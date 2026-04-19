@@ -1,0 +1,45 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories
+vendor/
+.env
+engine
+docker-compose.yaml
+
+.idea
+
+# SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+# Logging
+logs/
+
+# Temp directories
+tmp/
+
+# Tailwind CLI standalone binary — committed to repo, replace with: make setup
+# bin/tailwindcss
+# bin/tailwindcss.exe
+__debug_bin*
+.db
+
+# VitePress
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/package-lock.json
+docs/yarn.lock
+bin/

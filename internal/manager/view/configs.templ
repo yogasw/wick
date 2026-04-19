@@ -1,0 +1,147 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	fieldtype "github.com/yogasw/wick/internal/manager/view/type"
+)
+
+templ JobStatusBadge(status entity.JobStatus, enabled bool) {
+	if !enabled {
+		<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
+	} else if status == entity.JobStatusRunning {
+		<span class="inline-flex items-center rounded-full bg-prog-100 px-2.5 py-0.5 text-xs font-medium text-prog-400">Running</span>
+	} else {
+		<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Idle</span>
+	}
+}
+
+// ConfigsTable renders an editable list of configs owned by a single
+// scope (app variables, a tool, or a job). actionBase is the route
+// prefix where edits POST — e.g. "/manager/variables" or
+// "/manager/tools/foo/configs". Rows submit to {actionBase}/{key} and
+// regenerate via {actionBase}/{key}/regenerate. editKey selects which
+// row is currently in edit mode; cancelHref is where Cancel links.
+templ ConfigsTable(rows []entity.Config, actionBase string, editKey string, cancelHref string) {
+	if len(rows) == 0 {
+		<p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
+	} else {
+		<div class="mt-4 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+			<table class="w-full text-sm">
+				<thead>
+					<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Key</th>
+						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Description</th>
+						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Value</th>
+						<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						@configRow(row, actionBase, row.Key == editKey, cancelHref)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+templ configRow(row entity.Config, actionBase string, editing bool, cancelHref string) {
+	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
+		<td class="px-4 py-3 font-mono text-xs text-black-900 dark:text-white-100">
+			{ row.Key }
+			if row.Required && row.Value == "" {
+				<span class="ml-2 rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">missing</span>
+			} else if row.Required {
+				<span class="ml-2 text-[10px] font-medium text-neg-400">*</span>
+			}
+		</td>
+		<td class="px-4 py-3 text-sm text-black-800 dark:text-black-600">{ row.Description }</td>
+		<td class="px-4 py-3 text-sm">
+			if editing {
+				<form method="POST" action={ templ.SafeURL(actionBase + "/" + row.Key) } class="flex items-center gap-2">
+					@valueInput(row)
+					<button type="submit" class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600">Save</button>
+					<a href={ templ.SafeURL(cancelHref) } class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400">Cancel</a>
+				</form>
+			} else {
+				@valueDisplay(row)
+			}
+		</td>
+		<td class="px-4 py-3 text-right">
+			if !editing && !row.Locked {
+				<div class="flex justify-end gap-2">
+					<a
+						href={ templ.SafeURL(cancelHref + "?edit=" + row.Key) }
+						class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+					>Edit</a>
+					if row.CanRegenerate {
+						<form method="POST" action={ templ.SafeURL(actionBase + "/" + row.Key + "/regenerate") }>
+							<button
+								type="submit"
+								onclick="return confirm('Regenerate this value? Active sessions or dependents may be invalidated.');"
+								class="rounded-lg border border-prog-300 px-3 py-1.5 text-xs font-medium text-prog-400 hover:bg-prog-100"
+							>Regenerate</button>
+						</form>
+					}
+				</div>
+			} else if row.Locked {
+				<span class="text-xs text-black-700 dark:text-black-600">locked</span>
+			}
+		</td>
+	</tr>
+}
+
+// valueInput dispatches to the per-type widget. Secret fields override
+// every other type so sensitive values stay masked regardless of shape.
+templ valueInput(row entity.Config) {
+	if row.IsSecret {
+		@fieldtype.Secret(row)
+	} else {
+		switch row.Type {
+			case "textarea":
+				@fieldtype.Textarea(row)
+			case "dropdown":
+				@fieldtype.Dropdown(row)
+			case "checkbox":
+				@fieldtype.Checkbox(row)
+			case "number":
+				@fieldtype.Number(row)
+			case "email":
+				@fieldtype.Email(row)
+			case "url":
+				@fieldtype.URL(row)
+			case "color":
+				@fieldtype.Color(row)
+			case "date":
+				@fieldtype.Date(row)
+			case "datetime":
+				@fieldtype.Datetime(row)
+			default:
+				@fieldtype.Text(row)
+		}
+	}
+}
+
+// valueDisplay is the read-only rendering for a row. Secrets are
+// always masked; color gets a swatch; everything else falls back to
+// monospace text.
+templ valueDisplay(row entity.Config) {
+	if row.IsSecret {
+		<span class="rounded bg-white-200 dark:bg-navy-800 px-2 py-1 font-mono text-xs text-black-700 dark:text-black-600">•••••••• (hidden)</span>
+	} else if row.Type == "color" && row.Value != "" {
+		<span class="inline-flex items-center gap-2">
+			<span class="h-4 w-4 rounded border border-white-400 dark:border-navy-600" style={ "background-color:" + row.Value }></span>
+			<span class="font-mono text-xs text-black-900 dark:text-white-100">{ row.Value }</span>
+		</span>
+	} else if row.Type == "checkbox" {
+		if row.Value == "true" {
+			<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">true</span>
+		} else {
+			<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">false</span>
+		}
+	} else if row.Value == "" {
+		<span class="font-mono text-xs text-black-700 dark:text-black-600">—</span>
+	} else {
+		<span class="font-mono text-xs text-black-900 dark:text-white-100">{ row.Value }</span>
+	}
+}

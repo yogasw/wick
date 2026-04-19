@@ -1,0 +1,93 @@
+package view
+
+import (
+	"fmt"
+
+	"github.com/yogasw/wick/internal/entity"
+)
+
+type MissingEntry struct {
+	Scope   string
+	Key     string
+	Name    string
+	Icon    string
+	URL     string
+	Missing []string
+}
+
+type DashboardStats struct {
+	TotalJobs      int
+	EnabledJobs    int
+	RunningJobs    int
+	TotalTools     int
+	TotalConfigs   int
+	MissingConfigs int
+}
+
+templ DashboardPage(stats DashboardStats, missing []MissingEntry, user *entity.User) {
+	@AdminLayout("Admin · Dashboard", "dashboard", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Dashboard</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Everything configurable — variables, jobs, tools — in one place.</p>
+			<div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+				@statCard("Tools", fmt.Sprintf("%d", stats.TotalTools))
+				@statCard("Jobs", fmt.Sprintf("%d", stats.TotalJobs))
+				@statCard("Enabled", fmt.Sprintf("%d / %d", stats.EnabledJobs, stats.TotalJobs))
+				@statCard("Running", fmt.Sprintf("%d", stats.RunningJobs))
+				@statCard("Configs", fmt.Sprintf("%d", stats.TotalConfigs))
+				if stats.MissingConfigs > 0 {
+					@statCardAlert("Missing", fmt.Sprintf("%d", stats.MissingConfigs))
+				} else {
+					@statCard("Missing", "0")
+				}
+			</div>
+			<section class="mt-8">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Needs setup</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">Required configs that are still empty. Nothing breaks until a handler tries to read them — but it will.</p>
+				if len(missing) == 0 {
+					<p class="mt-4 rounded-xl border border-pos-300 bg-pos-100 px-4 py-3 text-sm text-pos-400">All required configs are set.</p>
+				} else {
+					<div class="mt-4 space-y-3">
+						for _, m := range missing {
+							@missingCard(m)
+						}
+					</div>
+				}
+			</section>
+		</main>
+	}
+}
+
+templ statCard(label string, value string) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4">
+		<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">{ label }</p>
+		<p class="mt-1 text-2xl font-semibold text-black-900 dark:text-white-100">{ value }</p>
+	</div>
+}
+
+templ statCardAlert(label string, value string) {
+	<div class="rounded-xl border border-neg-300 bg-neg-100 p-4">
+		<p class="text-xs font-medium uppercase tracking-wide text-neg-400">{ label }</p>
+		<p class="mt-1 text-2xl font-semibold text-neg-400">{ value }</p>
+	</div>
+}
+
+templ missingCard(m MissingEntry) {
+	<a href={ templ.SafeURL(m.URL) } class="block rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 transition-colors hover:border-green-400">
+		<div class="flex items-start gap-3">
+			<span class="text-lg">{ m.Icon }</span>
+			<div class="min-w-0 flex-1">
+				<div class="flex items-center gap-2">
+					<p class="text-sm font-semibold text-black-900 dark:text-white-100">{ m.Name }</p>
+					<span class="rounded-full bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">{ m.Scope }</span>
+				</div>
+				<div class="mt-2 flex flex-wrap gap-1.5">
+					for _, k := range m.Missing {
+						<span class="rounded bg-neg-100 px-2 py-0.5 font-mono text-[11px] text-neg-400">{ k }</span>
+					}
+				</div>
+			</div>
+			<span class="text-xs text-black-700 dark:text-black-600">→</span>
+		</div>
+	</a>
+}

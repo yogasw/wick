@@ -1,0 +1,135 @@
+package view
+
+import "github.com/yogasw/wick/internal/entity"
+
+templ TagsPage(tags []*entity.Tag, user *entity.User, editID string) {
+	@AdminLayout("Admin · Tags", "tags", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Tags</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Rename or delete tags. Changes propagate to every user and tool.</p>
+			<div class="mt-6 max-w-xl rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-sm">
+				<form action="/admin/tags" method="POST" class="flex items-center gap-2">
+					<input
+						type="text"
+						name="name"
+						required
+						placeholder="new tag name"
+						class="flex-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500"
+					/>
+					<button type="submit" class="rounded-md bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Add tag</button>
+				</form>
+			</div>
+			<div class="mt-6 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Name</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Description</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Flags</th>
+							<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(tags) == 0 {
+							<tr>
+								<td colspan="4" class="px-4 py-6 text-center text-black-700 dark:text-black-600">No tags yet.</td>
+							</tr>
+						}
+						for _, t := range tags {
+							@TagRowFragment(t, t.ID == editID)
+						}
+					</tbody>
+				</table>
+			</div>
+		</main>
+	}
+}
+
+templ TagRowFragment(t *entity.Tag, editing bool) {
+	<tr id={ "tag-" + t.ID } class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+		if editing {
+			<td colspan="4" class="px-4 py-3">
+				<form action={ templ.SafeURL("/admin/tags/" + t.ID + "/update") } method="POST" class="flex flex-wrap items-start gap-3">
+					<div class="flex flex-col gap-1">
+						<label class="text-[10px] uppercase tracking-wide text-black-700 dark:text-black-600">Name</label>
+						<input
+							type="text"
+							name="name"
+							value={ t.Name }
+							required
+							class="w-48 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500"
+						/>
+					</div>
+					<div class="flex flex-col gap-1 flex-1 min-w-[12rem]">
+						<label class="text-[10px] uppercase tracking-wide text-black-700 dark:text-black-600">Description</label>
+						<input
+							type="text"
+							name="description"
+							value={ t.Description }
+							placeholder="shown under the group heading"
+							class="w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500"
+						/>
+					</div>
+					<div class="flex flex-col gap-1">
+						<label class="text-[10px] uppercase tracking-wide text-black-700 dark:text-black-600">Sort</label>
+						<input
+							type="number"
+							name="sort_order"
+							value={ itoa(t.SortOrder) }
+							class="w-16 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500"
+						/>
+					</div>
+					<label class="flex cursor-pointer items-center gap-2 self-end pb-1.5 text-xs text-black-800 dark:text-black-600">
+						<input type="checkbox" name="is_group" checked?={ t.IsGroup } class="h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"/>
+						Group on home
+					</label>
+					<label class="flex cursor-pointer items-center gap-2 self-end pb-1.5 text-xs text-black-800 dark:text-black-600">
+						<input type="checkbox" name="is_filter" checked?={ t.IsFilter } class="h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"/>
+						Access filter
+					</label>
+					<div class="flex items-center gap-2 self-end pb-1">
+						<button type="submit" class="rounded-md bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 transition-colors">Save</button>
+						<a href="/admin/tags" class="rounded-md border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 transition-colors">Cancel</a>
+					</div>
+				</form>
+			</td>
+		} else {
+			<td class="px-4 py-3 font-medium text-black-900 dark:text-white-100">{ t.Name }</td>
+			<td class="px-4 py-3 text-sm text-black-700 dark:text-black-600">
+				if t.Description != "" {
+					{ t.Description }
+				} else {
+					<span class="text-black-600 dark:text-black-700">—</span>
+				}
+			</td>
+			<td class="px-4 py-3">
+				<div class="flex items-center gap-1.5">
+					if t.IsGroup {
+						<span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">Group</span>
+					}
+					if t.IsFilter {
+						<span class="rounded-full bg-cau-100 px-2 py-0.5 text-[10px] font-medium text-cau-400">Filter</span>
+					}
+					if !t.IsGroup && !t.IsFilter {
+						<span class="text-xs text-black-600 dark:text-black-700">—</span>
+					}
+				</div>
+			</td>
+			<td class="px-4 py-3 text-right">
+				<div class="flex items-center justify-end gap-2">
+					<a
+						href={ templ.SafeURL("/admin/tags?edit=" + t.ID) }
+						class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+					>Edit</a>
+					<form
+						action={ templ.SafeURL("/admin/tags/" + t.ID + "/delete") }
+						method="POST"
+						onsubmit="return confirm('Delete this tag? It will be removed from every user and tool.')"
+					>
+						<button type="submit" class="rounded-lg border border-neg-300 px-3 py-1.5 text-xs font-medium text-neg-400 hover:bg-neg-100">Delete</button>
+					</form>
+				</div>
+			</td>
+		}
+	</tr>
+}

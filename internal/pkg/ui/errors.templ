@@ -1,0 +1,41 @@
+package ui
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"net/http"
+)
+
+// NotFoundPage is shown for both 404 (missing) and 403 (forbidden) so a
+// signed-in user cannot distinguish "tool doesn't exist" from "tool
+// exists but I'm not allowed". The message is intentionally vague.
+templ NotFoundPage(user *entity.User) {
+	@Layout("Not found") {
+		@Navbar(user)
+		<main class="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-white-200 dark:bg-navy-800 px-4">
+			<div class="w-full max-w-md text-center">
+				<div class="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-2xl bg-white-100 dark:bg-navy-700 shadow-sm">
+					<img src="/public/img/party_blob.gif" alt="" class="h-16 w-16 object-contain"/>
+				</div>
+				<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">Page not found</h1>
+				<p class="mt-2 text-sm text-black-800 dark:text-black-600">
+					The page you're looking for doesn't exist, or you don't have access to it.
+				</p>
+				<a
+					href="/"
+					class="mt-6 inline-flex items-center justify-center rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600"
+				>
+					Back to home
+				</a>
+			</div>
+		</main>
+	}
+}
+
+// RenderNotFound writes the NotFoundPage with the given status code.
+// Use 404 for unknown paths, and 404 (not 403) for forbidden resources
+// so the two cases are indistinguishable to the client.
+func RenderNotFound(w http.ResponseWriter, r *http.Request, user *entity.User, status int) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	NotFoundPage(user).Render(r.Context(), w)
+}

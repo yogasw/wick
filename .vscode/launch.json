@@ -1,0 +1,57 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Lab Server",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/lab",
+      "args": ["server"],
+      "envFile": "${workspaceFolder}/.env",
+      "preLaunchTask": "debug: prep"
+    },
+    {
+      "name": "Run Lab Worker",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/lab",
+      "args": ["worker"],
+      "envFile": "${workspaceFolder}/.env",
+      "preLaunchTask": "debug: prep"
+    },
+    {
+      "name": "Run CLI (init)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/main.go",
+      "args": ["init", "${input:projectName}"],
+      "cwd": "${workspaceFolder}/.."
+    },
+    {
+      "name": "Run CLI (custom args)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/main.go",
+      "args": "${input:cliArgs}",
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "projectName",
+      "type": "promptString",
+      "description": "Project name to scaffold (e.g. my-app)",
+      "default": "demo-app"
+    },
+    {
+      "id": "cliArgs",
+      "type": "promptString",
+      "description": "CLI args (space-separated, e.g. init my-app)",
+      "default": "--help"
+    }
+  ]
+}

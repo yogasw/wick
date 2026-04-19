@@ -1,0 +1,6 @@
+bin/
+static/output.css
+*_templ.go
+.env
+.db
+__debug_bin*

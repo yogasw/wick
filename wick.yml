@@ -1,0 +1,61 @@
+vars:
+  TAILWIND_OS:
+    $arch:
+      windows: windows-x64.exe
+      darwin/arm64: macos-arm64
+      darwin: macos-x64
+      linux/arm64: linux-arm64
+      linux: linux-x64
+  TAILWIND_VERSION: 3.4.17
+  TAILWIND_BIN:
+    $arch:
+      windows: bin/tailwindcss.exe
+      default: bin/tailwindcss
+
+tasks:
+  setup:
+    cmds:
+      - mkdir -p bin web/public/js web/public/css
+      - if_missing:
+          file: "{{.TAILWIND_BIN}}"
+        download:
+          dest: "{{.TAILWIND_BIN}}"
+          url: "https://github.com/tailwindlabs/tailwindcss/releases/download/v{{.TAILWIND_VERSION}}/tailwindcss-{{.TAILWIND_OS}}"
+          cache: true
+      - if_missing:
+          cmd: templ
+        run: go install github.com/a-h/templ/cmd/templ@latest
+      - go mod tidy
+    done: |
+      Setup complete!
+      Run: wick dev
+
+  css:
+    cmds:
+      - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
+
+  dev:
+    cmds:
+      - templ generate ./...
+      - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css"
+      - go run main.go server
+
+  generate:
+    cmds:
+      - templ generate ./...
+      - go generate ./...
+      - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
+
+  build:
+    cmds:
+      - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
+      - go build -o bin/app main.go
+
+  test:
+    cmds:
+      - go test ./... -coverprofile=./coverage.out
+
+  tidy:
+    cmds:
+      - go fmt ./...
+      - go mod tidy -v

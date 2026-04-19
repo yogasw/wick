@@ -1,0 +1,39 @@
+package ui
+
+templ Layout(title string) {
+	{{ theme := ThemeByID(ThemeFromContext(ctx)) }}
+	<!DOCTYPE html>
+	<html lang="en" class={ htmlThemeClasses(theme) }>
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title } | { AppNameFromContext(ctx) }</title>
+			<link rel="stylesheet" href="/public/css/app.css"/>
+			if theme.ID == "" {
+				<!-- No user preference: follow device prefers-color-scheme before first paint. -->
+				<script>
+					(function(){var h=document.documentElement;if(window.matchMedia('(prefers-color-scheme:dark)').matches){h.classList.add('theme-dark','dark')}else{h.classList.add('theme-light')}})()
+				</script>
+			}
+		</head>
+		<body>
+			{ children... }
+			@Palette()
+			<script src="/public/js/app.js"></script>
+			<script src="/public/js/palette.js"></script>
+		</body>
+	</html>
+}
+
+// htmlThemeClasses returns the class attribute for the root element
+// given a resolved theme. Empty theme is rendered by the inline script
+// in <head> before first paint.
+func htmlThemeClasses(t Theme) string {
+	if t.ID == "" {
+		return ""
+	}
+	if t.IsDark {
+		return t.ClassName + " dark"
+	}
+	return t.ClassName
+}

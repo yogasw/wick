@@ -1,0 +1,63 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "templ: watch",
+      "type": "shell",
+      "command": "templ generate --watch",
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "pattern": [{ "regexp": "." }],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": ".*",
+            "endsPattern": ".*"
+          }
+        }
+      ],
+      "presentation": {
+        "group": "dev",
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "css: watch",
+      "type": "shell",
+      "command": "bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css --watch",
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "pattern": [{ "regexp": "." }],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": ".*",
+            "endsPattern": ".*"
+          }
+        }
+      ],
+      "presentation": {
+        "group": "dev",
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "debug: prep",
+      "type": "shell",
+      "command": "templ generate ./... && bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css",
+      "problemMatcher": []
+    },
+    {
+      "label": "dev",
+      "dependsOn": ["css: watch", "templ: watch"],
+      "dependsOrder": "parallel",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

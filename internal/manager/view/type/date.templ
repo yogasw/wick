@@ -1,0 +1,12 @@
+package fieldtype
+
+import "github.com/yogasw/wick/internal/entity"
+
+templ Date(row entity.Config) {
+	<input
+		name="value"
+		type="date"
+		value={ valueFor(row) }
+		class="w-48 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+	/>
+}

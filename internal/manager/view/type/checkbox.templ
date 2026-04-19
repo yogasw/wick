@@ -1,0 +1,14 @@
+package fieldtype
+
+import "github.com/yogasw/wick/internal/entity"
+
+// Checkbox renders a boolean. The hidden "false" input ensures an
+// unchecked box still posts a value (browsers skip unchecked checkboxes).
+templ Checkbox(row entity.Config) {
+	<input type="hidden" name="value" value="false"/>
+	if row.Value == "true" {
+		<input type="checkbox" name="value" value="true" checked class="h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"/>
+	} else {
+		<input type="checkbox" name="value" value="true" class="h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"/>
+	}
+}

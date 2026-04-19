@@ -1,0 +1,14 @@
+{
+  "go.toolsEnvVars": {
+    "GOFLAGS": "-tags=dev"
+  },
+  "[templ]": {
+    "editor.defaultFormatter": "a-h.templ"
+  },
+  "files.associations": {
+    "*.templ": "templ"
+  },
+  "tailwindCSS.includeLanguages": {
+    "templ": "html"
+  }
+}
