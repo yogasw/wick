@@ -161,12 +161,16 @@ jobs:
 
           rm -f commit_log.txt
 
-      - name: Create Git Tag
+      - name: Commit sync changes and create tag
         run: |
           VERSION=${{ steps.read_version.outputs.version }}
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b release-sync/v${VERSION}
+          git add template/go.mod.tmpl CHANGELOG.md
+          git commit -m "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" || true
           git tag v${VERSION}
+          git push origin release-sync/v${VERSION}
           git push origin v${VERSION}
 
       - name: Create GitHub Release
@@ -177,10 +181,12 @@ jobs:
           body: ${{ steps.ai_summary.outputs.summary }}
 
       - name: Create PR to master
-        uses: peter-evans/create-pull-request@4e1beaa7521e8b457b572c090b25bd3db56bf1c5 # v5.0.3
-        with:
-          commit-message: "chore: sync go.mod.tmpl and CHANGELOG for v${{ steps.read_version.outputs.version }}"
-          title: "chore: sync go.mod.tmpl and CHANGELOG for v${{ steps.read_version.outputs.version }}"
-          body: "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release."
-          branch: release-sync/v${{ steps.read_version.outputs.version }}
-          base: master
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.read_version.outputs.version }}
+          gh pr create \
+            --title "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" \
+            --body "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release." \
+            --base master \
+            --head release-sync/v${VERSION}
