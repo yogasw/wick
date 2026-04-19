@@ -19,7 +19,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify PR is from main branch
+      - name: Verify PR is from master branch
         uses: actions/github-script@v6
         with:
           script: |
@@ -29,12 +29,12 @@ jobs:
               pull_number: context.issue.number
             });
 
-            if (pr.head.ref !== 'main') {
-              core.setFailed(`PR must be from the main branch, but was from: ${pr.head.ref}`);
+            if (pr.head.ref !== 'master') {
+              core.setFailed(`PR must be from the master branch, but was from: ${pr.head.ref}`);
               process.exit(1);
             }
 
-            console.log("PR is from main branch. Proceeding with release.");
+            console.log("PR is from master branch. Proceeding with release.");
 
   release:
     name: Release
@@ -181,7 +181,7 @@ jobs:
           title: "chore: update CHANGELOG.md for v${{ steps.read_version.outputs.version }}"
           body: "Auto-generated PR to update changelog after release."
           branch: changelog/update-${{ steps.read_version.outputs.version }}
-          base: main
+          base: master
 
   auto-merge:
     name: Auto Merge Release PR
