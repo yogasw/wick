@@ -1,9 +1,9 @@
 import { defineConfig } from 'vitepress'
-import llmstxt from 'vitepress-plugin-llms'
+import llmstxt, { copyOrDownloadAsMarkdownButtons } from 'vitepress-plugin-llms'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
-const version = readFileSync(resolve(__dirname, '../version'), 'utf-8').trim()
+const version = readFileSync(resolve(__dirname, '../../VERSION'), 'utf-8').trim()
 
 export default defineConfig({
   title: 'Wick',
@@ -16,6 +16,12 @@ export default defineConfig({
 
   vite: {
     plugins: [llmstxt()],
+  },
+
+  markdown: {
+    config(md) {
+      md.use(copyOrDownloadAsMarkdownButtons)
+    },
   },
 
   themeConfig: {
