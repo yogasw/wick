@@ -1,0 +1,39 @@
+package ui
+
+// Palette renders the global command palette shell. Tool items are
+// populated on first open via GET /api/tools (see web/public/js/palette.js).
+templ Palette() {
+	<div
+		id="cmdk"
+		class="hidden fixed inset-0 z-[100] items-start justify-center pt-[10vh] px-4 bg-black-900/50 backdrop-blur-sm"
+		onclick="if(event.target===this)closePalette()"
+	>
+		<div class="w-full max-w-xl overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl">
+			<div class="flex items-center gap-3 border-b border-white-300 dark:border-navy-600 px-4">
+				<svg class="h-5 w-5 flex-shrink-0 text-black-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+					<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+				</svg>
+				<input
+					id="cmdk-input"
+					type="text"
+					placeholder="Type a command or search..."
+					oninput="paletteFilter(this.value)"
+					class="flex-1 bg-transparent py-3.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
+				/>
+				<button
+					onclick="closePalette()"
+					class="rounded border border-white-400 dark:border-navy-600 px-2 py-0.5 text-xs font-mono text-black-700 dark:text-black-600 hover:border-green-400 transition-colors"
+				>
+					ESC
+				</button>
+			</div>
+			<div id="cmdk-list" class="max-h-[60vh] overflow-y-auto py-2">
+				<div class="px-4 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Tools</div>
+				<div id="cmdk-items"></div>
+				<p id="cmdk-empty" class="hidden px-4 py-6 text-center text-sm text-black-700 dark:text-black-600">
+					No results.
+				</p>
+			</div>
+		</div>
+	</div>
+}

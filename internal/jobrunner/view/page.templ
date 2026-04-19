@@ -1,0 +1,178 @@
+package view
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// JobPage is the operator-facing surface for a single job mounted at
+// /jobs/{key}. Operators can trigger a run and see a condensed history
+// (last run + total invocations). Schedule, enabled flag, and runtime
+// configs live on /manager/jobs/{key} — this page is read-only for
+// those settings.
+//
+// bannerEntry is non-nil when the job still has Required configs
+// empty; the ScopedSetupBanner nudges the admin to finish setup before
+// runs can succeed.
+templ JobPage(j *entity.Job, runs []entity.JobRun, user *entity.User, errMsg string, bannerEntry *ui.MissingEntry) {
+	@ui.Layout(j.Name) {
+		@ui.Navbar(user)
+		@ui.ScopedSetupBanner(bannerEntry, user != nil && user.IsAdmin())
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+				<div class="flex items-center gap-3">
+					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
+						{ j.Icon }
+					</div>
+					<div>
+						<div class="flex items-center gap-2">
+							<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ j.Name }</h1>
+							@statusBadge(j.LastStatus, j.Enabled)
+						</div>
+						if j.Description != "" {
+							<p class="mt-0.5 text-sm text-black-800 dark:text-black-600">{ j.Description }</p>
+						}
+					</div>
+				</div>
+				<div class="flex items-center gap-2">
+					if user != nil && user.IsAdmin() {
+						<a
+							href={ templ.SafeURL("/manager/jobs/" + j.Key) }
+							class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-sm font-medium text-black-900 dark:text-white-100 hover:border-green-400 hover:text-green-600 transition-colors"
+						>Settings</a>
+					}
+					<form method="POST" action={ templ.SafeURL("/jobs/" + j.Key + "/run") }>
+						<button
+							type="submit"
+							disabled?={ j.LastStatus == entity.JobStatusRunning || bannerEntry != nil }
+							class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+						>Run Now</button>
+					</form>
+				</div>
+			</div>
+
+			if errMsg != "" {
+				<div class="mt-4 rounded-xl border border-neg-300 bg-neg-100 px-4 py-3 text-sm text-neg-400">{ errMsg }</div>
+			}
+
+			<section class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+				@statCard("Schedule", scheduleLabel(j))
+				@statCard("Total runs", fmt.Sprintf("%d", j.TotalRuns))
+				@statCard("Last run", lastRunLabel(runs))
+			</section>
+
+			<section class="mt-8">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Recent runs</h2>
+				if len(runs) == 0 {
+					<p class="mt-3 text-sm text-black-700 dark:text-black-600">No runs yet. Hit <span class="font-medium">Run Now</span> to kick off the first one.</p>
+				} else {
+					<div class="mt-3 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+						<table class="w-full text-sm">
+							<thead>
+								<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Trigger</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Started</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Duration</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Result</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, run := range runs {
+									@runRow(run)
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</section>
+		</main>
+	}
+}
+
+templ statCard(label string, value string) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-sm">
+		<div class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">{ label }</div>
+		<div class="mt-1.5 text-base font-semibold text-black-900 dark:text-white-100 break-words">{ value }</div>
+	</div>
+}
+
+templ statusBadge(status entity.JobStatus, enabled bool) {
+	if !enabled {
+		<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-500">Disabled</span>
+	} else if status == entity.JobStatusRunning {
+		<span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">Running</span>
+	} else {
+		<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">Idle</span>
+	}
+}
+
+templ runRow(run entity.JobRun) {
+	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
+		<td class="px-4 py-3">
+			@runStatusBadge(run.Status)
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
+			if run.TriggeredBy == entity.RunTriggerManual {
+				Manual
+			} else {
+				Cron
+			}
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
+			{ run.StartedAt.Format("Jan 2 15:04:05") }
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
+			{ runDuration(run) }
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600 max-w-md">
+			if run.Result == "" {
+				<span class="text-black-700">—</span>
+			} else {
+				<pre class="whitespace-pre-wrap break-words font-mono text-[11px]">{ run.Result }</pre>
+			}
+		</td>
+	</tr>
+}
+
+templ runStatusBadge(status entity.RunStatus) {
+	if status == entity.RunStatusRunning {
+		<span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">Running</span>
+	} else if status == entity.RunStatusSuccess {
+		<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">Success</span>
+	} else {
+		<span class="rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">Error</span>
+	}
+}
+
+func runDuration(run entity.JobRun) string {
+	if run.EndedAt == nil {
+		if run.Status == entity.RunStatusRunning {
+			return "running…"
+		}
+		return "—"
+	}
+	d := run.EndedAt.Sub(run.StartedAt)
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+func scheduleLabel(j *entity.Job) string {
+	if j.Schedule == "" {
+		return "—"
+	}
+	return j.Schedule
+}
+
+func lastRunLabel(runs []entity.JobRun) string {
+	if len(runs) == 0 {
+		return "—"
+	}
+	last := runs[0]
+	return last.StartedAt.Format("Jan 2 15:04")
+}

@@ -1,0 +1,260 @@
+package home
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/pkg/tool"
+	"strings"
+)
+
+templ IndexPage(items []tool.Tool, groups []Group, ungrouped []tool.Tool, meta map[string]ToolMetaEntry, user *entity.User, viewMode string) {
+	@ui.Layout("Home") {
+		@ui.Navbar(user)
+		<!-- Hero -->
+		<div class="py-12">
+			<div class="mx-auto w-full max-w-container px-6 text-center">
+				<div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-green-500 shadow-md">
+					<span class="text-3xl">🛠</span>
+				</div>
+				<h1 class="text-[2rem] font-semibold leading-tight tracking-tight text-black-900 dark:text-white-100">
+					{ ui.AppNameFromContext(ctx) }
+				</h1>
+				if desc := ui.AppDescFromContext(ctx); desc != "" {
+					<p class="mt-2 text-base text-black-800 dark:text-black-600">
+						{ desc }
+					</p>
+				}
+				<!-- Search bar -->
+				<div class="mx-auto mt-6 flex max-w-lg items-center gap-3 rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 shadow-sm focus-within:border-green-500 focus-within:ring-2 focus-within:ring-green-200 dark:focus-within:ring-green-800 transition-all">
+					<svg class="h-5 w-5 flex-shrink-0 text-black-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+					</svg>
+					<input
+						id="search"
+						type="text"
+						placeholder="Search tools…"
+						oninput="filterTools(this.value)"
+						class="flex-1 bg-transparent text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
+					/>
+					<kbd class="kbd-shortcut hidden sm:inline-flex items-center gap-1 rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-0.5 text-xs text-black-700 dark:text-black-600 font-mono">
+						Ctrl K
+					</kbd>
+				</div>
+				<p class="mt-2 text-xs text-black-700 dark:text-black-600">Press <kbd class="kbd-shortcut rounded border border-white-400 dark:border-navy-600 px-1 font-mono">Ctrl K</kbd> to search</p>
+				@ViewModeToggle(viewMode)
+			</div>
+		</div>
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			if len(items) == 0 {
+				<div class="mt-10 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+					<span class="text-5xl">🔒</span>
+					<p class="text-base font-semibold text-black-800 dark:text-black-600">No tools available</p>
+					if user == nil {
+						<p class="text-sm text-black-700 dark:text-black-600">
+							<a href="/auth/login" class="text-green-600 hover:underline">Sign in</a> to access tools.
+						</p>
+					} else {
+						<p class="text-sm text-black-700 dark:text-black-600">Contact an administrator to get access.</p>
+					}
+				</div>
+			} else {
+				if viewMode == "detailed" {
+					<div id="groups" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+						for _, g := range groups {
+							@GroupCard(g, meta, user != nil, viewMode)
+						}
+					</div>
+					if len(ungrouped) > 0 {
+						<div data-group data-group-kind="ungrouped" class="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+							for _, t := range ungrouped {
+								@ToolCardDetailed(t, meta[t.Path], user != nil)
+							}
+						</div>
+					}
+				} else {
+					<div id="groups" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+						for _, g := range groups {
+							@GroupCard(g, meta, user != nil, viewMode)
+						}
+					</div>
+					if len(ungrouped) > 0 {
+						<div data-group data-group-kind="ungrouped" class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+							for _, t := range ungrouped {
+								@ToolCardCompact(t, meta[t.Path], user != nil)
+							}
+						</div>
+					}
+				}
+				<p id="no-results" class="hidden mt-12 text-center text-sm text-black-700 dark:text-black-600">
+					No tools match your search.
+				</p>
+			}
+		</main>
+		<script src="/modules/home/js/home.js"></script>
+	}
+}
+
+templ ViewModeToggle(current string) {
+	<form method="POST" action="/" class="mx-auto mt-4 inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-sm">
+		<button
+			type="submit"
+			name="home_view"
+			value="compact"
+			title="Compact view"
+			aria-pressed?={ current != "detailed" }
+			class={ "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors", templ.KV("bg-green-500 text-white-100", current != "detailed"), templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", current == "detailed") }
+		>
+			<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<rect x="3" y="3" width="7" height="7" rx="1"/>
+				<rect x="14" y="3" width="7" height="7" rx="1"/>
+				<rect x="3" y="14" width="7" height="7" rx="1"/>
+				<rect x="14" y="14" width="7" height="7" rx="1"/>
+			</svg>
+			Compact
+		</button>
+		<button
+			type="submit"
+			name="home_view"
+			value="detailed"
+			title="Detailed view"
+			aria-pressed?={ current == "detailed" }
+			class={ "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors", templ.KV("bg-green-500 text-white-100", current == "detailed"), templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", current != "detailed") }
+		>
+			<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<line x1="3" y1="6" x2="21" y2="6"/>
+				<line x1="3" y1="12" x2="21" y2="12"/>
+				<line x1="3" y1="18" x2="21" y2="18"/>
+			</svg>
+			Detailed
+		</button>
+	</form>
+}
+
+templ GroupCard(g Group, meta map[string]ToolMetaEntry, loggedIn bool, viewMode string) {
+	<section data-group data-group-kind={ g.Kind } data-group-name={ g.Name } class="flex flex-col rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
+		<header class="mb-4">
+			<div class="flex items-center gap-2">
+				if g.Kind == "bookmarks" {
+					<span class="text-lg" aria-hidden="true">⭐</span>
+				}
+				<h2 class="text-lg font-semibold text-black-900 dark:text-white-100">{ g.Name }</h2>
+			</div>
+			if g.Description != "" {
+				<p class="mt-1 text-xs text-black-700 dark:text-black-600">{ g.Description }</p>
+			}
+		</header>
+		if viewMode == "detailed" {
+			<div class="grid gap-3 grid-cols-1">
+				for _, t := range g.Tools {
+					@ToolCardDetailed(t, meta[t.Path], loggedIn)
+				}
+			</div>
+		} else {
+			<div class="grid gap-3" style="grid-template-columns:repeat(auto-fill,minmax(90px,1fr))">
+				for _, t := range g.Tools {
+					@ToolCardCompact(t, meta[t.Path], loggedIn)
+				}
+			</div>
+		}
+	</section>
+}
+
+templ ToolCardDetailed(t tool.Tool, m ToolMetaEntry, loggedIn bool) {
+	{{ tagBlob := strings.Join(m.GroupNames, " ") }}
+	{{ if m.Bookmarked { tagBlob += " bookmark bookmarks" } }}
+	{{ isExternal := t.ExternalURL != "" }}
+	{{ href := t.Path }}
+	{{ if isExternal { href = t.ExternalURL } }}
+	<div
+		data-tool-card
+		data-name={ t.Name }
+		data-desc={ t.Description }
+		data-tags={ tagBlob }
+		class="group relative"
+	>
+		<a
+			href={ templ.URL(href) }
+			if isExternal {
+				target="_blank"
+				rel="noopener"
+			}
+			class="flex h-full items-start gap-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4 shadow-sm transition-all duration-150 hover:-translate-y-px hover:border-green-400 hover:shadow-md"
+		>
+			<div class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
+				{ t.Icon }
+				if isExternal {
+					<span class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-white-100 dark:bg-navy-700 text-[9px] text-black-700 dark:text-black-600 shadow-sm" aria-label="Opens in new tab">↗</span>
+				}
+				if t.Category == "job" {
+					<span class="absolute -right-1 -bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-prog-100 text-[8px] shadow-sm" aria-label="Background job">⚙</span>
+				}
+			</div>
+			<div class="min-w-0 flex-1 pr-6">
+				<p class="text-sm font-semibold text-black-900 dark:text-white-100">{ t.Name }</p>
+				if t.Description != "" {
+					<p class="mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">{ t.Description }</p>
+				}
+			</div>
+		</a>
+		if loggedIn {
+			<button
+				type="button"
+				data-bookmark-btn
+				data-tool-path={ t.Path }
+				aria-label="Toggle bookmark"
+				class="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full text-sm text-black-700 hover:text-green-500 focus:outline-none"
+			>
+				<span data-bookmark-icon class="leading-none">☆</span>
+			</button>
+		}
+	</div>
+}
+
+templ ToolCardCompact(t tool.Tool, m ToolMetaEntry, loggedIn bool) {
+	{{ tagBlob := strings.Join(m.GroupNames, " ") }}
+	{{ if m.Bookmarked { tagBlob += " bookmark bookmarks" } }}
+	{{ isExternal := t.ExternalURL != "" }}
+	{{ href := t.Path }}
+	{{ if isExternal { href = t.ExternalURL } }}
+	<div
+		data-tool-card
+		data-name={ t.Name }
+		data-desc={ t.Description }
+		data-tags={ tagBlob }
+		class="group relative"
+	>
+		<a
+			href={ templ.URL(href) }
+			title={ t.Description }
+			if isExternal {
+				target="_blank"
+				rel="noopener"
+			}
+			class="flex h-full flex-col items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 text-center shadow-sm transition-all duration-150 hover:-translate-y-px hover:border-green-400 hover:shadow-md"
+		>
+			<div class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
+				{ t.Icon }
+				if isExternal {
+					<span class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-white-100 dark:bg-navy-700 text-[9px] text-black-700 dark:text-black-600 shadow-sm" aria-label="Opens in new tab">↗</span>
+				}
+				if t.Category == "job" {
+					<span class="absolute -right-1 -bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-prog-100 text-[8px] shadow-sm" aria-label="Background job">⚙</span>
+				}
+			</div>
+			<p class="w-full truncate text-xs font-medium text-black-900 dark:text-white-100">{ t.Name }</p>
+		</a>
+		if loggedIn {
+			<button
+				type="button"
+				data-bookmark-btn
+				data-tool-path={ t.Path }
+				aria-label="Toggle bookmark"
+				class="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sm text-black-700 hover:text-green-500 focus:outline-none"
+			>
+				<span data-bookmark-icon class="leading-none">☆</span>
+			</button>
+		}
+	</div>
+}
+
+

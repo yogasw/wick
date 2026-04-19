@@ -1,0 +1,21 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	managerview "github.com/yogasw/wick/internal/manager/view"
+)
+
+templ VariablesPage(rows []entity.Config, editKey string, user *entity.User) {
+	@AdminLayout("Admin · Variables", "configs", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/admin/configs" class="hover:text-green-600">Configs</a>
+				<span>/</span>
+				<span class="text-black-900 dark:text-white-100">Variables</span>
+			</div>
+			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Variables</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">App-level runtime knobs. Changes are cached in memory and take effect immediately. Secrets are write-only — once set, no one can read them back.</p>
+			@managerview.ConfigsTable(rows, "/admin/variables", editKey, "/admin/variables")
+		</main>
+	}
+}

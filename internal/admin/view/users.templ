@@ -1,0 +1,99 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"strings"
+)
+
+templ UsersPage(rows []UserRow, allTags []*entity.Tag, user *entity.User, adminCount int) {
+	@AdminLayout("Admin · Users", "users", user) {
+		{{ tagsJSON := tagsToJSON(allTags) }}
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Users</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Approve accounts and manage roles and tags.</p>
+			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">User</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Role</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tags</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
+							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range rows {
+							@UserRowFragment(row, tagsJSON, adminCount)
+						}
+					</tbody>
+				</table>
+			</div>
+		</main>
+	}
+}
+
+templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
+	<tr id={ "user-" + row.User.ID } class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+		<td class="px-4 py-3">
+			<div class="flex items-center gap-3">
+				if row.User.Avatar != "" {
+					<img src={ row.User.Avatar } alt="" referrerpolicy="no-referrer" class="h-8 w-8 rounded-full object-cover"/>
+				} else {
+					<div class="flex h-8 w-8 items-center justify-center rounded-full bg-green-200 text-xs font-semibold text-green-700">
+						{ string([]rune(row.User.Name)[0:1]) }
+					</div>
+				}
+				<div>
+					<p class="font-medium text-black-900 dark:text-white-100">{ row.User.Name }</p>
+					<p class="text-xs text-black-700 dark:text-black-600">{ row.User.Email }</p>
+				</div>
+			</div>
+		</td>
+		<td class="px-4 py-3">
+			if row.User.Role == entity.RoleAdmin && adminCount <= 1 {
+				<span class="inline-flex items-center rounded-md bg-cau-100 px-2 py-1 text-xs font-medium text-cau-400" title="Satu-satunya admin, tidak bisa diubah">Admin (sole)</span>
+			} else {
+				<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/role") } method="POST">
+					<select name="role" onchange="this.form.requestSubmit()" class="rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs text-black-900 dark:text-white-100 outline-none focus:border-green-500">
+						<option value="user" selected?={ row.User.Role == entity.RoleUser }>User</option>
+						<option value="admin" selected?={ row.User.Role == entity.RoleAdmin }>Admin</option>
+					</select>
+				</form>
+			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			if row.User.Approved {
+				<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/tags") } method="POST" class="flex items-start gap-2">
+					<div
+						class="tag-picker w-56"
+						data-tags={ tagsJSON }
+						data-selected={ strings.Join(row.TagIDs, ",") }
+						data-can-create="true"
+					></div>
+					<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:text-green-700">Save</button>
+				</form>
+			} else {
+				<span class="text-xs italic text-black-700 dark:text-black-600">Approve first</span>
+			}
+		</td>
+		<td class="px-4 py-3">
+			if row.User.Approved {
+				<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Approved</span>
+			} else {
+				<span class="inline-flex items-center rounded-full bg-cau-100 px-2.5 py-0.5 text-xs font-medium text-cau-400">Pending</span>
+			}
+		</td>
+		<td class="px-4 py-3">
+			if row.User.Approved {
+				<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/unapprove") } method="POST">
+					<button type="submit" class="text-xs font-medium text-neg-400 hover:underline transition-colors">Revoke</button>
+				</form>
+			} else {
+				<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/approve") } method="POST">
+					<button type="submit" class="text-xs font-medium text-green-600 hover:underline transition-colors">Approve</button>
+				</form>
+			}
+		</td>
+	</tr>
+}

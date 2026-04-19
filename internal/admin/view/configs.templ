@@ -1,0 +1,42 @@
+package view
+
+import "github.com/yogasw/wick/internal/entity"
+
+// ConfigsHubPage is the landing page for /admin/configs. It's a card
+// grid that points to each subsection (Variables, SSO, …). Add a new
+// card when adding a new config category.
+templ ConfigsHubPage(user *entity.User) {
+	@AdminLayout("Admin · Configs", "configs", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Configs</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Runtime app configuration. Changes take effect immediately — no restart needed unless noted.</p>
+			<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				@configCard(
+					"/admin/variables",
+					"Variables",
+					"App-level runtime variables: base URL, signing secrets, and other knobs you'd otherwise put in .env. Edit them here without redeploying.",
+					"⚙️",
+				)
+				@configCard(
+					"/admin/configs/sso",
+					"SSO Providers",
+					"Single sign-on credentials. Currently supports Google OAuth — add the client ID/secret here to enable the Login with Google button.",
+					"🔐",
+				)
+			</div>
+		</main>
+	}
+}
+
+templ configCard(href, title, description, icon string) {
+	<a
+		href={ templ.SafeURL(href) }
+		class="group flex flex-col gap-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm transition-colors hover:border-green-400"
+	>
+		<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900 text-xl">
+			{ icon }
+		</div>
+		<div class="text-base font-semibold text-black-900 dark:text-white-100 group-hover:text-green-600">{ title }</div>
+		<p class="text-sm text-black-800 dark:text-black-600">{ description }</p>
+	</a>
+}

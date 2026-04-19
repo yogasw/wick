@@ -1,0 +1,31 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+templ PendingPage(user *entity.User) {
+	@ui.Layout("Pending Approval") {
+		@ui.Navbar(user)
+		<div class="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-white-200 dark:bg-navy-800 px-4">
+			<div class="w-full max-w-sm text-center">
+				<div class="mb-6 flex justify-center">
+					<span class="flex h-16 w-16 items-center justify-center rounded-full bg-cau-100 text-3xl">⏳</span>
+				</div>
+				<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">Waiting for approval</h1>
+				<p class="mt-3 text-sm text-black-800 dark:text-black-600">
+					Hi { user.Name }, your account (<span class="font-medium text-black-900 dark:text-white-100">{ user.Email }</span>) is pending approval by an administrator.
+				</p>
+				<p class="mt-2 text-sm text-black-700 dark:text-black-600">
+					You'll gain access once an admin approves your account.
+				</p>
+				<form action="/auth/logout" method="POST" class="mt-8">
+					<button type="submit" class="inline-flex items-center justify-center rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-5 py-3 text-sm font-medium text-black-800 dark:text-white-100 transition-colors hover:bg-white-200 dark:hover:bg-navy-600">
+						Sign out
+					</button>
+				</form>
+			</div>
+		</div>
+	}
+}

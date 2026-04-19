@@ -1,0 +1,17 @@
+package fieldtype
+
+import "github.com/yogasw/wick/internal/entity"
+
+// Color pairs the native picker with a mirrored hex text field so
+// admins can copy/paste values as well as pick them.
+templ Color(row entity.Config) {
+	<div class="flex items-center gap-2">
+		<input
+			name="value"
+			type="color"
+			value={ valueFor(row) }
+			class="h-10 w-14 cursor-pointer rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800"
+		/>
+		<span class="font-mono text-xs text-black-700 dark:text-black-600">{ valueFor(row) }</span>
+	</div>
+}

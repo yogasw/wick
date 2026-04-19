@@ -1,0 +1,93 @@
+package converttext
+
+type typeOption struct {
+	Value   string
+	Name    string
+	Example string
+}
+
+var typeOptions = []typeOption{
+	{"uppercase", "UPPERCASE", "hello world → HELLO WORLD"},
+	{"lowercase", "lowercase", "HELLO WORLD → hello world"},
+	{"titlecase", "Title Case", "hello world → Hello World"},
+	{"sentence", "Sentence case", "hello world → Hello world"},
+	{"alternating", "aLtErNaTiNg CaSe", "hello world → HeLlO wOrLd"},
+	{"lines-to-escaped", "Multiline → \\n", `A⏎B⏎C → A\nB\nC`},
+	{"escaped-to-lines", "\\n → Multiline", `A\nB\nC → A⏎B⏎C`},
+}
+
+templ IndexBody(title, basePath, inputText string, convertType ConvertType, result string) {
+	<main class="mx-auto w-full max-w-container px-6">
+			<div class="pb-6 pt-8">
+				<h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight text-black-900 dark:text-white-100">{ title }</h1>
+				<p class="mt-2 text-sm text-black-800 dark:text-black-600">Transform text between different letter cases instantly.</p>
+			</div>
+			<form id="ct-form" action={ templ.URL(basePath) } method="POST" class="mt-4 grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr]">
+				<aside class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-md">
+					<label for="ct-search" class="sr-only">Search conversion type</label>
+					<div class="relative mb-3">
+						<svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3-3"></path></svg>
+						<input
+							id="ct-search"
+							type="text"
+							placeholder="Search…"
+							autocomplete="off"
+							class="block w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 py-2 pl-9 pr-3 text-[0.875rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+						/>
+					</div>
+					<input type="hidden" id="type" name="type" value={ string(convertType) }/>
+					<ul id="ct-type-list" class="flex max-h-[60vh] flex-col gap-1 overflow-y-auto pr-1">
+						for _, opt := range typeOptions {
+							<li>
+								<button
+									type="button"
+									data-type-option
+									data-value={ opt.Value }
+									data-search={ opt.Name + " " + opt.Example }
+									class={ "group flex w-full flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors duration-150",
+										templ.KV("border-green-500 bg-green-200/40 dark:bg-green-800/30", string(convertType) == opt.Value),
+										templ.KV("border-transparent hover:border-white-400 dark:hover:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800", string(convertType) != opt.Value) }
+								>
+									<span class="text-[0.875rem] font-medium text-black-900 dark:text-white-100">{ opt.Name }</span>
+									<span class="truncate text-[0.75rem] text-black-800 dark:text-black-600">{ opt.Example }</span>
+								</button>
+							</li>
+						}
+					</ul>
+					<p id="ct-empty" class="hidden px-3 py-4 text-center text-[0.8125rem] text-black-800 dark:text-black-600">No matching type</p>
+				</aside>
+				<section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-md">
+					<div class="mb-6 flex flex-col gap-2">
+						<label for="text" class="block text-sm font-medium text-black-900 dark:text-white-100">Input Text</label>
+						<textarea
+							id="text"
+							name="text"
+							rows="6"
+							placeholder="Paste or type your text here…"
+							class="block w-full resize-y rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-4 text-[0.9375rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+						>{ inputText }</textarea>
+					</div>
+					<div class="flex items-center gap-4">
+						<button
+							type="submit"
+							class="inline-flex items-center justify-center rounded-lg bg-green-500 px-6 py-4 text-[0.9375rem] font-medium text-white-100 transition-colors duration-150 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-prog-300"
+						>
+							Convert
+						</button>
+					</div>
+					<div id="ct-result" class={ "mt-6 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600", templ.KV("hidden", result == "" && inputText == "") }>
+						<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">
+							<span class="text-[0.8125rem] font-medium text-black-800 dark:text-black-600">Result</span>
+							<button
+								type="button"
+								data-copy
+								class="inline-flex items-center justify-center rounded-lg border border-green-500 bg-white-100 dark:bg-navy-700 px-3 py-2 text-[0.8125rem] font-medium text-green-500 transition-colors duration-150 hover:bg-green-200 hover:border-green-600 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300"
+							>Copy</button>
+						</div>
+						<pre class="block min-h-24 w-full whitespace-pre-wrap break-all bg-white-100 dark:bg-navy-800 px-4 py-4 font-mono text-[0.9375rem] leading-relaxed text-black-900 dark:text-white-100">{ result }</pre>
+					</div>
+				</section>
+			</form>
+	</main>
+	<script src={ basePath + "/static/js/convert.js" }></script>
+}

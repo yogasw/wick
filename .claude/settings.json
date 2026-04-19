@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(templ generate:*)",
+      "Bash(go build:*)",
+      "Skill(tool-module)",
+      "Skill(tool-module:*)",
+      "Bash(ls Makefile)",
+      "Skill(design-system)",
+      "Skill(design-system:*)"
+    ]
+  }
+}

@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme tokens ────────────────────────────────────────────
+ *
+ * navy-*, white-*, black-* in tailwind.config.js resolve to the
+ * CSS variables defined here. Each theme overrides a handful:
+ *   - Dark themes rewrite navy-* (surfaces) and black-6xx/7xx
+ *     (secondary text that renders on dark bg via `dark:text-*`).
+ *   - Light themes rewrite white-* (surfaces) and black-8xx/9xx
+ *     (primary/secondary text on light bg).
+ * Real white (255 255 255) stays for button foregrounds; brand
+ * green is fixed in tailwind.config.js for visual consistency.
+ *
+ * The base :root defaults = default Light, so pages without a
+ * theme class still render. The .theme-dark block re-states the
+ * default Dark values so switching away from a custom theme back
+ * to "Dark" restores the original palette.
+ * ────────────────────────────────────────────────────────── */
+:root,
+.theme-light {
+  --color-white-100: 255 255 255;
+  --color-white-200: 250 250 250;
+  --color-white-300: 236 236 236;
+  --color-white-400: 223 223 223;
+
+  --color-navy-200: 196 203 217;
+  --color-navy-300: 138 154 179;
+  --color-navy-400: 80 108 143;
+  --color-navy-500: 1 65 108;
+  --color-navy-600: 16 51 82;
+  --color-navy-700: 20 38 58;
+  --color-navy-800: 18 25 35;
+
+  --color-black-600: 191 191 191;
+  --color-black-700: 160 160 160;
+  --color-black-800: 86 86 86;
+  --color-black-900: 10 10 10;
+}
+
+/* Dark — just the defaults plus the `dark` class on <html>. */
+.theme-dark {
+  --color-navy-600: 16 51 82;
+  --color-navy-700: 20 38 58;
+  --color-navy-800: 18 25 35;
+
+  --color-black-600: 191 191 191;
+  --color-black-700: 160 160 160;
+}
+
+/* Solarized Light — ethanschoonover.com/solarized */
+.theme-solarized-light {
+  --color-white-100: 253 246 227; /* base3 */
+  --color-white-200: 238 232 213; /* base2 */
+  --color-white-300: 147 161 161; /* base1 */
+  --color-white-400: 181 137 0;   /* yellow (accent border) */
+
+  --color-black-800: 101 123 131; /* base00 */
+  --color-black-900: 88 110 117;  /* base01 */
+}
+
+/* Solarized Dark */
+.theme-solarized-dark {
+  --color-navy-600: 88 110 117;   /* base01 */
+  --color-navy-700: 7 54 66;      /* base02 */
+  --color-navy-800: 0 43 54;      /* base03 */
+
+  --color-black-600: 147 161 161; /* base1 */
+  --color-black-700: 131 148 150; /* base0 */
+}
+
+/* Dracula — draculatheme.com */
+.theme-dracula {
+  --color-navy-600: 98 114 164;   /* comment */
+  --color-navy-700: 68 71 90;     /* current line */
+  --color-navy-800: 40 42 54;     /* background */
+
+  --color-black-600: 248 248 242; /* foreground — primary text on dark */
+  --color-black-700: 189 147 249; /* purple — secondary */
+}
+
+/* Nord — nordtheme.com */
+.theme-nord {
+  --color-navy-600: 76 86 106;    /* nord3 */
+  --color-navy-700: 59 66 82;     /* nord1 */
+  --color-navy-800: 46 52 64;     /* nord0 */
+
+  --color-black-600: 236 239 244; /* nord6 */
+  --color-black-700: 216 222 233; /* nord4 */
+}
+
+/* Gruvbox Dark — github.com/morhetz/gruvbox */
+.theme-gruvbox-dark {
+  --color-navy-600: 102 92 84;    /* bg3 */
+  --color-navy-700: 60 56 54;     /* bg1 */
+  --color-navy-800: 40 40 40;     /* bg0 */
+
+  --color-black-600: 235 219 178; /* fg1 */
+  --color-black-700: 189 174 147; /* fg3 */
+}
+
+/* GitHub Light — primer.style */
+.theme-github-light {
+  --color-white-100: 255 255 255; /* canvas default */
+  --color-white-200: 246 248 250; /* canvas subtle */
+  --color-white-300: 208 215 222; /* border default */
+  --color-white-400: 175 184 193; /* border muted */
+
+  --color-black-800: 101 109 118; /* fg muted */
+  --color-black-900: 31 35 40;    /* fg default */
+}
+
+/* GitHub Dark — primer.style */
+.theme-github-dark {
+  --color-navy-600: 48 54 61;     /* border default */
+  --color-navy-700: 22 27 34;     /* canvas subtle */
+  --color-navy-800: 13 17 23;     /* canvas default */
+
+  --color-black-600: 230 237 243; /* fg default */
+  --color-black-700: 139 148 158; /* fg muted */
+}
+
+/* Material Light — material.io */
+.theme-material-light {
+  --color-white-100: 255 255 255; /* surface */
+  --color-white-200: 250 250 250; /* background */
+  --color-white-300: 224 224 224; /* divider */
+  --color-white-400: 189 189 189; /* outline */
+
+  --color-black-800: 117 117 117; /* text secondary */
+  --color-black-900: 33 33 33;    /* text primary */
+}
+
+/* Material Dark — material.io */
+.theme-material-dark {
+  --color-navy-600: 55 71 79;     /* elevated surface */
+  --color-navy-700: 38 50 56;     /* surface */
+  --color-navy-800: 18 18 18;     /* background */
+
+  --color-black-600: 236 239 241; /* text primary */
+  --color-black-700: 176 190 197; /* text secondary */
+}
+
+/* Monokai */
+.theme-monokai {
+  --color-navy-600: 73 72 62;     /* highlight line */
+  --color-navy-700: 49 48 42;     /* sidebar */
+  --color-navy-800: 39 40 34;     /* editor bg */
+
+  --color-black-600: 248 248 242; /* fg */
+  --color-black-700: 166 226 46;  /* accent green */
+}
+
+/* ── Base layer ─────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after {
+    @apply box-border;
+  }
+
+  html {
+    @apply text-base;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html {
+    @apply bg-white-200;
+  }
+
+  html.dark {
+    @apply bg-navy-800;
+  }
+
+  body {
+    @apply min-h-screen bg-white-200 dark:bg-navy-800 font-sans text-black-900 dark:text-white-100 antialiased;
+    line-height: 1.5;
+  }
+
+  a {
+    @apply no-underline;
+    color: inherit;
+  }
+
+  button {
+    @apply cursor-pointer font-sans;
+  }
+
+  textarea, input, select {
+    @apply font-sans;
+  }
+}
+
+/* ── Components layer ───────────────────────────────────────── */
+@layer components {
+
+  /* ── Select dropdown arrow ──── */
+  .select-arrow {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A0A0A0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    padding-right: 2.5rem;
+  }
+}
+
+/* ── Keyframes ──────────────────────────────────────────────── */
+@keyframes tw-spin {
+  to { transform: rotate(360deg); }
+}
