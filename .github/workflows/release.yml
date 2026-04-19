@@ -138,7 +138,6 @@ jobs:
           echo "EOF_SUMMARY" >> $GITHUB_OUTPUT
 
       - name: Sync go.mod.tmpl and update CHANGELOG.md
-        id: sync
         env:
           SUMMARY: ${{ steps.ai_summary.outputs.summary }}
         run: |
@@ -162,16 +161,6 @@ jobs:
 
           rm -f commit_log.txt
 
-      - name: Create PR to master with CHANGELOG and go.mod.tmpl
-        id: create_pr
-        uses: peter-evans/create-pull-request@4e1beaa7521e8b457b572c090b25bd3db56bf1c5 # v5.0.3
-        with:
-          commit-message: "chore: release v${{ steps.read_version.outputs.version }}"
-          title: "chore: release v${{ steps.read_version.outputs.version }}"
-          body: "Auto-generated PR to sync go.mod.tmpl and update changelog after release."
-          branch: release-sync/v${{ steps.read_version.outputs.version }}
-          base: master
-
       - name: Create Git Tag
         run: |
           VERSION=${{ steps.read_version.outputs.version }}
@@ -186,6 +175,16 @@ jobs:
           tag_name: v${{ steps.read_version.outputs.version }}
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
+
+      - name: Create auto-merge PR to master
+        uses: peter-evans/create-pull-request@4e1beaa7521e8b457b572c090b25bd3db56bf1c5 # v5.0.3
+        with:
+          commit-message: "chore: sync go.mod.tmpl and CHANGELOG for v${{ steps.read_version.outputs.version }}"
+          title: "chore: sync go.mod.tmpl and CHANGELOG for v${{ steps.read_version.outputs.version }}"
+          body: "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release."
+          branch: release-sync/v${{ steps.read_version.outputs.version }}
+          base: master
+          labels: auto-merge
 
   auto-merge:
     name: Auto Merge Release PR
