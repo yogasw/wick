@@ -149,10 +149,20 @@ jobs:
           if [ -f docs/changelog.md ]; then
             docs_tempfile=$(mktemp)
             SEPARATOR_LINE=$(grep -n '^---$' docs/changelog.md | head -1 | cut -d: -f1)
+            REPO="yogasw/wick"
+
+            # Get previous tag for compare link
+            PREV_TAG=$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -1)
+            if [ -n "$PREV_TAG" ]; then
+              COMPARE_URL="https://github.com/${REPO}/compare/${PREV_TAG}...v${VERSION}"
+            else
+              COMPARE_URL="https://github.com/${REPO}/releases/tag/v${VERSION}"
+            fi
+
             head -n "$SEPARATOR_LINE" docs/changelog.md > "$docs_tempfile"
             {
               echo ""
-              echo "## v${VERSION}"
+              echo "## [v${VERSION}](${COMPARE_URL})"
               echo ""
               echo "_Released on $(date +'%Y-%m-%d')_"
               echo ""
