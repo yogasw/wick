@@ -282,7 +282,22 @@ jobs:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \
-            --method PUT \
-            --field merge_method=merge \
-            --field commit_title="chore: release v${{ needs.prepare.outputs.version }}"
+
+          # Update branch karena step sebelumnya sudah push commit baru ke master
+          echo "Updating branch for PR #$PR_NUMBER..."
+          gh api repos/yogasw/wick/pulls/$PR_NUMBER/update-branch \
+            --method PUT || true
+
+          # Tunggu GitHub proses update
+          sleep 15
+
+          # Retry merge sampai 3x
+          for i in 1 2 3; do
+            echo "Merge attempt $i..."
+            gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \
+              --method PUT \
+              --field merge_method=merge \
+              --field commit_title="chore: release v${{ needs.prepare.outputs.version }}" && break
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
