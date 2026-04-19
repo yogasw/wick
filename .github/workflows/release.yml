@@ -149,6 +149,7 @@ jobs:
 
             RETRY_DELAY=$(echo "$RESPONSE" | jq -r '[.error.details[]? | select(."@type" == "type.googleapis.com/google.rpc.RetryInfo") | .retryDelay // "0s"] | first // "0s"' 2>/dev/null | tr -d 's' || true)
             RETRY_DELAY=${RETRY_DELAY:-60}
+            [ "$RETRY_DELAY" -lt 30 ] 2>/dev/null && RETRY_DELAY=30
 
             echo "::warning::Attempt $ATTEMPT failed. Waiting ${RETRY_DELAY}s before retry..."
             echo "Raw Response: $RESPONSE"
