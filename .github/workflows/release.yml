@@ -149,7 +149,7 @@ jobs:
           git add template/go.mod.tmpl
           git commit -m "chore: bump go.mod.tmpl to v${{ steps.read_version.outputs.version }}" || true
           git tag v${{ steps.read_version.outputs.version }}
-          git push origin HEAD
+          git push origin HEAD:refs/heads/release
           git push origin v${{ steps.read_version.outputs.version }}
 
       - name: Create GitHub Release
