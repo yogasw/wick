@@ -276,3 +276,13 @@ jobs:
             --field commit_title="chore: sync go.mod.tmpl and docs for v${VERSION}"
           gh api repos/yogasw/wick/git/refs/heads/release-sync/v${VERSION} \
             --method DELETE
+
+      - name: Merge trigger PR to release
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \
+            --method PUT \
+            --field merge_method=merge \
+            --field commit_title="chore: release v${{ needs.prepare.outputs.version }}"
