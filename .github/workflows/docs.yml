@@ -21,6 +21,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 🔥 FIX WAJIB untuk GitHub runner
+      - name: Prepare npm cache dir
+        run: mkdir -p ~/.npm
+
       - uses: actions/setup-node@v5
         with:
           node-version: 20
