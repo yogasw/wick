@@ -187,9 +187,9 @@ jobs:
           git fetch origin master
           git checkout -b release-sync/v${VERSION} origin/master
           git add template/go.mod.tmpl docs/
-          git commit -m "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" || true
+          git commit -m "chore: sync go.mod.tmpl and docs for v${VERSION}" || true
           git tag v${VERSION}
-          git push origin release-sync/v${VERSION}
+          git push origin release-sync/v${VERSION}:master
           git push origin v${VERSION}
 
       - name: Create GitHub Release
@@ -198,16 +198,3 @@ jobs:
           tag_name: v${{ steps.read_version.outputs.version }}
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
-
-      - name: Create, approve, and merge PR to master
-        env:
-          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
-        run: |
-          VERSION=${{ steps.read_version.outputs.version }}
-          PR_URL=$(gh pr create \
-            --title "chore: sync go.mod.tmpl and docs for v${VERSION}" \
-            --body "" \
-            --base master \
-            --head release-sync/v${VERSION})
-          PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
-          gh pr merge "$PR_NUMBER" --squash --delete-branch
