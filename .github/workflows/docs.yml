@@ -1,11 +1,7 @@
 name: Deploy Docs
 
 on:
-  push:
-    branches: [main, master]
-    paths:
-      - 'docs/**'
-      - 'docs/package.json'
+  workflow_call:
   workflow_dispatch:
 
 permissions:

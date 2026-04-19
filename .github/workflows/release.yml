@@ -212,3 +212,12 @@ jobs:
             });
 
             console.log(`PR #${pr_number} merged successfully`);
+
+  deploy-docs:
+    name: Deploy Docs
+    needs: auto-merge
+    uses: ./.github/workflows/docs.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
