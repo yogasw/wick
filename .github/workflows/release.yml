@@ -211,4 +211,9 @@ jobs:
             --base master \
             --head release-sync/v${VERSION})
           PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
-          gh pr merge "$PR_NUMBER" --squash --delete-branch
+          gh api repos/{owner}/{repo}/pulls/$PR_NUMBER/merge \
+            --method PUT \
+            --field merge_method=squash \
+            --field commit_title="chore: sync go.mod.tmpl and docs for v${VERSION}"
+          gh api repos/{owner}/{repo}/git/refs/heads/release-sync/v${VERSION} \
+            --method DELETE
