@@ -151,6 +151,11 @@ jobs:
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
 
+      - name: Update go.mod template version
+        run: |
+          VERSION=${{ steps.read_version.outputs.version }}
+          sed -i "s|github.com/yogasw/wick v.*|github.com/yogasw/wick v${VERSION}|" template/go.mod.tmpl
+
       - name: Update CHANGELOG.md
         env:
           SUMMARY: ${{ steps.ai_summary.outputs.summary }}
