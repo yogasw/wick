@@ -186,15 +186,16 @@ jobs:
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
 
-      - name: Create and merge PR to master
+      - name: Create, approve, and merge PR to master
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
           VERSION=${{ steps.read_version.outputs.version }}
           PR_URL=$(gh pr create \
-            --title "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" \
-            --body "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release." \
+            --title "chore: sync go.mod.tmpl and docs for v${VERSION}" \
+            --body "" \
             --base master \
             --head release-sync/v${VERSION})
           PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
+          gh pr review "$PR_NUMBER" --approve
           gh pr merge "$PR_NUMBER" --squash --delete-branch --admin
