@@ -84,7 +84,7 @@ cd my-app
 wick dev
 ```
 
-This generates templ, rebuilds CSS, and starts the server at **http://localhost:8080**.
+This generates templ, rebuilds CSS, and starts the server at `http://localhost:8080`.
 
 ## 6. Let Claude build your tools
 
