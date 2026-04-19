@@ -143,6 +143,7 @@ jobs:
         run: |
           VERSION=${{ steps.read_version.outputs.version }}
           sed -i "s|github.com/yogasw/wick v.*|github.com/yogasw/wick v${VERSION}|" template/go.mod.tmpl
+          grep -rl "github.com/yogasw/wick@" docs/ | xargs sed -i "s|github.com/yogasw/wick@[^ \"'\`]*|github.com/yogasw/wick@v${VERSION}|g"
 
           tempfile=$(mktemp)
           {
@@ -167,7 +168,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b release-sync/v${VERSION}
-          git add template/go.mod.tmpl CHANGELOG.md
+          git add template/go.mod.tmpl CHANGELOG.md docs/
           git commit -m "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" || true
           git tag v${VERSION}
           git push origin release-sync/v${VERSION}
