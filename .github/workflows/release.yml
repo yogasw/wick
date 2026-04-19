@@ -182,7 +182,8 @@ jobs:
           VERSION=${{ steps.read_version.outputs.version }}
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b release-sync/v${VERSION}
+          git fetch origin master
+          git checkout -b release-sync/v${VERSION} origin/master
           git add template/go.mod.tmpl docs/
           git commit -m "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" || true
           git tag v${VERSION}
