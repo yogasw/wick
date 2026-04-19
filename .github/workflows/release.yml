@@ -145,20 +145,35 @@ jobs:
           sed -i "s|github.com/yogasw/wick v.*|github.com/yogasw/wick v${VERSION}|" template/go.mod.tmpl
           grep -rl "github.com/yogasw/wick@" docs/ | xargs sed -i "s|github.com/yogasw/wick@[^ \"'\`]*|github.com/yogasw/wick@v${VERSION}|g"
 
-          tempfile=$(mktemp)
-          {
-            echo "## v${VERSION}"
-            echo ""
-            echo "_Released on $(date +'%Y-%m-%d')_"
-            echo ""
-            printf '%s\n' "$SUMMARY"
-            echo ""
-            echo "---"
-            echo ""
-          } > "$tempfile"
+          # Update docs/changelog.md - insert new entry after the first --- separator
+          if [ -f docs/changelog.md ]; then
+            docs_tempfile=$(mktemp)
+            SEPARATOR_LINE=$(grep -n '^---$' docs/changelog.md | head -1 | cut -d: -f1)
+            REPO="yogasw/wick"
 
-          [ -f CHANGELOG.md ] && cat CHANGELOG.md >> "$tempfile"
-          mv "$tempfile" CHANGELOG.md
+            # Get previous tag for compare link
+            PREV_TAG=$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -1)
+            if [ -n "$PREV_TAG" ]; then
+              COMPARE_URL="https://github.com/${REPO}/compare/${PREV_TAG}...v${VERSION}"
+            else
+              COMPARE_URL="https://github.com/${REPO}/releases/tag/v${VERSION}"
+            fi
+
+            head -n "$SEPARATOR_LINE" docs/changelog.md > "$docs_tempfile"
+            {
+              echo ""
+              echo "## [v${VERSION}](${COMPARE_URL})"
+              echo ""
+              echo "_Released on $(date +'%Y-%m-%d')_"
+              echo ""
+              printf '%s\n' "$SUMMARY"
+              echo ""
+              echo "---"
+              echo ""
+              tail -n +$((SEPARATOR_LINE + 1)) docs/changelog.md
+            } >> "$docs_tempfile"
+            mv "$docs_tempfile" docs/changelog.md
+          fi
 
           rm -f commit_log.txt
 
@@ -168,7 +183,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b release-sync/v${VERSION}
-          git add template/go.mod.tmpl CHANGELOG.md docs/
+          git add template/go.mod.tmpl docs/
           git commit -m "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" || true
           git tag v${VERSION}
           git push origin release-sync/v${VERSION}
@@ -181,14 +196,15 @@ jobs:
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
 
-      - name: Create and merge PR to master
+      - name: Create, approve, and merge PR to master
         env:
           GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
           VERSION=${{ steps.read_version.outputs.version }}
           PR_URL=$(gh pr create \
-            --title "chore: sync go.mod.tmpl and CHANGELOG for v${VERSION}" \
-            --body "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release." \
+            --title "chore: sync go.mod.tmpl and docs for v${VERSION}" \
+            --body "" \
             --base master \
             --head release-sync/v${VERSION})
-          gh pr merge "$PR_URL" --squash --auto --delete-branch
+          PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --admin
