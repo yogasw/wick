@@ -21,6 +21,7 @@ func Execute(tpl, skills embed.FS) {
 	root.AddCommand(tidyCmd())
 	root.AddCommand(generateCmd())
 	root.AddCommand(runCmd())
+	root.AddCommand(versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

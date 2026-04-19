@@ -39,7 +39,7 @@ func initCmd(tpl, skills embed.FS) *cobra.Command {
 			if err := runIn(name, "go", "mod", "tidy"); err != nil {
 				return fmt.Errorf("go mod tidy: %w", err)
 			}
-			if err := runIn(name, "go", "run", ".", "setup"); err != nil {
+			if err := runIn(name, "wick", "setup"); err != nil {
 				return fmt.Errorf("wick setup: %w", err)
 			}
 
