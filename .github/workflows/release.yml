@@ -191,4 +191,4 @@ jobs:
             --body "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release." \
             --base master \
             --head release-sync/v${VERSION})
-          gh pr merge "$PR_URL" --squash --auto
+          gh pr merge "$PR_URL" --squash --auto --delete-branch
