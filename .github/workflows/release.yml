@@ -147,18 +147,12 @@ jobs:
               break
             fi
 
-            ERROR_CODE=$(echo "$RESPONSE" | jq -r '.error.code // empty' 2>/dev/null || true)
-            RETRY_DELAY=$(echo "$RESPONSE" | jq -r '[.error.details[]? | select(."@type" == "type.googleapis.com/google.rpc.RetryInfo") | .retryDelay // "0s"] | first // "0s"' 2>/dev/null | tr -d 's' || echo "60")
+            RETRY_DELAY=$(echo "$RESPONSE" | jq -r '[.error.details[]? | select(."@type" == "type.googleapis.com/google.rpc.RetryInfo") | .retryDelay // "0s"] | first // "0s"' 2>/dev/null | tr -d 's' || true)
             RETRY_DELAY=${RETRY_DELAY:-60}
 
-            if [ "$ERROR_CODE" = "429" ] && [ $ATTEMPT -lt $MAX_RETRIES ]; then
-              echo "Rate limited. Waiting ${RETRY_DELAY}s before retry..."
-              sleep "$RETRY_DELAY"
-            else
-              echo "::error::Failed to generate summary from Gemini."
-              echo "Raw Response: $RESPONSE"
-              exit 1
-            fi
+            echo "::warning::Attempt $ATTEMPT failed. Waiting ${RETRY_DELAY}s before retry..."
+            echo "Raw Response: $RESPONSE"
+            sleep "$RETRY_DELAY"
           done
 
           if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
