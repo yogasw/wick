@@ -1,0 +1,18 @@
+# .github/workflows/pkg-go-dev-sync.yml
+name: Sync to pkg.go.dev
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger pkg.go.dev sync
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          curl -s "https://pkg.go.dev/github.com/yogasw/wick@${VERSION}" > /dev/null
+          curl -s "https://sum.golang.org/lookup/github.com/yogasw/wick@${VERSION}" > /dev/null
+          echo "Synced $VERSION to pkg.go.dev"
