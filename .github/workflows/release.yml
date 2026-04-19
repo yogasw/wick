@@ -189,7 +189,8 @@ jobs:
           git add template/go.mod.tmpl docs/
           git commit -m "chore: sync go.mod.tmpl and docs for v${VERSION}" || true
           git tag v${VERSION}
-          git push origin release-sync/v${VERSION}:master
+          git push origin --delete release-sync/v${VERSION} || true
+          git push origin release-sync/v${VERSION}:master --force
           git push origin v${VERSION}
 
       - name: Create GitHub Release
