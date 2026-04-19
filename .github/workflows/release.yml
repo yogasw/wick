@@ -176,7 +176,7 @@ jobs:
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
 
-      - name: Create auto-merge PR to master
+      - name: Create PR to master
         uses: peter-evans/create-pull-request@4e1beaa7521e8b457b572c090b25bd3db56bf1c5 # v5.0.3
         with:
           commit-message: "chore: sync go.mod.tmpl and CHANGELOG for v${{ steps.read_version.outputs.version }}"
@@ -184,34 +184,3 @@ jobs:
           body: "Auto-generated PR to sync go.mod.tmpl and CHANGELOG after release."
           branch: release-sync/v${{ steps.read_version.outputs.version }}
           base: master
-          labels: auto-merge
-
-  auto-merge:
-    name: Auto Merge Release PR
-    needs: release
-    runs-on: ubuntu-latest
-    if: success()
-
-    permissions:
-      contents: write
-      pull-requests: write
-
-    steps:
-      - name: Merge PR into release branch
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const pr_number = context.issue.number;
-            console.log(`Merging PR #${pr_number}...`);
-
-            await github.rest.pulls.merge({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr_number,
-              merge_method: 'merge',
-              commit_title: `[Release] Merge PR #${pr_number} into release`,
-              commit_message: `Auto-merged after successful build and release`
-            });
-
-            console.log(`PR #${pr_number} merged successfully`);
