@@ -1,4 +1,8 @@
-# Wick Mini Tools
+# Wick
+
+**Just Prompt. AI Does the Rest.**
+
+Stop copy-pasting AI output into black-box editors. Wick gives AI a real Go project — you own everything it builds.
 
 ### Overview
 
