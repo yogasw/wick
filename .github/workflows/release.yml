@@ -128,36 +128,16 @@ jobs:
           PROMPT=$(printf "Release version: %s\n\nPull Request: %s\n\nDescription:\n%s\n\nCommits:\n%s\n\nYou are an agent responsible for generating GitHub release summaries from pull request commits. Output ONLY valid Markdown compatible with VitePress (no MDX, no HTML tags, no custom components, no frontmatter). Use only these heading levels: ### Added, ### Fixed, ### Improved — include only categories present in the commits. Under each heading use bullet points starting with '- '. Do not add introductory sentences, version headings, or trailing notes. Describe each item specifically and concisely. Professional tone suitable for public changelogs." "$VERSION" "$PR_TITLE" "$PR_BODY" "$COMMITS")
 
           PAYLOAD=$(jq -n --arg text "$PROMPT" '{"contents":[{"parts":[{"text":$text}]}]}')
-          MAX_RETRIES=5
-          ATTEMPT=0
-          SUMMARY=""
+          RESPONSE=$(curl -sS "https://generativelanguage.googleapis.com/v1beta/models/${{ vars.GEMINI_MODEL }}:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            -d "$PAYLOAD" 2>&1) || true
 
-          while [ $ATTEMPT -lt $MAX_RETRIES ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-            echo "Attempt $ATTEMPT..."
-
-            RESPONSE=$(curl -sS "https://generativelanguage.googleapis.com/v1beta/models/${{ vars.GEMINI_MODEL }}:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
-              -H 'Content-Type: application/json' \
-              -X POST \
-              -d "$PAYLOAD" 2>&1) || true
-
-            SUMMARY=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null || true)
-
-            if [ -n "$SUMMARY" ] && [ "$SUMMARY" != "null" ]; then
-              break
-            fi
-
-            RETRY_DELAY=$(echo "$RESPONSE" | jq -r '[.error.details[]? | select(."@type" == "type.googleapis.com/google.rpc.RetryInfo") | .retryDelay // "0s"] | first // "0s"' 2>/dev/null | tr -d 's' || true)
-            RETRY_DELAY=${RETRY_DELAY:-60}
-            RETRY_DELAY=$((RETRY_DELAY + 5))
-
-            echo "::warning::Attempt $ATTEMPT failed. Waiting ${RETRY_DELAY}s before retry..."
-            echo "Raw Response: $RESPONSE"
-            sleep "$RETRY_DELAY"
-          done
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null || true)
 
           if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
-            echo "::error::Failed after $MAX_RETRIES attempts."
+            echo "::error::Failed to generate summary from Gemini."
+            echo "Raw Response: $RESPONSE"
             exit 1
           fi
 
