@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.ADMIN_TOKEN }}
 
       - name: Read version from VERSION file
         id: read_version
@@ -189,8 +190,7 @@ jobs:
           git add template/go.mod.tmpl docs/
           git commit -m "chore: sync go.mod.tmpl and docs for v${VERSION}" || true
           git tag v${VERSION}
-          git push origin --delete release-sync/v${VERSION} || true
-          git push origin release-sync/v${VERSION}:master --force
+          git push origin release-sync/v${VERSION}
           git push origin v${VERSION}
 
       - name: Create GitHub Release
@@ -199,3 +199,16 @@ jobs:
           tag_name: v${{ steps.read_version.outputs.version }}
           name: ${{ steps.ai_summary.outputs.title }}
           body: ${{ steps.ai_summary.outputs.summary }}
+
+      - name: Merge sync branch to master
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          VERSION=${{ steps.read_version.outputs.version }}
+          PR_URL=$(gh pr create \
+            --title "chore: sync go.mod.tmpl and docs for v${VERSION}" \
+            --body "" \
+            --base master \
+            --head release-sync/v${VERSION})
+          PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
+          gh pr merge "$PR_NUMBER" --squash --delete-branch
