@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitepress'
-import llmstxt from 'vitepress-plugin-llms'
+import llmstxt, { copyOrDownloadAsMarkdownButtons } from 'vitepress-plugin-llms'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
@@ -16,6 +16,12 @@ export default defineConfig({
 
   vite: {
     plugins: [llmstxt()],
+  },
+
+  markdown: {
+    config(md) {
+      md.use(copyOrDownloadAsMarkdownButtons)
+    },
   },
 
   themeConfig: {
