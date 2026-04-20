@@ -1,4 +1,4 @@
-name: Deploy Docs
+name: Deploy Docs and Sync pkg.go.dev
 
 on:
   push:
@@ -6,24 +6,15 @@ on:
       - 'v*'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
-  build:
+  build-docs:
+    name: Build Docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      # 🔥 FIX WAJIB untuk GitHub runner
       - name: Prepare npm cache dir
         run: mkdir -p ~/.npm
 
@@ -46,9 +37,13 @@ jobs:
         with:
           path: docs/.vitepress/dist
 
-  deploy:
-    needs: build
+  deploy-docs:
+    name: Deploy Docs
+    needs: build-docs
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -56,3 +51,16 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  sync-pkg:
+    name: Sync to pkg.go.dev
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Trigger pkg.go.dev sync
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "Syncing $VERSION..."
+          curl -s "https://pkg.go.dev/github.com/yogasw/wick@${VERSION}" > /dev/null
+          curl -s "https://sum.golang.org/lookup/github.com/yogasw/wick@${VERSION}" > /dev/null
+          echo "Synced $VERSION to pkg.go.dev"
