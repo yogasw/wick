@@ -1,9 +1,9 @@
 <template>
-  <div class="home-install">
-    <p class="home-install__label">Paste this into any AI agent to get started:</p>
-    <div class="home-install__box">
-      <code class="home-install__code">{{ prompt }}</code>
-      <button class="home-install__btn" @click="copy" :class="{ copied }">
+  <div class="mobile-prompt">
+    <p class="mobile-prompt__label">Paste this into any AI agent to get started:</p>
+    <div class="mobile-prompt__box">
+      <code class="mobile-prompt__code">{{ prompt }}</code>
+      <button class="mobile-prompt__copy" @click="copy" :class="{ copied }">
         {{ copied ? '✓ Copied' : 'Copy' }}
       </button>
     </div>
@@ -25,13 +25,13 @@ function copy() {
 </script>
 
 <style scoped>
-.home-install {
+.mobile-prompt {
+  display: none;
+  margin-top: 24px;
   width: 100%;
-  max-width: 500px;
-  margin: 0 auto;
 }
 
-.home-install__label {
+.mobile-prompt__label {
   font-size: 11px;
   font-weight: 600;
   color: var(--vp-c-text-3);
@@ -40,7 +40,7 @@ function copy() {
   letter-spacing: 0.08em;
 }
 
-.home-install__box {
+.mobile-prompt__box {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--vp-c-divider);
@@ -50,19 +50,19 @@ function copy() {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 }
 
-.home-install__code {
-  padding: 18px 20px;
-  font-size: 12.5px;
+.mobile-prompt__code {
+  display: block;
+  padding: 16px 18px;
+  font-size: 12px;
   font-family: var(--vp-font-family-mono);
   white-space: pre-wrap;
   color: var(--vp-c-text-1);
   line-height: 1.75;
   text-align: left;
-  display: block;
 }
 
-.home-install__btn {
-  padding: 10px 20px;
+.mobile-prompt__copy {
+  padding: 10px 16px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -71,10 +71,15 @@ function copy() {
   background: transparent;
   color: var(--vp-c-brand-1);
   text-align: right;
-  letter-spacing: 0.03em;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s;
 }
 
-.home-install__btn:hover { background: var(--vp-c-brand-soft); }
-.home-install__btn.copied { color: var(--vp-c-green-1); }
+.mobile-prompt__copy:hover { background: var(--vp-c-brand-soft); }
+.mobile-prompt__copy.copied { color: var(--vp-c-green-1); }
+
+@media (max-width: 959px) {
+  .mobile-prompt {
+    display: block;
+  }
+}
 </style>
