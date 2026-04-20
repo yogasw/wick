@@ -52,15 +52,30 @@ static/                 # tailwind output + assets
 - Job surfaces: `/jobs/{Key}` is the **operator** page (Run Now + history). `/manager/jobs/{Key}` is the **admin** page (schedule + config). The module doesn't mount these — wick owns both surfaces.
 - Runtime-editable config: declare a typed `Config` struct with `wick:"desc=...;required;secret;dropdown=a|b|c"` tags and pass an instance as the `cfg` argument to `app.RegisterTool` / `app.RegisterJob` — the framework reflects the struct into rows via `entity.StructToConfigs` once at register time; no `Configs()` method on the module. Rows land in the `configs` table (composite PK `owner, key` where `owner = meta.Key`). Tools read via `c.Cfg("key")` / `c.CfgInt(...)` / `c.CfgBool(...)`. Jobs read via `job.FromContext(ctx).Cfg("key")`. Tag `required` for must-be-set knobs.
 
-## Makefile
+## Commands
 
-| Target          | What it does                                    |
-|-----------------|-------------------------------------------------|
-| `make setup`    | Install tailwind.exe + templ.exe to `./bin/`   |
-| `make dev`      | Generate templ + css, run server               |
-| `make build`    | Generate + minify css + build binary            |
-| `make tailwind-init` | Regenerate `tailwind.config.js`           |
-| `make clean`    | Remove `bin/` + generated css                   |
+Use `wick <command>` (not make):
+
+| Command           | What it does                                    |
+|-------------------|-------------------------------------------------|
+| `wick setup`      | Install tailwind + templ to `./bin/`            |
+| `wick dev`        | Generate templ + css, run server                |
+| `wick build`      | Generate + minify css + build binary            |
+| `wick generate`   | Regenerate templ + css only                     |
+| `wick test`       | Run tests                                       |
+| `wick tidy`       | go mod tidy                                     |
+
+## Skills
+
+Invoke a skill before reading code when the task matches:
+
+| Task | Skill |
+|------|-------|
+| Create/edit a tool or job (`tools/`, `jobs/`) | `/tool-module` |
+| Write Tailwind classes, pick colors, UI styling | `/design-system` |
+| Preview / screenshot a tool in browser | `/preview-tool` |
+
+Skills hold trigger rules + full detail. This file is overview only — don't duplicate what's in a skill.
 
 ## Rules of thumb
 
