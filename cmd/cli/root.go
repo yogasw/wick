@@ -8,12 +8,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func Execute(tpl, skills embed.FS) {
+func Execute(tpl, designSystem embed.FS) {
 	root := &cobra.Command{
 		Use:   "wick",
 		Short: "Scaffold agent-first Go projects",
 	}
-	root.AddCommand(initCmd(tpl, skills))
+	root.AddCommand(initCmd(tpl, designSystem))
+	root.AddCommand(skillCmd(tpl, designSystem))
 	root.AddCommand(devCmd())
 	root.AddCommand(setupCmd())
 	root.AddCommand(buildCmd())

@@ -19,7 +19,8 @@ Wick uses **Tailwind CSS** for styling and **[templ](https://templ.guide)** for 
 ```
 my-app/
 ├── main.go          # register tools and jobs here
-├── agent.md         # AI agent instructions (read by Claude)
+├── AGENTS.md        # AI agent instructions (read by Claude)
+├── .claude/skills/  # bundled AI skills (tool-module, design-system)
 ├── wick.yml         # task runner config
 ├── .env             # environment variables
 ├── tools/
