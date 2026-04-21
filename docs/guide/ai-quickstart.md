@@ -1,6 +1,6 @@
 # AI Quickstart
 
-Every project scaffolded by `wick init` includes `agent.md` — your AI agent reads it first and already knows the file layout, naming rules, and framework conventions.
+Every project scaffolded by `wick init` includes `AGENTS.md` — your AI agent reads it first and already knows the file layout, naming rules, and framework conventions.
 
 ## Setup a new project
 
@@ -81,17 +81,33 @@ that switches between standard and URL-safe base64 encoding.
 
 ---
 
-## How Claude uses agent.md
+## How Claude uses AGENTS.md and skills
 
-When you open a Wick project in Claude Code, it reads `agent.md` first. This file tells Claude:
+When you open a Wick project in Claude Code, it reads `AGENTS.md` first. That file points at the bundled skills in `./.claude/skills/`:
+
+- **`tool-module`** — enforces the tool/job contract, mandates a clarify + plan loop before writing code, and points Claude at the canonical examples (`tools/convert-text/`, `jobs/auto-get-data/`).
+- **`design-system`** — locks down colors, spacing, typography, and dark/light pairing.
+
+Together they tell Claude:
 
 - Where to put new tools and jobs
 - How to name files and packages
 - How `Register` and `Run` funcs must be shaped
 - How to register in `main.go`
 - What `wick:"..."` tags are available for Config structs
+- The correct design tokens for any UI
 
-You don't need to explain the framework in your prompts — just describe what the tool or job should **do**.
+You don't need to explain the framework in your prompts — just describe what the tool or job should **do**. The skill will make Claude ask clarifying questions and propose a plan before it writes any files.
+
+### Keeping skills up to date
+
+After upgrading `wick`, pull in the latest bundled skills:
+
+```bash
+wick skill sync
+```
+
+This replaces `./.claude/skills/tool-module/` and `./.claude/skills/design-system/` with the versions shipped in your current wick binary. It also refreshes the skill table in `AGENTS.md` if the table still matches the default shape, and creates `AGENTS.md` from the template if it's missing. Customized `AGENTS.md` files are left alone.
 
 ## Tips for better results
 
