@@ -11,8 +11,10 @@ import (
 
 // RenderFunc wraps a body fragment in wick's page shell (navbar,
 // layout, theme) and writes the full HTML response. Wick injects it
-// into *Ctx; modules call it indirectly via Ctx.HTML.
-type RenderFunc func(w http.ResponseWriter, r *http.Request, body templ.Component)
+// into *Ctx; modules call it indirectly via Ctx.HTML. The *Ctx hand-
+// off lets the renderer reach c.Missing() / c.Meta() without extra
+// threading from the router.
+type RenderFunc func(c *Ctx, body templ.Component)
 
 // ConfigReader is the narrow slice of the config service wick exposes
 // to tool handlers. Scoping by owner happens in Ctx — handlers see
@@ -137,7 +139,7 @@ func (c *Ctx) Missing() []string {
 
 // HTML renders body inside wick's page shell and writes the full HTML
 // response. Use for any tool page that lives under /tools/...
-func (c *Ctx) HTML(body templ.Component) { c.render(c.W, c.R, body) }
+func (c *Ctx) HTML(body templ.Component) { c.render(c, body) }
 
 // JSON writes v as application/json with the given status code.
 func (c *Ctx) JSON(status int, v any) {

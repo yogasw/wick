@@ -22,11 +22,11 @@ func Register(r tool.Router) {
 func index(c *tool.Ctx) {
 	seed := c.Cfg("init_text")
 	tp := ConvertType(c.Cfg("init_type"))
-	c.HTML(IndexBody(c.Meta().Name, c.Base(), seed, tp, Convert(seed, tp)))
+	c.HTML(IndexBody(c.Base(), seed, tp, Convert(seed, tp)))
 }
 
 func convert(c *tool.Ctx) {
 	text := c.Form("text")
 	ct := ConvertType(c.Form("type"))
-	c.HTML(IndexBody(c.Meta().Name, c.Base(), text, ct, Convert(text, ct)))
+	c.HTML(IndexBody(c.Base(), text, ct, Convert(text, ct)))
 }
