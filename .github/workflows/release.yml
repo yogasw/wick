@@ -15,11 +15,30 @@ jobs:
       contents: read
       pull-requests: read
 
+    outputs:
+      skip: ${{ steps.check_tag.outputs.skip }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+      - name: Check if already released
+        id: check_tag
+        run: |
+          VERSION=$(cat VERSION)
+          TAG_EXISTS=$(git ls-remote --tags origin refs/tags/v${VERSION} | wc -l)
+          if [ "$TAG_EXISTS" -gt "0" ]; then
+            echo "Tag v${VERSION} already exists, skipping..."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Verify PR is from master branch
+        if: steps.check_tag.outputs.skip == 'false'
         uses: actions/github-script@v6
         with:
           script: |
@@ -36,9 +55,32 @@ jobs:
 
             console.log("PR is from master branch. Proceeding with release.");
 
+      - name: Verify PR author is admin
+        if: steps.check_tag.outputs.skip == 'false'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.ADMIN_TOKEN }}
+          script: |
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.payload.pull_request.user.login
+            });
+
+            console.log(`PR author: ${context.payload.pull_request.user.login}`);
+            console.log(`Permission level: ${permission.permission}`);
+
+            if (permission.permission !== 'admin') {
+              core.setFailed(`PR author ${context.payload.pull_request.user.login} does not have admin permission.`);
+              process.exit(1);
+            }
+
+            console.log("PR author is authorized. Proceeding with release.");
+
   prepare:
     name: Prepare Release
     needs: check-source-branch
+    if: needs.check-source-branch.outputs.skip == 'false'
     runs-on: ubuntu-latest
 
     permissions:
@@ -283,15 +325,12 @@ jobs:
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
 
-          # Update branch karena step sebelumnya sudah push commit baru ke master
           echo "Updating branch for PR #$PR_NUMBER..."
           gh api repos/yogasw/wick/pulls/$PR_NUMBER/update-branch \
             --method PUT || true
 
-          # Tunggu GitHub proses update
           sleep 15
 
-          # Retry merge sampai 3x
           for i in 1 2 3; do
             echo "Merge attempt $i..."
             gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \

@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func initCmd(tpl, skills embed.FS) *cobra.Command {
+func initCmd(tpl, designSystem embed.FS) *cobra.Command {
 	var skipSetup bool
 	cmd := &cobra.Command{
 		Use:   "init [name]",
@@ -26,8 +26,8 @@ func initCmd(tpl, skills embed.FS) *cobra.Command {
 			if err := scaffold(tpl, name); err != nil {
 				return err
 			}
-			if err := copySkills(skills, name); err != nil {
-				return fmt.Errorf("copy skills: %w", err)
+			if err := copyDesignSystem(designSystem, name); err != nil {
+				return fmt.Errorf("copy design-system skill: %w", err)
 			}
 			fmt.Printf("created %s/\n", name)
 
@@ -98,8 +98,8 @@ func rewrite(p string, data []byte, name string) []byte {
 	return data
 }
 
-func copySkills(skills embed.FS, name string) error {
-	return fs.WalkDir(skills, ".claude/skills", func(p string, d fs.DirEntry, err error) error {
+func copyDesignSystem(designSystem embed.FS, name string) error {
+	return fs.WalkDir(designSystem, ".claude/skills/design-system", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func copySkills(skills embed.FS, name string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dst, 0o755)
 		}
-		data, err := skills.ReadFile(p)
+		data, err := designSystem.ReadFile(p)
 		if err != nil {
 			return err
 		}
