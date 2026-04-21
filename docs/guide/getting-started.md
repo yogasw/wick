@@ -38,7 +38,7 @@ This scaffolds `my-app/`, runs `go mod tidy`, and downloads Tailwind + templ aut
 ```
 my-app/
 ├── main.go          # register tools and jobs here
-├── agent.md         # AI agent instructions (auto-included)
+├── AGENTS.md         # AI agent instructions (auto-included)
 ├── wick.yml         # task runner config
 ├── tools/
 │   ├── convert-text/   # example tool
@@ -88,7 +88,7 @@ This generates templ, rebuilds CSS, and starts the server at `http://localhost:8
 
 ## 6. Let Claude build your tools
 
-Open the project in Claude Code. Every project includes `agent.md` and Claude skills — Claude already knows the conventions.
+Open the project in Claude Code. Every project includes `AGENTS.md` and Claude skills — Claude already knows the conventions.
 
 Just tell Claude what you need:
 
@@ -98,15 +98,15 @@ add a tool called "base64" that encodes and decodes text
 
 See [AI Quickstart](/guide/ai-quickstart) for more sample prompts.
 
-## Task Runner Reference
+## Common commands
 
-All common tasks are defined in `wick.yml` and run via `go run . <task>`:
+The ones you'll reach for day-to-day:
 
 | Command | What it does |
 |---------|-------------|
-| `wick setup` | Download Tailwind + templ, run `go mod tidy` |
-| `wick dev` | Generate templ + CSS, start server |
+| `wick dev` | Generate templ + CSS, start server at `http://localhost:8080` |
 | `wick build` | Generate + minify CSS, compile binary |
 | `wick test` | Run `go test ./...` with coverage |
-| `wick tidy` | `go fmt` + `go mod tidy` |
-| `wick generate` | templ + go generate + CSS rebuild |
+| `wick skill sync` | Refresh bundled AI skills after upgrading wick |
+
+Full list — built-in CLI commands (`init`, `run`, `skill`, `version`) and task shortcuts from `wick.yml` (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) — see the [CLI reference](/reference/cli).

@@ -5,4 +5,4 @@ Once Go is ready:
 1. Install wick: go install github.com/yogasw/wick@v0.1.13
 2. Ask me: what do you want to name your project?
 3. Scaffold it: wick init <name>
-4. Start the dev server and show me what was created.`
+4. Run: wick dev — then show me what was created.`
