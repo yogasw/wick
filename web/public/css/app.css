@@ -1034,6 +1034,10 @@ textarea, input, select {
   min-width: 12rem;
 }
 
+.min-w-\[8rem\] {
+  min-width: 8rem;
+}
+
 .max-w-container {
   max-width: 1120px;
 }
@@ -1060,6 +1064,10 @@ textarea, input, select {
 
 .flex-shrink-0 {
   flex-shrink: 0;
+}
+
+.flex-grow {
+  flex-grow: 1;
 }
 
 .-translate-y-1\/2 {
@@ -1795,6 +1803,11 @@ textarea, input, select {
   outline-offset: 2px;
 }
 
+.blur {
+  --tw-blur: blur(8px);
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
+}
+
 .filter {
   filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
 }
@@ -2150,6 +2163,11 @@ textarea, input, select {
 .hover\:text-green-700:hover {
   --tw-text-opacity: 1;
   color: rgb(36 88 78 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-neg-400:hover {
+  --tw-text-opacity: 1;
+  color: rgb(235 87 87 / var(--tw-text-opacity, 1));
 }
 
 .hover\:underline:hover {

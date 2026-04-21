@@ -1,6 +1,10 @@
 package view
 
-import "github.com/yogasw/wick/internal/entity"
+import (
+	"strings"
+
+	"github.com/yogasw/wick/internal/entity"
+)
 
 // SSOPage lists every SSO provider. Each provider is a card with an
 // inline edit form — there's only Google for now, but the UI scales
@@ -21,7 +25,120 @@ templ SSOPage(rows []entity.SSOProvider, callbackURL string, user *entity.User) 
 				}
 			</div>
 		</main>
+		@domainChipsScript()
 	}
+}
+
+// domainChipsScript wires every [data-domain-field] on the page. The
+// single inline input commits a chip on space, comma, enter, tab, or
+// blur; backspace on an empty input removes the last chip. Paste
+// splits on any whitespace/comma/semicolon so a chunk like
+// "a.com, b.com" lands as two chips. Hidden `allowed_domains` stays
+// in sync on every mutation so the form submits the canonical
+// comma-joined value.
+templ domainChipsScript() {
+	<script>
+	(function () {
+		function normalize(s) {
+			return (s || '').trim().toLowerCase();
+		}
+		function syncHidden(field) {
+			var hidden = field.querySelector('[data-domain-value]');
+			var chips = field.querySelectorAll('[data-domain-chip]');
+			var vals = [];
+			chips.forEach(function (c) { vals.push(c.getAttribute('data-domain-chip')); });
+			hidden.value = vals.join(',');
+		}
+		function makeChip(field, domain, beforeEl) {
+			var wrap = field.querySelector('[data-domain-chips]');
+			// Skip duplicates silently.
+			if (wrap.querySelector('[data-domain-chip="' + CSS.escape(domain) + '"]')) return;
+			var span = document.createElement('span');
+			span.className = 'inline-flex items-center gap-1 rounded-full bg-white-200 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-mono text-black-900 dark:text-white-100';
+			span.setAttribute('data-domain-chip', domain);
+			span.textContent = domain + ' ';
+			var btn = document.createElement('button');
+			btn.type = 'button';
+			btn.setAttribute('data-domain-remove', '');
+			btn.className = 'text-black-700 dark:text-black-600 hover:text-neg-400';
+			btn.setAttribute('aria-label', 'Remove ' + domain);
+			btn.textContent = '×';
+			span.appendChild(btn);
+			wrap.insertBefore(span, beforeEl || null);
+		}
+		document.querySelectorAll('[data-domain-field]').forEach(function (field) {
+			var input = field.querySelector('[data-domain-input]');
+			var wrap = field.querySelector('[data-domain-chips]');
+			function commit(raw) {
+				// Split on whitespace/comma/semicolon so a pasted list
+				// or a single typed word both funnel through the same
+				// path.
+				var tokens = (raw || '').split(/[\s,;]+/);
+				var added = false;
+				tokens.forEach(function (t) {
+					var v = normalize(t);
+					if (!v) return;
+					makeChip(field, v, input);
+					added = true;
+				});
+				if (added) syncHidden(field);
+			}
+			input.addEventListener('keydown', function (e) {
+				// Space, comma, semicolon, enter, tab → commit current
+				// token. Enter also prevents form submit.
+				if (e.key === ' ' || e.key === ',' || e.key === ';' || e.key === 'Enter' || e.key === 'Tab') {
+					if (normalize(input.value)) {
+						e.preventDefault();
+						commit(input.value);
+						input.value = '';
+					}
+					return;
+				}
+				// Backspace on empty input deletes the last chip.
+				if (e.key === 'Backspace' && input.value === '') {
+					var chips = wrap.querySelectorAll('[data-domain-chip]');
+					if (chips.length > 0) {
+						e.preventDefault();
+						chips[chips.length - 1].remove();
+						syncHidden(field);
+					}
+				}
+			});
+			input.addEventListener('paste', function (e) {
+				var text = (e.clipboardData || window.clipboardData).getData('text');
+				if (!text) return;
+				e.preventDefault();
+				commit(text);
+				input.value = '';
+			});
+			input.addEventListener('blur', function () {
+				if (normalize(input.value)) {
+					commit(input.value);
+					input.value = '';
+				}
+			});
+			// Clicking the wrapper (but not on a chip/remove) focuses
+			// the input so the whole thing feels like one field.
+			wrap.addEventListener('click', function (e) {
+				var removeBtn = e.target.closest('[data-domain-remove]');
+				if (removeBtn) {
+					removeBtn.closest('[data-domain-chip]').remove();
+					syncHidden(field);
+					return;
+				}
+				if (e.target === wrap) input.focus();
+			});
+			// Form submit: commit any pending text the user didn't
+			// separator-terminate before clicking Save.
+			field.closest('form').addEventListener('submit', function () {
+				if (normalize(input.value)) {
+					commit(input.value);
+					input.value = '';
+				}
+			});
+		});
+	})();
+	</script>
 }
 
 templ ssoCard(row entity.SSOProvider, callbackURL string) {
@@ -69,6 +186,7 @@ templ ssoCard(row entity.SSOProvider, callbackURL string) {
 				<p class="text-xs text-black-700 dark:text-black-600">Leave blank to keep the current secret.</p>
 			</div>
 		</div>
+		@domainChipsField(row.AllowedDomains)
 		<div class="mt-5 flex flex-col gap-1.5">
 			<label class="text-sm font-medium text-black-900 dark:text-white-100">Authorized redirect URI</label>
 			<div class="flex items-center gap-2">
@@ -91,8 +209,61 @@ templ ssoCard(row entity.SSOProvider, callbackURL string) {
 	</form>
 }
 
+// domainChipsField renders the allowed-domains editor as removable
+// chips + an add-row. The hidden input `allowed_domains` holds the
+// current comma-joined value that gets submitted with the form; the
+// chip DOM is the source of truth and the hidden value is rebuilt on
+// every add/remove by the inline script below.
+templ domainChipsField(raw string) {
+	<div class="mt-5 flex flex-col gap-1.5" data-domain-field>
+		<label class="text-sm font-medium text-black-900 dark:text-white-100">Allowed email domains</label>
+		<input type="hidden" name="allowed_domains" value={ raw } data-domain-value/>
+		// One combined container styled like a text input: existing
+		// chips flow inline with a flex-grow text input at the end.
+		// Clicking anywhere focuses the input — feels like a single
+		// field even though it's a wrapper.
+		<div
+			class="flex flex-wrap items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 focus-within:border-green-500 focus-within:ring-2 focus-within:ring-green-200 dark:focus-within:ring-green-800"
+			data-domain-chips
+		>
+			for _, d := range splitDomains(raw) {
+				@domainChip(d)
+			}
+			<input
+				type="text"
+				placeholder="example.com"
+				data-domain-input
+				class="flex-1 min-w-[8rem] bg-transparent px-1 py-0.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
+			/>
+		</div>
+		<p class="text-xs text-black-700 dark:text-black-600">Type then press space, comma, or Enter. Backspace removes the last chip. Leave empty to allow all domains.</p>
+	</div>
+}
+
+templ domainChip(d string) {
+	<span class="inline-flex items-center gap-1 rounded-full bg-white-200 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-mono text-black-900 dark:text-white-100" data-domain-chip={ d }>
+		{ d }
+		<button type="button" data-domain-remove class="text-black-700 dark:text-black-600 hover:text-neg-400" aria-label={ "Remove " + d }>×</button>
+	</span>
+}
+
 script copyCallback(url string) {
 	navigator.clipboard.writeText(url);
+}
+
+func splitDomains(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func secretPlaceholder(row entity.SSOProvider) string {

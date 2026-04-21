@@ -157,6 +157,11 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.sso.IsEmailAllowed(entity.SSOProviderGoogle, info.Email) {
+		http.Redirect(w, r, "/auth/login?error=Your+email+domain+is+not+allowed.", http.StatusFound)
+		return
+	}
+
 	user, err := h.svc.UpsertUser(r.Context(), info.Email, info.Name, info.Picture)
 	if err != nil {
 		http.Error(w, "failed to save user: "+err.Error(), http.StatusInternalServerError)
