@@ -50,7 +50,7 @@ func Navbar(user *entity.User) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if user != nil {
-			templ_7745c5c3_Err = ThemePicker(ThemeByID(user.Metadata.Theme), user.Metadata.LightTheme, user.Metadata.DarkTheme).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme)).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
