@@ -1,0 +1,23 @@
+/* Mobile: prompt box below hero text, not above */
+@media (max-width: 959px) {
+  .VPHero .container {
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .VPHero .main {
+    order: 1;
+    text-align: center;
+  }
+
+  .VPHero .image {
+    order: 2;
+    margin-top: 40px;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .VPHero .image {
+    display: none !important;
+  }
+}

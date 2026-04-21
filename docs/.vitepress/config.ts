@@ -55,6 +55,7 @@ export default defineConfig({
       {
         text: 'Reference',
         items: [
+          { text: 'CLI', link: '/reference/cli' },
           { text: 'wick.yml', link: '/reference/wick-yml' },
           { text: 'Environment Variables', link: '/reference/env-vars' },
         ],

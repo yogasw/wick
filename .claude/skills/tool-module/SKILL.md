@@ -15,7 +15,9 @@ paths:
   - "template/**"
 ---
 
-# Module Conventions (tools & jobs)
+# Module Conventions (tools & jobs) — upstream (wick core)
+
+> **Scope:** this skill is for work on **wick itself** — modules shipped under `internal/tools/` and `internal/jobs/` in the wick source tree. If you're building on top of wick in a downstream project (a scaffold generated from `template/`, where modules live under `tools/` and `jobs/` without the `internal/` prefix), use the downstream skill at `template/.claude/skills/tool-module/SKILL.md` — the paths, registration site, and view conventions differ.
 
 Activate this skill whenever the user touches a **tool** (UI module under `internal/tools/`) or a **job** (scheduled worker under `internal/jobs/`) — creating, improving, fixing, refactoring, restyling, or adding features. **The same conventions apply in both directions.** When editing an existing module, first audit it against the rules below and bring it up to spec as part of the change; don't leave it half-compliant.
 

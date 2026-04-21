@@ -28,7 +28,8 @@ docs/             # this documentation site (VitePress)
 ## Adding a Feature
 
 - **Framework change** (new `pkg/` API, new admin page) → edit under `internal/` or `pkg/`
-- **Template change** (new example tool/job, updated agent.md) → edit under `template/`
+- **Template change** (new example tool/job, updated `AGENTS.md`, downstream skill content) → edit under `template/`
+- **Shared skill change** (e.g. `design-system`) → edit under `.claude/skills/` at the repo root
 - **Docs change** → edit under `docs/`
 
 ## Submitting a PR

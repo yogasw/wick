@@ -52,15 +52,37 @@ static/                 # tailwind output + assets
 - Job surfaces: `/jobs/{Key}` is the **operator** page (Run Now + history). `/manager/jobs/{Key}` is the **admin** page (schedule + config). The module doesn't mount these — wick owns both surfaces.
 - Runtime-editable config: declare a typed `Config` struct with `wick:"desc=...;required;secret;dropdown=a|b|c"` tags and pass an instance as the `cfg` argument to `app.RegisterTool` / `app.RegisterJob` — the framework reflects the struct into rows via `entity.StructToConfigs` once at register time; no `Configs()` method on the module. Rows land in the `configs` table (composite PK `owner, key` where `owner = meta.Key`). Tools read via `c.Cfg("key")` / `c.CfgInt(...)` / `c.CfgBool(...)`. Jobs read via `job.FromContext(ctx).Cfg("key")`. Tag `required` for must-be-set knobs.
 
-## Makefile
+## Commands
 
-| Target          | What it does                                    |
-|-----------------|-------------------------------------------------|
-| `make setup`    | Install tailwind.exe + templ.exe to `./bin/`   |
-| `make dev`      | Generate templ + css, run server               |
-| `make build`    | Generate + minify css + build binary            |
-| `make tailwind-init` | Regenerate `tailwind.config.js`           |
-| `make clean`    | Remove `bin/` + generated css                   |
+Use `wick <command>` (not make):
+
+| Command                          | What it does                                               |
+|----------------------------------|------------------------------------------------------------|
+| `wick setup`                     | Install tailwind + templ to `./bin/`                       |
+| `wick dev`                       | Generate templ + css, run server                           |
+| `wick build`                     | Generate + minify css + build binary                       |
+| `wick generate`                  | Regenerate templ + css only                                |
+| `wick test`                      | Run tests                                                  |
+| `wick tidy`                      | go mod tidy                                                |
+| `wick run <task>`                | Run any task from `wick.yml` (advanced)                    |
+| `wick skill list`                | List skills bundled with this wick binary                  |
+| `wick skill sync [name...]`      | Replace `./.claude/skills/<name>/` with bundled version; also refreshes the skill table in `AGENTS.md` if its shape still matches the default. No args = sync all. |
+| `wick version`                   | Print wick version                                         |
+
+## Skills
+
+Invoke the skill before reading code when the task matches:
+
+| Task | Skill |
+|------|-------|
+| Create/edit a tool or job (`tools/`, `jobs/`) | [`tool-module`](./.claude/skills/tool-module/SKILL.md) |
+| UI styling, colors, spacing, components | [`design-system`](./.claude/skills/design-system/SKILL.md) |
+
+The `tool-module` skill holds the full module contract, widget catalog, layering rules, and points at the canonical examples (`tools/convert-text/`, `jobs/auto-get-data/`) — read those end-to-end before writing a new tool/job.
+
+**Before creating a new tool/job:** confirm the request matches the pattern in the canonical examples. If it doesn't, ask before improvising.
+
+For wick framework APIs not covered by the skill: <https://yogasw.github.io/wick/llms.txt>.
 
 ## Rules of thumb
 
