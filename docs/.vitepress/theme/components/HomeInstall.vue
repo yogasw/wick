@@ -15,7 +15,6 @@ import { ref } from 'vue'
 import { START_PROMPT } from '../prompt'
 
 const prompt = START_PROMPT
-
 const copied = ref(false)
 
 function copy() {
@@ -28,53 +27,54 @@ function copy() {
 <style scoped>
 .home-install {
   width: 100%;
-  max-width: 420px;
+  max-width: 500px;
+  margin: 0 auto;
 }
 
 .home-install__label {
-  font-size: 12px;
-  color: var(--vp-c-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vp-c-text-3);
   margin-bottom: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .home-install__box {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--vp-c-divider);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   background: var(--vp-c-bg-soft);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 }
 
 .home-install__code {
-  padding: 16px;
+  padding: 18px 20px;
   font-size: 12.5px;
   font-family: var(--vp-font-family-mono);
   white-space: pre-wrap;
   color: var(--vp-c-text-1);
-  line-height: 1.7;
+  line-height: 1.75;
+  text-align: left;
+  display: block;
 }
 
 .home-install__btn {
-  padding: 10px 16px;
-  font-size: 13px;
-  font-weight: 500;
+  padding: 10px 20px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   border: none;
   border-top: 1px solid var(--vp-c-divider);
-  background: var(--vp-c-bg-soft);
+  background: transparent;
   color: var(--vp-c-brand-1);
   text-align: right;
+  letter-spacing: 0.03em;
   transition: background 0.15s, color 0.15s;
 }
 
-.home-install__btn:hover {
-  background: var(--vp-c-brand-soft);
-}
-
-.home-install__btn.copied {
-  color: var(--vp-c-green-1);
-}
+.home-install__btn:hover { background: var(--vp-c-brand-soft); }
+.home-install__btn.copied { color: var(--vp-c-green-1); }
 </style>
