@@ -16,12 +16,8 @@ var typeOptions = []typeOption{
 	{"escaped-to-lines", "\\n → Multiline", `A\nB\nC → A⏎B⏎C`},
 }
 
-templ IndexBody(title, basePath, inputText string, convertType ConvertType, result string) {
-	<main class="mx-auto w-full max-w-container px-6">
-			<div class="pb-6 pt-8">
-				<h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight text-black-900 dark:text-white-100">{ title }</h1>
-				<p class="mt-2 text-sm text-black-800 dark:text-black-600">Transform text between different letter cases instantly.</p>
-			</div>
+templ IndexBody(basePath, inputText string, convertType ConvertType, result string) {
+	<main class="mx-auto w-full max-w-container px-6 pb-8">
 			<form id="ct-form" action={ templ.URL(basePath) } method="POST" class="mt-4 grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr]">
 				<aside class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-md">
 					<label for="ct-search" class="sr-only">Search conversion type</label>

@@ -6,7 +6,7 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `skill`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
 Run `wick --help` to print the current list.
@@ -70,6 +70,32 @@ Side effects on `./AGENTS.md`:
 - **Present, skill table is customized** (rows don't link to `./.claude/skills/<name>/SKILL.md`) — left untouched. Edit by hand if you want the new skills listed.
 
 The skill folder contents are always replaced — local edits inside `./.claude/skills/<name>/` will be overwritten. Commit anything you want to keep.
+
+---
+
+### `wick upgrade`
+
+Bump the `github.com/yogasw/wick` dependency in the current project's `go.mod` to the latest released version, then tidy and run `dev`.
+
+```bash
+$ wick upgrade
+current: v0.1.13
+latest:  v0.2.0
+upgrade v0.1.13 -> v0.2.0? [y/N]: y
+> go get github.com/yogasw/wick@v0.3.0
+> go mod tidy
+> <dev task from wick.yml>
+```
+
+Steps:
+
+1. Read the pinned version from the `require` block in `./go.mod`.
+2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
+3. If already on latest, exit without prompting.
+4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
+5. Run `go get github.com/yogasw/wick@v0.3.0`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+
+Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 
 ---
 
