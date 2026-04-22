@@ -227,7 +227,7 @@ jobs:
         run: |
           VERSION=${{ needs.prepare.outputs.version }}
           sed -i "s|github.com/yogasw/wick v.*|github.com/yogasw/wick v${VERSION}|" template/go.mod.tmpl
-          grep -rl "github.com/yogasw/wick@" docs/ | xargs sed -i "s|github.com/yogasw/wick@[^ \"'\`]*|github.com/yogasw/wick@v${VERSION}|g"
+          grep -rl "github.com/yogasw/wick@" docs/ template/ | xargs sed -i "s|github.com/yogasw/wick@[^ \"'\`]*|github.com/yogasw/wick@v${VERSION}|g"
 
           if [ -f docs/changelog.md ]; then
             docs_tempfile=$(mktemp)

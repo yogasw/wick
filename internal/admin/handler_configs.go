@@ -28,6 +28,7 @@ func (h *Handler) updateSSO(w http.ResponseWriter, r *http.Request) {
 	clientID := r.FormValue("client_id")
 	enabled := r.FormValue("enabled") == "true"
 	clientSecret := r.FormValue("client_secret")
+	allowedDomains := r.FormValue("allowed_domains")
 
 	// Empty client_secret means "keep the current value" — don't blank
 	// out a stored secret just because the form submitted blank.
@@ -37,7 +38,7 @@ func (h *Handler) updateSSO(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.sso.Update(r.Context(), provider, clientID, clientSecret, enabled); err != nil {
+	if err := h.sso.Update(r.Context(), provider, clientID, clientSecret, enabled, allowedDomains); err != nil {
 		log.Ctx(r.Context()).Error().Msgf("update sso %s: %s", provider, err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

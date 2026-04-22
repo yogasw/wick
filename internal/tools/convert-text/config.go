@@ -22,7 +22,7 @@ package converttext
 type Config struct {
 	// InitText is the seed value dropped into the input textarea on
 	// first load. Empty = blank textarea.
-	InitText string `wick:"desc=Seed text dropped into the input textarea on first load."`
+	InitText string `wick:"desc=Seed text dropped into the input textarea on first load.;required"`
 
 	// InitType is the conversion type pre-selected on first load.
 	// Dropdown options are pinned at module boot.

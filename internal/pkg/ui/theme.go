@@ -42,6 +42,42 @@ func ThemeByID(id string) Theme {
 	return Theme{}
 }
 
+// Defaults applied when a user or guest has no stored preference, so
+// first-time visitors land on GitHub Light with GitHub Dark as the
+// paired dark variant instead of the device system preference.
+const (
+	DefaultTheme      = "github-light"
+	DefaultLightTheme = "github-light"
+	DefaultDarkTheme  = "github-dark"
+)
+
+// EffectiveTheme returns the active theme id, falling back to
+// DefaultTheme when unset.
+func EffectiveTheme(id string) string {
+	if id == "" {
+		return DefaultTheme
+	}
+	return id
+}
+
+// EffectiveLightTheme returns the stored light-mode theme id or
+// DefaultLightTheme when unset.
+func EffectiveLightTheme(id string) string {
+	if id == "" {
+		return DefaultLightTheme
+	}
+	return id
+}
+
+// EffectiveDarkTheme returns the stored dark-mode theme id or
+// DefaultDarkTheme when unset.
+func EffectiveDarkTheme(id string) string {
+	if id == "" {
+		return DefaultDarkTheme
+	}
+	return id
+}
+
 // ── App name (configurable display name) ─────────────────────
 
 type appNameCtxKey struct{}

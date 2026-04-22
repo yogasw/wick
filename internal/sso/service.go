@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/yogasw/wick/internal/entity"
+	"strings"
 	"sync"
 
 	"golang.org/x/oauth2"
@@ -107,11 +108,52 @@ func (s *Service) AnyEnabled() bool {
 }
 
 // Update writes new credentials for a provider and refreshes the cache.
-func (s *Service) Update(ctx context.Context, provider, clientID, clientSecret string, enabled bool) error {
-	if err := s.repo.Update(ctx, provider, clientID, clientSecret, enabled); err != nil {
+// allowedDomains is a comma-separated list of email domains; empty
+// string disables the restriction.
+func (s *Service) Update(ctx context.Context, provider, clientID, clientSecret string, enabled bool, allowedDomains string) error {
+	if err := s.repo.Update(ctx, provider, clientID, clientSecret, enabled, normalizeDomains(allowedDomains)); err != nil {
 		return err
 	}
 	return s.reloadCache(ctx)
+}
+
+// IsEmailAllowed reports whether an email's domain is permitted to sign
+// in through this provider. Empty AllowedDomains means no restriction.
+// Returns false for malformed emails.
+func (s *Service) IsEmailAllowed(provider, email string) bool {
+	p, ok := s.Get(provider)
+	if !ok {
+		return false
+	}
+	if p.AllowedDomains == "" {
+		return true
+	}
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 {
+		return false
+	}
+	domain := strings.ToLower(email[at+1:])
+	for _, d := range strings.Split(p.AllowedDomains, ",") {
+		if strings.ToLower(strings.TrimSpace(d)) == domain {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeDomains trims whitespace around each entry, lowercases it,
+// and drops empty ones. Keeps the stored value canonical so matching
+// doesn't need to re-parse on every login.
+func normalizeDomains(raw string) string {
+	parts := strings.Split(raw, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // OAuthConfig builds the oauth2.Config for a provider, with the

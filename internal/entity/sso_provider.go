@@ -11,8 +11,13 @@ type SSOProvider struct {
 	ClientID     string `gorm:"type:varchar(255)"`
 	ClientSecret string `gorm:"type:varchar(255)"`
 	Enabled      bool   `gorm:"default:false"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// AllowedDomains is a comma-separated list of email domains allowed
+	// to sign in through this provider (e.g. "abc.com,abc.net").
+	// Empty string means no restriction — any email from the provider is
+	// accepted. Matching is case-insensitive.
+	AllowedDomains string `gorm:"type:text"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (SSOProvider) TableName() string { return "sso_providers" }

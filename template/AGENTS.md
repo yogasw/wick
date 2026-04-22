@@ -52,6 +52,23 @@ static/                 # tailwind output + assets
 - Job surfaces: `/jobs/{Key}` is the **operator** page (Run Now + history). `/manager/jobs/{Key}` is the **admin** page (schedule + config). The module doesn't mount these — wick owns both surfaces.
 - Runtime-editable config: declare a typed `Config` struct with `wick:"desc=...;required;secret;dropdown=a|b|c"` tags and pass an instance as the `cfg` argument to `app.RegisterTool` / `app.RegisterJob` — the framework reflects the struct into rows via `entity.StructToConfigs` once at register time; no `Configs()` method on the module. Rows land in the `configs` table (composite PK `owner, key` where `owner = meta.Key`). Tools read via `c.Cfg("key")` / `c.CfgInt(...)` / `c.CfgBool(...)`. Jobs read via `job.FromContext(ctx).Cfg("key")`. Tag `required` for must-be-set knobs.
 
+## Session start
+
+Before answering the first question or running any task in this repo, confirm the toolchain once:
+
+```bash
+go version          # Go must be installed
+wick version       # wick CLI must be on PATH
+```
+
+If `wick` is missing, install it and re-check:
+
+```bash
+go install github.com/yogasw/wick@v0.2.0
+```
+
+Do this at the start of the session — no need to repeat before every command.
+
 ## Commands
 
 Use `wick <command>` (not make):
@@ -67,6 +84,7 @@ Use `wick <command>` (not make):
 | `wick run <task>`                | Run any task from `wick.yml` (advanced)                    |
 | `wick skill list`                | List skills bundled with this wick binary                  |
 | `wick skill sync [name...]`      | Replace `./.claude/skills/<name>/` with bundled version; also refreshes the skill table in `AGENTS.md` if its shape still matches the default. No args = sync all. |
+| `wick upgrade`                   | Bump `github.com/yogasw/wick` in `go.mod` to latest, run `go mod tidy`, then `wick dev` |
 | `wick version`                   | Print wick version                                         |
 
 ## Skills

@@ -185,27 +185,18 @@ Strict call direction: **handler → service → repo**. Never skip a layer, nev
 
 5. **`service.go`** — pure Go logic. Mirror the same computation in `js/mytool.js` when applicable (JS-first rule).
 
-6. **`view.templ`**:
+6. **`view.templ`** — body only. The renderer wraps every tool page in `@ui.Layout` + `@ui.Navbar` + setup banner + shared `ToolHeader` (icon, name, description, admin Settings link) at render time. Do **not** write your own `<html>`, nav, or `<h1>` title — they come from `Meta.Name` / `Meta.Description`.
 
    ```go
    package mytool
-   import (
-       "github.com/yogasw/wick/internal/entity"
-       "github.com/yogasw/wick/internal/pkg/ui"
-   )
-   templ IndexPage(user *entity.User /*, other view state */) {
-       @ui.Layout("My Tool") {
-           @ui.Navbar(user)
-           <main class="mx-auto w-full max-w-container px-6 py-8">
-               <h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight text-black-900 dark:text-white-100">My Tool</h1>
-               <p class="mt-2 text-sm text-black-800 dark:text-black-600">Short description.</p>
-           </main>
-           <script src="/tools/mytool/static/js/mytool.js"></script>
-       }
+
+   templ IndexBody(basePath string /*, other view state */) {
+       <main class="mx-auto w-full max-w-container px-6 pb-8">
+           <!-- your form / content here -->
+       </main>
+       <script src={ basePath + "/static/js/mytool.js" }></script>
    }
    ```
-
-   Use `@ui.Layout` (never write your own `<html>`) and `@ui.Navbar(user)` (never write your own nav).
 
 7. **`handler.go`** — one top-level `Register(r tool.Router)` plus handler funcs. The Router exposes `GET`/`POST`/`PUT`/`DELETE`/`PATCH` plus `Static(prefix, fsys)` and `Meta()`. Paths are **relative** to `/tools/{Meta.Key}`. Inside handlers use `c.Base()` for the absolute base URL, `c.Meta()` for display metadata, `c.Cfg(...)` for runtime config.
 
@@ -217,7 +208,7 @@ Strict call direction: **handler → service → repo**. Never skip a layer, nev
        r.Static("/static/", StaticFS)
    }
    func index(c *tool.Ctx) {
-       c.HTML(IndexPage(c.Base() /*, view state */))
+       c.HTML(IndexBody(c.Base() /*, view state */))
    }
    ```
 

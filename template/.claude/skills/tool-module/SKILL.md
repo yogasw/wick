@@ -148,7 +148,7 @@ Don't pass `struct{}{}` — the No-Config variants make intent explicit.
 6. **Stateless top-level funcs.** No `NewTool(...)` / `NewJob(...)` constructors, no per-module `Handler` struct, no `Meta()` method on the module. Metadata is declared at the `app.RegisterTool` / `app.RegisterJob` call site.
 7. **Logging.** `log.Ctx(ctx).Error().Msgf("failed to X: %s", err.Error())`.
 8. **Names and descriptions matter.** `Meta.Name` is short and human. `Meta.Description` is one sentence — surfaces on the home grid and Ctrl+K palette.
-9. **No `@ui.Layout` / `@ui.Navbar` in your templ.** The framework wraps every tool page. Your templ starts at `<main>` (look at `tools/convert-text/view.templ`).
+9. **No `@ui.Layout` / `@ui.Navbar` / page title in your templ.** The framework wraps every tool page in Layout + Navbar + setup banner + a shared ToolHeader (icon, `Meta.Name`, `Meta.Description`, admin-only Settings link). Your templ starts at `<main>` with no `<h1>` — the title comes from `Meta.Name`. Look at `tools/convert-text/view.templ`.
 10. **No `*http.ServeMux`, no hardcoded `/tools/...`** — use `r.GET/POST/...` + `r.Static("/static/", StaticFS)`, paths relative to the instance mount.
 
 ## Tools
@@ -198,8 +198,32 @@ Strict call direction: **handler → service → repo**. Never skip, never rever
 4. **`static.go`:** `//go:embed js` + `var StaticFS embed.FS`.
 5. **`config.go`** (skip if no knobs): typed struct with `wick:"..."` tags.
 6. **`service.go`** — pure Go. Mirror computation in `js/mytool.js` per JS-first rule.
-7. **`view.templ`** — starts with `<main class="mx-auto w-full max-w-container px-6 py-8">…</main>` + `<script src={ basePath + "/static/js/mytool.js" }></script>`. Pass `basePath` in from the handler via `c.Base()`.
+7. **`view.templ`** — body only. No `<h1>` or description block — the shared ToolHeader above the main draws them from `Meta.Name` / `Meta.Description`. Pass `basePath` in from the handler via `c.Base()`.
+
+   ```go
+   package mytool
+
+   templ IndexBody(basePath string /*, other view state */) {
+       <main class="mx-auto w-full max-w-container px-6 pb-8">
+           <!-- your form / content here -->
+       </main>
+       <script src={ basePath + "/static/js/mytool.js" }></script>
+   }
+   ```
+
 8. **`handler.go`** — one top-level `Register(r tool.Router)` + handler funcs. Paths relative to `/tools/{Meta.Key}`.
+
+   ```go
+   package mytool
+   import "github.com/yogasw/wick/pkg/tool"
+   func Register(r tool.Router) {
+       r.GET("/", index)
+       r.Static("/static/", StaticFS)
+   }
+   func index(c *tool.Ctx) {
+       c.HTML(IndexBody(c.Base() /*, view state */))
+   }
+   ```
 9. **Register** in `main.go`:
 
    ```go

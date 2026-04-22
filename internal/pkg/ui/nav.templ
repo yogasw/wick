@@ -22,7 +22,7 @@ templ Navbar(user *entity.User) {
 					<kbd class="kbd-shortcut font-mono text-xs">Ctrl K</kbd>
 				</button>
 				if user != nil {
-					@ThemePicker(ThemeByID(user.Metadata.Theme), user.Metadata.LightTheme, user.Metadata.DarkTheme)
+					@ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme))
 				} else {
 					{{ g := GuestThemeFromContext(ctx) }}
 					@ThemePicker(ThemeByID(g.Current), g.Light, g.Dark)
