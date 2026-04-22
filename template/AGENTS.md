@@ -84,6 +84,7 @@ Use `wick <command>` (not make):
 | `wick run <task>`                | Run any task from `wick.yml` (advanced)                    |
 | `wick skill list`                | List skills bundled with this wick binary                  |
 | `wick skill sync [name...]`      | Replace `./.claude/skills/<name>/` with bundled version; also refreshes the skill table in `AGENTS.md` if its shape still matches the default. No args = sync all. |
+| `wick upgrade`                   | Bump `github.com/yogasw/wick` in `go.mod` to latest, run `go mod tidy`, then `wick dev` |
 | `wick version`                   | Print wick version                                         |
 
 ## Skills
