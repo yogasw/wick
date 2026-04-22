@@ -47,12 +47,13 @@ func (r *repo) EnsureProvider(ctx context.Context, provider string) error {
 }
 
 // Update writes the editable fields on a provider row.
-func (r *repo) Update(ctx context.Context, provider string, clientID, clientSecret string, enabled bool) error {
+func (r *repo) Update(ctx context.Context, provider string, clientID, clientSecret string, enabled bool, allowedDomains string) error {
 	return r.db.WithContext(ctx).Model(&entity.SSOProvider{}).
 		Where("provider = ?", provider).
 		Updates(map[string]any{
-			"client_id":     clientID,
-			"client_secret": clientSecret,
-			"enabled":       enabled,
+			"client_id":       clientID,
+			"client_secret":   clientSecret,
+			"enabled":         enabled,
+			"allowed_domains": allowedDomains,
 		}).Error
 }

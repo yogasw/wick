@@ -52,14 +52,19 @@ func (m *Middleware) Session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(cookieName)
 		if err != nil {
+			var g ui.GuestTheme
 			if tc, err2 := r.Cookie(guestThemeCookie); err2 == nil {
-				g := parseGuestThemeCookie(tc.Value)
-				ctx := ui.WithGuestTheme(r.Context(), g)
-				ctx = ui.WithTheme(ctx, g.Current)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
+				g = parseGuestThemeCookie(tc.Value)
+			} else {
+				g = ui.GuestTheme{
+					Current: ui.DefaultTheme,
+					Light:   ui.DefaultLightTheme,
+					Dark:    ui.DefaultDarkTheme,
+				}
 			}
-			next.ServeHTTP(w, r)
+			ctx := ui.WithGuestTheme(r.Context(), g)
+			ctx = ui.WithTheme(ctx, g.Current)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		userID, tagIDs, err := decryptSession(m.secrets.SessionSecret(), cookie.Value)
@@ -76,7 +81,7 @@ func (m *Middleware) Session(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), contextKeyUser, user)
 		ctx = context.WithValue(ctx, contextKeyUserTagIDs, tagIDs)
-		ctx = ui.WithTheme(ctx, user.Metadata.Theme)
+		ctx = ui.WithTheme(ctx, ui.EffectiveTheme(user.Metadata.Theme))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

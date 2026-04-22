@@ -101,7 +101,7 @@ func (t *toolRouter) add(method, path string, h tool.HandlerFunc) {
 		path:   t.resolve(path),
 		owner:  t.meta.Name,
 		h:      h,
-		render: render.NewToolRenderer(t.meta, t.hasConfigs),
+		render: render.NewToolRenderer(t.hasConfigs),
 		meta:   t.meta,
 	})
 }

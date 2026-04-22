@@ -8,7 +8,11 @@ package view
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import "github.com/yogasw/wick/internal/entity"
+import (
+	"strings"
+
+	"github.com/yogasw/wick/internal/entity"
+)
 
 // SSOPage lists every SSO provider. Each provider is a card with an
 // inline edit form — there's only Google for now, but the UI scales
@@ -60,9 +64,49 @@ func SSOPage(rows []entity.SSOProvider, callbackURL string, user *entity.User) t
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
+			templ_7745c5c3_Err = domainChipsScript().Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 			return nil
 		})
 		templ_7745c5c3_Err = AdminLayout("Admin · SSO", "configs", user).Render(templ.WithChildren(ctx, templ_7745c5c3_Var2), templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		return nil
+	})
+}
+
+// domainChipsScript wires every [data-domain-field] on the page. The
+// single inline input commits a chip on space, comma, enter, tab, or
+// blur; backspace on an empty input removes the last chip. Paste
+// splits on any whitespace/comma/semicolon so a chunk like
+// "a.com, b.com" lands as two chips. Hidden `allowed_domains` stays
+// in sync on every mutation so the form submits the canonical
+// comma-joined value.
+func domainChipsScript() templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var3 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var3 == nil {
+			templ_7745c5c3_Var3 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<script>\n\t(function () {\n\t\tfunction normalize(s) {\n\t\t\treturn (s || '').trim().toLowerCase();\n\t\t}\n\t\tfunction syncHidden(field) {\n\t\t\tvar hidden = field.querySelector('[data-domain-value]');\n\t\t\tvar chips = field.querySelectorAll('[data-domain-chip]');\n\t\t\tvar vals = [];\n\t\t\tchips.forEach(function (c) { vals.push(c.getAttribute('data-domain-chip')); });\n\t\t\thidden.value = vals.join(',');\n\t\t}\n\t\tfunction makeChip(field, domain, beforeEl) {\n\t\t\tvar wrap = field.querySelector('[data-domain-chips]');\n\t\t\t// Skip duplicates silently.\n\t\t\tif (wrap.querySelector('[data-domain-chip=\"' + CSS.escape(domain) + '\"]')) return;\n\t\t\tvar span = document.createElement('span');\n\t\t\tspan.className = 'inline-flex items-center gap-1 rounded-full bg-white-200 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-mono text-black-900 dark:text-white-100';\n\t\t\tspan.setAttribute('data-domain-chip', domain);\n\t\t\tspan.textContent = domain + ' ';\n\t\t\tvar btn = document.createElement('button');\n\t\t\tbtn.type = 'button';\n\t\t\tbtn.setAttribute('data-domain-remove', '');\n\t\t\tbtn.className = 'text-black-700 dark:text-black-600 hover:text-neg-400';\n\t\t\tbtn.setAttribute('aria-label', 'Remove ' + domain);\n\t\t\tbtn.textContent = '×';\n\t\t\tspan.appendChild(btn);\n\t\t\twrap.insertBefore(span, beforeEl || null);\n\t\t}\n\t\tdocument.querySelectorAll('[data-domain-field]').forEach(function (field) {\n\t\t\tvar input = field.querySelector('[data-domain-input]');\n\t\t\tvar wrap = field.querySelector('[data-domain-chips]');\n\t\t\tfunction commit(raw) {\n\t\t\t\t// Split on whitespace/comma/semicolon so a pasted list\n\t\t\t\t// or a single typed word both funnel through the same\n\t\t\t\t// path.\n\t\t\t\tvar tokens = (raw || '').split(/[\\s,;]+/);\n\t\t\t\tvar added = false;\n\t\t\t\ttokens.forEach(function (t) {\n\t\t\t\t\tvar v = normalize(t);\n\t\t\t\t\tif (!v) return;\n\t\t\t\t\tmakeChip(field, v, input);\n\t\t\t\t\tadded = true;\n\t\t\t\t});\n\t\t\t\tif (added) syncHidden(field);\n\t\t\t}\n\t\t\tinput.addEventListener('keydown', function (e) {\n\t\t\t\t// Space, comma, semicolon, enter, tab → commit current\n\t\t\t\t// token. Enter also prevents form submit.\n\t\t\t\tif (e.key === ' ' || e.key === ',' || e.key === ';' || e.key === 'Enter' || e.key === 'Tab') {\n\t\t\t\t\tif (normalize(input.value)) {\n\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\tcommit(input.value);\n\t\t\t\t\t\tinput.value = '';\n\t\t\t\t\t}\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\t// Backspace on empty input deletes the last chip.\n\t\t\t\tif (e.key === 'Backspace' && input.value === '') {\n\t\t\t\t\tvar chips = wrap.querySelectorAll('[data-domain-chip]');\n\t\t\t\t\tif (chips.length > 0) {\n\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\tchips[chips.length - 1].remove();\n\t\t\t\t\t\tsyncHidden(field);\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t});\n\t\t\tinput.addEventListener('paste', function (e) {\n\t\t\t\tvar text = (e.clipboardData || window.clipboardData).getData('text');\n\t\t\t\tif (!text) return;\n\t\t\t\te.preventDefault();\n\t\t\t\tcommit(text);\n\t\t\t\tinput.value = '';\n\t\t\t});\n\t\t\tinput.addEventListener('blur', function () {\n\t\t\t\tif (normalize(input.value)) {\n\t\t\t\t\tcommit(input.value);\n\t\t\t\t\tinput.value = '';\n\t\t\t\t}\n\t\t\t});\n\t\t\t// Clicking the wrapper (but not on a chip/remove) focuses\n\t\t\t// the input so the whole thing feels like one field.\n\t\t\twrap.addEventListener('click', function (e) {\n\t\t\t\tvar removeBtn = e.target.closest('[data-domain-remove]');\n\t\t\t\tif (removeBtn) {\n\t\t\t\t\tremoveBtn.closest('[data-domain-chip]').remove();\n\t\t\t\t\tsyncHidden(field);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (e.target === wrap) input.focus();\n\t\t\t});\n\t\t\t// Form submit: commit any pending text the user didn't\n\t\t\t// separator-terminate before clicking Save.\n\t\t\tfield.closest('form').addEventListener('submit', function () {\n\t\t\t\tif (normalize(input.value)) {\n\t\t\t\t\tcommit(input.value);\n\t\t\t\t\tinput.value = '';\n\t\t\t\t}\n\t\t\t});\n\t\t});\n\t})();\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -86,115 +130,123 @@ func ssoCard(row entity.SSOProvider, callbackURL string) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var3 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var3 == nil {
-			templ_7745c5c3_Var3 = templ.NopComponent
+		templ_7745c5c3_Var4 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var4 == nil {
+			templ_7745c5c3_Var4 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<form method=\"POST\" action=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<form method=\"POST\" action=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var4 templ.SafeURL
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/admin/configs/sso/" + row.Provider))
+		var templ_7745c5c3_Var5 templ.SafeURL
+		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/admin/configs/sso/" + row.Provider))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 30, Col: 62}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "\" class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><div class=\"flex items-start justify-between gap-4\"><div><div class=\"flex items-center gap-2\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100 capitalize\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var5 string
-		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(row.Provider)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 36, Col: 101}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 147, Col: 62}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</h2>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if row.Enabled && row.ClientID != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<span class=\"rounded-full bg-pos-100 px-2 py-0.5 text-xs font-medium text-pos-400\">Enabled</span>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<span class=\"rounded-full bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600\">Disabled</span>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</div><p class=\"mt-1 text-xs text-black-800 dark:text-black-600\">Provider key: <code class=\"font-mono\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\" class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><div class=\"flex items-start justify-between gap-4\"><div><div class=\"flex items-center gap-2\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100 capitalize\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(row.Provider)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 43, Col: 115}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 153, Col: 101}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</code></p></div><label class=\"flex items-center gap-2 text-sm text-black-900 dark:text-white-100\"><input type=\"checkbox\" name=\"enabled\" value=\"true\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</h2>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if row.Enabled {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, " checked")
+		if row.Enabled && row.ClientID != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<span class=\"rounded-full bg-pos-100 px-2 py-0.5 text-xs font-medium text-pos-400\">Enabled</span>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<span class=\"rounded-full bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600\">Disabled</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, " class=\"h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500\"> Enabled</label></div><div class=\"mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2\"><div class=\"flex flex-col gap-1.5\"><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Client ID</label> <input name=\"client_id\" type=\"text\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</div><p class=\"mt-1 text-xs text-black-800 dark:text-black-600\">Provider key: <code class=\"font-mono\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var7 string
-		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(row.ClientID)
+		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(row.Provider)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 56, Col: 25}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 160, Col: 115}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\" placeholder=\"123456789-abc.apps.googleusercontent.com\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><div class=\"flex flex-col gap-1.5\"><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Client Secret</label> <input name=\"client_secret\" type=\"password\" placeholder=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "</code></p></div><label class=\"flex items-center gap-2 text-sm text-black-900 dark:text-white-100\"><input type=\"checkbox\" name=\"enabled\" value=\"true\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if row.Enabled {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, " checked")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, " class=\"h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500\"> Enabled</label></div><div class=\"mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2\"><div class=\"flex flex-col gap-1.5\"><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Client ID</label> <input name=\"client_id\" type=\"text\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var8 string
-		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(secretPlaceholder(row))
+		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(row.ClientID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 66, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 173, Col: 25}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"><p class=\"text-xs text-black-700 dark:text-black-600\">Leave blank to keep the current secret.</p></div></div><div class=\"mt-5 flex flex-col gap-1.5\"><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Authorized redirect URI</label><div class=\"flex items-center gap-2\"><input readonly value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\" placeholder=\"123456789-abc.apps.googleusercontent.com\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><div class=\"flex flex-col gap-1.5\"><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Client Secret</label> <input name=\"client_secret\" type=\"password\" placeholder=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var9 string
-		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(callbackURL)
+		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(secretPlaceholder(row))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 77, Col: 24}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 183, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\" class=\"flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100\"> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"><p class=\"text-xs text-black-700 dark:text-black-600\">Leave blank to keep the current secret.</p></div></div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = domainChipsField(row.AllowedDomains).Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<div class=\"mt-5 flex flex-col gap-1.5\"><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Authorized redirect URI</label><div class=\"flex items-center gap-2\"><input readonly value=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var10 string
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(callbackURL)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 195, Col: 24}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\" class=\"flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100\"> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -202,16 +254,141 @@ func ssoCard(row entity.SSOProvider, callbackURL string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<button type=\"button\" onclick=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<button type=\"button\" onclick=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var10 templ.ComponentScript = copyCallback(callbackURL)
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10.Call)
+		var templ_7745c5c3_Var11 templ.ComponentScript = copyCallback(callbackURL)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11.Call)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\" class=\"rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600\">Copy</button></div><p class=\"text-xs text-black-700 dark:text-black-600\">Paste this exact URL into the provider's authorized redirect URIs list.</p></div><div class=\"mt-5 flex justify-end\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600\">Save</button></div></form>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\" class=\"rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600\">Copy</button></div><p class=\"text-xs text-black-700 dark:text-black-600\">Paste this exact URL into the provider's authorized redirect URIs list.</p></div><div class=\"mt-5 flex justify-end\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600\">Save</button></div></form>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		return nil
+	})
+}
+
+// domainChipsField renders the allowed-domains editor as removable
+// chips + an add-row. The hidden input `allowed_domains` holds the
+// current comma-joined value that gets submitted with the form; the
+// chip DOM is the source of truth and the hidden value is rebuilt on
+// every add/remove by the inline script below.
+func domainChipsField(raw string) templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var12 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var12 == nil {
+			templ_7745c5c3_Var12 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "<div class=\"mt-5 flex flex-col gap-1.5\" data-domain-field><label class=\"text-sm font-medium text-black-900 dark:text-white-100\">Allowed email domains</label> <input type=\"hidden\" name=\"allowed_domains\" value=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var13 string
+		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(raw)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 220, Col: 57}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "\" data-domain-value><div class=\"flex flex-wrap items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 focus-within:border-green-500 focus-within:ring-2 focus-within:ring-green-200 dark:focus-within:ring-green-800\" data-domain-chips>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		for _, d := range splitDomains(raw) {
+			templ_7745c5c3_Err = domainChip(d).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<input type=\"text\" placeholder=\"example.com\" data-domain-input class=\"flex-1 min-w-[8rem] bg-transparent px-1 py-0.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none\"></div><p class=\"text-xs text-black-700 dark:text-black-600\">Type then press space, comma, or Enter. Backspace removes the last chip. Leave empty to allow all domains.</p></div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		return nil
+	})
+}
+
+func domainChip(d string) templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var14 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var14 == nil {
+			templ_7745c5c3_Var14 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<span class=\"inline-flex items-center gap-1 rounded-full bg-white-200 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-mono text-black-900 dark:text-white-100\" data-domain-chip=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var15 string
+		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(d)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 244, Col: 176}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var16 string
+		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(d)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 245, Col: 5}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, " <button type=\"button\" data-domain-remove class=\"text-black-700 dark:text-black-600 hover:text-neg-400\" aria-label=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var17 string
+		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs("Remove " + d)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/admin/view/sso.templ`, Line: 246, Col: 131}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "\">×</button></span>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -227,6 +404,21 @@ func copyCallback(url string) templ.ComponentScript {
 		Call:       templ.SafeScript(`__templ_copyCallback_1a6e`, url),
 		CallInline: templ.SafeScriptInline(`__templ_copyCallback_1a6e`, url),
 	}
+}
+
+func splitDomains(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func secretPlaceholder(row entity.SSOProvider) string {

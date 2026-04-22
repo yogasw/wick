@@ -1,0 +1,91 @@
+package cli
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"regexp"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+const wickModule = "github.com/yogasw/wick"
+
+func upgradeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "upgrade",
+		Short: "Upgrade wick dependency to latest, tidy, then run dev",
+		RunE: func(c *cobra.Command, args []string) error {
+			return runUpgrade()
+		},
+	}
+}
+
+func runUpgrade() error {
+	current, err := readWickDepVersion()
+	if err != nil {
+		return err
+	}
+	latest, err := fetchLatestWickVersion()
+	if err != nil {
+		return fmt.Errorf("fetch latest: %w", err)
+	}
+	fmt.Printf("current: %s\n", current)
+	fmt.Printf("latest:  %s\n", latest)
+	if current == latest {
+		fmt.Println("already on latest")
+		return nil
+	}
+	fmt.Printf("upgrade %s -> %s? [y/N]: ", current, latest)
+	ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	ans = strings.TrimSpace(strings.ToLower(ans))
+	if ans != "y" && ans != "yes" {
+		fmt.Println("aborted")
+		return nil
+	}
+
+	if err := execCmd(fmt.Sprintf("go get %s@%s", wickModule, latest)); err != nil {
+		return err
+	}
+	if err := execCmd("go mod tidy"); err != nil {
+		return err
+	}
+	return runTask("dev")
+}
+
+func readWickDepVersion() (string, error) {
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		return "", fmt.Errorf("go.mod not found in current directory")
+	}
+	re := regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(wickModule) + `\s+(\S+)`)
+	m := re.FindStringSubmatch(string(data))
+	if len(m) < 2 {
+		return "", fmt.Errorf("%s not found in go.mod require block", wickModule)
+	}
+	return m[1], nil
+}
+
+func fetchLatestWickVersion() (string, error) {
+	resp, err := http.Get("https://proxy.golang.org/" + wickModule + "/@latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("proxy status %d", resp.StatusCode)
+	}
+	var info struct {
+		Version string `json:"Version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", err
+	}
+	if info.Version == "" {
+		return "", fmt.Errorf("empty version from proxy")
+	}
+	return info.Version, nil
+}

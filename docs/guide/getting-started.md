@@ -24,7 +24,7 @@ go install github.com/yogasw/wick@v0.2.0
 Verify:
 
 ```bash
-wick --version
+wick version
 ```
 
 ## 3. Init a project

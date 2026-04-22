@@ -24,7 +24,7 @@ var typeOptions = []typeOption{
 	{"escaped-to-lines", "\\n → Multiline", `A\nB\nC → A⏎B⏎C`},
 }
 
-func IndexBody(title, basePath, inputText string, convertType ConvertType, result string) templ.Component {
+func IndexBody(basePath, inputText string, convertType ConvertType, result string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -45,193 +45,180 @@ func IndexBody(title, basePath, inputText string, convertType ConvertType, resul
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto w-full max-w-container px-6\"><div class=\"pb-6 pt-8\"><h1 class=\"text-[1.75rem] font-semibold leading-tight tracking-tight text-black-900 dark:text-white-100\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto w-full max-w-container px-6 pb-8\"><form id=\"ct-form\" action=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var2 string
-		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(title)
+		var templ_7745c5c3_Var2 templ.SafeURL
+		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(basePath))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 22, Col: 116}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 21, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</h1><p class=\"mt-2 text-sm text-black-800 dark:text-black-600\">Transform text between different letter cases instantly.</p></div><form id=\"ct-form\" action=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\" method=\"POST\" class=\"mt-4 grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr]\"><aside class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-md\"><label for=\"ct-search\" class=\"sr-only\">Search conversion type</label><div class=\"relative mb-3\"><svg class=\"pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-700\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><circle cx=\"11\" cy=\"11\" r=\"7\"></circle><path d=\"m20 20-3-3\"></path></svg> <input id=\"ct-search\" type=\"text\" placeholder=\"Search…\" autocomplete=\"off\" class=\"block w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 py-2 pl-9 pr-3 text-[0.875rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><input type=\"hidden\" id=\"type\" name=\"type\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var3 templ.SafeURL
-		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(basePath))
+		var templ_7745c5c3_Var3 string
+		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(string(convertType))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 25, Col: 50}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 34, Col: 75}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\" method=\"POST\" class=\"mt-4 grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr]\"><aside class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-md\"><label for=\"ct-search\" class=\"sr-only\">Search conversion type</label><div class=\"relative mb-3\"><svg class=\"pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black-700\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><circle cx=\"11\" cy=\"11\" r=\"7\"></circle><path d=\"m20 20-3-3\"></path></svg> <input id=\"ct-search\" type=\"text\" placeholder=\"Search…\" autocomplete=\"off\" class=\"block w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 py-2 pl-9 pr-3 text-[0.875rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><input type=\"hidden\" id=\"type\" name=\"type\" value=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var4 string
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(string(convertType))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 38, Col: 75}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "\"><ul id=\"ct-type-list\" class=\"flex max-h-[60vh] flex-col gap-1 overflow-y-auto pr-1\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\"><ul id=\"ct-type-list\" class=\"flex max-h-[60vh] flex-col gap-1 overflow-y-auto pr-1\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for _, opt := range typeOptions {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<li>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<li>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var5 = []any{"group flex w-full flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors duration-150",
+			var templ_7745c5c3_Var4 = []any{"group flex w-full flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors duration-150",
 				templ.KV("border-green-500 bg-green-200/40 dark:bg-green-800/30", string(convertType) == opt.Value),
 				templ.KV("border-transparent hover:border-white-400 dark:hover:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800", string(convertType) != opt.Value)}
-			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var5...)
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var4...)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<button type=\"button\" data-type-option data-value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<button type=\"button\" data-type-option data-value=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var5 string
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Value)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 41, Col: 31}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\" data-search=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var6 string
-			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Value)
+			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Name + " " + opt.Example)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 45, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 42, Col: 51}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\" data-search=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\" class=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var7 string
-			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Name + " " + opt.Example)
+			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var4).String())
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 46, Col: 51}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 1, Col: 0}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "\" class=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "\"><span class=\"text-[0.875rem] font-medium text-black-900 dark:text-white-100\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var8 string
-			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var5).String())
+			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 1, Col: 0}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 47, Col: 96}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\"><span class=\"text-[0.875rem] font-medium text-black-900 dark:text-white-100\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</span> <span class=\"truncate text-[0.75rem] text-black-800 dark:text-black-600\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var9 string
-			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Name)
+			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Example)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 51, Col: 96}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 48, Col: 95}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "</span> <span class=\"truncate text-[0.75rem] text-black-800 dark:text-black-600\">")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var10 string
-			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(opt.Example)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 52, Col: 95}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</span></button></li>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "</span></button></li>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</ul><p id=\"ct-empty\" class=\"hidden px-3 py-4 text-center text-[0.8125rem] text-black-800 dark:text-black-600\">No matching type</p></aside><section class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-md\"><div class=\"mb-6 flex flex-col gap-2\"><label for=\"text\" class=\"block text-sm font-medium text-black-900 dark:text-white-100\">Input Text</label> <textarea id=\"text\" name=\"text\" rows=\"6\" placeholder=\"Paste or type your text here…\" class=\"block w-full resize-y rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-4 text-[0.9375rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</ul><p id=\"ct-empty\" class=\"hidden px-3 py-4 text-center text-[0.8125rem] text-black-800 dark:text-black-600\">No matching type</p></aside><section class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-md\"><div class=\"mb-6 flex flex-col gap-2\"><label for=\"text\" class=\"block text-sm font-medium text-black-900 dark:text-white-100\">Input Text</label> <textarea id=\"text\" name=\"text\" rows=\"6\" placeholder=\"Paste or type your text here…\" class=\"block w-full resize-y rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-4 text-[0.9375rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(inputText)
+		var templ_7745c5c3_Var10 string
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(inputText)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 68, Col: 18}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 64, Col: 18}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</textarea></div><div class=\"flex items-center gap-4\"><button type=\"submit\" class=\"inline-flex items-center justify-center rounded-lg bg-green-500 px-6 py-4 text-[0.9375rem] font-medium text-white-100 transition-colors duration-150 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-prog-300\">Convert</button></div>")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var12 = []any{"mt-6 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600", templ.KV("hidden", result == "" && inputText == "")}
-		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var12...)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</textarea></div><div class=\"flex items-center gap-4\"><button type=\"submit\" class=\"inline-flex items-center justify-center rounded-lg bg-green-500 px-6 py-4 text-[0.9375rem] font-medium text-white-100 transition-colors duration-150 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-prog-300\">Convert</button></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<div id=\"ct-result\" class=\"")
+		var templ_7745c5c3_Var11 = []any{"mt-6 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600", templ.KV("hidden", result == "" && inputText == "")}
+		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var11...)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<div id=\"ct-result\" class=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var12 string
+		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var11).String())
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 1, Col: 0}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\"><div class=\"flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3\"><span class=\"text-[0.8125rem] font-medium text-black-800 dark:text-black-600\">Result</span> <button type=\"button\" data-copy class=\"inline-flex items-center justify-center rounded-lg border border-green-500 bg-white-100 dark:bg-navy-700 px-3 py-2 text-[0.8125rem] font-medium text-green-500 transition-colors duration-150 hover:bg-green-200 hover:border-green-600 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300\">Copy</button></div><pre class=\"block min-h-24 w-full whitespace-pre-wrap break-all bg-white-100 dark:bg-navy-800 px-4 py-4 font-mono text-[0.9375rem] leading-relaxed text-black-900 dark:text-white-100\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var13 string
-		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var12).String())
+		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(result)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 1, Col: 0}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 83, Col: 197}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\"><div class=\"flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3\"><span class=\"text-[0.8125rem] font-medium text-black-800 dark:text-black-600\">Result</span> <button type=\"button\" data-copy class=\"inline-flex items-center justify-center rounded-lg border border-green-500 bg-white-100 dark:bg-navy-700 px-3 py-2 text-[0.8125rem] font-medium text-green-500 transition-colors duration-150 hover:bg-green-200 hover:border-green-600 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300\">Copy</button></div><pre class=\"block min-h-24 w-full whitespace-pre-wrap break-all bg-white-100 dark:bg-navy-800 px-4 py-4 font-mono text-[0.9375rem] leading-relaxed text-black-900 dark:text-white-100\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</pre></div></section></form></main><script src=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var14 string
-		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(result)
+		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(basePath + "/static/js/convert.js")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 87, Col: 197}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 88, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "</pre></div></section></form></main><script src=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var15 string
-		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(basePath + "/static/js/convert.js")
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/tools/convert-text/view.templ`, Line: 92, Col: 49}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "\"></script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\"></script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
