@@ -1,0 +1,177 @@
+package connectors
+
+import (
+	"context"
+	"time"
+
+	"gorm.io/gorm"
+
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// Repo wraps the gorm handle and exposes the connector-specific CRUD
+// surface used by the admin UI, the MCP dispatch layer, and the
+// run-history retention job.
+//
+// All queries scope on context, so cancellation from the HTTP handler
+// (or the cron worker) propagates cleanly into the DB driver.
+type Repo struct {
+	db *gorm.DB
+}
+
+// NewRepo wires a Repo around an existing gorm handle.
+func NewRepo(db *gorm.DB) *Repo {
+	return &Repo{db: db}
+}
+
+// ── Connector CRUD ───────────────────────────────────────────────────
+
+// Create inserts a new Connector row. The BeforeCreate hook on the
+// entity stamps an ID if the caller left it empty.
+func (r *Repo) Create(ctx context.Context, c *entity.Connector) error {
+	return r.db.WithContext(ctx).Create(c).Error
+}
+
+// Get loads a Connector by ID. Returns gorm.ErrRecordNotFound when no
+// row matches.
+func (r *Repo) Get(ctx context.Context, id string) (*entity.Connector, error) {
+	var c entity.Connector
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&c).Error
+	return &c, err
+}
+
+// List returns every Connector row, newest first. Admin view.
+func (r *Repo) List(ctx context.Context) ([]entity.Connector, error) {
+	var out []entity.Connector
+	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&out).Error
+	return out, err
+}
+
+// ListByKey returns every Connector that instantiates the given code
+// definition (e.g. all "loki" rows).
+func (r *Repo) ListByKey(ctx context.Context, key string) ([]entity.Connector, error) {
+	var out []entity.Connector
+	err := r.db.WithContext(ctx).Where("`key` = ?", key).Order("created_at DESC").Find(&out).Error
+	return out, err
+}
+
+// CountByKey returns how many Connector rows exist for a code key.
+// Used by Bootstrap to decide whether to auto-create the initial row.
+func (r *Repo) CountByKey(ctx context.Context, key string) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&entity.Connector{}).Where("`key` = ?", key).Count(&n).Error
+	return n, err
+}
+
+// Update writes label / configs / disabled changes to an existing row.
+// Identity fields (ID, Key, ParentID, CreatedBy, CreatedAt) are
+// untouched.
+func (r *Repo) Update(ctx context.Context, c *entity.Connector) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", c.ID).
+		Updates(map[string]any{
+			"label":      c.Label,
+			"configs":    c.Configs,
+			"disabled":   c.Disabled,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// SetDisabled flips the Disabled flag without touching anything else.
+// Used by the admin manager toggle.
+func (r *Repo) SetDisabled(ctx context.Context, id string, disabled bool) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"disabled":   disabled,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// Delete hard-deletes a connector row plus its operation toggles. Run
+// history is intentionally preserved — deleting a connector should not
+// retroactively erase the audit trail. The retention job purges old
+// runs on its own cadence.
+func (r *Repo) Delete(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorOperation{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", id).Delete(&entity.Connector{}).Error
+	})
+}
+
+// ── ConnectorOperation toggles ──────────────────────────────────────
+
+// ListOperations returns the toggle rows for a connector. Missing
+// rows mean "use the per-op default" (Destructive=false → on,
+// Destructive=true → off); callers fold the defaults in themselves.
+func (r *Repo) ListOperations(ctx context.Context, connectorID string) ([]entity.ConnectorOperation, error) {
+	var out []entity.ConnectorOperation
+	err := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).Find(&out).Error
+	return out, err
+}
+
+// SetOperation upserts the toggle for a single (connector, op) pair.
+// Insert when no row exists, update when it does.
+func (r *Repo) SetOperation(ctx context.Context, connectorID, opKey string, enabled bool) error {
+	row := entity.ConnectorOperation{
+		ConnectorID:  connectorID,
+		OperationKey: opKey,
+		Enabled:      enabled,
+		UpdatedAt:    time.Now(),
+	}
+	return r.db.WithContext(ctx).Save(&row).Error
+}
+
+// ── ConnectorRun (history) ──────────────────────────────────────────
+
+// CreateRun inserts a row at the start of an execution. Status should
+// be ConnectorRunStatusRunning; FinishRun finalizes it.
+func (r *Repo) CreateRun(ctx context.Context, run *entity.ConnectorRun) error {
+	return r.db.WithContext(ctx).Create(run).Error
+}
+
+// FinishRun stamps terminal status, the response body, error message,
+// and the timing/HTTP-status metrics. EndedAt is set to now.
+func (r *Repo) FinishRun(ctx context.Context, runID string, status entity.ConnectorRunStatus, response, errMsg string, latencyMs, httpStatus int) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&entity.ConnectorRun{}).Where("id = ?", runID).
+		Updates(map[string]any{
+			"status":        status,
+			"response_json": response,
+			"error_msg":     errMsg,
+			"latency_ms":    latencyMs,
+			"http_status":   httpStatus,
+			"ended_at":      &now,
+		}).Error
+}
+
+// GetRun loads a single run, used by the retry handler to replay the
+// stored RequestJSON against the current Connector.Configs.
+func (r *Repo) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
+	var run entity.ConnectorRun
+	err := r.db.WithContext(ctx).Where("id = ?", runID).First(&run).Error
+	return &run, err
+}
+
+// ListRunsByConnector returns the most recent runs for one connector,
+// newest first. Backed by composite index (connector_id, started_at).
+func (r *Repo) ListRunsByConnector(ctx context.Context, connectorID string, limit int) ([]entity.ConnectorRun, error) {
+	var out []entity.ConnectorRun
+	q := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).Order("started_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	err := q.Find(&out).Error
+	return out, err
+}
+
+// PurgeRunsOlderThan deletes ConnectorRun rows whose StartedAt is
+// before the cutoff. Returns how many rows were removed so the
+// retention job can log progress.
+//
+// Backed by the standalone started_at index — a single range delete,
+// no composite index needed.
+func (r *Repo) PurgeRunsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	res := r.db.WithContext(ctx).Where("started_at < ?", cutoff).Delete(&entity.ConnectorRun{})
+	return res.RowsAffected, res.Error
+}
