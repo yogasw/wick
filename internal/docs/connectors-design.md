@@ -30,6 +30,17 @@ bukan retrofit Tools.
 
 ---
 
+## 1.1 Prinsip desain
+
+**Wick side boleh ribet, user side wajib simple.** Kompleksitas
+(OAuth dance, JWT validation, tag resolution, transform response,
+encryption, MCP dispatch) ditelan di sisi wick. Yg user lihat:
+form isi cred, klik Save, copy 1 token, paste ke Claude Desktop —
+selesai. Setiap pilihan UX ditimbang dgn pertanyaan: "user mesti
+ngerti apa supaya ini jalan?" — jawabannya harus minimal.
+
+---
+
 ## 2. Konsep
 
 **Connector** = modul Go yang ditulis developer, bungkus satu API

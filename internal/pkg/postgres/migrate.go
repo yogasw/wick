@@ -28,6 +28,8 @@ func Migrate(db *gorm.DB) {
 		&entity.SSOProvider{},
 		&entity.Job{},
 		&entity.JobRun{},
+		&entity.Connector{},
+		&entity.ConnectorOperation{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())
