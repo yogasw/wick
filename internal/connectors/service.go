@@ -313,16 +313,22 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 // it as a struct keeps the call site readable when more fields are
 // added (e.g. retry parent, MCP session id).
 type ExecuteParams struct {
-	ConnectorID string
+	ConnectorID  string
 	OperationKey string
-	Input       map[string]string
-	Source      entity.ConnectorRunSource
-	UserID      string
-	IPAddress   string
-	UserAgent   string
+	Input        map[string]string
+	Source       entity.ConnectorRunSource
+	UserID       string
+	IPAddress    string
+	UserAgent    string
 	// ParentRunID is set when this call replays an earlier run.
 	// Intended for use with Source == ConnectorRunSourceRetry.
 	ParentRunID *string
+	// Progress, when non-nil, receives incremental progress events the
+	// connector emits via Ctx.ReportProgress. The MCP SSE handler wires
+	// a reporter that frames each event as a notifications/progress
+	// JSON-RPC message; the JSON transport leaves this nil so events
+	// are dropped harmlessly.
+	Progress connector.ProgressReporter
 }
 
 // ExecuteResult carries the outcome of one Execute call. Returned
@@ -410,7 +416,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("create run: %w", err)
 	}
 
-	cctx := connector.NewCtx(ctx, c.ID, configs, p.Input, s.httpClient)
+	cctx := connector.NewCtx(ctx, c.ID, configs, p.Input, s.httpClient, p.Progress)
 	value, execErr := op.Execute(cctx)
 	latencyMs := int(time.Since(startedAt).Milliseconds())
 

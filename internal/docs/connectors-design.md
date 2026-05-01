@@ -476,13 +476,21 @@ dgn 4 tab: Account · Access Tokens · Connected Apps · MCP.
 - Streamable HTTP menggantikan transport SSE legacy di spec MCP
   versi sekarang.
 - Mayoritas request-response — JSON cukup buat 90% connector.
-  Upgrade SSE disisakan buat call long-running.
+- Streamable HTTP (spec 2025-03-26) bisa dipake buat tools/call: client
+  kirim `Accept: text/event-stream`, server balas SSE body. Connector
+  emit progress lewat `Ctx.ReportProgress` → di-frame jadi
+  `notifications/progress`. Heartbeat `:keepalive` tiap 15s biar reverse
+  proxy ga reap koneksi mid-call.
+- GET-based SSE (server-initiated) belum dipakai — wick ga punya msg
+  yg di-push tanpa client request dulu.
 
 ### 7.2 Surface endpoint
 
 ```
 POST /mcp                                       -- JSON-RPC 2.0 (implemented)
-GET  /mcp                                       -- stream SSE (belum, opsional)
+                                                   - Accept: application/json     → JSON response (default)
+                                                   - Accept: text/event-stream    → Streamable HTTP for tools/call
+GET  /mcp                                       -- server→client SSE (belum, opsional)
 
 -- Auth metadata (implemented)
 GET  /.well-known/oauth-protected-resource      -- RFC 9728

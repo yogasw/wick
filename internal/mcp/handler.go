@@ -13,10 +13,20 @@ import (
 	"github.com/yogasw/wick/internal/login"
 )
 
-// protocolVersion is the MCP version this server speaks. Bumped when
-// the JSON-RPC surface changes shape; clients negotiate via the
-// "initialize" handshake.
-const protocolVersion = "2024-11-05"
+// supportedProtocolVersions lists every MCP revision this server can
+// speak, newest first. The JSON-RPC method shapes (initialize,
+// tools/list, tools/call) are identical across these revisions — the
+// difference is transport (Streamable HTTP in 2025-03-26+ vs the
+// 2024-11-05 single-shot POST). Wick is POST-only either way, which
+// the spec allows for both: a Streamable-HTTP client that doesn't
+// receive `text/event-stream` simply treats the response as a single
+// JSON-RPC reply.
+//
+// latestProtocolVersion is the version returned when the client asks
+// for one we don't support, per spec §lifecycle.
+var supportedProtocolVersions = []string{"2025-03-26", "2024-11-05"}
+
+const latestProtocolVersion = "2025-03-26"
 
 // Handler wires the MCP JSON-RPC surface — tools/list, tools/call,
 // initialize. Bearer auth is applied by AuthMiddleware before this
@@ -65,6 +75,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Streamable HTTP (spec 2025-03-26): when the client lists
+	// text/event-stream in Accept and the method actually benefits from
+	// streaming (currently just tools/call — that's the path that calls
+	// Execute and may emit progress notifications), respond with an SSE
+	// body instead of a single JSON document. Other methods always
+	// reply JSON regardless of Accept; the spec lets us choose.
+	if req.Method == "tools/call" && wantsSSE(r) {
+		h.handleToolsCallSSE(w, r, req)
+		return
+	}
+
 	switch req.Method {
 	case "initialize":
 		h.handleInitialize(w, r, req)
@@ -104,12 +125,37 @@ type toolsCapability struct {
 	ListChanged bool `json:"listChanged"`
 }
 
+// initializeParams is the subset of the client's "initialize" payload
+// we read. The full payload also carries clientInfo and capabilities,
+// but wick doesn't react to those — capability negotiation here is
+// one-way (server advertises its own).
+type initializeParams struct {
+	ProtocolVersion string `json:"protocolVersion"`
+}
+
 func (h *Handler) handleInitialize(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
+	var p initializeParams
+	_ = json.Unmarshal(req.Params, &p) // tolerate older clients that omit params
 	writeRPCResult(w, req.ID, initializeResult{
-		ProtocolVersion: protocolVersion,
+		ProtocolVersion: negotiateProtocolVersion(p.ProtocolVersion),
 		ServerInfo:      serverInfo{Name: "wick", Version: "0.4.0"},
 		Capabilities:    serverCapabilities{Tools: toolsCapability{ListChanged: false}},
 	})
+}
+
+// negotiateProtocolVersion implements the spec rule: if the client's
+// requested version is one we support, echo it back; otherwise return
+// our latest. Echoing the client's version keeps both sides on the
+// same shape — important for clients that key transport behavior off
+// the negotiated version (e.g. only opening a GET SSE stream after
+// confirming 2025-03-26+).
+func negotiateProtocolVersion(requested string) string {
+	for _, v := range supportedProtocolVersions {
+		if v == requested {
+			return v
+		}
+	}
+	return latestProtocolVersion
 }
 
 // ── tools/list ───────────────────────────────────────────────────────
@@ -250,6 +296,16 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, _ *http.Request, req rp
 type toolCallParams struct {
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
+	// Meta carries the optional _meta object the spec defines for tools/
+	// call. Wick reads only progressToken from it — everything else is
+	// transparent. Token type is RawMessage because the spec allows
+	// either string or number; we echo it verbatim in progress notifs
+	// so the client matches them to its outstanding request.
+	Meta *callMeta `json:"_meta,omitempty"`
+}
+
+type callMeta struct {
+	ProgressToken json.RawMessage `json:"progressToken,omitempty"`
 }
 
 // toolCallResult is the MCP-spec content envelope. We always return a
