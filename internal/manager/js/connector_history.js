@@ -23,7 +23,9 @@
   }
 
   // Row expand/collapse — clicking a summary row toggles the matching
-  // detail row. Chevron rotates to mark open state.
+  // detail row. Chevron rotates to mark open state. The Retry link
+  // inside the detail panel stops propagation so clicking it does not
+  // collapse the row.
   document.querySelectorAll("[data-history-toggle]").forEach((tr) => {
     const id = tr.dataset.historyToggle;
     const detail = document.querySelector(`[data-history-detail="${id}"]`);
@@ -36,5 +38,9 @@
         chevron.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
       }
     });
+  });
+
+  document.querySelectorAll("[data-history-retry]").forEach((a) => {
+    a.addEventListener("click", (e) => e.stopPropagation());
   });
 })();

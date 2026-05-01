@@ -9,7 +9,7 @@ import (
 // connector row. The operation dropdown is URL-synced (?op=) so that
 // switching ops never costs a page back-and-forth, and links from the
 // detail page can preselect a specific op.
-templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp string, user *entity.User) {
+templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp string, prefill map[string]string, user *entity.User) {
 	@Layout("Test · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -70,11 +70,11 @@ templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp st
 					for _, op := range mod.Operations {
 						if op.Key == activeOp {
 							<div data-test-form={ op.Key } class="mt-4 space-y-3">
-								@testFormBody(op)
+								@testFormBody(op, prefill)
 							</div>
 						} else {
 							<div data-test-form={ op.Key } class="mt-4 hidden space-y-3">
-								@testFormBody(op)
+								@testFormBody(op, nil)
 							</div>
 						}
 					}
@@ -93,16 +93,16 @@ templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp st
 	}
 }
 
-templ testFormBody(op connector.Operation) {
+templ testFormBody(op connector.Operation, prefill map[string]string) {
 	if len(op.Input) == 0 {
 		<p class="text-xs text-black-700 dark:text-black-600">This operation takes no input.</p>
 	}
 	for _, in := range op.Input {
-		@testInputField(in)
+		@testInputField(in, prefill[in.Key])
 	}
 }
 
-templ testInputField(in entity.Config) {
+templ testInputField(in entity.Config, value string) {
 	<div>
 		<label class="block text-xs font-medium text-black-800 dark:text-black-600">
 			{ in.Key }
@@ -119,23 +119,34 @@ templ testInputField(in entity.Config) {
 					data-test-input={ in.Key }
 					rows="4"
 					class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
-				></textarea>
+				>{ value }</textarea>
 			case "checkbox":
-				<input
-					data-test-input={ in.Key }
-					type="checkbox"
-					class="mt-1 h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"
-				/>
+				if value == "true" {
+					<input
+						data-test-input={ in.Key }
+						type="checkbox"
+						checked
+						class="mt-1 h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"
+					/>
+				} else {
+					<input
+						data-test-input={ in.Key }
+						type="checkbox"
+						class="mt-1 h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"
+					/>
+				}
 			case "number":
 				<input
 					data-test-input={ in.Key }
 					type="number"
+					value={ value }
 					class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
 				/>
 			default:
 				<input
 					data-test-input={ in.Key }
 					type="text"
+					value={ value }
 					class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
 				/>
 		}

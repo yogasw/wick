@@ -473,6 +473,12 @@ func (s *Service) Retry(ctx context.Context, originalRunID, userID, ipAddr, user
 
 // ── Retention ───────────────────────────────────────────────────────
 
+// GetRun loads a single ConnectorRun by ID. Backs the test page's
+// prefill flow when a Retry link is followed from the history view.
+func (s *Service) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
+	return s.repo.GetRun(ctx, runID)
+}
+
 // ListRuns returns the most recent ConnectorRun rows for a connector,
 // newest first. Used by the admin detail page to render history under
 // the test panel.

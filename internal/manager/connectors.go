@@ -168,7 +168,24 @@ func (h *Handler) connectorTestPage(w http.ResponseWriter, r *http.Request) {
 	if activeOp == "" && len(mod.Operations) > 0 {
 		activeOp = mod.Operations[0].Key
 	}
-	view.ConnectorTestPage(mod, row, activeOp, user).Render(ctx, w)
+
+	// `?prefill=<runID>` populates the active op's input fields with the
+	// payload from a prior run so the user can review/edit before
+	// re-running. Silent fall-through on lookup failure — prefill is a
+	// convenience, not a hard dependency.
+	var prefill map[string]string
+	if runID := r.URL.Query().Get("prefill"); runID != "" {
+		if run, err := h.connectors.GetRun(ctx, runID); err == nil && run != nil && run.ConnectorID == row.ID {
+			if activeOp == "" {
+				activeOp = run.OperationKey
+			}
+			if run.RequestJSON != "" {
+				_ = json.Unmarshal([]byte(run.RequestJSON), &prefill)
+			}
+		}
+	}
+
+	view.ConnectorTestPage(mod, row, activeOp, prefill, user).Render(ctx, w)
 }
 
 // connectorHistoryPage renders the standalone runs audit surface with

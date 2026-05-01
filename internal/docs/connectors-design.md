@@ -2,10 +2,11 @@
 
 Status: implemented (modul + persistence + MCP JSON-RPC meta-tool pattern
 + auth dual-mode PAT & OAuth 2.1 + per-user grant management + admin UI:
-list/detail row CRUD, dedicated test page, dedicated history page dgn
-filter URL-driven, admin overview pages utk connector instance, access
-token, connected app cross-user, admin dashboard split Modules vs Access
-stats + nav grouping ke Access/Setup dropdown + retention cleanup job
+list/detail row CRUD, dedicated test page (dgn ?prefill=<runID> dari
+history), dedicated history page dgn filter URL-driven + Retry link ke
+test panel, admin overview pages utk connector instance, access token,
+connected app cross-user, admin dashboard split Modules vs Access stats
++ nav grouping ke Access/Setup dropdown + retention cleanup job
 `connector-runs-purge` di worker).
 Update terakhir: 2026-05-01.
 
@@ -401,6 +402,15 @@ plus profile area user-facing buat manage auth.
   — back/refresh preserve pilihan, link dari detail page bisa preselect.
 - **No back to detail**: ganti operation = ganti form aja, tetap di
   page yg sama. Tombol Run + result panel tetap visible.
+- **Prefill dari history**: query param `?prefill=<runID>` lookup
+  `Service.GetRun(runID)` (gated ke connector row yg sama), decode
+  `RequestJSON` ke map, terus render `value=...` per input field
+  (textarea pakai inner text, checkbox pakai `checked`). Field input
+  matching key prior run ke-isi otomatis — user bisa edit lalu klik
+  Run. Lookup gagal = silent fallthrough (form kosong), prefill = nice-
+  to-have, bukan hard dependency. Ganti dropdown op tetap rewrite URL
+  ke `?op=...` aja → prefill drop saat user pindah op (intentional;
+  payload op lain ga relevan).
 - Backend handler `connectorTestPage` + endpoint POST `/test` reuse
   `Service.Execute` dgn `Source=ConnectorRunSourceTest`. Path code yg
   sama dgn MCP `tools/call` — verifikasi behavior end-to-end.
@@ -439,6 +449,13 @@ plus profile area user-facing buat manage auth.
 - **Expand row**: klik row toggle detail row di bawahnya — dua kolom
   Request/Response (pretty-printed JSON), plus run ID + IP + UA + HTTP
   status di footer. Zero round trip (data sudah di DOM).
+- **Retry link**: detail panel carry "Retry in test panel" link (cuma
+  utk run status non-running) ke `/manager/connectors/{key}/{id}/test
+  ?op=<opKey>&prefill=<runID>`. Sengaja **navigate**, bukan auto-replay
+  via POST — user mau review/edit input dulu sebelum re-run dan lihat
+  hasil di panel familiar. Klik Retry stop propagation supaya ga
+  collapse expand row. Backed by sec. 6.2 `?prefill=` flow + sec. 5.3
+  `Service.GetRun`.
 - Backend handler `connectorHistoryPage` panggil
   `Service.CountRunsFiltered(...)` + `Service.ListRunsFiltered(ctx,
   connectorID, RunFilter{...}, pageSize, offset)` — count untuk
@@ -870,8 +887,12 @@ revoke single PAT tanpa affect OAuth grants.
      user column resolve nama via `login.Service.GetUserByID`, expand
      row reveal request/response JSON + IP/UA/HTTP. Backed by
      `Service.ListRunsFiltered` (single composite-index query).
-   - Retry button via `Service.Retry` masih outstanding — sekarang user
-     copy request JSON manual + Run di test page.
+   - Retry button di history detail panel ✅ — bukan auto-replay POST,
+     tapi link ke test page `?prefill=<runID>` (sec. 6.2 + 6.3). Test
+     handler resolve run via `Service.GetRun`, populate input fields
+     via `value=` attr — user review/edit sebelum klik Run. Pilihan
+     UX: "navigate + manual run" mengalahkan "auto-replay" supaya user
+     selalu bisa lihat & adjust payload sebelum eksekusi.
 
 8. **Retention cleanup job** ✅
    - `internal/jobs/connector-runs-purge/` — daily worker yg panggil
@@ -955,9 +976,6 @@ revoke single PAT tanpa affect OAuth grants.
      filter user). Lihat sec. 6.5 buat detail.
 
 10. **Outstanding polish** *(opsional)*
-    - **Retry button** di history page — `Service.Retry` udah ada,
-      tinggal wire UI. Skrg user copy request JSON manual + Run di
-      test page. Cheap, ~30 LOC handler + 1 button.
     - Lain-lain → lihat sec 10b (parked future considerations).
 
 ---
