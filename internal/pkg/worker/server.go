@@ -37,7 +37,7 @@ func NewServer() *Server {
 			Name:        "Connector Runs Purge",
 			Description: "Daily cleanup of connector_runs audit rows older than the retention window.",
 			Icon:        "🧹",
-			DefaultCron: "0 3 * * *",
+			DefaultCron: "30 9 * * *",
 			DefaultTags: []tool.DefaultTag{tags.System},
 			AutoEnable:  true,
 		},
