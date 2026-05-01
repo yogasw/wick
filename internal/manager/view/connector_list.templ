@@ -109,6 +109,10 @@ templ kebabMenu(key string, row entity.Connector) {
 			<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
 		</summary>
 		<div class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg">
+			<a
+				href={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/history") }
+				class="block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800"
+			>History</a>
 			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/disable") }>
 				if row.Disabled {
 					<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-pos-400 hover:bg-white-200 dark:hover:bg-navy-800">Enable</button>

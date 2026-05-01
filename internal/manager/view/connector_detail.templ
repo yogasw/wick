@@ -20,50 +20,23 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 				<span class="text-black-900 dark:text-white-100">{ row.Label }</span>
 			</div>
 
-			<div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-				<div class="flex items-center gap-3">
-					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
-						{ mod.Meta.Icon }
-					</div>
-					<div>
-						<div class="flex items-center gap-2">
-							<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ row.Label }</h1>
-							if row.Disabled {
-								<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
-							} else {
-								<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
-							}
-						</div>
-						<p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{ row.ID }</p>
-						if mod.Meta.Description != "" {
-							<p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{ mod.Meta.Description }</p>
-						}
-					</div>
+			<div class="mt-4 flex items-center gap-3">
+				<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
+					{ mod.Meta.Icon }
 				</div>
-				<div class="flex flex-wrap items-center gap-2">
-					<a
-						href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/history") }
-						class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
-					>History</a>
-					<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/duplicate") }>
-						<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">
-							Duplicate
-						</button>
-					</form>
-					<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/disable") }>
+				<div>
+					<div class="flex items-center gap-2">
+						<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ row.Label }</h1>
 						if row.Disabled {
-							<button type="submit" class="rounded-lg border border-pos-300 px-3 py-2 text-xs font-medium text-pos-400 hover:bg-pos-100">Enable</button>
+							<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
 						} else {
-							<button type="submit" class="rounded-lg border border-prog-300 px-3 py-2 text-xs font-medium text-prog-400 hover:bg-prog-100">Disable</button>
+							<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
 						}
-					</form>
-					<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/delete") }>
-						<button
-							type="submit"
-							onclick="return confirm('Delete this connector row? Run history is kept for audit.');"
-							class="rounded-lg border border-neg-300 px-3 py-2 text-xs font-medium text-neg-400 hover:bg-neg-100"
-						>Delete</button>
-					</form>
+					</div>
+					<p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{ row.ID }</p>
+					if mod.Meta.Description != "" {
+						<p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{ mod.Meta.Description }</p>
+					}
 				</div>
 			</div>
 
