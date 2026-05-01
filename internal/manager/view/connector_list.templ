@@ -99,12 +99,17 @@ templ connectorListCard(key string, row entity.Connector, tagNames []string) {
 	</div>
 }
 
-// kebabMenu is a zero-JS dropdown built on <details>/<summary>. The
-// summary click toggles open state; clicking outside collapses it via
-// the inline focusout handler. Items mirror the actions previously
-// shown inline so no functionality is lost.
+// kebabMenu is a near-zero-JS dropdown built on <details>/<summary>.
+// The shared name="connector-kebab" makes browsers auto-close any
+// other open kebab when one opens (exclusive accordion). The inline
+// blur handler closes the menu when focus leaves the row entirely,
+// so clicking elsewhere on the page also collapses it.
 templ kebabMenu(key string, row entity.Connector) {
-	<details class="pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
+	<details
+		name="connector-kebab"
+		class="pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden"
+		onfocusout="if(!this.contains(event.relatedTarget))this.open=false"
+	>
 		<summary class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-green-600">
 			<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
 		</summary>

@@ -297,10 +297,11 @@ func connectorListCard(key string, row entity.Connector, tagNames []string) temp
 	})
 }
 
-// kebabMenu is a zero-JS dropdown built on <details>/<summary>. The
-// summary click toggles open state; clicking outside collapses it via
-// the inline focusout handler. Items mirror the actions previously
-// shown inline so no functionality is lost.
+// kebabMenu is a near-zero-JS dropdown built on <details>/<summary>.
+// The shared name="connector-kebab" makes browsers auto-close any
+// other open kebab when one opens (exclusive accordion). The inline
+// blur handler closes the menu when focus leaves the row entirely,
+// so clicking elsewhere on the page also collapses it.
 func kebabMenu(key string, row entity.Connector) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -322,14 +323,14 @@ func kebabMenu(key string, row entity.Connector) templ.Component {
 			templ_7745c5c3_Var14 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<details class=\"pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden\"><summary class=\"flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-green-600\"><svg class=\"h-4 w-4\" fill=\"currentColor\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"3\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"8\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"13\" r=\"1.5\"></circle></svg></summary><div class=\"absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg\"><a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<details name=\"connector-kebab\" class=\"pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden\" onfocusout=\"if(!this.contains(event.relatedTarget))this.open=false\"><summary class=\"flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-green-600\"><svg class=\"h-4 w-4\" fill=\"currentColor\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"3\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"8\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"13\" r=\"1.5\"></circle></svg></summary><div class=\"absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg\"><a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var15 templ.SafeURL
 		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/history"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 113, Col: 82}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 118, Col: 82}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
@@ -342,7 +343,7 @@ func kebabMenu(key string, row entity.Connector) templ.Component {
 		var templ_7745c5c3_Var16 templ.SafeURL
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/disable"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 116, Col: 103}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 121, Col: 103}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
@@ -370,7 +371,7 @@ func kebabMenu(key string, row entity.Connector) templ.Component {
 		var templ_7745c5c3_Var17 templ.SafeURL
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/duplicate"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 123, Col: 105}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 128, Col: 105}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 		if templ_7745c5c3_Err != nil {
@@ -383,7 +384,7 @@ func kebabMenu(key string, row entity.Connector) templ.Component {
 		var templ_7745c5c3_Var18 templ.SafeURL
 		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/delete"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 126, Col: 102}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 131, Col: 102}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 		if templ_7745c5c3_Err != nil {
