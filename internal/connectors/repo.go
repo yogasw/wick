@@ -316,8 +316,29 @@ type RunFilter struct {
 
 // ListRunsFiltered returns runs for one connector filtered by op/source/
 // status/user. The history page uses this to power its filter bar.
-func (r *Repo) ListRunsFiltered(ctx context.Context, connectorID string, f RunFilter, limit int) ([]entity.ConnectorRun, error) {
+// Supports limit+offset for page-based paging.
+func (r *Repo) ListRunsFiltered(ctx context.Context, connectorID string, f RunFilter, limit, offset int) ([]entity.ConnectorRun, error) {
 	var out []entity.ConnectorRun
+	q := r.runFilterQuery(ctx, connectorID, f).Order("started_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if offset > 0 {
+		q = q.Offset(offset)
+	}
+	err := q.Find(&out).Error
+	return out, err
+}
+
+// CountRunsFiltered returns the total row count matching the same filter
+// as ListRunsFiltered. Used to drive pagination controls.
+func (r *Repo) CountRunsFiltered(ctx context.Context, connectorID string, f RunFilter) (int64, error) {
+	var n int64
+	err := r.runFilterQuery(ctx, connectorID, f).Model(&entity.ConnectorRun{}).Count(&n).Error
+	return n, err
+}
+
+func (r *Repo) runFilterQuery(ctx context.Context, connectorID string, f RunFilter) *gorm.DB {
 	q := r.db.WithContext(ctx).Where("connector_id = ?", connectorID)
 	if f.OperationKey != "" {
 		q = q.Where("operation_key = ?", f.OperationKey)
@@ -331,12 +352,7 @@ func (r *Repo) ListRunsFiltered(ctx context.Context, connectorID string, f RunFi
 	if f.UserID != "" {
 		q = q.Where("user_id = ?", f.UserID)
 	}
-	q = q.Order("started_at DESC")
-	if limit > 0 {
-		q = q.Limit(limit)
-	}
-	err := q.Find(&out).Error
-	return out, err
+	return q
 }
 
 // PurgeRunsOlderThan deletes ConnectorRun rows whose StartedAt is

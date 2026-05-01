@@ -1106,6 +1106,10 @@ textarea, input, select {
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
+.cursor-not-allowed {
+  cursor: not-allowed;
+}
+
 .cursor-pointer {
   cursor: pointer;
 }
@@ -2215,6 +2219,11 @@ textarea, input, select {
   border-color: rgb(110 197 178 / var(--tw-border-opacity, 1));
 }
 
+.hover\:border-green-500:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(39 177 153 / var(--tw-border-opacity, 1));
+}
+
 .hover\:border-green-600:hover {
   --tw-border-opacity: 1;
   border-color: rgb(40 131 114 / var(--tw-border-opacity, 1));
@@ -2379,6 +2388,11 @@ textarea, input, select {
 .dark\:border-navy-600:is(.dark *) {
   --tw-border-opacity: 1;
   border-color: rgb(var(--color-navy-600) / var(--tw-border-opacity, 1));
+}
+
+.dark\:border-navy-700:is(.dark *) {
+  --tw-border-opacity: 1;
+  border-color: rgb(var(--color-navy-700) / var(--tw-border-opacity, 1));
 }
 
 .dark\:bg-green-800:is(.dark *) {

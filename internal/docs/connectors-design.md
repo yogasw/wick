@@ -403,26 +403,31 @@ plus profile area user-facing buat manage auth.
 
 ### 6.3 History page *(implemented)*
 
-`GET /manager/connectors/{key}/{id}/history?op=...&source=...&status=...&user=...`
+`GET /manager/connectors/{key}/{id}/history?op=...&source=...&status=...&user=...&page=N`
 ([connector_history.templ] + [connector_history.js]).
 
 ```
-/manager/connectors/loki/{id}/history?op=query&status=error
+/manager/connectors/loki/{id}/history?op=query&status=error&page=2
 ├── Breadcrumb: Home / Loki / Loki Prod / History
 ├── Filter bar (4 select, URL-driven)
 │     Operation │ Source │ Status │ User
 │     [query ▾] │ [all ▾]│ [error▾]│ [all ▾]
 │     [Clear all filters] (muncul kalau ada filter aktif)
-├── Table
+├── Table (max 10 rows / page)
 │     ▸ When │ Operation │ Source │ User │ Status │ Latency
 │     ▸ 2m ago│ query    │ mcp    │ Yoga │ error  │ 312 ms
 │       (klik row → expand inline)
 │       └── Request JSON · Response JSON · Run ID · IP · UA · HTTP
-└── Total counter
+└── Pager: "Showing 11–20 of 137 run(s)"   [← Prev] Page 2 of 14 [Next →]
 ```
 
 - **Filter chips URL-driven**: tiap `<select>` change → navigate ke
-  baseUrl + `?key=value` baru. Link bisa di-share, refresh preserve.
+  baseUrl + `?key=value` baru (tanpa `page=`, jd reset ke page 1).
+  Link bisa di-share, refresh preserve.
+- **Pagination**: 10 row/page, server-side (`LIMIT 10 OFFSET (page-1)*10`).
+  Prev/Next preserve filter via `historyPageURL` helper. `?page=` di-clamp
+  ke `[1, totalPages]`; out-of-range → ditarik balik ke page terakhir,
+  bukan empty list.
 - **User column**: resolve `UserID` → display name via
   `login.Service.GetUserByID`. Map dibangun sekali per page render
   (`resolveRunUsers`) supaya N+1 batched ke distinct user ID. Empty
@@ -431,8 +436,9 @@ plus profile area user-facing buat manage auth.
   Request/Response (pretty-printed JSON), plus run ID + IP + UA + HTTP
   status di footer. Zero round trip (data sudah di DOM).
 - Backend handler `connectorHistoryPage` panggil
-  `Service.ListRunsFiltered(ctx, connectorID, RunFilter{...}, 200)`
-  yg di-back single composite-index query.
+  `Service.CountRunsFiltered(...)` + `Service.ListRunsFiltered(ctx,
+  connectorID, RunFilter{...}, pageSize, offset)` — count untuk
+  totalPages, list untuk page yg aktif. Same composite-index query.
 - **Audit trail granularitas**: yg ke-track baru `user_id` + IP + UA.
   Token-id (PAT vs OAuth client mana) belum di-track — semua PAT/grant
   milik 1 user terlihat seragam. Trade-off awal; nanti tambah

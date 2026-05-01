@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/yogasw/wick/internal/connectors"
@@ -199,10 +200,26 @@ func (h *Handler) connectorHistoryPage(w http.ResponseWriter, r *http.Request) {
 		Status:       r.URL.Query().Get("status"),
 		UserID:       r.URL.Query().Get("user"),
 	}
-	runs, _ := h.connectors.ListRunsFiltered(ctx, row.ID, filter, 200)
+
+	const pageSize = 10
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+
+	total, _ := h.connectors.CountRunsFiltered(ctx, row.ID, filter)
+	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	runs, _ := h.connectors.ListRunsFiltered(ctx, row.ID, filter, pageSize, (page-1)*pageSize)
 	usersByID := h.resolveRunUsers(ctx, runs)
 
-	view.ConnectorHistoryPage(mod, row, runs, usersByID, filter, user).Render(ctx, w)
+	view.ConnectorHistoryPage(mod, row, runs, usersByID, filter, page, totalPages, int(total), user).Render(ctx, w)
 }
 
 // resolveRunUsers returns id→display map for every distinct UserID

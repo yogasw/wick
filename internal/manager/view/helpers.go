@@ -4,8 +4,38 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
 	"time"
+
+	"github.com/yogasw/wick/internal/connectors"
 )
+
+// historyPageURL builds the /history?... URL preserving filters and
+// setting the target page. Empty filter fields are omitted.
+func historyPageURL(connKey, rowID string, f connectors.RunFilter, page int) string {
+	q := url.Values{}
+	if f.OperationKey != "" {
+		q.Set("op", f.OperationKey)
+	}
+	if f.Source != "" {
+		q.Set("source", f.Source)
+	}
+	if f.Status != "" {
+		q.Set("status", f.Status)
+	}
+	if f.UserID != "" {
+		q.Set("user", f.UserID)
+	}
+	if page > 1 {
+		q.Set("page", strconv.Itoa(page))
+	}
+	base := "/manager/connectors/" + connKey + "/" + rowID + "/history"
+	if qs := q.Encode(); qs != "" {
+		return base + "?" + qs
+	}
+	return base
+}
 
 // prettyOrEmpty re-indents a JSON blob for the history detail panel.
 // Falls back to the raw text when the input isn't valid JSON, and to a
