@@ -32,6 +32,9 @@ func Migrate(db *gorm.DB) {
 		&entity.ConnectorOperation{},
 		&entity.ConnectorRun{},
 		&entity.PersonalAccessToken{},
+		&entity.OAuthClient{},
+		&entity.OAuthAuthorizationCode{},
+		&entity.OAuthToken{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())

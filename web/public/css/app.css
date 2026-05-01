@@ -913,6 +913,10 @@ textarea, input, select {
   min-height: calc(100vh - 4rem);
 }
 
+.min-h-screen {
+  min-height: 100vh;
+}
+
 .w-10 {
   width: 2.5rem;
 }
@@ -1146,6 +1150,12 @@ textarea, input, select {
 
 .gap-6 {
   gap: 1.5rem;
+}
+
+.space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.375rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.375rem * var(--tw-space-y-reverse));
 }
 
 .space-y-2 > :not([hidden]) ~ :not([hidden]) {
@@ -2136,6 +2146,11 @@ textarea, input, select {
 .hover\:border-green-600:hover {
   --tw-border-opacity: 1;
   border-color: rgb(40 131 114 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-neg-300:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(247 133 126 / var(--tw-border-opacity, 1));
 }
 
 .hover\:border-white-400:hover {

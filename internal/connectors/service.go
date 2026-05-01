@@ -157,6 +157,46 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 	return s.repo.List(ctx)
 }
 
+// ListVisibleTo returns the not-disabled connector rows the caller
+// can access, applying the same tag-filter rule as Tools (see
+// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering
+// — admins see every row whether or not they carry the row's tags.
+//
+// Use this from MCP tools/list and any user-facing surface that
+// enumerates connectors; only the admin manager should call List.
+func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	if isAdmin {
+		rows, err := s.repo.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Admin sees disabled rows in the manager but not in MCP/test
+		// surfaces — strip them here so callers don't have to.
+		filtered := rows[:0]
+		for _, r := range rows {
+			if !r.Disabled {
+				filtered = append(filtered, r)
+			}
+		}
+		return filtered, nil
+	}
+	return s.repo.ListAccessibleTo(ctx, userTagIDs)
+}
+
+// IsVisibleTo reports whether a single connector row is accessible to
+// the caller. Used by tools/call to re-check authorization at dispatch
+// time so a stale tools/list snapshot can't be replayed for access.
+func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	if isAdmin {
+		c, err := s.repo.Get(ctx, connectorID)
+		if err != nil {
+			return false, err
+		}
+		return !c.Disabled, nil
+	}
+	return s.repo.IsAccessibleTo(ctx, connectorID, userTagIDs)
+}
+
 // Update writes label / configs / disabled changes. Identity fields
 // (Key, ParentID, CreatedBy, CreatedAt) are immutable and untouched.
 func (s *Service) Update(ctx context.Context, id, label string, configs map[string]string, disabled bool) error {

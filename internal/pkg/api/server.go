@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/manager"
+	"github.com/yogasw/wick/internal/mcp"
+	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/ui"
@@ -114,17 +117,35 @@ func NewServer() *Server {
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
-	// one DB row per Key on first boot. The MCP/admin surfaces wire
-	// up against this Service in later phases.
+	// one DB row per Key on first boot. The MCP server below is the
+	// runtime entry point for LLM clients.
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
-	_ = connectorsSvc
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	tokensSvc := accesstoken.NewServiceFromDB(db)
 	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
+
+	// ── OAuth 2.1 server (issues bearer tokens for MCP) ──────────
+	// Issuer is the live app_url; the handler refreshes it from
+	// configs.Service on every request, so admin URL edits take
+	// effect without a restart.
+	oauthSvc := oauth.NewServiceFromDB(db, configsSvc.AppURL())
+	oauthHandler := oauth.NewHandler(oauthSvc, configsSvc)
+
+	// ── MCP server (JSON-RPC over /mcp) ──────────────────────────
+	// Bearer auth in front, connector dispatch behind. PAT and
+	// OAuth-issued tokens both flow through the same middleware —
+	// dispatch by prefix.
+	mcpHandler := mcp.NewHandler(connectorsSvc)
+	mcpAuth := mcp.NewAuthMiddleware(
+		tokensSvc,
+		authSvc,
+		oauthSvc,
+		strings.TrimRight(configsSvc.AppURL(), "/")+"/.well-known/oauth-protected-resource",
+	)
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to.
@@ -225,6 +246,18 @@ func NewServer() *Server {
 
 	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
 	tokensHandler.Register(r, authMidd)
+
+	// MCP JSON-RPC endpoint. Bearer-authed (PAT or OAuth access
+	// token). Mounted on the cookie-bypass mux because LLM clients
+	// carry a bearer header, not a session cookie — RequireAuth would
+	// 302 them into /auth/login which they can't follow.
+	r.Handle("POST /mcp", mcpAuth.Wrap(mcpHandler))
+
+	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
+	// authorize, token}. Public endpoints; /authorize reads the
+	// cookie session via login.GetUser to skip the login bounce when
+	// the user is already signed in.
+	oauthHandler.Register(r)
 
 	// Manager (admin settings) + jobrunner (operator surface) routes.
 	// The two share manager.Service so run history and banners stay in

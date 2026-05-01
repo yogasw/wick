@@ -55,6 +55,83 @@ func (r *Repo) ListByKey(ctx context.Context, key string) ([]entity.Connector, e
 	return out, err
 }
 
+// ListAccessibleTo returns the not-disabled Connector rows the caller
+// is allowed to see, mirroring the Tools tag-filter rule:
+//
+//   - row with no filter-type tags → visible to everyone
+//   - row with ≥1 filter-type tag  → visible only when userTagIDs
+//     intersects the row's filter-tags
+//
+// Tag association reuses the `tool_tags` table with
+// `tool_path = '/connectors/{id}'` (see entity.Connector godoc).
+//
+// Pass an empty userTagIDs for users that carry no filter tags — they
+// still see fully untagged rows. Admin callers should bypass this and
+// use List instead.
+func (r *Repo) ListAccessibleTo(ctx context.Context, userTagIDs []string) ([]entity.Connector, error) {
+	var out []entity.Connector
+	q := r.db.WithContext(ctx).
+		Where("disabled = ?", false).
+		Where(`
+			NOT EXISTS (
+				SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+				WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+			)`)
+	if len(userTagIDs) > 0 {
+		q = r.db.WithContext(ctx).
+			Where("disabled = ?", false).
+			Where(`
+				NOT EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+				)
+				OR EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id
+					AND t.is_filter = true
+					AND tt.tag_id IN ?
+				)`, userTagIDs)
+	}
+	err := q.Order("created_at DESC").Find(&out).Error
+	return out, err
+}
+
+// IsAccessibleTo reports whether a single connector row is visible to
+// the caller using the same rule as ListAccessibleTo. Used by
+// tools/call to re-check authorization before dispatch (the tools/list
+// snapshot the client cached may be stale).
+func (r *Repo) IsAccessibleTo(ctx context.Context, connectorID string, userTagIDs []string) (bool, error) {
+	var n int64
+	q := r.db.WithContext(ctx).
+		Model(&entity.Connector{}).
+		Where("id = ? AND disabled = ?", connectorID, false).
+		Where(`
+			NOT EXISTS (
+				SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+				WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+			)`)
+	if len(userTagIDs) > 0 {
+		q = r.db.WithContext(ctx).
+			Model(&entity.Connector{}).
+			Where("id = ? AND disabled = ?", connectorID, false).
+			Where(`
+				NOT EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+				)
+				OR EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id
+					AND t.is_filter = true
+					AND tt.tag_id IN ?
+				)`, userTagIDs)
+	}
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // CountByKey returns how many Connector rows exist for a code key.
 // Used by Bootstrap to decide whether to auto-create the initial row.
 func (r *Repo) CountByKey(ctx context.Context, key string) (int64, error) {
