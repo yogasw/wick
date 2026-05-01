@@ -81,26 +81,3 @@ func splitOptions(raw string) []string {
 	return out
 }
 
-// slugify lowercases a label and replaces non-alphanumeric runs with
-// underscores. Used to derive the third segment of an MCP tool name
-// (`{key}__{op}__{label_slug}`) from a row's human label.
-func slugify(s string) string {
-	var b strings.Builder
-	prevUnder := true
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			prevUnder = false
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + ('a' - 'A'))
-			prevUnder = false
-		default:
-			if !prevUnder {
-				b.WriteByte('_')
-				prevUnder = true
-			}
-		}
-	}
-	return strings.Trim(b.String(), "_")
-}

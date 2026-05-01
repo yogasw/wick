@@ -14,17 +14,14 @@
 // toggled on or off, so admins can disable destructive or unverified
 // operations without giving up the rest of the connector.
 //
-// MCP tool names are produced by combining all three:
-//
-//	{connector_key}__{op_key}__{instance_label_slug}
-//
-// For example a Loki connector with operations "query" and "list_apps",
-// duplicated as instances "Prod" and "Staging", surfaces four MCP tools:
-//
-//	loki__query__prod
-//	loki__list_apps__prod
-//	loki__query__staging
-//	loki__list_apps__staging
+// Connectors are not surfaced to MCP clients as N×M static tools. The
+// MCP layer exposes a fixed three-tool meta surface (wick_list /
+// wick_search / wick_execute), and the LLM discovers individual
+// (instance, operation) pairs at runtime via wick_list. Each pair is
+// addressed by an opaque tool_id of the form "conn:{connector_id}/
+// {op_key}", which wick_execute resolves back to a single ExecuteFunc
+// call. Adding or removing instances therefore never changes the
+// client's cached tool list — no manual "Refresh tool list" needed.
 //
 // A typical downstream registration looks like:
 //
@@ -48,14 +45,13 @@ package connector
 
 import "github.com/yogasw/wick/pkg/entity"
 
-// Meta is the static metadata for a connector definition. Key must be a
-// unique slug across every connector — MCP tool names start with it,
-// and entity.Connector.Key references it (one Meta.Key, many entity
-// rows for multi-instance setups).
+// Meta is the static metadata for a connector definition. Key must be
+// a unique slug across every connector; entity.Connector.Key references
+// it (one Meta.Key, many entity rows for multi-instance setups).
 //
-// Description is shown to the admin and (combined with the Operation
-// description) to the LLM in MCP tools/list. Keep it short; the
-// per-operation Description is the load-bearing signal for the model.
+// Description is shown to the admin in the manager UI. The LLM never
+// sees it directly — it only reads per-operation Description fields
+// surfaced through wick_list / wick_search.
 type Meta struct {
 	Key         string
 	Name        string
@@ -76,9 +72,10 @@ type ExecuteFunc func(c *Ctx) (any, error)
 // might have list_repos, create_issue, list_issues, add_comment.
 //
 // Description is the load-bearing field for the LLM — it is shown
-// verbatim in MCP tools/list and is the primary signal the model uses
-// to decide whether to call this op. Use action verbs and be specific
-// ("List repositories visible to the authenticated user", not "list").
+// verbatim in the wick_list / wick_search payload and is the primary
+// signal the model uses to decide whether to call this op. Use action
+// verbs and be specific ("List repositories visible to the
+// authenticated user", not "list").
 //
 // Destructive marks operations that mutate state in a way that is
 // hard or impossible to undo (delete, force-push, send message, post
