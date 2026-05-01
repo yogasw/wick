@@ -39,6 +39,12 @@ func (c *OAuthClient) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// TableName pins the table name. GORM's default naming would lower-
+// case + snake_case "OAuth" into "o_auth", giving "o_auth_clients".
+// We override so raw SQL in oauth.Repo.ListGrantsByUser stays
+// readable ("oauth_clients", not "o_auth_clients").
+func (OAuthClient) TableName() string { return "oauth_clients" }
+
 // OAuthAuthorizationCode is the short-lived PKCE authorization code
 // minted at /oauth/authorize and consumed at /oauth/token.
 //
@@ -74,6 +80,8 @@ func (c *OAuthAuthorizationCode) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+func (OAuthAuthorizationCode) TableName() string { return "oauth_authorization_codes" }
+
 // OAuthToken is one issued access or refresh token. Stored opaque
 // (32 hex chars), hashed at rest just like PersonalAccessToken — the
 // plaintext only crosses the wire on the /token response.
@@ -107,3 +115,5 @@ func (t *OAuthToken) BeforeCreate(tx *gorm.DB) error {
 	}
 	return nil
 }
+
+func (OAuthToken) TableName() string { return "oauth_tokens" }

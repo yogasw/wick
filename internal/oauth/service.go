@@ -294,6 +294,29 @@ func (s *Service) mintTokenPair(ctx context.Context, clientID, userID, scope str
 	}, nil
 }
 
+// ── Grants (user-facing dashboard) ───────────────────────────────────
+
+// ListGrants returns every app the user has currently authorized.
+// One row per client_id — the underlying access + refresh tokens are
+// collapsed into a single Grant struct (defined in repo.go).
+func (s *Service) ListGrants(ctx context.Context, userID string) ([]Grant, error) {
+	return s.repo.ListGrantsByUser(ctx, userID)
+}
+
+// RevokeGrant disconnects a client from the user's account by
+// revoking every active token they hold for that client. The next
+// /mcp call from that client lands on a 401 with the standard
+// WWW-Authenticate challenge so it can re-run the OAuth dance.
+//
+// Returns no error when the user has no active tokens for the
+// client — disconnect is idempotent.
+func (s *Service) RevokeGrant(ctx context.Context, userID, clientID string) error {
+	if userID == "" || clientID == "" {
+		return errors.New("user_id and client_id required")
+	}
+	return s.repo.RevokeAllForUserClient(ctx, userID, clientID)
+}
+
 // Authenticate validates an access token presented in the
 // Authorization: Bearer header and returns the owning user_id.
 // Mirrors accesstoken.Service.Authenticate so the MCP middleware can

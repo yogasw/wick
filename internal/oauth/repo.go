@@ -141,3 +141,70 @@ func (r *Repo) Revoke(ctx context.Context, id string) error {
 		Where("id = ? AND revoked_at IS NULL", id).
 		Update("revoked_at", &now).Error
 }
+
+// ── Grants (per-user dashboard) ──────────────────────────────────────
+
+// Grant is the aggregated view of one app the user has currently
+// authorized — collapsing the underlying token rows down to the app
+// metadata + lifetime markers the dashboard cares about.
+type Grant struct {
+	ClientID   string
+	ClientName string
+	GrantedAt  time.Time  // earliest CreatedAt across the active tokens
+	LastUsedAt *time.Time // most recent LastUsedAt, nil if never
+	TokenCount int        // active access + refresh tokens
+}
+
+// ListGrantsByUser returns one Grant per app the user has currently
+// authorized. "Currently" = at least one non-revoked, non-expired
+// token row of either kind (refresh keeps the grant alive even after
+// the access expires).
+//
+// Ordered newest-grant first so the dashboard reads chronologically.
+func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, error) {
+	type row struct {
+		ClientID   string
+		ClientName string
+		GrantedAt  time.Time
+		LastUsedAt *time.Time
+		TokenCount int
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Table("oauth_tokens AS t").
+		Select(`t.client_id            AS client_id,
+		         c.name                AS client_name,
+		         MIN(t.created_at)     AS granted_at,
+		         MAX(t.last_used_at)   AS last_used_at,
+		         COUNT(*)              AS token_count`).
+		Joins("JOIN oauth_clients c ON c.client_id = t.client_id").
+		Where("t.user_id = ? AND t.revoked_at IS NULL AND t.expires_at > ?", userID, time.Now()).
+		Group("t.client_id, c.name").
+		Order("MIN(t.created_at) DESC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Grant, len(rows))
+	for i, x := range rows {
+		out[i] = Grant{
+			ClientID:   x.ClientID,
+			ClientName: x.ClientName,
+			GrantedAt:  x.GrantedAt,
+			LastUsedAt: x.LastUsedAt,
+			TokenCount: x.TokenCount,
+		}
+	}
+	return out, nil
+}
+
+// RevokeAllForUserClient revokes every active token (access + refresh)
+// the user holds for the given client. Used by the profile
+// "Disconnect" button — once the user clicks it, the client must
+// re-run the OAuth dance to regain access. Idempotent.
+func (r *Repo) RevokeAllForUserClient(ctx context.Context, userID, clientID string) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&entity.OAuthToken{}).
+		Where("user_id = ? AND client_id = ? AND revoked_at IS NULL", userID, clientID).
+		Update("revoked_at", &now).Error
+}

@@ -6,9 +6,10 @@ import "github.com/yogasw/wick/internal/entity"
 type ProfileTabKey string
 
 const (
-	ProfileTabAccount ProfileTabKey = "account"
-	ProfileTabTokens  ProfileTabKey = "tokens"
-	ProfileTabMCP     ProfileTabKey = "mcp"
+	ProfileTabAccount     ProfileTabKey = "account"
+	ProfileTabTokens      ProfileTabKey = "tokens"
+	ProfileTabConnections ProfileTabKey = "connections"
+	ProfileTabMCP         ProfileTabKey = "mcp"
 )
 
 // ProfileLayout is the shared chrome for every page under /profile/*.
@@ -35,6 +36,7 @@ templ ProfileLayout(title string, active ProfileTabKey, user *entity.User) {
 					<div class="ml-2 flex items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1">
 						@profileTab("/profile", "Account", active == ProfileTabAccount)
 						@profileTab("/profile/tokens", "Access Tokens", active == ProfileTabTokens)
+						@profileTab("/profile/connections", "Connected Apps", active == ProfileTabConnections)
 						@profileTab("/profile/mcp", "MCP", active == ProfileTabMCP)
 					</div>
 				</div>

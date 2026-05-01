@@ -30,16 +30,71 @@ func NewHandler(svc *Service, cfg appConfig) *Handler {
 	return &Handler{svc: svc, cfg: cfg}
 }
 
-// Register wires routes. /authorize must run inside the cookie
-// session middleware (already applied at the root mux), so we don't
-// gate it here — the handler reads login.GetUser itself.
-func (h *Handler) Register(mux *http.ServeMux) {
+// Register wires routes. /authorize and the /profile/connections
+// pages need the cookie session populated (they call login.GetUser);
+// the root mux already wraps everything with Session middleware.
+//
+// The /profile/connections POST routes pass auth via the supplied
+// middleware so an unauthenticated request gets bounced to /auth/login
+// instead of silently failing.
+func (h *Handler) Register(mux *http.ServeMux, midd *login.Middleware) {
 	mux.Handle("GET /.well-known/oauth-protected-resource", http.HandlerFunc(h.protectedResourceMetadata))
 	mux.Handle("GET /.well-known/oauth-authorization-server", http.HandlerFunc(h.authorizationServerMetadata))
 	mux.Handle("POST /oauth/register", http.HandlerFunc(h.registerClient))
 	mux.Handle("GET /oauth/authorize", http.HandlerFunc(h.authorize))
 	mux.Handle("POST /oauth/authorize", http.HandlerFunc(h.consent))
 	mux.Handle("POST /oauth/token", http.HandlerFunc(h.token))
+
+	// Per-user grant management lives under /profile/* so it sits
+	// alongside Access Tokens in the profile tab strip.
+	auth := func(next http.HandlerFunc) http.Handler { return midd.RequireAuth(next) }
+	mux.Handle("GET /profile/connections", auth(h.connectionsPage))
+	mux.Handle("POST /profile/connections/{client_id}/disconnect", auth(h.disconnect))
+}
+
+func (h *Handler) connectionsPage(w http.ResponseWriter, r *http.Request) {
+	user := login.GetUser(r.Context())
+	grants, err := h.svc.ListGrants(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load grants", http.StatusInternalServerError)
+		return
+	}
+	rows := make([]view.GrantRow, len(grants))
+	for i, g := range grants {
+		rows[i] = view.GrantRow{
+			ClientID:   g.ClientID,
+			ClientName: g.ClientName,
+			GrantedAt:  g.GrantedAt,
+			LastUsedAt: g.LastUsedAt,
+			TokenCount: g.TokenCount,
+		}
+	}
+	view.ConnectionsPage(view.ConnectionsPageData{
+		User:        user,
+		Grants:      rows,
+		JustRevoked: r.URL.Query().Get("revoked"),
+	}).Render(r.Context(), w)
+}
+
+func (h *Handler) disconnect(w http.ResponseWriter, r *http.Request) {
+	user := login.GetUser(r.Context())
+	clientID := r.PathValue("client_id")
+	// Look up the client name BEFORE revoking so we can show it in
+	// the success banner; if the lookup fails we still revoke and
+	// just skip the personalized message.
+	var clientName string
+	if c, err := h.svc.LookupClient(r.Context(), clientID); err == nil {
+		clientName = c.Name
+	}
+	if err := h.svc.RevokeGrant(r.Context(), user.ID, clientID); err != nil {
+		http.Error(w, "failed to disconnect: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	target := "/profile/connections"
+	if clientName != "" {
+		target += "?revoked=" + url.QueryEscape(clientName)
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 // issuer returns the live app_url, falling back to a synthesized

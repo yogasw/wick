@@ -14,9 +14,10 @@ import "github.com/yogasw/wick/internal/entity"
 type ProfileTabKey string
 
 const (
-	ProfileTabAccount ProfileTabKey = "account"
-	ProfileTabTokens  ProfileTabKey = "tokens"
-	ProfileTabMCP     ProfileTabKey = "mcp"
+	ProfileTabAccount     ProfileTabKey = "account"
+	ProfileTabTokens      ProfileTabKey = "tokens"
+	ProfileTabConnections ProfileTabKey = "connections"
+	ProfileTabMCP         ProfileTabKey = "mcp"
 )
 
 // ProfileLayout is the shared chrome for every page under /profile/*.
@@ -64,7 +65,7 @@ func ProfileLayout(title string, active ProfileTabKey, user *entity.User) templ.
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(AppNameFromContext(ctx))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pkg/ui/profile_layout.templ`, Line: 26, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pkg/ui/profile_layout.templ`, Line: 27, Col: 31}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -79,6 +80,10 @@ func ProfileLayout(title string, active ProfileTabKey, user *entity.User) templ.
 				return templ_7745c5c3_Err
 			}
 			templ_7745c5c3_Err = profileTab("/profile/tokens", "Access Tokens", active == ProfileTabTokens).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = profileTab("/profile/connections", "Connected Apps", active == ProfileTabConnections).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -160,7 +165,7 @@ func profileTab(href string, label string, active bool) templ.Component {
 		var templ_7745c5c3_Var6 templ.SafeURL
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(href))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pkg/ui/profile_layout.templ`, Line: 58, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pkg/ui/profile_layout.templ`, Line: 60, Col: 28}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -186,7 +191,7 @@ func profileTab(href string, label string, active bool) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pkg/ui/profile_layout.templ`, Line: 65, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pkg/ui/profile_layout.templ`, Line: 67, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {

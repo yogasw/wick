@@ -254,10 +254,9 @@ func NewServer() *Server {
 	r.Handle("POST /mcp", mcpAuth.Wrap(mcpHandler))
 
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
-	// authorize, token}. Public endpoints; /authorize reads the
-	// cookie session via login.GetUser to skip the login bounce when
-	// the user is already signed in.
-	oauthHandler.Register(r)
+	// authorize, token} (public) + /profile/connections (auth-gated
+	// inside, per-user grant dashboard).
+	oauthHandler.Register(r, authMidd)
 
 	// Manager (admin settings) + jobrunner (operator surface) routes.
 	// The two share manager.Service so run history and banners stay in
