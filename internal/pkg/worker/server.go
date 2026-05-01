@@ -14,10 +14,8 @@ import (
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
-	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/pkg/job"
-	"github.com/yogasw/wick/pkg/tool"
 
 	"github.com/rs/zerolog/log"
 )
@@ -30,20 +28,10 @@ func NewServer() *Server {
 	// Built-in maintenance jobs whose RunFunc needs DB access are
 	// registered here, after DB init, so the closure can capture the
 	// same handle the worker uses. Must run BEFORE the configs loop
-	// below so the job's typed Config rows get seeded too.
-	jobs.Register(job.Module{
-		Meta: job.Meta{
-			Key:         "connector-runs-purge",
-			Name:        "Connector Runs Purge",
-			Description: "Daily cleanup of connector_runs audit rows older than the retention window.",
-			Icon:        "🧹",
-			DefaultCron: "30 9 * * *",
-			DefaultTags: []tool.DefaultTag{tags.System},
-			AutoEnable:  true,
-		},
-		Configs: entity.StructToConfigs(connectorrunspurge.Config{RetentionDays: 7}),
-		Run:     connectorrunspurge.NewRun(db),
-	})
+	// below so the job's typed Config rows get seeded too. Same call
+	// runs in internal/pkg/api/server.go so the web process also sees
+	// the row in /admin/jobs.
+	connectorrunspurge.Register(db)
 
 	// Reconcile the configs table so job.Ctx.Cfg(...) sees the same
 	// cached values the web process uses. Seeds per-tool / per-job

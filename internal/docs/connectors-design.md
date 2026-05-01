@@ -876,10 +876,13 @@ revoke single PAT tanpa affect OAuth grants.
 8. **Retention cleanup job** ✅
    - `internal/jobs/connector-runs-purge/` — daily worker yg panggil
      `connectors.Repo.PurgeRunsOlderThan(cutoff)`.
-   - Registered di `internal/pkg/worker/server.go` (bukan di
-     `connectors.RegisterBuiltins`) krn closure butuh `*gorm.DB` yg
-     baru ada setelah worker init DB.
-   - Default cron `0 3 * * *` (03:00 daily). Default `retention_days = 7`.
+   - **Dual registration** lewat `connectorrunspurge.Register(db)`
+     helper — di-call dari **dua tempat**:
+     - `internal/pkg/worker/server.go` → biar scheduler tick-nya jalan
+     - `internal/pkg/api/server.go` → biar /admin/jobs + /manager/jobs
+       di web server lihat row-nya (kalau cuma di-register di worker,
+       web process punya `jobs.All()` yg ga termasuk row ini)
+   - Default cron `30 9 * * *` (09:30 daily). Default `retention_days = 7`.
      Keduanya editable per-instance dari `/manager/jobs/connector-runs-purge`
      (admin only — lihat dibawah).
    - **System-tagged + auto-enabled**:
@@ -889,37 +892,54 @@ revoke single PAT tanpa affect OAuth grants.
        `repo.ForceEnable` tiap restart, jadi job selalu hidup tanpa
        butuh admin klik "Enable" di UI.
    - **System tag — access control mechanics:**
-     - `IsSystem=true` di tabel `tags` artinya tag code-owned. Tiga
-       enforcement lapis:
-       1. **Picker UI:** `/admin/users` strip System tag dari list
-          tag yg bisa di-pick (handler `usersPage`).
-       2. **Server guard:** `admin.Repo.SetUserTags` reject input
-          yg carry System tag → `ErrSystemTagAssignment` 400.
-       3. **Tag CRUD lock:** `admin.Repo.UpdateTag` /
-          `DeleteTag` reject System row → `ErrSystemTagImmutable`.
-          `/admin/tags` UI render System row sbg "Read-only ·
-          code-managed" tanpa tombol Edit/Delete.
+     - `IsSystem=true` di tabel `tags` artinya tag code-owned. Lapis
+       enforcement:
+       1. **Picker UI (user-tag):** `/admin/users` strip System tag
+          dari list tag yg bisa di-pick (handler `usersPage`).
+       2. **Server guard (user-tag):** `admin.Repo.SetUserTags` reject
+          input yg carry System tag → `ErrSystemTagAssignment` 400.
+       3. **Tag CRUD lock:** `admin.Repo.UpdateTag` / `DeleteTag`
+          reject System row → `ErrSystemTagImmutable` 400. `/admin/tags`
+          UI render System row sbg "Read-only · code-managed" tanpa
+          tombol Edit/Delete.
+       4. **Entity row lock di /admin/jobs:** kalau path job carry
+          System tag (`admin.Repo.HasSystemTag`), handler
+          `setJobDisabled` & `setJobTags` reject → `ErrSystemEntityImmutable`
+          400. Templ `adminJobRow` ngilangin tombol Hide/Show + Save +
+          disable tag picker untuk row ber-IsSystem (ga ada X di chip,
+          ga bisa add tag baru). Tujuannya: System tag link ga bisa
+          di-lepas via picker, dan job ga bisa di-hide via Hide button.
      - **Role auto-sync** di `admin.Repo.syncSystemTagsForRole`:
        - Promote user → admin: `FirstOrCreate` UserTag utk tiap
          System tag (idempotent, in-tx dgn role update).
        - Demote admin → user: `Delete` semua System UserTag user itu.
        - Re-approve user (`SetApproved(true)`): re-sync ke role
          current — fix drift dari revoke yg wipe semua UserTag.
-     - **Boot backfill:** `tags.Service.SyncSystemTagsForAllAdmins`
+     - **Boot backfill (user side):** `tags.Service.SyncSystemTagsForAllAdmins`
        di-call sekali di `internal/pkg/api/server.go` setelah
        `EnsureToolDefaultTags` — admin yg pre-date introduction
        System tag baru tetap dapet auto-link.
+     - **Boot backfill (tag flag side):** `EnsureToolDefaultTags`
+       force-sync `IsSystem=true` flag pada existing row lewat
+       `tags.Repo.SetIsSystem` kalau default-nya carry IsSystem=true.
+       Tanpa ini, tag yg dulu di-create tanpa flag IsSystem ga akan
+       ke-detect oleh guard apa-apa (silently mutable). Cuma flag
+       IsSystem yg di-force; IsGroup/IsFilter tetap "create-time only"
+       biar admin tweak via /admin/tags ga ke-revert.
      - **Picker preserve:** `SetUserTags` wipe clause
        `WHERE tag_id NOT IN (SELECT id FROM tags WHERE is_system)`,
        jadi admin yg edit tag-nya via `/admin/users` ga akan
        kehilangan System tag (yg ga tampak di picker).
      - **Tag-filter outcome:** `IsFilter=true` + cuma admin yg carry
        tag → job hidden dari `/manager/jobs` utk non-admin (admin
-       lihat lewat tag dia carry sendiri, bukan via bypass-filter
-       global).
-     - Hasil: end user gak lihat & gak bisa enable/disable. Admin
-       boleh lihat & klik tapi role-nya cuma observe — job tetap
-       auto-enable on next restart kalau ke-disable.
+       bypass via `login.Service.CanAccessTool` `IsAdmin()` shortcut
+       di [internal/login/service.go](internal/login/service.go)).
+       Scheduler `worker.tick` ga lewat tag filter — query langsung
+       `ListEnabledJobs` di DB → schedule jalan walau row hidden di UI.
+     - Hasil: end user gak lihat & gak bisa enable/disable/retag.
+       Admin lihat di /admin/jobs sbg "code-managed" badge tanpa
+       kontrol mutasi; bisa buka /manager/jobs/{key} buat lihat run
+       history + edit retention_days config.
 
 9. **Admin overview pages** ✅
    - `/admin/connectors` — list semua Connector row cross-Key, toggle

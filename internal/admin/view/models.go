@@ -23,9 +23,17 @@ type ToolRow struct {
 }
 
 // JobRow is the view model for a single job row in the admin jobs table.
+//
+// IsSystem mirrors the entity.Tag.IsSystem flag for any tag attached to
+// this job's path. When true the row is rendered read-only — no Hide
+// button, tag picker locked, no Save — because a System job is owned by
+// code (see internal/tags/defaults.go and connector-runs-purge for the
+// canonical example). Server-side guards in handler.setJobDisabled and
+// handler.setJobTags backstop the same rule.
 type JobRow struct {
 	Job         entity.Job
 	Disabled    bool
+	IsSystem    bool
 	TagIDs      []string
 	ConfigCount int
 }

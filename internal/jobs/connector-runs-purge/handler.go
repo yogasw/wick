@@ -18,10 +18,42 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/jobs"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/job"
+	"github.com/yogasw/wick/pkg/tool"
 
 	"gorm.io/gorm"
 )
+
+// Key is the job slug — also the row key in the `jobs` table.
+const Key = "connector-runs-purge"
+
+// Register adds the purge job to the global jobs registry. Must be
+// called from BOTH the web server (so /admin/jobs and /manager surfaces
+// see the row) and the worker (so the scheduler ticks it). Both
+// processes need a *gorm.DB anyway, so the closure capture pattern from
+// pkg/job.RunFunc godoc applies cleanly.
+//
+// Idempotent at the registry level: jobs.Register dedupes via the Key
+// at Bootstrap time; calling this twice in the same process would fail
+// loudly with "duplicate key" — call it exactly once per process.
+func Register(db *gorm.DB) {
+	jobs.Register(job.Module{
+		Meta: job.Meta{
+			Key:         Key,
+			Name:        "Connector Runs Purge",
+			Description: "Daily cleanup of connector_runs audit rows older than the retention window.",
+			Icon:        "🧹",
+			DefaultCron: "30 9 * * *",
+			DefaultTags: []tool.DefaultTag{tags.System},
+			AutoEnable:  true,
+		},
+		Configs: entity.StructToConfigs(Config{RetentionDays: 7}),
+		Run:     NewRun(db),
+	})
+}
 
 // defaultRetentionDays is the in-code fallback used when the Config
 // row is missing or carries a non-positive value. Matches the design

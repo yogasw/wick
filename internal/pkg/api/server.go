@@ -20,6 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/home"
 	"github.com/yogasw/wick/internal/jobrunner"
 	"github.com/yogasw/wick/internal/jobs"
+	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/manager"
@@ -43,6 +44,12 @@ func NewServer() *Server {
 
 	db := postgres.NewGORM(cfg.Database)
 	postgres.Migrate(db)
+
+	// Built-in maintenance jobs whose RunFunc captures *gorm.DB are
+	// registered here, after DB init, before validation + the jobs.All()
+	// loops below. Mirrors the call in internal/pkg/worker.NewServer
+	// so both processes share the same registry view.
+	connectorrunspurge.Register(db)
 
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────

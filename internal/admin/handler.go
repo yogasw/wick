@@ -423,11 +423,26 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	perms, _ := h.repo.ListToolPerms(ctx, paths)
 	allTags, _ := h.repo.ListTags(ctx)
 
+	systemTagIDs := make(map[string]bool)
+	for _, t := range allTags {
+		if t.IsSystem {
+			systemTagIDs[t.ID] = true
+		}
+	}
+
 	rows := make([]view.JobRow, len(jobs))
 	for i, j := range jobs {
+		isSystem := false
+		for _, id := range perms[i].TagIDs {
+			if systemTagIDs[id] {
+				isSystem = true
+				break
+			}
+		}
 		rows[i] = view.JobRow{
 			Job:         j,
 			Disabled:    perms[i].Disabled,
+			IsSystem:    isSystem,
 			TagIDs:      perms[i].TagIDs,
 			ConfigCount: len(h.configs.ListOwned(j.Key)),
 		}
@@ -439,6 +454,10 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setJobDisabled(w http.ResponseWriter, r *http.Request) {
 	path := "/jobs/" + r.PathValue("path")
+	if isSystem, _ := h.repo.HasSystemTag(r.Context(), path); isSystem {
+		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
+		return
+	}
 	disabled := boolParam(r, "disabled")
 	if err := h.repo.SetToolDisabled(r.Context(), path, disabled); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -449,6 +468,10 @@ func (h *Handler) setJobDisabled(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setJobTags(w http.ResponseWriter, r *http.Request) {
 	path := "/jobs/" + r.PathValue("path")
+	if isSystem, _ := h.repo.HasSystemTag(r.Context(), path); isSystem {
+		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
+		return
+	}
 	r.ParseForm()
 	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
@@ -553,6 +576,10 @@ func (h *Handler) updateTag(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.repo.DeleteTag(r.Context(), id); err != nil {
+		if errors.Is(err, ErrSystemTagImmutable) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

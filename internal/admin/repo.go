@@ -287,6 +287,24 @@ var ErrTagNameTaken = errors.New("a tag with that name already exists")
 // the UI would desync the seed catalog from the DB.
 var ErrSystemTagImmutable = errors.New("system tags are read-only and cannot be modified")
 
+// ErrSystemEntityImmutable is returned when an admin tries to mutate
+// (disable/hide/retag) a tool/job/connector that carries any System
+// tag. System-tagged entities are owned by code — see entity.Tag godoc.
+var ErrSystemEntityImmutable = errors.New("entity is system-tagged and cannot be modified from the admin UI")
+
+// HasSystemTag reports whether toolPath has any tag flagged IsSystem
+// linked through tool_tags. Used as a guard before mutating job/tool/
+// connector permissions or tag links from admin handlers.
+func (r *repo) HasSystemTag(ctx context.Context, toolPath string) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).
+		Table("tool_tags").
+		Joins("JOIN tags ON tags.id = tool_tags.tag_id").
+		Where("tool_tags.tool_path = ? AND tags.is_system = ?", toolPath, true).
+		Count(&n).Error
+	return n > 0, err
+}
+
 func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter bool) (*entity.Tag, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {

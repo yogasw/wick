@@ -50,6 +50,15 @@ func (r *repo) CreateTag(ctx context.Context, t *entity.Tag) error {
 	return r.db.WithContext(ctx).Create(t).Error
 }
 
+// SetIsSystem flips the IsSystem flag on an existing tag. Used by
+// EnsureToolDefaultTags to backfill the flag on rows that pre-date
+// the IsSystem schema — see that function for the rationale.
+func (r *repo) SetIsSystem(ctx context.Context, tagID string, isSystem bool) error {
+	return r.db.WithContext(ctx).Model(&entity.Tag{}).
+		Where("id = ?", tagID).
+		Update("is_system", isSystem).Error
+}
+
 // HasToolTags reports whether the tool_path already has any tool_tag rows.
 func (r *repo) HasToolTags(ctx context.Context, toolPath string) (bool, error) {
 	var count int64

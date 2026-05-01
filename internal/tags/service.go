@@ -27,10 +27,17 @@ func (s *Service) GroupTags(ctx context.Context) ([]*entity.Tag, error) {
 
 // EnsureToolDefaultTags seeds DefaultTags for a tool on startup. For each
 // spec it ensures the global tag exists by name (creating it with the
-// declared flags if missing; existing tags are left untouched). It then
-// links every spec tag to toolPath only when the tool has *no* tool_tag
-// rows yet — so an admin who later unlinks a tag won't see it return
-// after a restart.
+// declared flags if missing; existing tags are left untouched EXCEPT for
+// the IsSystem flag — see below). It then links every spec tag to toolPath
+// only when the tool has *no* tool_tag rows yet — so an admin who later
+// unlinks a tag won't see it return after a restart.
+//
+// IsSystem is special: it is code-owned (admins cannot toggle it from UI),
+// so this function force-syncs the flag on EXISTING rows whose default
+// declares IsSystem=true. That way a tag created before the IsSystem
+// schema landed gets backfilled with the flag on the next boot — without
+// it, the admin/repo guards (UpdateTag/DeleteTag/SetUserTags) wouldn't
+// recognize the row as protected.
 func (s *Service) EnsureToolDefaultTags(ctx context.Context, toolPath string, defaults []tool.DefaultTag) error {
 	if len(defaults) == 0 {
 		return nil
@@ -58,6 +65,12 @@ func (s *Service) EnsureToolDefaultTags(ctx context.Context, toolPath string, de
 		} else if err != nil {
 			log.Ctx(ctx).Error().Msgf("lookup tag %q for %s: %s", name, toolPath, err.Error())
 			continue
+		} else if d.IsSystem && !t.IsSystem {
+			if err := s.repo.SetIsSystem(ctx, t.ID, true); err != nil {
+				log.Ctx(ctx).Error().Msgf("backfill is_system on tag %q: %s", name, err.Error())
+			} else {
+				t.IsSystem = true
+			}
 		}
 		tagIDs = append(tagIDs, t.ID)
 	}
