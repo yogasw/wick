@@ -161,12 +161,19 @@ type Grant struct {
 // the access expires).
 //
 // Ordered newest-grant first so the dashboard reads chronologically.
+//
+// Implementation notes: SQLite returns MIN/MAX of TIMESTAMP columns
+// as raw strings (the driver only auto-parses real columns, not
+// aggregate expressions), so we scan those into strings and parse
+// them in Go. parseAggregateTime accepts both SQLite's "YYYY-MM-DD
+// HH:MM:SS[.fff]" and Postgres's RFC3339 — the same code works on
+// either backend without runtime feature detection.
 func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, error) {
 	type row struct {
 		ClientID   string
 		ClientName string
-		GrantedAt  time.Time
-		LastUsedAt *time.Time
+		GrantedAt  string  // raw timestamp string (parsed below)
+		LastUsedAt *string // null when never used
 		TokenCount int
 	}
 	var rows []row
@@ -187,15 +194,44 @@ func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, er
 	}
 	out := make([]Grant, len(rows))
 	for i, x := range rows {
+		grantedAt, _ := parseAggregateTime(x.GrantedAt)
+		var lastUsed *time.Time
+		if x.LastUsedAt != nil {
+			if t, ok := parseAggregateTime(*x.LastUsedAt); ok {
+				lastUsed = &t
+			}
+		}
 		out[i] = Grant{
 			ClientID:   x.ClientID,
 			ClientName: x.ClientName,
-			GrantedAt:  x.GrantedAt,
-			LastUsedAt: x.LastUsedAt,
+			GrantedAt:  grantedAt,
+			LastUsedAt: lastUsed,
 			TokenCount: x.TokenCount,
 		}
 	}
 	return out, nil
+}
+
+// parseAggregateTime tries the layouts SQLite and Postgres use when
+// returning aggregate timestamp expressions. Returns the zero time
+// + false when none match — the caller treats that as "unknown" and
+// renders accordingly.
+func parseAggregateTime(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // RevokeAllForUserClient revokes every active token (access + refresh)
