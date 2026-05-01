@@ -1,9 +1,9 @@
 # Connectors — Desain & State
 
-Status: implemented (modul + persistence + MCP JSON-RPC + auth dual-mode
-PAT & OAuth 2.1 + per-user grant management). Admin UI buat CRUD
-connector row + panel test belum dibikin — sekarang admin pakai SQL
-langsung atau bootstrap auto-row kosong.
+Status: implemented (modul + persistence + MCP JSON-RPC meta-tool pattern
++ auth dual-mode PAT & OAuth 2.1 + per-user grant management). Admin UI
+buat CRUD connector row + panel test belum dibikin — sekarang admin pakai
+SQL langsung atau bootstrap auto-row kosong.
 Update terakhir: 2026-05-01.
 
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
@@ -455,62 +455,83 @@ POST /oauth/authorize                           -- consent submit
 POST /oauth/token                               -- code exchange + refresh
 ```
 
-### 7.3 Mapping row × operation → MCP tool
+### 7.3 Meta-tool pattern
 
-```go
-// 1 row × N enabled ops = N MCP tools.
-// Disabled rows + disabled ops + tag-mismatched rows di-skip.
-func (r *MCPRegistry) List(ctx context.Context) []MCPTool {
-    tagIDs := login.GetUserTagIDs(ctx) // user pemanggil
-    rows := r.repo.ListVisibleTo(ctx, tagIDs) // tag-filtered, !Disabled
+MCP surface **bukan** N×M static tool (1 entry per connector×op). Sebagai
+gantinya, server expose **4 tool tetap** yg LLM pake buat discovery dan
+dispatch:
 
-    var out []MCPTool
-    for _, row := range rows {
-        mod, ok := r.modules[row.Key]
-        if !ok { continue } // row deactivated (no module registered)
-        states, _ := r.svc.OperationStates(ctx, row.ID, row.Key)
-        for _, op := range mod.Operations {
-            if !states[op.Key] { continue }
-            out = append(out, MCPTool{
-                Name:        toolName(row, op),
-                Description: opDescription(mod, op, row),
-                InputSchema: configsToJSONSchema(op.Input),
-                Handler:     dispatch(row.ID, op.Key),
-            })
-        }
+| Tool | Annotation | Fungsi |
+|---|---|---|
+| `wick_list` | `readOnlyHint: true` | List semua tool visible ke caller — tanpa `input_schema` |
+| `wick_search` | `readOnlyHint: true` | Cari tool by keyword (substring match: label + name + desc) |
+| `wick_get` | `readOnlyHint: true` | Ambil detail 1 tool by `tool_id`, termasuk `input_schema` |
+| `wick_execute` | `destructiveHint: true` | Eksekusi tool by `tool_id` + `params` |
+
+**Kenapa meta-tool, bukan static list:**
+
+- Tambah/hapus connector instance di admin UI → MCP surface **tidak
+  berubah** → client (Claude.ai) tidak perlu refresh tool list manual.
+- Token `wick_list` / `wick_search` lebih kecil karena tidak bawa
+  `input_schema` — LLM hanya bayar token schema buat tool yg akan dipakai.
+- Scale ke ratusan connector tanpa balon `tools/list` response.
+
+**Tool ID format:**
+
+```
+conn:{connector_id}/{op_key}
+```
+
+UUID-based, tidak berubah saat admin rename label instance. `conn:` prefix
+disisakan buat future extension (mis. `mcp:` buat proxied remote MCP tools,
+`prompt:` buat prompt templates).
+
+**Flow LLM (tipikal):**
+
+```
+wick_list                           → dapet daftar tool + tool_id
+wick_get({tool_id: "conn:abc/get"}) → dapet input_schema
+wick_execute({tool_id, params})     → hasil
+```
+
+Atau shortcut kalau LLM sudah tahu schema dari deskripsi:
+
+```
+wick_search({query: "loki query"}) → match + tool_id
+wick_execute({tool_id, params})    → hasil
+```
+
+**Isi payload `wick_list` / `wick_search`:**
+
+```json
+{
+  "tools": [
+    {
+      "tool_id": "conn:7f3a9c2e-4b1d-11ee-be56/query",
+      "connector": "Loki Prod",
+      "name": "Query Logs",
+      "description": "Search Loki using LogQL.",
+      "destructive": false
     }
-    return out
-}
-
-func toolName(row Connector, op Operation) string {
-    // 3-part: {connector_key}__{op_key}__{label_slug}
-    return row.Key + "__" + op.Key + "__" + slug(row.Label)
+  ],
+  "total": 1
 }
 ```
 
-`ListVisibleTo` query: `SELECT connectors JOIN tool_tags JOIN tags
-WHERE tool_tags.tool_path = '/connectors/'||id AND (tags.is_filter = false
-OR tag_id IN (tagIDs))`. Logika identik dgn cara Tools Private resolve
-akses, cuma path-prefix-nya beda.
+**Isi payload `wick_get`:**
 
-Contoh: connector `loki` punya 2 ops (`query`, `list_apps`) × 3 row yg
-user "yoga" punya akses (`Prod`, `Staging`, `Dev`) = **6 MCP tool**:
+Sama seperti entry di atas, ditambah `input_schema` (JSON Schema object).
 
-```
-loki__query__prod        loki__list_apps__prod
-loki__query__staging     loki__list_apps__staging
-loki__query__dev         loki__list_apps__dev
-```
+**Auth check per call:**
 
-Kalau ada bentrok label (jarang, tapi mungkin krn tag bareng tim),
-append suffix `__<short-id>`.
+Setiap `wick_execute` dan `wick_get` re-check `IsVisibleTo(connectorID,
+tagIDs, isAdmin)` — tidak trust list cache. Tag user bisa berubah antara
+list dan call. `connector_operations` enable state juga di-validasi oleh
+`Service.Execute`.
 
-Saat `tools/call` masuk, server resolve nama tool balik ke
-`(connector_id, op_key)`, cek ulang tag user vs tag row +
-`connector_operations` enable state (double-check, jangan trust list
-cache), terus panggil `Service.Execute` dgn
-`Source=ConnectorRunSourceMCP` — IP & UA dari request masuk ke
-`connector_runs` row.
+`ListVisibleTo` query: `SELECT connectors JOIN tool_tags JOIN tags WHERE
+tool_tags.tool_path = '/connectors/'||id AND (tags.is_filter = false OR
+tag_id IN (tagIDs))`. Logika identik dgn cara Tools Private resolve akses.
 
 ### 7.4 Session
 
@@ -529,9 +550,10 @@ Default: `Content-Type: application/json`, single response.
 Pindah ke `Content-Type: text/event-stream` cuma kalau:
 
 - Run operation diperkirakan > 5 detik dan butuh event progress.
-- Server perlu push `notifications/tools/list_changed` setelah admin
-  add/remove row atau toggle operation via web UI (butuh stream
-  long-lived `GET /mcp`).
+- Server perlu push `notifications/tools/list_changed` — **saat ini
+  tidak dibutuhkan** karena meta-tool pattern membuat tool list statis
+  (selalu 4 entry `wick_*`). Kalau kelak ada tipe tool baru yg perlu
+  advertise secara eksplisit, `GET /mcp` SSE channel baru relevan.
 
 ---
 
@@ -677,12 +699,16 @@ revoke single PAT tanpa affect OAuth grants.
 
 4. **MCP server** ✅
    - `internal/mcp/` — JSON-RPC handler, bearer auth middleware,
-     schema converter, slugify.
+     schema converter.
    - Endpoint `POST /mcp` dispatch `initialize`, `tools/list`,
      `tools/call`, `ping`.
-   - `tools/list` & `tools/call` bind ke `connectors.Service.Execute`
-     dgn `Source=ConnectorRunSourceMCP`. Tag-filtered per user.
-   - Tool name format: `{key}__{op}__{label_slug}`.
+   - **Meta-tool pattern**: `tools/list` selalu return 4 tool tetap
+     (`wick_list`, `wick_search`, `wick_get`, `wick_execute`).
+     Discovery dan dispatch connector dilakukan via tool_id
+     `conn:{connector_id}/{op_key}` — bukan nama tool statis.
+   - `wick_execute` bind ke `connectors.Service.Execute` dgn
+     `Source=ConnectorRunSourceMCP`. Tag-filtered + op-state check
+     per call.
 
 5. **Auth** ✅
    - **PAT** di `internal/accesstoken/` — generate/revoke di
@@ -706,9 +732,10 @@ revoke single PAT tanpa affect OAuth grants.
    - Viewer request/response gaya Postman, source=`test`.
    - History + retry button (panggil `Service.Retry`).
 
-8. **Streaming + notification** *(opsional, kalau dibutuhkan)*
-   - Stream SSE `GET /mcp`.
-   - `notifications/tools/list_changed` saat row/op berubah.
+8. **Streaming + notification** *(opsional, low priority)*
+   - Stream SSE `GET /mcp` — buat long-running ops (> 5s).
+   - `notifications/tools/list_changed` — **tidak dibutuhkan** selama
+     meta-tool pattern dipakai; tool list selalu statis 4 entry.
 
 9. **Convenience** *(belakangan)*
    - Cleanup job harian → `Service.PurgeOldRuns(retentionDays)` +
@@ -742,11 +769,10 @@ revoke single PAT tanpa affect OAuth grants.
 - **Rate limit.** Per user, per row, atau per connector? Client MCP
   bisa cukup chatty. Belum implement — tergantung observe pattern
   abuse di production.
-- **Penamaan di MCP.** Sekarang `loki__query__prod` (underscore-only,
-  paling aman lintas client). Bentrok label antar tag-mate (mis. dua
-  "Loki Default" beda team) — sekarang gak dicegah; bakal generate 2
-  tool dgn nama sama → MCP client behavior undefined. Solusi: suffix
-  `__<short-id>` di slug atau cegah duplicate label di UI.
+- ~~**Penamaan di MCP.**~~ *Resolved.* Diganti meta-tool pattern —
+  LLM tidak melihat nama per-connector di `tools/list`. Tool ID
+  `conn:{uuid}/{op_key}` tidak pernah bentrok dan tidak berubah saat
+  admin rename label.
 - **Reset configs saat duplicate — full vs partial.** Sekarang full
   reset (`Configs = "{}"`). Field non-secret (URL endpoint) sering
   reusable; cuma yg `secret` yg harus re-isi. Partial-reset lebih
@@ -774,9 +800,12 @@ revoke single PAT tanpa affect OAuth grants.
   (via `ToolTag` path `/connectors/{id}`) dan user (via `UserTag`)
   untuk gating akses. Tag string bebas — admin-defined, gak ada
   konvensi prefix wajib di code.
-- **MCP tool** — yg dilihat client LLM. Di-generate dari (row × op)
-  yg tagnya match dgn user pemanggil + op enabled, di
-  `tools/list`. Format nama: `{key}__{op}__{label_slug}`.
+- **MCP tool** — yg dilihat client LLM di `tools/list`. Selalu 4
+  entry tetap: `wick_list`, `wick_search`, `wick_get`,
+  `wick_execute`. Connector row × op direpresentasikan secara internal
+  via **tool_id** `conn:{connector_id}/{op_key}`, bukan nama tool
+  eksplisit. LLM discover via `wick_list`/`wick_search` dan execute
+  via `wick_execute`.
 - **ConnectorRun** — satu eksekusi (MCP, panel-test, atau retry).
   Catat input, response, latency, status, IP, UA, parent (kalau
   retry). Diretensi (default 7 hari).

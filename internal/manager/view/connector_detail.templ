@@ -38,6 +38,9 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 							}
 						</div>
 						<p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{ row.ID }</p>
+						if mod.Meta.Description != "" {
+							<p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{ mod.Meta.Description }</p>
+						}
 					</div>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">

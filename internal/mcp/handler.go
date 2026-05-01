@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -153,26 +152,27 @@ func metaToolDescriptors() []toolDescriptor {
 	return []toolDescriptor{
 		{
 			Name: "wick_list",
-			Description: "List every connector operation the caller can execute. " +
-				"Returns each entry's tool_id, connector label, operation name, description, " +
-				"destructive flag, and input_schema. Call this to discover what's available, " +
-				"then pass an entry's tool_id to wick_execute. Takes no arguments.",
+			Description: "List available connectors grouped by instance. " +
+				"Returns each connector's id, label, description, and total_tools count — no schemas. " +
+				"WORKFLOW: (1) wick_list to see what connectors exist, " +
+				"(2) wick_get with the connector id to see its tools + input_schemas, " +
+				"(3) wick_execute with tool_id + params. Takes no arguments.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
 			},
 			Annotations: &toolAnnotation{
-				Title:        "List wick tools",
+				Title:        "List wick connectors",
 				ReadOnlyHint: ptrBool(true),
 			},
 		},
 		{
 			Name: "wick_search",
-			Description: "Search the caller's connector operations by keyword. " +
-				"Case-insensitive substring match across connector label, operation name, " +
-				"and operation description. Returns the same shape as wick_list. " +
-				"Prefer this over wick_list when you have a specific intent " +
-				"(e.g. \"create user\", \"list invoices\").",
+			Description: "Search tools by keyword across all connectors. " +
+				"Case-insensitive match on connector label, tool name, and description. " +
+				"Returns matching tools nested under their connector (id, description), with tool_id per hit. " +
+				"WORKFLOW: after finding a match, call wick_get with the connector id to get full schemas, " +
+				"then wick_execute.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -190,31 +190,32 @@ func metaToolDescriptors() []toolDescriptor {
 		},
 		{
 			Name: "wick_get",
-			Description: "Get the full details of one connector operation by tool_id, " +
-				"including its input_schema. Call this after wick_list or wick_search " +
-				"to learn what params wick_execute expects before running the tool.",
+			Description: "Get a connector's full tool list with input_schemas. " +
+				"Pass the connector id from wick_list or wick_search. " +
+				"ALWAYS call this before wick_execute to know the required params. " +
+				"Never guess params — read input_schema from this response first.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"tool_id": map[string]any{
+					"id": map[string]any{
 						"type":        "string",
-						"description": "Opaque tool identifier from wick_list or wick_search.",
+						"description": "Connector id from wick_list or wick_search.",
 					},
 				},
-				"required": []string{"tool_id"},
+				"required": []string{"id"},
 			},
 			Annotations: &toolAnnotation{
-				Title:        "Get wick tool details",
+				Title:        "Get wick connector tools",
 				ReadOnlyHint: ptrBool(true),
 			},
 		},
 		{
 			Name: "wick_execute",
-			Description: "Execute one connector operation by tool_id. tool_id comes from " +
-				"wick_list or wick_search; params is an object whose shape matches the " +
-				"operation's input_schema (use {} for ops with no input). On success " +
-				"returns the operation's response payload as JSON; on failure returns " +
-				"{\"error\": string, \"tool_id\": string} with isError=true.",
+			Description: "Execute a tool by tool_id. " +
+				"PREREQUISITE: call wick_get first to get the tool's input_schema — " +
+				"never guess params. params must match the input_schema exactly. " +
+				"On success returns the response as JSON; " +
+				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -292,44 +293,88 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	}
 }
 
-// ── wick_list / wick_search ─────────────────────────────────────────
+// ── wick_list ───────────────────────────────────────────────────────
 
-// discoveredTool is one entry inside the wick_list / wick_search text
-// payload. Intentionally omits input_schema — callers that need the
-// full parameter contract should follow up with wick_get.
-type discoveredTool struct {
-	ToolID      string `json:"tool_id"`
+// connectorSummary is one entry in the wick_list response.
+// Grouped per connector instance — no tool schemas, just counts.
+type connectorSummary struct {
+	ID          string `json:"id"`
 	Connector   string `json:"connector"`
+	Description string `json:"description"`
+	TotalTools  int    `json:"total_tools"`
+}
+
+type listResult struct {
+	Connectors      []connectorSummary `json:"connectors"`
+	TotalConnectors int                `json:"total_connectors"`
+	TotalTools      int                `json:"total_tools"`
+}
+
+func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpcRequest, tagIDs []string, isAdmin bool) {
+	rows, err := h.connectors.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	if err != nil {
+		writeToolError(w, req.ID, "list connectors: "+err.Error(), "")
+		return
+	}
+	summaries := make([]connectorSummary, 0, len(rows))
+	totalTools := 0
+	for _, row := range rows {
+		mod, ok := h.connectors.Module(row.Key)
+		if !ok {
+			continue
+		}
+		states, err := h.connectors.OperationStates(r.Context(), row.ID, row.Key)
+		if err != nil {
+			continue
+		}
+		count := 0
+		for _, op := range mod.Operations {
+			if states[op.Key] {
+				count++
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		totalTools += count
+		summaries = append(summaries, connectorSummary{
+			ID:          row.ID,
+			Connector:   row.Label,
+			Description: mod.Meta.Description,
+			TotalTools:  count,
+		})
+	}
+	writeToolJSON(w, req.ID, listResult{
+		Connectors:      summaries,
+		TotalConnectors: len(summaries),
+		TotalTools:      totalTools,
+	})
+}
+
+// ── wick_search ─────────────────────────────────────────────────────
+
+// searchTool is one matching tool inside a searchGroup. Connector-level
+// info (id, label, description) lives on the parent group so it isn't
+// repeated for each hit on the same connector.
+type searchTool struct {
+	ToolID      string `json:"tool_id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Destructive bool   `json:"destructive"`
 }
 
-// toolDetail is the full record returned by wick_get. Same as
-// discoveredTool plus the input_schema the caller needs before
-// invoking wick_execute.
-type toolDetail struct {
-	ToolID      string     `json:"tool_id"`
-	Connector   string     `json:"connector"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Destructive bool       `json:"destructive"`
-	InputSchema jsonSchema `json:"input_schema"`
+// searchGroup nests matching tools under their owning connector.
+type searchGroup struct {
+	ID          string       `json:"id"`
+	Connector   string       `json:"connector"`
+	Description string       `json:"description"`
+	Tools       []searchTool `json:"tools"`
 }
 
-type discoverResult struct {
-	Tools []discoveredTool `json:"tools"`
-	Total int              `json:"total"`
-	Query string           `json:"query,omitempty"`
-}
-
-func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpcRequest, tagIDs []string, isAdmin bool) {
-	tools, err := h.collectVisibleTools(r.Context(), tagIDs, isAdmin)
-	if err != nil {
-		writeToolError(w, req.ID, "list tools: "+err.Error(), "")
-		return
-	}
-	writeToolJSON(w, req.ID, discoverResult{Tools: tools, Total: len(tools)})
+type searchResult struct {
+	Connectors []searchGroup `json:"connectors"`
+	Total      int           `json:"total"`
+	Query      string        `json:"query"`
 }
 
 func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any, tagIDs []string, isAdmin bool) {
@@ -339,101 +384,119 @@ func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req r
 		writeToolError(w, req.ID, "query is required", "")
 		return
 	}
-	all, err := h.collectVisibleTools(r.Context(), tagIDs, isAdmin)
+	rows, err := h.connectors.ListVisibleTo(r.Context(), tagIDs, isAdmin)
 	if err != nil {
-		writeToolError(w, req.ID, "search tools: "+err.Error(), "")
+		writeToolError(w, req.ID, "search: "+err.Error(), "")
 		return
 	}
 	needle := strings.ToLower(query)
-	hits := make([]discoveredTool, 0, len(all))
-	for _, t := range all {
-		hay := strings.ToLower(t.Connector + " " + t.Name + " " + t.Description)
-		if strings.Contains(hay, needle) {
-			hits = append(hits, t)
-		}
-	}
-	writeToolJSON(w, req.ID, discoverResult{Tools: hits, Total: len(hits), Query: query})
-}
-
-// collectVisibleTools enumerates every (connector × enabled operation)
-// the caller can access, formatting one discoveredTool per pair.
-// Shared by wick_list and wick_search so visibility/enable filtering
-// stays consistent between the two.
-func (h *Handler) collectVisibleTools(ctx context.Context, tagIDs []string, isAdmin bool) ([]discoveredTool, error) {
-	rows, err := h.connectors.ListVisibleTo(ctx, tagIDs, isAdmin)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]discoveredTool, 0, len(rows))
+	groups := make([]searchGroup, 0)
+	total := 0
 	for _, row := range rows {
 		mod, ok := h.connectors.Module(row.Key)
 		if !ok {
 			continue
 		}
-		states, err := h.connectors.OperationStates(ctx, row.ID, row.Key)
+		states, err := h.connectors.OperationStates(r.Context(), row.ID, row.Key)
 		if err != nil {
 			continue
 		}
+		matched := make([]searchTool, 0)
 		for _, op := range mod.Operations {
 			if !states[op.Key] {
 				continue
 			}
-			out = append(out, discoveredTool{
+			hay := strings.ToLower(row.Label + " " + op.Name + " " + op.Description)
+			if !strings.Contains(hay, needle) {
+				continue
+			}
+			matched = append(matched, searchTool{
 				ToolID:      formatToolID(row.ID, op.Key),
-				Connector:   row.Label,
 				Name:        op.Name,
 				Description: op.Description,
 				Destructive: op.Destructive,
 			})
 		}
+		if len(matched) == 0 {
+			continue
+		}
+		total += len(matched)
+		groups = append(groups, searchGroup{
+			ID:          row.ID,
+			Connector:   row.Label,
+			Description: mod.Meta.Description,
+			Tools:       matched,
+		})
 	}
-	return out, nil
+	writeToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
 }
 
 // ── wick_get ────────────────────────────────────────────────────────
 
+// toolDetail is one tool entry inside a connectorDetail response.
+type toolDetail struct {
+	ToolID      string     `json:"tool_id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Destructive bool       `json:"destructive"`
+	InputSchema jsonSchema `json:"input_schema"`
+}
+
+// connectorDetail is the full response for wick_get — one connector
+// instance with all its enabled tools and their input_schemas.
+type connectorDetail struct {
+	ID          string       `json:"id"`
+	Connector   string       `json:"connector"`
+	Description string       `json:"description"`
+	Tools       []toolDetail `json:"tools"`
+}
+
 func (h *Handler) handleWickGet(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any, tagIDs []string, isAdmin bool) {
-	toolID, _ := args["tool_id"].(string)
-	toolID = strings.TrimSpace(toolID)
-	if toolID == "" {
-		writeToolError(w, req.ID, "tool_id is required", toolID)
-		return
-	}
-	connectorID, opKey, err := parseToolID(toolID)
-	if err != nil {
-		writeToolError(w, req.ID, err.Error(), toolID)
+	connectorID, _ := args["id"].(string)
+	connectorID = strings.TrimSpace(connectorID)
+	if connectorID == "" {
+		writeToolError(w, req.ID, "id is required", "")
 		return
 	}
 	allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
 	if err != nil || !allowed {
-		writeToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+		writeToolError(w, req.ID, "connector not found or not accessible", connectorID)
 		return
 	}
 	row, err := h.connectors.Get(r.Context(), connectorID)
 	if err != nil {
-		writeToolError(w, req.ID, "get connector: "+err.Error(), toolID)
+		writeToolError(w, req.ID, "get connector: "+err.Error(), connectorID)
 		return
 	}
 	mod, ok := h.connectors.Module(row.Key)
 	if !ok {
-		writeToolError(w, req.ID, "connector module not found", toolID)
+		writeToolError(w, req.ID, "connector module not registered", connectorID)
 		return
 	}
+	states, err := h.connectors.OperationStates(r.Context(), row.ID, row.Key)
+	if err != nil {
+		writeToolError(w, req.ID, "load operation states: "+err.Error(), connectorID)
+		return
+	}
+	tools := make([]toolDetail, 0, len(mod.Operations))
 	for _, op := range mod.Operations {
-		if op.Key != opKey {
+		if !states[op.Key] {
 			continue
 		}
-		writeToolJSON(w, req.ID, toolDetail{
-			ToolID:      toolID,
-			Connector:   row.Label,
+		tools = append(tools, toolDetail{
+			ToolID:      formatToolID(row.ID, op.Key),
 			Name:        op.Name,
 			Description: op.Description,
 			Destructive: op.Destructive,
 			InputSchema: configsToJSONSchema(op.Input),
 		})
-		return
 	}
-	writeToolError(w, req.ID, "operation not found: "+opKey, toolID)
+	writeToolJSON(w, req.ID, connectorDetail{
+		ID:          row.ID,
+		Connector:   row.Label,
+		Description: mod.Meta.Description,
+		Tools:       tools,
+	})
 }
 
 // ── wick_execute ────────────────────────────────────────────────────
