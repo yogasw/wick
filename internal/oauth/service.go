@@ -317,6 +317,12 @@ func (s *Service) RevokeGrant(ctx context.Context, userID, clientID string) erro
 	return s.repo.RevokeAllForUserClient(ctx, userID, clientID)
 }
 
+// ListAllGrants returns active (user, client) grants across every
+// user. Admin-only — drives /admin/connections.
+func (s *Service) ListAllGrants(ctx context.Context) ([]AdminGrant, error) {
+	return s.repo.ListAllGrants(ctx)
+}
+
 // Authenticate validates an access token presented in the
 // Authorization: Bearer header and returns the owning user_id.
 // Mirrors accesstoken.Service.Authenticate so the MCP middleware can

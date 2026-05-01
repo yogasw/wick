@@ -27,6 +27,9 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						@adminTab("/admin/users", "Users", activeTab == "users")
 						@adminTab("/admin/tools", "Tools", activeTab == "tools")
 						@adminTab("/admin/jobs", "Jobs", activeTab == "jobs")
+						@adminTab("/admin/connectors", "Connectors", activeTab == "connectors")
+						@adminTab("/admin/access-tokens", "Access Tokens", activeTab == "access-tokens")
+						@adminTab("/admin/connections", "Connected Apps", activeTab == "connections")
 						@adminTab("/admin/tags", "Tags", activeTab == "tags")
 						@adminTab("/admin/configs", "Configs", activeTab == "configs")
 					</div>

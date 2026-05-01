@@ -110,6 +110,18 @@ func (s *Service) Revoke(ctx context.Context, id, userID string) error {
 	return s.repo.Revoke(ctx, id, userID)
 }
 
+// ListAllActive returns every non-revoked token across all users.
+// Admin-only — exposed via /admin/mcp.
+func (s *Service) ListAllActive(ctx context.Context) ([]entity.PersonalAccessToken, error) {
+	return s.repo.ListAllActive(ctx)
+}
+
+// RevokeAny stamps RevokedAt on a token without checking ownership.
+// Admin-only override; the user-facing Revoke still enforces it.
+func (s *Service) RevokeAny(ctx context.Context, id string) error {
+	return s.repo.RevokeAny(ctx, id)
+}
+
 // Authenticate validates a plaintext bearer pulled from an incoming
 // request and returns the owning user_id. Returns ErrInvalid for any
 // malformed, unknown, or revoked token so middleware can respond with

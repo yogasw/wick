@@ -244,3 +244,66 @@ func (r *Repo) RevokeAllForUserClient(ctx context.Context, userID, clientID stri
 		Where("user_id = ? AND client_id = ? AND revoked_at IS NULL", userID, clientID).
 		Update("revoked_at", &now).Error
 }
+
+// AdminGrant is the all-users variant of Grant. UserID is the row's
+// owner; the admin UI joins it against the users table to render
+// owner name/email.
+type AdminGrant struct {
+	UserID     string
+	ClientID   string
+	ClientName string
+	GrantedAt  time.Time
+	LastUsedAt *time.Time
+	TokenCount int
+}
+
+// ListAllGrants returns one row per active (user, client) pair across
+// every user — the admin equivalent of ListGrantsByUser. Same active
+// definition (≥1 non-revoked, non-expired token) and the same
+// SQLite/Postgres timestamp parsing dance.
+func (r *Repo) ListAllGrants(ctx context.Context) ([]AdminGrant, error) {
+	type row struct {
+		UserID     string
+		ClientID   string
+		ClientName string
+		GrantedAt  string
+		LastUsedAt *string
+		TokenCount int
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).
+		Table("oauth_tokens AS t").
+		Select(`t.user_id              AS user_id,
+		         t.client_id            AS client_id,
+		         c.name                 AS client_name,
+		         MIN(t.created_at)      AS granted_at,
+		         MAX(t.last_used_at)    AS last_used_at,
+		         COUNT(*)               AS token_count`).
+		Joins("JOIN oauth_clients c ON c.client_id = t.client_id").
+		Where("t.revoked_at IS NULL AND t.expires_at > ?", time.Now()).
+		Group("t.user_id, t.client_id, c.name").
+		Order("MIN(t.created_at) DESC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AdminGrant, len(rows))
+	for i, x := range rows {
+		grantedAt, _ := parseAggregateTime(x.GrantedAt)
+		var lastUsed *time.Time
+		if x.LastUsedAt != nil {
+			if t, ok := parseAggregateTime(*x.LastUsedAt); ok {
+				lastUsed = &t
+			}
+		}
+		out[i] = AdminGrant{
+			UserID:     x.UserID,
+			ClientID:   x.ClientID,
+			ClientName: x.ClientName,
+			GrantedAt:  grantedAt,
+			LastUsedAt: lastUsed,
+			TokenCount: x.TokenCount,
+		}
+	}
+	return out, nil
+}

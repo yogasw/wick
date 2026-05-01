@@ -214,7 +214,7 @@ func NewServer() *Server {
 	}
 
 	// ── Admin ────────────────────────────────────────────────────
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc)
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc)
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)

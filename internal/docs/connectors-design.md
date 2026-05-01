@@ -3,7 +3,8 @@
 Status: implemented (modul + persistence + MCP JSON-RPC meta-tool pattern
 + auth dual-mode PAT & OAuth 2.1 + per-user grant management + admin UI:
 list/detail row CRUD, dedicated test page, dedicated history page dgn
-filter URL-driven).
+filter URL-driven, admin overview pages utk connector instance, access
+token, connected app cross-user).
 Update terakhir: 2026-05-01.
 
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
@@ -464,6 +465,45 @@ dgn 4 tab: Account · Access Tokens · Connected Apps · MCP.
   — section "Claude.ai (OAuth-aware)" (cuma paste URL) + section
   "Claude Desktop / Cursor / VSCode (Bearer)" (4 install snippet siap-paste).
 
+### 6.5 Admin overview pages *(implemented)*
+
+Tab strip di `AdminLayout` punya 3 surface cross-user paralel ke /profile
+area (sec. 6.4) — admin-only, bypass tag filter, lihat semua user.
+
+```
+/admin/connectors      — semua Connector row (cross-Key) — toggle Disabled, set tags, link ke /manager
+/admin/access-tokens   — semua active PAT — owner, masked token, last used, admin revoke
+/admin/connections     — semua active OAuth grant — owner, app, granted, last used, admin disconnect
+```
+
+- **Connectors** ([internal/admin/view/connectors.templ] +
+  [internal/admin/connectors.go]): row label, module name, status pill.
+  Disable toggle nulis ke `Connector.Disabled` langsung (entity field,
+  bukan ToolPermission — yg disabled ngumpet dari MCP `tools/list` dan
+  test panel). Tag picker reuse `ToolTag` dgn path `/connectors/{id}`
+  — sama persis dgn manager UI. Row yg `Key`-nya gak ada module
+  registered ditandai "Module not registered" jadi admin bisa cleanup.
+
+- **Access Tokens** ([internal/admin/view/access_tokens.templ] +
+  [internal/admin/access_tokens.go]): cross-user view dari /profile/tokens.
+  Stat card (active tokens · users with token · never used) + table
+  (owner · masked token · created · last used · revoke). Admin revoke
+  pakai `accesstoken.Service.RevokeAny` — bypass owner check yg ada di
+  user-facing /profile/tokens.
+
+- **Connected Apps** ([internal/admin/view/connections.templ] +
+  [internal/admin/connections.go]): cross-user view dari
+  /profile/connections. Satu row per (user × OAuth client) yg punya
+  active token. Disconnect → `oauth.Service.RevokeGrant(userID,
+  clientID)` revoke semua access + refresh token user buat client itu;
+  app musti re-OAuth. Backed by `oauth.Repo.ListAllGrants` (versi
+  `ListGrantsByUser` tanpa filter user — same SQLite/Postgres timestamp
+  parsing dance).
+
+Surface ini admin-override; gak ada konfirmasi dari token/grant owner.
+Audit trail per call masih di `connector_runs` (sec. 5.3) — tab ini
+cuma manage-state, bukan log.
+
 ---
 
 ## 7. Eksposur MCP
@@ -796,15 +836,29 @@ revoke single PAT tanpa affect OAuth grants.
    - `notifications/tools/list_changed` — **tidak dibutuhkan** selama
      meta-tool pattern dipakai; tool list selalu statis 4 entry.
 
-9. **Convenience** *(belakangan)*
-   - Cleanup job harian → `Service.PurgeOldRuns(retentionDays)` +
-     purge expired `oauth_authorization_codes` + `oauth_tokens`.
-   - Admin view `/admin/oauth-clients` — list registered DCR clients
-     + revoke (sekarang SQL only).
-   - OAuth Token Revocation endpoint (RFC 7009) — `POST /oauth/revoke`
-     buat client revoke own token.
-   - Import OpenAPI / Postman collection buat scaffold stub Go
-     connector.
+9. **Admin overview pages** ✅
+   - `/admin/connectors` — list semua Connector row cross-Key, toggle
+     Disabled (entity field, bukan ToolPermission), set tags via
+     `ToolTag` path `/connectors/{id}`, link ke /manager utk edit
+     credential + ops.
+   - `/admin/access-tokens` — cross-user view PAT, admin revoke via
+     `accesstoken.Service.RevokeAny`. Bukan `/admin/mcp` — PAT itu
+     bearer general-purpose, MCP cuma satu caller.
+   - `/admin/connections` — cross-user view OAuth grant, admin
+     disconnect via `oauth.Service.RevokeGrant`. Backed by
+     `oauth.Repo.ListAllGrants` (varian `ListGrantsByUser` tanpa
+     filter user). Lihat sec. 6.5 buat detail.
+
+10. **Convenience** *(belakangan)*
+    - Cleanup job harian → `Service.PurgeOldRuns(retentionDays)` +
+      purge expired `oauth_authorization_codes` + `oauth_tokens`.
+    - Admin view `/admin/oauth-clients` — list registered DCR clients
+      + revoke (sekarang SQL only). Beda dgn /admin/connections yg
+      grant-centric: ini client-centric (1 row per `oauth_clients`).
+    - OAuth Token Revocation endpoint (RFC 7009) — `POST /oauth/revoke`
+      buat client revoke own token.
+    - Import OpenAPI / Postman collection buat scaffold stub Go
+      connector.
 
 ---
 

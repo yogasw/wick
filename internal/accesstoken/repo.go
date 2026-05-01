@@ -75,3 +75,25 @@ func (r *Repo) TouchLastUsed(ctx context.Context, id string) error {
 		Where("id = ?", id).
 		Update("last_used_at", &now).Error
 }
+
+// ListAllActive returns every non-revoked token across all users,
+// newest first. Drives the admin MCP page; not exposed to non-admin
+// callers.
+func (r *Repo) ListAllActive(ctx context.Context) ([]entity.PersonalAccessToken, error) {
+	var rows []entity.PersonalAccessToken
+	err := r.db.WithContext(ctx).
+		Where("revoked_at IS NULL").
+		Order("created_at DESC").
+		Find(&rows).Error
+	return rows, err
+}
+
+// RevokeAny stamps RevokedAt on a token regardless of owner. Used by
+// the admin override path; the user-facing Revoke still enforces
+// ownership.
+func (r *Repo) RevokeAny(ctx context.Context, id string) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&entity.PersonalAccessToken{}).
+		Where("id = ? AND revoked_at IS NULL", id).
+		Update("revoked_at", &now).Error
+}

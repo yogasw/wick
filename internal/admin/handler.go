@@ -8,10 +8,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin/view"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/pkg/tool"
 
@@ -24,15 +27,36 @@ type JobListProvider interface {
 }
 
 type Handler struct {
-	repo    *repo
-	tools   []tool.Tool
-	configs *configs.Service
-	sso     *sso.Service
-	svc     JobListProvider
+	repo       *repo
+	tools      []tool.Tool
+	configs    *configs.Service
+	sso        *sso.Service
+	svc        JobListProvider
+	connectors *connectors.Service
+	tokens     *accesstoken.Service
+	oauth      *oauth.Service
 }
 
-func NewHandler(db *gorm.DB, tools []tool.Tool, configsSvc *configs.Service, ssoSvc *sso.Service, svc JobListProvider) *Handler {
-	return &Handler{repo: newRepo(db), tools: tools, configs: configsSvc, sso: ssoSvc, svc: svc}
+func NewHandler(
+	db *gorm.DB,
+	tools []tool.Tool,
+	configsSvc *configs.Service,
+	ssoSvc *sso.Service,
+	svc JobListProvider,
+	connectorsSvc *connectors.Service,
+	tokensSvc *accesstoken.Service,
+	oauthSvc *oauth.Service,
+) *Handler {
+	return &Handler{
+		repo:       newRepo(db),
+		tools:      tools,
+		configs:    configsSvc,
+		sso:        ssoSvc,
+		svc:        svc,
+		connectors: connectorsSvc,
+		tokens:     tokensSvc,
+		oauth:      oauthSvc,
+	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
@@ -95,6 +119,21 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/tags", admin(h.createTag))
 	mux.Handle("POST /admin/tags/{id}/update", admin(h.updateTag))
 	mux.Handle("POST /admin/tags/{id}/delete", admin(h.deleteTag))
+
+	// Connector instance management (cross-definition list).
+	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
+	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
+	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
+
+	// Personal access tokens (admin override view). PATs authenticate
+	// any wick HTTP API — MCP is just one caller — so the surface is
+	// /admin/access-tokens, not /admin/mcp.
+	mux.Handle("GET /admin/access-tokens", admin(h.accessTokensAdminPage))
+	mux.Handle("POST /admin/access-tokens/{id}/revoke", admin(h.revokeTokenAdmin))
+
+	// OAuth connected apps (admin override view).
+	mux.Handle("GET /admin/connections", admin(h.connectionsAdminPage))
+	mux.Handle("POST /admin/connections/{userID}/{clientID}/disconnect", admin(h.disconnectGrantAdmin))
 }
 
 // ── Dashboard ──────────────────────────────────────────────────
