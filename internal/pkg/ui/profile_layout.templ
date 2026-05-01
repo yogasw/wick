@@ -1,0 +1,67 @@
+package ui
+
+import "github.com/yogasw/wick/internal/entity"
+
+// ProfileTabKey identifies which tab should render as active.
+type ProfileTabKey string
+
+const (
+	ProfileTabAccount ProfileTabKey = "account"
+	ProfileTabTokens  ProfileTabKey = "tokens"
+	ProfileTabMCP     ProfileTabKey = "mcp"
+)
+
+// ProfileLayout is the shared chrome for every page under /profile/*.
+// Mirrors AdminLayout: a single sticky navbar carries the logo, the
+// "Profile" section label, the segmented tab pill group, and the
+// theme/user controls — so children render against the full
+// max-w-container width instead of a narrow account-style column.
+templ ProfileLayout(title string, active ProfileTabKey, user *entity.User) {
+	@Layout(title) {
+		<nav class="sticky top-0 z-50 flex h-16 items-center border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+			<div class="mx-auto flex w-full max-w-container items-center justify-between px-6">
+				<div class="flex items-center gap-4">
+					<a href="/" class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100">
+						<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
+						{ AppNameFromContext(ctx) }
+					</a>
+					<span class="text-black-600 dark:text-black-700">/</span>
+					<span class="flex items-center gap-1.5 text-sm font-medium text-black-800 dark:text-black-600">
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"/>
+						</svg>
+						Profile
+					</span>
+					<div class="ml-2 flex items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1">
+						@profileTab("/profile", "Account", active == ProfileTabAccount)
+						@profileTab("/profile/tokens", "Access Tokens", active == ProfileTabTokens)
+						@profileTab("/profile/mcp", "MCP", active == ProfileTabMCP)
+					</div>
+				</div>
+				<div class="flex items-center gap-3">
+					if user != nil {
+						@ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme))
+					} else {
+						{{ g := GuestThemeFromContext(ctx) }}
+						@ThemePicker(ThemeByID(g.Current), g.Light, g.Dark)
+					}
+					@UserMenu(user)
+				</div>
+			</div>
+		</nav>
+		{ children... }
+	}
+}
+
+templ profileTab(href string, label string, active bool) {
+	<a
+		href={ templ.SafeURL(href) }
+		class={
+			"rounded-md px-4 py-2 text-sm font-medium transition-colors",
+			templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),
+			templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", !active),
+		}
+	>
+		{ label }
+	</a>
+}

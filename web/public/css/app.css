@@ -1068,6 +1068,14 @@ textarea, input, select {
   resize: vertical;
 }
 
+.list-inside {
+  list-style-position: inside;
+}
+
+.list-decimal {
+  list-style-type: decimal;
+}
+
 .list-none {
   list-style-type: none;
 }
@@ -1140,6 +1148,12 @@ textarea, input, select {
   gap: 1.5rem;
 }
 
+.space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.5rem * var(--tw-space-y-reverse));
+}
+
 .space-y-3 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-y-reverse: 0;
   margin-top: calc(0.75rem * calc(1 - var(--tw-space-y-reverse)));
@@ -1152,6 +1166,17 @@ textarea, input, select {
   margin-bottom: calc(1rem * var(--tw-space-y-reverse));
 }
 
+.divide-y > :not([hidden]) ~ :not([hidden]) {
+  --tw-divide-y-reverse: 0;
+  border-top-width: calc(1px * calc(1 - var(--tw-divide-y-reverse)));
+  border-bottom-width: calc(1px * var(--tw-divide-y-reverse));
+}
+
+.divide-white-300 > :not([hidden]) ~ :not([hidden]) {
+  --tw-divide-opacity: 1;
+  border-color: rgb(var(--color-white-300) / var(--tw-divide-opacity, 1));
+}
+
 .self-end {
   align-self: flex-end;
 }
@@ -1162,6 +1187,10 @@ textarea, input, select {
 
 .overflow-visible {
   overflow: visible;
+}
+
+.overflow-x-auto {
+  overflow-x: auto;
 }
 
 .overflow-y-auto {
@@ -1224,10 +1253,6 @@ textarea, input, select {
   border-width: 1px;
 }
 
-.border-2 {
-  border-width: 2px;
-}
-
 .border-b {
   border-bottom-width: 1px;
 }
@@ -1238,6 +1263,10 @@ textarea, input, select {
 
 .border-t {
   border-top-width: 1px;
+}
+
+.border-dashed {
+  border-style: dashed;
 }
 
 .border-cau-300 {
@@ -1268,6 +1297,11 @@ textarea, input, select {
 .border-pos-300 {
   --tw-border-opacity: 1;
   border-color: rgb(160 212 145 / var(--tw-border-opacity, 1));
+}
+
+.border-prog-200 {
+  --tw-border-opacity: 1;
+  border-color: rgb(195 235 250 / var(--tw-border-opacity, 1));
 }
 
 .border-prog-300 {
@@ -1327,6 +1361,10 @@ textarea, input, select {
   background-color: rgb(241 249 239 / var(--tw-bg-opacity, 1));
 }
 
+.bg-pos-100\/40 {
+  background-color: rgb(241 249 239 / 0.4);
+}
+
 .bg-prog-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(238 250 254 / var(--tw-bg-opacity, 1));
@@ -1339,6 +1377,10 @@ textarea, input, select {
 .bg-white-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(var(--color-white-100) / var(--tw-bg-opacity, 1));
+}
+
+.bg-white-100\/40 {
+  background-color: rgb(var(--color-white-100) / 0.4);
 }
 
 .bg-white-200 {
@@ -1365,6 +1407,10 @@ textarea, input, select {
   padding: 0.25rem;
 }
 
+.p-1\.5 {
+  padding: 0.375rem;
+}
+
 .p-3 {
   padding: 0.75rem;
 }
@@ -1388,6 +1434,11 @@ textarea, input, select {
 .px-1 {
   padding-left: 0.25rem;
   padding-right: 0.25rem;
+}
+
+.px-1\.5 {
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
 }
 
 .px-2 {
@@ -1507,6 +1558,10 @@ textarea, input, select {
 
 .pr-1 {
   padding-right: 0.25rem;
+}
+
+.pr-12 {
+  padding-right: 3rem;
 }
 
 .pr-3 {
@@ -1739,6 +1794,10 @@ textarea, input, select {
 .text-white-100 {
   --tw-text-opacity: 1;
   color: rgb(var(--color-white-100) / var(--tw-text-opacity, 1));
+}
+
+.underline {
+  text-decoration-line: underline;
 }
 
 .accent-green-500 {
@@ -2143,6 +2202,10 @@ textarea, input, select {
   text-decoration-line: underline;
 }
 
+.hover\:no-underline:hover {
+  text-decoration-line: none;
+}
+
 .hover\:shadow-md:hover {
   --tw-shadow: 0 4px 12px -2px rgba(0,0,0,0.08), 0 2px 4px -1px rgba(0,0,0,0.05);
   --tw-shadow-colored: 0 4px 12px -2px var(--tw-shadow-color), 0 2px 4px -1px var(--tw-shadow-color);
@@ -2216,6 +2279,11 @@ textarea, input, select {
   display: none;
 }
 
+.dark\:divide-navy-600:is(.dark *) > :not([hidden]) ~ :not([hidden]) {
+  --tw-divide-opacity: 1;
+  border-color: rgb(var(--color-navy-600) / var(--tw-divide-opacity, 1));
+}
+
 .dark\:border-navy-600:is(.dark *) {
   --tw-border-opacity: 1;
   border-color: rgb(var(--color-navy-600) / var(--tw-border-opacity, 1));
@@ -2243,6 +2311,10 @@ textarea, input, select {
 .dark\:bg-navy-800:is(.dark *) {
   --tw-bg-opacity: 1;
   background-color: rgb(var(--color-navy-800) / var(--tw-bg-opacity, 1));
+}
+
+.dark\:bg-navy-800\/30:is(.dark *) {
+  background-color: rgb(var(--color-navy-800) / 0.3);
 }
 
 .dark\:text-black-600:is(.dark *) {
