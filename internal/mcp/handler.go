@@ -189,6 +189,26 @@ func metaToolDescriptors() []toolDescriptor {
 			},
 		},
 		{
+			Name: "wick_get",
+			Description: "Get the full details of one connector operation by tool_id, " +
+				"including its input_schema. Call this after wick_list or wick_search " +
+				"to learn what params wick_execute expects before running the tool.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tool_id": map[string]any{
+						"type":        "string",
+						"description": "Opaque tool identifier from wick_list or wick_search.",
+					},
+				},
+				"required": []string{"tool_id"},
+			},
+			Annotations: &toolAnnotation{
+				Title:        "Get wick tool details",
+				ReadOnlyHint: ptrBool(true),
+			},
+		},
+		{
 			Name: "wick_execute",
 			Description: "Execute one connector operation by tool_id. tool_id comes from " +
 				"wick_list or wick_search; params is an object whose shape matches the " +
@@ -263,6 +283,8 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		h.handleWickList(w, r, req, tagIDs, user.IsAdmin())
 	case "wick_search":
 		h.handleWickSearch(w, r, req, p.Arguments, tagIDs, user.IsAdmin())
+	case "wick_get":
+		h.handleWickGet(w, r, req, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_execute":
 		h.handleWickExecute(w, r, req, p.Arguments, user, tagIDs)
 	default:
@@ -273,10 +295,20 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 // ── wick_list / wick_search ─────────────────────────────────────────
 
 // discoveredTool is one entry inside the wick_list / wick_search text
-// payload. tool_id is the opaque handle wick_execute consumes; the
-// rest is the human/LLM-facing context that lets the model pick the
-// right tool without a separate describe call.
+// payload. Intentionally omits input_schema — callers that need the
+// full parameter contract should follow up with wick_get.
 type discoveredTool struct {
+	ToolID      string `json:"tool_id"`
+	Connector   string `json:"connector"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Destructive bool   `json:"destructive"`
+}
+
+// toolDetail is the full record returned by wick_get. Same as
+// discoveredTool plus the input_schema the caller needs before
+// invoking wick_execute.
+type toolDetail struct {
 	ToolID      string     `json:"tool_id"`
 	Connector   string     `json:"connector"`
 	Name        string     `json:"name"`
@@ -352,11 +384,56 @@ func (h *Handler) collectVisibleTools(ctx context.Context, tagIDs []string, isAd
 				Name:        op.Name,
 				Description: op.Description,
 				Destructive: op.Destructive,
-				InputSchema: configsToJSONSchema(op.Input),
 			})
 		}
 	}
 	return out, nil
+}
+
+// ── wick_get ────────────────────────────────────────────────────────
+
+func (h *Handler) handleWickGet(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any, tagIDs []string, isAdmin bool) {
+	toolID, _ := args["tool_id"].(string)
+	toolID = strings.TrimSpace(toolID)
+	if toolID == "" {
+		writeToolError(w, req.ID, "tool_id is required", toolID)
+		return
+	}
+	connectorID, opKey, err := parseToolID(toolID)
+	if err != nil {
+		writeToolError(w, req.ID, err.Error(), toolID)
+		return
+	}
+	allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
+	if err != nil || !allowed {
+		writeToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+		return
+	}
+	row, err := h.connectors.Get(r.Context(), connectorID)
+	if err != nil {
+		writeToolError(w, req.ID, "get connector: "+err.Error(), toolID)
+		return
+	}
+	mod, ok := h.connectors.Module(row.Key)
+	if !ok {
+		writeToolError(w, req.ID, "connector module not found", toolID)
+		return
+	}
+	for _, op := range mod.Operations {
+		if op.Key != opKey {
+			continue
+		}
+		writeToolJSON(w, req.ID, toolDetail{
+			ToolID:      toolID,
+			Connector:   row.Label,
+			Name:        op.Name,
+			Description: op.Description,
+			Destructive: op.Destructive,
+			InputSchema: configsToJSONSchema(op.Input),
+		})
+		return
+	}
+	writeToolError(w, req.ID, "operation not found: "+opKey, toolID)
 }
 
 // ── wick_execute ────────────────────────────────────────────────────
@@ -514,8 +591,8 @@ func stringifyOne(v any) string {
 // upstream already normalized it onto RemoteAddr, but defensive).
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+		if first, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(first)
 		}
 		return strings.TrimSpace(xff)
 	}
