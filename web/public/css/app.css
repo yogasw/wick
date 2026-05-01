@@ -793,6 +793,10 @@ textarea, input, select {
   margin-left: 0.5rem;
 }
 
+.ml-auto {
+  margin-left: auto;
+}
+
 .mt-0\.5 {
   margin-top: 0.125rem;
 }
