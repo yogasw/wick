@@ -1,4 +1,4 @@
-package pat
+package accesstoken
 
 import "embed"
 

@@ -1,6 +1,8 @@
-// Package pat manages Personal Access Tokens — static bearer
-// credentials a user generates from /profile/mcp and pastes into a
-// remote MCP client (Claude Desktop, Cursor, VSCode plugin, custom CLI).
+// Package accesstoken manages Personal Access Tokens — static bearer
+// credentials a user generates from /profile/tokens and pastes into a
+// remote MCP client (Claude Desktop, Cursor, VSCode plugin, custom
+// CLI). The same token also authenticates any other wick HTTP API a
+// user wires up.
 //
 // The plaintext token is shown to the user exactly once, at creation
 // time. Wick stores only the SHA-256 hash so the token can be looked
@@ -10,10 +12,10 @@
 //
 //	wick_pat_<32 hex chars>
 //
-// The "wick_pat_" prefix is the routing hint MCP middleware uses to
+// The "wick_pat_" prefix is the routing hint auth middleware uses to
 // distinguish static bearers from OAuth JWTs (see internal/docs/
 // connectors-design.md §8.3).
-package pat
+package accesstoken
 
 import (
 	"context"

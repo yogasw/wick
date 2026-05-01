@@ -89,7 +89,7 @@ func MCPPage(data MCPPageData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</main><script src=\"/modules/pat/js/mcp.js\"></script>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</main><script src=\"/modules/accesstoken/js/mcp.js\"></script>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -131,7 +131,7 @@ func endpointCard(url string) templ.Component {
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(url)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/mcp.templ`, Line: 54, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 54, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
@@ -294,7 +294,7 @@ func snippetBlock(title, hint, code string) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/mcp.templ`, Line: 139, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 139, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -307,7 +307,7 @@ func snippetBlock(title, hint, code string) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(hint)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/mcp.templ`, Line: 140, Col: 69}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 140, Col: 69}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -320,7 +320,7 @@ func snippetBlock(title, hint, code string) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(code)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/mcp.templ`, Line: 142, Col: 222}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 142, Col: 222}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {

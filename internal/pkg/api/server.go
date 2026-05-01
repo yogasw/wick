@@ -20,8 +20,8 @@ import (
 	"github.com/yogasw/wick/internal/jobrunner"
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/manager"
-	"github.com/yogasw/wick/internal/pat"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/ui"
@@ -123,8 +123,8 @@ func NewServer() *Server {
 	_ = connectorsSvc
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
-	patSvc := pat.NewServiceFromDB(db)
-	patHandler := pat.NewHandler(patSvc, configsSvc)
+	tokensSvc := accesstoken.NewServiceFromDB(db)
+	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to.
@@ -212,7 +212,7 @@ func NewServer() *Server {
 	r.Handle("GET /modules/admin/", ui.StaticHandler("/modules/admin/", admin.StaticFS))
 
 	// MCP access page static assets (copy buttons, create-form toggle)
-	r.Handle("GET /modules/pat/", ui.StaticHandler("/modules/pat/", pat.StaticFS))
+	r.Handle("GET /modules/accesstoken/", ui.StaticHandler("/modules/accesstoken/", accesstoken.StaticFS))
 
 	// Auth routes: /auth/login, /auth/callback, /auth/logout, /auth/pending
 	authHandler.Register(r, authMidd)
@@ -223,8 +223,8 @@ func NewServer() *Server {
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
 
-	// Personal Access Token management — /profile/mcp surface.
-	patHandler.Register(r, authMidd)
+	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
+	tokensHandler.Register(r, authMidd)
 
 	// Manager (admin settings) + jobrunner (operator surface) routes.
 	// The two share manager.Service so run history and banners stay in

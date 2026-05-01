@@ -1,12 +1,12 @@
-package pat
+package accesstoken
 
 import (
 	"net/http"
 	"strings"
 
+	"github.com/yogasw/wick/internal/accesstoken/view"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/pat/view"
 )
 
 // appConfig is the subset of configs.Service the handler needs to

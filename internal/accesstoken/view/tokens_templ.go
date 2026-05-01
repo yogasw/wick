@@ -73,7 +73,7 @@ func TokensPage(data TokensPageData) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(data.ErrMsg)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 32, Col: 18}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 32, Col: 18}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -94,7 +94,7 @@ func TokensPage(data TokensPageData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</main><script src=\"/modules/pat/js/mcp.js\"></script>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</main><script src=\"/modules/accesstoken/js/mcp.js\"></script>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -138,7 +138,7 @@ func JustIssuedBanner(token string) templ.Component {
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(token)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 59, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 59, Col: 13}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
@@ -239,7 +239,7 @@ func tokenRow(t entity.PersonalAccessToken, highlight bool) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var8).String())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 1, Col: 0}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 1, Col: 0}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -252,7 +252,7 @@ func tokenRow(t entity.PersonalAccessToken, highlight bool) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(t.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 159, Col: 67}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 159, Col: 67}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -265,7 +265,7 @@ func tokenRow(t entity.PersonalAccessToken, highlight bool) templ.Component {
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(t.Masked())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 162, Col: 16}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 162, Col: 16}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
@@ -278,7 +278,7 @@ func tokenRow(t entity.PersonalAccessToken, highlight bool) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(t.CreatedAt.Format("Jan 2, 2006"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 166, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 166, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
@@ -292,7 +292,7 @@ func tokenRow(t entity.PersonalAccessToken, highlight bool) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(t.LastUsedAt.Format("Jan 2, 2006 15:04"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 170, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 170, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -311,7 +311,7 @@ func tokenRow(t entity.PersonalAccessToken, highlight bool) templ.Component {
 		var templ_7745c5c3_Var14 templ.SafeURL
 		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/profile/tokens/%s/revoke", t.ID)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/pat/view/tokens.templ`, Line: 176, Col: 75}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/tokens.templ`, Line: 176, Col: 75}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 		if templ_7745c5c3_Err != nil {
