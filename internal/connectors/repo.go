@@ -306,6 +306,39 @@ func (r *Repo) ListRunsByConnector(ctx context.Context, connectorID string, limi
 	return out, err
 }
 
+// RunFilter narrows ListRunsFiltered. Empty fields are ignored.
+type RunFilter struct {
+	OperationKey string
+	Source       string
+	Status       string
+	UserID       string
+}
+
+// ListRunsFiltered returns runs for one connector filtered by op/source/
+// status/user. The history page uses this to power its filter bar.
+func (r *Repo) ListRunsFiltered(ctx context.Context, connectorID string, f RunFilter, limit int) ([]entity.ConnectorRun, error) {
+	var out []entity.ConnectorRun
+	q := r.db.WithContext(ctx).Where("connector_id = ?", connectorID)
+	if f.OperationKey != "" {
+		q = q.Where("operation_key = ?", f.OperationKey)
+	}
+	if f.Source != "" {
+		q = q.Where("source = ?", f.Source)
+	}
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.UserID != "" {
+		q = q.Where("user_id = ?", f.UserID)
+	}
+	q = q.Order("started_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	err := q.Find(&out).Error
+	return out, err
+}
+
 // PurgeRunsOlderThan deletes ConnectorRun rows whose StartedAt is
 // before the cutoff. Returns how many rows were removed so the
 // retention job can log progress.

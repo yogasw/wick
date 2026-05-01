@@ -174,7 +174,7 @@ func NewServer() *Server {
 	tr.mount(toolsMux)
 
 	tagsSvc := tags.NewService(db)
-	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, allItems)
+	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
 
 	// jobrunnerHandler exposes /jobs/{key} — the operator surface with
 	// a Run Now button and run history. Admin-only settings stay on

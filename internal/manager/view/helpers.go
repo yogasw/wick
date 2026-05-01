@@ -1,9 +1,44 @@
 package view
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"time"
 )
+
+// prettyOrEmpty re-indents a JSON blob for the history detail panel.
+// Falls back to the raw text when the input isn't valid JSON, and to a
+// dash when it's empty.
+func prettyOrEmpty(s string) string {
+	if s == "" {
+		return "—"
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(s), "", "  "); err != nil {
+		return s
+	}
+	return buf.String()
+}
+
+// shortID renders the first 8 characters of an ID — enough to scan a
+// list without showing the full UUID.
+func shortID(s string) string {
+	if len(s) <= 8 {
+		return s
+	}
+	return s[:8] + "…"
+}
+
+// truncate clips a string to n runes, appending an ellipsis when it
+// had to cut. Used to keep User-Agent strings readable in the history
+// metadata row.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
 
 // relativeTime renders a coarse "x minutes ago" string. The tooltip on
 // the cell carries the precise RFC3339 timestamp for callers who need

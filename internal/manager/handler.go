@@ -28,11 +28,12 @@ type Handler struct {
 	configs    *configs.Service
 	connectors *connectors.Service
 	tags       *tags.Service
+	users      *login.Service
 	tools      []tool.Tool
 }
 
-func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, tools []tool.Tool) *Handler {
-	return &Handler{svc: svc, configs: configsSvc, connectors: connectorsSvc, tags: tagsSvc, tools: tools}
+func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, usersSvc *login.Service, tools []tool.Tool) *Handler {
+	return &Handler{svc: svc, configs: configsSvc, connectors: connectorsSvc, tags: tagsSvc, users: usersSvc, tools: tools}
 }
 
 // Register wires /manager/* to mux. All pages require auth; admin-only

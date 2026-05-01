@@ -30,7 +30,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/duplicate", auth(h.duplicateConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}", auth(h.toggleConnectorOperation))
+	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(h.connectorTestPage))
 	mux.Handle("POST /manager/connectors/{key}/{id}/test", auth(h.testConnectorOperation))
+	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(h.connectorHistoryPage))
 }
 
 // ── List page ────────────────────────────────────────────────────────
@@ -131,10 +133,105 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 
 	configs := buildRowConfigs(mod.Configs, decodeConfigs(row.Configs))
 	opStates, _ := h.connectors.OperationStates(ctx, row.ID, row.Key)
-	runs, _ := h.connectors.ListRuns(ctx, row.ID, 20)
 	editKey := r.URL.Query().Get("edit")
 
-	view.ConnectorDetailPage(mod, row, configs, opStates, runs, editKey, user).Render(ctx, w)
+	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user).Render(ctx, w)
+}
+
+// connectorTestPage renders the standalone Postman-style test surface
+// for one connector row. The active operation comes from `?op=`; the
+// page itself swaps forms client-side and updates the URL so picking a
+// different operation never costs a round trip.
+func (h *Handler) connectorTestPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	mod, ok := h.connectors.Module(key)
+	if !ok {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	if !h.canSeeRow(r, user, row.ID) {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+
+	activeOp := r.URL.Query().Get("op")
+	if activeOp == "" && len(mod.Operations) > 0 {
+		activeOp = mod.Operations[0].Key
+	}
+	view.ConnectorTestPage(mod, row, activeOp, user).Render(ctx, w)
+}
+
+// connectorHistoryPage renders the standalone runs audit surface with
+// filter chips. Filters are URL-driven so links can be shared.
+func (h *Handler) connectorHistoryPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	mod, ok := h.connectors.Module(key)
+	if !ok {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	if !h.canSeeRow(r, user, row.ID) {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+
+	filter := connectors.RunFilter{
+		OperationKey: r.URL.Query().Get("op"),
+		Source:       r.URL.Query().Get("source"),
+		Status:       r.URL.Query().Get("status"),
+		UserID:       r.URL.Query().Get("user"),
+	}
+	runs, _ := h.connectors.ListRunsFiltered(ctx, row.ID, filter, 200)
+	usersByID := h.resolveRunUsers(ctx, runs)
+
+	view.ConnectorHistoryPage(mod, row, runs, usersByID, filter, user).Render(ctx, w)
+}
+
+// resolveRunUsers returns id→display map for every distinct UserID
+// appearing in the run set. Missing/blank IDs map to "system".
+func (h *Handler) resolveRunUsers(ctx context.Context, runs []entity.ConnectorRun) map[string]string {
+	out := map[string]string{}
+	if h.users == nil {
+		return out
+	}
+	seen := map[string]struct{}{}
+	for _, r := range runs {
+		if r.UserID == "" {
+			continue
+		}
+		seen[r.UserID] = struct{}{}
+	}
+	for id := range seen {
+		u, err := h.users.GetUserByID(ctx, id)
+		if err != nil || u == nil {
+			out[id] = id
+			continue
+		}
+		label := u.Name
+		if label == "" {
+			label = u.Email
+		}
+		out[id] = label
+	}
+	return out
 }
 
 // ── Row CRUD ─────────────────────────────────────────────────────────

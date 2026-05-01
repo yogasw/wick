@@ -1,7 +1,8 @@
-// connectors.js — drives the per-row test panel on the manager
-// connector detail page. Toggles the visible input form per operation
-// and POSTs collected inputs to the /test endpoint, rendering the
-// returned status/latency/response inline.
+// connector_test.js — drives the standalone connector test page.
+// The operation dropdown is URL-synced (?op=...) so reload preserves
+// the selected operation and links from the detail page can preselect.
+// Switching ops shows the matching input form without a round trip;
+// Run posts the input to /test and renders status/latency/response.
 (function () {
   "use strict";
 
@@ -9,6 +10,7 @@
   if (!panel) return;
 
   const url = panel.dataset.testUrl;
+  const baseUrl = panel.dataset.baseUrl || url;
   const select = panel.querySelector("[data-test-op]");
   const runBtn = panel.querySelector("[data-test-run]");
   const result = panel.querySelector("[data-test-result]");
@@ -22,6 +24,14 @@
     forms.forEach((f) => {
       f.classList.toggle("hidden", f.dataset.testForm !== opKey);
     });
+  }
+
+  function syncUrl() {
+    const opKey = select.value;
+    const next = baseUrl + "?op=" + encodeURIComponent(opKey);
+    if (window.location.pathname + window.location.search !== next) {
+      window.history.replaceState({}, "", next);
+    }
   }
 
   function activeForm() {
@@ -92,7 +102,10 @@
     }
   }
 
-  select.addEventListener("change", showActiveForm);
+  select.addEventListener("change", () => {
+    showActiveForm();
+    syncUrl();
+  });
   runBtn.addEventListener("click", run);
   showActiveForm();
 })();

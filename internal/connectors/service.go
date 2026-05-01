@@ -474,6 +474,12 @@ func (s *Service) ListRuns(ctx context.Context, connectorID string, limit int) (
 	return s.repo.ListRunsByConnector(ctx, connectorID, limit)
 }
 
+// ListRunsFiltered returns runs filtered by op / source / status / user.
+// Backs the history page; pass zero-value filter for "no filter".
+func (s *Service) ListRunsFiltered(ctx context.Context, connectorID string, f RunFilter, limit int) ([]entity.ConnectorRun, error) {
+	return s.repo.ListRunsFiltered(ctx, connectorID, f, limit)
+}
+
 // PurgeOldRuns deletes ConnectorRun rows older than retentionDays.
 // Returns the number of rows removed. Called by the cleanup job on a
 // daily cadence (set up in a later phase).
