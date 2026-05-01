@@ -1,0 +1,90 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// AccessTokensStats summarises the PAT footprint for the admin
+// landing banner. Counts are computed by the handler so the template
+// stays pure-rendering.
+type AccessTokensStats struct {
+	ActiveTokens int
+	UsersWithPAT int
+	NeverUsed    int
+}
+
+templ AccessTokensPage(rows []AccessTokenRow, stats AccessTokensStats, user *entity.User) {
+	@AdminLayout("Admin · Access Tokens", "access-tokens", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div>
+				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Access Tokens</h1>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">Personal access tokens (<span class="font-mono">wick_pat_…</span>) every approved user has issued. They authenticate any wick HTTP API — MCP is just one caller. Revoking here is admin-override; it does not require the token's owner to confirm.</p>
+			</div>
+			<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+				@statCard("Active tokens", itoa(stats.ActiveTokens))
+				@statCard("Users with a token", itoa(stats.UsersWithPAT))
+				@statCard("Never used", itoa(stats.NeverUsed))
+			</div>
+			if len(rows) == 0 {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					No active tokens yet. Users issue tokens at <a class="text-green-600 hover:underline" href="/profile/tokens">/profile/tokens</a>.
+				</div>
+			} else {
+				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Owner</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Token</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Created</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Last used</th>
+								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range rows {
+								@accessTokenRowFragment(row)
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</main>
+	}
+}
+
+templ accessTokenRowFragment(row AccessTokenRow) {
+	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+		<td class="px-4 py-3 align-top">
+			<p class="font-medium text-black-900 dark:text-white-100">
+				if row.OwnerName != "" {
+					{ row.OwnerName }
+				} else {
+					{ row.OwnerEmail }
+				}
+			</p>
+			if row.OwnerName != "" && row.OwnerEmail != "" {
+				<p class="text-xs text-black-700 dark:text-black-600">{ row.OwnerEmail }</p>
+			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			<p class="font-medium text-black-900 dark:text-white-100">{ row.Token.Name }</p>
+			<p class="font-mono text-xs text-black-700 dark:text-black-600">{ row.Token.Masked() }</p>
+		</td>
+		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
+			{ row.Token.CreatedAt.Format("2006-01-02 15:04") }
+		</td>
+		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
+			if row.Token.LastUsedAt != nil {
+				{ row.Token.LastUsedAt.Format("2006-01-02 15:04") }
+			} else {
+				<span class="text-black-700 dark:text-black-600">never</span>
+			}
+		</td>
+		<td class="px-4 py-3 text-right align-top">
+			<form action={ templ.SafeURL("/admin/access-tokens/" + row.Token.ID + "/revoke") } method="POST" onsubmit="return confirm('Revoke this token? The owner will lose access immediately.')">
+				<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Revoke</button>
+			</form>
+		</td>
+	</tr>
+}

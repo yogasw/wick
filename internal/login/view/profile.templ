@@ -6,146 +6,132 @@ import (
 )
 
 templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool) {
-	@ui.Layout("Profile") {
-		@ui.Navbar(user)
-		<main class="mx-auto w-full max-w-lg px-6 py-10">
-			<!-- Header -->
-			<div class="mb-8 flex items-center gap-4">
-				if user.Avatar != "" {
-					<img src={ user.Avatar } alt={ user.Name } referrerpolicy="no-referrer" class="h-16 w-16 rounded-full object-cover border-2 border-white-300 dark:border-navy-600"/>
-				} else {
-					<div class="flex h-16 w-16 items-center justify-center rounded-full bg-green-200 text-2xl font-semibold text-green-700">
-						{ string([]rune(user.Name)[0:1]) }
-					</div>
-				}
-				<div>
-					<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">{ user.Name }</h1>
-					<p class="text-sm text-black-700 dark:text-black-600">{ user.Email }</p>
-					if user.IsAdmin() {
-						<span class="mt-1 inline-flex items-center rounded-full bg-prog-100 px-2 py-0.5 text-xs font-medium text-prog-400">Admin</span>
-					}
-				</div>
-			</div>
-			<!-- Password section -->
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
-				if user.PasswordHash != "" {
-					<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Change password</h2>
-					<p class="mt-1 text-sm text-black-800 dark:text-black-600">Update your login password.</p>
-				} else {
-					<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Set a password</h2>
-					<p class="mt-1 text-sm text-black-800 dark:text-black-600">Set a password so you can sign in without Google OAuth.</p>
-				}
-				if success {
-					<div class="mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400">
-						Password updated successfully.
-					</div>
-				}
-				if errMsg != "" {
-					<div class="mt-4 rounded-lg border border-neg-200 bg-neg-100 px-4 py-3 text-sm text-neg-400">
-						{ errMsg }
-					</div>
-				}
-				<form action="/profile/password" method="POST" class="mt-5 flex flex-col gap-4">
+	@ui.ProfileLayout("Profile", ui.ProfileTabAccount, user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Account</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Your password and display preferences.</p>
+			<div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+				<!-- Password section -->
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
 					if user.PasswordHash != "" {
+						<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Change password</h2>
+						<p class="mt-1 text-sm text-black-800 dark:text-black-600">Update your login password.</p>
+					} else {
+						<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Set a password</h2>
+						<p class="mt-1 text-sm text-black-800 dark:text-black-600">Set a password so you can sign in without Google OAuth.</p>
+					}
+					if success {
+						<div class="mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400">
+							Password updated successfully.
+						</div>
+					}
+					if errMsg != "" {
+						<div class="mt-4 rounded-lg border border-neg-200 bg-neg-100 px-4 py-3 text-sm text-neg-400">
+							{ errMsg }
+						</div>
+					}
+					<form action="/profile/password" method="POST" class="mt-5 flex flex-col gap-4">
+						if user.PasswordHash != "" {
+							<div class="flex flex-col gap-1.5">
+								<label for="current_password" class="text-sm font-medium text-black-900 dark:text-white-100">Current password</label>
+								<input
+									id="current_password"
+									name="current_password"
+									type="password"
+									required
+									autocomplete="current-password"
+									placeholder="••••••••"
+									class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+								/>
+							</div>
+						}
 						<div class="flex flex-col gap-1.5">
-							<label for="current_password" class="text-sm font-medium text-black-900 dark:text-white-100">Current password</label>
+							<label for="new_password" class="text-sm font-medium text-black-900 dark:text-white-100">New password</label>
 							<input
-								id="current_password"
-								name="current_password"
+								id="new_password"
+								name="new_password"
 								type="password"
 								required
-								autocomplete="current-password"
+								minlength="8"
+								autocomplete="new-password"
+								placeholder="Min. 8 characters"
+								class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+							/>
+						</div>
+						<div class="flex flex-col gap-1.5">
+							<label for="confirm_password" class="text-sm font-medium text-black-900 dark:text-white-100">Confirm new password</label>
+							<input
+								id="confirm_password"
+								name="confirm_password"
+								type="password"
+								required
+								minlength="8"
+								autocomplete="new-password"
 								placeholder="••••••••"
 								class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
 							/>
 						</div>
+						<div class="flex justify-end">
+							<button
+								type="submit"
+								class="rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300"
+							>
+								if user.PasswordHash != "" {
+									Update password
+								} else {
+									Set password
+								}
+							</button>
+						</div>
+					</form>
+				</div>
+				<!-- Display preferences -->
+				{{ homeView := user.Metadata.HomeViewOrDefault() }}
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+					<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Display preferences</h2>
+					<p class="mt-1 text-sm text-black-800 dark:text-black-600">Choose how the home tool grid is rendered.</p>
+					if prefsSaved {
+						<div class="mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400">
+							Preferences saved.
+						</div>
 					}
-					<div class="flex flex-col gap-1.5">
-						<label for="new_password" class="text-sm font-medium text-black-900 dark:text-white-100">New password</label>
-						<input
-							id="new_password"
-							name="new_password"
-							type="password"
-							required
-							minlength="8"
-							autocomplete="new-password"
-							placeholder="Min. 8 characters"
-							class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
-						/>
-					</div>
-					<div class="flex flex-col gap-1.5">
-						<label for="confirm_password" class="text-sm font-medium text-black-900 dark:text-white-100">Confirm new password</label>
-						<input
-							id="confirm_password"
-							name="confirm_password"
-							type="password"
-							required
-							minlength="8"
-							autocomplete="new-password"
-							placeholder="••••••••"
-							class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
-						/>
-					</div>
-					<div class="flex justify-end">
-						<button
-							type="submit"
-							class="rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300"
-						>
-							if user.PasswordHash != "" {
-								Update password
-							} else {
-								Set password
-							}
-						</button>
-					</div>
-				</form>
-			</div>
-			<!-- Display preferences -->
-			{{ homeView := user.Metadata.HomeViewOrDefault() }}
-			<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
-				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Display preferences</h2>
-				<p class="mt-1 text-sm text-black-800 dark:text-black-600">Choose how the home tool grid is rendered.</p>
-				if prefsSaved {
-					<div class="mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400">
-						Preferences saved.
-					</div>
-				}
-				<form action="/profile/preferences" method="POST" class="mt-5 flex flex-col gap-3">
-					<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400">
-						<input
-							type="radio"
-							name="home_view"
-							value="compact"
-							checked?={ homeView == "compact" }
-							class="mt-0.5 h-4 w-4 accent-green-500"
-						/>
-						<span class="flex flex-col">
-							<span class="text-sm font-medium text-black-900 dark:text-white-100">Compact</span>
-							<span class="text-xs text-black-700 dark:text-black-600">Small icon-and-name cards — fit more tools on screen.</span>
-						</span>
-					</label>
-					<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400">
-						<input
-							type="radio"
-							name="home_view"
-							value="detailed"
-							checked?={ homeView == "detailed" }
-							class="mt-0.5 h-4 w-4 accent-green-500"
-						/>
-						<span class="flex flex-col">
-							<span class="text-sm font-medium text-black-900 dark:text-white-100">Detailed</span>
-							<span class="text-xs text-black-700 dark:text-black-600">Larger cards with full names and descriptions.</span>
-						</span>
-					</label>
-					<div class="flex justify-end">
-						<button
-							type="submit"
-							class="rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300"
-						>
-							Save preferences
-						</button>
-					</div>
-				</form>
+					<form action="/profile/preferences" method="POST" class="mt-5 flex flex-col gap-3">
+						<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400">
+							<input
+								type="radio"
+								name="home_view"
+								value="compact"
+								checked?={ homeView == "compact" }
+								class="mt-0.5 h-4 w-4 accent-green-500"
+							/>
+							<span class="flex flex-col">
+								<span class="text-sm font-medium text-black-900 dark:text-white-100">Compact</span>
+								<span class="text-xs text-black-700 dark:text-black-600">Small icon-and-name cards — fit more tools on screen.</span>
+							</span>
+						</label>
+						<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400">
+							<input
+								type="radio"
+								name="home_view"
+								value="detailed"
+								checked?={ homeView == "detailed" }
+								class="mt-0.5 h-4 w-4 accent-green-500"
+							/>
+							<span class="flex flex-col">
+								<span class="text-sm font-medium text-black-900 dark:text-white-100">Detailed</span>
+								<span class="text-xs text-black-700 dark:text-black-600">Larger cards with full names and descriptions.</span>
+							</span>
+						</label>
+						<div class="flex justify-end">
+							<button
+								type="submit"
+								class="rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300"
+							>
+								Save preferences
+							</button>
+						</div>
+					</form>
+				</div>
 			</div>
 		</main>
 	}

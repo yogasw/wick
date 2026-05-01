@@ -8,10 +8,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin/view"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/pkg/tool"
 
@@ -24,15 +27,36 @@ type JobListProvider interface {
 }
 
 type Handler struct {
-	repo    *repo
-	tools   []tool.Tool
-	configs *configs.Service
-	sso     *sso.Service
-	svc     JobListProvider
+	repo       *repo
+	tools      []tool.Tool
+	configs    *configs.Service
+	sso        *sso.Service
+	svc        JobListProvider
+	connectors *connectors.Service
+	tokens     *accesstoken.Service
+	oauth      *oauth.Service
 }
 
-func NewHandler(db *gorm.DB, tools []tool.Tool, configsSvc *configs.Service, ssoSvc *sso.Service, svc JobListProvider) *Handler {
-	return &Handler{repo: newRepo(db), tools: tools, configs: configsSvc, sso: ssoSvc, svc: svc}
+func NewHandler(
+	db *gorm.DB,
+	tools []tool.Tool,
+	configsSvc *configs.Service,
+	ssoSvc *sso.Service,
+	svc JobListProvider,
+	connectorsSvc *connectors.Service,
+	tokensSvc *accesstoken.Service,
+	oauthSvc *oauth.Service,
+) *Handler {
+	return &Handler{
+		repo:       newRepo(db),
+		tools:      tools,
+		configs:    configsSvc,
+		sso:        ssoSvc,
+		svc:        svc,
+		connectors: connectorsSvc,
+		tokens:     tokensSvc,
+		oauth:      oauthSvc,
+	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
@@ -95,6 +119,21 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/tags", admin(h.createTag))
 	mux.Handle("POST /admin/tags/{id}/update", admin(h.updateTag))
 	mux.Handle("POST /admin/tags/{id}/delete", admin(h.deleteTag))
+
+	// Connector instance management (cross-definition list).
+	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
+	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
+	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
+
+	// Personal access tokens (admin override view). PATs authenticate
+	// any wick HTTP API — MCP is just one caller — so the surface is
+	// /admin/access-tokens, not /admin/mcp.
+	mux.Handle("GET /admin/access-tokens", admin(h.accessTokensAdminPage))
+	mux.Handle("POST /admin/access-tokens/{id}/revoke", admin(h.revokeTokenAdmin))
+
+	// OAuth connected apps (admin override view).
+	mux.Handle("GET /admin/connections", admin(h.connectionsAdminPage))
+	mux.Handle("POST /admin/connections/{userID}/{clientID}/disconnect", admin(h.disconnectGrantAdmin))
 }
 
 // ── Dashboard ──────────────────────────────────────────────────
@@ -117,13 +156,27 @@ func (h *Handler) dashboardPage(w http.ResponseWriter, r *http.Request) {
 
 	totalConfigs, missingTotal, entries := h.gatherMissing(ctx, jobs)
 
+	conns, _ := h.connectors.List(ctx)
+	disabledConns := 0
+	for _, c := range conns {
+		if c.Disabled {
+			disabledConns++
+		}
+	}
+	tokens, _ := h.tokens.ListAllActive(ctx)
+	grants, _ := h.oauth.ListAllGrants(ctx)
+
 	stats := view.DashboardStats{
-		TotalJobs:      len(jobs),
-		EnabledJobs:    enabled,
-		RunningJobs:    running,
-		TotalTools:     h.countTools(),
-		TotalConfigs:   totalConfigs,
-		MissingConfigs: missingTotal,
+		TotalJobs:          len(jobs),
+		EnabledJobs:        enabled,
+		RunningJobs:        running,
+		TotalTools:         h.countTools(),
+		TotalConfigs:       totalConfigs,
+		MissingConfigs:     missingTotal,
+		TotalConnectors:    len(conns),
+		DisabledConnectors: disabledConns,
+		ActiveTokens:       len(tokens),
+		ConnectedApps:      len(grants),
 	}
 	view.DashboardPage(stats, entries, user).Render(ctx, w)
 }
@@ -239,13 +292,23 @@ func (h *Handler) usersPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allTags, _ := h.repo.ListTags(r.Context())
+	// Strip System tags from the user picker — they're code-owned and
+	// rejected by SetUserTags. Other admin surfaces (tools, jobs,
+	// connectors) keep them so admins can still see them as labels.
+	pickerTags := make([]*entity.Tag, 0, len(allTags))
+	for _, t := range allTags {
+		if t.IsSystem {
+			continue
+		}
+		pickerTags = append(pickerTags, t)
+	}
 	adminCount, _ := h.repo.CountAdmins(r.Context())
 	items := make([]view.UserRow, len(users))
 	for i, u := range users {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
 		items[i] = view.UserRow{User: u, TagIDs: ids}
 	}
-	view.UsersPage(items, allTags, currentUser, int(adminCount)).Render(r.Context(), w)
+	view.UsersPage(items, pickerTags, currentUser, int(adminCount)).Render(r.Context(), w)
 }
 
 func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
@@ -332,7 +395,7 @@ func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetUserTags(r.Context(), id, ids); err != nil {
-		if errors.Is(err, ErrUserNotApproved) {
+		if errors.Is(err, ErrUserNotApproved) || errors.Is(err, ErrSystemTagAssignment) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -360,11 +423,26 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	perms, _ := h.repo.ListToolPerms(ctx, paths)
 	allTags, _ := h.repo.ListTags(ctx)
 
+	systemTagIDs := make(map[string]bool)
+	for _, t := range allTags {
+		if t.IsSystem {
+			systemTagIDs[t.ID] = true
+		}
+	}
+
 	rows := make([]view.JobRow, len(jobs))
 	for i, j := range jobs {
+		isSystem := false
+		for _, id := range perms[i].TagIDs {
+			if systemTagIDs[id] {
+				isSystem = true
+				break
+			}
+		}
 		rows[i] = view.JobRow{
 			Job:         j,
 			Disabled:    perms[i].Disabled,
+			IsSystem:    isSystem,
 			TagIDs:      perms[i].TagIDs,
 			ConfigCount: len(h.configs.ListOwned(j.Key)),
 		}
@@ -376,6 +454,10 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setJobDisabled(w http.ResponseWriter, r *http.Request) {
 	path := "/jobs/" + r.PathValue("path")
+	if isSystem, _ := h.repo.HasSystemTag(r.Context(), path); isSystem {
+		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
+		return
+	}
 	disabled := boolParam(r, "disabled")
 	if err := h.repo.SetToolDisabled(r.Context(), path, disabled); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -386,6 +468,10 @@ func (h *Handler) setJobDisabled(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setJobTags(w http.ResponseWriter, r *http.Request) {
 	path := "/jobs/" + r.PathValue("path")
+	if isSystem, _ := h.repo.HasSystemTag(r.Context(), path); isSystem {
+		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
+		return
+	}
 	r.ParseForm()
 	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
@@ -490,6 +576,10 @@ func (h *Handler) updateTag(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.repo.DeleteTag(r.Context(), id); err != nil {
+		if errors.Is(err, ErrSystemTagImmutable) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

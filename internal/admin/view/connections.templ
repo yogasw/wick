@@ -1,0 +1,95 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// ConnectionsAdminStats summarises OAuth grant activity for the
+// admin connections landing.
+type ConnectionsAdminStats struct {
+	ActiveGrants   int
+	UniqueClients  int
+	UniqueUsers    int
+}
+
+templ ConnectionsAdminPage(rows []ConnectionRow, stats ConnectionsAdminStats, user *entity.User) {
+	@AdminLayout("Admin · Connected Apps", "connections", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div>
+				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Connected Apps</h1>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">Active OAuth grants across every user. Disconnecting here revokes all access + refresh tokens that user holds for the chosen app — admin override, no owner confirmation.</p>
+			</div>
+			<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+				@statCard("Active grants", itoa(stats.ActiveGrants))
+				@statCard("Unique apps", itoa(stats.UniqueClients))
+				@statCard("Users with grants", itoa(stats.UniqueUsers))
+			</div>
+			if len(rows) == 0 {
+				<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center text-sm text-black-700 dark:text-black-600">
+					No active OAuth grants yet. Users authorize apps through the standard <span class="font-mono">/oauth/authorize</span> flow.
+				</div>
+			} else {
+				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Owner</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">App</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Granted</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Last used</th>
+								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tokens</th>
+								<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600"></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range rows {
+								@connectionRowFragment(row)
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</main>
+	}
+}
+
+templ connectionRowFragment(row ConnectionRow) {
+	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+		<td class="px-4 py-3 align-top">
+			<p class="font-medium text-black-900 dark:text-white-100">
+				if row.OwnerName != "" {
+					{ row.OwnerName }
+				} else if row.OwnerEmail != "" {
+					{ row.OwnerEmail }
+				} else {
+					<span class="font-mono text-xs">{ row.UserID }</span>
+				}
+			</p>
+			if row.OwnerName != "" && row.OwnerEmail != "" {
+				<p class="text-xs text-black-700 dark:text-black-600">{ row.OwnerEmail }</p>
+			}
+		</td>
+		<td class="px-4 py-3 align-top">
+			<p class="font-medium text-black-900 dark:text-white-100">{ row.ClientName }</p>
+			<p class="font-mono text-xs text-black-700 dark:text-black-600">{ row.ClientID }</p>
+		</td>
+		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
+			{ row.GrantedAt.Format("2006-01-02 15:04") }
+		</td>
+		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
+			if row.LastUsedAt != nil {
+				{ row.LastUsedAt.Format("2006-01-02 15:04") }
+			} else {
+				<span class="text-black-700 dark:text-black-600">never</span>
+			}
+		</td>
+		<td class="px-4 py-3 align-top text-xs text-black-800 dark:text-black-600">
+			{ itoa(row.TokenCount) }
+		</td>
+		<td class="px-4 py-3 text-right align-top">
+			<form action={ templ.SafeURL("/admin/connections/" + row.UserID + "/" + row.ClientID + "/disconnect") } method="POST" onsubmit="return confirm('Disconnect this app from the user? They will need to re-authorize.')">
+				<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Disconnect</button>
+			</form>
+		</td>
+	</tr>
+}

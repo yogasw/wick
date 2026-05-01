@@ -1,0 +1,128 @@
+package view
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// GrantRow is the view-layer projection of one OAuth grant. The handler
+// flattens GrantRow into this shape so the view never has to import
+// the oauth package (which would create a cycle through the consent
+// page).
+type GrantRow struct {
+	ClientID   string
+	ClientName string
+	GrantedAt  time.Time
+	LastUsedAt *time.Time
+	TokenCount int
+}
+
+// ConnectionsPageData carries every value the page needs.
+//
+// JustRevoked is the client name that was disconnected on the
+// previous request; non-empty triggers the success banner. Carried
+// via query string so a page refresh after the redirect doesn't
+// re-flash the banner.
+type ConnectionsPageData struct {
+	User        *entity.User
+	Grants      []GrantRow
+	JustRevoked string
+}
+
+templ ConnectionsPage(data ConnectionsPageData) {
+	@ui.ProfileLayout("Connected Apps", ui.ProfileTabConnections, data.User) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Connected Apps</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+				Apps you've authorized via OAuth — Claude.ai, Claude Desktop, custom agents. Disconnect any app to revoke its access immediately.
+			</p>
+			if data.JustRevoked != "" {
+				<div class="mt-6 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400">
+					Disconnected <span class="font-medium">{ data.JustRevoked }</span>. The app's tokens have been revoked and it can no longer access your workspace.
+				</div>
+			}
+			@grantsCard(data.Grants)
+			<p class="mt-4 text-xs text-black-700 dark:text-black-600">
+				Looking for static bearer tokens you generated yourself?
+				<a href="/profile/tokens" class="font-medium text-green-600 dark:text-green-400 hover:underline">Manage Access Tokens →</a>
+			</p>
+		</main>
+	}
+}
+
+templ grantsCard(grants []GrantRow) {
+	<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Active grants</h2>
+		<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+			One row per app. Disconnecting revokes every access and refresh token the app currently holds.
+		</p>
+		if len(grants) == 0 {
+			<div class="mt-5 rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-4 py-10 text-center">
+				<p class="text-sm text-black-800 dark:text-black-600">No active grants.</p>
+				<p class="mt-1 text-xs text-black-700">
+					When an MCP client connects via OAuth, it'll show up here.
+				</p>
+			</div>
+		} else {
+			<div class="mt-5 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
+				<table class="w-full text-left text-sm">
+					<thead class="bg-white-200 dark:bg-navy-800 text-xs uppercase tracking-wide text-black-700 dark:text-black-600">
+						<tr>
+							<th class="px-4 py-2.5 font-medium">App</th>
+							<th class="px-4 py-2.5 font-medium">Connected</th>
+							<th class="px-4 py-2.5 font-medium">Last used</th>
+							<th class="px-4 py-2.5 font-medium">Tokens</th>
+							<th class="px-4 py-2.5"></th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-white-300 dark:divide-navy-600">
+						for _, g := range grants {
+							@grantRow(g)
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
+templ grantRow(g GrantRow) {
+	<tr>
+		<td class="px-4 py-3">
+			<div class="flex items-center gap-2">
+				<span class="flex h-7 w-7 items-center justify-center rounded-md bg-green-200 text-sm">🔌</span>
+				<span class="text-black-900 dark:text-white-100 font-medium">{ g.ClientName }</span>
+			</div>
+		</td>
+		<td class="px-4 py-3 text-black-700 dark:text-black-600">
+			{ g.GrantedAt.Format("Jan 2, 2006") }
+		</td>
+		<td class="px-4 py-3 text-black-700 dark:text-black-600">
+			if g.LastUsedAt != nil {
+				{ g.LastUsedAt.Format("Jan 2, 2006 15:04") }
+			} else {
+				Never
+			}
+		</td>
+		<td class="px-4 py-3 text-black-700 dark:text-black-600">
+			{ fmt.Sprintf("%d", g.TokenCount) }
+		</td>
+		<td class="px-4 py-3 text-right">
+			<form
+				action={ templ.URL(fmt.Sprintf("/profile/connections/%s/disconnect", g.ClientID)) }
+				method="POST"
+				onsubmit="return confirm('Disconnect this app? It will need to re-authorize before it can access your workspace again.');"
+			>
+				<button
+					type="submit"
+					class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 transition-colors hover:border-neg-300 hover:text-neg-400"
+				>
+					Disconnect
+				</button>
+			</form>
+		</td>
+	</tr>
+}

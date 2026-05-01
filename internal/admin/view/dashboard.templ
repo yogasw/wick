@@ -16,12 +16,16 @@ type MissingEntry struct {
 }
 
 type DashboardStats struct {
-	TotalJobs      int
-	EnabledJobs    int
-	RunningJobs    int
-	TotalTools     int
-	TotalConfigs   int
-	MissingConfigs int
+	TotalJobs          int
+	EnabledJobs        int
+	RunningJobs        int
+	TotalTools         int
+	TotalConfigs       int
+	MissingConfigs     int
+	TotalConnectors    int
+	DisabledConnectors int
+	ActiveTokens       int
+	ConnectedApps      int
 }
 
 templ DashboardPage(stats DashboardStats, missing []MissingEntry, user *entity.User) {
@@ -29,7 +33,8 @@ templ DashboardPage(stats DashboardStats, missing []MissingEntry, user *entity.U
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Dashboard</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Everything configurable — variables, jobs, tools — in one place.</p>
-			<div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+			<p class="mt-6 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Modules</p>
+			<div class="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
 				@statCard("Tools", fmt.Sprintf("%d", stats.TotalTools))
 				@statCard("Jobs", fmt.Sprintf("%d", stats.TotalJobs))
 				@statCard("Enabled", fmt.Sprintf("%d / %d", stats.EnabledJobs, stats.TotalJobs))
@@ -40,6 +45,12 @@ templ DashboardPage(stats DashboardStats, missing []MissingEntry, user *entity.U
 				} else {
 					@statCard("Missing", "0")
 				}
+			</div>
+			<p class="mt-6 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Access</p>
+			<div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+				@statCardLink("Connectors", fmt.Sprintf("%d", stats.TotalConnectors), connectorsHint(stats.DisabledConnectors), "/admin/connectors")
+				@statCardLink("Access Tokens", fmt.Sprintf("%d", stats.ActiveTokens), "active", "/admin/access-tokens")
+				@statCardLink("Connected Apps", fmt.Sprintf("%d", stats.ConnectedApps), "OAuth grants", "/admin/connections")
 			</div>
 			<section class="mt-8">
 				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Needs setup</h2>
@@ -63,6 +74,26 @@ templ statCard(label string, value string) {
 		<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">{ label }</p>
 		<p class="mt-1 text-2xl font-semibold text-black-900 dark:text-white-100">{ value }</p>
 	</div>
+}
+
+templ statCardLink(label string, value string, hint string, href string) {
+	<a href={ templ.SafeURL(href) } class="group block rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 transition-colors hover:border-green-400">
+		<div class="flex items-center justify-between">
+			<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">{ label }</p>
+			<span class="text-xs text-black-700 dark:text-black-600 transition-transform group-hover:translate-x-0.5">→</span>
+		</div>
+		<p class="mt-1 text-2xl font-semibold text-black-900 dark:text-white-100">{ value }</p>
+		if hint != "" {
+			<p class="mt-1 text-xs text-black-700 dark:text-black-600">{ hint }</p>
+		}
+	</a>
+}
+
+func connectorsHint(disabled int) string {
+	if disabled == 0 {
+		return "all enabled"
+	}
+	return fmt.Sprintf("%d disabled", disabled)
 }
 
 templ statCardAlert(label string, value string) {

@@ -18,7 +18,7 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 ## 2. Install Wick CLI
 
 ```bash
-go install github.com/yogasw/wick@v0.3.0
+go install github.com/yogasw/wick@v0.4.0
 ```
 
 Verify:
@@ -37,14 +37,16 @@ This scaffolds `my-app/`, runs `go mod tidy`, and downloads Tailwind + templ aut
 
 ```
 my-app/
-├── main.go          # register tools and jobs here
-├── AGENTS.md         # AI agent instructions (auto-included)
+├── main.go          # register tools, jobs, and connectors here
+├── AGENTS.md        # AI agent instructions (auto-included)
 ├── wick.yml         # task runner config
 ├── tools/
 │   ├── convert-text/   # example tool
 │   └── external/       # external link cards
 ├── jobs/
 │   └── auto-get-data/  # example job
+├── connectors/
+│   └── crudcrud/       # example connector (LLM-facing via MCP)
 └── tags/
     └── defaults.go     # shared tag catalog
 ```
@@ -96,7 +98,16 @@ Just tell Claude what you need:
 add a tool called "base64" that encodes and decodes text
 ```
 
+```
+add a connector for the GitHub REST API with operations:
+list_repos, get_repo, list_issues, create_issue (destructive)
+```
+
 See [AI Quickstart](/guide/ai-quickstart) for more sample prompts.
+
+::: tip Wire up an LLM client
+After your first boot, generate a Personal Access Token at `/profile/tokens` and paste it into Claude Desktop / Cursor / VSCode using the snippets at `/profile/mcp`. Your connectors are immediately callable from the LLM. See [MCP for LLMs](/guide/mcp).
+:::
 
 ## Common commands
 
