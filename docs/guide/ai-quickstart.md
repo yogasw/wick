@@ -45,6 +45,29 @@ create a job called "db-cleanup" that deletes records older than 30 days from
 the audit_logs table. add a config field for retention days (number, default 30).
 ```
 
+### Create a new connector (LLM-facing via MCP)
+
+```
+add a connector for the GitHub REST API with operations:
+list_repos, get_repo, list_issues, create_issue (destructive),
+close_issue (destructive). credential is a personal access token
+(secret, required). base url defaults to https://api.github.com.
+```
+
+```
+add a connector for our internal Loki at https://loki.example.com.
+one operation: query (LogQL string input). add a token field (secret).
+```
+
+```
+add a connector for Slack with one operation: send_message (destructive).
+inputs are channel and text. credential is a bot token (secret, required).
+```
+
+::: tip List operations explicitly
+Tell Claude every operation by name plus whether it's destructive. The destructive flag defaults the per-row toggle off so admins must opt in — don't let Claude guess.
+:::
+
 ### Add an external link card
 
 ```
@@ -86,6 +109,7 @@ that switches between standard and URL-safe base64 encoding.
 When you open a Wick project in Claude Code, it reads `AGENTS.md` first. That file points at the bundled skills in `./.claude/skills/`:
 
 - **`tool-module`** — enforces the tool/job contract, mandates a clarify + plan loop before writing code, and points Claude at the canonical examples (`tools/convert-text/`, `jobs/auto-get-data/`).
+- **`connector-module`** — enforces the connector contract: typed `Configs` + per-op `Input` structs, `http.NewRequestWithContext` rule, destructive-opt-in model. Canonical example: `connectors/crudcrud/`.
 - **`design-system`** — locks down colors, spacing, typography, and dark/light pairing.
 
 Together they tell Claude:
@@ -116,3 +140,4 @@ This replaces `./.claude/skills/tool-module/` and `./.claude/skills/design-syste
 - **Specify visibility**: "make it private" or "public, visible to everyone"
 - **Mention the category**: Claude will pick or create a tag group accordingly
 - **For jobs, give the cron schedule**: "every hour", "daily at midnight UTC", "every 15 minutes"
+- **For connectors, list operations explicitly**: "with operations: a, b, c (destructive)" — saves Claude from inventing or omitting ops, and the destructive flag is load-bearing for safety

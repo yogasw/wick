@@ -10,6 +10,8 @@ connected app cross-user, admin dashboard split Modules vs Access stats
 `connector-runs-purge` di worker).
 Update terakhir: 2026-05-01.
 
+> **User-facing docs:** see [`docs/guide/connector-module.md`](../../docs/guide/connector-module.md), [`docs/guide/mcp.md`](../../docs/guide/mcp.md), [`docs/guide/access-tokens.md`](../../docs/guide/access-tokens.md), [`docs/guide/oauth-connections.md`](../../docs/guide/oauth-connections.md), [`docs/guide/connector-runs-purge.md`](../../docs/guide/connector-runs-purge.md), and [`docs/reference/connector-api.md`](../../docs/reference/connector-api.md). Update those when you change user-visible behavior — this design doc is the developer source of truth, not the user-facing surface.
+
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
 sejajar dengan Tools dan Jobs, dirancang khusus dikonsumsi LLM lewat MCP
 (Model Context Protocol). State dibawah refleksi dari kode di

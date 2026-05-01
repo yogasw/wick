@@ -2,6 +2,10 @@
 
 Jobs live in `jobs/<name>/` and mount at `/jobs/{key}` — shows schedule, run history, and a Run Now button. The module only needs a top-level `Run` func.
 
+::: info See also
+For an example of a System-tagged job (auto-enabled, code-managed), see [Connector Runs Purge](./connector-runs-purge) — it's the built-in retention worker for connector audit logs.
+:::
+
 ![Job Detail](/screenshots/job-detail.png)
 *Job page — schedule info, total runs, last run time, and full run history with results.*
 

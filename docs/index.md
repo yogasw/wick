@@ -24,8 +24,11 @@ features:
     title: Git Is the Control Plane
     details: No drag-and-drop UI to version. Every tool and job AI creates is real code in real files. `git diff` to review, `git revert` to undo. You own everything.
   - icon: 🧰
-    title: Tools & Jobs, No Boilerplate
-    details: Say "add a Slack notifier job". Claude creates the file, registers it, wires the config. You never touch main.go or a node editor.
+    title: Tools, Jobs, & Connectors
+    details: Say "add a Slack notifier job" or "add a GitHub connector for our LLM agent". Claude creates the file, registers it, wires the config — for humans, schedulers, and LLMs alike.
+  - icon: 🤖
+    title: LLM-Ready via MCP
+    details: Expose any connector to Claude, Cursor, and other MCP clients. Built-in OAuth 2.1 + Personal Access Tokens, per-call audit log, no protocol code on your side.
   - icon: 👀
     title: See Everything That Was Built
     details: Git history IS your tool inventory. Who built what, when, and why — no separate dashboard or admin panel to maintain.

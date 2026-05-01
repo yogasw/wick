@@ -2,6 +2,10 @@
 
 Tools live in `tools/<name>/` and mount at `/tools/{key}`. The framework handles routing, admin config UI, tags, and visibility — the module only needs a `Register` func.
 
+::: info Looking for LLM-facing modules?
+Tools are designed for humans clicking a UI. For modules consumed by LLM clients (Claude, Cursor) over MCP, see [Connector Module](./connector-module).
+:::
+
 ![Tool Detail](/screenshots/tool-detail.png)
 *Example tool — Convert Text. Left panel lists modes, right panel handles input/output.*
 

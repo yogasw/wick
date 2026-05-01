@@ -4,6 +4,29 @@ All notable changes to Wick are documented here.
 
 ---
 
+## Unreleased — Connectors + MCP
+
+### Added
+- **Connector module** — third class of wick module beside Tool and Job, designed for LLM consumption via MCP (Model Context Protocol). Each module wraps one external API with a typed `Configs` struct + N typed `Operations`. See [Connector Module](/guide/connector-module).
+- **MCP server** at `POST /mcp` with the four-tool meta-dispatch pattern (`wick_list`, `wick_search`, `wick_get`, `wick_execute`). Tool IDs are opaque (`conn:{connector_id}/{op_key}`) and stable across admin renames. See [MCP for LLMs](/guide/mcp).
+- **Personal Access Tokens** at `/profile/tokens` — `wick_pat_<32hex>`, hash-only stored, render-once banner. For MCP clients that cannot speak OAuth (Claude Desktop, Cursor, cURL). See [Access Tokens](/guide/access-tokens).
+- **OAuth 2.1** with Dynamic Client Registration (RFC 7591), PKCE S256 mandatory, refresh rotation + replay detection. Access `wick_oat_<32hex>` (1h TTL), refresh `wick_ort_<64hex>` (30d TTL). For browser-based MCP clients (Claude.ai). See [OAuth Connections](/guide/oauth-connections).
+- **Connected Apps** at `/profile/connections` — per-grant disconnect (revokes every token for one user × client pair).
+- **Admin pages**: `/admin/connectors`, `/admin/access-tokens`, `/admin/connections` for cross-user management.
+- **Built-in System job** `connector-runs-purge` — daily cleanup of `connector_runs` audit rows older than 7 days (configurable). Code-managed; cannot be disabled. See [Connector Runs Purge](/guide/connector-runs-purge).
+- **Per-row test panel + history** at `/manager/connectors/{key}/{id}` — Postman-style runner with URL-synced operation dropdown, prefill from history runs, paginated audit log with filter chips, expand-row inline detail, manual Retry navigation.
+- **Bundled skill** `connector-module` — added to `wick skill sync` and the template's bundled skill set. The example `connectors/crudcrud/` ships in scaffolded projects.
+- **Three-module mental model** in docs — introduction page now lists Tool, Job, and Connector side by side.
+
+### Changed
+- `template/AGENTS.md` documents the `connectors/` folder, `app.RegisterConnector` registration site, and the `connector-module` skill row.
+- `template/README.md` lists the connector test page URL and `/profile/mcp` install snippets in the Quick Start.
+
+### Migration notes
+- Existing wick deployments upgrading to this version: the `connectors`, `connector_operations`, and `connector_runs` tables are auto-created on first boot. The `connector-runs-purge` job auto-registers and auto-enables. No manual action required.
+
+---
+
 ## [v0.3.0](https://github.com/yogasw/wick/compare/v0.2.0...v0.3.0)
 
 _Released on 2026-04-22_
