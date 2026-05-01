@@ -1,13 +1,18 @@
 # Connectors — Desain & State
 
-Status: implemented (skeleton + service + persistence + run history). UI &
-MCP server menyusul.
+Status: implemented (modul + persistence + MCP JSON-RPC + auth dual-mode
+PAT & OAuth 2.1 + per-user grant management). Admin UI buat CRUD
+connector row + panel test belum dibikin — sekarang admin pakai SQL
+langsung atau bootstrap auto-row kosong.
 Update terakhir: 2026-05-01.
 
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
 sejajar dengan Tools dan Jobs, dirancang khusus dikonsumsi LLM lewat MCP
 (Model Context Protocol). State dibawah refleksi dari kode di
-`pkg/connector/`, `internal/connectors/`, dan `internal/entity/connector.go`.
+`pkg/connector/`, `internal/connectors/`, `internal/mcp/`,
+`internal/accesstoken/`, `internal/oauth/`, dan
+`internal/entity/connector.go` + `internal/entity/oauth.go` +
+`internal/entity/personal_access_token.go`.
 
 ---
 
@@ -174,9 +179,12 @@ app.RegisterConnector(
 
 ## 5. Persistence
 
-Tiga tabel: `connectors`, `connector_operations`, `connector_runs`.
-Tag association **reuse `ToolTag`** dgn `ToolPath = "/connectors/{id}"` —
-tidak ada tabel join baru.
+Tiga tabel inti connector: `connectors`, `connector_operations`,
+`connector_runs`. Tag association **reuse `ToolTag`** dgn
+`ToolPath = "/connectors/{id}"` — tidak ada tabel join baru.
+
+Auth pakai 4 tabel terpisah (di-cover §8): `personal_access_tokens`,
+`oauth_clients`, `oauth_authorization_codes`, `oauth_tokens`.
 
 ### 5.1 `connectors`
 
@@ -309,23 +317,31 @@ authenticated.
 Di dalam authenticated user, gating dilakukan dgn tag filter (sama persis
 dgn Tools Private + Jobs):
 
-| Skenario                                          | Cara setup                              |
-|---------------------------------------------------|-----------------------------------------|
-| Row pribadi user                                  | tag `user:<email>` (filter)             |
-| Row dipakai bareng tim                            | tag `team:<slug>` (filter)              |
-| Row template/admin-only                           | tag `role:admin` (filter)               |
+- Row dgn 0 filter-tag → visible ke semua approved user
+- Row dgn ≥1 filter-tag → visible kalau user carry minimal 1 dari tag itu
+- Admin → bypass, lihat semua
 
-Helper resolve tag user pakai middleware existing
-(`login.GetUserTagIDs`). Konvensi prefix tag string: `user:<email>`,
-`team:<slug>`, `role:<name>`, `env:<name>`.
+Tag itu sendiri **arbitrary string** — admin-defined. Gak ada konvensi
+prefix wajib di code (`user:`, `team:`, `role:` dll cuma contoh
+naming, bukan rule). Yg load-bearing: flag `IsFilter=true` di tabel
+`tags`, dan link many-to-many lewat `ToolTag` (row ↔ tag) +
+`UserTag` (user ↔ tag).
+
+Konsekuensi: 1 tag bisa di-link ke N user + N connector row,
+sharing-nya granular. Helper resolve tag user pakai middleware existing
+(`login.GetUserTagIDs`).
+
+Implementasi: `connectors.Repo.ListAccessibleTo(ctx, userTagIDs)` +
+`IsAccessibleTo` di `internal/connectors/repo.go`.
 
 ---
 
 ## 6. Web UI
 
-Dua surface utama.
+Tiga surface — dua admin-facing buat manage connector (belum dibikin),
+satu user-facing buat manage auth (sudah ada).
 
-### 6.1 Manajemen row
+### 6.1 Manajemen row *(belum dibikin)*
 
 ```
 Connectors
@@ -360,7 +376,7 @@ Connectors
 Tag list ditampilkan sbg chip di sebelah label — sekaligus jadi filter
 di list view (klik tag → list mengkerucut ke row yg carry tag itu).
 
-### 6.2 Panel test (gaya Postman)
+### 6.2 Panel test (gaya Postman) *(belum dibikin)*
 
 ```
 Loki Prod   [Test]
@@ -382,6 +398,32 @@ Loki Prod   [Test]
   rebuild call dari `RequestJSON` orig + configs row sekarang
   (cred edit yg admin lakukan di antara replay = honored).
 
+### 6.3 Profile area *(implemented)*
+
+Di-render via `ProfileLayout` (admin-style header, max-w-container)
+dgn 4 tab: Account · Access Tokens · Connected Apps · MCP.
+
+```
+/profile               — password change, display preferences
+/profile/tokens        — generate/revoke Personal Access Tokens
+/profile/connections   — list & disconnect OAuth-authorized apps
+/profile/mcp           — endpoint URL + install snippets (OAuth + bearer)
+```
+
+- **Access Tokens** ([internal/accesstoken/view/tokens.templ]):
+  table `Name | Token (masked) | Created | Last used | Revoke`. "Create
+  token" → inline form → submit → render-once banner dgn plaintext
+  `wick_pat_xxx`. Hash-only persisted; plaintext gak pernah re-readable.
+
+- **Connected Apps** ([internal/oauth/view/connections.templ]):
+  satu row per (user × OAuth client) yg punya active token. Disconnect
+  → revoke semua access + refresh token client itu, app tinggal re-OAuth
+  kalau mau akses lagi.
+
+- **MCP** ([internal/accesstoken/view/mcp.templ]): dokumentasi 2 jalur
+  — section "Claude.ai (OAuth-aware)" (cuma paste URL) + section
+  "Claude Desktop / Cursor / VSCode (Bearer)" (4 install snippet siap-paste).
+
 ---
 
 ## 7. Eksposur MCP
@@ -399,9 +441,18 @@ Loki Prod   [Test]
 ### 7.2 Surface endpoint
 
 ```
-POST /mcp                                  -- request/response JSON-RPC 2.0
-GET  /mcp                                  -- stream notifikasi SSE (opsional)
-GET  /.well-known/oauth-protected-resource -- metadata auth
+POST /mcp                                       -- JSON-RPC 2.0 (implemented)
+GET  /mcp                                       -- stream SSE (belum, opsional)
+
+-- Auth metadata (implemented)
+GET  /.well-known/oauth-protected-resource      -- RFC 9728
+GET  /.well-known/oauth-authorization-server    -- RFC 8414
+
+-- OAuth 2.1 server (implemented)
+POST /oauth/register                            -- DCR (RFC 7591)
+GET  /oauth/authorize                           -- PKCE consent
+POST /oauth/authorize                           -- consent submit
+POST /oauth/token                               -- code exchange + refresh
 ```
 
 ### 7.3 Mapping row × operation → MCP tool
@@ -486,93 +537,119 @@ Pindah ke `Content-Type: text/event-stream` cuma kalau:
 
 ## 8. Auth
 
-OAuth 2.1 / SSO, sesuai spec MCP buat server remote.
+Dual-mode bearer di endpoint `/mcp`: **PAT** (static) atau **OAuth 2.1**
+(dynamic). Middleware unified detect prefix → route ke validator yg
+sesuai. Dua mode coexist tanpa endpoint terpisah.
 
-### 8.1 Flow
+### 8.1 Flow OAuth (Claude.ai dst)
 
 ```
-1. Claude Desktop → POST /mcp  (tanpa token)
+1. Claude.ai → POST /mcp  (tanpa token)
 2. Wick → 401 + WWW-Authenticate: Bearer resource_metadata="..."
-3. Client fetch /.well-known/oauth-protected-resource
-4. Client buka browser → login SSO (Google / Microsoft / dll)
-5. Callback → access_token (Bearer)
-6. Client retry POST /mcp  Authorization: Bearer <token>
-7. Wick validasi → resolve user_id → scope row connector lewat tag
+3. Client GET /.well-known/oauth-protected-resource
+4. Client GET /.well-known/oauth-authorization-server
+5. Client POST /oauth/register  (DCR, gak ada pre-registration)
+   → {client_id}
+6. Client redirect browser → GET /oauth/authorize?
+       client_id=...&code_challenge=...&code_challenge_method=S256
+7. Wick check session cookie → kalau gak login, set after-login cookie
+   + redirect /auth/login. Habis login (password atau Google SSO),
+   bounce balik ke /authorize.
+8. Wick render consent page → user click Approve
+9. POST /oauth/authorize → mint code → redirect ke client redirect_uri
+10. Client POST /oauth/token (grant_type=authorization_code, PKCE verifier)
+    → {access_token: wick_oat_xxx, refresh_token: wick_ort_xxx, expires_in}
+11. Client retry POST /mcp  Authorization: Bearer wick_oat_xxx
+12. Wick validate → resolve user_id → ListVisibleTo(user_tag_ids) → tools/list
 ```
 
-### 8.2 Lokasi auth server
+### 8.2 Flow PAT (Claude Desktop / Cursor / cURL / dll)
 
-Dua opsi:
+```
+1. User generate token di /profile/tokens → render-once `wick_pat_xxx`
+2. User paste ke client config (Claude Desktop config.json dst)
+3. Client POST /mcp Authorization: Bearer wick_pat_xxx
+4. Wick validate (SHA-256 hash lookup) → user_id → tag-filtered list
+```
 
-- **Self-hosted**: wick implement `/oauth/authorize`,
-  `/oauth/callback`, `/oauth/token`, federasi ke Google/MS via OIDC.
-- **Delegasi**: provider eksternal (Auth0, Clerk, Keycloak) yg expose
-  endpoint OAuth; wick cuma validate bearer token.
+PAT gak butuh OAuth dance — single round trip. Useful buat client yg
+gak speak OAuth flow (Claude Desktop, Cursor, custom CLI).
 
-Rekomendasi: **delegasi**. Implementasi OAuth yg spec-compliant
-(PKCE, refresh, revocation, dynamic client registration) itu sub-
-proyek tersendiri yg berat; serahkan ke provider.
+### 8.3 Lokasi auth server
 
-### 8.3 Mode token
+**Self-hosted**: wick implement sendiri `/oauth/{authorize,token,register}`
++ `.well-known/*`. Federasi sosial via login wick existing (password
+atau Google SSO yg udah ada).
 
-Endpoint `/mcp` terima dua format token, dibedakan oleh format string:
+Original draft pertimbangin opsi delegasi (Auth0/Clerk/Keycloak),
+tapi self-hosted dipilih krn:
+- Wick udah punya user table + session cookie + Google SSO
+- Delegasi nambah dependency eksternal + secret rotation overhead
+- Token storage opaque (bukan JWT) → no key management
 
-| Mode             | Contoh token              | Validator                    | Audience                              |
-|------------------|---------------------------|------------------------------|---------------------------------------|
-| **OAuth 2.1**    | `eyJhbGc...` (JWT 3-part) | verify signature + claims    | Claude.ai, Claude Desktop, Cursor     |
-| **Static Bearer** | `wick_pat_xxx`           | hash lookup di DB            | dev, CLI, automation user, internal   |
+Implementasi di `internal/oauth/`:
+- `service.go` — DCR, IssueAuthCode, ExchangeAuthCode, ExchangeRefreshToken,
+  Authenticate
+- `repo.go` — gorm CRUD + chain revocation buat replay detection
+- `handler.go` — 5 routes + per-user grant management
 
-OAuth 2.1 wajib lengkap PKCE + Dynamic Client Registration (RFC 7591)
-+ metadata Authorization Server (RFC 8414) + Protected Resource
-(RFC 9728). Refresh token rotasi otomatis.
+### 8.4 Mode token
 
-Static bearer = mirip GitHub PAT — user generate di UI wick, disimpan
-hash-nya, kirim via `Authorization: Bearer wick_pat_xxx`. Useful buat
-client custom yg gak butuh login interaktif.
+Endpoint `/mcp` terima dua format, dibedakan prefix:
 
-Middleware unified pakai prefix / format detection buat route ke
-validator yg sesuai. Dua mode coexist tanpa endpoint terpisah.
+| Mode              | Wire format                  | Validator                       | Storage              |
+|-------------------|------------------------------|---------------------------------|----------------------|
+| **PAT**           | `wick_pat_<32hex>`           | SHA-256 hash lookup             | `personal_access_tokens` |
+| **OAuth access**  | `wick_oat_<32hex>`           | SHA-256 hash lookup + expiry    | `oauth_tokens` (kind=access) |
+| **OAuth refresh** | `wick_ort_<64hex>`           | SHA-256 hash lookup + chain     | `oauth_tokens` (kind=refresh) |
 
-### 8.4 Isolasi & sharing per user
+Semua opaque (bukan JWT). Stored hashed. Plaintext cuma cross the wire
+saat issue (PAT: render-once banner di /profile/tokens; OAuth: response
+body dari /oauth/token). DB leak ≠ token leak.
+
+OAuth feature lengkap:
+- PKCE S256 mandatory (OAuth 2.1 spec, gak terima `plain`)
+- Dynamic Client Registration (RFC 7591) tanpa pre-shared secret
+- Refresh rotation tiap exchange + replay detection (token-reuse =
+  revoke chain via `parent_token_id`)
+- Authorization Server Metadata (RFC 8414) + Protected Resource
+  (RFC 9728)
+- TTL: access 1h, refresh 30d, auth code 5min
+
+### 8.5 Middleware
+
+```go
+// internal/mcp/auth.go
+func (m *AuthMiddleware) resolveToken(ctx, plain string) (userID, error) {
+    if strings.HasPrefix(plain, accesstoken.Prefix) {  // "wick_pat_"
+        return m.tokens.Authenticate(ctx, plain)
+    }
+    if m.oauth != nil {
+        return m.oauth.Authenticate(ctx, plain)        // wick_oat_*
+    }
+    return "", ErrInvalid
+}
+```
+
+Middleware juga set `login.WithUser(ctx, user, tagIDs)` — same context
+shape sebagai cookie session, jadi downstream code (`login.GetUser`,
+`login.GetUserTagIDs`) jalan identik.
+
+### 8.6 Isolasi & sharing per user
 
 | Resource                      | Scope                                                  |
 |-------------------------------|--------------------------------------------------------|
 | Definisi connector (Module)   | global (kode Go, semua user lihat template sama)       |
 | Connector row                 | gating via tag filter (`UserTag` ↔ `ToolTag` row)      |
 | Operation enable state        | per row (`connector_operations`)                       |
-| Session MCP                   | per user (terikat token)                               |
+| Personal access token         | per user; user manage di /profile/tokens               |
+| OAuth grant (refresh + access)| per (user, client); user manage di /profile/connections |
 | `connector_runs`              | per user pemanggil; admin bisa lihat semua             |
 | Eksekusi MCP `tools/call`     | dicek ulang tag user + op enable state setiap call     |
 | IP/UA per call                | dicatat di `connector_runs.ip_address`/`user_agent`    |
 
-Konsekuensi: tidak semua user lihat semua row. Tidak ada konsep
-"public" — semua row authenticated. Sharing antar user/tim dilakukan
-dgn assign tag yg sama (mis. admin link tag `team:platform` ke row +
-ke user-user yg perlu akses).
-
-### 8.5 Sketsa middleware
-
-```go
-func MCPAuth(v TokenValidator) func(http.Handler) http.Handler {
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            tok := extractBearer(r)
-            if tok == "" {
-                w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="..."`)
-                http.Error(w, "unauthorized", 401)
-                return
-            }
-            claims, err := v.Validate(r.Context(), tok)
-            if err != nil {
-                http.Error(w, "invalid token", 401)
-                return
-            }
-            ctx := context.WithValue(r.Context(), userIDKey, claims.Sub)
-            next.ServeHTTP(w, r.WithContext(ctx))
-        })
-    }
-}
-```
+User bisa disconnect single OAuth grant tanpa affect PAT-nya, dan
+revoke single PAT tanpa affect OAuth grants.
 
 ---
 
@@ -593,38 +670,55 @@ func MCPAuth(v TokenValidator) func(http.Handler) http.Handler {
    - Reuse `ToolTag` dgn path `/connectors/{id}` — tidak ada tabel
      join baru.
 
-3. **Web UI** *(in progress / next)*
-   - Handler CRUD + form auto-render dari `Module.Configs`.
+3. **Connector pertama** ✅
+   - `internal/connectors/crudcrud/` jadi pilot — CRUD generik thd
+     crudcrud.com sandbox. 5 operasi (create/list/get/update/delete),
+     1 destructive op (delete).
+
+4. **MCP server** ✅
+   - `internal/mcp/` — JSON-RPC handler, bearer auth middleware,
+     schema converter, slugify.
+   - Endpoint `POST /mcp` dispatch `initialize`, `tools/list`,
+     `tools/call`, `ping`.
+   - `tools/list` & `tools/call` bind ke `connectors.Service.Execute`
+     dgn `Source=ConnectorRunSourceMCP`. Tag-filtered per user.
+   - Tool name format: `{key}__{op}__{label_slug}`.
+
+5. **Auth** ✅
+   - **PAT** di `internal/accesstoken/` — generate/revoke di
+     /profile/tokens. Format `wick_pat_<32hex>`, hash-only stored.
+   - **OAuth 2.1** di `internal/oauth/` — DCR + PKCE + refresh
+     rotation + chain replay detection. Self-hosted (bukan delegasi).
+   - Format `wick_oat_<32hex>` (access) + `wick_ort_<64hex>` (refresh),
+     opaque (bukan JWT).
+   - Per-user grant management di /profile/connections.
+   - .well-known/* metadata + /oauth/{register,authorize,token}.
+
+6. **Web UI admin** *(belum dibikin — gap UX terbesar)*
+   - Page `/manager/connectors` buat CRUD row + form configs.
    - Per-row per-op toggle panel.
    - Duplicate / edit / delete / disable.
+   - Sekarang admin pakai SQL langsung; bootstrap auto-bikin row
+     kosong per Key biar gak harus INSERT manual.
 
-4. **Panel test**
+7. **Panel test** *(belum dibikin)*
    - Handler `/connectors/{id}/test`.
    - Viewer request/response gaya Postman, source=`test`.
    - History + retry button (panggil `Service.Retry`).
-
-5. **Connector pertama**
-   - `internal/connectors/loki/` jadi pilot, validate ergonomi
-     response-shape di kasus nyata.
-
-6. **MCP server**
-   - Endpoint `POST /mcp`, dispatch JSON-RPC.
-   - `tools/list` + `tools/call` di-bind ke `Service.Execute`,
-     source=`mcp`.
-   - Auth bearer (token statik dulu buat dev).
-
-7. **SSO**
-   - Ganti bearer statik jadi OAuth 2.1 + provider delegasi.
-   - Resolve row per user via tag.
 
 8. **Streaming + notification** *(opsional, kalau dibutuhkan)*
    - Stream SSE `GET /mcp`.
    - `notifications/tools/list_changed` saat row/op berubah.
 
 9. **Convenience** *(belakangan)*
+   - Cleanup job harian → `Service.PurgeOldRuns(retentionDays)` +
+     purge expired `oauth_authorization_codes` + `oauth_tokens`.
+   - Admin view `/admin/oauth-clients` — list registered DCR clients
+     + revoke (sekarang SQL only).
+   - OAuth Token Revocation endpoint (RFC 7009) — `POST /oauth/revoke`
+     buat client revoke own token.
    - Import OpenAPI / Postman collection buat scaffold stub Go
      connector.
-   - Cleanup job harian → `Service.PurgeOldRuns(retentionDays)`.
 
 ---
 
@@ -632,32 +726,38 @@ func MCPAuth(v TokenValidator) func(http.Handler) http.Handler {
 
 - **Gaya transformasi response.** Operation return struct Go bertipe
   (lalu wick `json.Marshal`), atau selalu return `map[string]any`?
-  Bertipe lebih clean; map lebih fleksibel kalau bentuk upstream
-  berubah-ubah.
+  Sekarang crudcrud pilot pakai `any` (mostly map) krn sandbox shape
+  user-defined. Connector domain-specific (Loki dst) bakal lebih
+  cocok struct bertipe. Konvensi belum final.
 - **Penyimpanan secret.** Encrypt field configs at rest di kolom
   `connectors.configs`? Pakai envelope encryption, atau cukup
-  encryption di level DB? Konsisten dgn tabel `configs` lama.
+  encryption di level DB? Konsisten dgn tabel `configs` lama. Sama
+  jg untuk `personal_access_tokens.token_hash` — sekarang cuma SHA-256
+  (irreversible), tapi `oauth_tokens` punya plaintext claim flow di
+  /token response yg secara teori bocor di log proxy.
 - **Visibility definisi.** Apakah ada definisi connector yg admin-only
   (gak muncul di picker "+ New row" milik user)? Bisa di-gate lewat
-  Module-level tag mirip `DefaultTags` Tool.
+  Module-level tag mirip `DefaultTags` Tool. Belum implement krn UI
+  manage row sendiri belum ada.
 - **Rate limit.** Per user, per row, atau per connector? Client MCP
-  bisa cukup chatty.
-- **Penamaan di MCP.** `loki__query__prod` vs `loki.query.prod` —
-  underscore-only paling aman lintas client tapi kurang cantik.
-  Bentrok label antar tag-mate (mis. dua "Loki Default" beda team)
-  → suffix `__<short-id>` atau cegah di UI?
+  bisa cukup chatty. Belum implement — tergantung observe pattern
+  abuse di production.
+- **Penamaan di MCP.** Sekarang `loki__query__prod` (underscore-only,
+  paling aman lintas client). Bentrok label antar tag-mate (mis. dua
+  "Loki Default" beda team) — sekarang gak dicegah; bakal generate 2
+  tool dgn nama sama → MCP client behavior undefined. Solusi: suffix
+  `__<short-id>` di slug atau cegah duplicate label di UI.
 - **Reset configs saat duplicate — full vs partial.** Sekarang full
   reset (`Configs = "{}"`). Field non-secret (URL endpoint) sering
   reusable; cuma yg `secret` yg harus re-isi. Partial-reset lebih
   ergonomis tapi butuh metadata `secret` konsisten di tag struct.
-- **Tag tipe terstruktur.** Sekarang konvensi prefix string (`user:`,
-  `team:`, `env:`). Cukup, atau perlu kolom `Type` di tabel `tags`?
-- **Auto-create tag `user:<email>`.** Lazy saat user pertama bikin
-  row, atau eager saat user di-approve admin? Lazy lebih bersih
-  (gak ada tag yatim).
 - **Generic entity-tag.** `ToolTag` sekarang dipakai Tools, Jobs,
-  Connectors via path-prefix convention. Layak di-rename jadi
-  `EntityTag` dgn dedicated `entity_path` / `entity_type`?
+  Connectors via path-prefix convention (`/tools/{key}`, `/jobs/{key}`,
+  `/connectors/{id}`). Layak di-rename jadi `EntityTag` dgn dedicated
+  `entity_path` / `entity_type`?
+- **OAuth audit trail.** `oauth_tokens.last_used_at` di-stamp tiap
+  validate, tapi gak ada per-call audit log (mirip `connector_runs`).
+  Cukup, atau perlu tabel `oauth_token_uses`?
 
 ---
 
@@ -672,8 +772,8 @@ func MCPAuth(v TokenValidator) func(http.Handler) http.Handler {
   Per-row punya enable toggle. `Destructive=true` default off.
 - **Tag filter** — `Tag` dgn `IsFilter=true`. Dicocokkan antara row
   (via `ToolTag` path `/connectors/{id}`) dan user (via `UserTag`)
-  untuk gating akses. Konvensi prefix: `user:<email>`, `team:<slug>`,
-  `role:<name>`, `env:<name>`.
+  untuk gating akses. Tag string bebas — admin-defined, gak ada
+  konvensi prefix wajib di code.
 - **MCP tool** — yg dilihat client LLM. Di-generate dari (row × op)
   yg tagnya match dgn user pemanggil + op enabled, di
   `tools/list`. Format nama: `{key}__{op}__{label_slug}`.
@@ -682,6 +782,16 @@ func MCPAuth(v TokenValidator) func(http.Handler) http.Handler {
   retry). Diretensi (default 7 hari).
 - **Streamable HTTP** — transport MCP terkini. Endpoint tunggal,
   default JSON, bisa upgrade ke SSE per response kalau perlu.
-- **Static Bearer (PAT)** — token yg user generate manual di UI
-  wick, formatnya `wick_pat_xxx`. Alternatif OAuth buat client
-  non-interaktif.
+- **Static Bearer (PAT)** — token yg user generate manual di
+  /profile/tokens, formatnya `wick_pat_<32hex>`. Alternatif OAuth
+  buat client yg gak speak OAuth flow (Claude Desktop, Cursor, cURL).
+  Hash-only stored di `personal_access_tokens`.
+- **OAuth grant** — pasangan (access + refresh token) yg di-mint saat
+  user approve consent di /oauth/authorize. Access `wick_oat_<32hex>`
+  TTL 1h, refresh `wick_ort_<64hex>` TTL 30d dgn rotation tiap exchange.
+  Disconnect lewat /profile/connections revoke semua token milik
+  (user, client) sekaligus.
+- **Dynamic Client Registration (DCR)** — RFC 7591. MCP client
+  (Claude.ai dst) panggil `POST /oauth/register` tanpa pre-registration
+  → wick mint `client_id` + simpan redirect URIs. Public clients only
+  (no client_secret) — PKCE menggantikan secret per OAuth 2.1.
