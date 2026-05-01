@@ -17,7 +17,11 @@
 // the admin UI in a later phase.
 package connectors
 
-import "github.com/yogasw/wick/pkg/connector"
+import (
+	"github.com/yogasw/wick/internal/connectors/crudcrud"
+	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/entity"
+)
 
 // extra holds connector definitions registered by downstream projects
 // (and, for the wick lab binary, by RegisterBuiltins). All() returns
@@ -33,8 +37,16 @@ func Register(m connector.Module) {
 // RegisterBuiltins appends wick's own in-house connectors to the
 // registry. Intended for the wick lab binary (cmd/lab); downstream
 // projects start with an empty registry and register only their own
-// connectors. Empty for now — the Loki pilot lands in a later phase.
-func RegisterBuiltins() {}
+// connectors.
+func RegisterBuiltins() {
+	extra = append(extra,
+		connector.Module{
+			Meta:       crudcrud.Meta(),
+			Configs:    entity.StructToConfigs(crudcrud.Configs{}),
+			Operations: crudcrud.Operations(),
+		},
+	)
+}
 
 // All returns every registered connector definition in registration
 // order.

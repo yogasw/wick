@@ -13,6 +13,7 @@ import (
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
@@ -109,6 +110,16 @@ func NewServer() *Server {
 	if err := jobsSvc.Bootstrap(context.Background(), jobs.All()); err != nil {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
 	}
+
+	// ── Connectors (LLM-facing via MCP) ──────────────────────────
+	// Register the code-side definitions for dispatch and auto-seed
+	// one DB row per Key on first boot. The MCP/admin surfaces wire
+	// up against this Service in later phases.
+	connectorsSvc := connectors.NewServiceFromDB(db)
+	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
+		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
+	}
+	_ = connectorsSvc
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to.
