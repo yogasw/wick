@@ -1,9 +1,9 @@
 # Connectors — Desain & State
 
 Status: implemented (modul + persistence + MCP JSON-RPC meta-tool pattern
-+ auth dual-mode PAT & OAuth 2.1 + per-user grant management). Admin UI
-buat CRUD connector row + panel test belum dibikin — sekarang admin pakai
-SQL langsung atau bootstrap auto-row kosong.
++ auth dual-mode PAT & OAuth 2.1 + per-user grant management + admin UI:
+list/detail row CRUD, dedicated test page, dedicated history page dgn
+filter URL-driven).
 Update terakhir: 2026-05-01.
 
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
@@ -338,67 +338,107 @@ Implementasi: `connectors.Repo.ListAccessibleTo(ctx, userTagIDs)` +
 
 ## 6. Web UI
 
-Tiga surface — dua admin-facing buat manage connector (belum dibikin),
-satu user-facing buat manage auth (sudah ada).
+Empat surface admin-facing buat manage connector (semua implemented),
+plus profile area user-facing buat manage auth.
 
-### 6.1 Manajemen row *(belum dibikin)*
-
-```
-Connectors
-└── Loki                                (1 modul Go, key="loki")
-    ├── [+ New row]
-    ├── Loki Prod     [user:yoga]              [test] [edit] [duplicate] [delete]
-    ├── Loki Staging  [user:yoga, env:staging] [test] [edit] [duplicate] [delete]
-    └── Loki Platform [team:platform]          [test] [edit] [duplicate] [delete]
-        Operations:
-          ✓ query              (enabled)
-          ✓ list_apps          (enabled)
-          ✗ delete_log [⚠]     (destructive — admin opt-in)
-```
-
-- **New row**: form di-render otomatis dari `Module.Configs`. User isi
-  configs, label, dan pilih tag (`user:<self>` di-set otomatis). Cuma
-  tag yg user sendiri carry yg bisa dipilih — supaya gak bikin row yg
-  user sendiri gak bisa lihat.
-- **Per-op toggle**: tiap row punya panel toggle on/off untuk setiap
-  op yg di-declare di Module. Destructive ops default off + chip
-  warning di UI.
-- **Duplicate**: copy row → configs **direset** (form muncul, user
-  re-isi). Tag dari source tidak diwarisin; cuma `user:<self>` yg
-  di-set caller. Lihat 5.5.
-- **Edit / Delete / Duplicate**: muncul ke semua user yg lihat row
-  (siapa pun yg tag-nya match). Tidak ada konsep owner eksklusif —
-  siapa yg punya akses, punya hak penuh. Audit trail via
-  `connector_runs.user_id` + `ip_address`/`user_agent`.
-- **Disable**: row-level off-switch (`Connector.Disabled`); hide dari
-  MCP `tools/list` & list view tanpa harus delete.
-
-Tag list ditampilkan sbg chip di sebelah label — sekaligus jadi filter
-di list view (klik tag → list mengkerucut ke row yg carry tag itu).
-
-### 6.2 Panel test (gaya Postman) *(belum dibikin)*
+### 6.1 List + detail row *(implemented)*
 
 ```
-Loki Prod   [Test]
-├── Operation: [query ▾]    (dropdown dari module.Operations yg enabled)
-├── Form input              (auto dari op.Input)
-│   query: [_______]
-│   start: [_______]
-├── [Run]
-├── Preview request         method, URL, header, body
-├── Preview response        status, latency, JSON tree
-└── History                 last N runs (klik → reload form / [Retry])
+/manager/connectors/loki                       — list semua row utk Meta.Key=loki
+└── Loki Prod        [user:yoga]              [⋮ menu]
+└── Loki Staging     [user:yoga, env:staging] [⋮ menu]
+└── Loki Platform    [team:platform]          [⋮ menu]
+   ↳ klik card → /manager/connectors/loki/{id}  (detail page)
+
+/manager/connectors/loki/{id}                  — detail page (settings-only)
+├── Identity         label, status badge, ID
+├── Top actions      History · Duplicate · Disable/Enable · Delete
+├── Label form
+├── Credentials      auto-render dari Module.Configs (typed struct + secret mask)
+└── Operations       table:
+       Operation │ Description │ Actions          │ Enabled
+       query     │ ...         │ [Test] [History] │ [Disable]
+       delete    │ ⚠ destruct. │ [Test] [History] │ [Enable]
 ```
 
-- Memanggil `Service.Execute` dgn `Source=ConnectorRunSourceTest`.
-  Path code yg sama dgn MCP `tools/call` — verifikasi behavior end-to-end.
-- Riwayat berasal dari `connector_runs`, di-filter ke source=test +
-  user_id pemanggil.
-- `[Retry]` di history row → panggil `Service.Retry(originalRunID, ...)`,
-  rebuild call dari `RequestJSON` orig + configs row sekarang
-  (cred edit yg admin lakukan di antara replay = honored).
+- **List page** ([connector_list.templ]) — n8n-style stacked cards, kebab
+  menu kanan untuk Disable/Duplicate/Delete tanpa pindah halaman.
+- **New row**: tombol `+ New row` mint row kosong (`Configs="{}"`,
+  Label = `Meta.Name + " (new)"`) lalu redirect ke detail. Form per-field
+  pakai `ConfigsTable` shared dgn Tools/Jobs.
+- **Per-op toggle**: tiap operation row punya kolom `Enabled` dgn tombol
+  Enable/Disable. Default mengikuti `Operation.Destructive` (off untuk
+  destructive, on untuk sisanya).
+- **Per-op actions**: kolom `Actions` punya 2 link — `[Test]` ke
+  `/test?op=<key>` dan `[History]` ke `/history?op=<key>`. Detail page
+  fokus settings; runtime dilempar ke page khusus.
+- **Duplicate**: copy row → configs **direset**. Tag dari source tidak
+  diwarisin. Lihat 5.5.
+- **Disable**: row-level off-switch; hide dari MCP `tools/list` & list
+  view tanpa harus delete.
 
-### 6.3 Profile area *(implemented)*
+### 6.2 Test page (gaya Postman) *(implemented)*
+
+`GET /manager/connectors/{key}/{id}/test?op=<op_key>`
+([connector_test.templ] + [connector_test.js]).
+
+```
+/manager/connectors/loki/{id}/test?op=query
+├── Breadcrumb: Home / Loki / Loki Prod / Test
+├── Header: "Test runner" + [View history] (preserve op filter)
+├── Operation dropdown        — URL-synced: ganti = history.replaceState ke ?op=...
+├── Input form                — di-render dari op.Input via testInputField
+├── [Run]                     — POST /test (JSON {operation, input})
+└── Result panel              — status pill + latency + response/error pre
+```
+
+- **URL sync**: ganti dropdown ngubah `?op=` lewat `history.replaceState`
+  — back/refresh preserve pilihan, link dari detail page bisa preselect.
+- **No back to detail**: ganti operation = ganti form aja, tetap di
+  page yg sama. Tombol Run + result panel tetap visible.
+- Backend handler `connectorTestPage` + endpoint POST `/test` reuse
+  `Service.Execute` dgn `Source=ConnectorRunSourceTest`. Path code yg
+  sama dgn MCP `tools/call` — verifikasi behavior end-to-end.
+
+### 6.3 History page *(implemented)*
+
+`GET /manager/connectors/{key}/{id}/history?op=...&source=...&status=...&user=...`
+([connector_history.templ] + [connector_history.js]).
+
+```
+/manager/connectors/loki/{id}/history?op=query&status=error
+├── Breadcrumb: Home / Loki / Loki Prod / History
+├── Filter bar (4 select, URL-driven)
+│     Operation │ Source │ Status │ User
+│     [query ▾] │ [all ▾]│ [error▾]│ [all ▾]
+│     [Clear all filters] (muncul kalau ada filter aktif)
+├── Table
+│     ▸ When │ Operation │ Source │ User │ Status │ Latency
+│     ▸ 2m ago│ query    │ mcp    │ Yoga │ error  │ 312 ms
+│       (klik row → expand inline)
+│       └── Request JSON · Response JSON · Run ID · IP · UA · HTTP
+└── Total counter
+```
+
+- **Filter chips URL-driven**: tiap `<select>` change → navigate ke
+  baseUrl + `?key=value` baru. Link bisa di-share, refresh preserve.
+- **User column**: resolve `UserID` → display name via
+  `login.Service.GetUserByID`. Map dibangun sekali per page render
+  (`resolveRunUsers`) supaya N+1 batched ke distinct user ID. Empty
+  UserID → "system". Unknown → short ID.
+- **Expand row**: klik row toggle detail row di bawahnya — dua kolom
+  Request/Response (pretty-printed JSON), plus run ID + IP + UA + HTTP
+  status di footer. Zero round trip (data sudah di DOM).
+- Backend handler `connectorHistoryPage` panggil
+  `Service.ListRunsFiltered(ctx, connectorID, RunFilter{...}, 200)`
+  yg di-back single composite-index query.
+- **Audit trail granularitas**: yg ke-track baru `user_id` + IP + UA.
+  Token-id (PAT vs OAuth client mana) belum di-track — semua PAT/grant
+  milik 1 user terlihat seragam. Trade-off awal; nanti tambah
+  `auth_token_id` + `auth_token_kind` kalau "siapa pakai token mana"
+  jadi load-bearing buat triage abuse.
+
+### 6.4 Profile area *(implemented)*
 
 Di-render via `ProfileLayout` (admin-style header, max-w-container)
 dgn 4 tab: Account · Access Tokens · Connected Apps · MCP.
@@ -720,17 +760,28 @@ revoke single PAT tanpa affect OAuth grants.
    - Per-user grant management di /profile/connections.
    - .well-known/* metadata + /oauth/{register,authorize,token}.
 
-6. **Web UI admin** *(belum dibikin — gap UX terbesar)*
-   - Page `/manager/connectors` buat CRUD row + form configs.
-   - Per-row per-op toggle panel.
-   - Duplicate / edit / delete / disable.
-   - Sekarang admin pakai SQL langsung; bootstrap auto-bikin row
-     kosong per Key biar gak harus INSERT manual.
+6. **Web UI admin** ✅
+   - Page `/manager/connectors/{key}` list row dgn n8n-style cards +
+     kebab menu (Disable/Duplicate/Delete).
+   - Page `/manager/connectors/{key}/{id}` detail row: identity, label,
+     credentials (typed struct → ConfigsTable), operations table dgn
+     Test/History/Enable per row.
+   - Tombol Disable/Duplicate/Delete di header detail.
+   - Bootstrap auto-bikin row kosong per Key biar admin tinggal isi
+     credential dari UI.
 
-7. **Panel test** *(belum dibikin)*
-   - Handler `/connectors/{id}/test`.
-   - Viewer request/response gaya Postman, source=`test`.
-   - History + retry button (panggil `Service.Retry`).
+7. **Test page + history page** ✅
+   - `/manager/connectors/{key}/{id}/test?op=...` standalone Postman-style
+     runner. Operation dropdown URL-synced (history.replaceState) — ganti
+     op tanpa back, refresh preserve. Run pakai `Service.Execute` dgn
+     `Source=ConnectorRunSourceTest`.
+   - `/manager/connectors/{key}/{id}/history?op=...&source=...&status=...&user=...`
+     audit log dedicated. Filter chips URL-driven (shareable links),
+     user column resolve nama via `login.Service.GetUserByID`, expand
+     row reveal request/response JSON + IP/UA/HTTP. Backed by
+     `Service.ListRunsFiltered` (single composite-index query).
+   - Retry button via `Service.Retry` masih outstanding — sekarang user
+     copy request JSON manual + Run di test page.
 
 8. **Streaming + notification** *(opsional, low priority)*
    - Stream SSE `GET /mcp` — buat long-running ops (> 5s).
