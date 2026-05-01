@@ -72,6 +72,11 @@ func (s *Service) Bootstrap(ctx context.Context, mods []job.Module) error {
 		if err := s.repo.UpsertJob(ctx, row); err != nil {
 			return fmt.Errorf("bootstrap job %s: %w", m.Key, err)
 		}
+		if m.AutoEnable {
+			if err := s.repo.ForceEnable(ctx, m.Key); err != nil {
+				return fmt.Errorf("bootstrap job %s: force enable: %w", m.Key, err)
+			}
+		}
 	}
 	return nil
 }

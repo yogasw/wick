@@ -1,0 +1,281 @@
+package view
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
+)
+
+// ConnectorHistoryPage is the standalone audit log for one connector
+// row. Filter chips (operation, source, status, user) are URL-driven so
+// links stay shareable. Each row expands inline to reveal the request /
+// response JSON without a round trip.
+templ ConnectorHistoryPage(mod connector.Module, row *entity.Connector, runs []entity.ConnectorRun, usersByID map[string]string, filter connectors.RunFilter, page, totalPages, total int, user *entity.User) {
+	@Layout("History · "+row.Label, user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/" class="hover:text-green-600">Home</a>
+				<span>/</span>
+				<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key) } class="hover:text-green-600">{ mod.Meta.Name }</a>
+				<span>/</span>
+				<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID) } class="hover:text-green-600">{ row.Label }</a>
+				<span>/</span>
+				<span class="text-black-900 dark:text-white-100">History</span>
+			</div>
+
+			<div class="mt-4">
+				<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Run history</h1>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Recent runs against this row — MCP calls, panel tests, and retries. Older entries are purged on the daily retention cycle.
+				</p>
+			</div>
+
+			<section
+				class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4"
+				data-history-filters
+				data-base-url={ "/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/history" }
+			>
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-4">
+					<div>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Operation</label>
+						<select
+							data-history-filter="op"
+							class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+						>
+							<option value="">All operations</option>
+							for _, op := range mod.Operations {
+								if op.Key == filter.OperationKey {
+									<option value={ op.Key } selected>{ op.Name }</option>
+								} else {
+									<option value={ op.Key }>{ op.Name }</option>
+								}
+							}
+						</select>
+					</div>
+					<div>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Source</label>
+						<select
+							data-history-filter="source"
+							class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+						>
+							<option value="">All sources</option>
+							@sourceOption("mcp", "MCP", filter.Source)
+							@sourceOption("test", "Panel test", filter.Source)
+							@sourceOption("retry", "Retry", filter.Source)
+						</select>
+					</div>
+					<div>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Status</label>
+						<select
+							data-history-filter="status"
+							class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+						>
+							<option value="">All statuses</option>
+							@statusOption("success", "Success", filter.Status)
+							@statusOption("error", "Error", filter.Status)
+							@statusOption("running", "Running", filter.Status)
+						</select>
+					</div>
+					<div>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">User</label>
+						@userFilterSelect(filter.UserID, usersByID)
+					</div>
+				</div>
+				if filter.OperationKey != "" || filter.Source != "" || filter.Status != "" || filter.UserID != "" {
+					<div class="mt-3">
+						<a
+							href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/history") }
+							class="text-xs font-medium text-green-600 hover:underline"
+						>Clear all filters</a>
+					</div>
+				}
+			</section>
+
+			<section class="mt-6">
+				if len(runs) == 0 {
+					<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center">
+						<p class="text-sm text-black-700 dark:text-black-600">No runs match the current filters.</p>
+					</div>
+				} else {
+					<div class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+						<table class="w-full text-sm">
+							<thead>
+								<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+									<th class="w-8 px-2 py-3"></th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">When</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Source</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">User</th>
+									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
+									<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Latency</th>
+								</tr>
+							</thead>
+							<tbody data-history-tbody>
+								for _, run := range runs {
+									@historyRow(run, usersByID, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/test")
+								}
+							</tbody>
+						</table>
+					</div>
+					@historyPager(mod.Meta.Key, row.ID, filter, page, totalPages, total)
+				}
+			</section>
+		</main>
+		<script src="/modules/manager/js/connector_history.js"></script>
+	}
+}
+
+templ historyRow(run entity.ConnectorRun, usersByID map[string]string, testBaseURL string) {
+	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800" data-history-toggle={ run.ID }>
+		<td class="px-2 py-3 text-center text-black-700 dark:text-black-600">
+			<svg class="inline h-3 w-3 transition-transform" data-history-chevron viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
+			<span title={ run.StartedAt.Format(time.RFC3339) }>{ relativeTime(run.StartedAt) }</span>
+		</td>
+		<td class="px-4 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ run.OperationKey }</td>
+		<td class="px-4 py-3 text-xs">
+			<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-medium text-black-700 dark:text-black-600">{ string(run.Source) }</span>
+		</td>
+		<td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">
+			@runUserCell(run, usersByID)
+		</td>
+		<td class="px-4 py-3 text-xs">
+			@runStatusBadge(run.Status)
+			if run.Status == entity.ConnectorRunStatusError && run.ErrorMsg != "" {
+				<p class="mt-1 max-w-md truncate font-mono text-[10px] text-neg-400" title={ run.ErrorMsg }>{ run.ErrorMsg }</p>
+			}
+		</td>
+		<td class="px-4 py-3 text-right font-mono text-xs text-black-800 dark:text-black-600">
+			if run.LatencyMs > 0 {
+				{ fmt.Sprintf("%d ms", run.LatencyMs) }
+			} else {
+				—
+			}
+		</td>
+	</tr>
+	<tr class="hidden border-b border-white-300 dark:border-navy-600" data-history-detail={ run.ID }>
+		<td colspan="7" class="bg-white-200 dark:bg-navy-800 px-4 py-4">
+			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+				<div>
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Request</p>
+					<pre class="mt-1 max-h-80 overflow-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-3 font-mono text-[11px] text-black-900 dark:text-white-100">{ prettyOrEmpty(run.RequestJSON) }</pre>
+				</div>
+				<div>
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Response</p>
+					if run.Status == entity.ConnectorRunStatusError && run.ErrorMsg != "" {
+						<pre class="mt-1 max-h-80 overflow-auto rounded-lg border border-neg-300 bg-neg-100 p-3 font-mono text-[11px] text-neg-400">{ run.ErrorMsg }</pre>
+					} else {
+						<pre class="mt-1 max-h-80 overflow-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-3 font-mono text-[11px] text-black-900 dark:text-white-100">{ prettyOrEmpty(run.ResponseJSON) }</pre>
+					}
+				</div>
+			</div>
+			<div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-black-700 dark:text-black-600">
+				<span>Run ID: <code class="font-mono">{ run.ID }</code></span>
+				if run.IPAddress != "" {
+					<span>IP: <code class="font-mono">{ run.IPAddress }</code></span>
+				}
+				if run.UserAgent != "" {
+					<span>UA: <code class="font-mono">{ truncate(run.UserAgent, 80) }</code></span>
+				}
+				if run.HTTPStatus > 0 {
+					<span>HTTP: <code class="font-mono">{ fmt.Sprintf("%d", run.HTTPStatus) }</code></span>
+				}
+				if run.Status != entity.ConnectorRunStatusRunning {
+					<a
+						href={ templ.SafeURL(testBaseURL + "?op=" + run.OperationKey + "&prefill=" + run.ID) }
+						data-history-retry
+						class="ml-auto rounded-lg bg-green-500 px-3 py-1 text-[11px] font-medium text-white-100 hover:bg-green-600"
+					>Retry in test panel</a>
+				}
+			</div>
+		</td>
+	</tr>
+}
+
+templ historyPager(connKey, rowID string, filter connectors.RunFilter, page, totalPages, total int) {
+	{{ start := (page-1)*10 + 1 }}
+	{{ end := start + 9 }}
+	{{ if end > total { end = total } }}
+	{{ if total == 0 { start = 0 } }}
+	<div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+		<p class="text-[11px] text-black-700 dark:text-black-600">
+			{ fmt.Sprintf("Showing %d–%d of %d run(s)", start, end, total) }
+		</p>
+		if totalPages > 1 {
+			<nav class="flex items-center gap-1 text-xs">
+				if page > 1 {
+					<a
+						href={ templ.SafeURL(historyPageURL(connKey, rowID, filter, page-1)) }
+						class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 font-medium text-black-900 dark:text-white-100 hover:border-green-500 hover:text-green-600"
+					>← Prev</a>
+				} else {
+					<span class="rounded-lg border border-white-300 dark:border-navy-700 bg-white-200 dark:bg-navy-700 px-3 py-1.5 font-medium text-black-700 dark:text-black-600 cursor-not-allowed">← Prev</span>
+				}
+				<span class="px-3 py-1.5 text-black-800 dark:text-black-600">
+					{ fmt.Sprintf("Page %d of %d", page, totalPages) }
+				</span>
+				if page < totalPages {
+					<a
+						href={ templ.SafeURL(historyPageURL(connKey, rowID, filter, page+1)) }
+						class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 font-medium text-black-900 dark:text-white-100 hover:border-green-500 hover:text-green-600"
+					>Next →</a>
+				} else {
+					<span class="rounded-lg border border-white-300 dark:border-navy-700 bg-white-200 dark:bg-navy-700 px-3 py-1.5 font-medium text-black-700 dark:text-black-600 cursor-not-allowed">Next →</span>
+				}
+			</nav>
+		}
+	</div>
+}
+
+templ runUserCell(run entity.ConnectorRun, usersByID map[string]string) {
+	if run.UserID == "" {
+		<span class="italic text-black-700 dark:text-black-600">system</span>
+	} else {
+		if name, ok := usersByID[run.UserID]; ok {
+			<span title={ run.UserID }>{ name }</span>
+		} else {
+			<span class="font-mono text-[11px]" title={ run.UserID }>{ shortID(run.UserID) }</span>
+		}
+	}
+}
+
+templ sourceOption(value, label, current string) {
+	if value == current {
+		<option value={ value } selected>{ label }</option>
+	} else {
+		<option value={ value }>{ label }</option>
+	}
+}
+
+templ statusOption(value, label, current string) {
+	if value == current {
+		<option value={ value } selected>{ label }</option>
+	} else {
+		<option value={ value }>{ label }</option>
+	}
+}
+
+templ userFilterSelect(current string, usersByID map[string]string) {
+	<select
+		data-history-filter="user"
+		class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+	>
+		<option value="">All users</option>
+		if current != "" {
+			if _, ok := usersByID[current]; !ok {
+				<option value={ current } selected>{ shortID(current) }</option>
+			}
+		}
+		for id, name := range usersByID {
+			if id == current {
+				<option value={ id } selected>{ name }</option>
+			} else {
+				<option value={ id }>{ name }</option>
+			}
+		}
+	</select>
+}

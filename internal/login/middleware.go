@@ -27,6 +27,17 @@ func GetUserTagIDs(ctx context.Context) []string {
 	return ids
 }
 
+// WithUser stamps a user + filter-tag-ID set onto the context using
+// the same keys the cookie-session middleware does. Useful for
+// non-cookie auth paths (MCP bearer middleware, OAuth) that need
+// downstream code (`login.GetUser`, `login.GetUserTagIDs`,
+// `Service.CanAccessTool`) to behave identically.
+func WithUser(ctx context.Context, user *entity.User, tagIDs []string) context.Context {
+	ctx = context.WithValue(ctx, contextKeyUser, user)
+	ctx = context.WithValue(ctx, contextKeyUserTagIDs, tagIDs)
+	return ctx
+}
+
 // SecretProvider is the minimal interface Middleware needs to read the
 // current session-signing secret. configs.Service satisfies it.
 type SecretProvider interface {

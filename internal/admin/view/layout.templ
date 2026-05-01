@@ -27,8 +27,15 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						@adminTab("/admin/users", "Users", activeTab == "users")
 						@adminTab("/admin/tools", "Tools", activeTab == "tools")
 						@adminTab("/admin/jobs", "Jobs", activeTab == "jobs")
-						@adminTab("/admin/tags", "Tags", activeTab == "tags")
-						@adminTab("/admin/configs", "Configs", activeTab == "configs")
+						@adminTab("/admin/connectors", "Connectors", activeTab == "connectors")
+						@adminDropdown("Access", isAccessActive(activeTab), []dropdownItem{
+							{Href: "/admin/access-tokens", Label: "Access Tokens", Active: activeTab == "access-tokens"},
+							{Href: "/admin/connections", Label: "Connected Apps", Active: activeTab == "connections"},
+						})
+						@adminDropdown("Setup", isSetupActive(activeTab), []dropdownItem{
+							{Href: "/admin/configs", Label: "Configs", Active: activeTab == "configs"},
+							{Href: "/admin/tags", Label: "Tags", Active: activeTab == "tags"},
+						})
 					</div>
 				</div>
 				<div class="flex items-center gap-3">
@@ -56,4 +63,45 @@ templ adminTab(href string, label string, active bool) {
 			templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),
 			templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", !active) }
 	>{ label }</a>
+}
+
+type dropdownItem struct {
+	Href   string
+	Label  string
+	Active bool
+}
+
+func isAccessActive(tab string) bool {
+	return tab == "access-tokens" || tab == "connections"
+}
+
+func isSetupActive(tab string) bool {
+	return tab == "configs" || tab == "tags"
+}
+
+templ adminDropdown(label string, active bool, items []dropdownItem) {
+	<div class="relative">
+		<details class="group">
+			<summary
+				class={ "flex cursor-pointer list-none items-center gap-1 rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none",
+					templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),
+					templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", !active) }
+			>
+				{ label }
+				<svg class="h-3 w-3 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/>
+				</svg>
+			</summary>
+			<div class="absolute left-0 top-full mt-2 w-48 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg z-50 py-1">
+				for _, it := range items {
+					<a
+						href={ templ.SafeURL(it.Href) }
+						class={ "block px-4 py-2 text-sm transition-colors",
+							templ.KV("bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 font-medium", it.Active),
+							templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100", !it.Active) }
+					>{ it.Label }</a>
+				}
+			</div>
+		</details>
+	</div>
 }

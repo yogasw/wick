@@ -6,28 +6,34 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager/view"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/tool"
-
 )
 
 //go:embed js
 var StaticFS embed.FS
 
 // Handler wires the /manager/* routes. Manager owns job scheduling,
-// runtime configs for jobs and tools.
+// runtime configs for jobs and tools, and the admin surface for
+// connector rows.
 type Handler struct {
-	svc     *Service
-	configs *configs.Service
-	tools   []tool.Tool
+	svc        *Service
+	configs    *configs.Service
+	connectors *connectors.Service
+	tags       *tags.Service
+	users      *login.Service
+	tools      []tool.Tool
 }
 
-func NewHandler(svc *Service, configsSvc *configs.Service, tools []tool.Tool) *Handler {
-	return &Handler{svc: svc, configs: configsSvc, tools: tools}
+func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, usersSvc *login.Service, tools []tool.Tool) *Handler {
+	return &Handler{svc: svc, configs: configsSvc, connectors: connectorsSvc, tags: tagsSvc, users: usersSvc, tools: tools}
 }
 
 // Register wires /manager/* to mux. All pages require auth; admin-only
@@ -59,6 +65,9 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	mux.Handle("GET /manager/tools/{key}", auth(h.toolDetailPage))
 	mux.Handle("POST /manager/tools/{key}/configs/{configKey}", adminOnly(h.setToolConfig))
 	mux.Handle("POST /manager/tools/{key}/configs/{configKey}/regenerate", adminOnly(h.regenerateToolConfig))
+
+	// Connectors — list + per-row detail with test panel and action menu.
+	h.connectorRoutes(mux, authMidd)
 }
 
 // requiredMissingKeys returns the keys whose Required flag is set but

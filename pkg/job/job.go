@@ -27,6 +27,13 @@ type Meta struct {
 	// startup, linked to the job's path, and used for tag-based access
 	// control in the admin UI.
 	DefaultTags []tool.DefaultTag
+	// AutoEnable forces Job.Enabled = true on every Bootstrap. Intended
+	// for built-in maintenance jobs that ship pre-enabled and have no
+	// user-facing toggle (typically combined with DefaultTags carrying
+	// the System tag so the row is hidden from non-admin manager UI).
+	// Admin-managed jobs leave this false — admins enable from the
+	// /manager/jobs UI.
+	AutoEnable bool
 }
 
 // RunFunc is the job-side run signature. It executes the job and

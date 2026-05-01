@@ -47,7 +47,30 @@ templ TagsPage(tags []*entity.Tag, user *entity.User, editID string) {
 
 templ TagRowFragment(t *entity.Tag, editing bool) {
 	<tr id={ "tag-" + t.ID } class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-		if editing {
+		if t.IsSystem {
+			<td class="px-4 py-3 font-medium text-black-900 dark:text-white-100">{ t.Name }</td>
+			<td class="px-4 py-3 text-sm text-black-700 dark:text-black-600">
+				if t.Description != "" {
+					{ t.Description }
+				} else {
+					<span class="text-black-600 dark:text-black-700">—</span>
+				}
+			</td>
+			<td class="px-4 py-3">
+				<div class="flex items-center gap-1.5">
+					<span class="rounded-full bg-cau-100 px-2 py-0.5 text-[10px] font-medium text-cau-400">System</span>
+					if t.IsGroup {
+						<span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">Group</span>
+					}
+					if t.IsFilter {
+						<span class="rounded-full bg-cau-100 px-2 py-0.5 text-[10px] font-medium text-cau-400">Filter</span>
+					}
+				</div>
+			</td>
+			<td class="px-4 py-3 text-right">
+				<span class="text-xs italic text-black-600 dark:text-black-700">Read-only · code-managed</span>
+			</td>
+		} else if editing {
 			<td colspan="4" class="px-4 py-3">
 				<form action={ templ.SafeURL("/admin/tags/" + t.ID + "/update") } method="POST" class="flex flex-wrap items-start gap-3">
 					<div class="flex flex-col gap-1">

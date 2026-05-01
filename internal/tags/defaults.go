@@ -39,4 +39,26 @@ var (
 		IsGroup:     true,
 		SortOrder:   90,
 	}
+
+	// System marks built-in maintenance items (jobs/tools/connectors
+	// shipped by wick itself) that end users should not see or manage.
+	//
+	// Three flags work together:
+	//   - IsSystem  : admin UI refuses to assign this tag to a user, so
+	//                 no user can ever "carry" it.
+	//   - IsFilter  : the tag participates in the access-filter rule —
+	//                 because no user carries it, the item is hidden
+	//                 from every non-admin /manager surface.
+	//   - IsGroup   : the home page renders System-tagged items in
+	//                 their own group when an admin browses there.
+	//
+	// Sort last so the System group sits at the bottom of the home page.
+	System = tool.DefaultTag{
+		Name:        "System",
+		Description: "Built-in maintenance items shipped with wick. Hidden from non-admin users.",
+		IsGroup:     true,
+		IsFilter:    true,
+		IsSystem:    true,
+		SortOrder:   1000,
+	}
 )

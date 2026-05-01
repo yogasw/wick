@@ -18,9 +18,9 @@ Wick uses **Tailwind CSS** for styling and **[templ](https://templ.guide)** for 
 
 ```
 my-app/
-├── main.go          # register tools and jobs here
+├── main.go          # register tools, jobs, and connectors here
 ├── AGENTS.md        # AI agent instructions (read by Claude)
-├── .claude/skills/  # bundled AI skills (tool-module, design-system)
+├── .claude/skills/  # bundled AI skills (tool-module, connector-module, design-system)
 ├── wick.yml         # task runner config
 ├── .env             # environment variables
 ├── tools/
@@ -28,44 +28,44 @@ my-app/
 │   └── external/       # external link cards
 ├── jobs/
 │   └── auto-get-data/  # example background job
+├── connectors/
+│   └── crudcrud/       # example connector (LLM-facing via MCP)
 └── tags/
     └── defaults.go     # shared tag catalog
 ```
 
-## Two Module Types
+## Three Module Types
 
-| Type | Location | Entry Point | URL |
-|------|----------|-------------|-----|
-| Tool | `tools/{name}/` | `Register(r tool.Router)` | `/tools/{key}` |
-| Job  | `jobs/{name}/`  | `Run(ctx) (string, error)` | `/jobs/{key}` |
+| Type | Audience | Location | Entry Point | URL |
+|------|----------|----------|-------------|-----|
+| Tool | Humans (web UI) | `tools/{name}/` | `Register(r tool.Router)` | `/tools/{key}` |
+| Job | Scheduler | `jobs/{name}/` | `Run(ctx) (string, error)` | `/jobs/{key}` |
+| Connector | LLMs (via MCP) | `connectors/{name}/` | `Operations()` + `ExecuteFunc` | `/mcp` (LLM) + `/manager/connectors/{key}` (admin) |
 
 ## What the Framework Handles
 
 You write the business logic. Wick handles everything else:
 
-- **Admin UI** — config editor, tag management, job schedule
-- **Tags & visibility** — group tools, set public/private per tool
+- **Admin UI** — config editor, tag management, job schedule, connector test panel + history
+- **Tags & visibility** — group tools, set public/private per tool, filter-tag access control
 - **SSO** — configurable from admin panel, no code changes
 - **Runtime config** — typed `Config` structs reflected into admin-editable rows
-- **Run history** — every job execution logged automatically
-- **Routing** — tools mount at `/tools/{key}`, jobs at `/jobs/{key}`
+- **Run history** — every job execution logged; every connector call audited per-row
+- **MCP server** — built-in `/mcp` endpoint exposes connectors to Claude, Cursor, custom agents
+- **Auth surface** — OAuth 2.1 (DCR + PKCE) and Personal Access Tokens, both at `/profile/*`
+- **Routing** — tools mount at `/tools/{key}`, jobs at `/jobs/{key}`, connectors at `/manager/connectors/{key}`
 
 ### Admin Panel
 
 ![Admin Dashboard](/screenshots/admin-dashboard.png)
-*Dashboard — tools, jobs, enabled/running count, and missing configs at a glance.*
+*Dashboard — top-line stats split into Modules (execution health) and Access (auth surface).*
 
-![Admin Users](/screenshots/admin-users.png)
-*Users — approve accounts, assign roles and access tags.*
+The admin panel covers users, modules, tags, configs, and the LLM auth surface — all from one place, no separate codebase. See [Admin Panel](./admin-panel) for screenshots and notes on every page (`/admin/users`, `/admin/tools`, `/admin/jobs`, `/admin/connectors`, `/admin/access-tokens`, `/admin/connections`, `/admin/tags`, `/admin/configs`).
 
-![Admin Tools](/screenshots/admin-tools.png)
-*Tool Permissions — enable/disable tools, set visibility, assign tags.*
+### LLM Surface
 
-![Admin Jobs](/screenshots/admin-jobs.png)
-*Job Permissions — enable/disable jobs, assign access tags.*
+Connectors are exposed to LLM clients via the [Model Context Protocol](./mcp). Every authenticated user can paste a wick URL or token into Claude.ai, Claude Desktop, Cursor, or any MCP-aware agent and immediately call the connectors visible to them. See:
 
-![Admin Tags](/screenshots/admin-tags.png)
-*Tags — create group tags (home grouping) and filter tags (access control).*
-
-![Admin Configs](/screenshots/admin-configs.png)
-*Configs — runtime variables and SSO providers, no redeploy needed.*
+- [Connector Module](./connector-module) — module shape and per-row admin UI
+- [MCP for LLMs](./mcp) — transport, meta-tool dispatch, install snippets
+- [Access Tokens](./access-tokens) and [OAuth Connections](./oauth-connections) — auth modes

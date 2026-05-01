@@ -48,6 +48,18 @@ func (r *repo) ListEnabledJobs(ctx context.Context) ([]entity.Job, error) {
 	return js, err
 }
 
+// ForceEnable sets Enabled=true on the job with the given key. Used by
+// Bootstrap when Meta.AutoEnable is set, so built-in maintenance jobs
+// stay enabled across restarts even if something flipped the flag (or
+// the row was never enabled by an admin to begin with).
+func (r *repo) ForceEnable(ctx context.Context, key string) error {
+	return r.db.WithContext(ctx).Model(&entity.Job{}).Where("`key` = ?", key).
+		Updates(map[string]any{
+			"enabled":    true,
+			"updated_at": time.Now(),
+		}).Error
+}
+
 func (r *repo) UpdateSchedule(ctx context.Context, id string, schedule string, enabled bool, maxRuns int) error {
 	return r.db.WithContext(ctx).Model(&entity.Job{}).Where("id = ?", id).
 		Updates(map[string]any{

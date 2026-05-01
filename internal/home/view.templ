@@ -188,6 +188,9 @@ templ ToolCardDetailed(t tool.Tool, m ToolMetaEntry, loggedIn bool) {
 				if t.Category == "job" {
 					<span class="absolute -right-1 -bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-prog-100 text-[8px] shadow-sm" aria-label="Background job">⚙</span>
 				}
+				if t.Category == "connector" {
+					<span class="absolute -right-1 -bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-green-200 dark:bg-green-800 text-[8px] shadow-sm" aria-label="LLM connector">🔌</span>
+				}
 			</div>
 			<div class="min-w-0 flex-1 pr-6">
 				<p class="text-sm font-semibold text-black-900 dark:text-white-100">{ t.Name }</p>
@@ -239,6 +242,9 @@ templ ToolCardCompact(t tool.Tool, m ToolMetaEntry, loggedIn bool) {
 				}
 				if t.Category == "job" {
 					<span class="absolute -right-1 -bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-prog-100 text-[8px] shadow-sm" aria-label="Background job">⚙</span>
+				}
+				if t.Category == "connector" {
+					<span class="absolute -right-1 -bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-green-200 dark:bg-green-800 text-[8px] shadow-sm" aria-label="LLM connector">🔌</span>
 				}
 			</div>
 			<p class="w-full truncate text-xs font-medium text-black-900 dark:text-white-100">{ t.Name }</p>

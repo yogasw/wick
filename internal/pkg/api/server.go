@@ -7,19 +7,25 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
 	"github.com/yogasw/wick/internal/jobrunner"
 	"github.com/yogasw/wick/internal/jobs"
+	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/manager"
+	"github.com/yogasw/wick/internal/mcp"
+	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/ui"
@@ -38,6 +44,12 @@ func NewServer() *Server {
 
 	db := postgres.NewGORM(cfg.Database)
 	postgres.Migrate(db)
+
+	// Built-in maintenance jobs whose RunFunc captures *gorm.DB are
+	// registered here, after DB init, before validation + the jobs.All()
+	// loops below. Mirrors the call in internal/pkg/worker.NewServer
+	// so both processes share the same registry view.
+	connectorrunspurge.Register(db)
 
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
@@ -110,6 +122,38 @@ func NewServer() *Server {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
 	}
 
+	// ── Connectors (LLM-facing via MCP) ──────────────────────────
+	// Register the code-side definitions for dispatch and auto-seed
+	// one DB row per Key on first boot. The MCP server below is the
+	// runtime entry point for LLM clients.
+	connectorsSvc := connectors.NewServiceFromDB(db)
+	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
+		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
+	}
+
+	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
+	tokensSvc := accesstoken.NewServiceFromDB(db)
+	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
+
+	// ── OAuth 2.1 server (issues bearer tokens for MCP) ──────────
+	// Issuer is the live app_url; the handler refreshes it from
+	// configs.Service on every request, so admin URL edits take
+	// effect without a restart.
+	oauthSvc := oauth.NewServiceFromDB(db, configsSvc.AppURL())
+	oauthHandler := oauth.NewHandler(oauthSvc, configsSvc)
+
+	// ── MCP server (JSON-RPC over /mcp) ──────────────────────────
+	// Bearer auth in front, connector dispatch behind. PAT and
+	// OAuth-issued tokens both flow through the same middleware —
+	// dispatch by prefix.
+	mcpHandler := mcp.NewHandler(connectorsSvc)
+	mcpAuth := mcp.NewAuthMiddleware(
+		tokensSvc,
+		authSvc,
+		oauthSvc,
+		strings.TrimRight(configsSvc.AppURL(), "/")+"/.well-known/oauth-protected-resource",
+	)
+
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to.
 	var allItems []tool.Tool
@@ -136,7 +180,8 @@ func NewServer() *Server {
 	}
 	tr.mount(toolsMux)
 
-	managerHandler := manager.NewHandler(jobsSvc, configsSvc, allItems)
+	tagsSvc := tags.NewService(db)
+	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
 
 	// jobrunnerHandler exposes /jobs/{key} — the operator surface with
 	// a Run Now button and run history. Admin-only settings stay on
@@ -159,11 +204,26 @@ func NewServer() *Server {
 		})
 	}
 
+	// Register connectors as items. One module = one card; the card
+	// links to the manager list page where users see N rows for that
+	// definition (one per credential set), each with a test panel and
+	// enable/disable/duplicate actions.
+	for _, cm := range connectors.All() {
+		m := cm.Meta
+		allItems = append(allItems, tool.Tool{
+			Name:              m.Name,
+			Description:       m.Description,
+			Icon:              m.Icon,
+			Path:              "/manager/connectors/" + m.Key,
+			Category:          "connector",
+			DefaultVisibility: entity.VisibilityPrivate,
+		})
+	}
+
 	// ── Admin ────────────────────────────────────────────────────
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc)
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc)
 
 	// ── Shared services ─────────────────────────────────────────
-	tagsSvc := tags.NewService(db)
 	bookmarkSvc := bookmark.NewService(db)
 	bookmarkHandler := bookmark.NewHandler(bookmarkSvc)
 
@@ -175,6 +235,12 @@ func NewServer() *Server {
 		if err := tagsSvc.EnsureToolDefaultTags(context.Background(), t.Path, t.DefaultTags); err != nil {
 			log.Error().Msgf("seed default tags for %s: %s", t.Path, err.Error())
 		}
+	}
+	// Backfill System tags for existing admins. New admins get the
+	// sync inline via admin.Repo.SetRole; this catches admins that
+	// pre-date a newly-introduced System tag.
+	if err := tagsSvc.SyncSystemTagsForAllAdmins(context.Background()); err != nil {
+		log.Error().Msgf("backfill system tags for admins: %s", err.Error())
 	}
 
 	// ── Home ─────────────────────────────────────────────────────
@@ -195,6 +261,9 @@ func NewServer() *Server {
 	// Admin module static assets (tag picker etc.)
 	r.Handle("GET /modules/admin/", ui.StaticHandler("/modules/admin/", admin.StaticFS))
 
+	// MCP access page static assets (copy buttons, create-form toggle)
+	r.Handle("GET /modules/accesstoken/", ui.StaticHandler("/modules/accesstoken/", accesstoken.StaticFS))
+
 	// Auth routes: /auth/login, /auth/callback, /auth/logout, /auth/pending
 	authHandler.Register(r, authMidd)
 
@@ -203,6 +272,20 @@ func NewServer() *Server {
 
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
+
+	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
+	tokensHandler.Register(r, authMidd)
+
+	// MCP JSON-RPC endpoint. Bearer-authed (PAT or OAuth access
+	// token). Mounted on the cookie-bypass mux because LLM clients
+	// carry a bearer header, not a session cookie — RequireAuth would
+	// 302 them into /auth/login which they can't follow.
+	r.Handle("POST /mcp", mcpAuth.Wrap(mcpHandler))
+
+	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
+	// authorize, token} (public) + /profile/connections (auth-gated
+	// inside, per-user grant dashboard).
+	oauthHandler.Register(r, authMidd)
 
 	// Manager (admin settings) + jobrunner (operator surface) routes.
 	// The two share manager.Service so run history and banners stay in
