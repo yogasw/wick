@@ -21,11 +21,13 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -94,6 +96,31 @@ func RegisterJobNoConfig(meta job.Meta, run job.RunFunc) {
 	jobs.Register(job.Module{
 		Meta: meta,
 		Run:  run,
+	})
+}
+
+// RegisterConnector adds a connector definition to the registry. One
+// call = one Go module wired up to wick's MCP layer; per-instance rows
+// (credentials, labels, tags) are created later from the admin UI and
+// stored in the connector_instances table.
+//
+//	app.RegisterConnector(
+//	    loki.Meta(),
+//	    loki.Creds{},        // typed credential struct, reflected for the form
+//	    loki.Operations(),   // []connector.Operation, one per LLM-callable action
+//	)
+//
+// creds is a typed struct whose exported fields carry `wick:"..."` tags
+// and represent per-instance credential / endpoint values shared across
+// every operation of this connector. ops is the list of named actions
+// (one MCP tool per op per instance); each carries its own input schema
+// and ExecuteFunc. Pass an empty struct{}{} for creds when the
+// connector has no credentials.
+func RegisterConnector[C any](meta connector.Meta, creds C, ops []connector.Operation) {
+	connectors.Register(connector.Module{
+		Meta:       meta,
+		Configs:    entity.StructToConfigs(creds),
+		Operations: ops,
 	})
 }
 

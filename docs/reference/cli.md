@@ -24,7 +24,7 @@ wick init my-app
 wick init my-app --skip-setup   # skip "go mod tidy" and "wick setup"
 ```
 
-Copies the bundled template (tools, jobs, tags, `wick.yml`, `AGENTS.md`, example tool and job) and the shared `design-system` skill into `./.claude/skills/design-system/`.
+Copies the bundled template — tools, jobs, connectors, tags, `wick.yml`, `AGENTS.md`, example tool, example job, and the example [`crudcrud` connector](../guide/connector-module) — plus the bundled skills (`tool-module`, `connector-module`, `design-system`) into `./.claude/skills/`.
 
 ---
 
@@ -47,6 +47,7 @@ List the AI agent skills bundled with the installed wick binary.
 
 ```bash
 $ wick skill list
+connector-module
 tool-module
 design-system
 ```
@@ -58,9 +59,9 @@ design-system
 Replace `./.claude/skills/<name>/` with the bundled version. Use this after upgrading wick to pull in updated skill content.
 
 ```bash
-wick skill sync                       # sync all bundled skills
-wick skill sync design-system         # sync one
-wick skill sync tool-module design-system
+wick skill sync                                # sync all bundled skills
+wick skill sync design-system                  # sync one
+wick skill sync tool-module connector-module   # sync several
 ```
 
 Side effects on `./AGENTS.md`:

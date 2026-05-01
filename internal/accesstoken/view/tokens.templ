@@ -1,0 +1,189 @@
+package view
+
+import (
+	"fmt"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// TokensPageData carries everything the access-tokens page needs.
+//
+// JustIssued is non-empty only on the synchronous response to a
+// successful create — the plaintext token is rendered once, then
+// discarded. Subsequent loads of /profile/tokens never see it.
+type TokensPageData struct {
+	User         *entity.User
+	Tokens       []entity.PersonalAccessToken
+	JustIssued   string
+	JustIssuedID string
+	ErrMsg       string
+}
+
+templ TokensPage(data TokensPageData) {
+	@ui.ProfileLayout("Access Tokens", ui.ProfileTabTokens, data.User) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Access Tokens</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+				Generate bearer tokens for MCP clients, scripts, or any wick API call. Treat each token like a password.
+			</p>
+			if data.ErrMsg != "" {
+				<div class="mt-6 rounded-lg border border-neg-200 bg-neg-100 px-4 py-3 text-sm text-neg-400">
+					{ data.ErrMsg }
+				</div>
+			}
+			if data.JustIssued != "" {
+				@JustIssuedBanner(data.JustIssued)
+			}
+			@tokensCard(data.Tokens, data.JustIssuedID)
+		</main>
+		<script src="/modules/accesstoken/js/mcp.js"></script>
+	}
+}
+
+// JustIssuedBanner is the green callout shown once after a successful
+// token creation. The plaintext is unrecoverable from this point on.
+templ JustIssuedBanner(token string) {
+	<div class="mt-6 rounded-xl border border-pos-200 bg-pos-100 p-5">
+		<div class="flex items-start gap-3">
+			<svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-pos-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+			</svg>
+			<div class="flex-1 min-w-0">
+				<p class="text-sm font-medium text-pos-400">Token created — copy it now</p>
+				<p class="mt-1 text-xs text-black-800 dark:text-black-600">
+					This is the only time the full token will be shown. Store it somewhere safe; if you lose it, generate a new one.
+				</p>
+				<div class="mt-3 flex items-center gap-2">
+					<code data-token-value class="flex-1 truncate rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100">
+						{ token }
+					</code>
+					<button
+						type="button"
+						data-copy-token
+						class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 transition-colors hover:bg-green-600"
+					>
+						Copy
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+templ tokensCard(tokens []entity.PersonalAccessToken, justIssuedID string) {
+	<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Personal access tokens</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Active tokens linked to your account.
+				</p>
+			</div>
+			<button
+				type="button"
+				data-open-create
+				class="flex-shrink-0 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 transition-colors hover:bg-green-600"
+			>
+				Create token
+			</button>
+		</div>
+		<form
+			data-create-form
+			action="/profile/tokens"
+			method="POST"
+			class="mt-5 hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4"
+		>
+			<label for="token_name" class="text-sm font-medium text-black-900 dark:text-white-100">
+				Token name
+			</label>
+			<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+				A label to recognize this token in the list. Example: "Claude Desktop — laptop".
+			</p>
+			<div class="mt-3 flex items-center gap-2">
+				<input
+					id="token_name"
+					name="name"
+					type="text"
+					required
+					maxlength="120"
+					autocomplete="off"
+					placeholder="My MCP client"
+					class="flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+				/>
+				<button
+					type="submit"
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 transition-colors hover:bg-green-600"
+				>
+					Generate
+				</button>
+				<button
+					type="button"
+					data-cancel-create
+					class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-sm text-black-800 dark:text-black-600 transition-colors hover:border-green-400"
+				>
+					Cancel
+				</button>
+			</div>
+		</form>
+		if len(tokens) == 0 {
+			<div class="mt-5 rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-4 py-10 text-center">
+				<p class="text-sm text-black-800 dark:text-black-600">No active tokens yet.</p>
+				<p class="mt-1 text-xs text-black-700">Click <span class="font-medium">Create token</span> to generate one.</p>
+			</div>
+		} else {
+			<div class="mt-5 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
+				<table class="w-full text-left text-sm">
+					<thead class="bg-white-200 dark:bg-navy-800 text-xs uppercase tracking-wide text-black-700 dark:text-black-600">
+						<tr>
+							<th class="px-4 py-2.5 font-medium">Name</th>
+							<th class="px-4 py-2.5 font-medium">Token</th>
+							<th class="px-4 py-2.5 font-medium">Created</th>
+							<th class="px-4 py-2.5 font-medium">Last used</th>
+							<th class="px-4 py-2.5"></th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-white-300 dark:divide-navy-600">
+						for _, t := range tokens {
+							@tokenRow(t, t.ID == justIssuedID)
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
+templ tokenRow(t entity.PersonalAccessToken, highlight bool) {
+	<tr class={ "transition-colors", templ.KV("bg-pos-100/40", highlight) }>
+		<td class="px-4 py-3 text-black-900 dark:text-white-100">{ t.Name }</td>
+		<td class="px-4 py-3">
+			<code class="rounded bg-white-200 dark:bg-navy-800 px-2 py-1 font-mono text-xs text-black-700 dark:text-black-600">
+				{ t.Masked() }
+			</code>
+		</td>
+		<td class="px-4 py-3 text-black-700 dark:text-black-600">
+			{ t.CreatedAt.Format("Jan 2, 2006") }
+		</td>
+		<td class="px-4 py-3 text-black-700 dark:text-black-600">
+			if t.LastUsedAt != nil {
+				{ t.LastUsedAt.Format("Jan 2, 2006 15:04") }
+			} else {
+				Never
+			}
+		</td>
+		<td class="px-4 py-3 text-right">
+			<form action={ templ.URL(fmt.Sprintf("/profile/tokens/%s/revoke", t.ID)) } method="POST" onsubmit="return confirm('Revoke this token? Clients using it will stop working immediately.');">
+				<button
+					type="submit"
+					aria-label="Revoke token"
+					class="rounded-lg p-1.5 text-black-700 dark:text-black-600 transition-colors hover:bg-neg-100 hover:text-neg-400"
+				>
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"/>
+					</svg>
+				</button>
+			</form>
+		</td>
+	</tr>
+}

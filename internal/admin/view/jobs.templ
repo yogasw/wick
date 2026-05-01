@@ -53,31 +53,48 @@ templ adminJobRow(row JobRow, tagsJSON string) {
 			</div>
 		</td>
 		<td class="px-4 py-3 align-top">
-			<form action={ templ.SafeURL("/admin/jobs/" + row.Job.Key + "/disabled") } method="POST" class="flex items-center gap-2">
-				if row.Disabled {
-					<span class="inline-flex items-center rounded-full bg-neg-100 px-2.5 py-0.5 text-xs font-medium text-neg-400">Hidden</span>
-					<input type="hidden" name="disabled" value="false"/>
-					<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Show</button>
-				} else {
+			if row.IsSystem {
+				<div class="flex items-center gap-2">
 					@managerview.JobStatusBadge(row.Job.LastStatus, row.Job.Enabled)
-					<input type="hidden" name="disabled" value="true"/>
-					<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Hide</button>
-				}
-			</form>
+					<span class="text-[10px] italic text-black-700 dark:text-black-600">code-managed</span>
+				</div>
+			} else {
+				<form action={ templ.SafeURL("/admin/jobs/" + row.Job.Key + "/disabled") } method="POST" class="flex items-center gap-2">
+					if row.Disabled {
+						<span class="inline-flex items-center rounded-full bg-neg-100 px-2.5 py-0.5 text-xs font-medium text-neg-400">Hidden</span>
+						<input type="hidden" name="disabled" value="false"/>
+						<button type="submit" class="text-xs font-medium text-green-600 hover:underline">Show</button>
+					} else {
+						@managerview.JobStatusBadge(row.Job.LastStatus, row.Job.Enabled)
+						<input type="hidden" name="disabled" value="true"/>
+						<button type="submit" class="text-xs font-medium text-neg-400 hover:underline">Hide</button>
+					}
+				</form>
+			}
 		</td>
 		<td class="px-4 py-3 align-top">
-			<form action={ templ.SafeURL("/admin/jobs/" + row.Job.Key + "/tags") } method="POST" class="flex items-start gap-2">
+			if row.IsSystem {
 				<div
 					class="tag-picker w-64"
 					data-tags={ tagsJSON }
 					data-selected={ strings.Join(row.TagIDs, ",") }
-					data-can-create="true"
-					data-disabled?={ row.Disabled }
+					data-can-create="false"
+					data-disabled="true"
 				></div>
-				if !row.Disabled {
-					<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
-				}
-			</form>
+			} else {
+				<form action={ templ.SafeURL("/admin/jobs/" + row.Job.Key + "/tags") } method="POST" class="flex items-start gap-2">
+					<div
+						class="tag-picker w-64"
+						data-tags={ tagsJSON }
+						data-selected={ strings.Join(row.TagIDs, ",") }
+						data-can-create="true"
+						data-disabled?={ row.Disabled }
+					></div>
+					if !row.Disabled {
+						<button type="submit" class="mt-1 text-xs font-medium text-green-600 hover:underline">Save</button>
+					}
+				</form>
+			}
 		</td>
 		<td class="px-4 py-3 text-right align-top">
 			<div class="flex items-center justify-end gap-2">

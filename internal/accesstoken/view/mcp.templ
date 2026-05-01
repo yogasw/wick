@@ -1,0 +1,187 @@
+package view
+
+import (
+	"fmt"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// MCPPageData carries everything the MCP page needs.
+//
+// HasTokens controls whether the bearer-token snippets are presented
+// as ready-to-use or paired with a callout pointing the user back to
+// /profile/tokens to mint one first. Claude.ai's OAuth flow doesn't
+// need a PAT, so the OAuth section renders the same either way.
+type MCPPageData struct {
+	User        *entity.User
+	EndpointURL string
+	HasTokens   bool
+}
+
+templ MCPPage(data MCPPageData) {
+	@ui.ProfileLayout("MCP", ui.ProfileTabMCP, data.User) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">MCP</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+				Wick exposes connectors over the Model Context Protocol. Two ways to authenticate — pick whichever your client supports.
+			</p>
+			@endpointCard(data.EndpointURL)
+			@oauthCard()
+			@bearerCard(data.EndpointURL, data.HasTokens)
+		</main>
+		<script src="/modules/accesstoken/js/mcp.js"></script>
+	}
+}
+
+templ endpointCard(url string) {
+	<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<h2 class="text-base font-semibold text-black-900 dark:text-white-100">MCP Endpoint</h2>
+		<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+			This is the URL every MCP client needs. Both auth modes below use it.
+		</p>
+		<div class="mt-4 flex items-center gap-2">
+			<code data-endpoint-value class="flex-1 truncate rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100">
+				{ url }
+			</code>
+			<button
+				type="button"
+				data-copy-endpoint
+				class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs font-medium text-black-900 dark:text-white-100 transition-colors hover:border-green-400"
+			>
+				Copy
+			</button>
+		</div>
+	</div>
+}
+
+// oauthCard documents the OAuth-discovery path used by Claude.ai web
+// and any other client that follows the MCP authorization spec —
+// users paste the endpoint URL and let the client trigger the OAuth
+// dance automatically.
+templ oauthCard() {
+	<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<div class="flex items-start gap-3">
+			<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 text-lg">
+				🔐
+			</div>
+			<div class="flex-1 min-w-0">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Claude.ai &amp; OAuth-aware clients</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Just paste the endpoint URL — no token needed. The client discovers wick's OAuth server automatically.
+				</p>
+			</div>
+		</div>
+		<ol class="mt-5 space-y-2.5 text-sm text-black-900 dark:text-white-100 list-decimal list-inside">
+			<li>In Claude.ai, go to <span class="font-medium">Settings → Integrations → Add custom MCP server</span>.</li>
+			<li>Paste the endpoint URL above.</li>
+			<li>Claude redirects you to wick — log in if needed, then click <span class="font-medium">Approve</span>.</li>
+			<li>Connectors you have access to appear as Claude tools.</li>
+		</ol>
+		<div class="mt-5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">
+			<p class="text-sm text-black-800 dark:text-black-600">
+				Manage approved apps at
+				<a href="/profile/connections" class="font-medium text-green-600 dark:text-green-400 hover:underline">Connected Apps →</a>
+			</p>
+		</div>
+	</div>
+}
+
+// bearerCard documents the static-bearer path used by clients that
+// don't speak OAuth (Claude Desktop, Cursor, VSCode plugins, custom
+// CLIs). Each client gets a copy-paste config snippet referencing a
+// Personal Access Token.
+templ bearerCard(endpoint string, hasTokens bool) {
+	<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<div class="flex items-start gap-3">
+			<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 text-lg">
+				🔑
+			</div>
+			<div class="flex-1 min-w-0">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Claude Desktop, Cursor, VSCode</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Clients that don't auto-OAuth read a static <span class="font-mono text-xs">Authorization: Bearer</span> header from their config file.
+				</p>
+			</div>
+		</div>
+		if !hasTokens {
+			<div class="mt-5 rounded-lg border border-prog-200 bg-prog-100 px-4 py-3">
+				<p class="text-sm text-prog-400">
+					You don't have any access tokens yet.
+					<a href="/profile/tokens" class="font-medium underline hover:no-underline">Generate one →</a>
+				</p>
+			</div>
+		} else {
+			<p class="mt-5 text-sm text-black-800 dark:text-black-600">
+				Replace <code class="rounded bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 font-mono text-xs">YOUR_TOKEN</code> with a token from
+				<a href="/profile/tokens" class="font-medium text-green-600 dark:text-green-400 hover:underline">Access Tokens</a>.
+			</p>
+		}
+		<div class="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
+			@snippetBlock(
+				"Claude Desktop",
+				"Edit ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %APPDATA%\\Claude\\claude_desktop_config.json (Windows). Restart Claude after saving.",
+				fmt.Sprintf(`{
+  "mcpServers": {
+    "wick": {
+      "url": %q,
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}`, endpoint),
+			)
+			@snippetBlock(
+				"Cursor",
+				"Add to ~/.cursor/mcp.json (or the workspace-level .cursor/mcp.json).",
+				fmt.Sprintf(`{
+  "mcpServers": {
+    "wick": {
+      "url": %q,
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}`, endpoint),
+			)
+			@snippetBlock(
+				"VSCode (Cline / Continue)",
+				"Open the extension settings and add a new MCP server entry.",
+				fmt.Sprintf(`{
+  "name": "wick",
+  "url": %q,
+  "headers": {
+    "Authorization": "Bearer YOUR_TOKEN"
+  }
+}`, endpoint),
+			)
+			@snippetBlock(
+				"cURL (smoke test)",
+				"Verify the endpoint is reachable and the token is accepted.",
+				fmt.Sprintf(`curl -X POST %q \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`, endpoint),
+			)
+		</div>
+	</div>
+}
+
+templ snippetBlock(title, hint, code string) {
+	<div>
+		<h3 class="text-sm font-medium text-black-900 dark:text-white-100">{ title }</h3>
+		<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{ hint }</p>
+		<div class="relative mt-2">
+			<pre class="overflow-x-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 pr-12 font-mono text-xs leading-relaxed text-black-900 dark:text-white-100"><code data-snippet>{ code }</code></pre>
+			<button
+				type="button"
+				data-copy-snippet
+				class="absolute right-2 top-2 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs font-medium text-black-800 dark:text-black-600 transition-colors hover:border-green-400"
+			>
+				Copy
+			</button>
+		</div>
+	</div>
+}
