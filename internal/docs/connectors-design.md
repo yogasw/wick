@@ -4,7 +4,8 @@ Status: implemented (modul + persistence + MCP JSON-RPC meta-tool pattern
 + auth dual-mode PAT & OAuth 2.1 + per-user grant management + admin UI:
 list/detail row CRUD, dedicated test page, dedicated history page dgn
 filter URL-driven, admin overview pages utk connector instance, access
-token, connected app cross-user).
+token, connected app cross-user, admin dashboard split Modules vs Access
+stats + nav grouping ke Access/Setup dropdown).
 Update terakhir: 2026-05-01.
 
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
@@ -509,6 +510,38 @@ area (sec. 6.4) — admin-only, bypass tag filter, lihat semua user.
 Surface ini admin-override; gak ada konfirmasi dari token/grant owner.
 Audit trail per call masih di `connector_runs` (sec. 5.3) — tab ini
 cuma manage-state, bukan log.
+
+### 6.6 Admin dashboard + nav grouping *(implemented)*
+
+`/admin` dashboard ([internal/admin/view/dashboard.templ] +
+[internal/admin/handler.go]) split jadi 2 stat group biar Modules
+(execution health) ga ke-mix sama Access (auth surface):
+
+```
+Modules : Tools · Jobs · Enabled · Running · Configs · Missing
+Access  : Connectors · Access Tokens · Connected Apps   (clickable cards)
+```
+
+Stats dihitung per render dari `connectors.List`,
+`tokens.ListAllActive`, `oauth.ListAllGrants`. Connector card carry
+hint kecil (`X disabled` / `all enabled`) — quick health glance tanpa
+buka /admin/connectors.
+
+Nav strip ([internal/admin/view/layout.templ]) di-grouping jadi 7
+slot biar muat di header tanpa wrap:
+
+```
+Dashboard · Users · Tools · Jobs · Connectors · Access ▾ · Setup ▾
+                                                  │         │
+                                                  │         └─ Configs · Tags
+                                                  └─ Access Tokens · Connected Apps
+```
+
+Dropdown pakai `<details>/<summary>` (pattern sama dgn `UserMenu` di
+`internal/pkg/ui/nav.templ`) — zero JS, summary highlight kalau child
+aktif. Connectors sengaja dipertahankan top-level krn frequently
+visited; auth surface (token + grant) dilipat ke Access dropdown krn
+admin jarang nyentuh setelah onboarding.
 
 ---
 

@@ -156,13 +156,27 @@ func (h *Handler) dashboardPage(w http.ResponseWriter, r *http.Request) {
 
 	totalConfigs, missingTotal, entries := h.gatherMissing(ctx, jobs)
 
+	conns, _ := h.connectors.List(ctx)
+	disabledConns := 0
+	for _, c := range conns {
+		if c.Disabled {
+			disabledConns++
+		}
+	}
+	tokens, _ := h.tokens.ListAllActive(ctx)
+	grants, _ := h.oauth.ListAllGrants(ctx)
+
 	stats := view.DashboardStats{
-		TotalJobs:      len(jobs),
-		EnabledJobs:    enabled,
-		RunningJobs:    running,
-		TotalTools:     h.countTools(),
-		TotalConfigs:   totalConfigs,
-		MissingConfigs: missingTotal,
+		TotalJobs:          len(jobs),
+		EnabledJobs:        enabled,
+		RunningJobs:        running,
+		TotalTools:         h.countTools(),
+		TotalConfigs:       totalConfigs,
+		MissingConfigs:     missingTotal,
+		TotalConnectors:    len(conns),
+		DisabledConnectors: disabledConns,
+		ActiveTokens:       len(tokens),
+		ConnectedApps:      len(grants),
 	}
 	view.DashboardPage(stats, entries, user).Render(ctx, w)
 }
