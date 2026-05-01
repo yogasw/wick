@@ -1166,10 +1166,10 @@ textarea, input, select {
   margin-bottom: calc(0.375rem * var(--tw-space-y-reverse));
 }
 
-.space-y-2 > :not([hidden]) ~ :not([hidden]) {
+.space-y-2\.5 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-y-reverse: 0;
-  margin-top: calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));
-  margin-bottom: calc(0.5rem * var(--tw-space-y-reverse));
+  margin-top: calc(0.625rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.625rem * var(--tw-space-y-reverse));
 }
 
 .space-y-3 > :not([hidden]) ~ :not([hidden]) {
@@ -1395,10 +1395,6 @@ textarea, input, select {
 .bg-white-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(var(--color-white-100) / var(--tw-bg-opacity, 1));
-}
-
-.bg-white-100\/40 {
-  background-color: rgb(var(--color-white-100) / 0.4);
 }
 
 .bg-white-200 {
@@ -2334,10 +2330,6 @@ textarea, input, select {
 .dark\:bg-navy-800:is(.dark *) {
   --tw-bg-opacity: 1;
   background-color: rgb(var(--color-navy-800) / var(--tw-bg-opacity, 1));
-}
-
-.dark\:bg-navy-800\/30:is(.dark *) {
-  background-color: rgb(var(--color-navy-800) / 0.3);
 }
 
 .dark\:text-black-600:is(.dark *) {

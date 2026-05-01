@@ -17,9 +17,10 @@ import (
 
 // MCPPageData carries everything the MCP page needs.
 //
-// HasTokens controls whether the install snippets are presented as
-// ready-to-use or paired with a callout pointing the user back to
-// /profile/tokens to mint one first.
+// HasTokens controls whether the bearer-token snippets are presented
+// as ready-to-use or paired with a callout pointing the user back to
+// /profile/tokens to mint one first. Claude.ai's OAuth flow doesn't
+// need a PAT, so the OAuth section renders the same either way.
 type MCPPageData struct {
 	User        *entity.User
 	EndpointURL string
@@ -59,17 +60,7 @@ func MCPPage(data MCPPageData) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto w-full max-w-container px-6 py-8\"><h1 class=\"text-[1.375rem] font-semibold text-black-900 dark:text-white-100\">MCP</h1><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Wick exposes connectors over the Model Context Protocol. Point your MCP-aware client (Claude Desktop, Cursor, custom agent) at the endpoint below and authenticate with an access token.</p>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			if !data.HasTokens {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<div class=\"mt-6 rounded-lg border border-prog-200 bg-prog-100 px-4 py-3\"><p class=\"text-sm text-prog-400\">You don't have any access tokens yet. <a href=\"/profile/tokens\" class=\"font-medium underline hover:no-underline\">Generate one →</a></p></div>")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<div class=\"mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto w-full max-w-container px-6 py-8\"><h1 class=\"text-[1.375rem] font-semibold text-black-900 dark:text-white-100\">MCP</h1><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Wick exposes connectors over the Model Context Protocol. Two ways to authenticate — pick whichever your client supports.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -77,19 +68,15 @@ func MCPPage(data MCPPageData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = quickInstallHint().Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = oauthCard().Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</div>")
+			templ_7745c5c3_Err = bearerCard(data.EndpointURL, data.HasTokens).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = installCard(data.EndpointURL).Render(ctx, templ_7745c5c3_Buffer)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</main><script src=\"/modules/accesstoken/js/mcp.js\"></script>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</main><script src=\"/modules/accesstoken/js/mcp.js\"></script>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -124,20 +111,20 @@ func endpointCard(url string) templ.Component {
 			templ_7745c5c3_Var3 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<div class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">MCP Endpoint</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">This is the URL your MCP client should call.</p><div class=\"mt-4 flex items-center gap-2\"><code data-endpoint-value class=\"flex-1 truncate rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<div class=\"mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">MCP Endpoint</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">This is the URL every MCP client needs. Both auth modes below use it.</p><div class=\"mt-4 flex items-center gap-2\"><code data-endpoint-value class=\"flex-1 truncate rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(url)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 54, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 45, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</code> <button type=\"button\" data-copy-endpoint class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs font-medium text-black-900 dark:text-white-100 transition-colors hover:border-green-400\">Copy</button></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</code> <button type=\"button\" data-copy-endpoint class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs font-medium text-black-900 dark:text-white-100 transition-colors hover:border-green-400\">Copy</button></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -145,7 +132,11 @@ func endpointCard(url string) templ.Component {
 	})
 }
 
-func quickInstallHint() templ.Component {
+// oauthCard documents the OAuth-discovery path used by Claude.ai web
+// and any other client that follows the MCP authorization spec —
+// users paste the endpoint URL and let the client trigger the OAuth
+// dance automatically.
+func oauthCard() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -166,7 +157,7 @@ func quickInstallHint() templ.Component {
 			templ_7745c5c3_Var5 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<div class=\"rounded-xl border border-dashed border-white-400 dark:border-navy-600 bg-white-100/40 dark:bg-navy-800/30 p-6\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">How it works</h2><ol class=\"mt-3 space-y-2 text-sm text-black-800 dark:text-black-600 list-decimal list-inside\"><li>Generate an <a href=\"/profile/tokens\" class=\"font-medium text-green-600 dark:text-green-400 hover:underline\">access token</a>.</li><li>Copy the snippet for your client below.</li><li>Replace <code class=\"rounded bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 font-mono text-xs\">YOUR_TOKEN</code> and paste into the client's config.</li><li>Restart the client — wick connectors appear as MCP tools.</li></ol></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<div class=\"mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><div class=\"flex items-start gap-3\"><div class=\"flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 text-lg\">🔐</div><div class=\"flex-1 min-w-0\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Claude.ai &amp; OAuth-aware clients</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Just paste the endpoint URL — no token needed. The client discovers wick's OAuth server automatically.</p></div></div><ol class=\"mt-5 space-y-2.5 text-sm text-black-900 dark:text-white-100 list-decimal list-inside\"><li>In Claude.ai, go to <span class=\"font-medium\">Settings → Integrations → Add custom MCP server</span>.</li><li>Paste the endpoint URL above.</li><li>Claude redirects you to wick — log in if needed, then click <span class=\"font-medium\">Approve</span>.</li><li>Connectors you have access to appear as Claude tools.</li></ol><div class=\"mt-5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3\"><p class=\"text-sm text-black-800 dark:text-black-600\">Manage approved apps at <a href=\"/profile/connections\" class=\"font-medium text-green-600 dark:text-green-400 hover:underline\">Connected Apps →</a></p></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -174,7 +165,11 @@ func quickInstallHint() templ.Component {
 	})
 }
 
-func installCard(endpoint string) templ.Component {
+// bearerCard documents the static-bearer path used by clients that
+// don't speak OAuth (Claude Desktop, Cursor, VSCode plugins, custom
+// CLIs). Each client gets a copy-paste config snippet referencing a
+// Personal Access Token.
+func bearerCard(endpoint string, hasTokens bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -195,7 +190,22 @@ func installCard(endpoint string) templ.Component {
 			templ_7745c5c3_Var6 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<div class=\"mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Install</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Pick the snippet for your client.</p><div class=\"mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<div class=\"mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><div class=\"flex items-start gap-3\"><div class=\"flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 text-lg\">🔑</div><div class=\"flex-1 min-w-0\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Claude Desktop, Cursor, VSCode</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Clients that don't auto-OAuth read a static <span class=\"font-mono text-xs\">Authorization: Bearer</span> header from their config file.</p></div></div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if !hasTokens {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<div class=\"mt-5 rounded-lg border border-prog-200 bg-prog-100 px-4 py-3\"><p class=\"text-sm text-prog-400\">You don't have any access tokens yet. <a href=\"/profile/tokens\" class=\"font-medium underline hover:no-underline\">Generate one →</a></p></div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<p class=\"mt-5 text-sm text-black-800 dark:text-black-600\">Replace <code class=\"rounded bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 font-mono text-xs\">YOUR_TOKEN</code> with a token from <a href=\"/profile/tokens\" class=\"font-medium text-green-600 dark:text-green-400 hover:underline\">Access Tokens</a>.</p>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<div class=\"mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -294,7 +304,7 @@ func snippetBlock(title, hint, code string) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 139, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 174, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -307,7 +317,7 @@ func snippetBlock(title, hint, code string) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(hint)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 140, Col: 69}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 175, Col: 69}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -320,7 +330,7 @@ func snippetBlock(title, hint, code string) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(code)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 142, Col: 222}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 177, Col: 222}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
