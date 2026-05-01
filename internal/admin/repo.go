@@ -42,11 +42,19 @@ func (r *repo) SetApproved(ctx context.Context, userID string, approved bool) er
 		if err := tx.Model(&entity.User{}).Where("id = ?", userID).Update("approved", approved).Error; err != nil {
 			return err
 		}
-		// A revoked user must not keep tags — tags are only meaningful for approved users.
 		if !approved {
+			// A revoked user must not keep tags — tags are only meaningful
+			// for approved users. System tags will be re-synced from role
+			// on re-approve, so wiping them here is safe.
 			return tx.Where("user_id = ?", userID).Delete(&entity.UserTag{}).Error
 		}
-		return nil
+		// On approve: re-sync system tags to match current role. Fixes
+		// any drift introduced by an earlier revoke that wiped them.
+		var u entity.User
+		if err := tx.First(&u, "id = ?", userID).Error; err != nil {
+			return err
+		}
+		return syncSystemTagsForRole(tx, userID, u.Role)
 	})
 }
 
@@ -76,8 +84,40 @@ func (r *repo) SetRole(ctx context.Context, userID string, role entity.UserRole)
 				}
 			}
 		}
-		return tx.Model(&entity.User{}).Where("id = ?", userID).Update("role", role).Error
+		if err := tx.Model(&entity.User{}).Where("id = ?", userID).Update("role", role).Error; err != nil {
+			return err
+		}
+		return syncSystemTagsForRole(tx, userID, role)
 	})
+}
+
+// syncSystemTagsForRole keeps a user's System UserTag rows in lockstep
+// with their role. Admins carry every IsSystem tag (so they show up in
+// /manager/* surfaces gated by tag-filter); non-admins carry none.
+//
+// Called from SetRole inside the role-change transaction so a partial
+// promotion/demotion isn't possible.
+func syncSystemTagsForRole(tx *gorm.DB, userID string, role entity.UserRole) error {
+	var systemTagIDs []string
+	if err := tx.Model(&entity.Tag{}).Where("is_system = ?", true).
+		Pluck("id", &systemTagIDs).Error; err != nil {
+		return err
+	}
+	if len(systemTagIDs) == 0 {
+		return nil
+	}
+	if role == entity.RoleAdmin {
+		for _, id := range systemTagIDs {
+			link := entity.UserTag{UserID: userID, TagID: id}
+			if err := tx.Where("user_id = ? AND tag_id = ?", userID, id).
+				FirstOrCreate(&link).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return tx.Where("user_id = ? AND tag_id IN ?", userID, systemTagIDs).
+		Delete(&entity.UserTag{}).Error
 }
 
 // GetUserTagIDs returns the set of tag ids a user currently has.
@@ -96,6 +136,12 @@ func (r *repo) GetUserTagIDs(ctx context.Context, userID string) ([]string, erro
 // ErrUserNotApproved is returned when trying to assign tags to an unapproved user.
 var ErrUserNotApproved = errors.New("user must be approved before assigning tags")
 
+// ErrSystemTagAssignment is returned when an admin tries to attach a
+// tag flagged IsSystem to a user. System tags are code-owned and exist
+// solely to gate built-in maintenance items behind a tag no end user
+// can carry — see entity.Tag godoc.
+var ErrSystemTagAssignment = errors.New("system tags cannot be assigned to users")
+
 func (r *repo) SetUserTags(ctx context.Context, userID string, tagIDs []string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var u entity.User
@@ -105,14 +151,40 @@ func (r *repo) SetUserTags(ctx context.Context, userID string, tagIDs []string) 
 		if !u.Approved && len(tagIDs) > 0 {
 			return ErrUserNotApproved
 		}
-		if err := tx.Where("user_id = ?", userID).Delete(&entity.UserTag{}).Error; err != nil {
-			return err
-		}
+		// Reject the request outright if any of the requested tags is
+		// marked IsSystem. We check before mutating so a bad payload
+		// doesn't blank the user's tags as a side effect. System tags
+		// are managed exclusively by SetRole — this picker never sees
+		// them in the UI either (handler strips them).
+		cleaned := make([]string, 0, len(tagIDs))
 		for _, id := range tagIDs {
 			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
+			if id != "" {
+				cleaned = append(cleaned, id)
 			}
+		}
+		if len(cleaned) > 0 {
+			var systemHits int64
+			if err := tx.Model(&entity.Tag{}).
+				Where("id IN ? AND is_system = ?", cleaned, true).
+				Count(&systemHits).Error; err != nil {
+				return err
+			}
+			if systemHits > 0 {
+				return ErrSystemTagAssignment
+			}
+		}
+		// Wipe only non-system UserTag rows. Admin's auto-assigned
+		// System tags survive the picker rewrite — they're owned by
+		// SetRole, not this handler.
+		if err := tx.
+			Where(`user_id = ? AND tag_id NOT IN (
+				SELECT id FROM tags WHERE is_system = ?
+			)`, userID, true).
+			Delete(&entity.UserTag{}).Error; err != nil {
+			return err
+		}
+		for _, id := range cleaned {
 			if err := tx.Create(&entity.UserTag{UserID: userID, TagID: id}).Error; err != nil {
 				return err
 			}
@@ -209,6 +281,12 @@ func (r *repo) ListTags(ctx context.Context) ([]*entity.Tag, error) {
 // ErrTagNameTaken is returned when creating or renaming a tag to an existing name.
 var ErrTagNameTaken = errors.New("a tag with that name already exists")
 
+// ErrSystemTagImmutable is returned when an admin tries to edit, delete,
+// or otherwise mutate a Tag whose IsSystem flag is true. System tags are
+// owned by code (seeded via tool/job DefaultTags) and changing them from
+// the UI would desync the seed catalog from the DB.
+var ErrSystemTagImmutable = errors.New("system tags are read-only and cannot be modified")
+
 func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter bool) (*entity.Tag, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -230,11 +308,19 @@ func (r *repo) CreateTag(ctx context.Context, name string, isGroup, isFilter boo
 }
 
 // UpdateTag renames and/or updates metadata (description, is_group,
-// sort_order) in a single call. Pass the full desired state.
+// sort_order) in a single call. Pass the full desired state. Refuses to
+// touch tags flagged IsSystem — those are code-owned.
 func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, isGroup, isFilter bool, sortOrder int) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("tag name is required")
+	}
+	var current entity.Tag
+	if err := r.db.WithContext(ctx).First(&current, "id = ?", tagID).Error; err != nil {
+		return err
+	}
+	if current.IsSystem {
+		return ErrSystemTagImmutable
 	}
 	var clash entity.Tag
 	err := r.db.WithContext(ctx).Where("name = ? AND id <> ?", name, tagID).First(&clash).Error
@@ -256,8 +342,17 @@ func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, i
 }
 
 // DeleteTag removes a tag and all its associations (tool_tags, user_tags).
+// Refuses to delete tags flagged IsSystem — they are seeded from code at
+// every boot anyway, so deletion would resurrect them empty.
 func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current entity.Tag
+		if err := tx.First(&current, "id = ?", tagID).Error; err != nil {
+			return err
+		}
+		if current.IsSystem {
+			return ErrSystemTagImmutable
+		}
 		if err := tx.Where("tag_id = ?", tagID).Delete(&entity.ToolTag{}).Error; err != nil {
 			return err
 		}

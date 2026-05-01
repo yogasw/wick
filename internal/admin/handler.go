@@ -292,13 +292,23 @@ func (h *Handler) usersPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allTags, _ := h.repo.ListTags(r.Context())
+	// Strip System tags from the user picker — they're code-owned and
+	// rejected by SetUserTags. Other admin surfaces (tools, jobs,
+	// connectors) keep them so admins can still see them as labels.
+	pickerTags := make([]*entity.Tag, 0, len(allTags))
+	for _, t := range allTags {
+		if t.IsSystem {
+			continue
+		}
+		pickerTags = append(pickerTags, t)
+	}
 	adminCount, _ := h.repo.CountAdmins(r.Context())
 	items := make([]view.UserRow, len(users))
 	for i, u := range users {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
 		items[i] = view.UserRow{User: u, TagIDs: ids}
 	}
-	view.UsersPage(items, allTags, currentUser, int(adminCount)).Render(r.Context(), w)
+	view.UsersPage(items, pickerTags, currentUser, int(adminCount)).Render(r.Context(), w)
 }
 
 func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +395,7 @@ func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetUserTags(r.Context(), id, ids); err != nil {
-		if errors.Is(err, ErrUserNotApproved) {
+		if errors.Is(err, ErrUserNotApproved) || errors.Is(err, ErrSystemTagAssignment) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

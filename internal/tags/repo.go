@@ -79,3 +79,37 @@ func (r *repo) LinkToolTag(ctx context.Context, toolPath, tagID string) error {
 		Where("tool_path = ? AND tag_id = ?", toolPath, tagID).
 		FirstOrCreate(&link).Error
 }
+
+// SyncSystemTagsForAllAdmins ensures every admin user carries every
+// IsSystem tag. Idempotent — duplicate (user, tag) pairs are skipped
+// via FirstOrCreate. Called from boot to backfill admins that pre-date
+// the System-tag schema; per-user role changes after boot use the
+// inline sync in admin.Repo.SetRole.
+func (r *repo) SyncSystemTagsForAllAdmins(ctx context.Context) error {
+	var systemTagIDs []string
+	if err := r.db.WithContext(ctx).Model(&entity.Tag{}).
+		Where("is_system = ?", true).
+		Pluck("id", &systemTagIDs).Error; err != nil {
+		return err
+	}
+	if len(systemTagIDs) == 0 {
+		return nil
+	}
+	var adminIDs []string
+	if err := r.db.WithContext(ctx).Model(&entity.User{}).
+		Where("role = ?", entity.RoleAdmin).
+		Pluck("id", &adminIDs).Error; err != nil {
+		return err
+	}
+	for _, uid := range adminIDs {
+		for _, tid := range systemTagIDs {
+			link := entity.UserTag{UserID: uid, TagID: tid}
+			if err := r.db.WithContext(ctx).
+				Where("user_id = ? AND tag_id = ?", uid, tid).
+				FirstOrCreate(&link).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

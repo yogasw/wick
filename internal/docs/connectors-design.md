@@ -5,7 +5,8 @@ Status: implemented (modul + persistence + MCP JSON-RPC meta-tool pattern
 list/detail row CRUD, dedicated test page, dedicated history page dgn
 filter URL-driven, admin overview pages utk connector instance, access
 token, connected app cross-user, admin dashboard split Modules vs Access
-stats + nav grouping ke Access/Setup dropdown).
+stats + nav grouping ke Access/Setup dropdown + retention cleanup job
+`connector-runs-purge` di worker).
 Update terakhir: 2026-05-01.
 
 Dokumen ini mencatat desain **Connectors** — kelas modul ketiga di wick,
@@ -275,8 +276,10 @@ Index strategy (composite, tiap query yg dilayani):
 - `started_at` standalone → retention purge cheap range delete
 - `parent_run_id` → retry lineage trace
 
-Retention: `Service.PurgeOldRuns(retentionDays)`. Default 7 hari, di-jalanin
-cleanup job di phase berikutnya.
+Retention: `Service.PurgeOldRuns(retentionDays)` ✅ — di-jalanin tiap
+hari oleh job built-in `connector-runs-purge` (lihat sec 9 phase 8).
+Default retentionDays = 7, editable per-instance lewat
+`/manager/jobs/connector-runs-purge`.
 
 ### 5.4 Bootstrap (auto-seed 1 row)
 
@@ -870,10 +873,53 @@ revoke single PAT tanpa affect OAuth grants.
    - Retry button via `Service.Retry` masih outstanding — sekarang user
      copy request JSON manual + Run di test page.
 
-8. **Streaming + notification** *(opsional, low priority)*
-   - Stream SSE `GET /mcp` — buat long-running ops (> 5s).
-   - `notifications/tools/list_changed` — **tidak dibutuhkan** selama
-     meta-tool pattern dipakai; tool list selalu statis 4 entry.
+8. **Retention cleanup job** ✅
+   - `internal/jobs/connector-runs-purge/` — daily worker yg panggil
+     `connectors.Repo.PurgeRunsOlderThan(cutoff)`.
+   - Registered di `internal/pkg/worker/server.go` (bukan di
+     `connectors.RegisterBuiltins`) krn closure butuh `*gorm.DB` yg
+     baru ada setelah worker init DB.
+   - Default cron `0 3 * * *` (03:00 daily). Default `retention_days = 7`.
+     Keduanya editable per-instance dari `/manager/jobs/connector-runs-purge`
+     (admin only — lihat dibawah).
+   - **System-tagged + auto-enabled**:
+     - Carry `tags.System` (lihat `internal/tags/defaults.go`) dgn
+       flag combo `IsSystem=true, IsFilter=true, IsGroup=true`.
+     - `Meta.AutoEnable=true` → `manager.Service.Bootstrap` panggil
+       `repo.ForceEnable` tiap restart, jadi job selalu hidup tanpa
+       butuh admin klik "Enable" di UI.
+   - **System tag — access control mechanics:**
+     - `IsSystem=true` di tabel `tags` artinya tag code-owned. Tiga
+       enforcement lapis:
+       1. **Picker UI:** `/admin/users` strip System tag dari list
+          tag yg bisa di-pick (handler `usersPage`).
+       2. **Server guard:** `admin.Repo.SetUserTags` reject input
+          yg carry System tag → `ErrSystemTagAssignment` 400.
+       3. **Tag CRUD lock:** `admin.Repo.UpdateTag` /
+          `DeleteTag` reject System row → `ErrSystemTagImmutable`.
+          `/admin/tags` UI render System row sbg "Read-only ·
+          code-managed" tanpa tombol Edit/Delete.
+     - **Role auto-sync** di `admin.Repo.syncSystemTagsForRole`:
+       - Promote user → admin: `FirstOrCreate` UserTag utk tiap
+         System tag (idempotent, in-tx dgn role update).
+       - Demote admin → user: `Delete` semua System UserTag user itu.
+       - Re-approve user (`SetApproved(true)`): re-sync ke role
+         current — fix drift dari revoke yg wipe semua UserTag.
+     - **Boot backfill:** `tags.Service.SyncSystemTagsForAllAdmins`
+       di-call sekali di `internal/pkg/api/server.go` setelah
+       `EnsureToolDefaultTags` — admin yg pre-date introduction
+       System tag baru tetap dapet auto-link.
+     - **Picker preserve:** `SetUserTags` wipe clause
+       `WHERE tag_id NOT IN (SELECT id FROM tags WHERE is_system)`,
+       jadi admin yg edit tag-nya via `/admin/users` ga akan
+       kehilangan System tag (yg ga tampak di picker).
+     - **Tag-filter outcome:** `IsFilter=true` + cuma admin yg carry
+       tag → job hidden dari `/manager/jobs` utk non-admin (admin
+       lihat lewat tag dia carry sendiri, bukan via bypass-filter
+       global).
+     - Hasil: end user gak lihat & gak bisa enable/disable. Admin
+       boleh lihat & klik tapi role-nya cuma observe — job tetap
+       auto-enable on next restart kalau ke-disable.
 
 9. **Admin overview pages** ✅
    - `/admin/connectors` — list semua Connector row cross-Key, toggle
@@ -888,54 +934,176 @@ revoke single PAT tanpa affect OAuth grants.
      `oauth.Repo.ListAllGrants` (varian `ListGrantsByUser` tanpa
      filter user). Lihat sec. 6.5 buat detail.
 
-10. **Convenience** *(belakangan)*
-    - Cleanup job harian → `Service.PurgeOldRuns(retentionDays)` +
-      purge expired `oauth_authorization_codes` + `oauth_tokens`.
-    - Admin view `/admin/oauth-clients` — list registered DCR clients
-      + revoke (sekarang SQL only). Beda dgn /admin/connections yg
-      grant-centric: ini client-centric (1 row per `oauth_clients`).
-    - OAuth Token Revocation endpoint (RFC 7009) — `POST /oauth/revoke`
-      buat client revoke own token.
-    - Import OpenAPI / Postman collection buat scaffold stub Go
-      connector.
+10. **Outstanding polish** *(opsional)*
+    - **Retry button** di history page — `Service.Retry` udah ada,
+      tinggal wire UI. Skrg user copy request JSON manual + Run di
+      test page. Cheap, ~30 LOC handler + 1 button.
+    - Lain-lain → lihat sec 10b (parked future considerations).
 
 ---
 
-## 10. Pertanyaan terbuka
+## 10. Open questions
 
-- **Gaya transformasi response.** Operation return struct Go bertipe
-  (lalu wick `json.Marshal`), atau selalu return `map[string]any`?
-  Sekarang crudcrud pilot pakai `any` (mostly map) krn sandbox shape
-  user-defined. Connector domain-specific (Loki dst) bakal lebih
-  cocok struct bertipe. Konvensi belum final.
-- **Penyimpanan secret.** Encrypt field configs at rest di kolom
-  `connectors.configs`? Pakai envelope encryption, atau cukup
-  encryption di level DB? Konsisten dgn tabel `configs` lama. Sama
-  jg untuk `personal_access_tokens.token_hash` — sekarang cuma SHA-256
-  (irreversible), tapi `oauth_tokens` punya plaintext claim flow di
-  /token response yg secara teori bocor di log proxy.
-- **Visibility definisi.** Apakah ada definisi connector yg admin-only
-  (gak muncul di picker "+ New row" milik user)? Bisa di-gate lewat
-  Module-level tag mirip `DefaultTags` Tool. Belum implement krn UI
-  manage row sendiri belum ada.
-- **Rate limit.** Per user, per row, atau per connector? Client MCP
-  bisa cukup chatty. Belum implement — tergantung observe pattern
-  abuse di production.
-- ~~**Penamaan di MCP.**~~ *Resolved.* Diganti meta-tool pattern —
-  LLM tidak melihat nama per-connector di `tools/list`. Tool ID
-  `conn:{uuid}/{op_key}` tidak pernah bentrok dan tidak berubah saat
-  admin rename label.
-- **Reset configs saat duplicate — full vs partial.** Sekarang full
-  reset (`Configs = "{}"`). Field non-secret (URL endpoint) sering
-  reusable; cuma yg `secret` yg harus re-isi. Partial-reset lebih
-  ergonomis tapi butuh metadata `secret` konsisten di tag struct.
-- **Generic entity-tag.** `ToolTag` sekarang dipakai Tools, Jobs,
-  Connectors via path-prefix convention (`/tools/{key}`, `/jobs/{key}`,
-  `/connectors/{id}`). Layak di-rename jadi `EntityTag` dgn dedicated
-  `entity_path` / `entity_type`?
-- **OAuth audit trail.** `oauth_tokens.last_used_at` di-stamp tiap
-  validate, tapi gak ada per-call audit log (mirip `connector_runs`).
-  Cukup, atau perlu tabel `oauth_token_uses`?
+Tiap pertanyaan dibawah punya **Default skrg** + **Scenario revisit**
++ **Solusi calon**. Tujuannya: ga perlu re-evaluate dari nol tiap kali
+baca — cek scenario, kalau ke-trigger baru pikir solusi.
+
+### 10.1 Gaya transformasi response (struct vs `map[string]any`)
+
+- **Default skrg:** ExecuteFunc return `any`. Crudcrud pilot pakai
+  `map[string]any` krn sandbox shape user-defined.
+- **Scenario revisit:**
+  1. Connector domain-spesifik (Loki, GitHub) di-implement → tipe
+     response stabil → struct bertipe = JSON Schema otomatis ke
+     `wick_get`, IDE help, refactor-safe.
+  2. LLM sering salah parse field nama → struct + json tag eksplisit
+     ngilangin ambiguity.
+  3. Response upstream nested deep → user (LLM) ke-bingungan, tetep
+     mau struct yg di-flatten.
+- **Solusi calon:** struct bertipe per-operation, marshal ke JSON.
+  Retain `any` cuma untuk connector eksperimen / generic CRUD.
+- **Trade-off:** struct = type safety + dokumentasi otomatis;
+  `any` = fleksibel utk shape upstream yg variabel.
+
+### 10.2 Encrypt configs at rest
+
+- **Default skrg:** plaintext di `connectors.configs`. PAT dan OAuth
+  token sebenernya hash-only (SHA-256, irreversible) — cuma connector
+  configs yg plaintext. Konsisten dgn tabel `configs` lama.
+- **Scenario revisit:**
+  1. Compliance audit minta secret tidak boleh plaintext di DB.
+  2. DB backup di-share ke pihak yg ga seharusnya akses cred.
+  3. Incident: dev environment dump ke-share, ada credential leak.
+  4. Customer-hosted deploy minta encryption-at-rest.
+- **Solusi calon:** envelope encryption pakai master key dari env
+  (KMS-backed di prod). Wajib apply bareng tabel `configs` lama biar
+  konsisten — touching satu tanpa yg lain bingung-in operator.
+
+### 10.3 Visibility definisi (admin-only modules)
+
+- **Default skrg:** semua module visible ke semua user (yg di-grant
+  tag). Picker "+ New row" tampilin semua module.
+- **Scenario revisit:**
+  1. Module yg cuma admin yg boleh provision (mis. write akses ke
+     PII store, akses billing API).
+  2. List module ke-panjangan, user non-teknis bingung milih.
+  3. Multi-tenant: 1 wick instance dipakai banyak team, sebagian
+     module cuma utk team tertentu.
+- **Solusi calon:** Module-level `AdminOnly bool` di Meta, atau
+  `RequiredTags []string` (mirip `DefaultTags` Tool — module muncul
+  cuma kalau user carry tag X).
+
+### 10.4 Rate limit MCP call
+
+- **Default skrg:** ga ada rate limit. LLM bisa loop unbounded.
+- **Scenario revisit:**
+  1. Bill upstream tiba2 spike (Loki query, OpenAI proxy).
+  2. 1 user / 1 token mendominasi traffic, blok user lain dgn 429
+     cascade dari upstream.
+  3. Crash log "context deadline exceeded" mendadak banyak —
+     connector kena throttled upstream tanpa wick tau.
+  4. PAT bocor → attacker drain quota.
+- **Solusi calon:** token-bucket per (user_id, connector_id).
+  Limit eksposed via header `Retry-After`. Default generous (mis.
+  100 req/min/connector). Per-row override di tabel `connectors`.
+
+### 10.5 Reset configs duplicate — full vs partial
+
+- **Default skrg:** full reset → `Configs = "{}"`. Admin re-isi semua
+  field (termasuk endpoint URL yg biasanya reusable).
+- **Scenario revisit:**
+  1. Admin sering duplicate Loki Prod → Staging dan endpoint URL +
+     headers sama, cuma token beda. Repetitive isi URL ke-skip
+     karena lupa → row baru gak jalan.
+  2. Survey/feedback dari power user: "duplicate harusnya bawa
+     field non-secret".
+- **Solusi calon:** scan tag `wick:"...secret..."`, reset cuma field
+  yg `secret`. Prereq: semua connector author wajib mark `secret`
+  konsisten — kalau ada 1 yg lupa, partial-reset bocorin cred.
+
+### 10.6 Generic entity-tag (rename `ToolTag` → `EntityTag`)
+
+- **Default skrg:** `ToolTag` pakai path-prefix convention
+  (`/tools/{key}`, `/jobs/{key}`, `/connectors/{id}`). Kerja, tapi
+  nama tabel misleading — bukan cuma tool.
+- **Scenario revisit:**
+  1. Tipe entity ke-empat ditambah (mis. workflows, prompts) →
+     path-prefix hack mulai brittle, gampang typo path di handler.
+  2. Migrasi tag setup-helper kena bug krn `/tools/...` di-hardcode
+     di multiple tempat.
+  3. Onboarding kontributor baru sering bingung "kenapa connector
+     tag-nya di tabel `tool_tags`".
+- **Solusi calon:** rename tabel jadi `entity_tags` dgn kolom
+  `entity_type` (string, "tool"/"job"/"connector") + `entity_id`.
+  Migrasi straightforward (path → split jadi 2 field, drop "/").
+
+### 10.7 OAuth audit trail per call
+
+- **Default skrg:** `oauth_tokens.last_used_at` di-stamp tiap validate.
+  Per-call detail (operasi, IP, UA) ke-track di `connector_runs`,
+  tapi `connector_runs.user_id` cuma tau user — bukan token mana.
+- **Scenario revisit:**
+  1. Token leak suspected — perlu trace "request mana yg pakai
+     token X" buat ngerti scope of compromise.
+  2. Compliance: audit log per-token use, bukan cuma per user.
+  3. User punya N PAT (laptop, desktop, CI), pengen tau token mana
+     yg paling sering jalan / jarang dipake (auto-cleanup hint).
+- **Solusi calon:** kolom `auth_token_id` + `auth_token_kind` di
+  `connector_runs` (lebih hemat — gabung audit di satu tempat,
+  bukan tabel baru `oauth_token_uses`). Backfill = NULL aman.
+
+### 10.8 Resolved questions
+
+- ~~**Penamaan di MCP.**~~ Diganti meta-tool pattern — LLM tidak lihat
+  nama per-connector di `tools/list`. Tool ID `conn:{uuid}/{op_key}`
+  tidak pernah bentrok dan tidak berubah saat admin rename label.
+
+---
+
+## 10b. Future considerations (parked)
+
+Item dibawah pernah dipertimbangkan, ga di-build sampai trigger
+spesifik muncul. Ditulis disini biar ga lupa kontex aslinya.
+
+### 10b.1 `/admin/oauth-clients` page
+
+- **Apa:** admin UI list & revoke `oauth_clients` rows (DCR
+  registrations).
+- **Beda dgn `/admin/connections`:** connections grant-centric
+  (1 row per user × client yg punya active token); ini client-centric
+  (1 row per client itu sendiri, terlepas ada user yg approve).
+- **Trigger build:** spam DCR registrations dari client jahat /
+  orphan, audit minta visibility "siapa aja yg pernah register".
+- **Workaround skrg:** SQL langsung — `DELETE FROM oauth_clients
+  WHERE id = 'xxx'`. Cukup buat occasional cleanup.
+
+### 10b.2 `POST /oauth/revoke` (RFC 7009)
+
+- **Apa:** endpoint standar buat client revoke token-nya sendiri
+  programmatically.
+- **Trigger build:** Claude Desktop logout sekarang cuma hapus token
+  lokal, server-side row idup sampai TTL expire (30d). Kalau ada
+  permintaan "logout = bersih server-side" atau audit minta
+  zero-orphan-token policy, build ini.
+- **Workaround skrg:** user manual disconnect via /profile/connections,
+  atau tunggu TTL.
+
+### 10b.3 OpenAPI / Postman → scaffold importer
+
+- **Apa:** dev tool generate stub `internal/connectors/<name>/connector.go`
+  dari OpenAPI/Postman spec.
+- **Trigger build:** dev velocity bottleneck — onboarding connector
+  baru terlalu lama, atau library connector pengen scale ke 50+.
+- **Workaround skrg:** copy crudcrud dan edit by hand. Cukup utk <10
+  connector.
+
+### 10b.4 Streaming SSE `GET /mcp` (server→client)
+
+- **Apa:** push channel buat `notifications/*` JSON-RPC msg.
+- **Trigger build:** ada msg yg server perlu push tanpa client
+  request dulu. Skrg ga ada — `notifications/tools/list_changed`
+  ga relevan krn meta-tool bikin tool list selalu statis 4 entry.
+- **Workaround skrg:** N/A — ga ada use case.
 
 ---
 

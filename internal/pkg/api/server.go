@@ -229,6 +229,12 @@ func NewServer() *Server {
 			log.Error().Msgf("seed default tags for %s: %s", t.Path, err.Error())
 		}
 	}
+	// Backfill System tags for existing admins. New admins get the
+	// sync inline via admin.Repo.SetRole; this catches admins that
+	// pre-date a newly-introduced System tag.
+	if err := tagsSvc.SyncSystemTagsForAllAdmins(context.Background()); err != nil {
+		log.Error().Msgf("backfill system tags for admins: %s", err.Error())
+	}
 
 	// ── Home ─────────────────────────────────────────────────────
 	homeHandler := home.NewHandler(allItems, authSvc, tagsSvc, bookmarkSvc)

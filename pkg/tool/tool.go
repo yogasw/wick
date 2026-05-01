@@ -50,11 +50,15 @@ type Tool struct {
 }
 
 // DefaultTag is the spec used by Tool.DefaultTags to seed tags on startup.
+//
+// IsSystem marks the tag as code-owned — see entity.Tag godoc for the
+// admin-UI implications (cannot be assigned to users from the picker).
 type DefaultTag struct {
 	Name        string
 	Description string
 	IsGroup     bool
 	IsFilter    bool
+	IsSystem    bool
 	SortOrder   int
 }
 

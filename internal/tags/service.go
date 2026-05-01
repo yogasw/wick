@@ -48,6 +48,7 @@ func (s *Service) EnsureToolDefaultTags(ctx context.Context, toolPath string, de
 				Description: strings.TrimSpace(d.Description),
 				IsGroup:     d.IsGroup,
 				IsFilter:    d.IsFilter,
+				IsSystem:    d.IsSystem,
 				SortOrder:   d.SortOrder,
 			}
 			if err := s.repo.CreateTag(ctx, t); err != nil {
@@ -82,6 +83,19 @@ func (s *Service) EnsureToolDefaultTags(ctx context.Context, toolPath string, de
 // have a list of tag ids from ToolTagIDs and want to render names/flags.
 func (s *Service) TagsByIDs(ctx context.Context, ids []string) ([]*entity.Tag, error) {
 	return s.repo.TagsByIDs(ctx, ids)
+}
+
+// SyncSystemTagsForAllAdmins reconciles UserTag rows so every existing
+// admin carries every Tag flagged IsSystem. Idempotent — uses
+// FirstOrCreate per (user, tag) pair.
+//
+// Called once at boot (after EnsureToolDefaultTags has had a chance to
+// seed System tags) so admins who existed before the System-tag schema
+// landed are auto-granted access to System-gated items. Per-user role
+// changes after boot are handled inline by admin.Repo.SetRole — this
+// boot call only catches the migration-time backfill.
+func (s *Service) SyncSystemTagsForAllAdmins(ctx context.Context) error {
+	return s.repo.SyncSystemTagsForAllAdmins(ctx)
 }
 
 // ToolTagIDs returns a map from tool_path to the list of tag ids it has.
