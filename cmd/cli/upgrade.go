@@ -25,25 +25,58 @@ func upgradeCmd() *cobra.Command {
 }
 
 func runUpgrade() error {
-	current, err := readWickDepVersion()
-	if err != nil {
-		return err
-	}
 	latest, err := fetchLatestWickVersion()
 	if err != nil {
 		return fmt.Errorf("fetch latest: %w", err)
 	}
-	fmt.Printf("current: %s\n", current)
-	fmt.Printf("latest:  %s\n", latest)
-	if current == latest {
+
+	depVersion, depErr := readWickDepVersion()
+	hasGoMod := depErr == nil
+
+	binVersion := AppVersion
+	fmt.Printf("cli binary: %s\n", binVersion)
+	if hasGoMod {
+		fmt.Printf("go.mod dep: %s\n", depVersion)
+	}
+	fmt.Printf("latest:     %s\n", latest)
+
+	binStale := binVersion != latest && binVersion != "dev"
+	depStale := hasGoMod && depVersion != latest
+
+	if !binStale && !depStale && binVersion != "dev" {
 		fmt.Println("already on latest")
 		return nil
 	}
-	fmt.Printf("upgrade %s -> %s? [y/N]: ", current, latest)
-	ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+
+	reader := bufio.NewReader(os.Stdin)
+
+	if binStale || binVersion == "dev" {
+		fmt.Printf("upgrade cli binary %s -> %s? [y/N]: ", binVersion, latest)
+		ans, _ := reader.ReadString('\n')
+		ans = strings.TrimSpace(strings.ToLower(ans))
+		if ans == "y" || ans == "yes" {
+			if err := execCmd(fmt.Sprintf("go install %s@%s", wickModule, latest)); err != nil {
+				return fmt.Errorf("install cli: %w", err)
+			}
+			fmt.Println("cli binary upgraded. re-run `wick upgrade` from new binary if needed.")
+		} else {
+			fmt.Println("cli upgrade skipped")
+		}
+	}
+
+	if !hasGoMod {
+		return nil
+	}
+
+	if !depStale {
+		return nil
+	}
+
+	fmt.Printf("upgrade go.mod dep %s -> %s? [y/N]: ", depVersion, latest)
+	ans, _ := reader.ReadString('\n')
 	ans = strings.TrimSpace(strings.ToLower(ans))
 	if ans != "y" && ans != "yes" {
-		fmt.Println("aborted")
+		fmt.Println("dep upgrade skipped")
 		return nil
 	}
 
