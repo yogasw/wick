@@ -2,9 +2,9 @@
 
 Connectors are the third class of wick module beside Tools and Jobs. They wrap one external API and expose it to LLM clients (Claude, Cursor, custom agents) over [MCP](./mcp). Where Tools are designed for humans clicking a UI and Jobs run on a schedule, connectors exist so an LLM can call your APIs with structured input/output and full audit logging — no protocol code on your side.
 
-::: warning 📸 Screenshot pending: `connector-list.png`
-`/manager/connectors/{key}` list page with stacked rows + tag chips + kebab menu. See [SCREENSHOTS.md](https://github.com/yogasw/wick/blob/master/docs/SCREENSHOTS.md) for the capture recipe.
-:::
+![Connector instances list with kebab menu](/screenshots/connector-list.png)
+
+*`/manager/connectors/{key}` list page with stacked rows + tag chips + kebab menu.*
 
 ## Mental model
 
@@ -221,9 +221,9 @@ func listRepos(c *connector.Ctx) (any, error) {
 
 ## Per-row management UI
 
-::: warning 📸 Screenshot pending: `connector-detail.png`
-`/manager/connectors/{key}/{id}` detail page — identity, action bar, label form, credentials, operations table.
-:::
+![Connector instance detail page](/screenshots/connector-detail.png)
+
+*`/manager/connectors/{key}/{id}` detail page — identity, action bar, label form, credentials, operations table.*
 
 `/manager/connectors/{key}/{id}` is the per-row settings page. Five sections:
 
@@ -238,9 +238,9 @@ func listRepos(c *connector.Ctx) (any, error) {
 
 ### Test panel (Postman-style)
 
-::: warning 📸 Screenshot pending: `connector-test.png`
-`/manager/connectors/{key}/{id}/test?op=...` Postman-style runner — input form + Run button + success result panel.
-:::
+![Connector test runner with success result](/screenshots/connector-test.png)
+
+*`/manager/connectors/{key}/{id}/test?op=...` Postman-style runner — input form + Run button + success result panel.*
 
 `GET /manager/connectors/{key}/{id}/test?op=<op_key>` is the in-app runner. It uses the exact same code path as the MCP `tools/call` — verify behavior end-to-end without leaving the browser.
 
@@ -250,9 +250,9 @@ func listRepos(c *connector.Ctx) (any, error) {
 
 ### History page
 
-::: warning 📸 Screenshot pending: `connector-history.png`
-`/manager/connectors/{key}/{id}/history` audit log — filter chips + table + expanded row showing Request/Response JSON + Retry link.
-:::
+![Connector run history with expanded error row](/screenshots/connector-history.png)
+
+*`/manager/connectors/{key}/{id}/history` audit log — filter chips + table + expanded row showing Request/Response JSON + Retry link.*
 
 `GET /manager/connectors/{key}/{id}/history?op=...&source=...&status=...&user=...` is a paginated audit log.
 

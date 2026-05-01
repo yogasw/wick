@@ -1,11 +1,12 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 import llmstxt, { copyOrDownloadAsMarkdownButtons } from 'vitepress-plugin-llms'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
 const version = readFileSync(resolve(__dirname, '../../VERSION'), 'utf-8').trim()
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   title: 'Wick',
   description: 'AI-first framework for building internal tools and background jobs in Go',
   base: '/wick/',
@@ -97,4 +98,4 @@ export default defineConfig({
       provider: 'local',
     },
   },
-})
+}))

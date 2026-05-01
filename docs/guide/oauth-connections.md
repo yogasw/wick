@@ -39,9 +39,34 @@ Trade-off: you carry the authorization server's operational responsibility (cert
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-::: warning 📸 Diagram pending: `oauth-flow.png`
-Sequence diagram of the 12 steps above. Three lanes: Claude.ai · wick web · wick MCP. Mermaid block inside the doc preferred over PNG.
-:::
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Claude.ai
+    participant MCP as wick /mcp
+    participant Web as wick web (/oauth, /auth)
+    participant User as User browser
+
+    Client->>MCP: POST /mcp (no token)
+    MCP-->>Client: 401 + WWW-Authenticate: Bearer resource_metadata="..."
+    Client->>Web: GET /.well-known/oauth-protected-resource
+    Web-->>Client: { authorization_servers: [wick] }
+    Client->>Web: GET /.well-known/oauth-authorization-server
+    Web-->>Client: endpoints + supported flows
+    Client->>Web: POST /oauth/register (DCR, no pre-shared secret)
+    Web-->>Client: { client_id }
+    Client->>User: redirect → GET /oauth/authorize?client_id&code_challenge&S256
+    User->>Web: not logged in? → /auth/login → bounce back
+    Web-->>User: render consent screen
+    User->>Web: POST /oauth/authorize (Approve)
+    Web-->>User: 302 to redirect_uri?code=...
+    User-->>Client: forward auth code
+    Client->>Web: POST /oauth/token (code + PKCE verifier)
+    Web-->>Client: { access_token: wick_oat_..., refresh_token: wick_ort_..., expires_in }
+    Client->>MCP: POST /mcp Authorization: Bearer wick_oat_...
+    MCP->>Web: validate token + resolve user_id
+    MCP-->>Client: tag-filtered tools/list
+```
 
 ### Token formats
 
@@ -57,9 +82,9 @@ PKCE S256 is **mandatory**. Wick rejects `code_challenge_method=plain` per the O
 
 ## Consent screen
 
-::: warning 📸 Screenshot pending: `oauth-consent.png`
-`/oauth/authorize` consent page — app name, scope summary, Approve/Deny buttons.
-:::
+![OAuth consent page](/screenshots/oauth-consent.png)
+
+*`/oauth/authorize` consent page — app name, scope summary, Approve/Deny buttons.*
 
 Wick renders `/oauth/authorize` with:
 
@@ -71,9 +96,9 @@ Denying is sticky for the duration of the auth code TTL (5 minutes) — the clie
 
 ## Manage active connections
 
-::: warning 📸 Screenshot pending: `connections-list.png`
-`/profile/connections` table — App name · Granted at · Last used · Disconnect.
-:::
+![Connected apps list](/screenshots/connections-list.png)
+
+*`/profile/connections` table — App name · Granted at · Last used · Disconnect.*
 
 `/profile/connections` lists every active OAuth grant for the logged-in user — one row per (user × OAuth client) that has at least one valid access or refresh token.
 
@@ -83,9 +108,9 @@ This is per-grant, not per-token: disconnecting one PAT does not affect OAuth gr
 
 ## Admin override
 
-::: warning 📸 Screenshot pending: `admin-connections.png`
-`/admin/connections` cross-user grant table with admin Disconnect buttons.
-:::
+![Admin connections cross-user grant table](/screenshots/admin-connections.png)
+
+*`/admin/connections` cross-user grant table with admin Disconnect buttons.*
 
 `/admin/connections` is the cross-user view. Admins see every active OAuth grant across every user and can disconnect any of them — useful when:
 

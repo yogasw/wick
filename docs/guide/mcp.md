@@ -55,9 +55,31 @@ UUID-based, opaque, stable across admin label renames. The `conn:` prefix is res
 
 ### Typical LLM flow
 
-::: warning 📸 Diagram pending: `mcp-flow.png`
-Sequence diagram — Claude.ai → wick MCP → connector ExecuteFunc → upstream API. Mermaid block inside the doc preferred over PNG.
-:::
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LLM as Claude.ai / LLM client
+    participant MCP as wick /mcp
+    participant Auth as wick auth
+    participant Op as connector ExecuteFunc
+    participant API as upstream API
+
+    LLM->>MCP: tools/list
+    MCP-->>LLM: [wick_list, wick_search, wick_get, wick_execute]
+    LLM->>MCP: wick_list
+    MCP->>Auth: IsVisibleTo(user, tags, is_admin)
+    Auth-->>MCP: filtered (row × op) set
+    MCP-->>LLM: [{ tool_id, connector, name, description, destructive }]
+    LLM->>MCP: wick_get({tool_id})
+    MCP-->>LLM: input_schema + detailed description
+    LLM->>MCP: wick_execute({tool_id, params})
+    MCP->>Auth: re-check visibility + op enabled
+    MCP->>Op: ExecuteFunc(ctx, c, params)
+    Op->>API: HTTP / SDK call
+    API-->>Op: response
+    Op-->>MCP: result
+    MCP-->>LLM: { result, audit_id }
+```
 
 ```
 wick_list                                 → list of { tool_id, connector, name, description, destructive }
@@ -92,9 +114,9 @@ Both formats are opaque (not JWT) and stored hashed (SHA-256). A DB leak does no
 
 ## Install snippets
 
-::: warning 📸 Screenshot pending: `mcp-install-page.png`
-`/profile/mcp` install snippets — OAuth section + Bearer section with all 4 ready-to-paste snippets.
-:::
+![MCP install page](/screenshots/mcp-install-page.png)
+
+*`/profile/mcp` install snippets — OAuth section + Bearer section with all 4 ready-to-paste snippets.*
 
 The in-app `/profile/mcp` page shows the URL and four install snippets ready to copy. Below is the same content for reference.
 
@@ -195,9 +217,9 @@ curl -X POST https://<your-wick-host>/mcp \
 5. **Generate a PAT.** Visit `/profile/tokens`, click Create, copy the token from the render-once banner.
 6. **Wire up Claude Desktop.** Drop the snippet above into `claude_desktop_config.json`, restart Claude Desktop.
 
-::: warning 📸 Screenshot pending: `mcp-claude-desktop.png`
-Claude Desktop Tools dialog showing the 4 `wick_*` tools registered after wiring a PAT.
-:::
+![Claude Desktop tool permissions for wick](/screenshots/mcp-claude-desktop.png)
+
+*Claude Desktop Tools dialog showing the 4 `wick_*` tools registered after wiring a PAT.*
 
 7. **Try it.** Ask Claude: "Use wick_list to see what connectors are available, then use wick_execute to list documents from the books resource on crudcrud."
 

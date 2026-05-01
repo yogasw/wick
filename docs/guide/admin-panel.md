@@ -41,9 +41,9 @@ For System-tagged jobs the action buttons are removed and the tag picker is read
 
 ## Connectors
 
-::: warning 📸 Screenshot pending: `admin-connectors.png`
-`/admin/connectors` cross-Key list — Disabled toggles, per-row tag picker, "Module not registered" badge for orphans.
-:::
+![Admin connectors cross-key list](/screenshots/admin-connectors.png)
+
+*`/admin/connectors` cross-Key list — Disabled toggles, per-row tag picker, "Module not registered" badge for orphans.*
 
 `/admin/connectors` is the cross-Key list of every connector row across every user. Toggle `Disabled` to hide a row from MCP `tools/list` and from `/manager/connectors`. The tag picker reuses `ToolTag` with path `/connectors/{id}` — same mechanism as Tools.
 
@@ -53,9 +53,9 @@ Operational guide: [Connector Module](./connector-module).
 
 ## Access Tokens
 
-::: warning 📸 Screenshot pending: `admin-tokens.png`
-`/admin/access-tokens` cross-user view — stat card row + table.
-:::
+![Admin access tokens cross-user view](/screenshots/admin-tokens.png)
+
+*`/admin/access-tokens` cross-user view — stat card row + table.*
 
 Cross-user view of every active Personal Access Token. Admins can revoke any token without the owner's consent — useful when a token has been compromised or a user has left the team.
 
@@ -63,9 +63,9 @@ Operational guide: [Access Tokens (PAT)](./access-tokens).
 
 ## Connected Apps (OAuth)
 
-::: warning 📸 Screenshot pending: `admin-connections.png`
-`/admin/connections` cross-user grant table — one row per (user × OAuth client) with admin Disconnect buttons.
-:::
+![Admin connections cross-user grant table](/screenshots/admin-connections.png)
+
+*`/admin/connections` cross-user grant table — one row per (user × OAuth client) with admin Disconnect buttons.*
 
 Cross-user view of every active OAuth grant. Each row is one (user × client) pair with at least one valid access or refresh token. Disconnect revokes every token issued to that client for that user; the client must re-do the OAuth dance to regain access.
 

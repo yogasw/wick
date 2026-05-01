@@ -16,17 +16,17 @@ A database leak does not expose tokens — only hashes.
 
 ## Generate a token
 
-::: warning 📸 Screenshot pending: `tokens-list.png`
-`/profile/tokens` table — Name · Token (masked) · Created · Last used · Revoke.
-:::
+![Personal access tokens list](/screenshots/tokens-list.png)
+
+*`/profile/tokens` table — Name · Token (masked) · Created · Last used · Revoke.*
 
 1. Open `/profile/tokens` and click **Create token**.
 2. Pick a name that identifies where the token will live ("Laptop", "Production CI", "Mac Mini"). The name is for your own bookkeeping; revoking by name is faster than reading masked hex.
 3. Click **Generate**.
 
-::: warning 📸 Screenshot pending: `tokens-create.png`
-Render-once green banner showing the plaintext `wick_pat_xxx` token + "won't be shown again" warning.
-:::
+![Token created render-once banner](/screenshots/tokens-create.png)
+
+*Render-once green banner showing the plaintext `wick_pat_xxx` token + "won't be shown again" warning.*
 
 4. Copy the plaintext token from the banner immediately. **It will not be shown again.**
 5. Paste into your client config. See the [MCP install snippets](./mcp#claude-desktop-cursor-vscode-bearer) for Claude Desktop, Cursor, VSCode, and cURL formats.
@@ -56,9 +56,9 @@ A user revokes their own tokens at `/profile/tokens`. Click the trash icon on th
 
 ## Admin override
 
-::: warning 📸 Screenshot pending: `admin-tokens.png`
-`/admin/access-tokens` cross-user view — stat card row + table.
-:::
+![Admin access tokens cross-user view](/screenshots/admin-tokens.png)
+
+*`/admin/access-tokens` cross-user view — stat card row + table.*
 
 `/admin/access-tokens` lists every active PAT across every user. Admins can revoke any token without the owner's consent — useful when a token has been compromised or a user has left the team.
 

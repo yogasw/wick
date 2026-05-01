@@ -18,9 +18,9 @@ The purge job is wick's answer: a small daily worker that does a single range de
 
 ## Adjust retention or schedule
 
-::: warning 📸 Screenshot pending: `purge-job-detail.png`
-`/manager/jobs/connector-runs-purge` — "Code-managed" badge, cron field, `retention_days` field, run history table.
-:::
+![Connector runs purge job settings](/screenshots/purge-job-detail.png)
+
+*`/manager/jobs/connector-runs-purge` — cron field, `retention_days` field, save button.*
 
 Open `/manager/jobs/connector-runs-purge`:
 
@@ -34,9 +34,9 @@ Changes take effect on the next tick — no restart needed.
 
 ### Run-on-demand
 
-::: warning 📸 Screenshot pending: `purge-run-history.png`
-Run history row after "Run Now" — output like `Purged N connector_run row(s) older than 7 day(s) (cutoff: ...)`.
-:::
+![Purge run history after Run Now](/screenshots/purge-run-history.png)
+
+*Run history row after "Run Now" — output like `Purged N connector_run row(s) older than 7 day(s) (cutoff: ...)`.*
 
 Click **Run Now** on the operator page (`/jobs/connector-runs-purge`) to trigger an out-of-cycle purge. The result row in the history table records how many rows were deleted and the cutoff timestamp.
 
