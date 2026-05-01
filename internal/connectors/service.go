@@ -197,6 +197,30 @@ func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagID
 	return s.repo.IsAccessibleTo(ctx, connectorID, userTagIDs)
 }
 
+// ListForManager returns rows the caller can see in the admin manager.
+// Unlike ListVisibleTo, disabled rows are included so users can re-
+// enable or delete them. Admins see every row.
+func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	if isAdmin {
+		return s.repo.List(ctx)
+	}
+	return s.repo.ListAccessibleForManager(ctx, userTagIDs)
+}
+
+// IsManageableBy reports whether the caller may operate on a row from
+// the manager UI. Disabled rows are still manageable — the caller may
+// be re-enabling them.
+func (s *Service) IsManageableBy(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	if isAdmin {
+		_, err := s.repo.Get(ctx, connectorID)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return s.repo.IsAccessibleForManager(ctx, connectorID, userTagIDs)
+}
+
 // Update writes label / configs / disabled changes. Identity fields
 // (Key, ParentID, CreatedBy, CreatedAt) are immutable and untouched.
 func (s *Service) Update(ctx context.Context, id, label string, configs map[string]string, disabled bool) error {
@@ -442,6 +466,13 @@ func (s *Service) Retry(ctx context.Context, originalRunID, userID, ipAddr, user
 }
 
 // ── Retention ───────────────────────────────────────────────────────
+
+// ListRuns returns the most recent ConnectorRun rows for a connector,
+// newest first. Used by the admin detail page to render history under
+// the test panel.
+func (s *Service) ListRuns(ctx context.Context, connectorID string, limit int) ([]entity.ConnectorRun, error) {
+	return s.repo.ListRunsByConnector(ctx, connectorID, limit)
+}
 
 // PurgeOldRuns deletes ConnectorRun rows older than retentionDays.
 // Returns the number of rows removed. Called by the cleanup job on a

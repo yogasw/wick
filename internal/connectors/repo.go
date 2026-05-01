@@ -96,6 +96,70 @@ func (r *Repo) ListAccessibleTo(ctx context.Context, userTagIDs []string) ([]ent
 	return out, err
 }
 
+// ListAccessibleForManager mirrors ListAccessibleTo but does NOT strip
+// disabled rows. The admin manager surface must be able to enumerate
+// disabled rows so they can be re-enabled. Tag-filter logic is unchanged.
+func (r *Repo) ListAccessibleForManager(ctx context.Context, userTagIDs []string) ([]entity.Connector, error) {
+	var out []entity.Connector
+	q := r.db.WithContext(ctx).
+		Where(`
+			NOT EXISTS (
+				SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+				WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+			)`)
+	if len(userTagIDs) > 0 {
+		q = r.db.WithContext(ctx).
+			Where(`
+				NOT EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+				)
+				OR EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id
+					AND t.is_filter = true
+					AND tt.tag_id IN ?
+				)`, userTagIDs)
+	}
+	err := q.Order("created_at DESC").Find(&out).Error
+	return out, err
+}
+
+// IsAccessibleForManager mirrors IsAccessibleTo but ignores the disabled
+// flag. Used by manager handlers so admins who disabled a row can still
+// open its detail page to re-enable.
+func (r *Repo) IsAccessibleForManager(ctx context.Context, connectorID string, userTagIDs []string) (bool, error) {
+	var n int64
+	q := r.db.WithContext(ctx).
+		Model(&entity.Connector{}).
+		Where("id = ?", connectorID).
+		Where(`
+			NOT EXISTS (
+				SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+				WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+			)`)
+	if len(userTagIDs) > 0 {
+		q = r.db.WithContext(ctx).
+			Model(&entity.Connector{}).
+			Where("id = ?", connectorID).
+			Where(`
+				NOT EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id AND t.is_filter = true
+				)
+				OR EXISTS (
+					SELECT 1 FROM tool_tags tt JOIN tags t ON t.id = tt.tag_id
+					WHERE tt.tool_path = '/connectors/' || connectors.id
+					AND t.is_filter = true
+					AND tt.tag_id IN ?
+				)`, userTagIDs)
+	}
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // IsAccessibleTo reports whether a single connector row is visible to
 // the caller using the same rule as ListAccessibleTo. Used by
 // tools/call to re-check authorization before dispatch (the tools/list

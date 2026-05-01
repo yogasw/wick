@@ -61,6 +61,17 @@ func (r *repo) HasToolTags(ctx context.Context, toolPath string) (bool, error) {
 	return count > 0, nil
 }
 
+// TagsByIDs returns the tags whose ids are in ids, in arbitrary order.
+// An empty ids slice yields an empty result without hitting the DB.
+func (r *repo) TagsByIDs(ctx context.Context, ids []string) ([]*entity.Tag, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var tags []*entity.Tag
+	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&tags).Error
+	return tags, err
+}
+
 // LinkToolTag creates a tool_tag row, ignoring duplicates.
 func (r *repo) LinkToolTag(ctx context.Context, toolPath, tagID string) error {
 	link := entity.ToolTag{ToolPath: toolPath, TagID: tagID}

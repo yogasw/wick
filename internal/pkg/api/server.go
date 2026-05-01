@@ -173,7 +173,8 @@ func NewServer() *Server {
 	}
 	tr.mount(toolsMux)
 
-	managerHandler := manager.NewHandler(jobsSvc, configsSvc, allItems)
+	tagsSvc := tags.NewService(db)
+	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, allItems)
 
 	// jobrunnerHandler exposes /jobs/{key} — the operator surface with
 	// a Run Now button and run history. Admin-only settings stay on
@@ -196,11 +197,26 @@ func NewServer() *Server {
 		})
 	}
 
+	// Register connectors as items. One module = one card; the card
+	// links to the manager list page where users see N rows for that
+	// definition (one per credential set), each with a test panel and
+	// enable/disable/duplicate actions.
+	for _, cm := range connectors.All() {
+		m := cm.Meta
+		allItems = append(allItems, tool.Tool{
+			Name:              m.Name,
+			Description:       m.Description,
+			Icon:              m.Icon,
+			Path:              "/manager/connectors/" + m.Key,
+			Category:          "connector",
+			DefaultVisibility: entity.VisibilityPrivate,
+		})
+	}
+
 	// ── Admin ────────────────────────────────────────────────────
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc)
 
 	// ── Shared services ─────────────────────────────────────────
-	tagsSvc := tags.NewService(db)
 	bookmarkSvc := bookmark.NewService(db)
 	bookmarkHandler := bookmark.NewHandler(bookmarkSvc)
 

@@ -1,0 +1,131 @@
+package view
+
+import (
+	"fmt"
+
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
+)
+
+// ConnectorListPage shows every row that backs a single connector
+// definition. One Meta.Key can have many rows (e.g. Loki Prod / Staging /
+// Dev), each carrying its own credentials and tag set. Rows are listed
+// here with quick actions; clicking a row opens the detail page where
+// configs are edited and operations are tested.
+templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow map[string][]string, user *entity.User) {
+	@Layout("Manager · "+mod.Meta.Name, user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/" class="hover:text-green-600">Home</a>
+				<span>/</span>
+				<span class="text-black-900 dark:text-white-100">{ mod.Meta.Name }</span>
+			</div>
+			<div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+				<div class="flex items-center gap-3">
+					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
+						{ mod.Meta.Icon }
+					</div>
+					<div>
+						<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ mod.Meta.Name }</h1>
+						if mod.Meta.Description != "" {
+							<p class="mt-0.5 text-sm text-black-800 dark:text-black-600">{ mod.Meta.Description }</p>
+						}
+						<p class="mt-1 text-xs text-black-700 dark:text-black-600">
+							{ fmt.Sprintf("%d operation(s) · %d row(s)", len(mod.Operations), len(rows)) }
+						</p>
+					</div>
+				</div>
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/new") }>
+					<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
+						+ New row
+					</button>
+				</form>
+			</div>
+
+			<section class="mt-8">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Instances</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Each row carries its own credentials and label. MCP exposes one tool per (row × enabled operation).
+				</p>
+				if len(rows) == 0 {
+					<div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center">
+						<p class="text-sm text-black-700 dark:text-black-600">No rows yet. Click <strong>+ New row</strong> to create one.</p>
+					</div>
+				} else {
+					<div class="mt-4 flex flex-col gap-2">
+						for _, row := range rows {
+							@connectorListCard(mod.Meta.Key, row, tagsByRow[row.ID])
+						}
+					</div>
+				}
+			</section>
+		</main>
+	}
+}
+
+// connectorListCard renders one row in the n8n-style stacked list:
+// label + meta on the left, access tags + status in the middle, kebab
+// menu on the right. The card itself is clickable; the kebab keeps
+// destructive actions one click away without crowding the row.
+templ connectorListCard(key string, row entity.Connector, tagNames []string) {
+	<div class="group relative flex items-center gap-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 hover:border-green-400">
+		<a href={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID) } class="absolute inset-0 z-0" aria-label="Open"></a>
+		<div class="pointer-events-none relative min-w-0 flex-1">
+			<p class="truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{ row.Label }</p>
+			<p class="mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600">{ row.ID }</p>
+		</div>
+		<div class="pointer-events-none relative flex flex-shrink-0 items-center gap-2">
+			if len(tagNames) == 0 {
+				<span class="hidden rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600 sm:inline">Everyone</span>
+			} else {
+				for _, n := range tagNames {
+					<span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
+						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+						{ n }
+					</span>
+				}
+			}
+			if row.Disabled {
+				<span class="inline-flex items-center gap-1.5 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">
+					<span class="h-1.5 w-1.5 rounded-full bg-black-700"></span>Disabled
+				</span>
+			} else {
+				<span class="inline-flex items-center gap-1.5 rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">
+					<span class="h-1.5 w-1.5 rounded-full bg-pos-400"></span>Published
+				</span>
+			}
+			@kebabMenu(key, row)
+		</div>
+	</div>
+}
+
+// kebabMenu is a zero-JS dropdown built on <details>/<summary>. The
+// summary click toggles open state; clicking outside collapses it via
+// the inline focusout handler. Items mirror the actions previously
+// shown inline so no functionality is lost.
+templ kebabMenu(key string, row entity.Connector) {
+	<details class="pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
+		<summary class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-green-600">
+			<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
+		</summary>
+		<div class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg">
+			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/disable") }>
+				if row.Disabled {
+					<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-pos-400 hover:bg-white-200 dark:hover:bg-navy-800">Enable</button>
+				} else {
+					<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-prog-400 hover:bg-white-200 dark:hover:bg-navy-800">Disable</button>
+				}
+			</form>
+			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/duplicate") }>
+				<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800">Duplicate</button>
+			</form>
+			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/delete") }>
+				<button
+					type="submit"
+					onclick="return confirm('Delete this connector row? Run history is kept for audit.');"
+					class="block w-full border-t border-white-300 dark:border-navy-600 px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100"
+				>Delete</button>
+			</form>
+		</div>
+	</details>
+}

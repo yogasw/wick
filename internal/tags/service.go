@@ -78,6 +78,12 @@ func (s *Service) EnsureToolDefaultTags(ctx context.Context, toolPath string, de
 	return nil
 }
 
+// TagsByIDs returns Tag rows for the given ids. Used by surfaces that
+// have a list of tag ids from ToolTagIDs and want to render names/flags.
+func (s *Service) TagsByIDs(ctx context.Context, ids []string) ([]*entity.Tag, error) {
+	return s.repo.TagsByIDs(ctx, ids)
+}
+
 // ToolTagIDs returns a map from tool_path to the list of tag ids it has.
 func (s *Service) ToolTagIDs(ctx context.Context, toolPaths []string) (map[string][]string, error) {
 	out := make(map[string][]string)
