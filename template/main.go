@@ -6,6 +6,7 @@ import (
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
 
+	"template/connectors/crudcrud"
 	autogetdata "template/jobs/auto-get-data"
 	"template/tags"
 	converttext "template/tools/convert-text"

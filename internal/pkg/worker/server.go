@@ -10,6 +10,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/jobs"
+	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -23,6 +24,14 @@ func NewServer() *Server {
 	cfg := config.Load()
 	db := postgres.NewGORM(cfg.Database)
 	postgres.Migrate(db)
+
+	// Built-in maintenance jobs whose RunFunc needs DB access are
+	// registered here, after DB init, so the closure can capture the
+	// same handle the worker uses. Must run BEFORE the configs loop
+	// below so the job's typed Config rows get seeded too. Same call
+	// runs in internal/pkg/api/server.go so the web process also sees
+	// the row in /admin/jobs.
+	connectorrunspurge.Register(db)
 
 	// Reconcile the configs table so job.Ctx.Cfg(...) sees the same
 	// cached values the web process uses. Seeds per-tool / per-job

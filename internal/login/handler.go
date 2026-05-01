@@ -20,6 +20,47 @@ import (
 
 const stateCookieName = "_st_oauth_state"
 
+// afterLoginCookie carries a same-origin URL set by callers that want
+// the login flow to return the user to a specific page (e.g.
+// /oauth/authorize). The cookie is one-shot — read and cleared on the
+// next successful login. Path-only redirects are accepted; absolute
+// URLs and protocol-relative URLs are rejected on read to avoid
+// open-redirect.
+const afterLoginCookie = "_st_after_login"
+
+// SetAfterLoginRedirect stores a path the next successful login should
+// land on, instead of "/". Paths must start with "/" and not "//".
+// Used by /oauth/authorize when the user isn't logged in yet.
+func SetAfterLoginRedirect(w http.ResponseWriter, r *http.Request, path string) {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     afterLoginCookie,
+		Value:    path,
+		Path:     "/",
+		MaxAge:   600,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   strings.HasPrefix(r.URL.Scheme, "https") || r.TLS != nil,
+	})
+}
+
+// consumeAfterLogin reads the after-login redirect and immediately
+// clears the cookie. Returns "/" when no cookie is set or the value
+// would be unsafe (open-redirect protection).
+func (h *Handler) consumeAfterLogin(w http.ResponseWriter, r *http.Request) string {
+	c, err := r.Cookie(afterLoginCookie)
+	if err != nil {
+		return "/"
+	}
+	http.SetCookie(w, &http.Cookie{Name: afterLoginCookie, Path: "/", MaxAge: -1})
+	if !strings.HasPrefix(c.Value, "/") || strings.HasPrefix(c.Value, "//") {
+		return "/"
+	}
+	return c.Value
+}
+
 // appConfig is the subset of configs.Service the handler needs. Kept
 // as an interface so tests can stub it, and to avoid a circular import
 // between login and configs.
@@ -128,7 +169,7 @@ func (h *Handler) loginPassword(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/auth/pending", http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, h.consumeAfterLogin(w, r), http.StatusFound)
 }
 
 func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +217,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/auth/pending", http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, h.consumeAfterLogin(w, r), http.StatusFound)
 }
 
 func (h *Handler) syncThemeCookie(w http.ResponseWriter, user *entity.User) {

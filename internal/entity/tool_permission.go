@@ -45,12 +45,21 @@ type ToolPermission struct {
 //     multiple group tags appears in each group.
 //
 // A tag can set any combination of IsGroup and IsFilter independently.
+//
+// IsSystem marks a tag as code-owned: it can only be assigned to
+// tool/job/connector entities by code (via DefaultTags seeding), never
+// by an admin from the UI to a user. The intent is to gate built-in
+// maintenance items (e.g. the connector-runs-purge job) behind a tag
+// no end user can carry — combined with IsFilter=true, this hides the
+// item from /manager/* for everyone except admin (who bypasses the
+// tag-filter rule wholesale).
 type Tag struct {
 	ID          string `gorm:"type:varchar(36);primaryKey"`
 	Name        string `gorm:"uniqueIndex;type:varchar(100);not null"`
 	Description string `gorm:"type:varchar(500)"`
 	IsGroup     bool   `gorm:"default:false"`
 	IsFilter    bool   `gorm:"default:false"`
+	IsSystem    bool   `gorm:"default:false"`
 	SortOrder   int    `gorm:"default:0"`
 	CreatedAt   time.Time
 }

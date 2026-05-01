@@ -1,0 +1,127 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// ConsentData carries everything the consent page needs to render.
+//
+// Every field except User round-trips through hidden form inputs back
+// to POST /oauth/authorize so the consent decision binds to the same
+// request the user just looked at.
+type ConsentData struct {
+	User                *entity.User
+	ClientName          string
+	Scope               string
+	ClientID            string
+	RedirectURI         string
+	State               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+}
+
+templ ConsentPage(data ConsentData) {
+	@ui.Layout("Authorize Application") {
+		<div class="flex min-h-screen items-center justify-center bg-white-200 dark:bg-navy-800 px-4 py-8">
+			<div class="w-full max-w-md">
+				<!-- Mini wick brand top -->
+				<div class="mb-6 flex items-center justify-center gap-2 text-sm font-medium text-black-800 dark:text-black-600">
+					<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
+					{ ui.AppNameFromContext(ctx) }
+				</div>
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-lg">
+					<div class="flex items-center gap-3">
+						<div class="flex h-12 w-12 items-center justify-center rounded-xl bg-green-200 text-2xl">
+							🔌
+						</div>
+						<div>
+							<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">Authorize</h1>
+							<p class="text-xs text-black-700 dark:text-black-600">via OAuth 2.1 + PKCE</p>
+						</div>
+					</div>
+					<p class="mt-6 text-sm text-black-800 dark:text-black-600">
+						<span class="font-medium text-black-900 dark:text-white-100">{ data.ClientName }</span>
+						is requesting access to your { ui.AppNameFromContext(ctx) } workspace as
+						<span class="font-medium text-black-900 dark:text-white-100">{ data.User.Email }</span>.
+					</p>
+					<div class="mt-5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+						<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">This will let the app</p>
+						<ul class="mt-2 space-y-1.5 text-sm text-black-900 dark:text-white-100">
+							<li class="flex items-start gap-2">
+								<svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/>
+								</svg>
+								List and call connectors you have access to via MCP
+							</li>
+							<li class="flex items-start gap-2">
+								<svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/>
+								</svg>
+								Run as you, scoped by your tags — no admin elevation
+							</li>
+						</ul>
+					</div>
+					<form action="/oauth/authorize" method="POST" class="mt-6 flex flex-col gap-3">
+						<input type="hidden" name="client_id" value={ data.ClientID }/>
+						<input type="hidden" name="redirect_uri" value={ data.RedirectURI }/>
+						<input type="hidden" name="state" value={ data.State }/>
+						<input type="hidden" name="scope" value={ data.Scope }/>
+						<input type="hidden" name="code_challenge" value={ data.CodeChallenge }/>
+						<input type="hidden" name="code_challenge_method" value={ data.CodeChallengeMethod }/>
+						<button
+							type="submit"
+							name="decision"
+							value="approve"
+							class="w-full rounded-lg bg-green-500 px-4 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300"
+						>
+							Approve
+						</button>
+						<button
+							type="submit"
+							name="decision"
+							value="deny"
+							class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-2.5 text-sm font-medium text-black-800 dark:text-black-600 transition-colors hover:border-neg-300 hover:text-neg-400"
+						>
+							Deny
+						</button>
+					</form>
+					<p class="mt-5 text-center text-xs text-black-700 dark:text-black-600">
+						Approving redirects you back to <span class="font-medium text-black-900 dark:text-white-100">{ data.ClientName }</span>.
+					</p>
+				</div>
+				<!-- Footer link, outside the card so it stays subtle -->
+				<p class="mt-4 text-center text-xs text-black-700 dark:text-black-600">
+					Signed in as <span class="font-medium text-black-800 dark:text-black-600">{ data.User.Email }</span>
+					· <a href="/profile/tokens" class="text-green-600 dark:text-green-400 hover:underline">Manage tokens</a>
+				</p>
+			</div>
+		</div>
+	}
+}
+
+// AuthorizeError is the page rendered when wick can't safely redirect
+// back to the client (unknown client_id, redirect_uri mismatch). The
+// OAuth spec requires we NOT redirect in those cases — phishing risk.
+templ AuthorizeError(title, message string) {
+	@ui.Layout("Authorization error") {
+		<div class="flex min-h-screen items-center justify-center bg-white-200 dark:bg-navy-800 px-4 py-8">
+			<div class="w-full max-w-md">
+				<div class="mb-6 flex items-center justify-center gap-2 text-sm font-medium text-black-800 dark:text-black-600">
+					<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
+					{ ui.AppNameFromContext(ctx) }
+				</div>
+				<div class="rounded-xl border border-neg-200 bg-neg-100 p-8 shadow-lg">
+					<h1 class="text-lg font-semibold text-neg-400">{ title }</h1>
+					<p class="mt-2 text-sm text-black-800 dark:text-black-600">{ message }</p>
+					<a href="/" class="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400 hover:underline">
+						Back to { ui.AppNameFromContext(ctx) }
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/>
+						</svg>
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}

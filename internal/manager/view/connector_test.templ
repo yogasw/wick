@@ -1,0 +1,154 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
+)
+
+// ConnectorTestPage is the standalone Postman-style runner for one
+// connector row. The operation dropdown is URL-synced (?op=) so that
+// switching ops never costs a page back-and-forth, and links from the
+// detail page can preselect a specific op.
+templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp string, prefill map[string]string, user *entity.User) {
+	@Layout("Test · "+row.Label, user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/" class="hover:text-green-600">Home</a>
+				<span>/</span>
+				<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key) } class="hover:text-green-600">{ mod.Meta.Name }</a>
+				<span>/</span>
+				<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID) } class="hover:text-green-600">{ row.Label }</a>
+				<span>/</span>
+				<span class="text-black-900 dark:text-white-100">Test</span>
+			</div>
+
+			<div class="mt-4 flex items-start justify-between gap-4">
+				<div>
+					<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Test runner</h1>
+					<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+						Pick an operation, fill the input, and run it against this row's credentials. Calls are recorded as <code class="font-mono text-xs">source=test</code> in the run log.
+					</p>
+				</div>
+				<a
+					href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/history?op=" + activeOp) }
+					class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+				>View history</a>
+			</div>
+
+			if len(mod.Operations) == 0 {
+				<div class="mt-8 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center">
+					<p class="text-sm text-black-700 dark:text-black-600">This connector exposes no operations.</p>
+				</div>
+			} else {
+				<section
+					class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4"
+					data-connector-test
+					data-test-url={ "/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/test" }
+					data-base-url={ "/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/test" }
+				>
+					<div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+						<div class="flex-1">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600">Operation</label>
+							<select
+								data-test-op
+								class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+							>
+								for _, op := range mod.Operations {
+									if op.Key == activeOp {
+										<option value={ op.Key } selected>{ op.Name }</option>
+									} else {
+										<option value={ op.Key }>{ op.Name }</option>
+									}
+								}
+							</select>
+						</div>
+						<button type="button" data-test-run class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
+							Run
+						</button>
+					</div>
+
+					for _, op := range mod.Operations {
+						if op.Key == activeOp {
+							<div data-test-form={ op.Key } class="mt-4 space-y-3">
+								@testFormBody(op, prefill)
+							</div>
+						} else {
+							<div data-test-form={ op.Key } class="mt-4 hidden space-y-3">
+								@testFormBody(op, nil)
+							</div>
+						}
+					}
+
+					<div data-test-result class="mt-4 hidden">
+						<div class="flex items-center gap-2 text-xs text-black-700 dark:text-black-600">
+							<span data-test-status class="rounded-full bg-prog-100 px-2 py-0.5 font-medium text-prog-400">running</span>
+							<span data-test-latency></span>
+						</div>
+						<pre data-test-body class="mt-2 max-h-96 overflow-auto rounded-lg bg-white-200 dark:bg-navy-800 p-3 font-mono text-xs text-black-900 dark:text-white-100"></pre>
+					</div>
+				</section>
+			}
+		</main>
+		<script src="/modules/manager/js/connector_test.js"></script>
+	}
+}
+
+templ testFormBody(op connector.Operation, prefill map[string]string) {
+	if len(op.Input) == 0 {
+		<p class="text-xs text-black-700 dark:text-black-600">This operation takes no input.</p>
+	}
+	for _, in := range op.Input {
+		@testInputField(in, prefill[in.Key])
+	}
+}
+
+templ testInputField(in entity.Config, value string) {
+	<div>
+		<label class="block text-xs font-medium text-black-800 dark:text-black-600">
+			{ in.Key }
+			if in.Required {
+				<span class="text-neg-400">*</span>
+			}
+		</label>
+		if in.Description != "" {
+			<p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">{ in.Description }</p>
+		}
+		switch in.Type {
+			case "textarea":
+				<textarea
+					data-test-input={ in.Key }
+					rows="4"
+					class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-xs text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+				>{ value }</textarea>
+			case "checkbox":
+				if value == "true" {
+					<input
+						data-test-input={ in.Key }
+						type="checkbox"
+						checked
+						class="mt-1 h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"
+					/>
+				} else {
+					<input
+						data-test-input={ in.Key }
+						type="checkbox"
+						class="mt-1 h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"
+					/>
+				}
+			case "number":
+				<input
+					data-test-input={ in.Key }
+					type="number"
+					value={ value }
+					class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+				/>
+			default:
+				<input
+					data-test-input={ in.Key }
+					type="text"
+					value={ value }
+					class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+				/>
+		}
+	</div>
+}

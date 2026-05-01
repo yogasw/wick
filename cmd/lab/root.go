@@ -5,6 +5,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/internal/tools"
 )
@@ -12,6 +13,7 @@ import (
 func main() {
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()
+	connectors.RegisterBuiltins()
 
 	var port int
 	var command = &cobra.Command{
