@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -127,13 +128,32 @@ func readWickDepVersion() (string, error) {
 }
 
 func fetchLatestWickVersion() (string, error) {
+	goVer, goErr := fetchFromGoProxy()
+	ghVer, ghErr := fetchFromGitHub()
+
+	if goErr != nil && ghErr != nil {
+		return "", fmt.Errorf("go proxy: %w; github: %v", goErr, ghErr)
+	}
+	if goErr != nil {
+		return ghVer, nil
+	}
+	if ghErr != nil {
+		return goVer, nil
+	}
+	if semverGT(ghVer, goVer) {
+		return ghVer, nil
+	}
+	return goVer, nil
+}
+
+func fetchFromGoProxy() (string, error) {
 	resp, err := http.Get("https://proxy.golang.org/" + wickModule + "/@latest")
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("proxy status %d", resp.StatusCode)
+		return "", fmt.Errorf("status %d", resp.StatusCode)
 	}
 	var info struct {
 		Version string `json:"Version"`
@@ -142,7 +162,53 @@ func fetchLatestWickVersion() (string, error) {
 		return "", err
 	}
 	if info.Version == "" {
-		return "", fmt.Errorf("empty version from proxy")
+		return "", fmt.Errorf("empty version")
 	}
 	return info.Version, nil
+}
+
+func fetchFromGitHub() (string, error) {
+	req, _ := http.NewRequest("GET", "https://api.github.com/repos/yogasw/wick/releases/latest", nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var info struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", err
+	}
+	if info.TagName == "" {
+		return "", fmt.Errorf("empty tag")
+	}
+	return info.TagName, nil
+}
+
+// semverGT reports whether a > b for vX.Y.Z strings.
+func semverGT(a, b string) bool {
+	parse := func(v string) [3]int {
+		v = strings.TrimPrefix(v, "v")
+		parts := strings.SplitN(v, ".", 3)
+		var out [3]int
+		for i, p := range parts {
+			if i >= 3 {
+				break
+			}
+			out[i], _ = strconv.Atoi(p)
+		}
+		return out
+	}
+	pa, pb := parse(a), parse(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] > pb[i]
+		}
+	}
+	return false
 }
