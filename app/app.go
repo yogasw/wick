@@ -33,11 +33,12 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// BuildVersion and BuildCommit are embedded at build time via -ldflags.
-// wick mcp serve sets them automatically; manual builds get "dev".
+// BuildVersion, BuildCommit, and BuildTime are embedded at build time via -ldflags.
+// wick mcp serve sets them automatically; manual builds get "dev"/"unknown".
 var (
 	BuildVersion = "dev"
 	BuildCommit  = "dev"
+	BuildTime    = "unknown"
 )
 
 // RegisterTool adds a tool instance to the registry. One call = one
@@ -176,7 +177,7 @@ func Run() {
 		Use:   "serve",
 		Short: "Run MCP server over stdio (for Claude Desktop, Cursor, etc.)",
 		Run: func(cmd *cobra.Command, args []string) {
-			api.RunMCPStdio(BuildVersion, BuildCommit)
+			api.RunMCPStdio(BuildVersion, BuildCommit, BuildTime)
 		},
 	}
 	mcpCmd.AddCommand(mcpServeCmd)

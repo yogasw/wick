@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -97,6 +98,7 @@ func buildBinary(bin string) error {
 	if commit, err := gitShortHash(); err == nil {
 		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildCommit="+commit)
 	}
+	ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildTime="+buildTimestamp())
 	if len(ldf) > 0 {
 		args = append(args, "-ldflags", strings.Join(ldf, " "))
 	}
@@ -126,6 +128,10 @@ func gitShortHash() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func buildTimestamp() string {
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
 func runBinary(bin string) error {

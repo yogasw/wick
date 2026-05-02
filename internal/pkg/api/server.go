@@ -387,7 +387,7 @@ func (s *Server) Run(port int) {
 // Intended for local clients that spawn wick as a child process (Claude
 // Desktop, Cursor, etc.). No auth — all connectors are visible as a
 // synthetic local-admin identity.
-func RunMCPStdio(version, commit string) {
+func RunMCPStdio(version, commit, buildTime string) {
 	// When spawned by an MCP client (Claude Desktop, Cursor, etc.) the
 	// working directory is the client's, not the project root. Chdir to
 	// the project root (parent of the bin/ dir) so .env and wick.db
@@ -413,6 +413,6 @@ func RunMCPStdio(version, commit string) {
 	ctx := login.WithUser(context.Background(), localAdmin, nil)
 
 	mcp.NewHandler(connSvc).
-		WithBuildInfo(version, commit).
+		WithBuildInfo(version, commit, buildTime).
 		ServeStdioOS(ctx)
 }

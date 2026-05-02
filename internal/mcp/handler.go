@@ -44,20 +44,23 @@ type Handler struct {
 	connectors *connectors.Service
 	version    string
 	commit     string
+	buildTime  string
 }
 
 func NewHandler(c *connectors.Service) *Handler {
-	return &Handler{connectors: c, version: "dev", commit: ""}
+	return &Handler{connectors: c, version: "dev", commit: "", buildTime: "unknown"}
 }
 
-// WithBuildInfo sets the version and short commit hash shown in the
-// MCP initialize response. Called by RunMCPStdio with app.Build* vars.
-func (h *Handler) WithBuildInfo(version, commit string) *Handler {
+// WithBuildInfo sets the version, short commit hash, and build timestamp
+// shown in the MCP initialize response and wick_info tool.
+// Called by RunMCPStdio with app.Build* vars.
+func (h *Handler) WithBuildInfo(version, commit, buildTime string) *Handler {
 	h.version = version
 	if len(commit) > 8 {
 		commit = commit[:8]
 	}
 	h.commit = commit
+	h.buildTime = buildTime
 	return h
 }
 
@@ -381,7 +384,11 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 // ── wick_info ──────────────────────────────────────────────────────
 
 func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
-	info := map[string]string{"version": h.version, "commit": h.commit}
+	info := map[string]string{
+		"version":    h.version,
+		"commit":     h.commit,
+		"build_time": h.buildTime,
+	}
 	b, _ := json.Marshal(info)
 	writeRPCResult(w, req.ID, toolCallResult{
 		Content: []toolContent{{Type: "text", Text: string(b)}},
