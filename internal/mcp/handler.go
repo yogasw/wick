@@ -304,7 +304,7 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 		},
 		{
 			Name:        "wick_info",
-			Description: "Return wick server version and build info. Use this when asked about the version, build, or commit of the running wick instance.",
+			Description: "Return wick framework version and server build info. Fields: wick_version (wick library version), server_build_time (when this server binary was compiled), server_commit (git commit of the server binary at build time).",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -385,9 +385,9 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 
 func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
 	info := map[string]string{
-		"version":    h.version,
-		"commit":     h.commit,
-		"build_time": h.buildTime,
+		"wick_version":      h.version,
+		"server_build_time": h.buildTime,
+		"server_commit":     h.commit,
 	}
 	b, _ := json.Marshal(info)
 	writeRPCResult(w, req.ID, toolCallResult{
