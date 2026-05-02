@@ -663,6 +663,10 @@ textarea, input, select {
   pointer-events: auto;
 }
 
+.visible {
+  visibility: visible;
+}
+
 .static {
   position: static;
 }
@@ -787,6 +791,10 @@ textarea, input, select {
 
 .mb-8 {
   margin-bottom: 2rem;
+}
+
+.ml-1 {
+  margin-left: 0.25rem;
 }
 
 .ml-2 {
@@ -1219,6 +1227,10 @@ textarea, input, select {
 
 .gap-y-1 {
   row-gap: 0.25rem;
+}
+
+.gap-y-2 {
+  row-gap: 0.5rem;
 }
 
 .space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {

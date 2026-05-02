@@ -101,3 +101,23 @@ func generateCmd() *cobra.Command {
 		},
 	}
 }
+
+func serverCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "server",
+		Short: "Run the HTTP server (go run . server)",
+		RunE: func(c *cobra.Command, args []string) error {
+			return execCmd("go run . server")
+		},
+	}
+}
+
+func workerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "worker",
+		Short: "Run the background job worker (go run . worker)",
+		RunE: func(c *cobra.Command, args []string) error {
+			return execCmd("go run . worker")
+		},
+	}
+}

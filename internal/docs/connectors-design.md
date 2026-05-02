@@ -8,7 +8,7 @@ test panel, admin overview pages utk connector instance, access token,
 connected app cross-user, admin dashboard split Modules vs Access stats
 + nav grouping ke Access/Setup dropdown + retention cleanup job
 `connector-runs-purge` di worker).
-Update terakhir: 2026-05-01.
+Update terakhir: 2026-05-02.
 
 > **User-facing docs:** see [`docs/guide/connector-module.md`](../../docs/guide/connector-module.md), [`docs/guide/mcp.md`](../../docs/guide/mcp.md), [`docs/guide/access-tokens.md`](../../docs/guide/access-tokens.md), [`docs/guide/oauth-connections.md`](../../docs/guide/oauth-connections.md), [`docs/guide/connector-runs-purge.md`](../../docs/guide/connector-runs-purge.md), and [`docs/reference/connector-api.md`](../../docs/reference/connector-api.md). Update those when you change user-visible behavior — this design doc is the developer source of truth, not the user-facing surface.
 
@@ -607,7 +607,7 @@ POST /oauth/token                               -- code exchange + refresh
 ### 7.3 Meta-tool pattern
 
 MCP surface **bukan** N×M static tool (1 entry per connector×op). Sebagai
-gantinya, server expose **4 tool tetap** yg LLM pake buat discovery dan
+gantinya, server expose **5 tool tetap** yg LLM pake buat discovery dan
 dispatch:
 
 | Tool | Annotation | Fungsi |
@@ -616,6 +616,7 @@ dispatch:
 | `wick_search` | `readOnlyHint: true` | Cari tool by keyword (substring match: label + name + desc) |
 | `wick_get` | `readOnlyHint: true` | Ambil detail 1 tool by `tool_id`, termasuk `input_schema` |
 | `wick_execute` | `destructiveHint: true` | Eksekusi tool by `tool_id` + `params` |
+| `wick_info` | `readOnlyHint: true` | Return server version + build commit. Dipakai LLM kalau ditanya "versi wick yg jalan" |
 
 **Kenapa meta-tool, bukan static list:**
 
@@ -851,13 +852,16 @@ revoke single PAT tanpa affect OAuth grants.
      schema converter.
    - Endpoint `POST /mcp` dispatch `initialize`, `tools/list`,
      `tools/call`, `ping`.
-   - **Meta-tool pattern**: `tools/list` selalu return 4 tool tetap
-     (`wick_list`, `wick_search`, `wick_get`, `wick_execute`).
+   - **Meta-tool pattern**: `tools/list` selalu return 5 tool tetap
+     (`wick_list`, `wick_search`, `wick_get`, `wick_execute`, `wick_info`).
      Discovery dan dispatch connector dilakukan via tool_id
      `conn:{connector_id}/{op_key}` — bukan nama tool statis.
    - `wick_execute` bind ke `connectors.Service.Execute` dgn
      `Source=ConnectorRunSourceMCP`. Tag-filtered + op-state check
      per call.
+   - `wick_info` return `{version, commit}` dari `app.BuildVersion` +
+     `app.BuildCommit` yg di-embed lewat ldflags saat build. `Handler`
+     carry field ini via `WithBuildInfo(version, commit)`.
 
 5. **Auth** ✅
    - **PAT** di `internal/accesstoken/` — generate/revoke di
@@ -1160,9 +1164,9 @@ spesifik muncul. Ditulis disini biar ga lupa kontex aslinya.
   (via `ToolTag` path `/connectors/{id}`) dan user (via `UserTag`)
   untuk gating akses. Tag string bebas — admin-defined, gak ada
   konvensi prefix wajib di code.
-- **MCP tool** — yg dilihat client LLM di `tools/list`. Selalu 4
-  entry tetap: `wick_list`, `wick_search`, `wick_get`,
-  `wick_execute`. Connector row × op direpresentasikan secara internal
+- **MCP tool** — yg dilihat client LLM di `tools/list`. Selalu 5
+  entry tetap: `wick_list`, `wick_search`, `wick_get`, `wick_execute`,
+  `wick_info`. Connector row × op direpresentasikan secara internal
   via **tool_id** `conn:{connector_id}/{op_key}`, bukan nama tool
   eksplisit. LLM discover via `wick_list`/`wick_search` dan execute
   via `wick_execute`.

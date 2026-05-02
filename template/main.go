@@ -72,5 +72,11 @@ func main() {
 		autogetdata.Config{},
 		autogetdata.Run,
 	)
+	// RegisterConnector wires one connector definition into the MCP layer.
+	// Each call = one module; admins create per-instance rows (with their
+	// own credentials) from the manager UI. Replace crudcrud with your own
+	// connector once you no longer need the sample.
+	app.RegisterConnector(crudcrud.Meta(), crudcrud.Configs{}, crudcrud.Operations())
+
 	app.Run()
 }
