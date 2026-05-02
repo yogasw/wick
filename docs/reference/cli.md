@@ -6,7 +6,7 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `server`, `worker`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
 Run `wick --help` to print the current list.
@@ -74,6 +74,30 @@ The skill folder contents are always replaced — local edits inside `./.claude/
 
 ---
 
+### `wick server`
+
+Start the HTTP server directly without needing a `wick.yml` task. Equivalent to `go run . server`.
+
+```bash
+wick server
+```
+
+Use this instead of `wick dev` when you don't need hot-reload or asset generation — production-like run from source.
+
+---
+
+### `wick worker`
+
+Start the background job worker directly without needing a `wick.yml` task. Equivalent to `go run . worker`.
+
+```bash
+wick worker
+```
+
+Runs the same worker process as `./myapp worker` but straight from source. Useful for running server and worker in separate terminals during development.
+
+---
+
 ### `wick upgrade`
 
 Bump the `github.com/yogasw/wick` dependency in the current project's `go.mod` to the latest released version, then tidy and run `dev`.
@@ -81,9 +105,9 @@ Bump the `github.com/yogasw/wick` dependency in the current project's `go.mod` t
 ```bash
 $ wick upgrade
 current: v0.1.13
-latest:  v0.2.0
+latest:  v0.4.2
 upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.4.2
+> go get github.com/yogasw/wick@v0.5.1
 > go mod tidy
 > <dev task from wick.yml>
 ```
@@ -94,7 +118,7 @@ Steps:
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
 3. If already on latest, exit without prompting.
 4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.4.2`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+5. Run `go get github.com/yogasw/wick@v0.5.1`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 
