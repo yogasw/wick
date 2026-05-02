@@ -6,7 +6,7 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `server`, `worker`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
 Run `wick --help` to print the current list.
@@ -71,6 +71,30 @@ Side effects on `./AGENTS.md`:
 - **Present, skill table is customized** (rows don't link to `./.claude/skills/<name>/SKILL.md`) — left untouched. Edit by hand if you want the new skills listed.
 
 The skill folder contents are always replaced — local edits inside `./.claude/skills/<name>/` will be overwritten. Commit anything you want to keep.
+
+---
+
+### `wick server`
+
+Start the HTTP server directly without needing a `wick.yml` task. Equivalent to `go run . server`.
+
+```bash
+wick server
+```
+
+Use this instead of `wick dev` when you don't need hot-reload or asset generation — production-like run from source.
+
+---
+
+### `wick worker`
+
+Start the background job worker directly without needing a `wick.yml` task. Equivalent to `go run . worker`.
+
+```bash
+wick worker
+```
+
+Runs the same worker process as `./myapp worker` but straight from source. Useful for running server and worker in separate terminals during development.
 
 ---
 

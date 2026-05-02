@@ -25,7 +25,7 @@ func main() {
 	}
 
 	command.Flags().IntVar(&port, "port", 8080, "Listen on given port")
-	command.AddCommand(serverCmd(), workerCmd())
+	command.AddCommand(serverCmd(), workerCmd(), mcpCmd())
 
 	if err := command.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())

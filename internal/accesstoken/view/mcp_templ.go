@@ -60,7 +60,7 @@ func MCPPage(data MCPPageData) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto w-full max-w-container px-6 py-8\"><h1 class=\"text-[1.375rem] font-semibold text-black-900 dark:text-white-100\">MCP</h1><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Wick exposes connectors over the Model Context Protocol. Two ways to authenticate — pick whichever your client supports.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto w-full max-w-container px-6 py-8\"><h1 class=\"text-[1.375rem] font-semibold text-black-900 dark:text-white-100\">MCP</h1><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Wick exposes connectors over the Model Context Protocol. Connect via OAuth, a bearer token, or run wick as a local child process with no token at all.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -73,6 +73,10 @@ func MCPPage(data MCPPageData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			templ_7745c5c3_Err = bearerCard(data.EndpointURL, data.HasTokens).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = stdioCard().Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -118,7 +122,7 @@ func endpointCard(url string) templ.Component {
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(url)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 45, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 46, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
@@ -276,7 +280,9 @@ func bearerCard(endpoint string, hasTokens bool) templ.Component {
 	})
 }
 
-func snippetBlock(title, hint, code string) templ.Component {
+// stdioCard documents the stdio transport — wick runs as a local child
+// process, no hosted server, no token. All connectors visible as local admin.
+func stdioCard() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -297,46 +303,111 @@ func snippetBlock(title, hint, code string) templ.Component {
 			templ_7745c5c3_Var7 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<div><h3 class=\"text-sm font-medium text-black-900 dark:text-white-100\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<div class=\"mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><div class=\"flex items-start gap-3\"><div class=\"flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 text-lg\">⚡</div><div class=\"flex-1 min-w-0\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Local Clients (stdio)</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Run wick as a local child process over stdin/stdout — no hosted server, no token required. The server starts as a local admin with access to all connectors.</p></div></div><p class=\"mt-5 text-sm text-black-800 dark:text-black-600\">From the project root, run <code class=\"rounded bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 font-mono text-xs\">wick mcp install</code> — it writes the config file and resolves the binary path automatically.</p><div class=\"mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var8 string
-		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(title)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 174, Col: 76}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
+		templ_7745c5c3_Err = snippetBlock(
+			"Claude Code",
+			"Writes .mcp.json to the project root. Restart Claude Code (or /mcp reload) to pick it up.",
+			"wick mcp install --client claude-code",
+		).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</h3><p class=\"mt-0.5 text-xs text-black-700 dark:text-black-600\">")
+		templ_7745c5c3_Err = snippetBlock(
+			"Claude Desktop",
+			"Writes directly to claude_desktop_config.json. Restart Claude Desktop after saving.",
+			"wick mcp install --client claude",
+		).Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = snippetBlock(
+			"Cursor",
+			"Writes to Cursor's MCP settings file.",
+			"wick mcp install --client cursor",
+		).Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = snippetBlock(
+			"All clients at once",
+			"Install into Claude Desktop, Cursor, Gemini CLI, Codex CLI, and Claude Code in one shot.",
+			"wick mcp install --client all",
+		).Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</div><div class=\"mt-5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3\"><p class=\"text-sm font-medium text-black-900 dark:text-white-100\">Build modes</p><p class=\"mt-1 text-xs text-black-800 dark:text-black-600\">Pass <code class=\"rounded bg-white-300 dark:bg-navy-700 px-1 py-0.5 font-mono text-xs\">--mode</code> to control how the binary is built before serving.</p><dl class=\"mt-3 grid grid-cols-1 gap-y-2 gap-x-4 sm:grid-cols-2 text-xs\"><div><code class=\"font-mono text-black-900 dark:text-white-100\">auto</code> <span class=\"ml-1 text-black-800 dark:text-black-600\">— rebuild when HEAD or source changed (default)</span></div><div><code class=\"font-mono text-black-900 dark:text-white-100\">dev</code> <span class=\"ml-1 text-black-800 dark:text-black-600\">— always <code class=\"font-mono\">go run .</code>, no binary cache</span></div><div><code class=\"font-mono text-black-900 dark:text-white-100\">build</code> <span class=\"ml-1 text-black-800 dark:text-black-600\">— build once, reuse binary</span></div><div><code class=\"font-mono text-black-900 dark:text-white-100\">rebuild</code> <span class=\"ml-1 text-black-800 dark:text-black-600\">— always force a full rebuild</span></div></dl></div><div class=\"mt-4 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3\"><p class=\"text-sm text-black-800 dark:text-black-600\">To print the config snippet without writing any file: <code class=\"rounded bg-white-300 dark:bg-navy-700 px-1.5 py-0.5 font-mono text-xs\">wick mcp config</code></p></div></div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		return nil
+	})
+}
+
+func snippetBlock(title, hint, code string) templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var8 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var8 == nil {
+			templ_7745c5c3_Var8 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<div><h3 class=\"text-sm font-medium text-black-900 dark:text-white-100\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var9 string
-		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(hint)
+		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 175, Col: 69}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 251, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</p><div class=\"relative mt-2\"><pre class=\"overflow-x-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 pr-12 font-mono text-xs leading-relaxed text-black-900 dark:text-white-100\"><code data-snippet>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</h3><p class=\"mt-0.5 text-xs text-black-700 dark:text-black-600\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var10 string
-		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(code)
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(hint)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 177, Col: 222}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 252, Col: 69}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</code></pre><button type=\"button\" data-copy-snippet class=\"absolute right-2 top-2 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs font-medium text-black-800 dark:text-black-600 transition-colors hover:border-green-400\">Copy</button></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</p><div class=\"relative mt-2\"><pre class=\"overflow-x-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 pr-12 font-mono text-xs leading-relaxed text-black-900 dark:text-white-100\"><code data-snippet>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var11 string
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(code)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/accesstoken/view/mcp.templ`, Line: 254, Col: 222}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "</code></pre><button type=\"button\" data-copy-snippet class=\"absolute right-2 top-2 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs font-medium text-black-800 dark:text-black-600 transition-colors hover:border-green-400\">Copy</button></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
