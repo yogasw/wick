@@ -11,6 +11,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 // supportedProtocolVersions lists every MCP revision this server can
@@ -217,7 +218,8 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 		{
 			Name: "wick_list",
 			Description: "List available connectors grouped by instance. " +
-				"Returns each connector's id, label, description, and total_tools count — no schemas. " +
+				"Returns each connector's id, label, description, total_tools count, and status. " +
+				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
 				"WORKFLOW: (1) wick_list to see what connectors exist, " +
 				"(2) wick_get with the connector id to see its tools + input_schemas, " +
 				"(3) wick_execute with tool_id + params. Takes no arguments.",
@@ -234,7 +236,8 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 			Name: "wick_search",
 			Description: "Search tools by keyword across all connectors. " +
 				"Case-insensitive match on connector label, tool name, and description. " +
-				"Returns matching tools nested under their connector (id, description), with tool_id per hit. " +
+				"Returns matching tools nested under their connector (id, description, status), with tool_id per hit. " +
+				"status is 'ready' or 'needs_setup' — do NOT call wick_execute on a needs_setup connector; tell the user to open the admin dashboard to complete setup. " +
 				"WORKFLOW: after finding a match, call wick_get with the connector id to get full schemas, " +
 				"then wick_execute.",
 			InputSchema: map[string]any{
@@ -404,12 +407,32 @@ type connectorSummary struct {
 	Connector   string `json:"connector"`
 	Description string `json:"description"`
 	TotalTools  int    `json:"total_tools"`
+	// Status is "ready" when all required configs are filled, "needs_setup"
+	// when one or more required fields are empty. Do not call wick_execute
+	// on a needs_setup connector — it will fail. Direct the user to the
+	// admin dashboard to complete setup.
+	Status string `json:"status"`
 }
 
 type listResult struct {
 	Connectors      []connectorSummary `json:"connectors"`
 	TotalConnectors int                `json:"total_connectors"`
 	TotalTools      int                `json:"total_tools"`
+}
+
+// connectorStatus returns "ready" when all required configs on the module
+// have a non-empty value in the connector row, otherwise "needs_setup".
+func connectorStatus(mod connector.Module, configsJSON string) string {
+	var vals map[string]string
+	if configsJSON != "" {
+		_ = json.Unmarshal([]byte(configsJSON), &vals)
+	}
+	for _, c := range mod.Configs {
+		if c.Required && vals[c.Key] == "" {
+			return "needs_setup"
+		}
+	}
+	return "ready"
 }
 
 func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpcRequest, tagIDs []string, isAdmin bool) {
@@ -444,6 +467,7 @@ func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpc
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
 			TotalTools:  count,
+			Status:      connectorStatus(mod, row.Configs),
 		})
 	}
 	writeToolJSON(w, req.ID, listResult{
@@ -470,7 +494,9 @@ type searchGroup struct {
 	ID          string       `json:"id"`
 	Connector   string       `json:"connector"`
 	Description string       `json:"description"`
-	Tools       []searchTool `json:"tools"`
+	// Status mirrors connectorSummary.Status — "ready" or "needs_setup".
+	Status string       `json:"status"`
+	Tools  []searchTool `json:"tools"`
 }
 
 type searchResult struct {
@@ -527,6 +553,7 @@ func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req r
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
+			Status:      connectorStatus(mod, row.Configs),
 			Tools:       matched,
 		})
 	}

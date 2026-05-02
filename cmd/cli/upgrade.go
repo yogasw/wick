@@ -55,10 +55,9 @@ func runUpgrade() error {
 		ans, _ := reader.ReadString('\n')
 		ans = strings.TrimSpace(strings.ToLower(ans))
 		if ans == "y" || ans == "yes" {
-			if err := execCmd(fmt.Sprintf("go install %s@%s", wickModule, latest)); err != nil {
-				return fmt.Errorf("install cli: %w", err)
+			if err := installCLI(latest); err != nil {
+				return err
 			}
-			fmt.Println("cli binary upgraded. re-run `wick upgrade` from new binary if needed.")
 		} else {
 			fmt.Println("cli upgrade skipped")
 		}
@@ -87,6 +86,31 @@ func runUpgrade() error {
 		return err
 	}
 	return runTask("dev")
+}
+
+func installCLI(version string) error {
+	cmd := fmt.Sprintf("go install %s@%s", wickModule, version)
+
+	exe, err := os.Executable()
+	if err != nil {
+		return execCmd(cmd)
+	}
+
+	// Windows can't overwrite a running exe, but can rename it.
+	// Rename current binary so go install can write the new one.
+	old := exe + ".old"
+	if err := os.Rename(exe, old); err != nil {
+		return execCmd(cmd)
+	}
+
+	if err := execCmd(cmd); err != nil {
+		_ = os.Rename(old, exe) // restore on failure
+		return fmt.Errorf("install cli: %w", err)
+	}
+
+	_ = os.Remove(old)
+	fmt.Printf("cli binary upgraded to %s\n", version)
+	return nil
 }
 
 func readWickDepVersion() (string, error) {
