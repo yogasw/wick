@@ -91,7 +91,7 @@ func Run(ctx context.Context) (string, error) {
 
 ## Runtime Config
 
-Same `wick:"..."` tag grammar as tools:
+Same `wick:"..."` tag grammar as tools — see the **[Config Tag Reference](/reference/config-tags)** for the full widget table and all flags.
 
 ```go
 package myjob

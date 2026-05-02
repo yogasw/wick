@@ -22,6 +22,9 @@ type Service struct {
 	// keyed by (owner, key). It lets Missing() answer without re-
 	// walking the registries.
 	meta map[ownerKey]entity.Config
+	// declOrder preserves the per-owner declaration order so ListOwned
+	// returns rows in the same sequence as the module's Config struct.
+	declOrder map[string][]string
 }
 
 // ownerKey is the composite cache key. Owner scopes the variable
@@ -30,9 +33,10 @@ type ownerKey struct{ Owner, Key string }
 
 func NewService(db *gorm.DB) *Service {
 	return &Service{
-		repo:  newRepo(db),
-		cache: make(map[ownerKey]entity.Config),
-		meta:  make(map[ownerKey]entity.Config),
+		repo:      newRepo(db),
+		cache:     make(map[ownerKey]entity.Config),
+		meta:      make(map[ownerKey]entity.Config),
+		declOrder: make(map[string][]string),
 	}
 }
 
@@ -86,6 +90,18 @@ func (s *Service) reconcile(ctx context.Context, row entity.Config) error {
 	s.mu.Lock()
 	s.cache[k] = *fresh
 	s.meta[k] = row
+	// Track declaration order — append only on first encounter so
+	// re-reconciliation (e.g. Set) does not duplicate the key.
+	found := false
+	for _, existing := range s.declOrder[row.Owner] {
+		if existing == row.Key {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.declOrder[row.Owner] = append(s.declOrder[row.Owner], row.Key)
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -106,22 +122,14 @@ func (s *Service) GetOwned(owner, key string) string {
 	return s.cache[ownerKey{Owner: owner, Key: key}].Value
 }
 
-// ListOwned returns every config scoped to owner in declaration order
-// (app-level follows appDefaults(); per-owner follows map iteration).
+// ListOwned returns every config scoped to owner in declaration order.
 func (s *Service) ListOwned(owner string) []entity.Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]entity.Config, 0)
-	if owner == "" {
-		for _, d := range appDefaults() {
-			if v, ok := s.cache[ownerKey{Owner: "", Key: d.Key}]; ok {
-				out = append(out, v)
-			}
-		}
-		return out
-	}
-	for k, v := range s.cache {
-		if k.Owner == owner {
+	keys := s.declOrder[owner]
+	out := make([]entity.Config, 0, len(keys))
+	for _, key := range keys {
+		if v, ok := s.cache[ownerKey{Owner: owner, Key: key}]; ok {
 			out = append(out, v)
 		}
 	}

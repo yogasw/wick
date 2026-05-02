@@ -27,4 +27,8 @@ type Config struct {
 	// InitType is the conversion type pre-selected on first load.
 	// Dropdown options are pinned at module boot.
 	InitType string `wick:"desc=Seed conversion type pre-selected on first load.;dropdown=uppercase|lowercase|titlecase|sentencecase|alternating"`
+
+	// ExampleMapping is a demo kvlist config (id, key, value columns).
+	// Not used by the tool — shows the kvlist widget in the admin UI.
+	ExampleMapping string `wick:"kvlist=id|key|value;desc=Demo kvlist config — not used by the tool."`
 }

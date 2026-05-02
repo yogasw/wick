@@ -52,7 +52,7 @@ Every field with a `wick:"..."` tag becomes one row in the `configs` table, scop
 
 | Go type | Default widget | Override with tag flag |
 |---|---|---|
-| `string` | `text` | `textarea` / `dropdown=a\|b\|c` / `email` / `url` / `color` / `date` / `datetime` |
+| `string` | `text` | `textarea` / `dropdown=a\|b\|c` / `email` / `url` / `color` / `date` / `datetime` / `kvlist=col1\|col2` |
 | `bool` | `checkbox` | — |
 | `int`/`float` | `number` | — |
 
@@ -64,6 +64,7 @@ Additional flags (any widget):
 - `regen` — admin gets a "Regenerate" button. Only wired for app-level variables today; per-module regenerate is a TODO.
 - `key=custom_name` — override the snake_case column name derived from the field name.
 - `desc=...` — admin UI help text. Be useful — this is the only hint the admin sees.
+- `kvlist=col1|col2|col3` — editable table widget. Value is stored as a JSON array of objects (`[{"col1":"...","col2":"..."}]`). Read with `json.Unmarshal([]byte(c.Cfg("key")), &rows)`. Bare `kvlist` (no `=`) defaults to a single `value` column.
 
 ### Tag grammar
 
@@ -91,6 +92,10 @@ type Config struct {
 
     // checkbox (default bool)
     EnableCache bool `wick:"desc=Cache results across requests."`
+
+    // kvlist — editable table; value stored as JSON array
+    // e.g. [{"id":"1","name":"Sales"},{"id":"2","name":"Support"}]
+    QuestionGroups string `wick:"kvlist=id|name;desc=Question group definitions."`
 
     // override the column name
     LegacyKey string `wick:"key=legacy_api_key;secret;desc=Deprecated. Kept for v1 clients."`

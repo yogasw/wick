@@ -18,10 +18,12 @@ import "time"
 // Type drives which widget the admin UI renders:
 //
 //	text (default), textarea, dropdown, number, checkbox,
-//	email, url, color, date, datetime
+//	email, url, color, date, datetime,
+//	kvlist (editable table; Options = pipe-separated column names)
 //
-// Options is pipe-separated (`a|b|c`) and only meaningful when
-// Type == "dropdown".
+// Options is pipe-separated (`a|b|c`). For "dropdown" it holds option
+// values; for "kvlist" it holds column names (e.g. "id|name"). Value
+// for kvlist rows is a JSON array of string-keyed objects.
 type Config struct {
 	Owner         string `gorm:"primaryKey;type:varchar(64);default:''"`
 	Key           string `gorm:"primaryKey;type:varchar(64)"`
