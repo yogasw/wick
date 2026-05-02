@@ -77,6 +77,7 @@ export default withMermaid(defineConfig({
           { text: 'wick.yml', link: '/reference/wick-yml' },
           { text: 'Environment Variables', link: '/reference/env-vars' },
           { text: 'Connector API', link: '/reference/connector-api' },
+          { text: 'Config Tags', link: '/reference/config-tags' },
         ],
       },
       {

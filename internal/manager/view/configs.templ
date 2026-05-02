@@ -1,8 +1,9 @@
 package view
 
 import (
+	"strings"
+
 	"github.com/yogasw/wick/internal/entity"
-	fieldtype "github.com/yogasw/wick/internal/manager/view/type"
 )
 
 templ JobStatusBadge(status entity.JobStatus, enabled bool) {
@@ -15,141 +16,405 @@ templ JobStatusBadge(status entity.JobStatus, enabled bool) {
 	}
 }
 
-// ConfigsTable renders an editable list of configs owned by a single
-// scope (app variables, a tool, or a job). actionBase is the route
-// prefix where edits POST — e.g. "/manager/variables" or
-// "/manager/tools/foo/configs". Rows submit to {actionBase}/{key} and
-// regenerate via {actionBase}/{key}/regenerate. editKey selects which
-// row is currently in edit mode; cancelHref is where Cancel links.
-templ ConfigsTable(rows []entity.Config, actionBase string, editKey string, cancelHref string) {
+// ConfigsTable renders all configs as an always-visible block form.
+// editKey and cancelHref are kept for API compatibility but unused.
+templ ConfigsTable(rows []entity.Config, actionBase string, _ string, _ string) {
 	if len(rows) == 0 {
 		<p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
 	} else {
-		<div class="mt-4 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-			<table class="w-full text-sm">
-				<thead>
-					<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Key</th>
-						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Description</th>
-						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Value</th>
-						<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, row := range rows {
-						@configRow(row, actionBase, row.Key == editKey, cancelHref)
-					}
-				</tbody>
-			</table>
+		@configsForm(splitSimple(rows), splitKVList(rows), actionBase)
+	}
+}
+
+templ configsForm(simpleRows []entity.Config, kvRows []entity.Config, actionBase string) {
+	<div class="mt-4 flex flex-col gap-3" data-configs-form data-action-base={ actionBase }>
+		if len(simpleRows) > 0 {
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+					<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Configuration</h3>
+				</div>
+				<div class="p-5">
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+						for _, row := range simpleRows {
+							@simpleField(row)
+						}
+					</div>
+				</div>
+			</div>
+		}
+		for _, row := range kvRows {
+			@kvlistBlock(row, cfgKVCols(row), cfgKVRows(row))
+		}
+		@configsSaveScript()
+	</div>
+}
+
+// simpleField wraps the field div; textarea gets full-width.
+templ simpleField(row entity.Config) {
+	if row.Type == "textarea" {
+		<div class="col-span-full">
+			@simpleFieldInner(row)
+		</div>
+	} else {
+		<div>
+			@simpleFieldInner(row)
 		</div>
 	}
 }
 
-templ configRow(row entity.Config, actionBase string, editing bool, cancelHref string) {
-	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
-		<td class="px-4 py-3 font-mono text-xs text-black-900 dark:text-white-100">
-			{ row.Key }
+templ simpleFieldInner(row entity.Config) {
+	<div data-field-wrap>
+		<div class="flex items-center gap-2 mb-1.5">
+			<span class="font-mono text-xs font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
 			if row.Required && row.Value == "" {
-				<span class="ml-2 rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">missing</span>
+				<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
 			} else if row.Required {
-				<span class="ml-2 text-[10px] font-medium text-neg-400">*</span>
+				<span class="text-[10px] font-semibold text-neg-400">*</span>
 			}
-		</td>
-		<td class="px-4 py-3 text-sm text-black-800 dark:text-black-600">{ row.Description }</td>
-		<td class="px-4 py-3 text-sm">
-			if editing {
-				<form method="POST" action={ templ.SafeURL(actionBase + "/" + row.Key) } class="flex items-center gap-2">
-					@valueInput(row)
-					<button type="submit" class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600">Save</button>
-					<a href={ templ.SafeURL(cancelHref) } class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400">Cancel</a>
-				</form>
-			} else {
-				@valueDisplay(row)
-			}
-		</td>
-		<td class="px-4 py-3 text-right">
-			if !editing && !row.Locked {
-				<div class="flex justify-end gap-2">
-					<a
-						href={ templ.SafeURL(cancelHref + "?edit=" + row.Key) }
-						class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
-					>Edit</a>
-					if row.CanRegenerate {
-						<form method="POST" action={ templ.SafeURL(actionBase + "/" + row.Key + "/regenerate") }>
-							<button
-								type="submit"
-								onclick="return confirm('Regenerate this value? Active sessions or dependents may be invalidated.');"
-								class="rounded-lg border border-prog-300 px-3 py-1.5 text-xs font-medium text-prog-400 hover:bg-prog-100"
-							>Regenerate</button>
-						</form>
-					}
-				</div>
-			} else if row.Locked {
-				<span class="text-xs text-black-700 dark:text-black-600">locked</span>
-			}
-		</td>
-	</tr>
+			<span data-save-status class="ml-auto text-[10px] transition-all"></span>
+		</div>
+		@simpleFieldWidget(row)
+		if row.Description != "" {
+			<p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed">{ row.Description }</p>
+		}
+	</div>
 }
 
-// valueInput dispatches to the per-type widget. Secret fields override
-// every other type so sensitive values stay masked regardless of shape.
-templ valueInput(row entity.Config) {
+templ simpleFieldWidget(row entity.Config) {
 	if row.IsSecret {
-		@fieldtype.Secret(row)
+		<input
+			data-field-key={ row.Key }
+			type="password"
+			autocomplete="new-password"
+			placeholder="Leave blank to keep current value"
+			class={ cfgInputClass }
+		/>
 	} else {
 		switch row.Type {
 			case "textarea":
-				@fieldtype.Textarea(row)
+				<textarea
+					data-field-key={ row.Key }
+					rows="4"
+					class={ cfgInputClass }
+				>{ row.Value }</textarea>
 			case "dropdown":
-				@fieldtype.Dropdown(row)
+				<select data-field-key={ row.Key } class={ cfgInputClass + " cursor-pointer appearance-none" }>
+					for _, opt := range strings.Split(row.Options, "|") {
+						if opt == row.Value {
+							<option value={ opt } selected>{ opt }</option>
+						} else {
+							<option value={ opt }>{ opt }</option>
+						}
+					}
+				</select>
 			case "checkbox":
-				@fieldtype.Checkbox(row)
+				<label class="inline-flex items-center gap-3 cursor-pointer mt-1">
+					<input
+						data-field-key={ row.Key }
+						type="checkbox"
+						if row.Value == "true" {
+							checked
+						}
+						class="w-4 h-4 accent-green-500 cursor-pointer rounded"
+					/>
+					<span class="text-xs text-black-800 dark:text-black-600">
+						if row.Value == "true" {
+							Enabled
+						} else {
+							Disabled
+						}
+					</span>
+				</label>
 			case "number":
-				@fieldtype.Number(row)
+				<input
+					data-field-key={ row.Key }
+					type="number"
+					value={ row.Value }
+					class={ cfgInputClass }
+				/>
 			case "email":
-				@fieldtype.Email(row)
+				<input
+					data-field-key={ row.Key }
+					type="email"
+					value={ row.Value }
+					placeholder="you@example.com"
+					class={ cfgInputClass }
+				/>
 			case "url":
-				@fieldtype.URL(row)
+				<input
+					data-field-key={ row.Key }
+					type="url"
+					value={ row.Value }
+					placeholder="https://"
+					class={ cfgInputClass }
+				/>
 			case "color":
-				@fieldtype.Color(row)
+				<div class="flex items-center gap-3">
+					<input
+						data-field-key={ row.Key }
+						type="color"
+						value={ row.Value }
+						class="h-10 w-16 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 cursor-pointer p-1"
+					/>
+					if row.Value != "" {
+						<span class="font-mono text-xs text-black-800 dark:text-black-600">{ row.Value }</span>
+					}
+				</div>
 			case "date":
-				@fieldtype.Date(row)
+				<input
+					data-field-key={ row.Key }
+					type="date"
+					value={ row.Value }
+					class={ cfgInputClass }
+				/>
 			case "datetime":
-				@fieldtype.Datetime(row)
-			case "kvlist":
-				@fieldtype.KVList(row)
+				<input
+					data-field-key={ row.Key }
+					type="datetime-local"
+					value={ row.Value }
+					class={ cfgInputClass }
+				/>
 			default:
-				@fieldtype.Text(row)
+				<input
+					data-field-key={ row.Key }
+					type="text"
+					value={ row.Value }
+					placeholder=""
+					class={ cfgInputClass }
+				/>
 		}
 	}
 }
 
-// valueDisplay is the read-only rendering for a row. Secrets are
-// always masked; color gets a swatch; everything else falls back to
-// monospace text.
-templ valueDisplay(row entity.Config) {
-	if row.IsSecret {
-		<span class="rounded bg-white-200 dark:bg-navy-800 px-2 py-1 font-mono text-xs text-black-700 dark:text-black-600">•••••••• (hidden)</span>
-	} else if row.Type == "color" && row.Value != "" {
-		<span class="inline-flex items-center gap-2">
-			<span class="h-4 w-4 rounded border border-white-400 dark:border-navy-600" style={ "background-color:" + row.Value }></span>
-			<span class="font-mono text-xs text-black-900 dark:text-white-100">{ row.Value }</span>
-		</span>
-	} else if row.Type == "checkbox" {
-		if row.Value == "true" {
-			<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">true</span>
-		} else {
-			<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">false</span>
+templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
+	<div
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
+		data-kvlist-key={ row.Key }
+		data-kv-cols={ strings.Join(cols, "|") }
+	>
+		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			<div class="flex items-center gap-2">
+				<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
+				if row.Required && row.Value == "" {
+					<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
+				}
+				<span class="text-[11px] text-black-700 dark:text-black-600 font-normal">
+					for i, col := range cols {
+						{ col }
+						if i < len(cols)-1 {
+							{ " · " }
+						}
+					}
+				</span>
+				<span data-save-status class="ml-auto text-[10px] transition-all"></span>
+			</div>
+			if row.Description != "" {
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{ row.Description }</p>
+			}
+		</div>
+		<div class="p-5">
+			<div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
+				<div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+					for _, col := range cols {
+						<div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize">{ col }</div>
+					}
+					<div class="w-10 shrink-0"></div>
+				</div>
+				<div data-kv-rows>
+					if len(data) == 0 {
+						<div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600" data-kv-empty>
+							No rows yet — click <strong>+ Add Row</strong> to start
+						</div>
+					}
+					for _, entry := range data {
+						@kvDataRow(cols, entry)
+					}
+				</div>
+			</div>
+			<button
+				type="button"
+				onclick="kvBlockAddRow(this)"
+				class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
+			>+ Add Row</button>
+		</div>
+	</div>
+}
+
+templ kvDataRow(cols []string, entry map[string]string) {
+	<div data-kv-row class="flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+		for _, col := range cols {
+			<div class="flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0">
+				<input
+					type="text"
+					data-col={ col }
+					value={ entry[col] }
+					placeholder={ col }
+					class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
+				/>
+			</div>
 		}
-	} else if row.Type == "kvlist" {
-		if row.Value == "" || row.Value == "[]" {
-			<span class="font-mono text-xs text-black-700 dark:text-black-600">—</span>
-		} else {
-			<span class="font-mono text-xs text-black-900 dark:text-white-100">{ fieldtype.KVListSummary(row) }</span>
+		<div class="w-10 shrink-0 flex items-center justify-center">
+			<button
+				type="button"
+				onclick="kvBlockRemoveRow(this)"
+				aria-label="Remove row"
+				class="text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none transition-colors"
+			>×</button>
+		</div>
+	</div>
+}
+
+templ configsSaveScript() {
+	<script>
+	(function(){
+		var inputCls='w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600';
+		var cellCls='flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0';
+		var rowCls='flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors';
+
+		function debounce(fn,ms){
+			var t;
+			return function(){var a=arguments,ctx=this;clearTimeout(t);t=setTimeout(function(){fn.apply(ctx,a);},ms);};
 		}
-	} else if row.Value == "" {
-		<span class="font-mono text-xs text-black-700 dark:text-black-600">—</span>
-	} else {
-		<span class="font-mono text-xs text-black-900 dark:text-white-100">{ row.Value }</span>
-	}
+
+		function setStatus(el,state){
+			if(!el)return;
+			if(state==='saving'){
+				el.textContent='saving…';
+				el.style.color='#A0A0A0';
+			}else if(state==='saved'){
+				el.textContent='✓ saved';
+				el.style.color='#288C7A';
+				setTimeout(function(){el.textContent='';},2000);
+			}else if(state==='error'){
+				el.textContent='✗ failed';
+				el.style.color='#EB5757';
+			}
+		}
+
+		async function saveField(el,base){
+			var key=el.getAttribute('data-field-key');
+			var val=el.type==='checkbox'?(el.checked?'true':'false'):el.value;
+			var wrap=el.closest('[data-field-wrap]');
+			var statusEl=wrap?wrap.querySelector('[data-save-status]'):null;
+			setStatus(statusEl,'saving');
+			var fd=new FormData();fd.append('value',val);
+			try{
+				var r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});
+				if(!r.ok)throw new Error(key);
+				setStatus(statusEl,'saved');
+				// clear "missing" badge if field now has a value
+				if(val&&val.trim()!==''){
+					var badge=wrap?wrap.querySelector('[data-missing-badge]'):null;
+					if(badge)badge.remove();
+				}
+			}catch(e){
+				setStatus(statusEl,'error');
+			}
+		}
+
+		async function saveKVBlock(section,base){
+			var key=section.getAttribute('data-kvlist-key');
+			var statusEl=section.querySelector('[data-save-status]');
+			var rows=[];
+			section.querySelectorAll('[data-kv-row]').forEach(function(row){
+				var obj={};
+				row.querySelectorAll('[data-col]').forEach(function(i){obj[i.getAttribute('data-col')]=i.value;});
+				if(Object.values(obj).some(function(v){return v.trim()!=='';}))rows.push(obj);
+			});
+			setStatus(statusEl,'saving');
+			var fd=new FormData();fd.append('value',JSON.stringify(rows));
+			try{
+				var r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});
+				if(!r.ok)throw new Error(key);
+				setStatus(statusEl,'saved');
+				if(rows.length>0){
+					var badge=section.querySelector('[data-missing-badge]');
+					if(badge)badge.remove();
+				}
+			}catch(e){
+				setStatus(statusEl,'error');
+			}
+		}
+
+		function kvBlockAddRow(btn){
+			var section=btn.closest('[data-kvlist-key]');
+			var rowsEl=section.querySelector('[data-kv-rows]');
+			var empty=rowsEl.querySelector('[data-kv-empty]');
+			if(empty)empty.remove();
+			var cols=section.getAttribute('data-kv-cols').split('|');
+			var row=document.createElement('div');
+			row.setAttribute('data-kv-row','');
+			row.className=rowCls;
+			cols.forEach(function(col,i){
+				var cell=document.createElement('div');
+				cell.className=cellCls;
+				var inp=document.createElement('input');
+				inp.type='text';
+				inp.setAttribute('data-col',col);
+				inp.placeholder=col;
+				inp.className=inputCls;
+				if(i===cols.length-1){
+					inp.addEventListener('keydown',function(e){
+						if(e.key==='Tab'&&!e.shiftKey){
+							var rows=rowsEl.querySelectorAll('[data-kv-row]');
+							if(row===rows[rows.length-1]){e.preventDefault();kvBlockAddRow(btn);}
+						}
+					});
+				}
+				cell.appendChild(inp);
+				row.appendChild(cell);
+			});
+			var act=document.createElement('div');
+			act.className='w-10 shrink-0 flex items-center justify-center';
+			var rm=document.createElement('button');
+			rm.type='button';
+			rm.className='text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none transition-colors';
+			rm.setAttribute('aria-label','Remove row');
+			rm.textContent='×';
+			rm.onclick=function(){kvBlockRemoveRow(rm);};
+			act.appendChild(rm);
+			row.appendChild(act);
+			rowsEl.appendChild(row);
+			row.querySelector('input').focus();
+		}
+
+		function kvBlockRemoveRow(btn){
+			var row=btn.closest('[data-kv-row]');
+			var section=row.closest('[data-kvlist-key]');
+			var rowsEl=row.closest('[data-kv-rows]');
+			row.remove();
+			if(!rowsEl.querySelector('[data-kv-row]')){
+				var e=document.createElement('div');
+				e.setAttribute('data-kv-empty','');
+				e.className='px-4 py-5 text-center text-xs text-black-700 dark:text-black-600';
+				e.innerHTML='No rows yet — click <strong>+ Add Row</strong> to start';
+				rowsEl.appendChild(e);
+			}
+			// auto-save after row removal
+			var form=section.closest('[data-configs-form]');
+			if(form)saveKVBlock(section,form.getAttribute('data-action-base'));
+		}
+
+		function attachAutoSave(form){
+			var base=form.getAttribute('data-action-base');
+			// simple fields
+			form.querySelectorAll('[data-field-key]').forEach(function(el){
+				var immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';
+				var handler=function(){saveField(el,base);};
+				el.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));
+			});
+			// kvlist blocks — delegate on the rows container
+			form.querySelectorAll('[data-kvlist-key]').forEach(function(section){
+				var debouncedSave=debounce(function(){saveKVBlock(section,base);},800);
+				var rowsEl=section.querySelector('[data-kv-rows]');
+				if(rowsEl)rowsEl.addEventListener('input',debouncedSave);
+			});
+		}
+
+		document.querySelectorAll('[data-configs-form]').forEach(attachAutoSave);
+
+		window.kvBlockAddRow=kvBlockAddRow;
+		window.kvBlockRemoveRow=kvBlockRemoveRow;
+	})();
+	</script>
 }

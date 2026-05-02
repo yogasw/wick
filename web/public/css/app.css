@@ -763,6 +763,10 @@ textarea, input, select {
   z-index: 100;
 }
 
+.col-span-full {
+  grid-column: 1 / -1;
+}
+
 .mx-auto {
   margin-left: auto;
   margin-right: auto;
@@ -771,6 +775,14 @@ textarea, input, select {
 .my-5 {
   margin-top: 1.25rem;
   margin-bottom: 1.25rem;
+}
+
+.mb-1 {
+  margin-bottom: 0.25rem;
+}
+
+.mb-1\.5 {
+  margin-bottom: 0.375rem;
 }
 
 .mb-2 {
@@ -1117,6 +1129,10 @@ textarea, input, select {
   flex-shrink: 0;
 }
 
+.shrink-0 {
+  flex-shrink: 0;
+}
+
 .flex-grow {
   flex-grow: 1;
 }
@@ -1154,6 +1170,12 @@ textarea, input, select {
 
 .list-none {
   list-style-type: none;
+}
+
+.appearance-none {
+  -webkit-appearance: none;
+     -moz-appearance: none;
+          appearance: none;
 }
 
 .grid-cols-1 {
@@ -1229,12 +1251,21 @@ textarea, input, select {
        column-gap: 1rem;
 }
 
+.gap-x-6 {
+  -moz-column-gap: 1.5rem;
+       column-gap: 1.5rem;
+}
+
 .gap-y-1 {
   row-gap: 0.25rem;
 }
 
 .gap-y-2 {
   row-gap: 0.5rem;
+}
+
+.gap-y-5 {
+  row-gap: 1.25rem;
 }
 
 .space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {
@@ -1356,6 +1387,10 @@ textarea, input, select {
   border-bottom-width: 1px;
 }
 
+.border-r {
+  border-right-width: 1px;
+}
+
 .border-r-0 {
   border-right-width: 0px;
 }
@@ -1366,6 +1401,10 @@ textarea, input, select {
 
 .border-dashed {
   border-style: dashed;
+}
+
+.border-none {
+  border-style: none;
 }
 
 .border-cau-300 {
@@ -1636,6 +1675,11 @@ textarea, input, select {
   padding-bottom: 1rem;
 }
 
+.py-5 {
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+}
+
 .py-6 {
   padding-top: 1.5rem;
   padding-bottom: 1.5rem;
@@ -1800,6 +1844,10 @@ textarea, input, select {
 
 .font-medium {
   font-weight: 500;
+}
+
+.font-normal {
+  font-weight: 400;
 }
 
 .font-semibold {
@@ -2212,6 +2260,14 @@ textarea, input, select {
   border-width: 0px;
 }
 
+.last\:border-b-0:last-child {
+  border-bottom-width: 0px;
+}
+
+.last\:border-r-0:last-child {
+  border-right-width: 0px;
+}
+
 .focus-within\:border-green-500:focus-within {
   --tw-border-opacity: 1;
   border-color: rgb(39 177 153 / var(--tw-border-opacity, 1));
@@ -2487,6 +2543,16 @@ textarea, input, select {
 .dark\:text-white-100:is(.dark *) {
   --tw-text-opacity: 1;
   color: rgb(var(--color-white-100) / var(--tw-text-opacity, 1));
+}
+
+.dark\:placeholder\:text-black-600:is(.dark *)::-moz-placeholder {
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-black-600) / var(--tw-text-opacity, 1));
+}
+
+.dark\:placeholder\:text-black-600:is(.dark *)::placeholder {
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-black-600) / var(--tw-text-opacity, 1));
 }
 
 .dark\:focus-within\:ring-green-800:focus-within:is(.dark *) {
