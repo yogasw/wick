@@ -103,13 +103,13 @@ type Configs struct {
 }
 ```
 
-The `wick:"..."` tag grammar is shared with Tools and Jobs. See the [Tool Module](./tool-module#runtime-config) reference for the full table. Common modifiers:
+The `wick:"..."` tag grammar is shared with Tools and Jobs. See the **[Config Tag Reference](/reference/config-tags)** for the full widget table and all flags. Common modifiers:
 
 | Tag | Effect |
 |-----|--------|
 | `required` | Admin must fill before any op can run |
 | `secret` | Masked in the UI; never returned to the form after first save |
-| `url`, `email`, `textarea`, `dropdown=a\|b\|c` | Widget overrides |
+| `url`, `email`, `textarea`, `dropdown=a\|b\|c`, `kvlist=col1\|col2` | Widget overrides |
 | `desc=...` | Help text shown next to the field |
 | `key=custom_name` | Override the snake_cased field name |
 
