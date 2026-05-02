@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/joho/godotenv"
 
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/bookmark"
@@ -385,6 +388,17 @@ func (s *Server) Run(port int) {
 // Desktop, Cursor, etc.). No auth — all connectors are visible as a
 // synthetic local-admin identity.
 func RunMCPStdio() {
+	// When spawned by an MCP client (Claude Desktop, Cursor, etc.) the
+	// working directory is the client's, not the project root. Chdir to
+	// the project root (parent of the bin/ dir) so .env and wick.db
+	// resolve correctly, then reload .env before config.Load().
+	if exe, err := os.Executable(); err == nil {
+		projectRoot := filepath.Dir(filepath.Dir(filepath.Clean(exe)))
+		if err := os.Chdir(projectRoot); err == nil {
+			_ = godotenv.Load()
+		}
+	}
+
 	cfg := config.Load()
 
 	db := postgres.NewGORM(cfg.Database)

@@ -146,7 +146,7 @@ func mcpBinPath() string {
 // ---------- config command ----------
 
 func mcpConfigCmd() *cobra.Command {
-	var name string
+	var name, mode string
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Print MCP config snippet for Claude Desktop / Cursor / VS Code",
@@ -159,7 +159,7 @@ func mcpConfigCmd() *cobra.Command {
 				name = filepath.Base(cwd)
 			}
 
-			entry := mcpEntry(cwd)
+			entry := mcpEntry(cwd, mode)
 			snippet := map[string]any{
 				"mcpServers": map[string]any{name: entry},
 			}
@@ -175,14 +175,14 @@ func mcpConfigCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
+	cmd.Flags().StringVar(&mode, "mode", "auto", "serve mode written into config: auto | dev | build | rebuild")
 	return cmd
 }
 
 // ---------- install command ----------
 
 func mcpInstallCmd() *cobra.Command {
-	var client string
-	var name string
+	var client, name, mode string
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install MCP server config into Claude, Cursor, Gemini, or Codex",
@@ -193,7 +193,10 @@ Clients (--client):
   cursor   Cursor IDE
   gemini   Gemini CLI
   codex    OpenAI Codex CLI
-  all      install into all four`,
+  all      install into all four
+
+Modes (--mode): same as mcp serve --mode. Use "dev" to force go run,
+"auto" (default) to use the compiled binary when present.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -202,11 +205,12 @@ Clients (--client):
 			if name == "" {
 				name = filepath.Base(cwd)
 			}
-			return mcpInstall(client, name, cwd)
+			return mcpInstall(client, name, mode, cwd)
 		},
 	}
 	cmd.Flags().StringVar(&client, "client", "claude", "target client: claude | cursor | gemini | codex | all")
 	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
+	cmd.Flags().StringVar(&mode, "mode", "auto", "serve mode: auto | dev | build | rebuild")
 	return cmd
 }
 
@@ -224,7 +228,10 @@ func resolvedClients() []mcpClientDef {
 	var claudePath, cursorPath string
 	switch runtime.GOOS {
 	case "windows":
-		claudePath = filepath.Join(appdata, "Claude", "claude_desktop_config.json")
+		// Claude Desktop has two install paths depending on the installer:
+		//   Direct installer : %APPDATA%\Claude\claude_desktop_config.json
+		//   Windows Store    : %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json
+		claudePath = claudeDesktopConfigWindows(appdata)
 		cursorPath = filepath.Join(appdata, "Cursor", "User", "settings.json")
 	case "darwin":
 		claudePath = filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
@@ -242,8 +249,26 @@ func resolvedClients() []mcpClientDef {
 	}
 }
 
-func mcpInstall(client, name, cwd string) error {
-	entry := mcpEntry(cwd)
+// claudeDesktopConfigWindows finds the correct claude_desktop_config.json path.
+// Prefers the Windows Store (sandboxed) location when it exists.
+func claudeDesktopConfigWindows(appdata string) string {
+	localappdata := os.Getenv("LOCALAPPDATA")
+	if localappdata != "" {
+		packagesDir := filepath.Join(localappdata, "Packages")
+		if entries, err := os.ReadDir(packagesDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() && strings.HasPrefix(e.Name(), "Claude_") {
+					p := filepath.Join(packagesDir, e.Name(), "LocalCache", "Roaming", "Claude", "claude_desktop_config.json")
+					return p
+				}
+			}
+		}
+	}
+	return filepath.Join(appdata, "Claude", "claude_desktop_config.json")
+}
+
+func mcpInstall(client, name, mode, cwd string) error {
+	entry := mcpEntry(cwd, mode)
 	all := resolvedClients()
 
 	targets := all
@@ -342,9 +367,21 @@ func installCodexTOML(path, name string, entry map[string]any) error {
 
 // ---------- shared helpers ----------
 
-// mcpEntry builds the mcpServers entry. Uses compiled binary if it exists,
-// otherwise falls back to "go run . mcp serve" (requires Go in PATH).
-func mcpEntry(cwd string) map[string]any {
+// mcpEntry builds the mcpServers entry for the given serve mode.
+// mode "dev" always uses "go run"; all others use the compiled binary
+// if it exists, falling back to "go run" when the binary is absent.
+// cwd is always included so the client spawns the process in the right
+// directory (needed for .env, SQLite db, etc.).
+func mcpEntry(cwd, mode string) map[string]any {
+	goRun := map[string]any{
+		"command": "go",
+		"args":    []string{"run", ".", "mcp", "serve"},
+		"cwd":     cwd,
+	}
+	if mode == "dev" {
+		return goRun
+	}
+
 	binName := "app"
 	if runtime.GOOS == "windows" {
 		binName = "app.exe"
@@ -355,14 +392,10 @@ func mcpEntry(cwd string) map[string]any {
 		return map[string]any{
 			"command": binPath,
 			"args":    []string{"mcp", "serve"},
+			"cwd":     cwd,
 		}
 	}
-
-	return map[string]any{
-		"command": "go",
-		"args":    []string{"run", ".", "mcp", "serve"},
-		"cwd":     cwd,
-	}
+	return goRun
 }
 
 func configLocations() []string {
@@ -370,7 +403,7 @@ func configLocations() []string {
 	case "windows":
 		appdata := os.Getenv("APPDATA")
 		return []string{
-			fmt.Sprintf(`Claude Desktop : %s\Claude\claude_desktop_config.json`, appdata),
+			fmt.Sprintf(`Claude Desktop : %s`, claudeDesktopConfigWindows(appdata)),
 			fmt.Sprintf(`Cursor         : %s\Cursor\User\settings.json  (mcpServers key)`, appdata),
 			fmt.Sprintf(`Gemini CLI     : %s\.gemini\settings.json`, os.Getenv("USERPROFILE")),
 			fmt.Sprintf(`Codex CLI      : %s\.codex\config.toml`, os.Getenv("USERPROFILE")),
