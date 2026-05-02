@@ -33,11 +33,11 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// BuildVersion, BuildCommit, and BuildTime are embedded at build time via -ldflags.
-// wick mcp serve sets them automatically; manual builds get "dev"/"unknown".
+// BuildVersion, BuildCommit, and BuildTime are injected via -ldflags at build time.
+// wick mcp serve reads VERSION from the project root and injects it automatically.
 var (
 	BuildVersion = "dev"
-	BuildCommit  = "dev"
+	BuildCommit  = "unknown"
 	BuildTime    = "unknown"
 )
 

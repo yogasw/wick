@@ -92,7 +92,7 @@ func mcpServeMode(mode string) error {
 func buildBinary(bin string) error {
 	args := []string{"build"}
 	var ldf []string
-	if ver, err := moduleVersion(); err == nil {
+	if ver, err := readVersionFile(); err == nil {
 		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildVersion="+ver)
 	}
 	if commit, err := gitShortHash(); err == nil {
@@ -109,15 +109,15 @@ func buildBinary(bin string) error {
 	return c.Run()
 }
 
-func moduleVersion() (string, error) {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Version}}").Output()
+
+func readVersionFile() (string, error) {
+	data, err := os.ReadFile("VERSION")
 	if err != nil {
-		// Not a module or no version tag — use directory name as fallback.
-		return strings.TrimSpace(strings.Trim(filepath.Base("."), "/")), nil
+		return "", err
 	}
-	v := strings.TrimSpace(string(out))
+	v := strings.TrimSpace(string(data))
 	if v == "" {
-		return "", fmt.Errorf("no version")
+		return "", fmt.Errorf("empty VERSION file")
 	}
 	return v, nil
 }
@@ -250,15 +250,16 @@ func mcpInstallCmd() *cobra.Command {
 	var client, name, mode string
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install MCP server config into Claude, Cursor, Gemini, or Codex",
+		Short: "Install MCP server config into Claude, Cursor, Gemini, Codex, or Claude Code",
 		Long: `Write the mcpServers entry directly into the config file of the target client.
 
 Clients (--client):
-  claude   Claude Desktop
-  cursor   Cursor IDE
-  gemini   Gemini CLI
-  codex    OpenAI Codex CLI
-  all      install into all four
+  claude       Claude Desktop
+  cursor       Cursor IDE
+  gemini       Gemini CLI
+  codex        OpenAI Codex CLI
+  claude-code  Claude Code — writes to .mcp.json in the project root
+  all          install into all five
 
 Modes (--mode): same as mcp serve --mode. Use "dev" to force go run,
 "auto" (default) to use the compiled binary when present.`,
@@ -273,7 +274,7 @@ Modes (--mode): same as mcp serve --mode. Use "dev" to force go run,
 			return mcpInstall(client, name, mode, cwd)
 		},
 	}
-	cmd.Flags().StringVar(&client, "client", "claude", "target client: claude | cursor | gemini | codex | all")
+	cmd.Flags().StringVar(&client, "client", "claude", "target client: claude | cursor | gemini | codex | claude-code | all")
 	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
 	cmd.Flags().StringVar(&mode, "mode", "auto", "serve mode: auto | dev | build | rebuild")
 	return cmd
@@ -286,7 +287,7 @@ type mcpClientDef struct {
 	format string // "json" or "toml-codex"
 }
 
-func resolvedClients() []mcpClientDef {
+func resolvedClients(cwd string) []mcpClientDef {
 	home, _ := os.UserHomeDir()
 	appdata := os.Getenv("APPDATA")
 
@@ -311,6 +312,7 @@ func resolvedClients() []mcpClientDef {
 		{"cursor", "Cursor", cursorPath, "json"},
 		{"gemini", "Gemini CLI", filepath.Join(home, ".gemini", "settings.json"), "json"},
 		{"codex", "Codex CLI", filepath.Join(home, ".codex", "config.toml"), "toml-codex"},
+		{"claude-code", "Claude Code (project)", filepath.Join(cwd, ".mcp.json"), "json"},
 	}
 }
 
@@ -334,7 +336,7 @@ func claudeDesktopConfigWindows(appdata string) string {
 
 func mcpInstall(client, name, mode, cwd string) error {
 	entry := mcpEntry(cwd, mode)
-	all := resolvedClients()
+	all := resolvedClients(cwd)
 
 	targets := all
 	if client != "all" {
@@ -474,6 +476,7 @@ func configLocations() []string {
 			fmt.Sprintf(`Cursor         : %s\Cursor\User\settings.json  (mcpServers key)`, appdata),
 			fmt.Sprintf(`Gemini CLI     : %s\.gemini\settings.json`, os.Getenv("USERPROFILE")),
 			fmt.Sprintf(`Codex CLI      : %s\.codex\config.toml`, os.Getenv("USERPROFILE")),
+			`Claude Code    : .mcp.json  (project root; run: wick mcp install --client claude-code)`,
 		}
 	case "darwin":
 		home, _ := os.UserHomeDir()
@@ -482,6 +485,7 @@ func configLocations() []string {
 			fmt.Sprintf(`Cursor         : %s/Library/Application Support/Cursor/User/settings.json  (mcpServers key)`, home),
 			fmt.Sprintf(`Gemini CLI     : %s/.gemini/settings.json`, home),
 			fmt.Sprintf(`Codex CLI      : %s/.codex/config.toml`, home),
+			`Claude Code    : .mcp.json  (project root; run: wick mcp install --client claude-code)`,
 		}
 	default:
 		home, _ := os.UserHomeDir()
@@ -490,6 +494,7 @@ func configLocations() []string {
 			fmt.Sprintf(`Cursor         : %s/.config/Cursor/User/settings.json  (mcpServers key)`, home),
 			fmt.Sprintf(`Gemini CLI     : %s/.gemini/settings.json`, home),
 			fmt.Sprintf(`Codex CLI      : %s/.codex/config.toml`, home),
+			`Claude Code    : .mcp.json  (project root; run: wick mcp install --client claude-code)`,
 		}
 	}
 }

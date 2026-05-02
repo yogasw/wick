@@ -208,6 +208,116 @@ curl -X POST https://<your-wick-host>/mcp \
        "params":{"name":"wick_list","arguments":{}}}'
 ```
 
+## Local MCP (stdio)
+
+Wick ships a built-in stdio transport so any MCP client that spawns a child process — Claude Desktop, Cursor, Gemini CLI, Codex CLI, **Claude Code** — can connect directly to your local project without a hosted server or PAT.
+
+The local server runs as a synthetic `local` admin: all connectors are visible, no auth middleware, no token required.
+
+### Commands
+
+#### `wick mcp serve`
+
+Starts the MCP JSON-RPC server over stdin/stdout. Normally invoked automatically by the client; you rarely run this by hand.
+
+```
+wick mcp serve [--mode auto|dev|build|rebuild]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `auto` | Build mode (see table below) |
+| `--project` | (cwd) | Project root — set automatically by `mcp install`, not needed when running from the project dir |
+
+**Build modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `auto` | Rebuild only when HEAD commit changed or any `.go` file is newer than binary |
+| `dev` | `go run .` — always recompiles; no binary cache. Good while actively developing connectors |
+| `build` | Build once if binary missing, reuse otherwise |
+| `rebuild` | Always force a full rebuild |
+
+#### `wick mcp config`
+
+Print the ready-to-paste `mcpServers` JSON snippet for any client, plus show config file locations for all supported clients.
+
+```
+wick mcp config [--name <server-name>] [--mode auto|dev|build|rebuild]
+```
+
+#### `wick mcp install`
+
+Write the `mcpServers` entry directly into the target client's config file.
+
+```
+wick mcp install [--client <target>] [--name <server-name>] [--mode auto|dev|build|rebuild]
+```
+
+| `--client` | Config file written |
+|------------|---------------------|
+| `claude` | Claude Desktop — `claude_desktop_config.json` |
+| `cursor` | Cursor IDE — `settings.json` |
+| `gemini` | Gemini CLI — `~/.gemini/settings.json` |
+| `codex` | Codex CLI — `~/.codex/config.toml` |
+| `claude-code` | Claude Code (project) — `.mcp.json` in project root |
+| `all` | All five targets |
+
+Default `--client` is `claude`.
+
+### Wiring Claude Code
+
+From the project root:
+
+```sh
+wick mcp install --client claude-code
+# ✓ Claude Code (project)
+#   .mcp.json
+```
+
+Or for dev mode (always recompiles — no stale binary surprises):
+
+```sh
+wick mcp install --client claude-code --mode dev
+```
+
+The generated `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "myproject": {
+      "command": "go",
+      "args": ["run", ".", "mcp", "serve"],
+      "cwd": "/path/to/myproject"
+    }
+  }
+}
+```
+
+For `auto` / `build` / `rebuild` modes the entry uses the compiled wick binary with `--project` so the client can spawn it from any working directory:
+
+```json
+{
+  "mcpServers": {
+    "myproject": {
+      "command": "/path/to/wick",
+      "args": ["mcp", "serve", "--mode", "auto", "--project", "/path/to/myproject"]
+    }
+  }
+}
+```
+
+To approve all servers from `.mcp.json` without per-server prompts, add to `.claude/settings.json`:
+
+```json
+{
+  "enableAllProjectMcpServers": true
+}
+```
+
+After saving, restart Claude Code (or reload MCP servers via `/mcp`). The four `wick_*` tools appear in Claude Code's tool list with no token required.
+
 ## End-to-end test from a fresh project
 
 1. **Register a connector** — the scaffolded template ships [`connectors/crudcrud/`](./connector-module). Confirm it's registered in `main.go`.
