@@ -55,8 +55,15 @@ close_issue (destructive). credential is a personal access token
 ```
 
 ```
-add a connector for our internal Loki at https://loki.example.com.
-one operation: query (LogQL string input). add a token field (secret).
+Add a Loki connector for https://loki.example.com 
+auth switchable between token (secret) or username + password.
+
+Operations: 
+- query (LogQL, start, end, limit, direction)
+- labels
+- label_values (label name)
+Clean up the response so it's readable for LLM 
+figure out the best format yourself.
 ```
 
 ```
