@@ -38,6 +38,7 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_search` | `readOnlyHint` | Substring search over label, name, description |
 | `wick_get` | `readOnlyHint` | Fetch full detail for one `tool_id`, including `input_schema` |
 | `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params` |
+| `wick_info` | `readOnlyHint` | Return server version and build info |
 
 Why not a static list?
 
@@ -358,6 +359,36 @@ Every MCP `tools/call` writes a row to `connector_runs` with:
 - `parent_run_id` for retry lineage
 
 The data backs the [history page](./connector-module#history-page) on each connector row. Retention is enforced by the [Connector Runs Purge](./connector-runs-purge) job — default 7 days.
+
+## `wick_info`
+
+Returns the running server's version and build metadata. Useful for verifying which wick version is active without leaving the LLM context.
+
+```bash
+curl -X POST https://<your-wick-host>/mcp \
+  -H "Authorization: Bearer wick_pat_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","id":3,
+       "params":{"name":"wick_info","arguments":{}}}'
+```
+
+Response:
+
+```json
+{
+  "wick_version": "v0.4.1",
+  "server_build_time": "2026-05-02T10:03:30Z",
+  "server_commit": "924efec"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `wick_version` | Wick framework version — from the `VERSION` file at build time, or from the embedded Go module info when wick is used as a library dependency |
+| `server_build_time` | When this server binary was compiled (RFC 3339 UTC) |
+| `server_commit` | Short git commit hash of the server binary at build time |
+
+`wick_version` is injected automatically by `wick mcp serve` — no ldflags needed in downstream projects. When wick is imported as a library (`require github.com/yogasw/wick v1.x.x`), the version is read from Go's embedded module build info at startup.
 
 ## Reference
 
