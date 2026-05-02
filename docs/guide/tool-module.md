@@ -134,21 +134,7 @@ type Config struct {
 
 The framework reflects the struct into `configs` table rows at boot. Admin edits are live on the next request — no redeploy.
 
-### wick tag reference
-
-| Tag | Widget | Notes |
-|-----|--------|-------|
-| `desc=...` | — | Description shown in admin |
-| `required` | — | `c.Missing()` returns this key until set |
-| `secret` | Password | Masked in UI |
-| `textarea` | Textarea | Multi-line |
-| `dropdown=a\|b\|c` | Select | Pipe-separated options |
-| `checkbox` | Checkbox | Auto-applied for `bool` fields |
-| `number` | Number | Auto-applied for `int`/`float` fields |
-| `email`, `url`, `color`, `date`, `datetime` | Typed input | HTML input type |
-| `key=custom_name` | — | Override auto snake_case key |
-
-Field names are auto snake-cased: `InitText` → `init_text`.
+For the full widget table, all tag flags, key derivation rules, and the `kvlist` editable-table type, see the **[Config Tag Reference](/reference/config-tags)**.
 
 ## JavaScript Assets
 

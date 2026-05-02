@@ -45,7 +45,9 @@ app.RegisterTool(
 
 Tag grammar: `wick:"key,description=...,type=...,default=...,required,secret,locked"`. Field tanpa tag di-skip.
 
-`entity.Config` fields: `Owner`, `Key`, `Value`, `Type` (text/textarea/number/checkbox/dropdown/url/email/color/date/datetime), `Options` (pipe-separated, buat dropdown), `IsSecret`, `Required`, `CanRegenerate`, `Locked`, `Description`.
+`entity.Config` fields: `Owner`, `Key`, `Value`, `Type` (text/textarea/number/checkbox/dropdown/url/email/color/date/datetime/kvlist), `Options` (pipe-separated — dropdown options atau kvlist column names), `IsSecret`, `Required`, `CanRegenerate`, `Locked`, `Description`.
+
+`kvlist` type: `Options` = pipe-separated column names (`id|name|label`). `Value` = JSON array of string-keyed objects (`[{"id":"1","name":"Sales"}]`). Rendered sebagai inline editable table di admin UI, auto-save 800ms debounce.
 
 Handler baca via `c.Cfg("key")` / `c.CfgInt` / `c.CfgBool` / `c.Missing()` (tool) atau `job.FromContext(ctx).Cfg("key")` (job).
 

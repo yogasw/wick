@@ -443,3 +443,74 @@ templ IndexPage(user *entity.User) {
 <div class="bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100
             border-white-300 dark:border-navy-600">...</div>
 ```
+
+---
+
+## 12. KVList (editable table config field)
+
+Used in the admin config block form for `kvlist`-type fields. Renders an
+always-visible mini-table with inline inputs, add-row, and remove-row buttons.
+Auto-saves via debounced `input` listeners (no submit button needed).
+
+### Tag (in Config struct)
+
+```go
+QuestionGroups string `wick:"kvlist=id|name|label;desc=Row definitions."`
+// bare kvlist defaults to a single "value" column:
+Mapping string `wick:"kvlist;desc=Simple list."`
+```
+
+### Value format
+
+Stored as JSON in the `configs.value` column:
+
+```json
+[{"id":"1","name":"Sales","label":"Q1"},{"id":"2","name":"Support","label":"Q2"}]
+```
+
+Read in Go:
+
+```go
+var rows []map[string]string
+json.Unmarshal([]byte(c.Cfg("question_groups")), &rows)
+```
+
+### Rendered structure (from `kvlistBlock` + `kvDataRow` in configs.templ)
+
+```
+┌─ Block card (rounded-xl border) ─────────────────────────┐
+│ Header: key · col1 · col2    [✓ saved]                    │
+│ Description (if any)                                       │
+├───────────────────────────────────────────────────────────┤
+│  col1 │ col2 │ col3  │ ×                                   │  ← header row
+│ ──────┼──────┼───────┼────                                │
+│ [inp] │[inp] │ [inp] │ ×                                   │  ← data rows
+│ ...                                                        │
+├───────────────────────────────────────────────────────────┤
+│  [+ Add Row]  (dashed button, full width)                  │
+└───────────────────────────────────────────────────────────┘
+```
+
+### Notes
+
+- Column names come from `Options` (pipe-separated), set by the `kvlist=` tag flag.
+- Auto-save: `input` events on any `[data-col]` input debounce 800ms then POST JSON to the config endpoint. Row removal triggers immediate save.
+- `data-save-status` span in the header shows `saving…` / `✓ saved` / `✗ failed`.
+- `data-missing-badge` clears client-side on first successful save with non-empty rows.
+- JS helpers `kvBlockAddRow` / `kvBlockRemoveRow` are exposed on `window` by `configsSaveScript()`.
+
+### Common mistakes
+
+```go
+// WRONG: using kvlist for a single flat list — use textarea or dropdown instead
+Notes string `wick:"kvlist;desc=Freeform notes."`
+// RIGHT: kvlist makes sense when data has 2+ columns OR when rows are structured
+Endpoints string `wick:"kvlist=name|url|method;desc=API endpoints."`
+
+// WRONG: reading kvlist value as a plain string
+val := c.Cfg("endpoints")  // val is raw JSON — useless as a plain string
+
+// RIGHT: unmarshal the JSON array
+var rows []map[string]string
+_ = json.Unmarshal([]byte(c.Cfg("endpoints")), &rows)
+```
