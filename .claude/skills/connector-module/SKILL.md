@@ -37,29 +37,44 @@ The full design lives in [`internal/docs/connectors-design.md`](../../../interna
 - Any edit under `internal/connectors/{name}/`, `pkg/connector/`, `internal/mcp/`
 - Changes to `internal/connectors/registry.go::RegisterBuiltins`
 
-## Before building: ALWAYS ask 4 questions
+## Before building: ALWAYS gather the contract
 
-Whenever the user asks for a **new** connector, the very first reply back is:
+Whenever the user asks for a **new** connector — or for a new operation on an existing one — STOP and ask before writing code. Connectors are LLM-facing; the wrong input/output shape costs more to fix than to gather upfront.
 
-> *"Before I write anything, please confirm four things so the shape is right:*
-> 1. *Endpoint + auth — what does this API need? (base URL, API key, OAuth token, etc. — these become fields on `Configs`)*
-> 2. *Operations — which actions should the LLM be able to call? List name, input arguments, and whether each one is destructive (delete, post, send — these default to off on every new row).*
-> 3. *Output shape — typed struct or passthrough JSON? (Recommended: typed struct so the LLM gets a clean, stable shape independent of upstream changes.)*
-> 4. *Default tags — group-only, or do you also want a filter tag to restrict who can use this connector? (Default is group-only — every approved user sees it.)"*
+The very first reply back is a short numbered checklist asking the user (or the upstream docs) for:
 
-Don't silently invent operations or skip the destructive flag.
+> *"Before I write anything, please share these so the shape is right:*
+> 1. *Endpoint + auth — base URL, auth scheme (bearer / basic / header key / OAuth), required scopes. These become `Configs` fields.*
+> 2. *Operations — which actions should the LLM call? For each: name, what it does, and whether it mutates state (delete, post, send → `OpDestructive`, defaults off on every new row).*
+> 3. **One concrete sample request per operation** — method, URL, headers, query params, body. A real cURL or HTTP example, not prose.*
+> 4. **One concrete sample response per operation** — both happy path and a typical error envelope. The error shape decides how `repo.go` parses non-2xx.*
+> 5. *Output shape — typed struct (recommended) or passthrough JSON? Typed gives the LLM a stable shape independent of upstream cosmetics.*
+> 6. *Pagination / rate-limit / retry quirks — anything an op needs to surface as input or error.*
+> 7. *Default tags — group-only (default, every approved user sees it) or restricted by filter tag?"*
+
+Then **explain back** what you'll build: list the ops you're going to write, the `Configs` fields you'll declare, and the typed return shapes — and wait for confirmation before generating code. This catches "no, the API actually needs both `app_id` and `tenant_id`" or "delete is reversible for 30 days, treat it as `Op` not `OpDestructive`" while it's still cheap.
+
+Don't silently invent operations, skip the destructive flag, or guess request/response shapes from a description.
 
 ## Module layout
 
+The default layout is a three-file split — same shape as tools (`handler.go` / `service.go` / `repo.go`):
+
 ```
 internal/connectors/myconn/
-  connector.go    # Meta + Configs + per-op Input structs + Operations() + every ExecuteFunc
-  service.go      # optional split when business logic outgrows connector.go
-  repo.go         # rare — only for external I/O beyond direct HTTP (e.g. a DB cache)
+  connector.go    # Meta + Configs + per-op Input structs + Operations() + thin op handlers
+  service.go      # pure Go — input validation, URL/body construction, response shaping
+  repo.go         # outbound I/O — HTTP calls, DB, S3 (everything that touches the network)
   doc.go          # optional — package-level godoc when connector.go gets crowded
 ```
 
-Most connectors fit in a single `connector.go`. Reach for split files only when the file passes ~400 lines or helpers stop being incidental.
+The shipped reference at [`internal/connectors/crudcrud/`](../../../internal/connectors/crudcrud/) follows exactly this split. Mirror it.
+
+- **`connector.go`** stays scannable — a reader sees Meta, Configs, every Input struct, every Operation description, and the dispatch outline of every handler without scrolling past validation logic or HTTP wiring.
+- **`service.go`** is unit-testable in isolation. Validators and URL builders take a `*connector.Ctx` (or plain values) and return data — no network, no fixtures, fast tests.
+- **`repo.go`** is where the goroutine-leak rule lives. Concentrating every `http.NewRequestWithContext` in one file makes the rule trivial to enforce and audit.
+
+Handlers in `connector.go` should read like five lines: validate via `service.go`, dispatch via `repo.go`, return. Anything past "parse, validate, dispatch" goes in `service.go`. Trivial single-op connectors (no validation, one HTTP call) MAY collapse into a single `connector.go`, but default to splitting.
 
 ## File contract
 
@@ -159,7 +174,7 @@ Write action verbs and be specific about input/output shape:
 
 ### `ExecuteFunc`
 
-See [`internal/connectors/crudcrud/connector.go`](../../../internal/connectors/crudcrud/connector.go) for the canonical reference — five operations, one destructive, JSON validation helper, error wrapping, full happy-path + sad-path coverage.
+See [`internal/connectors/crudcrud/`](../../../internal/connectors/crudcrud/) for the canonical reference — five operations split across `connector.go` (handlers), `service.go` (validation, URL building, JSON body checks), `repo.go` (HTTP). One op is destructive; error wrapping and happy-path + sad-path coverage are in `repo.go::doRequest`.
 
 ### Golden rules for `ExecuteFunc`
 
