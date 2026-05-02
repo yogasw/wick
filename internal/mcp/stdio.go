@@ -40,7 +40,7 @@ func (h *Handler) ServeStdio(ctx context.Context, r io.Reader, w io.Writer) {
 // ServeStdioOS is the process-level entrypoint: reads os.Stdin, writes
 // os.Stdout. Thin wrapper around ServeStdio for production use.
 func (h *Handler) ServeStdioOS(ctx context.Context) {
-	fmt.Fprintln(os.Stderr, "wick MCP server ready (stdio)")
+	fmt.Fprintf(os.Stderr, "wick MCP server ready (stdio) %s\n", h.serverVersion())
 	h.ServeStdio(ctx, os.Stdin, os.Stdout)
 }
 

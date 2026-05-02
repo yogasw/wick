@@ -17,9 +17,6 @@
 package app
 
 import (
-	"fmt"
-	"os"
-
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -36,10 +33,12 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// BuildCommit is the git commit hash embedded at build time via:
-//
-//	go build -ldflags="-X github.com/yogasw/wick/app.BuildCommit=$(git rev-parse HEAD)"
-var BuildCommit = "dev"
+// BuildVersion and BuildCommit are embedded at build time via -ldflags.
+// wick mcp serve sets them automatically; manual builds get "dev".
+var (
+	BuildVersion = "dev"
+	BuildCommit  = "dev"
+)
 
 // RegisterTool adds a tool instance to the registry. One call = one
 // card on the home grid; call again with a different meta.Key (and, if
@@ -141,14 +140,6 @@ func RegisterConnector[C any](meta connector.Meta, creds C, ops []connector.Oper
 //
 // Blocks until shutdown.
 func Run() {
-	// Early exit for the CLI wrapper's stale-binary check.
-	for _, arg := range os.Args[1:] {
-		if arg == "--wick-commit" {
-			fmt.Println(BuildCommit)
-			os.Exit(0)
-		}
-	}
-
 	defaultPort := config.Load().App.Port
 	var port int
 	root := &cobra.Command{
@@ -185,7 +176,7 @@ func Run() {
 		Use:   "serve",
 		Short: "Run MCP server over stdio (for Claude Desktop, Cursor, etc.)",
 		Run: func(cmd *cobra.Command, args []string) {
-			api.RunMCPStdio()
+			api.RunMCPStdio(BuildVersion, BuildCommit)
 		},
 	}
 	mcpCmd.AddCommand(mcpServeCmd)

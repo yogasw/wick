@@ -27,7 +27,7 @@ func mcpServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Run MCP server over stdio (no auth, local admin)",
 		Run: func(cmd *cobra.Command, args []string) {
-			api.RunMCPStdio()
+			api.RunMCPStdio("dev", "")
 		},
 	}
 }

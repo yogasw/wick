@@ -42,10 +42,30 @@ const latestProtocolVersion = "2025-03-26"
 // "Refresh tool list" after every admin change.
 type Handler struct {
 	connectors *connectors.Service
+	version    string
+	commit     string
 }
 
 func NewHandler(c *connectors.Service) *Handler {
-	return &Handler{connectors: c}
+	return &Handler{connectors: c, version: "dev", commit: ""}
+}
+
+// WithBuildInfo sets the version and short commit hash shown in the
+// MCP initialize response. Called by RunMCPStdio with app.Build* vars.
+func (h *Handler) WithBuildInfo(version, commit string) *Handler {
+	h.version = version
+	if len(commit) > 8 {
+		commit = commit[:8]
+	}
+	h.commit = commit
+	return h
+}
+
+func (h *Handler) serverVersion() string {
+	if h.commit != "" && h.commit != "dev" {
+		return h.version + " (" + h.commit + ")"
+	}
+	return h.version
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +158,7 @@ func (h *Handler) handleInitialize(w http.ResponseWriter, _ *http.Request, req r
 	_ = json.Unmarshal(req.Params, &p) // tolerate older clients that omit params
 	writeRPCResult(w, req.ID, initializeResult{
 		ProtocolVersion: negotiateProtocolVersion(p.ProtocolVersion),
-		ServerInfo:      serverInfo{Name: "wick", Version: "0.4.0"},
+		ServerInfo:      serverInfo{Name: "wick", Version: h.serverVersion()},
 		Capabilities:    serverCapabilities{Tools: toolsCapability{ListChanged: false}},
 	})
 }
@@ -189,12 +209,7 @@ type toolAnnotation struct {
 
 func ptrBool(b bool) *bool { return &b }
 
-// metaToolDescriptors returns the fixed three-tool surface every
-// authenticated MCP client receives. Kept as a function (not a package
-// var) so the input schemas are fresh maps per call — JSON encoding
-// mutates fields in-place in some clients and we don't want shared
-// state surprises.
-func metaToolDescriptors() []toolDescriptor {
+func (h *Handler) metaToolDescriptors() []toolDescriptor {
 	return []toolDescriptor{
 		{
 			Name: "wick_list",
@@ -284,11 +299,23 @@ func metaToolDescriptors() []toolDescriptor {
 				OpenWorldHint:   ptrBool(true),
 			},
 		},
+		{
+			Name:        "wick_info",
+			Description: "Return wick server version and build info. Use this when asked about the version, build, or commit of the running wick instance.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Annotations: &toolAnnotation{
+				Title:        "Wick server info",
+				ReadOnlyHint: ptrBool(true),
+			},
+		},
 	}
 }
 
 func (h *Handler) handleToolsList(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
-	writeRPCResult(w, req.ID, toolListResult{Tools: metaToolDescriptors()})
+	writeRPCResult(w, req.ID, toolListResult{Tools: h.metaToolDescriptors()})
 }
 
 // ── tools/call ───────────────────────────────────────────────────────
@@ -344,9 +371,21 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		h.handleWickGet(w, r, req, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_execute":
 		h.handleWickExecute(w, r, req, p.Arguments, user, tagIDs)
+	case "wick_info":
+		h.handleWickInfo(w, req)
 	default:
 		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
 	}
+}
+
+// ── wick_info ──────────────────────────────────────────────────────
+
+func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
+	info := map[string]string{"version": h.version, "commit": h.commit}
+	b, _ := json.Marshal(info)
+	writeRPCResult(w, req.ID, toolCallResult{
+		Content: []toolContent{{Type: "text", Text: string(b)}},
+	})
 }
 
 // ── wick_list ───────────────────────────────────────────────────────

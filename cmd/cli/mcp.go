@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,7 @@ func mcpCmd() *cobra.Command {
 }
 
 func mcpServeCmd() *cobra.Command {
-	var mode string
+	var mode, project string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run MCP server over stdio",
@@ -34,10 +35,17 @@ Modes (--mode):
   build    build once if binary missing, reuse existing binary otherwise
   rebuild  always force a full rebuild before running`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if project != "" {
+				if err := os.Chdir(project); err != nil {
+					return fmt.Errorf("chdir %s: %w", project, err)
+				}
+			}
 			return mcpServeMode(mode)
 		},
 	}
 	cmd.Flags().StringVar(&mode, "mode", "auto", "build mode: auto | dev | build | rebuild")
+	cmd.Flags().StringVar(&project, "project", "", "project root; set by mcp install so clients can spawn wick from any CWD")
+	cmd.Flags().MarkHidden("project")
 	return cmd
 }
 
@@ -80,12 +88,17 @@ func mcpServeMode(mode string) error {
 	}
 }
 
-// buildBinary compiles the project into bin, embedding the current git
-// commit hash via ldflags so needsRebuild can query it without a sidecar file.
 func buildBinary(bin string) error {
 	args := []string{"build"}
-	if head, err := gitHEAD(); err == nil {
-		args = append(args, "-ldflags", "-X github.com/yogasw/wick/app.BuildCommit="+head)
+	var ldf []string
+	if ver, err := moduleVersion(); err == nil {
+		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildVersion="+ver)
+	}
+	if commit, err := gitShortHash(); err == nil {
+		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildCommit="+commit)
+	}
+	if len(ldf) > 0 {
+		args = append(args, "-ldflags", strings.Join(ldf, " "))
 	}
 	args = append(args, "-o", bin, ".")
 	c := exec.Command("go", args...)
@@ -94,51 +107,97 @@ func buildBinary(bin string) error {
 	return c.Run()
 }
 
-func runBinary(bin string) error {
-	abs, err := filepath.Abs(bin)
+func moduleVersion() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Version}}").Output()
 	if err != nil {
-		return err
+		// Not a module or no version tag — use directory name as fallback.
+		return strings.TrimSpace(strings.Trim(filepath.Base("."), "/")), nil
 	}
-	c := exec.Command(abs, "mcp", "serve")
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
+	v := strings.TrimSpace(string(out))
+	if v == "" {
+		return "", fmt.Errorf("no version")
+	}
+	return v, nil
 }
 
-// needsRebuild returns true when the binary doesn't exist or the commit
-// embedded in it differs from HEAD. Falls back to true on any error.
-func needsRebuild(bin string) bool {
-	abs, err := filepath.Abs(bin)
-	if err != nil {
-		return true
-	}
-	if _, err := os.Stat(abs); err != nil {
-		return true
-	}
-	head, err := gitHEAD()
-	if err != nil {
-		return false // not a git repo — binary exists, skip rebuild
-	}
-	out, err := exec.Command(abs, "--wick-commit").Output()
-	if err != nil {
-		return true
-	}
-	return strings.TrimSpace(string(out)) != head
-}
-
-func gitHEAD() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+func gitShortHash() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
+func runBinary(bin string) error {
+	abs, err := filepath.Abs(bin)
+	if err != nil {
+		return err
+	}
+	// os/exec on Windows calls lookExtensions inside Cmd.Start which requires
+	// a .exe suffix even when Path is set directly. os.StartProcess goes
+	// straight to CreateProcess and works with any valid PE binary path.
+	proc, err := os.StartProcess(abs, []string{abs, "mcp", "serve"}, &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	if err != nil {
+		return err
+	}
+	ps, err := proc.Wait()
+	if err != nil {
+		return err
+	}
+	if ec := ps.ExitCode(); ec != 0 {
+		return fmt.Errorf("exit status %d", ec)
+	}
+	return nil
+}
+
+// needsRebuild returns true when the binary is missing or any .go file
+// in the project is newer than the binary. Works without git and detects
+// uncommitted changes.
+func needsRebuild(bin string) bool {
+	abs, err := filepath.Abs(bin)
+	if err != nil {
+		return true
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return true
+	}
+	binMod := info.ModTime()
+
+	// Also check go.mod / go.sum — dependency updates change these.
+	for _, f := range []string{"go.mod", "go.sum"} {
+		if fi, err := os.Stat(f); err == nil && fi.ModTime().After(binMod) {
+			return true
+		}
+	}
+
+	stale := false
+	filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || stale {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == "vendor" || name == ".git" || name == "bin" {
+				return filepath.SkipDir
+			}
+		}
+		if filepath.Ext(path) == ".go" {
+			if fi, err := d.Info(); err == nil && fi.ModTime().After(binMod) {
+				stale = true
+			}
+		}
+		return nil
+	})
+	return stale
+}
+
 // mcpBinPath returns the platform-correct output path for go build.
 func mcpBinPath() string {
 	if runtime.GOOS == "windows" {
-		return `bin\app.exe`
+		return `bin\app`
 	}
 	return "bin/app"
 }
@@ -368,34 +427,36 @@ func installCodexTOML(path, name string, entry map[string]any) error {
 // ---------- shared helpers ----------
 
 // mcpEntry builds the mcpServers entry for the given serve mode.
-// mode "dev" always uses "go run"; all others use the compiled binary
-// if it exists, falling back to "go run" when the binary is absent.
-// cwd is always included so the client spawns the process in the right
-// directory (needed for .env, SQLite db, etc.).
+//
+// Non-dev modes point at the wick CLI binary (os.Executable) with
+// --mode and --project flags so the client can spawn wick from any
+// working directory and still rebuild/cache correctly.
+//
+// Dev mode falls back to "go run ." which requires the client to
+// honor the cwd field — only reliable for terminal use.
 func mcpEntry(cwd, mode string) map[string]any {
-	goRun := map[string]any{
-		"command": "go",
-		"args":    []string{"run", ".", "mcp", "serve"},
-		"cwd":     cwd,
-	}
 	if mode == "dev" {
-		return goRun
-	}
-
-	binName := "app"
-	if runtime.GOOS == "windows" {
-		binName = "app.exe"
-	}
-	binPath := filepath.Join(cwd, "bin", binName)
-
-	if _, err := os.Stat(binPath); err == nil {
 		return map[string]any{
-			"command": binPath,
-			"args":    []string{"mcp", "serve"},
+			"command": "go",
+			"args":    []string{"run", ".", "mcp", "serve"},
 			"cwd":     cwd,
 		}
 	}
-	return goRun
+
+	wickExe, err := os.Executable()
+	if err != nil {
+		wickExe = "wick"
+	} else {
+		// Resolve symlinks so the stored path is the real binary.
+		if resolved, err := filepath.EvalSymlinks(wickExe); err == nil {
+			wickExe = resolved
+		}
+	}
+
+	return map[string]any{
+		"command": wickExe,
+		"args":    []string{"mcp", "serve", "--mode", mode, "--project", cwd},
+	}
 }
 
 func configLocations() []string {
