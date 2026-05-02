@@ -14,19 +14,20 @@
 // and document shapes are LLM-supplied so a single instance can model
 // any REST-ish resource the caller invents.
 //
+// File layout follows the standard wick connector split:
+//
+//   - connector.go  — Meta, Configs, per-op Input structs, Operations,
+//     and the thin op handler funcs (this file).
+//   - service.go    — pure Go validation and URL construction.
+//   - repo.go       — outbound HTTP I/O.
+//
 // Use this package as the canonical reference when building your own
 // connector. See <https://yogasw.github.io/wick/guide/connector-module>
 // for the full guide.
 package crudcrud
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -127,6 +128,10 @@ func Operations() []connector.Operation {
 }
 
 // ── Operation handlers ───────────────────────────────────────────────
+//
+// Handlers are deliberately thin: validate inputs via service.go, then
+// hand off to repo.go for the HTTP call. Anything that grows beyond
+// "parse, validate, dispatch" belongs in service.go.
 
 func create(c *connector.Ctx) (any, error) {
 	resource, err := requireResource(c)
@@ -200,105 +205,4 @@ func deleteOp(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "id": id, "resource": resource}, nil
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-func requireResource(c *connector.Ctx) (string, error) {
-	r := strings.TrimSpace(c.Input("resource"))
-	if r == "" {
-		return "", errors.New("resource is required")
-	}
-	return r, nil
-}
-
-func requireResourceAndID(c *connector.Ctx) (string, string, error) {
-	r, err := requireResource(c)
-	if err != nil {
-		return "", "", err
-	}
-	id := strings.TrimSpace(c.Input("id"))
-	if id == "" {
-		return "", "", errors.New("id is required")
-	}
-	return r, id, nil
-}
-
-// requireJSONBody validates that the LLM-supplied body parses as JSON
-// before we ship it upstream. crudcrud accepts garbage and 400s on it
-// — fail fast so the run row carries a useful error message.
-func requireJSONBody(raw string) ([]byte, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.New("body is required")
-	}
-	var probe any
-	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
-		return nil, fmt.Errorf("body is not valid JSON: %w", err)
-	}
-	return []byte(raw), nil
-}
-
-func buildURL(c *connector.Ctx, resource, id string) (string, error) {
-	base := strings.TrimRight(strings.TrimSpace(c.Cfg("base_url")), "/")
-	if base == "" {
-		return "", errors.New("base_url is not configured for this connector")
-	}
-	if id != "" {
-		return base + "/" + resource + "/" + id, nil
-	}
-	return base + "/" + resource, nil
-}
-
-// doRequest issues the HTTP call, surfaces non-2xx as a typed error,
-// and decodes the response as JSON when the body is non-empty. Empty
-// bodies (typical for PUT/DELETE) yield a nil map.
-//
-// Note the use of http.NewRequestWithContext: every connector MUST
-// propagate c.Context() so the call aborts when the MCP transport
-// cancels (client disconnect, deadline) instead of leaking a goroutine
-// that waits on the upstream response.
-func doRequest(c *connector.Ctx, method, url string, body []byte) (any, error) {
-	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(c.Context(), method, url, reader)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call crudcrud: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(raw))
-		if msg == "" {
-			msg = resp.Status
-		}
-		return nil, fmt.Errorf("crudcrud %d: %s", resp.StatusCode, msg)
-	}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, nil
-	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, fmt.Errorf("decode response: %w (body: %s)", err, truncate(string(raw), 200))
-	}
-	return decoded, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

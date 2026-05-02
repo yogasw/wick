@@ -14,16 +14,41 @@ Connectors are the third class of wick module beside Tools and Jobs. They wrap o
 - An admin can spawn **many rows per definition** at runtime through `/manager/connectors/{key}` — each row carries its own credentials, label, and tags. Same Go code, different rows = different (env, team, account).
 - LLMs do not see N×M static tools. The MCP server exposes a fixed meta surface (`wick_list`, `wick_search`, `wick_get`, `wick_execute`); each (row × operation) pair is addressed by an opaque `tool_id` of the form `conn:{connector_id}/{op_key}`. See the [MCP guide](./mcp) for the full transport story.
 
+## Before you build
+
+Before writing a single line, lock down the API contract. Connectors are LLM-facing and the wrong shape costs more to fix than to gather upfront. Ask the user (or skim the upstream docs yourself) for:
+
+| What to gather | Why it matters |
+|----------------|----------------|
+| **Endpoint + auth** — base URL, auth scheme (bearer token, basic, header key, OAuth), required scopes | Becomes the `Configs` struct. Auth scheme decides whether one credential field is enough or you need several. |
+| **One concrete sample request per operation** — method, URL, headers, query params, body | Drives the `Input` struct shape and the request builder in `repo.go`. Don't guess from a description. |
+| **One concrete sample response per operation** — both happy path and a typical error | Drives the typed return shape and the error parser. Upstream error envelopes differ wildly; pick the wrong field and run history shows blank errors. |
+| **Which ops mutate state** — and how reversible each one is | Decides `Op` vs `OpDestructive`. Destructive ops default off on every new row; missing the flag means the LLM can fire them silently. |
+| **Pagination, rate limit, retry quirks** | Decides whether the op needs a `cursor`/`page` input, and whether to surface limit headers as errors instead of swallowing them. |
+| **Default tags** — public to every approved user, or restricted by filter tag? | Default is group-only (every approved user sees it). Filter tags require an explicit ask — never add one on your own initiative. |
+
+Paste the sample request/response into the conversation before coding. It is much easier to align on shape with a real payload in front of you than to reverse-engineer it from prose.
+
 ## File structure
+
+Connectors mirror the tool module split — three files, one job each:
 
 ```
 connectors/my-connector/
-├── connector.go    # Meta + Configs + per-op Input structs + Operations() + ExecuteFunc impls
-├── service.go      # optional split when the file outgrows ~400 lines
-└── repo.go         # rare — only for external I/O beyond direct HTTP (e.g. a DB cache)
+├── connector.go    # Meta + Configs + per-op Input structs + Operations() + thin op handlers
+├── service.go      # pure Go logic — input validation, URL/body construction, response shaping
+└── repo.go         # outbound I/O — HTTP calls, DB, S3 (everything that touches the network)
 ```
 
-Most connectors fit in a single `connector.go`. The shipped example [`connectors/crudcrud/connector.go`](https://github.com/yogasw/wick/blob/master/template/connectors/crudcrud/connector.go) is ~290 lines and covers five operations including one destructive — that's a good upper bound for the single-file pattern.
+Why split:
+
+- **`connector.go` stays scannable.** A reader can read Meta, Configs, every Input struct, every Operation description, and the dispatch shape of every handler without scrolling past validation logic or HTTP wiring.
+- **`service.go` is unit-testable in isolation.** Validators and URL builders take a `*connector.Ctx` (or plain values) and return data — no network, no fixtures, fast tests.
+- **`repo.go` is where the goroutine-leak rule lives.** Concentrating every `http.NewRequestWithContext` call in one file makes the rule easy to enforce and easy to audit.
+
+Handlers in `connector.go` should read like a five-line outline: validate via `service.go`, dispatch via `repo.go`, return. Anything that grows beyond "parse, validate, dispatch" belongs in `service.go`.
+
+The shipped example [`connectors/crudcrud/`](https://github.com/yogasw/wick/tree/master/template/connectors/crudcrud) follows this layout — five operations including one destructive, end-to-end.
 
 ## Register in main.go
 
@@ -302,7 +327,7 @@ After registering and filling credentials:
 ## Reference
 
 - Public API: `pkg/connector` — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `ExecuteFunc`, `Ctx`
-- Canonical example: [`connectors/crudcrud/connector.go`](https://github.com/yogasw/wick/blob/master/template/connectors/crudcrud/connector.go)
+- Canonical example: [`connectors/crudcrud/`](https://github.com/yogasw/wick/tree/master/template/connectors/crudcrud) — three-file split (`connector.go` + `service.go` + `repo.go`)
 - MCP transport: [MCP for LLMs](./mcp)
 - Auth modes: [Access Tokens (PAT)](./access-tokens), [OAuth Connections](./oauth-connections)
 - Audit retention: [Connector Runs Purge](./connector-runs-purge)
