@@ -116,8 +116,10 @@ The ones you'll reach for day-to-day:
 | Command | What it does |
 |---------|-------------|
 | `wick dev` | Generate templ + CSS, start server at `http://localhost:8080` |
+| `wick server` | Start HTTP server only (`go run . server`) — no asset generation |
+| `wick worker` | Start background job worker (`go run . worker`) |
 | `wick build` | Generate + minify CSS, compile binary |
 | `wick test` | Run `go test ./...` with coverage |
 | `wick skill sync` | Refresh bundled AI skills after upgrading wick |
 
-Full list — built-in CLI commands (`init`, `run`, `skill`, `version`) and task shortcuts from `wick.yml` (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) — see the [CLI reference](/reference/cli).
+Full list — built-in CLI commands (`init`, `run`, `server`, `worker`, `skill`, `version`) and task shortcuts from `wick.yml` (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) — see the [CLI reference](/reference/cli).
