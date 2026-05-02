@@ -89,6 +89,9 @@ templ simpleFieldWidget(row entity.Config) {
 			placeholder="Leave blank to keep current value"
 			class={ cfgInputClass }
 		/>
+		if row.Value != "" {
+			<p class="mt-1 text-xs font-mono text-black-700 dark:text-black-600">••••••••</p>
+		}
 	} else {
 		switch row.Type {
 			case "textarea":

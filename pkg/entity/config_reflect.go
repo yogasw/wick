@@ -57,9 +57,16 @@ func StructToConfigs(cfg any) []Config {
 
 		widget, opts := widgetFor(f.Type.Kind(), tag)
 
+		value := goValueToString(v.Field(i))
+		if isZeroString(value) {
+			if def, ok := tag["default"]; ok {
+				value = def
+			}
+		}
+
 		out = append(out, Config{
 			Key:           key,
-			Value:         goValueToString(v.Field(i)),
+			Value:         value,
 			Type:          widget,
 			Options:       opts,
 			IsSecret:      tag["secret"] == "true",
@@ -124,6 +131,12 @@ func widgetFor(k reflect.Kind, tag map[string]string) (widget, options string) {
 	default:
 		return "text", ""
 	}
+}
+
+// isZeroString returns true for the string representations of Go zero
+// values produced by goValueToString: "", "0", and "false".
+func isZeroString(s string) bool {
+	return s == "" || s == "0" || s == "false"
 }
 
 // goValueToString renders a reflect.Value as the string form stored in

@@ -18,6 +18,7 @@ var skillLabels = map[string]string{
 	"tool-module":      "Create/edit a tool or job (`tools/`, `jobs/`)",
 	"connector-module": "Create/edit a connector (`connectors/`)",
 	"design-system":    "UI styling, colors, spacing, components",
+	"config-tags":      "Adding/editing `wick:\"...\"` config fields — widget types, modifiers, key derivation",
 }
 
 func skillCmd(tpl, designSystem embed.FS) *cobra.Command {
