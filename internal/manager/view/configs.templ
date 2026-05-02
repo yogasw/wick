@@ -116,6 +116,8 @@ templ valueInput(row entity.Config) {
 				@fieldtype.Date(row)
 			case "datetime":
 				@fieldtype.Datetime(row)
+			case "kvlist":
+				@fieldtype.KVList(row)
 			default:
 				@fieldtype.Text(row)
 		}
@@ -138,6 +140,12 @@ templ valueDisplay(row entity.Config) {
 			<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">true</span>
 		} else {
 			<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">false</span>
+		}
+	} else if row.Type == "kvlist" {
+		if row.Value == "" || row.Value == "[]" {
+			<span class="font-mono text-xs text-black-700 dark:text-black-600">—</span>
+		} else {
+			<span class="font-mono text-xs text-black-900 dark:text-white-100">{ fieldtype.KVListSummary(row) }</span>
 		}
 	} else if row.Value == "" {
 		<span class="font-mono text-xs text-black-700 dark:text-black-600">—</span>

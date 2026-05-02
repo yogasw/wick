@@ -1,0 +1,119 @@
+package fieldtype
+
+import (
+	"strings"
+
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// KVList renders an editable multi-row table widget. Options holds
+// pipe-separated column names (e.g. "id|name"); Value is a JSON array
+// of string-keyed objects: [{"id":"1","name":"Sales Report"},...].
+// The hidden input named "value" is serialized to JSON on submit.
+templ KVList(row entity.Config) {
+	@kvlistEditor(kvlistColumns(row), kvlistRows(row))
+}
+
+templ kvlistEditor(cols []string, rows []map[string]string) {
+	<div class="kvlist-editor w-full" data-cols={ strings.Join(cols, "|") }>
+		<div class="overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 mb-2">
+			<table class="w-full text-xs">
+				<thead>
+					<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+						for _, col := range cols {
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-600 capitalize">{ col }</th>
+						}
+						<th class="px-3 py-2 w-8"></th>
+					</tr>
+				</thead>
+				<tbody class="kvlist-rows">
+					for _, entry := range rows {
+						<tr class="border-b border-white-300 dark:border-navy-600 last:border-0">
+							for _, col := range cols {
+								<td class="px-2 py-1">
+									<input
+										type="text"
+										data-col={ col }
+										value={ entry[col] }
+										class="w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-1 focus:ring-green-200 dark:focus:ring-green-800"
+									/>
+								</td>
+							}
+							<td class="px-2 py-1 text-center">
+								<button
+									type="button"
+									data-kvlist-remove
+									class="text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none"
+									aria-label="Remove row"
+								>×</button>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		<button
+			type="button"
+			data-kvlist-add
+			class="rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+		>+ Add Row</button>
+		<input type="hidden" name="value"/>
+		<script>
+		(function(){
+			var w=document.currentScript.closest('.kvlist-editor');
+			var cols=w.getAttribute('data-cols').split('|');
+			var tbody=w.querySelector('.kvlist-rows');
+			var addBtn=w.querySelector('[data-kvlist-add]');
+			var hidden=w.querySelector('input[name="value"]');
+			var form=w.closest('form');
+			var inputClass='w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-1 focus:ring-green-200 dark:focus:ring-green-800';
+			function mkRow(vals){
+				var tr=document.createElement('tr');
+				tr.className='border-b border-white-300 dark:border-navy-600 last:border-0';
+				cols.forEach(function(c){
+					var td=document.createElement('td');
+					td.className='px-2 py-1';
+					var inp=document.createElement('input');
+					inp.type='text';
+					inp.setAttribute('data-col',c);
+					inp.value=(vals&&vals[c])||'';
+					inp.className=inputClass;
+					td.appendChild(inp);
+					tr.appendChild(td);
+				});
+				var td2=document.createElement('td');
+				td2.className='px-2 py-1 text-center';
+				var btn=document.createElement('button');
+				btn.type='button';
+				btn.setAttribute('data-kvlist-remove','');
+				btn.className='text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none';
+				btn.setAttribute('aria-label','Remove row');
+				btn.textContent='×';
+				td2.appendChild(btn);
+				tr.appendChild(td2);
+				return tr;
+			}
+			tbody.addEventListener('click',function(e){
+				var btn=e.target.closest('[data-kvlist-remove]');
+				if(btn)btn.closest('tr').remove();
+			});
+			addBtn.addEventListener('click',function(){
+				tbody.appendChild(mkRow());
+			});
+			form.addEventListener('submit',function(){
+				var out=[];
+				tbody.querySelectorAll('tr').forEach(function(tr){
+					var obj={};
+					tr.querySelectorAll('[data-col]').forEach(function(inp){
+						obj[inp.getAttribute('data-col')]=inp.value;
+					});
+					if(Object.values(obj).some(function(v){return v.trim()!=='';})){
+						out.push(obj);
+					}
+				});
+				hidden.value=JSON.stringify(out);
+			});
+		})();
+		</script>
+	</div>
+}
