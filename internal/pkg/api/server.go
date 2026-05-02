@@ -378,3 +378,25 @@ func (s *Server) Run(port int) {
 	<-done
 	log.Info().Msg("server stopped")
 }
+
+// RunMCPStdio initialises only the connector layer (DB + connectors
+// bootstrap) and serves the MCP JSON-RPC protocol over stdin/stdout.
+// Intended for local clients that spawn wick as a child process (Claude
+// Desktop, Cursor, etc.). No auth — all connectors are visible as a
+// synthetic local-admin identity.
+func RunMCPStdio() {
+	cfg := config.Load()
+
+	db := postgres.NewGORM(cfg.Database)
+	postgres.Migrate(db)
+
+	connSvc := connectors.NewServiceFromDB(db)
+	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
+		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
+	}
+
+	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
+	ctx := login.WithUser(context.Background(), localAdmin, nil)
+
+	mcp.NewHandler(connSvc).ServeStdioOS(ctx)
+}
