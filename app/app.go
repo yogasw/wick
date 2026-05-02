@@ -17,6 +17,8 @@
 package app
 
 import (
+	"runtime/debug"
+
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -35,11 +37,48 @@ import (
 
 // BuildVersion, BuildCommit, and BuildTime are injected via -ldflags at build time.
 // wick mcp serve reads VERSION from the project root and injects it automatically.
+// When used as a library dependency, init() fills these from the embedded module build info.
 var (
 	BuildVersion = "dev"
 	BuildCommit  = "unknown"
 	BuildTime    = "unknown"
 )
+
+func init() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	// Fill version from embedded module info when not injected via ldflags.
+	if BuildVersion == "dev" {
+		const modPath = "github.com/yogasw/wick"
+		if info.Main.Path == modPath && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			BuildVersion = info.Main.Version
+		} else {
+			for _, dep := range info.Deps {
+				if dep.Path == modPath && dep.Version != "" {
+					BuildVersion = dep.Version
+					break
+				}
+			}
+		}
+	}
+
+	// Fill commit and build time from VCS settings embedded by `go build`.
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if BuildCommit == "unknown" && len(s.Value) >= 7 {
+				BuildCommit = s.Value[:7]
+			}
+		case "vcs.time":
+			if BuildTime == "unknown" {
+				BuildTime = s.Value
+			}
+		}
+	}
+}
 
 // RegisterTool adds a tool instance to the registry. One call = one
 // card on the home grid; call again with a different meta.Key (and, if
