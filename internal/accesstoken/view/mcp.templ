@@ -24,11 +24,12 @@ templ MCPPage(data MCPPageData) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">MCP</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">
-				Wick exposes connectors over the Model Context Protocol. Two ways to authenticate — pick whichever your client supports.
+				Wick exposes connectors over the Model Context Protocol. Connect via OAuth, a bearer token, or run wick as a local child process with no token at all.
 			</p>
 			@endpointCard(data.EndpointURL)
 			@oauthCard()
 			@bearerCard(data.EndpointURL, data.HasTokens)
+			@stdioCard()
 		</main>
 		<script src="/modules/accesstoken/js/mcp.js"></script>
 	}
@@ -165,6 +166,82 @@ templ bearerCard(endpoint string, hasTokens bool) {
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`, endpoint),
 			)
+		</div>
+	</div>
+}
+
+// stdioCard documents the stdio transport — wick runs as a local child
+// process, no hosted server, no token. All connectors visible as local admin.
+templ stdioCard() {
+	<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<div class="flex items-start gap-3">
+			<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 text-lg">
+				⚡
+			</div>
+			<div class="flex-1 min-w-0">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Local Clients (stdio)</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Run wick as a local child process over stdin/stdout — no hosted server, no token required.
+					The server starts as a local admin with access to all connectors.
+				</p>
+			</div>
+		</div>
+		<p class="mt-5 text-sm text-black-800 dark:text-black-600">
+			From the project root, run
+			<code class="rounded bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 font-mono text-xs">wick mcp install</code>
+			— it writes the config file and resolves the binary path automatically.
+		</p>
+		<div class="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
+			@snippetBlock(
+				"Claude Code",
+				"Writes .mcp.json to the project root. Restart Claude Code (or /mcp reload) to pick it up.",
+				"wick mcp install --client claude-code",
+			)
+			@snippetBlock(
+				"Claude Desktop",
+				"Writes directly to claude_desktop_config.json. Restart Claude Desktop after saving.",
+				"wick mcp install --client claude",
+			)
+			@snippetBlock(
+				"Cursor",
+				"Writes to Cursor's MCP settings file.",
+				"wick mcp install --client cursor",
+			)
+			@snippetBlock(
+				"All clients at once",
+				"Install into Claude Desktop, Cursor, Gemini CLI, Codex CLI, and Claude Code in one shot.",
+				"wick mcp install --client all",
+			)
+		</div>
+		<div class="mt-5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">
+			<p class="text-sm font-medium text-black-900 dark:text-white-100">Build modes</p>
+			<p class="mt-1 text-xs text-black-800 dark:text-black-600">
+				Pass <code class="rounded bg-white-300 dark:bg-navy-700 px-1 py-0.5 font-mono text-xs">--mode</code> to control how the binary is built before serving.
+			</p>
+			<dl class="mt-3 grid grid-cols-1 gap-y-2 gap-x-4 sm:grid-cols-2 text-xs">
+				<div>
+					<code class="font-mono text-black-900 dark:text-white-100">auto</code>
+					<span class="ml-1 text-black-800 dark:text-black-600">— rebuild when HEAD or source changed (default)</span>
+				</div>
+				<div>
+					<code class="font-mono text-black-900 dark:text-white-100">dev</code>
+					<span class="ml-1 text-black-800 dark:text-black-600">— always <code class="font-mono">go run .</code>, no binary cache</span>
+				</div>
+				<div>
+					<code class="font-mono text-black-900 dark:text-white-100">build</code>
+					<span class="ml-1 text-black-800 dark:text-black-600">— build once, reuse binary</span>
+				</div>
+				<div>
+					<code class="font-mono text-black-900 dark:text-white-100">rebuild</code>
+					<span class="ml-1 text-black-800 dark:text-black-600">— always force a full rebuild</span>
+				</div>
+			</dl>
+		</div>
+		<div class="mt-4 rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">
+			<p class="text-sm text-black-800 dark:text-black-600">
+				To print the config snippet without writing any file:
+				<code class="rounded bg-white-300 dark:bg-navy-700 px-1.5 py-0.5 font-mono text-xs">wick mcp config</code>
+			</p>
 		</div>
 	</div>
 }
