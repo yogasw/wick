@@ -8,6 +8,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -62,8 +63,13 @@ func echoModule() connector.Module {
 func newSvcWithStub(t *testing.T, encSvc *enc.Service) (*Service, string) {
 	t.Helper()
 	db := newSQLite(t)
+	cfgsSvc := configs.NewService(db)
+	if err := cfgsSvc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("configs bootstrap: %v", err)
+	}
 	svc := NewServiceFromDB(db)
 	svc.SetEnc(encSvc)
+	svc.SetConfigs(cfgsSvc)
 	if err := svc.Bootstrap(context.Background(), []connector.Module{echoModule()}); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

@@ -57,6 +57,47 @@ func (s *Service) Bootstrap(ctx context.Context, extras ...entity.Config) error 
 	return nil
 }
 
+// EnsureOwned reconciles a runtime-declared set of rows for owner.
+// Used when a connector / tool / job instance is created after boot:
+// the caller stamps Owner on each row and hands them in; the rows that
+// already exist are left alone (metadata is refreshed, value
+// preserved), missing rows are created.
+//
+// The owner string scopes the rows — by convention "connector:{id}"
+// for connector instances. Any owner string is accepted.
+func (s *Service) EnsureOwned(ctx context.Context, owner string, rows ...entity.Config) error {
+	for _, row := range rows {
+		row.Owner = owner
+		if err := s.reconcile(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteOwned removes every row scoped to owner from the DB and the
+// in-memory cache. Used when a connector / tool / job instance is
+// destroyed. Returns nil when owner has no rows.
+func (s *Service) DeleteOwned(ctx context.Context, owner string) error {
+	if err := s.repo.DeleteByOwner(ctx, owner); err != nil {
+		return fmt.Errorf("delete configs for owner %q: %w", owner, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.cache {
+		if k.Owner == owner {
+			delete(s.cache, k)
+		}
+	}
+	for k := range s.meta {
+		if k.Owner == owner {
+			delete(s.meta, k)
+		}
+	}
+	delete(s.declOrder, owner)
+	return nil
+}
+
 func (s *Service) reconcile(ctx context.Context, row entity.Config) error {
 	existing, err := s.repo.FindByOwnerKey(ctx, row.Owner, row.Key)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {

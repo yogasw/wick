@@ -211,14 +211,14 @@ func (r *Repo) CountByKey(ctx context.Context, key string) (int64, error) {
 	return n, err
 }
 
-// Update writes label / configs / disabled changes to an existing row.
-// Identity fields (ID, Key, ParentID, CreatedBy, CreatedAt) are
-// untouched.
+// Update writes label / disabled changes to an existing row. Per-
+// field config values live in the configs table now and are written
+// by Service.Update via configs.Service.SetOwned, not here. Identity
+// fields (ID, Key, CreatedBy, CreatedAt) are untouched.
 func (r *Repo) Update(ctx context.Context, c *entity.Connector) error {
 	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", c.ID).
 		Updates(map[string]any{
 			"label":      c.Label,
-			"configs":    c.Configs,
 			"disabled":   c.Disabled,
 			"updated_at": time.Now(),
 		}).Error

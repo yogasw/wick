@@ -10,6 +10,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -58,7 +59,12 @@ func stubModule() connector.Module {
 
 func newTestService(t *testing.T, db *gorm.DB, mod connector.Module) *connectors.Service {
 	t.Helper()
+	cfgsSvc := configs.NewService(db)
+	if err := cfgsSvc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("configs bootstrap: %v", err)
+	}
 	svc := connectors.NewServiceFromDB(db)
+	svc.SetConfigs(cfgsSvc)
 	if err := svc.Bootstrap(context.Background(), []connector.Module{mod}); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

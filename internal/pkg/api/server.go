@@ -150,6 +150,7 @@ func NewServer() *Server {
 	// runtime entry point for LLM clients.
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	connectorsSvc.SetEnc(encSvc)
+	connectorsSvc.SetConfigs(configsSvc)
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -439,6 +440,7 @@ func RunMCPStdio(version, commit, buildTime string) {
 
 	connSvc := connectors.NewServiceFromDB(db)
 	connSvc.SetEnc(encSvc)
+	connSvc.SetConfigs(configsSvc)
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}

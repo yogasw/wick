@@ -64,3 +64,12 @@ func (r *repo) SetValue(ctx context.Context, owner, key, value string) error {
 		Where("owner = ? AND key = ?", owner, key).
 		Update("value", value).Error
 }
+
+// DeleteByOwner removes every row scoped to owner. Used when a
+// connector / tool / job instance is destroyed and its per-instance
+// config rows should follow.
+func (r *repo) DeleteByOwner(ctx context.Context, owner string) error {
+	return r.db.WithContext(ctx).
+		Where("owner = ?", owner).
+		Delete(&entity.Config{}).Error
+}

@@ -1,10 +1,13 @@
 package postgres
 
 import (
+	"encoding/json"
+
 	"github.com/yogasw/wick/internal/entity"
 
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func Migrate(db *gorm.DB) {
@@ -14,6 +17,14 @@ func Migrate(db *gorm.DB) {
 	// re-migrated DB the new name is present and we skip.
 	if err := renameConfigsTable(db); err != nil {
 		log.Fatal().Msgf("rename app_variables → configs: %s", err.Error())
+	}
+
+	// Move connector credential blobs from connectors.configs (JSON
+	// text) into the configs table (one row per field, owner =
+	// "connector:{id}"). Runs before AutoMigrate so the source column
+	// is still present, then drops the column to lock the migration in.
+	if err := migrateConnectorConfigsToConfigs(db); err != nil {
+		log.Fatal().Msgf("migrate connector configs: %s", err.Error())
 	}
 
 	err := db.AutoMigrate(
@@ -50,4 +61,51 @@ func renameConfigsTable(db *gorm.DB) error {
 		return nil
 	}
 	return m.RenameTable("app_variables", "configs")
+}
+
+// migrateConnectorConfigsToConfigs is a one-shot migration that lifts
+// the legacy connectors.configs JSON blob into per-field rows on the
+// configs table (owner = "connector:{id}"), then drops the source
+// column. Idempotent — once the column is gone every subsequent boot
+// short-circuits.
+func migrateConnectorConfigsToConfigs(db *gorm.DB) error {
+	m := db.Migrator()
+	if !m.HasTable("connectors") {
+		return nil
+	}
+	if !m.HasColumn("connectors", "configs") {
+		return nil
+	}
+	type row struct {
+		ID      string
+		Configs string
+	}
+	var rows []row
+	if err := db.Raw(`SELECT id, configs FROM connectors WHERE configs IS NOT NULL AND configs <> '' AND configs <> '{}'`).Scan(&rows).Error; err != nil {
+		return err
+	}
+	for _, r := range rows {
+		var legacy map[string]string
+		if err := json.Unmarshal([]byte(r.Configs), &legacy); err != nil {
+			continue
+		}
+		owner := "connector:" + r.ID
+		for k, v := range legacy {
+			if k == "" || v == "" {
+				continue
+			}
+			cfg := entity.Config{
+				Owner: owner,
+				Key:   k,
+				Value: v,
+			}
+			if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&cfg).Error; err != nil {
+				return err
+			}
+		}
+	}
+	// Both postgres and sqlite (≥3.35) support ALTER TABLE DROP COLUMN.
+	// Bypass gorm's migrator — its sqlite driver panics in recreateTable
+	// when the field has been removed from the entity struct.
+	return db.Exec(`ALTER TABLE connectors DROP COLUMN configs`).Error
 }
