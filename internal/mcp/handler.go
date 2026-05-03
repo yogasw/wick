@@ -46,10 +46,19 @@ type Handler struct {
 	version    string
 	commit     string
 	buildTime  string
+	wickRoot   string // project root; set for CLI (stdio), empty for HTTP
 }
 
 func NewHandler(c *connectors.Service) *Handler {
 	return &Handler{connectors: c, version: "dev", commit: "", buildTime: "unknown"}
+}
+
+// WithWickRoot records the project root directory for the wick_info tool.
+// Called by RunMCPStdio after chdir — pass os.Getwd(). Empty string means
+// the server is running in HTTP mode (no local filesystem access).
+func (h *Handler) WithWickRoot(root string) *Handler {
+	h.wickRoot = root
+	return h
 }
 
 // WithBuildInfo sets the version, short commit hash, and build timestamp
@@ -306,8 +315,11 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 			},
 		},
 		{
-			Name:        "wick_info",
-			Description: "Return wick framework version and server build info. Fields: wick_version (wick library version), server_build_time (when this server binary was compiled), server_commit (git commit of the server binary at build time).",
+			Name: "wick_info",
+			Description: "Return wick server info. Fields: wick_version, server_build_time, server_commit, " +
+				"access_type ('cli' when running as a local stdio process with filesystem access, 'http' when running as a remote HTTP server), " +
+				"wick_root (absolute path to the project directory — only set for 'cli', empty for 'http'). " +
+				"Use access_type and wick_root to decide whether you can edit connector config files directly or must redirect the user to the Wick UI.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -387,10 +399,16 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 // ── wick_info ──────────────────────────────────────────────────────
 
 func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
+	accessType := "http"
+	if h.wickRoot != "" {
+		accessType = "cli"
+	}
 	info := map[string]string{
 		"wick_version":      h.version,
 		"server_build_time": h.buildTime,
 		"server_commit":     h.commit,
+		"access_type":       accessType,
+		"wick_root":         h.wickRoot,
 	}
 	b, _ := json.Marshal(info)
 	writeRPCResult(w, req.ID, toolCallResult{

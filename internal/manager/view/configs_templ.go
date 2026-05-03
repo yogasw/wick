@@ -355,9 +355,15 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "\"> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
+			}
+			if row.Value != "" {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<p class=\"mt-1 text-xs font-mono text-black-700 dark:text-black-600\">••••••••</p>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
 			}
 		} else {
 			switch row.Type {
@@ -367,20 +373,20 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<textarea data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<textarea data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 96, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 99, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\" rows=\"4\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "\" rows=\"4\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -393,20 +399,20 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 99, Col: 16}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 102, Col: 16}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "</textarea>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</textarea>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -416,20 +422,20 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<select data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<select data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 101, Col: 36}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 104, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -442,119 +448,119 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				for _, opt := range strings.Split(row.Options, "|") {
 					if opt == row.Value {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "<option value=\"")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "<option value=\"")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var20 string
 						templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(opt)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 104, Col: 26}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 107, Col: 26}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "\" selected>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "\" selected>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var21 string
 						templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(opt)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 104, Col: 43}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 107, Col: 43}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</option>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</option>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					} else {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "<option value=\"")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "<option value=\"")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var22 string
 						templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(opt)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 106, Col: 26}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 109, Col: 26}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\">")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\">")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var23 string
 						templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(opt)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 106, Col: 34}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 109, Col: 34}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "</option>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "</option>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "</select>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "</select>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			case "checkbox":
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "<label class=\"inline-flex items-center gap-3 cursor-pointer mt-1\"><input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "<label class=\"inline-flex items-center gap-3 cursor-pointer mt-1\"><input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 113, Col: 30}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 116, Col: 30}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "\" type=\"checkbox\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "\" type=\"checkbox\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if row.Value == "true" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, " checked")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, " checked")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, " class=\"w-4 h-4 accent-green-500 cursor-pointer rounded\"> <span class=\"text-xs text-black-800 dark:text-black-600\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, " class=\"w-4 h-4 accent-green-500 cursor-pointer rounded\"> <span class=\"text-xs text-black-800 dark:text-black-600\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if row.Value == "true" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "Enabled")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "Enabled")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				} else {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "Disabled")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "Disabled")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "</span></label>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "</span></label>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -564,33 +570,33 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var26 string
 				templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 130, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 133, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "\" type=\"number\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "\" type=\"number\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var27 string
 				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 132, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 135, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -603,7 +609,7 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -613,33 +619,33 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "<input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var30 string
 				templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 137, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 140, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "\" type=\"email\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "\" type=\"email\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var31 string
 				templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 139, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 142, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "\" placeholder=\"you@example.com\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\" placeholder=\"you@example.com\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -652,7 +658,7 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -662,33 +668,33 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "<input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "<input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var34 string
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 145, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 148, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "\" type=\"url\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "\" type=\"url\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var35 string
 				templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 147, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 150, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "\" placeholder=\"https://\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "\" placeholder=\"https://\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -701,61 +707,61 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			case "color":
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "<div class=\"flex items-center gap-3\"><input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "<div class=\"flex items-center gap-3\"><input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var37 string
 				templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 154, Col: 30}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 157, Col: 30}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "\" type=\"color\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\" type=\"color\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var38 string
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 156, Col: 23}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 159, Col: 23}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\" class=\"h-10 w-16 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 cursor-pointer p-1\"> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "\" class=\"h-10 w-16 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 cursor-pointer p-1\"> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if row.Value != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "<span class=\"font-mono text-xs text-black-800 dark:text-black-600\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "<span class=\"font-mono text-xs text-black-800 dark:text-black-600\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var39 string
 					templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 160, Col: 84}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 163, Col: 84}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "</span>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "</span>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "</div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "</div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -765,33 +771,33 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "<input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "<input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var41 string
 				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 165, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 168, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "\" type=\"date\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 66, "\" type=\"date\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var42 string
 				templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 167, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 170, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 66, "\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 67, "\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -804,7 +810,7 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 67, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 68, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -814,33 +820,33 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 68, "<input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "<input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var45 string
 				templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 172, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 175, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "\" type=\"datetime-local\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 70, "\" type=\"datetime-local\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var46 string
 				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 174, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 177, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 70, "\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -853,7 +859,7 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -863,33 +869,33 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "<input data-field-key=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 73, "<input data-field-key=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var49 string
 				templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 179, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 182, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 73, "\" type=\"text\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "\" type=\"text\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(row.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 181, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 184, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "\" placeholder=\"\" class=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 75, "\" placeholder=\"\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -902,7 +908,7 @@ func simpleFieldWidget(row entity.Config) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 75, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -933,56 +939,56 @@ func kvlistBlock(row entity.Config, cols []string, data []map[string]string) tem
 			templ_7745c5c3_Var52 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "<div class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden\" data-kvlist-key=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "<div class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden\" data-kvlist-key=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var53 string
 		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 192, Col: 27}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 195, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "\" data-kv-cols=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "\" data-kv-cols=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var54 string
 		templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(strings.Join(cols, "|"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 193, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 196, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "\"><div class=\"px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800\"><div class=\"flex items-center gap-2\"><span class=\"font-mono text-sm font-semibold text-black-900 dark:text-white-100\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 79, "\"><div class=\"px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800\"><div class=\"flex items-center gap-2\"><span class=\"font-mono text-sm font-semibold text-black-900 dark:text-white-100\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var55 string
 		templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(row.Key)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 197, Col: 94}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 200, Col: 94}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 79, "</span> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 80, "</span> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if row.Required && row.Value == "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 80, "<span data-missing-badge class=\"rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400\">missing</span> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 81, "<span data-missing-badge class=\"rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400\">missing</span> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 81, "<span class=\"text-[11px] text-black-700 dark:text-black-600 font-normal\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, "<span class=\"text-[11px] text-black-700 dark:text-black-600 font-normal\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -990,13 +996,13 @@ func kvlistBlock(row entity.Config, cols []string, data []map[string]string) tem
 			var templ_7745c5c3_Var56 string
 			templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(col)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 203, Col: 11}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 206, Col: 11}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, " ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, " ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1004,7 +1010,7 @@ func kvlistBlock(row entity.Config, cols []string, data []map[string]string) tem
 				var templ_7745c5c3_Var57 string
 				templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.JoinStringErrs(" · ")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 205, Col: 15}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 208, Col: 15}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var57))
 				if templ_7745c5c3_Err != nil {
@@ -1012,58 +1018,58 @@ func kvlistBlock(row entity.Config, cols []string, data []map[string]string) tem
 				}
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "</span> <span data-save-status class=\"ml-auto text-[10px] transition-all\"></span></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 84, "</span> <span data-save-status class=\"ml-auto text-[10px] transition-all\"></span></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if row.Description != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 84, "<p class=\"mt-0.5 text-xs text-black-700 dark:text-black-600\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 85, "<p class=\"mt-0.5 text-xs text-black-700 dark:text-black-600\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var58 string
 			templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(row.Description)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 212, Col: 82}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 215, Col: 82}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 85, "</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 86, "</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 86, "</div><div class=\"p-5\"><div class=\"rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3\"><div class=\"flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 87, "</div><div class=\"p-5\"><div class=\"rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3\"><div class=\"flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for _, col := range cols {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 87, "<div class=\"flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 88, "<div class=\"flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var59 string
 			templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinStringErrs(col)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 219, Col: 208}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 222, Col: 208}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 88, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 89, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 89, "<div class=\"w-10 shrink-0\"></div></div><div data-kv-rows>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 90, "<div class=\"w-10 shrink-0\"></div></div><div data-kv-rows>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if len(data) == 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 90, "<div class=\"px-4 py-5 text-center text-xs text-black-700 dark:text-black-600\" data-kv-empty>No rows yet — click <strong>+ Add Row</strong> to start</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 91, "<div class=\"px-4 py-5 text-center text-xs text-black-700 dark:text-black-600\" data-kv-empty>No rows yet — click <strong>+ Add Row</strong> to start</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1074,7 +1080,7 @@ func kvlistBlock(row entity.Config, cols []string, data []map[string]string) tem
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 91, "</div></div><button type=\"button\" onclick=\"kvBlockAddRow(this)\" class=\"w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors\">+ Add Row</button></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 92, "</div></div><button type=\"button\" onclick=\"kvBlockAddRow(this)\" class=\"w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors\">+ Add Row</button></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1103,56 +1109,56 @@ func kvDataRow(cols []string, entry map[string]string) templ.Component {
 			templ_7745c5c3_Var60 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 92, "<div data-kv-row class=\"flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 93, "<div data-kv-row class=\"flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for _, col := range cols {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 93, "<div class=\"flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0\"><input type=\"text\" data-col=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 94, "<div class=\"flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0\"><input type=\"text\" data-col=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var61 string
 			templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinStringErrs(col)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 249, Col: 19}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 252, Col: 19}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 94, "\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 95, "\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var62 string
 			templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(entry[col])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 250, Col: 23}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 253, Col: 23}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 95, "\" placeholder=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 96, "\" placeholder=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var63 string
 			templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(col)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 251, Col: 22}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/configs.templ`, Line: 254, Col: 22}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 96, "\" class=\"w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600\"></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 97, "\" class=\"w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600\"></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 97, "<div class=\"w-10 shrink-0 flex items-center justify-center\"><button type=\"button\" onclick=\"kvBlockRemoveRow(this)\" aria-label=\"Remove row\" class=\"text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none transition-colors\">×</button></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 98, "<div class=\"w-10 shrink-0 flex items-center justify-center\"><button type=\"button\" onclick=\"kvBlockRemoveRow(this)\" aria-label=\"Remove row\" class=\"text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none transition-colors\">×</button></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1181,7 +1187,7 @@ func configsSaveScript() templ.Component {
 			templ_7745c5c3_Var64 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 98, "<script>\n\t(function(){\n\t\tvar inputCls='w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600';\n\t\tvar cellCls='flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0';\n\t\tvar rowCls='flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors';\n\n\t\tfunction debounce(fn,ms){\n\t\t\tvar t;\n\t\t\treturn function(){var a=arguments,ctx=this;clearTimeout(t);t=setTimeout(function(){fn.apply(ctx,a);},ms);};\n\t\t}\n\n\t\tfunction setStatus(el,state){\n\t\t\tif(!el)return;\n\t\t\tif(state==='saving'){\n\t\t\t\tel.textContent='saving…';\n\t\t\t\tel.style.color='#A0A0A0';\n\t\t\t}else if(state==='saved'){\n\t\t\t\tel.textContent='✓ saved';\n\t\t\t\tel.style.color='#288C7A';\n\t\t\t\tsetTimeout(function(){el.textContent='';},2000);\n\t\t\t}else if(state==='error'){\n\t\t\t\tel.textContent='✗ failed';\n\t\t\t\tel.style.color='#EB5757';\n\t\t\t}\n\t\t}\n\n\t\tasync function saveField(el,base){\n\t\t\tvar key=el.getAttribute('data-field-key');\n\t\t\tvar val=el.type==='checkbox'?(el.checked?'true':'false'):el.value;\n\t\t\tvar wrap=el.closest('[data-field-wrap]');\n\t\t\tvar statusEl=wrap?wrap.querySelector('[data-save-status]'):null;\n\t\t\tsetStatus(statusEl,'saving');\n\t\t\tvar fd=new FormData();fd.append('value',val);\n\t\t\ttry{\n\t\t\t\tvar r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});\n\t\t\t\tif(!r.ok)throw new Error(key);\n\t\t\t\tsetStatus(statusEl,'saved');\n\t\t\t\t// clear \"missing\" badge if field now has a value\n\t\t\t\tif(val&&val.trim()!==''){\n\t\t\t\t\tvar badge=wrap?wrap.querySelector('[data-missing-badge]'):null;\n\t\t\t\t\tif(badge)badge.remove();\n\t\t\t\t}\n\t\t\t}catch(e){\n\t\t\t\tsetStatus(statusEl,'error');\n\t\t\t}\n\t\t}\n\n\t\tasync function saveKVBlock(section,base){\n\t\t\tvar key=section.getAttribute('data-kvlist-key');\n\t\t\tvar statusEl=section.querySelector('[data-save-status]');\n\t\t\tvar rows=[];\n\t\t\tsection.querySelectorAll('[data-kv-row]').forEach(function(row){\n\t\t\t\tvar obj={};\n\t\t\t\trow.querySelectorAll('[data-col]').forEach(function(i){obj[i.getAttribute('data-col')]=i.value;});\n\t\t\t\tif(Object.values(obj).some(function(v){return v.trim()!=='';}))rows.push(obj);\n\t\t\t});\n\t\t\tsetStatus(statusEl,'saving');\n\t\t\tvar fd=new FormData();fd.append('value',JSON.stringify(rows));\n\t\t\ttry{\n\t\t\t\tvar r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});\n\t\t\t\tif(!r.ok)throw new Error(key);\n\t\t\t\tsetStatus(statusEl,'saved');\n\t\t\t\tif(rows.length>0){\n\t\t\t\t\tvar badge=section.querySelector('[data-missing-badge]');\n\t\t\t\t\tif(badge)badge.remove();\n\t\t\t\t}\n\t\t\t}catch(e){\n\t\t\t\tsetStatus(statusEl,'error');\n\t\t\t}\n\t\t}\n\n\t\tfunction kvBlockAddRow(btn){\n\t\t\tvar section=btn.closest('[data-kvlist-key]');\n\t\t\tvar rowsEl=section.querySelector('[data-kv-rows]');\n\t\t\tvar empty=rowsEl.querySelector('[data-kv-empty]');\n\t\t\tif(empty)empty.remove();\n\t\t\tvar cols=section.getAttribute('data-kv-cols').split('|');\n\t\t\tvar row=document.createElement('div');\n\t\t\trow.setAttribute('data-kv-row','');\n\t\t\trow.className=rowCls;\n\t\t\tcols.forEach(function(col,i){\n\t\t\t\tvar cell=document.createElement('div');\n\t\t\t\tcell.className=cellCls;\n\t\t\t\tvar inp=document.createElement('input');\n\t\t\t\tinp.type='text';\n\t\t\t\tinp.setAttribute('data-col',col);\n\t\t\t\tinp.placeholder=col;\n\t\t\t\tinp.className=inputCls;\n\t\t\t\tif(i===cols.length-1){\n\t\t\t\t\tinp.addEventListener('keydown',function(e){\n\t\t\t\t\t\tif(e.key==='Tab'&&!e.shiftKey){\n\t\t\t\t\t\t\tvar rows=rowsEl.querySelectorAll('[data-kv-row]');\n\t\t\t\t\t\t\tif(row===rows[rows.length-1]){e.preventDefault();kvBlockAddRow(btn);}\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t\tcell.appendChild(inp);\n\t\t\t\trow.appendChild(cell);\n\t\t\t});\n\t\t\tvar act=document.createElement('div');\n\t\t\tact.className='w-10 shrink-0 flex items-center justify-center';\n\t\t\tvar rm=document.createElement('button');\n\t\t\trm.type='button';\n\t\t\trm.className='text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none transition-colors';\n\t\t\trm.setAttribute('aria-label','Remove row');\n\t\t\trm.textContent='×';\n\t\t\trm.onclick=function(){kvBlockRemoveRow(rm);};\n\t\t\tact.appendChild(rm);\n\t\t\trow.appendChild(act);\n\t\t\trowsEl.appendChild(row);\n\t\t\trow.querySelector('input').focus();\n\t\t}\n\n\t\tfunction kvBlockRemoveRow(btn){\n\t\t\tvar row=btn.closest('[data-kv-row]');\n\t\t\tvar section=row.closest('[data-kvlist-key]');\n\t\t\tvar rowsEl=row.closest('[data-kv-rows]');\n\t\t\trow.remove();\n\t\t\tif(!rowsEl.querySelector('[data-kv-row]')){\n\t\t\t\tvar e=document.createElement('div');\n\t\t\t\te.setAttribute('data-kv-empty','');\n\t\t\t\te.className='px-4 py-5 text-center text-xs text-black-700 dark:text-black-600';\n\t\t\t\te.innerHTML='No rows yet — click <strong>+ Add Row</strong> to start';\n\t\t\t\trowsEl.appendChild(e);\n\t\t\t}\n\t\t\t// auto-save after row removal\n\t\t\tvar form=section.closest('[data-configs-form]');\n\t\t\tif(form)saveKVBlock(section,form.getAttribute('data-action-base'));\n\t\t}\n\n\t\tfunction attachAutoSave(form){\n\t\t\tvar base=form.getAttribute('data-action-base');\n\t\t\t// simple fields\n\t\t\tform.querySelectorAll('[data-field-key]').forEach(function(el){\n\t\t\t\tvar immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';\n\t\t\t\tvar handler=function(){saveField(el,base);};\n\t\t\t\tel.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));\n\t\t\t});\n\t\t\t// kvlist blocks — delegate on the rows container\n\t\t\tform.querySelectorAll('[data-kvlist-key]').forEach(function(section){\n\t\t\t\tvar debouncedSave=debounce(function(){saveKVBlock(section,base);},800);\n\t\t\t\tvar rowsEl=section.querySelector('[data-kv-rows]');\n\t\t\t\tif(rowsEl)rowsEl.addEventListener('input',debouncedSave);\n\t\t\t});\n\t\t}\n\n\t\tdocument.querySelectorAll('[data-configs-form]').forEach(attachAutoSave);\n\n\t\twindow.kvBlockAddRow=kvBlockAddRow;\n\t\twindow.kvBlockRemoveRow=kvBlockRemoveRow;\n\t})();\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 99, "<script>\n\t(function(){\n\t\tvar inputCls='w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600';\n\t\tvar cellCls='flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0';\n\t\tvar rowCls='flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors';\n\n\t\tfunction debounce(fn,ms){\n\t\t\tvar t;\n\t\t\treturn function(){var a=arguments,ctx=this;clearTimeout(t);t=setTimeout(function(){fn.apply(ctx,a);},ms);};\n\t\t}\n\n\t\tfunction setStatus(el,state){\n\t\t\tif(!el)return;\n\t\t\tif(state==='saving'){\n\t\t\t\tel.textContent='saving…';\n\t\t\t\tel.style.color='#A0A0A0';\n\t\t\t}else if(state==='saved'){\n\t\t\t\tel.textContent='✓ saved';\n\t\t\t\tel.style.color='#288C7A';\n\t\t\t\tsetTimeout(function(){el.textContent='';},2000);\n\t\t\t}else if(state==='error'){\n\t\t\t\tel.textContent='✗ failed';\n\t\t\t\tel.style.color='#EB5757';\n\t\t\t}\n\t\t}\n\n\t\tasync function saveField(el,base){\n\t\t\tvar key=el.getAttribute('data-field-key');\n\t\t\tvar val=el.type==='checkbox'?(el.checked?'true':'false'):el.value;\n\t\t\tvar wrap=el.closest('[data-field-wrap]');\n\t\t\tvar statusEl=wrap?wrap.querySelector('[data-save-status]'):null;\n\t\t\tsetStatus(statusEl,'saving');\n\t\t\tvar fd=new FormData();fd.append('value',val);\n\t\t\ttry{\n\t\t\t\tvar r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});\n\t\t\t\tif(!r.ok)throw new Error(key);\n\t\t\t\tsetStatus(statusEl,'saved');\n\t\t\t\t// clear \"missing\" badge if field now has a value\n\t\t\t\tif(val&&val.trim()!==''){\n\t\t\t\t\tvar badge=wrap?wrap.querySelector('[data-missing-badge]'):null;\n\t\t\t\t\tif(badge)badge.remove();\n\t\t\t\t}\n\t\t\t}catch(e){\n\t\t\t\tsetStatus(statusEl,'error');\n\t\t\t}\n\t\t}\n\n\t\tasync function saveKVBlock(section,base){\n\t\t\tvar key=section.getAttribute('data-kvlist-key');\n\t\t\tvar statusEl=section.querySelector('[data-save-status]');\n\t\t\tvar rows=[];\n\t\t\tsection.querySelectorAll('[data-kv-row]').forEach(function(row){\n\t\t\t\tvar obj={};\n\t\t\t\trow.querySelectorAll('[data-col]').forEach(function(i){obj[i.getAttribute('data-col')]=i.value;});\n\t\t\t\tif(Object.values(obj).some(function(v){return v.trim()!=='';}))rows.push(obj);\n\t\t\t});\n\t\t\tsetStatus(statusEl,'saving');\n\t\t\tvar fd=new FormData();fd.append('value',JSON.stringify(rows));\n\t\t\ttry{\n\t\t\t\tvar r=await fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'});\n\t\t\t\tif(!r.ok)throw new Error(key);\n\t\t\t\tsetStatus(statusEl,'saved');\n\t\t\t\tif(rows.length>0){\n\t\t\t\t\tvar badge=section.querySelector('[data-missing-badge]');\n\t\t\t\t\tif(badge)badge.remove();\n\t\t\t\t}\n\t\t\t}catch(e){\n\t\t\t\tsetStatus(statusEl,'error');\n\t\t\t}\n\t\t}\n\n\t\tfunction kvBlockAddRow(btn){\n\t\t\tvar section=btn.closest('[data-kvlist-key]');\n\t\t\tvar rowsEl=section.querySelector('[data-kv-rows]');\n\t\t\tvar empty=rowsEl.querySelector('[data-kv-empty]');\n\t\t\tif(empty)empty.remove();\n\t\t\tvar cols=section.getAttribute('data-kv-cols').split('|');\n\t\t\tvar row=document.createElement('div');\n\t\t\trow.setAttribute('data-kv-row','');\n\t\t\trow.className=rowCls;\n\t\t\tcols.forEach(function(col,i){\n\t\t\t\tvar cell=document.createElement('div');\n\t\t\t\tcell.className=cellCls;\n\t\t\t\tvar inp=document.createElement('input');\n\t\t\t\tinp.type='text';\n\t\t\t\tinp.setAttribute('data-col',col);\n\t\t\t\tinp.placeholder=col;\n\t\t\t\tinp.className=inputCls;\n\t\t\t\tif(i===cols.length-1){\n\t\t\t\t\tinp.addEventListener('keydown',function(e){\n\t\t\t\t\t\tif(e.key==='Tab'&&!e.shiftKey){\n\t\t\t\t\t\t\tvar rows=rowsEl.querySelectorAll('[data-kv-row]');\n\t\t\t\t\t\t\tif(row===rows[rows.length-1]){e.preventDefault();kvBlockAddRow(btn);}\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t\tcell.appendChild(inp);\n\t\t\t\trow.appendChild(cell);\n\t\t\t});\n\t\t\tvar act=document.createElement('div');\n\t\t\tact.className='w-10 shrink-0 flex items-center justify-center';\n\t\t\tvar rm=document.createElement('button');\n\t\t\trm.type='button';\n\t\t\trm.className='text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none transition-colors';\n\t\t\trm.setAttribute('aria-label','Remove row');\n\t\t\trm.textContent='×';\n\t\t\trm.onclick=function(){kvBlockRemoveRow(rm);};\n\t\t\tact.appendChild(rm);\n\t\t\trow.appendChild(act);\n\t\t\trowsEl.appendChild(row);\n\t\t\trow.querySelector('input').focus();\n\t\t}\n\n\t\tfunction kvBlockRemoveRow(btn){\n\t\t\tvar row=btn.closest('[data-kv-row]');\n\t\t\tvar section=row.closest('[data-kvlist-key]');\n\t\t\tvar rowsEl=row.closest('[data-kv-rows]');\n\t\t\trow.remove();\n\t\t\tif(!rowsEl.querySelector('[data-kv-row]')){\n\t\t\t\tvar e=document.createElement('div');\n\t\t\t\te.setAttribute('data-kv-empty','');\n\t\t\t\te.className='px-4 py-5 text-center text-xs text-black-700 dark:text-black-600';\n\t\t\t\te.innerHTML='No rows yet — click <strong>+ Add Row</strong> to start';\n\t\t\t\trowsEl.appendChild(e);\n\t\t\t}\n\t\t\t// auto-save after row removal\n\t\t\tvar form=section.closest('[data-configs-form]');\n\t\t\tif(form)saveKVBlock(section,form.getAttribute('data-action-base'));\n\t\t}\n\n\t\tfunction attachAutoSave(form){\n\t\t\tvar base=form.getAttribute('data-action-base');\n\t\t\t// simple fields\n\t\t\tform.querySelectorAll('[data-field-key]').forEach(function(el){\n\t\t\t\tvar immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';\n\t\t\t\tvar handler=function(){saveField(el,base);};\n\t\t\t\tel.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));\n\t\t\t});\n\t\t\t// kvlist blocks — delegate on the rows container\n\t\t\tform.querySelectorAll('[data-kvlist-key]').forEach(function(section){\n\t\t\t\tvar debouncedSave=debounce(function(){saveKVBlock(section,base);},800);\n\t\t\t\tvar rowsEl=section.querySelector('[data-kv-rows]');\n\t\t\t\tif(rowsEl)rowsEl.addEventListener('input',debouncedSave);\n\t\t\t});\n\t\t}\n\n\t\tdocument.querySelectorAll('[data-configs-form]').forEach(attachAutoSave);\n\n\t\twindow.kvBlockAddRow=kvBlockAddRow;\n\t\twindow.kvBlockRemoveRow=kvBlockRemoveRow;\n\t})();\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

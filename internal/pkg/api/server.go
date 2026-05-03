@@ -412,7 +412,9 @@ func RunMCPStdio(version, commit, buildTime string) {
 	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
 	ctx := login.WithUser(context.Background(), localAdmin, nil)
 
+	root, _ := os.Getwd()
 	mcp.NewHandler(connSvc).
 		WithBuildInfo(version, commit, buildTime).
+		WithWickRoot(root).
 		ServeStdioOS(ctx)
 }
