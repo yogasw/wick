@@ -78,6 +78,7 @@ export default withMermaid(defineConfig({
           { text: 'Environment Variables', link: '/reference/env-vars' },
           { text: 'Connector API', link: '/reference/connector-api' },
           { text: 'Config Tags', link: '/reference/config-tags' },
+          { text: 'Encrypted Fields', link: '/reference/encrypted-fields' },
         ],
       },
       {

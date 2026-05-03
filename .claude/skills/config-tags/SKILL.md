@@ -46,7 +46,7 @@ type Config struct {
 | `dropdown=a\|b\|c` | Select | Pipe-separated options |
 | `checkbox` | Checkbox toggle | Auto-applied for `bool` fields |
 | `number` | Number input | Auto-applied for `int` / `float` fields |
-| `secret` | Password input | Masked; value never sent to browser. Shows `••••••••` when set |
+| `secret` | Password input | Masked; value never sent to browser. Shows `••••••••` when set. **For connector Configs/Input, also opts the field into the encrypted-fields layer** — see [`encrypted-fields`](../encrypted-fields/SKILL.md): wick auto-decrypts incoming `wick_enc_` tokens and auto-masks the plaintext in the response back to the LLM |
 | `email` | Email input | HTML `type="email"` |
 | `url` | URL input | HTML `type="url"` |
 | `color` | Color picker | HTML `type="color"` |

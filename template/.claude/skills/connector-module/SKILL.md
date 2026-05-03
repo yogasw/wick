@@ -219,7 +219,9 @@ type Configs struct {
 
 Read `SKILL.md` from the `config-tags` folder (sibling of this skill's folder) for the full tag reference.
 
-**Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`** — keys are the snake_cased field name unless overridden with `key=`.
+**Fields tagged `secret` opt into the encrypted-fields layer** — wick auto-decrypts incoming `wick_enc_` tokens before `ExecuteFunc` runs and auto-masks the plaintext in the response back to the LLM. Use it for anything the LLM should pass forward without ever learning the value: tokens, API keys, session credentials. See `SKILL.md` from the `encrypted-fields` folder for the full contract (manual `c.Mask` / `c.MaskIgnoreCase` for dynamic API responses, `wick_enc_` token format, per-user keys, MCP redirect tools).
+
+**Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`** — keys are the snake_cased field name unless overridden with `key=`. Reads always return plaintext; the encrypted-fields layer happens around `ExecuteFunc`, not inside it.
 
 ### Per-operation `Input` structs
 

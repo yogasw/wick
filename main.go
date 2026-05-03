@@ -13,6 +13,7 @@ var templateFS embed.FS
 //go:embed all:.claude/skills/design-system
 //go:embed all:.claude/skills/connector-module
 //go:embed all:.claude/skills/config-tags
+//go:embed all:.claude/skills/encrypted-fields
 var wickSkillsFS embed.FS
 
 //go:embed VERSION

@@ -57,14 +57,14 @@ func TestDispatchLineToolsList(t *testing.T) {
 	if err := json.Unmarshal(got, &resp); err != nil {
 		t.Fatalf("unmarshal: %v\nbody=%s", err, got)
 	}
-	if len(resp.Result.Tools) != 5 {
-		t.Fatalf("tools count = %d, want 5", len(resp.Result.Tools))
+	if len(resp.Result.Tools) != 7 {
+		t.Fatalf("tools count = %d, want 7", len(resp.Result.Tools))
 	}
 	names := make([]string, len(resp.Result.Tools))
 	for i, tool := range resp.Result.Tools {
 		names[i] = tool.Name
 	}
-	for _, want := range []string{"wick_list", "wick_search", "wick_get", "wick_execute", "wick_info"} {
+	for _, want := range []string{"wick_list", "wick_search", "wick_get", "wick_execute", "wick_info", "wick_encrypt", "wick_decrypt"} {
 		found := false
 		for _, n := range names {
 			if n == want {

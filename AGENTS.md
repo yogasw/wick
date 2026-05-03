@@ -51,8 +51,10 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 ## Skills to use
 
 - `tool-module` — any work under `internal/tools/{tool}/` **or** `internal/jobs/{job}/`. Covers both surfaces — they share the same Config reflection, `wick:"..."` tag grammar, and bootstrap contract.
+- `connector-module` — any work under `internal/connectors/{connector}/` or anything that touches the MCP surface (`internal/mcp/`).
 - `design-system` — any UI styling decision (colors, spacing, typography).
 - `config-tags` — adding/editing `wick:"..."` config fields (widget types, modifiers, key derivation).
+- `encrypted-fields` — any connector that handles credentials, tokens, or sensitive values flowing through the LLM. Covers the `secret` tag (auto-mask), `c.Mask` / `c.MaskIgnoreCase` for dynamic response data, and the `wick_enc_` token contract.
 
 ## Module surfaces at a glance
 

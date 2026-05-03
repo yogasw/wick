@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -223,3 +224,15 @@ func (s *Service) AppDescription() string     { return s.Get(KeyAppDescription) 
 func (s *Service) AppURL() string             { return s.Get(KeyAppURL) }
 func (s *Service) SessionSecret() string      { return s.Get(KeySessionSecret) }
 func (s *Service) AdminPasswordChanged() bool { return s.Get(KeyAdminPasswordChanged) == "true" }
+
+// EncryptionKey returns the master key for the encrypted-fields layer.
+// WICK_ENC_KEY in the environment wins when set — production deploys
+// inject from a vault here so the secret never lands in the DB. Falls
+// back to the DB-stored value (auto-generated on first boot via the
+// generators map in spec.go).
+func (s *Service) EncryptionKey() string {
+	if v := os.Getenv("WICK_ENC_KEY"); v != "" {
+		return v
+	}
+	return s.Get(KeyEncryptionKey)
+}

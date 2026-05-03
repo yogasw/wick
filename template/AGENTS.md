@@ -103,6 +103,7 @@ Invoke the skill before reading code when the task matches:
 | Create/edit a connector (`connectors/`) | [`connector-module`](./.claude/skills/connector-module/SKILL.md) |
 | UI styling, colors, spacing, components | [`design-system`](./.claude/skills/design-system/SKILL.md) |
 | Adding/editing `wick:"..."` config fields — widget types, modifiers, key derivation | [`config-tags`](./.claude/skills/config-tags/SKILL.md) |
+| Handling credentials/tokens that flow through the LLM — `secret` tag, `c.Mask` / `c.MaskIgnoreCase`, `wick_enc_` tokens | [`encrypted-fields`](./.claude/skills/encrypted-fields/SKILL.md) |
 
 The `tool-module` skill holds the full module contract, widget catalog, layering rules, and points at the canonical examples (`tools/convert-text/`, `jobs/auto-get-data/`) — read those end-to-end before writing a new tool/job.
 

@@ -18,7 +18,9 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
+	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
 	"github.com/yogasw/wick/internal/jobrunner"
@@ -125,11 +127,29 @@ func NewServer() *Server {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
 	}
 
+	// ── Encrypted-fields layer (encrypted-fields.md) ───────────────
+	// Master key is bootstrapped by the configs service (auto-
+	// generated on first boot, vault-overridable via WICK_ENC_KEY).
+	// Disable globally with WICK_ENC_DISABLE=true. We initialise this
+	// before the connectors service so Bootstrap can wire the cipher
+	// in once and Execute is never called without it.
+	encSvc, err := enc.New(configsSvc.EncryptionKey())
+	if err != nil {
+		log.Fatal().Msgf("enc init: %s", err.Error())
+	}
+	// The encfields tool resolves its cipher through a package
+	// singleton — built-in tools register from cmd/lab before the DB
+	// or enc service exist, so a static Register signature is the
+	// cost of doing business. Set once here, before any tool route
+	// is mountable.
+	encfieldstool.SetService(encSvc)
+
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
 	// one DB row per Key on first boot. The MCP server below is the
 	// runtime entry point for LLM clients.
 	connectorsSvc := connectors.NewServiceFromDB(db)
+	connectorsSvc.SetEnc(encSvc)
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -149,7 +169,7 @@ func NewServer() *Server {
 	// Bearer auth in front, connector dispatch behind. PAT and
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
-	mcpHandler := mcp.NewHandler(connectorsSvc)
+	mcpHandler := mcp.NewHandler(connectorsSvc).WithAppURL(configsSvc.AppURL)
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -404,7 +424,21 @@ func RunMCPStdio(version, commit, buildTime string) {
 	db := postgres.NewGORM(cfg.Database)
 	postgres.Migrate(db)
 
+	// Bootstrap the configs service even in stdio mode — we don't
+	// expose it over HTTP here, but the encrypted-fields layer pulls
+	// the master key from it and the rest of the connector dispatch
+	// path expects encrypt/decrypt to behave the same as in HTTP.
+	configsSvc := configs.NewService(db)
+	if err := configsSvc.Bootstrap(context.Background()); err != nil {
+		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
+	}
+	encSvc, err := enc.New(configsSvc.EncryptionKey())
+	if err != nil {
+		log.Fatal().Msgf("enc init: %s", err.Error())
+	}
+
 	connSvc := connectors.NewServiceFromDB(db)
+	connSvc.SetEnc(encSvc)
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -412,7 +446,10 @@ func RunMCPStdio(version, commit, buildTime string) {
 	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
 	ctx := login.WithUser(context.Background(), localAdmin, nil)
 
+	root, _ := os.Getwd()
 	mcp.NewHandler(connSvc).
 		WithBuildInfo(version, commit, buildTime).
+		WithWickRoot(root).
+		WithAppURL(configsSvc.AppURL).
 		ServeStdioOS(ctx)
 }

@@ -38,7 +38,10 @@ const Key = "crudcrud"
 // Configs is the per-instance credential / endpoint set. Reflected by
 // entity.StructToConfigs into the admin form.
 type Configs struct {
-	BaseURL string `wick:"url;required;desc=Unique crudcrud endpoint URL. Example: https://crudcrud.com/api/abcdef0123456789"`
+	BaseURL     string `wick:"url;required;desc=Unique crudcrud endpoint URL. Example: https://crudcrud.com/api/abcdef0123456789"`
+	SecretWord  string `wick:"secret;desc=Reserved sensitive field. Currently unused."`
+	SecretWords             string `wick:"kvlist;desc=One keyword per row. Any keyword that appears in a create / get / update response is replaced with an encrypted token."`
+	SecretWordsIgnoreCase   bool   `wick:"desc=When checked, keyword matching folds case (Admin == admin) and all variants share one token."`
 }
 
 // CreateInput is the argument schema for the "create" operation.
@@ -144,7 +147,11 @@ func create(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return doRequest(c, http.MethodPost, url, body)
+	resp, err := doRequest(c, http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	return maskSecretWords(c, resp)
 }
 
 func list(c *connector.Ctx) (any, error) {
@@ -168,7 +175,11 @@ func get(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return doRequest(c, http.MethodGet, url, nil)
+	resp, err := doRequest(c, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return maskSecretWords(c, resp)
 }
 
 func update(c *connector.Ctx) (any, error) {
@@ -187,7 +198,7 @@ func update(c *connector.Ctx) (any, error) {
 	if _, err := doRequest(c, http.MethodPut, url, body); err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true, "id": id, "resource": resource}, nil
+	return maskSecretWords(c, map[string]any{"ok": true, "id": id, "resource": resource})
 }
 
 func deleteOp(c *connector.Ctx) (any, error) {

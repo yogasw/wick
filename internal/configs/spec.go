@@ -31,6 +31,7 @@ const (
 	KeyAppURL               = "app_url"
 	KeySessionSecret        = "session_secret"
 	KeyAdminPasswordChanged = "admin_password_changed"
+	KeyEncryptionKey        = "encryption_key"
 )
 
 // generators maps app-level keys to the function that produces a fresh
@@ -38,6 +39,7 @@ const (
 // Regenerate(). Keep this tight — only real secrets belong here.
 var generators = map[string]func() string{
 	KeySessionSecret: generateHex32,
+	KeyEncryptionKey: generateHex32,
 }
 
 // appDefaults returns the seed rows reconciled into `configs` on every
@@ -77,6 +79,14 @@ func appDefaults() []entity.Config {
 			Type:        "bool",
 			Value:       "false",
 			Description: "Set to true once the default admin password has been changed. Used to show a security warning on startup.",
+		},
+		{
+			Key:           KeyEncryptionKey,
+			Type:          "text",
+			Value:         generateHex32(),
+			Description:   "Master key for the encrypted-fields layer (HKDF salt = user_uuid, AES-256-GCM). Regenerating invalidates every wick_enc_ token already issued. Set WICK_ENC_KEY in the environment to override the DB value (vault injection); set WICK_ENC_DISABLE=true to disable encryption entirely.",
+			IsSecret:      true,
+			CanRegenerate: true,
 		},
 	}
 }

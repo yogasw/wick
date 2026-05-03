@@ -30,7 +30,7 @@ Heartbeat `:keepalive` frames every 15 seconds keep reverse proxies from reaping
 
 ## Meta-tool pattern
 
-Wick does **not** advertise N×M static tools (one entry per connector × operation). It advertises four fixed tools:
+Wick does **not** advertise N×M static tools (one entry per connector × operation). It advertises a fixed set of meta-tools:
 
 | Tool | Annotation | Purpose |
 |------|------------|---------|
@@ -39,6 +39,8 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_get` | `readOnlyHint` | Fetch full detail for one `tool_id`, including `input_schema` |
 | `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params` |
 | `wick_info` | `readOnlyHint` | Return server version and build info |
+| `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
+| `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
 
 Why not a static list?
 
@@ -98,6 +100,44 @@ wick_execute({tool_id, params: {...}})    → result
 ### Auth check on every call
 
 `wick_execute` and `wick_get` re-validate `IsVisibleTo(connector_id, user_tag_ids, is_admin)` on every call — they never trust a list-time cache. The `connector_operations` enable state is also re-checked. Removing a user's tag or disabling an op takes effect on the very next call.
+
+## Encrypted credentials
+
+Wick wraps every value tagged `secret` in a connector's `Configs` or per-op `Input` struct in a `wick_enc_<base64url>` token before the response leaves the server. The LLM carries the token forward into the next tool call; wick decrypts it before `ExecuteFunc` runs. The plaintext never appears in the LLM's context window or in the audit log.
+
+Per-user keys (`HKDF(master_key, salt=user_uuid, info="wick-enc")`) mean a token issued for user A cannot be decrypted under user B's session — replays across users fail loudly.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LLM
+    participant MCP as wick /mcp
+    participant Op as connector ExecuteFunc
+
+    LLM->>MCP: wick_execute(tool_id, params)
+    Note over MCP: decrypt any wick_enc_ tokens<br/>under user's per-user key
+    MCP->>Op: ExecuteFunc(plaintext)
+    Op-->>MCP: response (plaintext sensitive values)
+    Note over MCP: mask values from `secret` fields<br/>+ values c.Mask / c.MaskIgnoreCase declared
+    MCP-->>LLM: response with wick_enc_ tokens
+    LLM->>MCP: wick_execute(next_tool, params: {token: "wick_enc_..."})
+    Note over MCP: decrypt under same user's key<br/>→ plaintext for ExecuteFunc
+```
+
+`wick_execute`'s tool description tells the LLM how to handle these tokens:
+
+> Values prefixed with "wick_enc_" are valid credentials managed by the server. Use them as-is wherever a value is needed — pass them through into params, return them unchanged in your response, and never alter, decode, or omit them.
+
+When a user explicitly asks for the plaintext behind a token (or wants to mint a new one to paste into a config field), two redirect tools point them at the in-app UI:
+
+| Tool | Returns |
+|------|---------|
+| `wick_encrypt` | `{ "url": "https://<host>/tools/encfields", "message": "..." }` |
+| `wick_decrypt` | `{ "url": "https://<host>/tools/encfields/decrypt", "message": "..." }` |
+
+The crypto is **never** run over MCP — running it inline would defeat the purpose by putting plaintext (encrypt) or the user-revealed value (decrypt) into the LLM's context window. The user opens the URL, logs in, pastes the value, and copies the result.
+
+For the full mechanism — `secret` tag semantics, `c.Mask` / `c.MaskIgnoreCase` for dynamic responses, key rotation, `WICK_ENC_KEY` / `WICK_ENC_DISABLE` env vars — see the [Encrypted Fields reference](../reference/encrypted-fields).
 
 ## Auth modes
 

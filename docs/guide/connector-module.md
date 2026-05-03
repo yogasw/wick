@@ -108,12 +108,12 @@ The `wick:"..."` tag grammar is shared with Tools and Jobs. See the **[Config Ta
 | Tag | Effect |
 |-----|--------|
 | `required` | Admin must fill before any op can run |
-| `secret` | Masked in the UI; never returned to the form after first save |
+| `secret` | Masked in the UI **and** opts the field into the [encrypted-fields layer](/reference/encrypted-fields) — wick auto-decrypts incoming `wick_enc_` tokens before `ExecuteFunc` runs and auto-masks the plaintext in the response back to the LLM |
 | `url`, `email`, `textarea`, `dropdown=a\|b\|c`, `kvlist=col1\|col2` | Widget overrides |
 | `desc=...` | Help text shown next to the field |
 | `key=custom_name` | Override the snake_cased field name |
 
-Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`.
+Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`. Reads always return plaintext — the encrypted-fields layer happens around `ExecuteFunc`, not inside it. For sensitive values that come back from the upstream API and aren't declared as Configs/Input fields, mask them yourself with `c.Mask(data, values)` (or `c.MaskIgnoreCase` for case-folded matching) before returning.
 
 ### Per-operation `Input` structs
 

@@ -254,6 +254,14 @@ func (h *Handler) handleToolsCallSSE(w http.ResponseWriter, r *http.Request, req
 		h.sseStaticTool(sess, func(buf *bufferingWriter) {
 			h.handleWickGet(buf, r, req, p.Arguments, tagIDs, user.IsAdmin())
 		})
+	case "wick_encrypt":
+		h.sseStaticTool(sess, func(buf *bufferingWriter) {
+			h.handleWickEncrypt(buf, req)
+		})
+	case "wick_decrypt":
+		h.sseStaticTool(sess, func(buf *bufferingWriter) {
+			h.handleWickDecrypt(buf, req)
+		})
 	case "wick_execute":
 		h.sseWickExecute(sess, r, req, p, user, tagIDs)
 	default:

@@ -15,6 +15,7 @@ import (
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 
 	converttext "github.com/yogasw/wick/internal/tools/convert-text"
+	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
 
 	"github.com/yogasw/wick/pkg/tool"
@@ -67,6 +68,18 @@ func RegisterBuiltins() {
 			InitType: "lowercase",
 		}),
 		Register: converttext.Register,
+	})
+	extra = append(extra, tool.Module{
+		Meta: tool.Tool{
+			Key:               "encfields",
+			Name:              "Encrypt / Decrypt",
+			Description:       "Mint or reveal wick_enc_ tokens. Per-user keys — only you can decrypt your own tokens.",
+			Icon:              "🔐",
+			Category:          "Security",
+			DefaultVisibility: entity.VisibilityPublic,
+			DefaultTags:       []tool.DefaultTag{tags.Security},
+		},
+		Register: encfields.Register,
 	})
 	for _, e := range external.All() {
 		extra = append(extra, e)

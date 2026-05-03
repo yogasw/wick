@@ -10,6 +10,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -29,6 +30,20 @@ type Service struct {
 
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
+
+	// enc is the encrypted-fields cipher. nil when wick boots without
+	// a configs.Service (e.g. legacy tests) or with WICK_ENC_DISABLE
+	// set to true. When non-nil, Execute auto-decrypts wick_enc_ tokens
+	// found in the input/credential maps before calling the connector,
+	// and auto-encrypts sensitive plaintext appearing in the response.
+	enc *enc.Service
+}
+
+// SetEnc wires the encrypted-fields cipher in after construction. Call
+// once at boot from server.go, before Execute is reachable. Passing nil
+// is allowed — Execute then runs without any masking.
+func (s *Service) SetEnc(e *enc.Service) {
+	s.enc = e
 }
 
 // NewService wires a Service around an existing Repo and the default
@@ -397,7 +412,28 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 
+	// Snapshot the request BEFORE we decrypt anything — by design the
+	// audit log stores wick_enc_ tokens (not plaintext) in
+	// request_json, so a retry can re-decrypt under the retrier's key.
 	reqBytes, _ := json.Marshal(p.Input)
+
+	// Auto-decrypt: scan configs + input for wick_enc_ tokens and
+	// replace each with its plaintext. The connector only ever sees
+	// plaintext via Ctx.Cfg / Ctx.Input. A failed decrypt is fatal
+	// here — running the op against a still-encrypted credential
+	// would silently authenticate as nothing.
+	input := p.Input
+	if s.enc != nil && !s.enc.Disabled() {
+		var err error
+		configs, err = unmaskMap(s.enc, configs, p.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt configs: %w", err)
+		}
+		input, err = unmaskMap(s.enc, input, p.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt input: %w", err)
+		}
+	}
 
 	startedAt := time.Now()
 	run := &entity.ConnectorRun{
@@ -416,7 +452,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("create run: %w", err)
 	}
 
-	cctx := connector.NewCtx(ctx, c.ID, configs, p.Input, s.httpClient, p.Progress)
+	cctx := connector.NewCtx(ctx, c.ID, configs, input, s.httpClient, p.Progress, userMasker(s.enc, p.UserID))
 	value, execErr := op.Execute(cctx)
 	latencyMs := int(time.Since(startedAt).Milliseconds())
 
@@ -435,6 +471,16 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		} else {
 			res.Status = entity.ConnectorRunStatusSuccess
 			res.ResponseJSON = string(bytes)
+			// Auto-encrypt: replace any sensitive plaintext present in
+			// the response with a wick_enc_ token, so the LLM can carry
+			// the value forward without ever seeing it. Sensitive
+			// plaintexts are: post-decrypt config values bertag
+			// secret/encrypt, and post-decrypt input values likewise
+			// bertag.
+			if s.enc != nil && !s.enc.Disabled() {
+				values := collectSensitiveValues(mod, op, configs, input)
+				res.ResponseJSON = s.enc.Mask(res.ResponseJSON, values, p.UserID)
+			}
 		}
 	}
 

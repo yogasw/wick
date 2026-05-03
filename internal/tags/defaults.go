@@ -31,6 +31,17 @@ var (
 		SortOrder:   30,
 	}
 
+	// Security groups credential / token / encryption helpers — anything
+	// that protects a value or reverses that protection. Sized for one
+	// item now (encfields) but broad enough for future siblings (token
+	// rotation, session revocation, audit-log viewer).
+	Security = tool.DefaultTag{
+		Name:        "Security",
+		Description: "Credential, token, and encryption helpers.",
+		IsGroup:     true,
+		SortOrder:   40,
+	}
+
 	// Job groups background jobs that run on a cron schedule or are
 	// triggered manually.
 	Job = tool.DefaultTag{

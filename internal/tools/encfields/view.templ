@@ -1,0 +1,118 @@
+package encfields
+
+// EncryptPage and DecryptPage share one chrome — a tab strip across
+// the top, then the page-specific form below. The framework wraps the
+// body in @ui.Layout + ToolHeader, so this file does NOT emit nav,
+// page title, or description. Submission is JSON-only via
+// encfields.js — the form here is markup, the handlers under POST
+// return JSON, and the JS renders results inline.
+
+templ tabs(basePath, active string) {
+	<nav class="mb-6 flex gap-2 border-b border-white-300 dark:border-navy-600">
+		<a
+			href={ templ.URL(basePath) }
+			class={ "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors duration-150",
+				templ.KV("border-green-500 text-green-500", active == "encrypt"),
+				templ.KV("border-transparent text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", active != "encrypt") }
+		>Encrypt</a>
+		<a
+			href={ templ.URL(basePath + "/decrypt") }
+			class={ "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors duration-150",
+				templ.KV("border-green-500 text-green-500", active == "decrypt"),
+				templ.KV("border-transparent text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", active != "decrypt") }
+		>Decrypt</a>
+	</nav>
+}
+
+templ EncryptPage(basePath string) {
+	<main class="mx-auto w-full max-w-container px-6 pb-8">
+		@tabs(basePath, "encrypt")
+		<section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-md">
+			<p class="mb-6 text-sm text-black-800 dark:text-black-600">
+				Mint a wick_enc_ token from a plaintext value. Tokens are scoped to your user account — only you can decrypt your own tokens, and admins cannot peek at the plaintext behind them.
+			</p>
+			<div data-error class="mb-6 hidden rounded-lg border border-red-300 dark:border-red-800 bg-red-100 dark:bg-red-900/40 px-4 py-3 text-sm text-red-700 dark:text-red-300"></div>
+			<form data-encrypt-form class="flex flex-col gap-4">
+				<label class="flex flex-col gap-2 text-sm font-medium text-black-900 dark:text-white-100">
+					Plaintext
+					<textarea
+						name="value"
+						rows="4"
+						required
+						placeholder="Paste the value you want to encrypt…"
+						class="block w-full resize-y rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-3 font-mono text-[0.875rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+					></textarea>
+				</label>
+				<label class="flex flex-col gap-2 text-sm font-medium text-black-900 dark:text-white-100">
+					Source <span class="font-normal text-black-800 dark:text-black-600">(optional label, e.g. "Loki Prod / token field")</span>
+					<input
+						type="text"
+						name="source"
+						placeholder="Where this value comes from"
+						class="block w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-3 text-[0.875rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+					/>
+				</label>
+				<div>
+					<button
+						type="submit"
+						class="inline-flex items-center justify-center rounded-lg bg-green-500 px-6 py-3 text-sm font-medium text-white-100 transition-colors duration-150 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+					>Encrypt</button>
+				</div>
+			</form>
+			<div data-result class="mt-6 hidden overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
+				<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">
+					<span class="text-[0.8125rem] font-medium text-black-800 dark:text-black-600">Token (paste back into the conversation or connector config)</span>
+					<button
+						type="button"
+						data-copy-target="[data-result-text]"
+						class="inline-flex items-center justify-center rounded-lg border border-green-500 bg-white-100 dark:bg-navy-700 px-3 py-2 text-[0.8125rem] font-medium text-green-500 transition-colors duration-150 hover:bg-green-200 hover:border-green-600 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+					>Copy</button>
+				</div>
+				<pre data-result-text class="block min-h-12 w-full whitespace-pre-wrap break-all bg-white-100 dark:bg-navy-800 px-4 py-4 font-mono text-[0.875rem] leading-relaxed text-black-900 dark:text-white-100"></pre>
+			</div>
+		</section>
+		<script src={ basePath + "/static/js/encfields.js" }></script>
+	</main>
+}
+
+templ DecryptPage(basePath string) {
+	<main class="mx-auto w-full max-w-container px-6 pb-8">
+		@tabs(basePath, "decrypt")
+		<section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-md">
+			<p class="mb-6 text-sm text-black-800 dark:text-black-600">
+				Reveal the plaintext behind a wick_enc_ token. Per-user keys mean only the user who issued a token can decrypt it — admins cannot reveal another user's tokens.
+			</p>
+			<div data-error class="mb-6 hidden rounded-lg border border-red-300 dark:border-red-800 bg-red-100 dark:bg-red-900/40 px-4 py-3 text-sm text-red-700 dark:text-red-300"></div>
+			<form data-decrypt-form class="flex flex-col gap-4">
+				<label class="flex flex-col gap-2 text-sm font-medium text-black-900 dark:text-white-100">
+					Token
+					<textarea
+						name="token"
+						rows="4"
+						required
+						placeholder="wick_enc_…"
+						class="block w-full resize-y rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-4 py-3 font-mono text-[0.875rem] text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors duration-150 hover:border-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+					></textarea>
+				</label>
+				<div>
+					<button
+						type="submit"
+						class="inline-flex items-center justify-center rounded-lg bg-green-500 px-6 py-3 text-sm font-medium text-white-100 transition-colors duration-150 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+					>Decrypt</button>
+				</div>
+			</form>
+			<div data-result class="mt-6 hidden overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
+				<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">
+					<span class="text-[0.8125rem] font-medium text-black-800 dark:text-black-600">Plaintext (visible only in this browser session)</span>
+					<button
+						type="button"
+						data-copy-target="[data-result-text]"
+						class="inline-flex items-center justify-center rounded-lg border border-green-500 bg-white-100 dark:bg-navy-700 px-3 py-2 text-[0.8125rem] font-medium text-green-500 transition-colors duration-150 hover:bg-green-200 hover:border-green-600 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+					>Copy</button>
+				</div>
+				<pre data-result-text class="block min-h-12 w-full whitespace-pre-wrap break-all bg-white-100 dark:bg-navy-800 px-4 py-4 font-mono text-[0.875rem] leading-relaxed text-black-900 dark:text-white-100"></pre>
+			</div>
+		</section>
+		<script src={ basePath + "/static/js/encfields.js" }></script>
+	</main>
+}

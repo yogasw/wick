@@ -46,10 +46,34 @@ type Handler struct {
 	version    string
 	commit     string
 	buildTime  string
+	wickRoot   string // project root; set for CLI (stdio), empty for HTTP
+	// appURL returns the live base URL (configs.Service.AppURL) at
+	// request time. Used to build the absolute redirect link for the
+	// wick_encrypt / wick_decrypt meta-tools — those never run the
+	// crypto themselves, only point the user at the UI form. nil
+	// fallback returns "" so we still serve a relative path.
+	appURL func() string
 }
 
 func NewHandler(c *connectors.Service) *Handler {
 	return &Handler{connectors: c, version: "dev", commit: "", buildTime: "unknown"}
+}
+
+// WithAppURL records a getter for the configurable base URL so the
+// wick_encrypt / wick_decrypt redirect tools can mint absolute links.
+// Pass configsSvc.AppURL — wick reads it on every call so admin URL
+// edits take effect without a restart.
+func (h *Handler) WithAppURL(get func() string) *Handler {
+	h.appURL = get
+	return h
+}
+
+// WithWickRoot records the project root directory for the wick_info tool.
+// Called by RunMCPStdio after chdir — pass os.Getwd(). Empty string means
+// the server is running in HTTP mode (no local filesystem access).
+func (h *Handler) WithWickRoot(root string) *Handler {
+	h.wickRoot = root
+	return h
 }
 
 // WithBuildInfo sets the version, short commit hash, and build timestamp
@@ -282,7 +306,14 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 				"PREREQUISITE: call wick_get first to get the tool's input_schema — " +
 				"never guess params. params must match the input_schema exactly. " +
 				"On success returns the response as JSON; " +
-				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.",
+				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.\n\n" +
+				"ENCRYPTED FIELDS: values prefixed with \"wick_enc_\" are valid credentials " +
+				"managed by the server. Use them as-is wherever a value is needed — pass them " +
+				"through into params, return them unchanged in your response, and never alter, " +
+				"decode, or omit them. The server resolves them automatically before the tool " +
+				"runs and re-encrypts any sensitive values in the response. If a user asks for " +
+				"the plaintext, redirect them to the wick_decrypt tool — do not attempt to " +
+				"decode the value yourself.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -306,8 +337,11 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 			},
 		},
 		{
-			Name:        "wick_info",
-			Description: "Return wick framework version and server build info. Fields: wick_version (wick library version), server_build_time (when this server binary was compiled), server_commit (git commit of the server binary at build time).",
+			Name: "wick_info",
+			Description: "Return wick server info. Fields: wick_version, server_build_time, server_commit, " +
+				"access_type ('cli' when running as a local stdio process with filesystem access, 'http' when running as a remote HTTP server), " +
+				"wick_root (absolute path to the project directory — only set for 'cli', empty for 'http'). " +
+				"Use access_type and wick_root to decide whether you can edit connector config files directly or must redirect the user to the Wick UI.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -317,7 +351,58 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 				ReadOnlyHint: ptrBool(true),
 			},
 		},
+		{
+			Name: "wick_encrypt",
+			Description: "Mint a wick_enc_ token from a plaintext value. " +
+				"This tool never runs the crypto over MCP — calling it returns a URL pointing " +
+				"to the Wick UI form. The user must open the URL, log in, and paste their " +
+				"value there; the server replies with a wick_enc_<...> token they can then " +
+				"paste back into the conversation. Use this when a user asks how to protect a " +
+				"credential before sharing it with a tool, or when a connector config form " +
+				"asks for a wick_enc_ token.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Annotations: &toolAnnotation{
+				Title:        "Encrypt a value (UI redirect)",
+				ReadOnlyHint: ptrBool(true),
+			},
+		},
+		{
+			Name: "wick_decrypt",
+			Description: "Reveal the plaintext behind a wick_enc_ token. " +
+				"This tool never runs the crypto over MCP — calling it returns a URL pointing " +
+				"to the Wick UI form. The user must open the URL, log in, and paste the token " +
+				"there; the server replies with the plaintext, visible only in the user's " +
+				"browser. Per-user keys mean only the user who issued a token can reveal it. " +
+				"Use this only when the user explicitly asks to see a wick_enc_ value's " +
+				"plaintext — never call it speculatively.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+			Annotations: &toolAnnotation{
+				Title:        "Decrypt a wick_enc_ token (UI redirect)",
+				ReadOnlyHint: ptrBool(true),
+			},
+		},
 	}
+}
+
+// encfieldsURL builds the absolute URL for the encrypt/decrypt UI page
+// — now mounted as a regular tool at /tools/encfields. Falls back to
+// a relative path when no app_url is configured (typically the stdio
+// path where there is no live HTTP server).
+func (h *Handler) encfieldsURL(suffix string) string {
+	base := ""
+	if h.appURL != nil {
+		base = strings.TrimRight(h.appURL(), "/")
+	}
+	if suffix == "encrypt" {
+		return base + "/tools/encfields"
+	}
+	return base + "/tools/encfields/" + suffix
 }
 
 func (h *Handler) handleToolsList(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
@@ -379,18 +464,49 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		h.handleWickExecute(w, r, req, p.Arguments, user, tagIDs)
 	case "wick_info":
 		h.handleWickInfo(w, req)
+	case "wick_encrypt":
+		h.handleWickEncrypt(w, req)
+	case "wick_decrypt":
+		h.handleWickDecrypt(w, req)
 	default:
 		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
 	}
 }
 
+// handleWickEncrypt and handleWickDecrypt are deliberately
+// non-functional: they return only the UI URL. Running the cipher over
+// MCP would put plaintext (and key-resolved ciphertext) into the LLM's
+// context window — exactly the leakage the encrypted-fields layer
+// exists to prevent. The redirect forces the user to log in to the UI
+// and complete the operation in their own browser session.
+
+func (h *Handler) handleWickEncrypt(w http.ResponseWriter, req rpcRequest) {
+	writeToolJSON(w, req.ID, map[string]string{
+		"message": "Encryption must be done via the Wick UI. Open the URL, log in, paste the plaintext, and copy the wick_enc_ token back into the conversation.",
+		"url":     h.encfieldsURL("encrypt"),
+	})
+}
+
+func (h *Handler) handleWickDecrypt(w http.ResponseWriter, req rpcRequest) {
+	writeToolJSON(w, req.ID, map[string]string{
+		"message": "Decryption must be done via the Wick UI. Per-user keys mean only the user who issued a wick_enc_ token can reveal its plaintext.",
+		"url":     h.encfieldsURL("decrypt"),
+	})
+}
+
 // ── wick_info ──────────────────────────────────────────────────────
 
 func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
+	accessType := "http"
+	if h.wickRoot != "" {
+		accessType = "cli"
+	}
 	info := map[string]string{
 		"wick_version":      h.version,
 		"server_build_time": h.buildTime,
 		"server_commit":     h.commit,
+		"access_type":       accessType,
+		"wick_root":         h.wickRoot,
 	}
 	b, _ := json.Marshal(info)
 	writeRPCResult(w, req.ID, toolCallResult{

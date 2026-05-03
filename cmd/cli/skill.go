@@ -15,10 +15,11 @@ import (
 // skillLabels maps skill folder name → task description shown in AGENTS.md.
 // Extend when a new skill is bundled.
 var skillLabels = map[string]string{
-	"tool-module":      "Create/edit a tool or job (`tools/`, `jobs/`)",
-	"connector-module": "Create/edit a connector (`connectors/`)",
-	"design-system":    "UI styling, colors, spacing, components",
-	"config-tags":      "Adding/editing `wick:\"...\"` config fields — widget types, modifiers, key derivation",
+	"tool-module":       "Create/edit a tool or job (`tools/`, `jobs/`)",
+	"connector-module":  "Create/edit a connector (`connectors/`)",
+	"design-system":     "UI styling, colors, spacing, components",
+	"config-tags":       "Adding/editing `wick:\"...\"` config fields — widget types, modifiers, key derivation",
+	"encrypted-fields":  "Handling credentials/tokens that flow through the LLM — `secret` tag, `c.Mask` / `c.MaskIgnoreCase`, `wick_enc_` tokens",
 }
 
 func skillCmd(tpl, designSystem embed.FS) *cobra.Command {
