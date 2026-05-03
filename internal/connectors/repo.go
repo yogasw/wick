@@ -7,6 +7,13 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/strutil"
+)
+
+const (
+	maxRunRequestLen = strutil.DefaultLimit
+	maxRunResponseLen = strutil.DefaultLimit
+	maxRunErrorLen   = 2_000
 )
 
 // Repo wraps the gorm handle and exposes the connector-specific CRUD
@@ -268,6 +275,7 @@ func (r *Repo) SetOperation(ctx context.Context, connectorID, opKey string, enab
 // CreateRun inserts a row at the start of an execution. Status should
 // be ConnectorRunStatusRunning; FinishRun finalizes it.
 func (r *Repo) CreateRun(ctx context.Context, run *entity.ConnectorRun) error {
+	run.RequestJSON = strutil.LimitText(run.RequestJSON, maxRunRequestLen)
 	return r.db.WithContext(ctx).Create(run).Error
 }
 
@@ -278,8 +286,8 @@ func (r *Repo) FinishRun(ctx context.Context, runID string, status entity.Connec
 	return r.db.WithContext(ctx).Model(&entity.ConnectorRun{}).Where("id = ?", runID).
 		Updates(map[string]any{
 			"status":        status,
-			"response_json": response,
-			"error_msg":     errMsg,
+			"response_json": strutil.LimitText(response, maxRunResponseLen),
+			"error_msg":     strutil.LimitText(errMsg, maxRunErrorLen),
 			"latency_ms":    latencyMs,
 			"http_status":   httpStatus,
 			"ended_at":      &now,

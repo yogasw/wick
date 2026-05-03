@@ -26,8 +26,10 @@ func initCmd(tpl, designSystem embed.FS) *cobra.Command {
 			if err := scaffold(tpl, name); err != nil {
 				return err
 			}
-			if err := copyDesignSystem(designSystem, name); err != nil {
-				return fmt.Errorf("copy design-system skill: %w", err)
+			for _, skill := range []string{"design-system", "config-tags"} {
+				if err := copySkillFromFS(designSystem, ".claude/skills/"+skill, name); err != nil {
+					return fmt.Errorf("copy %s skill: %w", skill, err)
+				}
 			}
 			fmt.Printf("created %s/\n", name)
 
@@ -98,8 +100,8 @@ func rewrite(p string, data []byte, name string) []byte {
 	return data
 }
 
-func copyDesignSystem(designSystem embed.FS, name string) error {
-	return fs.WalkDir(designSystem, ".claude/skills/design-system", func(p string, d fs.DirEntry, err error) error {
+func copySkillFromFS(fsys embed.FS, src, name string) error {
+	return fs.WalkDir(fsys, src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -107,7 +109,7 @@ func copyDesignSystem(designSystem embed.FS, name string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dst, 0o755)
 		}
-		data, err := designSystem.ReadFile(p)
+		data, err := fsys.ReadFile(p)
 		if err != nil {
 			return err
 		}

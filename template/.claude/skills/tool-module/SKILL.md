@@ -14,6 +14,10 @@ paths:
 
 # Module Conventions (tools & jobs) — downstream
 
+## Before Starting
+
+Read `SKILL.md` from the `config-tags` folder, which is a sibling folder of this skill's folder.
+
 Activate whenever the user touches a **tool** (UI module under `tools/`) or a **job** (scheduled worker under `jobs/`) — creating, improving, fixing, refactoring, restyling, or adding features. When editing an existing module, audit it against these rules and bring it up to spec as part of the change.
 
 ## Before writing any code — mandatory clarify + plan loop
@@ -87,40 +91,9 @@ When auditing an existing module: if the user asks you to add a hardcoded value 
 
 ## Widget catalog
 
-Every exported field with a `wick:"..."` tag becomes one row in the `configs` table, scoped to the instance's `Meta.Key`. Widget is picked from Go type + tag flags — explicit flags always win.
+Read `SKILL.md` from the `config-tags` folder (sibling of this skill's folder) for the full tag reference.
 
-| Go type | Default widget | Override with tag flag |
-|---|---|---|
-| `string` | `text` | `textarea` / `dropdown=a\|b\|c` / `email` / `url` / `color` / `date` / `datetime` |
-| `bool` | `checkbox` | — |
-| `int`/`float` | `number` | — |
-
-Additional flags (any widget):
-
-- `required` — admin must fill it in; tool blocks via `c.Missing()`, job shows setup banner
-- `secret` — masked in UI, never rendered back after first save
-- `locked` — read-only in admin UI
-- `key=custom_name` — override the snake_case column name derived from the field name
-- `desc=...` — admin UI help text (the only hint the admin sees — make it useful)
-
-### Tag grammar
-
-Fields separated by `;`. `key=value` sets a named field; a bare key is a boolean flag.
-
-```go
-type Config struct {
-    Title       string `wick:"desc=Card title shown in admin UI."`
-    Endpoint    string `wick:"url;required;desc=API base URL. Example: https://api.example.com"`
-    Mode        string `wick:"desc=Conversion mode.;dropdown=uppercase|lowercase|titlecase"`
-    Template    string `wick:"desc=Prompt template.;textarea"`
-    MaxRows     int    `wick:"desc=Max rows returned per query.;required"`
-    APIKey      string `wick:"desc=External API key.;secret;required"`
-    EnableCache bool   `wick:"desc=Cache results across requests."`
-    LegacyKey   string `wick:"key=legacy_api_key;secret;desc=Deprecated."`
-}
-```
-
-**Rules:**
+Quick rules:
 
 - **Fields without a `wick` tag are ignored** — internal state stays internal.
 - **One wick-tagged field per runtime-editable knob.** The Go value in `cfg` is the first-boot seed; once a row exists in `configs` the DB value wins.

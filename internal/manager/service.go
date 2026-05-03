@@ -172,7 +172,6 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 		} else {
 			l.Info().Msg("job run completed")
 		}
-
 		if err := s.repo.FinishRun(bgCtx, run.ID, status, result); err != nil {
 			l.Error().Err(err).Msg("failed to finish run")
 		}

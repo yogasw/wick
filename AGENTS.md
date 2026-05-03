@@ -52,6 +52,7 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 
 - `tool-module` — any work under `internal/tools/{tool}/` **or** `internal/jobs/{job}/`. Covers both surfaces — they share the same Config reflection, `wick:"..."` tag grammar, and bootstrap contract.
 - `design-system` — any UI styling decision (colors, spacing, typography).
+- `config-tags` — adding/editing `wick:"..."` config fields (widget types, modifiers, key derivation).
 
 ## Module surfaces at a glance
 
