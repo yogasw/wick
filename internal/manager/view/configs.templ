@@ -71,6 +71,9 @@ templ simpleFieldInner(row entity.Config) {
 			} else if row.Required {
 				<span class="text-[10px] font-semibold text-neg-400">*</span>
 			}
+			if row.IsSecret && row.Value != "" {
+				<span class="rounded-full bg-pos-100 px-1.5 py-0.5 text-[10px] font-semibold text-pos-400">stored</span>
+			}
 			<span data-save-status class="ml-auto text-[10px] transition-all"></span>
 		</div>
 		@simpleFieldWidget(row)
@@ -82,15 +85,22 @@ templ simpleFieldInner(row entity.Config) {
 
 templ simpleFieldWidget(row entity.Config) {
 	if row.IsSecret {
-		<input
-			data-field-key={ row.Key }
-			type="password"
-			autocomplete="new-password"
-			placeholder="Leave blank to keep current value"
-			class={ cfgInputClass }
-		/>
 		if row.Value != "" {
-			<p class="mt-1 text-xs font-mono text-black-700 dark:text-black-600">••••••••</p>
+			<input
+				data-field-key={ row.Key }
+				type="password"
+				autocomplete="new-password"
+				placeholder="Type new value to replace"
+				class={ cfgInputClass }
+			/>
+		} else {
+			<input
+				data-field-key={ row.Key }
+				type="password"
+				autocomplete="new-password"
+				placeholder="Enter secret"
+				class={ cfgInputClass }
+			/>
 		}
 	} else {
 		switch row.Type {

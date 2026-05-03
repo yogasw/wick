@@ -10,10 +10,61 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 )
+
+// ownerForConnector returns the configs.Service owner string used to
+// scope a connector instance's per-field config rows. Each instance
+// (even multiple instances of the same Key) gets its own slot.
+func ownerForConnector(connectorID string) string {
+	return "connector:" + connectorID
+}
+
+// Status returns "ready" when every Required field on the connector
+// has a non-empty value, "needs_setup" otherwise. Reads from the
+// configs.Service cache (RWMutex, no DB hit per call).
+func (s *Service) Status(c entity.Connector) string {
+	if len(s.cfgs.Missing(ownerForConnector(c.ID))) == 0 {
+		return "ready"
+	}
+	return "needs_setup"
+}
+
+// LoadConfigs returns the credential map for a connector row, keyed
+// by the Creds-struct field names. Values are pulled from the configs
+// table (owner = "connector:{id}").
+func (s *Service) LoadConfigs(c entity.Connector) map[string]string {
+	rows := s.cfgs.ListOwned(ownerForConnector(c.ID))
+	out := make(map[string]string, len(rows))
+	for _, r := range rows {
+		out[r.Key] = r.Value
+	}
+	return out
+}
+
+// RowConfigs returns the connector module's declared config schema
+// overlaid with the row's stored values. Used by the admin UI so the
+// form always reflects the latest declaration even when EnsureOwned
+// has not yet seeded a brand-new field. Returns nil when the row's
+// Key has no registered module (e.g. after a deploy that dropped the
+// connector — admins should delete the orphan row).
+func (s *Service) RowConfigs(c entity.Connector) []entity.Config {
+	mod, ok := s.Module(c.Key)
+	if !ok {
+		return nil
+	}
+	vals := s.LoadConfigs(c)
+	out := make([]entity.Config, len(mod.Configs))
+	for i, spec := range mod.Configs {
+		spec.Owner = ownerForConnector(c.ID)
+		spec.Value = vals[spec.Key]
+		out[i] = spec
+	}
+	return out
+}
 
 // Service is the runtime façade between code-side connector definitions
 // (kept in-memory by the registry) and DB-side connector rows. The
@@ -31,6 +82,12 @@ type Service struct {
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
+	// cfgs delegates per-instance configuration storage to the central
+	// configs table (owner = "connector:{id}"). nil means storage falls
+	// back to the legacy entity.Connector.Configs JSON column — set
+	// during the dual-write migration window so reads never miss.
+	cfgs *configs.Service
+
 	// enc is the encrypted-fields cipher. nil when wick boots without
 	// a configs.Service (e.g. legacy tests) or with WICK_ENC_DISABLE
 	// set to true. When non-nil, Execute auto-decrypts wick_enc_ tokens
@@ -44,6 +101,15 @@ type Service struct {
 // is allowed — Execute then runs without any masking.
 func (s *Service) SetEnc(e *enc.Service) {
 	s.enc = e
+}
+
+// SetConfigs wires the central configs.Service used to store per-
+// instance config rows under owner = "connector:{id}". When nil,
+// reads fall back to the legacy JSON blob on entity.Connector. Call
+// at boot before Bootstrap so seeded rows get their config rows
+// reconciled into the configs table.
+func (s *Service) SetConfigs(c *configs.Service) {
+	s.cfgs = c
 }
 
 // NewService wires a Service around an existing Repo and the default
@@ -95,16 +161,27 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 		if err != nil {
 			return fmt.Errorf("count rows for %q: %w", m.Meta.Key, err)
 		}
-		if n > 0 {
-			continue
+		if n == 0 {
+			row := &entity.Connector{
+				Key:   m.Meta.Key,
+				Label: m.Meta.Name,
+			}
+			if err := s.repo.Create(ctx, row); err != nil {
+				return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
+			}
 		}
-		row := &entity.Connector{
-			Key:     m.Meta.Key,
-			Label:   m.Meta.Name,
-			Configs: "{}",
+		// Reconcile every row of this Key with the module's declared
+		// config schema. Existing values are preserved; metadata
+		// (description, required, secret, ...) is refreshed so renames
+		// in code propagate without a migration.
+		rows, err := s.repo.ListByKey(ctx, m.Meta.Key)
+		if err != nil {
+			return fmt.Errorf("list rows for %q: %w", m.Meta.Key, err)
 		}
-		if err := s.repo.Create(ctx, row); err != nil {
-			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
+		for _, row := range rows {
+			if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(row.ID), m.Configs...); err != nil {
+				return fmt.Errorf("ensure configs for %q: %w", row.ID, err)
+			}
 		}
 	}
 	return nil
@@ -134,27 +211,33 @@ func (s *Service) Module(key string) (connector.Module, bool) {
 
 // ── Connector CRUD ───────────────────────────────────────────────────
 
-// Create inserts a new Connector row for the given code-defined Key.
-// configs is the credential map keyed by the Creds-struct field names
-// the connector declared; it is JSON-encoded into the row.
+// Create inserts a new Connector row for the given code-defined Key
+// and seeds its per-field config rows in the configs table (owner =
+// "connector:{id}"). configs is the credential map keyed by the
+// Creds-struct field names; values are written one row per field.
 //
 // Returns the freshly stored row (with ID stamped).
 func (s *Service) Create(ctx context.Context, key, label string, configs map[string]string, createdBy string) (*entity.Connector, error) {
-	if _, ok := s.Module(key); !ok {
+	mod, ok := s.Module(key)
+	if !ok {
 		return nil, fmt.Errorf("unknown connector key %q", key)
-	}
-	encoded, err := json.Marshal(configs)
-	if err != nil {
-		return nil, fmt.Errorf("encode configs: %w", err)
 	}
 	c := &entity.Connector{
 		Key:       key,
 		Label:     label,
-		Configs:   string(encoded),
 		CreatedBy: createdBy,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
+	}
+	owner := ownerForConnector(c.ID)
+	if err := s.cfgs.EnsureOwned(ctx, owner, mod.Configs...); err != nil {
+		return nil, fmt.Errorf("seed config rows: %w", err)
+	}
+	for k, v := range configs {
+		if err := s.cfgs.SetOwned(ctx, owner, k, v); err != nil {
+			return nil, fmt.Errorf("set %s: %w", k, err)
+		}
 	}
 	return c, nil
 }
@@ -237,18 +320,33 @@ func (s *Service) IsManageableBy(ctx context.Context, connectorID string, userTa
 }
 
 // Update writes label / configs / disabled changes. Identity fields
-// (Key, ParentID, CreatedBy, CreatedAt) are immutable and untouched.
+// (Key, CreatedBy, CreatedAt) are immutable and untouched.
+//
+// Per-field config values land in the configs table (owner =
+// "connector:{id}"); only declared keys are written, unknown keys are
+// silently dropped to keep stale form fields from polluting storage.
 func (s *Service) Update(ctx context.Context, id, label string, configs map[string]string, disabled bool) error {
-	encoded, err := json.Marshal(configs)
-	if err != nil {
-		return fmt.Errorf("encode configs: %w", err)
-	}
-	return s.repo.Update(ctx, &entity.Connector{
+	if err := s.repo.Update(ctx, &entity.Connector{
 		ID:       id,
 		Label:    label,
-		Configs:  string(encoded),
 		Disabled: disabled,
-	})
+	}); err != nil {
+		return err
+	}
+	owner := ownerForConnector(id)
+	declared := make(map[string]bool, len(configs))
+	for _, row := range s.cfgs.ListOwned(owner) {
+		declared[row.Key] = true
+	}
+	for k, v := range configs {
+		if !declared[k] {
+			continue
+		}
+		if err := s.cfgs.SetOwned(ctx, owner, k, v); err != nil {
+			return fmt.Errorf("set %s: %w", k, err)
+		}
+	}
+	return nil
 }
 
 // SetDisabled toggles the row-level off-switch.
@@ -256,10 +354,17 @@ func (s *Service) SetDisabled(ctx context.Context, id string, disabled bool) err
 	return s.repo.SetDisabled(ctx, id, disabled)
 }
 
-// Delete hard-deletes the connector row plus its operation toggles.
-// Run history is intentionally preserved for audit.
+// Delete hard-deletes the connector row plus its operation toggles
+// and its per-field config rows. Run history is intentionally
+// preserved for audit.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	return s.repo.Delete(ctx, id)
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	if err := s.cfgs.DeleteOwned(ctx, ownerForConnector(id)); err != nil {
+		return fmt.Errorf("delete config rows: %w", err)
+	}
+	return nil
 }
 
 // Duplicate copies an existing connector row with credentials reset.
@@ -276,11 +381,15 @@ func (s *Service) Duplicate(ctx context.Context, sourceID, createdBy string) (*e
 	c := &entity.Connector{
 		Key:       src.Key,
 		Label:     src.Label + " (copy)",
-		Configs:   "{}",
 		CreatedBy: createdBy,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
+	}
+	if mod, ok := s.Module(c.Key); ok {
+		if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(c.ID), mod.Configs...); err != nil {
+			return nil, fmt.Errorf("seed config rows: %w", err)
+		}
 	}
 	return c, nil
 }
@@ -404,13 +513,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
 	}
 
-	// Decode the stored credential map.
-	var configs map[string]string
-	if c.Configs != "" {
-		if err := json.Unmarshal([]byte(c.Configs), &configs); err != nil {
-			return nil, fmt.Errorf("decode configs: %w", err)
-		}
-	}
+	// Load the credential map from the configs table — one row per
+	// field, owner = "connector:{id}".
+	configs := s.LoadConfigs(*c)
 
 	// Snapshot the request BEFORE we decrypt anything — by design the
 	// audit log stores wick_enc_ tokens (not plaintext) in
@@ -422,17 +527,32 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// plaintext via Ctx.Cfg / Ctx.Input. A failed decrypt is fatal
 	// here — running the op against a still-encrypted credential
 	// would silently authenticate as nothing.
+	//
+	// The plaintexts produced by these decrypts are seeded into the
+	// per-call masker (below) so the post-Execute auto-mask phase
+	// re-tokenizes them on the way out, even when the receiving
+	// field carries no `secret` tag — the LLM treats wick_enc_ as
+	// opaque and may pass it into any field, so the round trip must
+	// not depend on tag discipline alone.
 	input := p.Input
+	masker := newMaskerAdapter(s.enc, p.UserID)
 	if s.enc != nil && !s.enc.Disabled() {
-		var err error
-		configs, err = unmaskMap(s.enc, configs, p.UserID)
+		var (
+			err     error
+			decCfg  []string
+			decIn   []string
+		)
+		configs, decCfg, err = unmaskMap(s.enc, configs, p.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt configs: %w", err)
 		}
-		input, err = unmaskMap(s.enc, input, p.UserID)
+		input, decIn, err = unmaskMap(s.enc, input, p.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt input: %w", err)
 		}
+		masker.add(decCfg)
+		masker.add(decIn)
+		masker.add(collectSensitiveValues(mod, op, configs, input))
 	}
 
 	startedAt := time.Now()
@@ -452,9 +572,37 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("create run: %w", err)
 	}
 
-	cctx := connector.NewCtx(ctx, c.ID, configs, input, s.httpClient, p.Progress, userMasker(s.enc, p.UserID))
+	// Pass a nil interface (not a typed-nil *maskerAdapter) when enc is
+	// disabled so connector.Ctx's nil-check on c.Mask short-circuits.
+	var ctxMasker connector.Masker
+	if masker != nil {
+		ctxMasker = masker
+	}
+	cctx := connector.NewCtx(ctx, c.ID, configs, input, s.httpClient, p.Progress, ctxMasker)
 	value, execErr := op.Execute(cctx)
 	latencyMs := int(time.Since(startedAt).Milliseconds())
+
+	// maskOut replays every sensitive plaintext seen during this call
+	// against an outgoing string — used by both the success and error
+	// paths so plaintext can never reach the LLM or audit log via an
+	// error message either. The masker has been fed by three sources:
+	//   1. plaintexts produced by decrypting wick_enc_ tokens in
+	//      configs / input — round-trip protection that does not
+	//      depend on the receiving field's tag.
+	//   2. plaintext values of every Configs/Input field tagged
+	//      `secret` (covers credentials sent in plaintext, e.g. by
+	//      the admin form).
+	//   3. values the connector explicitly passed to c.Mask /
+	//      c.MaskIgnoreCase — dynamic sensitive data the connector
+	//      pulled from upstream.
+	// Dedup happens inside snapshot() so identical values collapse
+	// to a single Mask invocation.
+	maskOut := func(s string) string {
+		if masker == nil || s == "" {
+			return s
+		}
+		return masker.svc.Mask(s, masker.snapshot(), p.UserID)
+	}
 
 	res := &ExecuteResult{
 		RunID:     run.ID,
@@ -462,25 +610,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 	if execErr != nil {
 		res.Status = entity.ConnectorRunStatusError
-		res.ErrorMessage = execErr.Error()
+		res.ErrorMessage = maskOut(execErr.Error())
 	} else {
 		bytes, mErr := json.Marshal(value)
 		if mErr != nil {
 			res.Status = entity.ConnectorRunStatusError
-			res.ErrorMessage = "marshal response: " + mErr.Error()
+			res.ErrorMessage = maskOut("marshal response: " + mErr.Error())
 		} else {
 			res.Status = entity.ConnectorRunStatusSuccess
-			res.ResponseJSON = string(bytes)
-			// Auto-encrypt: replace any sensitive plaintext present in
-			// the response with a wick_enc_ token, so the LLM can carry
-			// the value forward without ever seeing it. Sensitive
-			// plaintexts are: post-decrypt config values bertag
-			// secret/encrypt, and post-decrypt input values likewise
-			// bertag.
-			if s.enc != nil && !s.enc.Disabled() {
-				values := collectSensitiveValues(mod, op, configs, input)
-				res.ResponseJSON = s.enc.Mask(res.ResponseJSON, values, p.UserID)
-			}
+			res.ResponseJSON = maskOut(string(bytes))
 		}
 	}
 

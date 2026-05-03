@@ -28,26 +28,45 @@ A token issued for user A cannot be decrypted under user B's session — the der
 
 `connectors.Service.Execute` is the single chokepoint. Around every call:
 
-```
-LLM params (may contain wick_enc_ tokens)
-        ↓
-audit log: stores params verbatim (still encrypted)
-        ↓
-auto-decrypt input + configs maps
-        ↓
-ExecuteFunc (sees plaintext)
-        ↓
-marshal return value to JSON
-        ↓
-auto-mask response: replace every plaintext value
-  of fields tagged `secret` with their wick_enc_ token
-        ↓
-audit log: stores response (already masked)
-        ↓
-LLM (only ever sees wick_enc_)
+```mermaid
+flowchart TD
+    LLM([LLM])
+    DB1[(request_json)]
+    DB2[(response_json<br/>+ error_msg)]
+
+    LLM -- "params w/ wick_enc_" --> SNAP[Snapshot params<br/>still encrypted]
+    SNAP --> DB1
+    SNAP --> DEC[Decrypt configs + input<br/>remember plaintexts]
+    DEC --> EXEC["ExecuteFunc<br/>(plaintext + c.Mask)"]
+    EXEC -- success --> MAR[Marshal return]
+    EXEC -- error --> ERR[Format error]
+    MAR --> SWEEP{{Auto-mask sweep<br/>replay remembered values}}
+    ERR --> SWEEP
+    SWEEP --> DB2
+    SWEEP -- "wick_enc_ only" --> LLM
 ```
 
 Identical plaintext within one response receives the same token (per-call dedup cache), so the LLM does not mistake duplicates for distinct credentials.
+
+The auto-mask sweep at the end pulls plaintexts from three sources, deduped:
+
+1. **Decrypted-from-token** — every plaintext produced by decrypting an incoming `wick_enc_` token in the configs or input map. Tracked regardless of whether the receiving field carries the `secret` tag, because the LLM contract says `wick_enc_` is opaque and may be passed into any field. Without this, a connector that echoes a non-secret field would silently leak plaintext the moment the LLM forwarded a token to it.
+2. **`secret`-tagged plaintexts** — every Configs/Input field tagged `secret`, taken post-decrypt (covers values stored in plaintext, e.g. via the admin form).
+3. **Values passed to `c.Mask` / `c.MaskIgnoreCase`** — anything the connector explicitly tagged as sensitive mid-call. The framework remembers these and applies them to the whole response, so a value the connector masked in one field also gets masked if it leaks into another field of the same response.
+
+The list lives on a per-call adapter inside `internal/connectors`. Connectors and any other code outside that package cannot read it back — the only public surface is `c.Mask` (write-only from the connector's view).
+
+### The "connector forgot to mask" guarantee
+
+The most common worry is: *what if the connector returns a value that should have been masked but wasn't?* The middleware covers the two paths where that risk is real:
+
+| Scenario | What protects you |
+|----------|-------------------|
+| LLM passed `wick_enc_X` into a field. Connector decrypts via `c.Input(...)` (transparent), uses the plaintext, and accidentally returns it raw in the response. | Source #1 above. Every plaintext produced by decrypting an inbound token is in the sweep list — the response gets re-masked even if the connector did nothing about it. |
+| Connector pulls a sensitive value from upstream, calls `c.Mask` on one place where it appears, but a *different* response field also carries the same value. | Source #3 above. `c.Mask` records the values, then the post-Execute sweep re-applies them to the entire marshaled response. |
+| Connector wraps a credential into an error string (`fmt.Errorf("...token=%s", c.Cfg("token"))`) and returns it. | Same sweep runs over the error message before it reaches the caller and the audit log. |
+
+The guarantee does **not** stretch to channels the framework cannot see — `c.ReportProgress`, structured logs, side-effect writes (DB, queue, file). For those, mask before emitting.
 
 ## Marking a field as sensitive
 
@@ -67,6 +86,8 @@ type RefreshInput struct {
 That's the only code change needed for the common case. Wick reflects the tag at boot via `entity.StructToConfigs`, the `IsSecret` flag flows into the Config row, and `connectors.Service.Execute` reads it back when collecting sensitive values to mask.
 
 There is no min-length floor — admins are responsible for making sure sensitive fields don't carry generic values like `"true"`, `"1"`, or short IDs that would substring-match all over the response.
+
+The `secret` tag still matters even though decrypt-then-echo is now caught regardless of tag: it is the only signal that covers a credential the admin pasted in **as plaintext** (no `wick_enc_` token at any point). For credentials that always travel as tokens you'd be safe with or without the tag, but tagging consistently keeps the form rendering masked and the audit trail clean.
 
 ## Dynamic values: `c.Mask` / `c.MaskIgnoreCase`
 
@@ -92,6 +113,8 @@ func login(c *connector.Ctx) (any, error) {
 ```
 
 `c.Mask(data, values)` and `c.MaskIgnoreCase(data, values)` are bound to the calling user's per-user key automatically; connectors never see the user UUID. When wick is booted without the encrypted-fields layer (tests) or with `WICK_ENC_DISABLE=true`, the call is a passthrough.
+
+Side effect worth knowing: every value passed to `c.Mask` is also remembered for the post-Execute auto-mask sweep. So if a connector calls `c.Mask(loggedFragment, []string{token})` to scrub one field, then later returns a struct where a different field happens to contain the same token, the second occurrence is masked too. The connector does not need to thread the same value into both places manually.
 
 ## Manual UI: `/tools/encfields`
 
@@ -127,6 +150,7 @@ The reason `wick_encrypt` / `wick_decrypt` redirect rather than executing the ci
 |--------|---------|
 | `connector_runs.request_json` | Params **before** decrypt — stores `wick_enc_` tokens verbatim, so retry-from-history works under the retrier's key. |
 | `connector_runs.response_json` | Response **after** mask — already redacted, no plaintext anywhere. |
+| `connector_runs.error_msg` | Error message **after** mask — same sweep as response_json, so a connector that wraps a credential into `fmt.Errorf` does not leak via the audit row. |
 
 Plaintext never lands in the audit log.
 
@@ -141,9 +165,11 @@ DB-stored key lives at `configs.encryption_key` (auto-generated on first boot, r
 
 ## Common pitfalls
 
-- **Tagging a generic value `secret`.** A field whose value is `"true"`, `"1"`, `"abc"`, or a short ID will substring-match all over the response and silently mint tokens for noise. Pick distinct values for sensitive fields.
+- **Tagging a generic value `secret`.** A field whose value is `"true"`, `"1"`, `"abc"`, or a short ID will substring-match all over the response and silently mint tokens for noise. Pick distinct values for sensitive fields. The same applies to a `wick_enc_` token whose plaintext is generic — round-trip auto-mask will substring-scan the response for it.
 - **Manually calling `EncryptValue` in `ExecuteFunc`.** Don't — let the framework do it via the `secret` tag (auto-mask) or `c.Mask` / `c.MaskIgnoreCase` (dynamic). Manual encrypt risks shipping a token to a place the LLM was already fine with plaintext for, breaking subsequent tool calls.
-- **Logging or progress-reporting plaintext.** Auto-mask only covers the value `ExecuteFunc` returns. If you also write to `c.ReportProgress`, structured logs, or a queue, mask those yourself first.
+- **Logging or progress-reporting plaintext.** Auto-mask covers the response and the error message returned from `ExecuteFunc`. If you also write to `c.ReportProgress`, structured logs, or a queue, mask those yourself first.
+- **Detached goroutines that outlive `ExecuteFunc`.** The auto-mask sweep snapshots the remembered plaintexts the moment `ExecuteFunc` returns. A goroutine you spawned but did not wait for can call `c.Mask` afterwards — that mask still scrubs whatever string the goroutine itself produced, but values it adds to the per-call list arrive too late to scrub the main response. Join your goroutines before returning, or do the masking inside them.
+- **Generic plaintexts behind `wick_enc_` tokens.** The decrypt-then-remember path now feeds every token plaintext into the substring sweep regardless of tag. A token whose plaintext is `"true"`, `"1"`, or a 3-character ID will substring-match noise across the response and silently mint tokens for unrelated fields. Don't issue tokens for generic values.
 - **Trying to decrypt over MCP.** `wick_decrypt` deliberately returns a URL — the cipher never runs in the LLM's context window. Direct the user there.
 
 ## See also

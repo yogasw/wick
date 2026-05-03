@@ -7,10 +7,26 @@ import (
 	"os"
 	"sync"
 
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 
 	"gorm.io/gorm"
 )
+
+// isAnyToken reports whether value is already an encryption token in
+// either layer (per-user wick_enc_ or master wick_cenc_). Reused by
+// reconcile / setOwned to skip double-encryption.
+func isAnyToken(v string) bool { return enc.IsToken(v) || enc.IsMasterToken(v) }
+
+// Encryptor is the subset of *enc.Service the configs layer uses for
+// at-rest encryption of `secret`-tagged rows. Set once after boot via
+// SetEncryptor; reconcile/setOwned check it before encrypting writes
+// or decrypting reads.
+type Encryptor interface {
+	EncryptMaster(plain string) (string, error)
+	DecryptMaster(token string) (string, error)
+	Disabled() bool
+}
 
 // Service exposes typed, cached access to runtime variables. The cache
 // is loaded once at startup by Bootstrap() and refreshed on every
@@ -26,6 +42,11 @@ type Service struct {
 	// declOrder preserves the per-owner declaration order so ListOwned
 	// returns rows in the same sequence as the module's Config struct.
 	declOrder map[string][]string
+	// enc encrypts `secret`-tagged values at rest. Nil until
+	// SetEncryptor runs (after Bootstrap, since the master key is
+	// itself a config row). When nil, secret values are stored
+	// plaintext — same behaviour as before this layer existed.
+	enc Encryptor
 }
 
 // ownerKey is the composite cache key. Owner scopes the variable
@@ -38,6 +59,61 @@ func NewService(db *gorm.DB) *Service {
 		cache:     make(map[ownerKey]entity.Config),
 		meta:      make(map[ownerKey]entity.Config),
 		declOrder: make(map[string][]string),
+	}
+}
+
+// SetEncryptor wires the at-rest cipher. Call once at boot after the
+// enc service is built (which itself depends on Bootstrap having
+// reconciled the encryption_key row). After this point, every Set
+// against an IsSecret row writes ciphertext to the DB and the cache
+// holds the decrypted plaintext.
+//
+// Calling with a Disabled() encryptor is a no-op — the layer behaves
+// as if SetEncryptor was never called.
+func (s *Service) SetEncryptor(e Encryptor) {
+	if e == nil || e.Disabled() {
+		return
+	}
+	s.mu.Lock()
+	s.enc = e
+	// Two-pass walk over the cache (Bootstrap ran before this call,
+	// so the encryptor was nil during reconcile and IsSecret rows
+	// landed in the cache untouched):
+	//   - wick_cenc_ tokens → decrypt into the cache so callers see
+	//     plaintext via Get/GetOwned.
+	//   - plaintext IsSecret rows → encrypt and persist so legacy
+	//     installs migrate to ciphertext on this boot.
+	type pending struct{ owner, key, value string }
+	var toEncrypt []pending
+	for k, row := range s.cache {
+		m, ok := s.meta[k]
+		if !ok || !m.IsSecret || row.Value == "" {
+			continue
+		}
+		if k.Owner == "" && k.Key == KeyEncryptionKey {
+			continue
+		}
+		if enc.IsMasterToken(row.Value) {
+			plain, err := e.DecryptMaster(row.Value)
+			if err != nil {
+				continue
+			}
+			row.Value = plain
+			s.cache[k] = row
+			continue
+		}
+		if isAnyToken(row.Value) {
+			continue
+		}
+		toEncrypt = append(toEncrypt, pending{owner: k.Owner, key: k.Key, value: row.Value})
+	}
+	s.mu.Unlock()
+	for _, p := range toEncrypt {
+		ct, err := e.EncryptMaster(p.value)
+		if err != nil {
+			continue
+		}
+		_ = s.repo.SetValue(context.Background(), p.owner, p.key, ct)
 	}
 }
 
@@ -54,6 +130,47 @@ func (s *Service) Bootstrap(ctx context.Context, extras ...entity.Config) error 
 			return err
 		}
 	}
+	return nil
+}
+
+// EnsureOwned reconciles a runtime-declared set of rows for owner.
+// Used when a connector / tool / job instance is created after boot:
+// the caller stamps Owner on each row and hands them in; the rows that
+// already exist are left alone (metadata is refreshed, value
+// preserved), missing rows are created.
+//
+// The owner string scopes the rows — by convention "connector:{id}"
+// for connector instances. Any owner string is accepted.
+func (s *Service) EnsureOwned(ctx context.Context, owner string, rows ...entity.Config) error {
+	for _, row := range rows {
+		row.Owner = owner
+		if err := s.reconcile(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteOwned removes every row scoped to owner from the DB and the
+// in-memory cache. Used when a connector / tool / job instance is
+// destroyed. Returns nil when owner has no rows.
+func (s *Service) DeleteOwned(ctx context.Context, owner string) error {
+	if err := s.repo.DeleteByOwner(ctx, owner); err != nil {
+		return fmt.Errorf("delete configs for owner %q: %w", owner, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.cache {
+		if k.Owner == owner {
+			delete(s.cache, k)
+		}
+	}
+	for k := range s.meta {
+		if k.Owner == owner {
+			delete(s.meta, k)
+		}
+	}
+	delete(s.declOrder, owner)
 	return nil
 }
 
@@ -82,10 +199,27 @@ func (s *Service) reconcile(ctx context.Context, row entity.Config) error {
 	// UpsertMeta skips the value column on existing rows — restore the
 	// seed so auto-generated secrets land in the cache even when the
 	// row already existed (Bootstrap only runs the generator when
-	// nothing was stored yet).
+	// nothing was stored yet). New rows tagged secret get encrypted on
+	// the seed write itself when the encryptor is wired (currently
+	// only true for EnsureOwned post-boot — Bootstrap-time secrets
+	// land plaintext, then SetEncryptor migrates them on the next
+	// boot).
 	if existing == nil {
 		fresh.Value = value
-		_ = s.repo.SetValue(ctx, row.Owner, row.Key, value)
+		stored := value
+		if value != "" && row.IsSecret && s.shouldEncrypt(row.Owner, row.Key) {
+			if ct, encErr := s.enc.EncryptMaster(value); encErr == nil {
+				stored = ct
+			}
+		}
+		_ = s.repo.SetValue(ctx, row.Owner, row.Key, stored)
+	}
+	// Cache holds plaintext: reads via Get/GetOwned must return what
+	// the admin pasted, not the ciphertext.
+	if fresh.IsSecret && enc.IsMasterToken(fresh.Value) && s.enc != nil {
+		if plain, decErr := s.enc.DecryptMaster(fresh.Value); decErr == nil {
+			fresh.Value = plain
+		}
 	}
 	k := ownerKey{Owner: row.Owner, Key: row.Key}
 	s.mu.Lock()
@@ -186,17 +320,58 @@ func (s *Service) SetOwned(ctx context.Context, owner, key, value string) error 
 }
 
 func (s *Service) setOwned(ctx context.Context, owner, key, value string) error {
-	if err := s.repo.SetValue(ctx, owner, key, value); err != nil {
+	// IsSecret rows render as password inputs with a "leave blank to
+	// keep" placeholder — an empty submit means the admin did not
+	// touch the field, so don't clobber the stored value.
+	if value == "" {
+		s.mu.RLock()
+		m, ok := s.meta[ownerKey{Owner: owner, Key: key}]
+		s.mu.RUnlock()
+		if ok && m.IsSecret {
+			return nil
+		}
+	}
+	stored := value
+	plaintext := value
+	if value != "" && !isAnyToken(value) && s.shouldEncrypt(owner, key) {
+		ct, err := s.enc.EncryptMaster(value)
+		if err != nil {
+			return fmt.Errorf("encrypt %s/%s: %w", owner, key, err)
+		}
+		stored = ct
+	}
+	if err := s.repo.SetValue(ctx, owner, key, stored); err != nil {
 		return err
 	}
 	fresh, err := s.repo.FindByOwnerKey(ctx, owner, key)
 	if err != nil {
 		return err
 	}
+	// Cache holds plaintext (see reconcile). Reuse what we already
+	// have — the just-written ciphertext would round-trip through
+	// DecryptMaster, but skipping the call avoids a needless decrypt.
+	fresh.Value = plaintext
 	s.mu.Lock()
 	s.cache[ownerKey{Owner: owner, Key: key}] = *fresh
 	s.mu.Unlock()
 	return nil
+}
+
+// shouldEncrypt reports whether (owner, key) is a secret row that the
+// at-rest layer should encrypt. False when no encryptor is wired, the
+// row is not declared IsSecret, or the row is the encryption_key
+// itself (chicken-and-egg: it would need to decrypt itself to read).
+func (s *Service) shouldEncrypt(owner, key string) bool {
+	if s.enc == nil {
+		return false
+	}
+	if owner == "" && key == KeyEncryptionKey {
+		return false
+	}
+	s.mu.RLock()
+	m, ok := s.meta[ownerKey{Owner: owner, Key: key}]
+	s.mu.RUnlock()
+	return ok && m.IsSecret
 }
 
 // Regenerate replaces an app-level key's value by running its

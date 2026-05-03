@@ -103,7 +103,7 @@ wick_execute({tool_id, params: {...}})    → result
 
 ## Encrypted credentials
 
-Wick wraps every value tagged `secret` in a connector's `Configs` or per-op `Input` struct in a `wick_enc_<base64url>` token before the response leaves the server. The LLM carries the token forward into the next tool call; wick decrypts it before `ExecuteFunc` runs. The plaintext never appears in the LLM's context window or in the audit log.
+Wick wraps sensitive plaintext in a `wick_enc_<base64url>` token before the response leaves the server. The LLM carries the token forward into the next tool call; wick decrypts it before `ExecuteFunc` runs. The plaintext never appears in the LLM's context window or in the audit log. Three sources are masked, deduped: every Configs/Input field tagged `secret`, every plaintext produced by decrypting an incoming `wick_enc_` token (regardless of tag — the LLM treats tokens as opaque and may pass them into any field), and every value the connector explicitly handed to `c.Mask` / `c.MaskIgnoreCase` mid-call.
 
 Per-user keys (`HKDF(master_key, salt=user_uuid, info="wick-enc")`) mean a token issued for user A cannot be decrypted under user B's session — replays across users fail loudly.
 
@@ -115,11 +115,11 @@ sequenceDiagram
     participant Op as connector ExecuteFunc
 
     LLM->>MCP: wick_execute(tool_id, params)
-    Note over MCP: decrypt any wick_enc_ tokens<br/>under user's per-user key
+    Note over MCP: decrypt any wick_enc_ tokens<br/>under user's per-user key<br/>(remember plaintexts for mask sweep)
     MCP->>Op: ExecuteFunc(plaintext)
     Op-->>MCP: response (plaintext sensitive values)
-    Note over MCP: mask values from `secret` fields<br/>+ values c.Mask / c.MaskIgnoreCase declared
-    MCP-->>LLM: response with wick_enc_ tokens
+    Note over MCP: mask sweep on response AND error,<br/>dedup of:<br/>1. `secret`-tagged plaintexts<br/>2. plaintexts from decrypted tokens<br/>3. values declared via c.Mask / c.MaskIgnoreCase
+    MCP-->>LLM: response (or error) with wick_enc_ tokens
     LLM->>MCP: wick_execute(next_tool, params: {token: "wick_enc_..."})
     Note over MCP: decrypt under same user's key<br/>→ plaintext for ExecuteFunc
 ```

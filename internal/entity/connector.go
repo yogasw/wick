@@ -28,15 +28,14 @@ import (
 // a connector therefore get an empty-but-working row back on restart;
 // duplicates and edits to existing rows are untouched.
 //
-// Configs holds the credential / endpoint values as a JSON-encoded
-// map[string]string keyed by the field names declared on the
-// connector's Creds struct. Secret-marked fields are stored plaintext
-// (matching the wick `configs` table convention) and masked in the
-// UI render layer; if at-rest encryption becomes a requirement it
-// applies to both this column and the legacy configs table together.
-// The jsonb shape is preferred to a row-per-field table because cred
-// sets are tiny, always read together, and never need cross-instance
-// queries.
+// Per-field credential / endpoint values live on the central configs
+// table (owner = "connector:{id}"), one row per field declared on the
+// connector's Creds struct. Wick reflects the typed Creds into rows
+// at boot via entity.StructToConfigs and reconciles them on every
+// connector instance create. Reading credentials goes through
+// connectors.Service.LoadConfigs; the configs.Service cache makes the
+// per-field shape as cheap as a JSON unmarshal but keeps each value
+// query-able and individually editable.
 //
 // Disabled hides the row from MCP tools/list and the admin UI list view
 // (admins can re-enable from the manager). The tag-filter system (the
@@ -52,7 +51,6 @@ type Connector struct {
 	ID        string `gorm:"type:varchar(36);primaryKey"`
 	Key       string `gorm:"type:varchar(100);index;not null"`
 	Label     string `gorm:"type:varchar(255);not null"`
-	Configs   string `gorm:"type:text"`
 	Disabled  bool   `gorm:"default:false"`
 	CreatedBy string `gorm:"type:varchar(36)"`
 	CreatedAt time.Time

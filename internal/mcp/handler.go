@@ -11,7 +11,6 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/pkg/connector"
 )
 
 // supportedProtocolVersions lists every MCP revision this server can
@@ -536,20 +535,6 @@ type listResult struct {
 	TotalTools      int                `json:"total_tools"`
 }
 
-// connectorStatus returns "ready" when all required configs on the module
-// have a non-empty value in the connector row, otherwise "needs_setup".
-func connectorStatus(mod connector.Module, configsJSON string) string {
-	var vals map[string]string
-	if configsJSON != "" {
-		_ = json.Unmarshal([]byte(configsJSON), &vals)
-	}
-	for _, c := range mod.Configs {
-		if c.Required && vals[c.Key] == "" {
-			return "needs_setup"
-		}
-	}
-	return "ready"
-}
 
 func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpcRequest, tagIDs []string, isAdmin bool) {
 	rows, err := h.connectors.ListVisibleTo(r.Context(), tagIDs, isAdmin)
@@ -583,7 +568,7 @@ func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpc
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
 			TotalTools:  count,
-			Status:      connectorStatus(mod, row.Configs),
+			Status:      h.connectors.Status(row),
 		})
 	}
 	writeToolJSON(w, req.ID, listResult{
@@ -669,7 +654,7 @@ func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req r
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
-			Status:      connectorStatus(mod, row.Configs),
+			Status:      h.connectors.Status(row),
 			Tools:       matched,
 		})
 	}

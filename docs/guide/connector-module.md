@@ -108,12 +108,12 @@ The `wick:"..."` tag grammar is shared with Tools and Jobs. See the **[Config Ta
 | Tag | Effect |
 |-----|--------|
 | `required` | Admin must fill before any op can run |
-| `secret` | Masked in the UI **and** opts the field into the [encrypted-fields layer](/reference/encrypted-fields) — wick auto-decrypts incoming `wick_enc_` tokens before `ExecuteFunc` runs and auto-masks the plaintext in the response back to the LLM |
+| `secret` | Masked in the UI **and** marks the field for plaintext auto-mask in the [encrypted-fields layer](/reference/encrypted-fields). Round-tripping a `wick_enc_` token through *any* field (secret-tagged or not) is now covered automatically — every plaintext produced by decrypting an incoming token is re-masked on the way out. The `secret` tag is still the right signal whenever the field can also be filled in plaintext (e.g. by an admin pasting a raw credential into the form). |
 | `url`, `email`, `textarea`, `dropdown=a\|b\|c`, `kvlist=col1\|col2` | Widget overrides |
 | `desc=...` | Help text shown next to the field |
 | `key=custom_name` | Override the snake_cased field name |
 
-Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`. Reads always return plaintext — the encrypted-fields layer happens around `ExecuteFunc`, not inside it. For sensitive values that come back from the upstream API and aren't declared as Configs/Input fields, mask them yourself with `c.Mask(data, values)` (or `c.MaskIgnoreCase` for case-folded matching) before returning.
+Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`. Reads always return plaintext — the encrypted-fields layer happens around `ExecuteFunc`, not inside it. For sensitive values that come back from the upstream API and aren't declared as Configs/Input fields, mask them yourself with `c.Mask(data, values)` (or `c.MaskIgnoreCase` for case-folded matching) before returning. Every value passed to `c.Mask` is also remembered for the framework's post-Execute auto-mask sweep, so the same value leaking into a different response field gets masked too — no need to thread it through every site manually.
 
 ### Per-operation `Input` structs
 

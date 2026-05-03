@@ -46,6 +46,11 @@ import (
 // upstream APIs emit, so a substring scan is unambiguous.
 const Prefix = "wick_enc_"
 
+// MasterPrefix marks a config-encrypted token (at-rest, master-key
+// keyed, no per-user salt). Distinct from Prefix so the wrong decrypt
+// path can't pick it up — Mask/Unmask scan only for Prefix.
+const MasterPrefix = "wick_cenc_"
+
 // Service wraps the master key + the per-user key derivation. One
 // instance is shared across the process; methods are safe to call
 // concurrently.
@@ -199,6 +204,100 @@ var ErrNotToken = errors.New("enc: not a wick_enc_ token")
 // sure what they're holding.
 func IsToken(s string) bool {
 	return strings.HasPrefix(s, Prefix)
+}
+
+// IsMasterToken reports whether s carries the wick_cenc_ prefix used
+// for at-rest config encryption. Distinct from IsToken so callers
+// can pick the right decrypt path (master vs per-user).
+func IsMasterToken(s string) bool {
+	return strings.HasPrefix(s, MasterPrefix)
+}
+
+// masterKeyFor returns the AES key used by EncryptMaster/DecryptMaster.
+// Domain-separated from per-user keys via HKDF info="wick-cenc-master"
+// so the same masterKey can never accidentally encrypt-or-decrypt
+// across the two layers.
+func (s *Service) masterKeyFor() ([]byte, error) {
+	r := hkdf.New(newSHA256, s.masterKey, nil, []byte("wick-cenc-master"))
+	out := make([]byte, 32)
+	if _, err := io.ReadFull(r, out); err != nil {
+		return nil, fmt.Errorf("hkdf master derive: %w", err)
+	}
+	return out, nil
+}
+
+// EncryptMaster produces a wick_cenc_ token bound to the master key
+// (no per-user salt). Used for at-rest config encryption: admin pastes
+// plaintext into a `secret`-tagged config row, the configs service
+// stores the token, and DecryptMaster restores the plaintext when the
+// row is read back into the cache.
+//
+// Disabled service is a programmer error — the configs layer must not
+// call this when Disabled() is true. Returns an error rather than
+// silently passing through.
+func (s *Service) EncryptMaster(plain string) (string, error) {
+	if s.disabled {
+		return "", errors.New("enc: service disabled")
+	}
+	key, err := s.masterKeyFor()
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("aes new: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("gcm new: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("nonce: %w", err)
+	}
+	ct := gcm.Seal(nil, nonce, []byte(plain), nil)
+	buf := make([]byte, 0, len(nonce)+len(ct))
+	buf = append(buf, nonce...)
+	buf = append(buf, ct...)
+	return MasterPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// DecryptMaster reverses EncryptMaster. Returns ErrNotToken when the
+// input lacks the wick_cenc_ prefix. The error is opaque on
+// auth/decrypt failure (typically: master key was rotated since the
+// token was written).
+func (s *Service) DecryptMaster(token string) (string, error) {
+	if !IsMasterToken(token) {
+		return "", ErrNotToken
+	}
+	if s.disabled {
+		return "", errors.New("enc: service disabled")
+	}
+	key, err := s.masterKeyFor()
+	if err != nil {
+		return "", err
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token[len(MasterPrefix):])
+	if err != nil {
+		return "", fmt.Errorf("decode: %w", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("aes new: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("gcm new: %w", err)
+	}
+	if len(raw) < gcm.NonceSize() {
+		return "", errors.New("enc: ciphertext too short")
+	}
+	nonce, ct := raw[:gcm.NonceSize()], raw[gcm.NonceSize():]
+	plain, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return "", fmt.Errorf("gcm open: %w", err)
+	}
+	return string(plain), nil
 }
 
 // Mask replaces every occurrence of every value in `values` inside

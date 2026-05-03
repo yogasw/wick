@@ -137,6 +137,10 @@ func NewServer() *Server {
 	if err != nil {
 		log.Fatal().Msgf("enc init: %s", err.Error())
 	}
+	// Wire the cipher into configs so every IsSecret row is
+	// encrypted at rest from this point on. Also migrates any
+	// pre-existing plaintext secret rows to ciphertext on next boot.
+	configsSvc.SetEncryptor(encSvc)
 	// The encfields tool resolves its cipher through a package
 	// singleton — built-in tools register from cmd/lab before the DB
 	// or enc service exist, so a static Register signature is the
@@ -150,6 +154,7 @@ func NewServer() *Server {
 	// runtime entry point for LLM clients.
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	connectorsSvc.SetEnc(encSvc)
+	connectorsSvc.SetConfigs(configsSvc)
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -436,9 +441,11 @@ func RunMCPStdio(version, commit, buildTime string) {
 	if err != nil {
 		log.Fatal().Msgf("enc init: %s", err.Error())
 	}
+	configsSvc.SetEncryptor(encSvc)
 
 	connSvc := connectors.NewServiceFromDB(db)
 	connSvc.SetEnc(encSvc)
+	connSvc.SetConfigs(configsSvc)
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}

@@ -132,7 +132,7 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configs := buildRowConfigs(mod.Configs, decodeConfigs(row.Configs))
+	configs := h.connectors.RowConfigs(*row)
 	opStates, _ := h.connectors.OperationStates(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
@@ -304,7 +304,7 @@ func (h *Handler) setConnectorLabel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "label is required", http.StatusBadRequest)
 		return
 	}
-	stored := decodeConfigs(row.Configs)
+	stored := h.connectors.LoadConfigs(*row)
 	if err := h.connectors.Update(ctx, row.ID, label, stored, row.Disabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -324,7 +324,7 @@ func (h *Handler) setConnectorConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	stored := decodeConfigs(row.Configs)
+	stored := h.connectors.LoadConfigs(*row)
 	stored[configKey] = r.FormValue("value")
 	if err := h.connectors.Update(ctx, row.ID, row.Label, stored, row.Disabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -493,32 +493,6 @@ func (h *Handler) canSeeRow(r *http.Request, user *entity.User, connectorID stri
 	isAdmin := user != nil && user.IsAdmin()
 	ok, err := h.connectors.IsManageableBy(ctx, connectorID, login.GetUserTagIDs(ctx), isAdmin)
 	return err == nil && ok
-}
-
-// decodeConfigs unmarshals the row's stored JSON configs blob. Empty or
-// malformed blobs decode to an empty map so callers can always write.
-func decodeConfigs(raw string) map[string]string {
-	out := map[string]string{}
-	if raw == "" {
-		return out
-	}
-	_ = json.Unmarshal([]byte(raw), &out)
-	if out == nil {
-		out = map[string]string{}
-	}
-	return out
-}
-
-// buildRowConfigs overlays the row's stored values onto the module's
-// declared config schema, producing the rows the existing ConfigsTable
-// expects.
-func buildRowConfigs(specs []entity.Config, stored map[string]string) []entity.Config {
-	out := make([]entity.Config, len(specs))
-	for i, s := range specs {
-		s.Value = stored[s.Key]
-		out[i] = s
-	}
-	return out
 }
 
 func userID(u *entity.User) string {
