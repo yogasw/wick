@@ -48,66 +48,14 @@ When auditing an existing module as part of a change, similarly: if the user ask
 
 ### Widget catalog (shared across tools & jobs)
 
-Every field with a `wick:"..."` tag becomes one row in the `configs` table, scoped to that module's `Meta.Key`. The widget is picked from the Go type plus tag flags — explicit flags always win.
+Read `SKILL.md` from the `config-tags` folder (sibling of this skill's folder) for the full tag reference.
 
-| Go type | Default widget | Override with tag flag |
-|---|---|---|
-| `string` | `text` | `textarea` / `dropdown=a\|b\|c` / `email` / `url` / `color` / `date` / `datetime` / `kvlist=col1\|col2` |
-| `bool` | `checkbox` | — |
-| `int`/`float` | `number` | — |
-
-Additional flags (any widget):
-
-- `required` — blocks the module until admin fills it in. Tools surface this via `c.Missing()`; jobs via the `ScopedSetupBanner` on `/jobs/{key}` and `/manager/jobs/{key}`.
-- `secret` — masked in UI, never rendered back to the admin after first save.
-- `locked` — read-only in admin UI (set by seed, not editable post-boot).
-- `regen` — admin gets a "Regenerate" button. Only wired for app-level variables today; per-module regenerate is a TODO.
-- `key=custom_name` — override the snake_case column name derived from the field name.
-- `desc=...` — admin UI help text. Be useful — this is the only hint the admin sees.
-- `kvlist=col1|col2|col3` — editable table widget. Value is stored as a JSON array of objects (`[{"col1":"...","col2":"..."}]`). Read with `json.Unmarshal([]byte(c.Cfg("key")), &rows)`. Bare `kvlist` (no `=`) defaults to a single `value` column.
-
-### Tag grammar
-
-Fields are separated by `;`. `key=value` sets a named field; a bare key becomes a boolean flag.
-
-```go
-type Config struct {
-    // text (default string)
-    Title string `wick:"desc=Card title shown in the admin UI."`
-
-    // url + required + desc
-    Endpoint string `wick:"url;required;desc=API base URL. Example: https://api.example.com"`
-
-    // dropdown with fixed options
-    Mode string `wick:"desc=Conversion mode.;dropdown=uppercase|lowercase|titlecase"`
-
-    // textarea for multi-line
-    Template string `wick:"desc=Prompt template.;textarea"`
-
-    // number, required
-    MaxRows int `wick:"desc=Max rows returned per query.;required"`
-
-    // secret, required
-    APIKey string `wick:"desc=External API key.;secret;required"`
-
-    // checkbox (default bool)
-    EnableCache bool `wick:"desc=Cache results across requests."`
-
-    // kvlist — editable table; value stored as JSON array
-    // e.g. [{"id":"1","name":"Sales"},{"id":"2","name":"Support"}]
-    QuestionGroups string `wick:"kvlist=id|name;desc=Question group definitions."`
-
-    // override the column name
-    LegacyKey string `wick:"key=legacy_api_key;secret;desc=Deprecated. Kept for v1 clients."`
-}
-```
-
-**Rules (same for tools & jobs):**
+Quick rules:
 
 - **Fields without a `wick` tag are ignored** — internal state stays internal.
 - **One wick-tagged field per runtime-editable knob.** The Go value in `cfg` is the first-boot seed; once a row exists in the `configs` table the DB value wins.
 - **Pass a different `cfg` per instance** to seed different defaults. Same Register/Run func, different Meta.Key + Config = second card/scheduled instance.
-- **Never set `Owner` manually.** Wick assigns `Owner = Meta.Key` at bootstrap. A module can't spoof another module's namespace.
+- **Never set `Owner` manually.** Wick assigns `Owner = Meta.Key` at bootstrap.
 - **Tools read via `c.Cfg("key")`**, typed helpers `c.CfgInt` / `c.CfgBool`. Cross-module reads via `c.CfgOf(owner, key)` — rare, always needs a comment explaining why.
 - **Jobs read via `job.FromContext(ctx).Cfg("key")`**, same typed helpers, same `CfgOf` escape hatch.
 - **Key derivation:** field name is snake-cased (`InitText` → `init_text`, `APIBaseURL` → `api_base_url`).

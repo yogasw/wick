@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/strutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -96,7 +97,7 @@ func (r *repo) FinishRun(ctx context.Context, runID string, status entity.RunSta
 	return r.db.WithContext(ctx).Model(&entity.JobRun{}).Where("id = ?", runID).
 		Updates(map[string]any{
 			"status":   status,
-			"result":   result,
+			"result":   strutil.LimitText(result, strutil.DefaultLimit),
 			"ended_at": &now,
 		}).Error
 }

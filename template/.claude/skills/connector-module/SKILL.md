@@ -217,14 +217,7 @@ type Configs struct {
 }
 ```
 
-**Tag grammar is shared with Tools and Jobs.** The full widget catalog (every `wick:"..."` flag, the type → widget table, key derivation rules) lives in the [`tool-module`](../tool-module/SKILL.md) skill under "Widget catalog" — don't duplicate it here, defer to it. The most common flags you'll reach for in connectors:
-
-- `required` — admin must fill before any op can run
-- `secret` — masked input (passwords, API keys, bearer tokens, OAuth client secrets)
-- `url` — URL input widget (base URLs, webhook targets)
-- `dropdown=a|b|c` — restricted choice (region, environment, mode)
-- `desc=...` — help text shown next to the field; the only hint the admin sees
-- `key=custom_name` — override the auto snake_cased column name
+Read `SKILL.md` from the `config-tags` folder (sibling of this skill's folder) for the full tag reference.
 
 **Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`** — keys are the snake_cased field name unless overridden with `key=`.
 

@@ -105,17 +105,7 @@ type Configs struct {
 }
 ```
 
-Tag grammar (same as Tools/Jobs — `tool-module` skill has the full table):
-
-| Field | Default widget | Override flags |
-|---|---|---|
-| `string` | `text` | `textarea`, `dropdown=a\|b\|c`, `email`, `url`, `color`, `date`, `datetime`, `kvlist=col1\|col2` |
-| `bool` | `checkbox` | — |
-| `int`/`float` | `number` | — |
-
-Common modifiers: `required`, `secret`, `desc=...`, `key=custom_name`.
-
-`kvlist=col1|col2|col3` — editable table widget. Value stored as JSON array of objects (`[{"col1":"...","col2":"..."}]`). Read with `json.Unmarshal([]byte(c.Cfg("key")), &rows)`. Bare `kvlist` defaults to a single `value` column.
+Read `SKILL.md` from the `config-tags` folder (sibling of this skill's folder) for the full tag reference.
 
 **Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`** — keys are the snake_cased field name unless overridden with `key=`.
 

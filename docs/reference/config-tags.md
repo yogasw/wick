@@ -46,7 +46,7 @@ type Config struct {
 | `dropdown=a\|b\|c` | Select | Pipe-separated options |
 | `checkbox` | Checkbox toggle | Auto-applied for `bool` fields |
 | `number` | Number input | Auto-applied for `int` / `float` fields |
-| `secret` | Password input | Masked; never returned to form after first save |
+| `secret` | Password input | Masked; value never sent to browser. Shows `••••••••` when set |
 | `email` | Email input | HTML `type="email"` |
 | `url` | URL input | HTML `type="url"` |
 | `color` | Color picker | HTML `type="color"` |
@@ -59,8 +59,10 @@ type Config struct {
 | Modifier | Effect |
 |----------|--------|
 | `desc=...` | Help text shown below the field in the admin UI |
+| `default=...` | Seed value used when the Go field is its zero value (`""`, `0`, `false`) |
 | `required` | `c.Missing()` / `job.Missing()` returns this key until it is set |
 | `locked` | Read-only in admin UI — set once at boot, not editable post-deploy |
+| `regen` | Shows a regenerate button in admin UI — key must have a registered generator |
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
 
 ## Key derivation
