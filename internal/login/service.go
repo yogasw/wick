@@ -35,6 +35,14 @@ func (s *Service) GetUserByID(ctx context.Context, id string) (*entity.User, err
 	return s.repo.GetUserByID(ctx, id)
 }
 
+// FirstAdmin returns the oldest admin user, or nil when no admin exists.
+// Stdio MCP uses this to bind its synthetic context to a real admin so
+// wick_enc_ tokens minted from MCP can be decrypted by that admin in
+// the web UI (per-user keys are HKDF-salted with user.ID).
+func (s *Service) FirstAdmin(ctx context.Context) (*entity.User, error) {
+	return s.repo.FirstAdmin(ctx)
+}
+
 // GetUserFilterTagIDs fetches the filter-type tag IDs for a user.
 // Called at login time; the result is embedded in the encrypted session cookie
 // so subsequent requests do not need an extra DB query for tag matching.

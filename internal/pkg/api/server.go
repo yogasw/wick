@@ -450,7 +450,17 @@ func RunMCPStdio(version, commit, buildTime string) {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
 
+	// Bind the stdio context to the oldest real admin user so wick_enc_
+	// tokens minted here decrypt under that admin's session in the web
+	// UI. Per-user keys are HKDF(masterKey, salt=user.ID); a synthetic
+	// "local" salt would produce tokens nobody can reverse via /tools/
+	// encfields. Fall back to the synthetic id only on a fresh DB with
+	// no admin yet.
 	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
+	authSvc := login.NewService(db, cfg.App.AdminEmails)
+	if u, err := authSvc.FirstAdmin(context.Background()); err == nil && u != nil {
+		localAdmin = u
+	}
 	ctx := login.WithUser(context.Background(), localAdmin, nil)
 
 	root, _ := os.Getwd()

@@ -58,7 +58,7 @@ func (r *Repo) List(ctx context.Context) ([]entity.Connector, error) {
 // definition (e.g. all "loki" rows).
 func (r *Repo) ListByKey(ctx context.Context, key string) ([]entity.Connector, error) {
 	var out []entity.Connector
-	err := r.db.WithContext(ctx).Where("`key` = ?", key).Order("created_at DESC").Find(&out).Error
+	err := r.db.WithContext(ctx).Where(`"key" = ?`, key).Order("created_at DESC").Find(&out).Error
 	return out, err
 }
 
@@ -207,7 +207,7 @@ func (r *Repo) IsAccessibleTo(ctx context.Context, connectorID string, userTagID
 // Used by Bootstrap to decide whether to auto-create the initial row.
 func (r *Repo) CountByKey(ctx context.Context, key string) (int64, error) {
 	var n int64
-	err := r.db.WithContext(ctx).Model(&entity.Connector{}).Where("`key` = ?", key).Count(&n).Error
+	err := r.db.WithContext(ctx).Model(&entity.Connector{}).Where(`"key" = ?`, key).Count(&n).Error
 	return n, err
 }
 

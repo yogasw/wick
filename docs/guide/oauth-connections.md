@@ -16,57 +16,67 @@ Trade-off: you carry the authorization server's operational responsibility (cert
 
 ## OAuth dance
 
-```
-┌─ Claude.ai ────────────────────────────────────────────────────────┐
-│ 1. POST /mcp (no token)                                            │
-│ 2. ← 401 + WWW-Authenticate: Bearer                                │
-│      resource_metadata="<base>/.well-known/oauth-protected-resource"│
-│ 3. GET /.well-known/oauth-protected-resource                       │
-│ 4. GET /.well-known/oauth-authorization-server                     │
-│ 5. POST /oauth/register   (DCR — no pre-shared secret)             │
-│    → { client_id }                                                 │
-│ 6. Browser: GET /oauth/authorize?client_id=...&code_challenge=...  │
-│      &code_challenge_method=S256                                   │
-│ 7. wick: not logged in? → /auth/login → bounce back to /authorize  │
-│ 8. wick renders consent → user clicks Approve                      │
-│ 9. POST /oauth/authorize → mint code → 302 to client redirect_uri  │
-│ 10. POST /oauth/token (grant_type=authorization_code,              │
-│      PKCE verifier)                                                │
-│      → { access_token: wick_oat_..., refresh_token: wick_ort_...,  │
-│           expires_in }                                             │
-│ 11. POST /mcp Authorization: Bearer wick_oat_...                   │
-│ 12. wick validates → resolves user_id → tag-filtered tools/list    │
-└────────────────────────────────────────────────────────────────────┘
-```
+Five phases, color-coded. Hover any arrow for the exact HTTP call; click a participant to jump to the relevant reference.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Client as Claude.ai
     participant MCP as wick /mcp
-    participant Web as wick web (/oauth, /auth)
-    participant User as User browser
+    participant Web as wick /oauth
+    participant User as Browser
 
-    Client->>MCP: POST /mcp (no token)
-    MCP-->>Client: 401 + WWW-Authenticate: Bearer resource_metadata="..."
-    Client->>Web: GET /.well-known/oauth-protected-resource
-    Web-->>Client: { authorization_servers: [wick] }
-    Client->>Web: GET /.well-known/oauth-authorization-server
-    Web-->>Client: endpoints + supported flows
-    Client->>Web: POST /oauth/register (DCR, no pre-shared secret)
-    Web-->>Client: { client_id }
-    Client->>User: redirect → GET /oauth/authorize?client_id&code_challenge&S256
-    User->>Web: not logged in? → /auth/login → bounce back
-    Web-->>User: render consent screen
-    User->>Web: POST /oauth/authorize (Approve)
-    Web-->>User: 302 to redirect_uri?code=...
-    User-->>Client: forward auth code
-    Client->>Web: POST /oauth/token (code + PKCE verifier)
-    Web-->>Client: { access_token: wick_oat_..., refresh_token: wick_ort_..., expires_in }
-    Client->>MCP: POST /mcp Authorization: Bearer wick_oat_...
-    MCP->>Web: validate token + resolve user_id
-    MCP-->>Client: tag-filtered tools/list
+    rect rgb(245, 235, 220)
+        Note over Client,MCP: Phase 1 — Discovery (challenge)
+        Client->>+MCP: POST /mcp (no token)
+        MCP-->>-Client: 401 WWW-Authenticate: Bearer<br/>resource_metadata=".well-known/..."
+        Client->>+Web: GET /.well-known/oauth-protected-resource
+        Web-->>-Client: { authorization_servers: [wick] }
+        Client->>+Web: GET /.well-known/oauth-authorization-server
+        Web-->>-Client: endpoints + supported flows
+    end
+
+    rect rgb(225, 240, 230)
+        Note over Client,Web: Phase 2 — DCR (no pre-shared secret)
+        Client->>+Web: POST /oauth/register
+        Web-->>-Client: { client_id }
+    end
+
+    rect rgb(230, 235, 250)
+        Note over Client,User: Phase 3 — Consent (user-in-the-loop)
+        Client->>User: 302 → /oauth/authorize?client_id<br/>&code_challenge&method=S256
+        User->>+Web: GET /oauth/authorize
+        opt not logged in
+            Web-->>User: 302 /auth/login
+            User->>Web: login → bounce back
+        end
+        Web-->>User: render consent screen
+        User->>Web: POST /oauth/authorize (Approve)
+        Web-->>-User: 302 redirect_uri?code=...
+        User-->>Client: forward auth code
+    end
+
+    rect rgb(250, 235, 240)
+        Note over Client,Web: Phase 4 — Token exchange (PKCE verify)
+        Client->>+Web: POST /oauth/token<br/>grant_type=authorization_code + verifier
+        Web-->>-Client: { access_token: wick_oat_…,<br/>refresh_token: wick_ort_…, expires_in }
+    end
+
+    rect rgb(235, 245, 250)
+        Note over Client,MCP: Phase 5 — Authenticated call
+        Client->>+MCP: POST /mcp Authorization: Bearer wick_oat_…
+        MCP->>Web: validate token + resolve user_id
+        MCP-->>-Client: tag-filtered tools/list
+    end
+
+    link Client: "Claude.ai docs" @ "https://modelcontextprotocol.io/docs/develop/connect-remote-servers"
+    link MCP: "MCP guide" @ "./mcp"
+    link Web: "Token formats" @ "#token-formats"
 ```
+
+::: tip Phase legend
+**Discovery** → client learns where to register · **DCR** → register without admin · **Consent** → user approves in browser · **Token exchange** → PKCE proves same client · **Authenticated call** → bearer token passed on every MCP call
+:::
 
 ### Token formats
 
