@@ -3,6 +3,12 @@
 // server.go walks All() at boot to validate, wire routes, and seed
 // config rows.
 //
+// Two seed paths exist:
+//   - init() seeds core tools that ship with every consumer (currently
+//     encfields, since the MCP encrypt/decrypt redirects depend on it).
+//   - RegisterBuiltins() seeds opt-in lab-only tools — convert-text,
+//     external links — and is called only from cmd/lab.
+//
 // To add a built-in tool (wick lab binary only):
 //  1. Create internal/tools/<name>/ with a Register(r tool.Router) func
 //     and, if the tool has runtime-editable config, a Config struct.
@@ -31,6 +37,26 @@ var extra []tool.Module
 // directly from app code.
 func Register(m tool.Module) {
 	extra = append(extra, m)
+}
+
+// init seeds tools that are part of wick's core surface and must be
+// available to every downstream consumer, not just cmd/lab. encfields
+// belongs here because the MCP layer's wick_encrypt / wick_decrypt
+// meta-tools redirect to /tools/encfields — without it, those redirects
+// 404 in any consumer binary.
+func init() {
+	extra = append(extra, tool.Module{
+		Meta: tool.Tool{
+			Key:               "encfields",
+			Name:              "Encrypt / Decrypt",
+			Description:       "Mint or reveal wick_enc_ tokens. Per-user keys — only you can decrypt your own tokens.",
+			Icon:              "🔐",
+			Category:          "Security",
+			DefaultVisibility: entity.VisibilityPublic,
+			DefaultTags:       []tool.DefaultTag{tags.Security},
+		},
+		Register: encfields.Register,
+	})
 }
 
 // RegisterBuiltins seeds wick's own in-house tools into the registry.
@@ -68,18 +94,6 @@ func RegisterBuiltins() {
 			InitType: "lowercase",
 		}),
 		Register: converttext.Register,
-	})
-	extra = append(extra, tool.Module{
-		Meta: tool.Tool{
-			Key:               "encfields",
-			Name:              "Encrypt / Decrypt",
-			Description:       "Mint or reveal wick_enc_ tokens. Per-user keys — only you can decrypt your own tokens.",
-			Icon:              "🔐",
-			Category:          "Security",
-			DefaultVisibility: entity.VisibilityPublic,
-			DefaultTags:       []tool.DefaultTag{tags.Security},
-		},
-		Register: encfields.Register,
 	})
 	for _, e := range external.All() {
 		extra = append(extra, e)
