@@ -27,7 +27,7 @@ func (r *repo) UpsertJob(ctx context.Context, j *entity.Job) error {
 
 func (r *repo) GetJobByKey(ctx context.Context, key string) (*entity.Job, error) {
 	var j entity.Job
-	err := r.db.WithContext(ctx).Where("`key` = ?", key).First(&j).Error
+	err := r.db.WithContext(ctx).Where(`"key" = ?`, key).First(&j).Error
 	return &j, err
 }
 
@@ -54,7 +54,7 @@ func (r *repo) ListEnabledJobs(ctx context.Context) ([]entity.Job, error) {
 // stay enabled across restarts even if something flipped the flag (or
 // the row was never enabled by an admin to begin with).
 func (r *repo) ForceEnable(ctx context.Context, key string) error {
-	return r.db.WithContext(ctx).Model(&entity.Job{}).Where("`key` = ?", key).
+	return r.db.WithContext(ctx).Model(&entity.Job{}).Where(`"key" = ?`, key).
 		Updates(map[string]any{
 			"enabled":    true,
 			"updated_at": time.Now(),

@@ -87,6 +87,22 @@ func (r *repo) CountAdmins(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+// FirstAdmin returns the oldest admin user. Used by stdio MCP to bind
+// the synthetic local context to a real admin identity so wick_enc_
+// tokens minted in stdio decrypt under the same user that owns the
+// session in the web UI.
+func (r *repo) FirstAdmin(ctx context.Context) (*entity.User, error) {
+	var u entity.User
+	err := r.db.WithContext(ctx).
+		Where("role = ?", entity.RoleAdmin).
+		Order("created_at ASC").
+		First(&u).Error
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 // GetToolPerm returns the per-tool permission row, falling back to
 // (fallback, false) when no row exists.
 func (r *repo) GetToolPerm(ctx context.Context, toolPath string, fallback entity.ToolVisibility) (vis entity.ToolVisibility, disabled bool) {
