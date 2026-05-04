@@ -153,6 +153,7 @@ type initializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	ServerInfo      serverInfo         `json:"serverInfo"`
 	Capabilities    serverCapabilities `json:"capabilities"`
+	Instructions    string             `json:"instructions,omitempty"`
 }
 
 type serverInfo struct {
@@ -187,6 +188,7 @@ func (h *Handler) handleInitialize(w http.ResponseWriter, _ *http.Request, req r
 		ProtocolVersion: negotiateProtocolVersion(p.ProtocolVersion),
 		ServerInfo:      serverInfo{Name: "wick", Version: h.serverVersion()},
 		Capabilities:    serverCapabilities{Tools: toolsCapability{ListChanged: false}},
+		Instructions:    serverInstructions,
 	})
 }
 
