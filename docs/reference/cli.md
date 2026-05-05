@@ -175,8 +175,8 @@ Each of these runs the matching task in `wick.yml`. The commands shown in the "D
 | `wick test` | `go test ./... -coverprofile=./coverage.out` |
 | `wick tidy` | `go fmt ./...` + `go mod tidy -v` |
 
-::: tip Templates also ship a `build` task
-The default `wick.yml` defines a `build` task that minifies CSS and then calls `wick build`. Running `wick build` directly skips the asset step — fine when CSS is already current.
+::: tip `wick build` auto-runs `generate`
+If `wick.yml` defines a `generate` task, `wick build` runs it before the Go compile step — keeps templ + CSS + `go generate` in sync without a separate task wrapper. Skip it by removing or renaming the task.
 :::
 
 See [`wick.yml` reference](./wick-yml) for the full task syntax (`if_missing`, `download`, `bg`, variable interpolation, etc.).
