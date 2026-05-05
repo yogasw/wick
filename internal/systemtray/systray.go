@@ -12,8 +12,10 @@ package systemtray
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,12 +83,17 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 		defer cleanup()
 	}
 
-	lock, err := acquireSingleInstance()
-	if err != nil {
+	// Per-app PID-file lock under UserConfigDir. A live match for the
+	// same exe means another copy is already in the tray — bail so we
+	// don't leave two icons fighting over the same DB / port. Different
+	// appNames have different files, so test-baruN doesn't lock out
+	// test-baruM.
+	if release, err := acquireSingleInstance(); err == nil {
+		defer release()
+	} else {
 		log.Printf("single-instance: %v", err)
 		return
 	}
-	defer lock.Close()
 
 	if cfg, err := userconfig.Load(appName); err == nil {
 		userCfg = cfg
@@ -264,10 +271,13 @@ func onReady() {
 
 	mQuit := systray.AddMenuItem("Quit", "Quit "+appName)
 
-	setServerLabel := func(running bool) {
-		if running {
+	setServerLabel := func(running bool, errMsg string) {
+		switch {
+		case running:
 			mServer.SetTitle(fmt.Sprintf("Stop server  (running on :%d)", serverPort))
-		} else {
+		case errMsg != "":
+			mServer.SetTitle("Start server  (failed: " + errMsg + ")")
+		default:
 			mServer.SetTitle("Start server")
 		}
 	}
@@ -282,12 +292,12 @@ func onReady() {
 	if userCfg.AutoStartServer {
 		if err := startServer(); err != nil {
 			log.Printf("auto-start server: %v", err)
-			setServerLabel(false)
+			setServerLabel(false, err.Error())
 		} else {
-			setServerLabel(true)
+			setServerLabel(true, "")
 		}
 	} else {
-		setServerLabel(false)
+		setServerLabel(false, "")
 	}
 	if userCfg.AutoStartWorker {
 		if err := startWorker(); err != nil {
@@ -360,11 +370,12 @@ func onReady() {
 			case <-mServer.ClickedCh:
 				if isServerRunning() {
 					stopServer()
-					setServerLabel(false)
+					setServerLabel(false, "")
 				} else if err := startServer(); err != nil {
 					log.Printf("start server: %v", err)
+					setServerLabel(false, err.Error())
 				} else {
-					setServerLabel(true)
+					setServerLabel(true, "")
 				}
 				refreshIcon()
 			case <-mWorker.ClickedCh:
@@ -511,6 +522,19 @@ func startServer() error {
 		mu.Unlock()
 		return fmt.Errorf("already running")
 	}
+
+	// Pre-flight bind check so port collisions surface synchronously to
+	// the caller (tray menu / auto-start). Tiny race window between
+	// closing this listener and api.NewServer().Run binding the same
+	// port, but the cost of getting it wrong is just a confusing error
+	// message — acceptable for UX feedback on the common case.
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", serverPort))
+	if err != nil {
+		mu.Unlock()
+		return fmt.Errorf("port %d in use: %w", serverPort, err)
+	}
+	ln.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	serverCancel = cancel
 	serverDone = make(chan struct{})
@@ -599,7 +623,7 @@ func writeExampleConfig() (string, error) {
 	snippet := map[string]any{
 		"mcpServers": map[string]any{appName: entry},
 	}
-	out, err := jsonIndent(snippet)
+	out, err := json.MarshalIndent(snippet, "", "  ")
 	if err != nil {
 		return "", err
 	}

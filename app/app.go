@@ -71,6 +71,13 @@ var (
 )
 
 func init() {
+	// Cobra ships an anti-double-click guard: when a binary is launched
+	// from Explorer on Windows, it prints `MousetrapHelpText` and exits
+	// before any RunE fires. That's exactly what we DON'T want — wick
+	// apps are tray-first, double-click is the primary launch path.
+	// Disable by emptying the message so cobra's check skips it.
+	cobra.MousetrapHelpText = ""
+
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return
