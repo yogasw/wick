@@ -1,6 +1,11 @@
 package main
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
 
@@ -12,16 +17,13 @@ func serverCmd() *cobra.Command {
 	var command = &cobra.Command{
 		Use:   "server",
 		Short: "Run web server",
-		Run: func(cmd *cobra.Command, args []string) {
-			runServer(port)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return api.NewServer().Run(ctx, port)
 		},
 	}
 
 	command.Flags().IntVar(&port, "port", config.Load().App.Port, "Listen on given port (env: PORT)")
 	return command
-}
-
-func runServer(port int) {
-	srv := api.NewServer()
-	srv.Run(port)
 }

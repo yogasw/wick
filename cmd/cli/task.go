@@ -46,20 +46,6 @@ func setupCmd() *cobra.Command {
 	}
 }
 
-func buildCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "build",
-		Short: "Run build task from wick.yml",
-		RunE: func(c *cobra.Command, args []string) error {
-			if err := runTask("build"); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				fmt.Println("tip: make sure wick.yml has a 'build' task")
-			}
-			return nil
-		},
-	}
-}
-
 func testCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test",

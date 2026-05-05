@@ -17,7 +17,12 @@
 package app
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"runtime/debug"
+	"syscall"
 
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/rs/zerolog/log"
@@ -25,23 +30,44 @@ import (
 
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
+	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/worker"
+	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// BuildVersion, BuildCommit, and BuildTime are injected via -ldflags at build time.
-// wick mcp serve reads VERSION from the project root and injects it automatically.
-// When used as a library dependency, init() fills these from the embedded module build info.
+// Build* vars are injected via -ldflags at build time:
+//
+//	BuildAppName     downstream app's `name:` from wick.yml
+//	BuildAppVersion  downstream app's `version:` from wick.yml
+//	BuildWickVersion wick framework version (semver of github.com/yogasw/wick)
+//	BuildCommit      git short hash of the build
+//	BuildTime        build timestamp (RFC3339)
+//
+// The wick.yml `build` task injects BuildAppName + BuildAppVersion
+// from the {{.NAME}} / {{.VERSION}} task vars. init() below auto-fills
+// BuildWickVersion / BuildCommit / BuildTime from embedded build info
+// when ldflags didn't override them — so binaries built without ldflags
+// still report a sensible wick version.
 var (
-	BuildVersion = "dev"
-	BuildCommit  = "unknown"
-	BuildTime    = "unknown"
+	BuildAppName     = "app"
+	BuildAppVersion  = "dev"
+	BuildWickVersion = "dev"
+	BuildCommit      = "unknown"
+	BuildTime        = "unknown"
+
+	// GitHubPAT and GitHubRepo are injected by `wick build --github-pat
+	// --github-repo` for the self-updater. Empty when built without
+	// those flags — updater falls back to manual-only mode.
+	GitHubPAT  = ""
+	GitHubRepo = ""
 )
 
 func init() {
@@ -51,14 +77,14 @@ func init() {
 	}
 
 	// Fill version from embedded module info when not injected via ldflags.
-	if BuildVersion == "dev" {
+	if BuildWickVersion == "dev" {
 		const modPath = "github.com/yogasw/wick"
 		if info.Main.Path == modPath && info.Main.Version != "" && info.Main.Version != "(devel)" {
-			BuildVersion = info.Main.Version
+			BuildWickVersion = info.Main.Version
 		} else {
 			for _, dep := range info.Deps {
 				if dep.Path == modPath && dep.Version != "" {
-					BuildVersion = dep.Version
+					BuildWickVersion = dep.Version
 					break
 				}
 			}
@@ -171,6 +197,76 @@ func RegisterConnector[C any](meta connector.Meta, creds C, ops []connector.Oper
 	})
 }
 
+// mcpInstallCmd writes this binary's MCP entry into the chosen
+// client's config file (Claude Desktop / Cursor / Gemini / Codex /
+// Claude Code). Uses os.Executable() so the entry points at the actual
+// built binary, not wick itself.
+func mcpInstallCmd() *cobra.Command {
+	var clientID, name string
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install this app's MCP entry into a client config",
+		Long: `Write {"command": "<this binary>", "args": ["mcp", "serve"]} into
+the target MCP client's config file, merging with existing servers.
+
+Clients (--client):
+  claude       Claude Desktop
+  cursor       Cursor IDE
+  gemini       Gemini CLI
+  codex        OpenAI Codex CLI
+  claude-code  Claude Code (writes .mcp.json in CWD)
+  all          install into every detected client`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			if name == "" {
+				name = filepath.Base(cwd)
+			}
+			entry, err := mcpconfig.SelfEntry()
+			if err != nil {
+				return err
+			}
+			targets, err := mcpconfig.ResolveTargets(cwd, clientID)
+			if err != nil {
+				return err
+			}
+			mcpconfig.InstallMany(targets, name, entry, os.Stdout)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&clientID, "client", "all", "claude | cursor | gemini | codex | claude-code | all")
+	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
+	return cmd
+}
+
+func mcpUninstallCmd() *cobra.Command {
+	var clientID, name string
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove this app's MCP entry from a client config",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			if name == "" {
+				name = filepath.Base(cwd)
+			}
+			targets, err := mcpconfig.ResolveTargets(cwd, clientID)
+			if err != nil {
+				return err
+			}
+			mcpconfig.UninstallMany(targets, name, os.Stdout)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&clientID, "client", "all", "claude | cursor | gemini | codex | claude-code | all")
+	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
+	return cmd
+}
+
 // Run parses the command-line flags and starts either the HTTP server
 // or the background worker. Subcommands:
 //
@@ -185,17 +281,26 @@ func Run() {
 	root := &cobra.Command{
 		Use:   "app",
 		Short: "wick-powered service",
-		Run: func(cmd *cobra.Command, args []string) {
-			api.NewServer().Run(port)
+		Long:  "Run with no args to launch the system tray. Use subcommands for headless server / worker / MCP / install.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			systemtray.Run(cwd, BuildAppName, BuildAppVersion, BuildWickVersion, BuildCommit, BuildTime, GitHubRepo, GitHubPAT)
+			return nil
 		},
 	}
-	root.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
 
 	serverCmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run web server",
-		Run: func(cmd *cobra.Command, args []string) {
-			api.NewServer().Run(port)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			userconfig.ResolveDBPath(BuildAppName, "")
+			userconfig.ResolvePort(0)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return api.NewServer().Run(ctx, port)
 		},
 	}
 	serverCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
@@ -203,8 +308,11 @@ func Run() {
 	workerCmd := &cobra.Command{
 		Use:   "worker",
 		Short: "Run background job worker",
-		Run: func(cmd *cobra.Command, args []string) {
-			worker.NewServer().Run()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			userconfig.ResolveDBPath(BuildAppName, "")
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return worker.NewServer().Run(ctx)
 		},
 	}
 
@@ -216,12 +324,25 @@ func Run() {
 		Use:   "serve",
 		Short: "Run MCP server over stdio (for Claude Desktop, Cursor, etc.)",
 		Run: func(cmd *cobra.Command, args []string) {
-			api.RunMCPStdio(BuildVersion, BuildCommit, BuildTime)
+			api.RunMCPStdio(BuildAppVersion, BuildCommit, BuildTime)
 		},
 	}
-	mcpCmd.AddCommand(mcpServeCmd)
+	mcpCmd.AddCommand(mcpServeCmd, mcpInstallCmd(), mcpUninstallCmd())
 
-	root.AddCommand(serverCmd, workerCmd, mcpCmd)
+	trayCmd := &cobra.Command{
+		Use:   "tray",
+		Short: "Run system tray UI: start/stop server, install MCP",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			systemtray.Run(cwd, BuildAppName, BuildAppVersion, BuildWickVersion, BuildCommit, BuildTime, GitHubRepo, GitHubPAT)
+			return nil
+		},
+	}
+
+	root.AddCommand(serverCmd, workerCmd, mcpCmd, trayCmd)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())

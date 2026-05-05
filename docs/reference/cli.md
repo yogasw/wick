@@ -6,8 +6,10 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `server`, `worker`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
-- **Task shortcuts** (`dev`, `setup`, `build`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Task shortcuts** (`dev`, `setup`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
+
+Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `mcp serve / install / uninstall`) — see [Built apps](#built-apps) below.
 
 Run `wick --help` to print the current list.
 
@@ -74,6 +76,32 @@ The skill folder contents are always replaced — local edits inside `./.claude/
 
 ---
 
+### `wick build`
+
+Compile the project to a single binary with version metadata baked in via Go ldflags. Reads `name:` and `version:` from `wick.yml` by default; flags / env vars override.
+
+```bash
+wick build                                 # → bin/<wick.yml name>[.exe]
+wick build -o myapp-linux-amd64            # custom output path
+wick build --headless                      # drop tray UI (-tags headless)
+GOOS=linux GOARCH=arm64 wick build         # cross-compile
+```
+
+Common flags:
+
+| Flag | Env fallback | Effect |
+|---|---|---|
+| `--app-name` | `WICK_APP_NAME` | Override `name:` from `wick.yml` |
+| `--app-version` | `WICK_APP_VERSION` | Override `version:` from `wick.yml` |
+| `--github-pat` | `GITHUB_PAT` | Bake PAT for self-updater |
+| `--github-repo` | `GITHUB_REPOSITORY` | Bake `owner/repo` for self-updater |
+| `-o`, `--output` | — | Output path (default `bin/<app-name>[.exe]`) |
+| `--headless` | — | Add `-tags headless` (no tray) |
+
+Full reference incl. CI workflow templates and PAT setup: [`wick build` reference](./build).
+
+---
+
 ### `wick server`
 
 Start the HTTP server directly without needing a `wick.yml` task. Equivalent to `go run . server`.
@@ -107,7 +135,7 @@ $ wick upgrade
 current: v0.1.13
 latest:  v0.4.2
 upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.6.4
+> go get github.com/yogasw/wick@v0.7.0
 > go mod tidy
 > <dev task from wick.yml>
 ```
@@ -118,7 +146,7 @@ Steps:
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
 3. If already on latest, exit without prompting.
 4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.6.4`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+5. Run `go get github.com/yogasw/wick@v0.7.0`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 
@@ -143,9 +171,64 @@ Each of these runs the matching task in `wick.yml`. The commands shown in the "D
 |---------|-------------|
 | `wick setup` | Download Tailwind + templ into `./bin/`, run `go mod tidy` |
 | `wick dev` | Generate templ + CSS, start `go run . server` |
-| `wick build` | Generate + minify CSS, compile binary to `bin/app` |
 | `wick generate` | Regenerate templ, run `go generate ./...`, rebuild CSS |
 | `wick test` | `go test ./... -coverprofile=./coverage.out` |
 | `wick tidy` | `go fmt ./...` + `go mod tidy -v` |
 
+::: tip Templates also ship a `build` task
+The default `wick.yml` defines a `build` task that minifies CSS and then calls `wick build`. Running `wick build` directly skips the asset step — fine when CSS is already current.
+:::
+
 See [`wick.yml` reference](./wick-yml) for the full task syntax (`if_missing`, `download`, `bg`, variable interpolation, etc.).
+
+---
+
+## Built apps
+
+The binary produced by `wick build` registers its own command tree. Run `./bin/<app> --help` for the live list.
+
+### `<app>` (no args)
+
+Launch the system tray UI. Same as `<app> tray`. The tray runs the HTTP server and the background worker as in-process goroutines and exposes MCP install / uninstall, preferences, and self-update from the menu.
+
+See the [Desktop Tray guide](../guide/desktop-tray) for menu layout, file locations, and self-updater behavior.
+
+### `<app> tray`
+
+Explicit tray subcommand. Identical to running with no args.
+
+In headless builds (`wick build --headless`) this prints `tray not available in headless build` and exits non-zero.
+
+### `<app> server`
+
+Start the HTTP server only. Useful for running on a server, in Docker, or alongside an external process supervisor.
+
+```bash
+./bin/myapp server
+./bin/myapp server --port 9000   # override the resolved port
+```
+
+### `<app> worker`
+
+Start the background job worker only. Pair with `server` in a separate process / container when you want to scale them independently.
+
+### `<app> mcp serve`
+
+Run the MCP server over stdio. Spawned by Claude Desktop / Cursor / Gemini / Codex / Claude Code based on the entry written by `mcp install`.
+
+### `<app> mcp install`
+
+Write the binary's MCP entry into the chosen client's config file. Resolves `os.Executable()` so the entry points at the actual built binary, not at `wick`.
+
+```bash
+./bin/myapp mcp install                          # all detected clients
+./bin/myapp mcp install --client claude          # Claude Desktop only
+./bin/myapp mcp install --client claude-code     # writes .mcp.json in CWD
+./bin/myapp mcp install --name custom-server     # override server name
+```
+
+`--client` accepts: `claude`, `cursor`, `gemini`, `codex`, `claude-code`, `all`. The default server name is the basename of the current directory.
+
+### `<app> mcp uninstall`
+
+Remove the entry written by `install`. Same flags as `install`.

@@ -28,7 +28,7 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 ### Killing processes
 
 - Anything **you** started (server, watcher, build job) must be killed before handing control back.
-- If you encounter a process **the user** started (e.g. their own dev server already running on :8080), do NOT kill it silently. Ask first: "Looks like something is already running on :8080. OK to kill it, or are you using it?"
+- If you encounter a process **the user** started (e.g. their own dev server already running on :9425), do NOT kill it silently. Ask first: "Looks like something is already running on :9425. OK to kill it, or are you using it?"
 - Prefer `taskkill //F //PID <pid>` on Windows (git bash), `kill <pid>` elsewhere.
 
 ## Quick commands

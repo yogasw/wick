@@ -96,6 +96,10 @@ func rewrite(p string, data []byte, name string) []byte {
 		s = strings.ReplaceAll(s, "IMAGE            ?= template", "IMAGE            ?= "+name)
 		s = strings.ReplaceAll(s, "/template$(EXE)", "/"+name+"$(EXE)")
 		return []byte(s)
+	case strings.HasSuffix(p, "wick.yml"):
+		s := string(data)
+		s = strings.Replace(s, "name: app", "name: "+name, 1)
+		return []byte(s)
 	}
 	return data
 }

@@ -14,6 +14,6 @@ RUN templ generate && \
 FROM alpine:3.19
 WORKDIR /app
 COPY --from=build /out/app /app/app
-EXPOSE 8080
+EXPOSE 9425
 ENTRYPOINT ["/app/app"]
 CMD ["server"]

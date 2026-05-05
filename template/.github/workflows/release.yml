@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+# ── Setup ─────────────────────────────────────────────────────────────────
+#
+# Two setups supported — pick one:
+#
+# ┌─ A) Separate releases repo (recommended for private apps) ────────────┐
+# │                                                                        │
+# │  1. Create repo org/<app>-releases on GitHub (private).               │
+# │                                                                        │
+# │  2. Create two fine-grained PATs at:                                  │
+# │     https://github.com/settings/personal-access-tokens                │
+# │                                                                        │
+# │     PAT_DOWNLOAD — baked into binary, used by self-updater to         │
+# │                    download future releases from the releases repo     │
+# │       Repository access : Only select repositories → <app>-releases   │
+# │       Permissions       : Contents = Read-only                        │
+# │       Expiration        : 90 days (rotate by publishing a new release)│
+# │                                                                        │
+# │     PAT_BUILD    — CI-only, publishes the GitHub release              │
+# │       Repository access : Only select repositories → <app>-releases   │
+# │       Permissions       : Contents = Read and write                   │
+# │       Expiration        : 90 days                                     │
+# │                                                                        │
+# │  3. Add secrets + variable in the SOURCE repo:                        │
+# │     Settings → Secrets and variables → Actions                        │
+# │       Secret  PAT_DOWNLOAD  = <token above>                           │
+# │       Secret  PAT_BUILD     = <token above>                           │
+# │       Variable RELEASES_REPO = org/<app>-releases                     │
+# │                                                                        │
+# └────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─ B) Same repo ────────────────────────────────────────────────────────┐
+# │                                                                        │
+# │  1. Create one fine-grained PAT:                                      │
+# │     https://github.com/settings/personal-access-tokens                │
+# │                                                                        │
+# │     PAT_DOWNLOAD — baked into binary, used by self-updater to         │
+# │                    download future releases from this same repo        │
+# │       Repository access : Only select repositories → <app> (this repo)│
+# │       Permissions       : Contents = Read-only                        │
+# │       Expiration        : 90 days                                     │
+# │                                                                        │
+# │  2. Add secret in this repo (PAT_BUILD not needed — github.token      │
+# │     already has write access to the same repo):                       │
+# │     Settings → Secrets and variables → Actions                        │
+# │       Secret  PAT_DOWNLOAD  = <token above>                           │
+# │     Leave RELEASES_REPO variable unset.                               │
+# │                                                                        │
+# └────────────────────────────────────────────────────────────────────────┘
+#
+# ──────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, arch: amd64, runner: windows-latest, ext: '.exe' }
+          - { os: windows, arch: arm64, runner: windows-latest, ext: '.exe' }
+          - { os: darwin,  arch: amd64, runner: macos-latest,   ext: ''     }
+          - { os: darwin,  arch: arm64, runner: macos-latest,   ext: ''     }
+          - { os: linux,   arch: amd64, runner: ubuntu-latest,  ext: ''     }
+          - { os: linux,   arch: arm64, runner: ubuntu-latest,  ext: ''     }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Install wick CLI
+        run: go install github.com/yogasw/wick@latest
+
+      - name: Resolve app name and output path
+        id: meta
+        shell: bash
+        run: |
+          NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "output=${NAME}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          # Read-only PAT baked into binary for the self-updater.
+          # Scoped to releases repo only — if it leaks, attacker can only
+          # download already-published binaries, nothing else.
+          GITHUB_PAT: ${{ secrets.PAT_DOWNLOAD }}
+          GITHUB_REPOSITORY: ${{ vars.RELEASES_REPO || github.repository }}
+        run: wick build -o ${{ steps.meta.outputs.output }}
+
+      - name: Checksum
+        shell: bash
+        run: |
+          sha256sum "${{ steps.meta.outputs.output }}" \
+            > "${{ steps.meta.outputs.output }}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.app_name }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ${{ steps.meta.outputs.output }}
+            ${{ steps.meta.outputs.output }}.sha256
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: go.mod
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Resolve app name
+        id: meta
+        run: |
+          NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          # Same-repo: github.token has write access, PAT_BUILD not needed.
+          # Separate releases repo: set PAT_BUILD with Contents read+write.
+          GH_TOKEN: ${{ secrets.PAT_BUILD || github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ vars.RELEASES_REPO || github.repository }}" \
+            --title "${{ steps.meta.outputs.app_name }} ${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/*

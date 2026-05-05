@@ -415,7 +415,7 @@ make css            # rebuild CSS once (minified)
 go run main.go server
 ```
 
-The server listens on `http://localhost:8080`.
+The server listens on `http://localhost:9425`.
 
 See [AGENTS.md](AGENTS.md) for the rules coding agents follow (one-shot flow, process cleanup, Tailwind binary check).
 

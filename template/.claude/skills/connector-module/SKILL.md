@@ -416,7 +416,7 @@ The first time wick boots after registration, it auto-creates **one empty row** 
    ```bash
    wick dev   # or `go run . server`
    # in another terminal:
-   curl http://localhost:8080/healthz
+   curl http://localhost:9425/healthz
    # exercise the connector via /manager/connectors/{key}/{id}/test?op=...
    # then kill the port — never leave the dev server running after the smoke test
    ```

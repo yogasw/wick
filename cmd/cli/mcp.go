@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yogasw/wick/internal/mcpconfig"
 )
 
 func mcpCmd() *cobra.Command {
@@ -93,7 +95,7 @@ func buildBinary(bin string) error {
 	args := []string{"build"}
 	var ldf []string
 	if ver, err := readVersionFile(); err == nil {
-		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildVersion="+ver)
+		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildWickVersion="+ver)
 	}
 	if commit, err := gitShortHash(); err == nil {
 		ldf = append(ldf, "-X github.com/yogasw/wick/app.BuildCommit="+commit)
@@ -108,7 +110,6 @@ func buildBinary(bin string) error {
 	c.Stderr = os.Stderr
 	return c.Run()
 }
-
 
 func readVersionFile() (string, error) {
 	data, err := os.ReadFile("VERSION")
@@ -172,7 +173,6 @@ func needsRebuild(bin string) bool {
 	}
 	binMod := info.ModTime()
 
-	// Also check go.mod / go.sum — dependency updates change these.
 	for _, f := range []string{"go.mod", "go.sum"} {
 		if fi, err := os.Stat(f); err == nil && fi.ModTime().After(binMod) {
 			return true
@@ -223,17 +223,14 @@ func mcpConfigCmd() *cobra.Command {
 			if name == "" {
 				name = filepath.Base(cwd)
 			}
-
-			entry := mcpEntry(cwd, mode)
 			snippet := map[string]any{
-				"mcpServers": map[string]any{name: entry},
+				"mcpServers": map[string]any{name: mcpconfig.WickEntry(cwd, mode)},
 			}
 			out, _ := json.MarshalIndent(snippet, "", "  ")
-
 			fmt.Println(string(out))
 			fmt.Println()
 			fmt.Printf("Config file location:\n")
-			for _, line := range configLocations() {
+			for _, line := range mcpconfig.Locations() {
 				fmt.Printf("  %s\n", line)
 			}
 			return nil
@@ -271,230 +268,16 @@ Modes (--mode): same as mcp serve --mode. Use "dev" to force go run,
 			if name == "" {
 				name = filepath.Base(cwd)
 			}
-			return mcpInstall(client, name, mode, cwd)
+			targets, err := mcpconfig.ResolveTargets(cwd, client)
+			if err != nil {
+				return err
+			}
+			mcpconfig.InstallMany(targets, name, mcpconfig.WickEntry(cwd, mode), os.Stdout)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&client, "client", "claude", "target client: claude | cursor | gemini | codex | claude-code | all")
 	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
 	cmd.Flags().StringVar(&mode, "mode", "auto", "serve mode: auto | dev | build | rebuild")
 	return cmd
-}
-
-type mcpClientDef struct {
-	id     string
-	label  string
-	path   string
-	format string // "json" or "toml-codex"
-}
-
-func resolvedClients(cwd string) []mcpClientDef {
-	home, _ := os.UserHomeDir()
-	appdata := os.Getenv("APPDATA")
-
-	var claudePath, cursorPath string
-	switch runtime.GOOS {
-	case "windows":
-		// Claude Desktop has two install paths depending on the installer:
-		//   Direct installer : %APPDATA%\Claude\claude_desktop_config.json
-		//   Windows Store    : %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json
-		claudePath = claudeDesktopConfigWindows(appdata)
-		cursorPath = filepath.Join(appdata, "Cursor", "User", "settings.json")
-	case "darwin":
-		claudePath = filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
-		cursorPath = filepath.Join(home, "Library", "Application Support", "Cursor", "User", "settings.json")
-	default:
-		claudePath = filepath.Join(home, ".config", "Claude", "claude_desktop_config.json")
-		cursorPath = filepath.Join(home, ".config", "Cursor", "User", "settings.json")
-	}
-
-	return []mcpClientDef{
-		{"claude", "Claude Desktop", claudePath, "json"},
-		{"cursor", "Cursor", cursorPath, "json"},
-		{"gemini", "Gemini CLI", filepath.Join(home, ".gemini", "settings.json"), "json"},
-		{"codex", "Codex CLI", filepath.Join(home, ".codex", "config.toml"), "toml-codex"},
-		{"claude-code", "Claude Code (project)", filepath.Join(cwd, ".mcp.json"), "json"},
-	}
-}
-
-// claudeDesktopConfigWindows finds the correct claude_desktop_config.json path.
-// Prefers the Windows Store (sandboxed) location when it exists.
-func claudeDesktopConfigWindows(appdata string) string {
-	localappdata := os.Getenv("LOCALAPPDATA")
-	if localappdata != "" {
-		packagesDir := filepath.Join(localappdata, "Packages")
-		if entries, err := os.ReadDir(packagesDir); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && strings.HasPrefix(e.Name(), "Claude_") {
-					p := filepath.Join(packagesDir, e.Name(), "LocalCache", "Roaming", "Claude", "claude_desktop_config.json")
-					return p
-				}
-			}
-		}
-	}
-	return filepath.Join(appdata, "Claude", "claude_desktop_config.json")
-}
-
-func mcpInstall(client, name, mode, cwd string) error {
-	entry := mcpEntry(cwd, mode)
-	all := resolvedClients(cwd)
-
-	targets := all
-	if client != "all" {
-		targets = nil
-		for _, c := range all {
-			if c.id == client {
-				targets = []mcpClientDef{c}
-				break
-			}
-		}
-		if targets == nil {
-			return fmt.Errorf("unknown client %q — use: claude | cursor | gemini | codex | all", client)
-		}
-	}
-
-	for _, c := range targets {
-		var err error
-		switch c.format {
-		case "json":
-			err = installJSONMCP(c.path, name, entry)
-		case "toml-codex":
-			err = installCodexTOML(c.path, name, entry)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ✗ %s (%s): %v\n", c.label, c.path, err)
-		} else {
-			fmt.Printf("  ✓ %s\n    %s\n", c.label, c.path)
-		}
-	}
-	return nil
-}
-
-// installJSONMCP merges {"mcpServers": {name: entry}} into a JSON config file.
-func installJSONMCP(path, name string, entry map[string]any) error {
-	raw := []byte("{}")
-	if data, err := os.ReadFile(path); err == nil {
-		raw = data
-	}
-
-	var cfg map[string]any
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
-	}
-	if cfg == nil {
-		cfg = map[string]any{}
-	}
-
-	servers, _ := cfg["mcpServers"].(map[string]any)
-	if servers == nil {
-		servers = map[string]any{}
-	}
-	servers[name] = entry
-	cfg["mcpServers"] = servers
-
-	out, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o644)
-}
-
-// installCodexTOML appends an [[mcp_servers]] block to ~/.codex/config.toml.
-func installCodexTOML(path, name string, entry map[string]any) error {
-	existing, _ := os.ReadFile(path)
-	// skip if already present
-	if strings.Contains(string(existing), fmt.Sprintf("name = %q", name)) {
-		fmt.Printf("    (already installed)\n")
-		return nil
-	}
-
-	cmd, _ := entry["command"].(string)
-	rawArgs, _ := entry["args"].([]string)
-	quotedArgs := make([]string, len(rawArgs))
-	for i, a := range rawArgs {
-		quotedArgs[i] = fmt.Sprintf("%q", a)
-	}
-
-	block := fmt.Sprintf("\n[[mcp_servers]]\nname = %q\ntype = \"stdio\"\ncmd = %q\nargs = [%s]\n",
-		name, cmd, strings.Join(quotedArgs, ", "))
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(block)
-	return err
-}
-
-// ---------- shared helpers ----------
-
-// mcpEntry builds the mcpServers entry for the given serve mode.
-//
-// Non-dev modes point at the wick CLI binary (os.Executable) with
-// --mode and --project flags so the client can spawn wick from any
-// working directory and still rebuild/cache correctly.
-//
-// Dev mode falls back to "go run ." which requires the client to
-// honor the cwd field — only reliable for terminal use.
-func mcpEntry(cwd, mode string) map[string]any {
-	if mode == "dev" {
-		return map[string]any{
-			"command": "go",
-			"args":    []string{"run", ".", "mcp", "serve"},
-			"cwd":     cwd,
-		}
-	}
-
-	wickExe, err := os.Executable()
-	if err != nil {
-		wickExe = "wick"
-	} else {
-		// Resolve symlinks so the stored path is the real binary.
-		if resolved, err := filepath.EvalSymlinks(wickExe); err == nil {
-			wickExe = resolved
-		}
-	}
-
-	return map[string]any{
-		"command": wickExe,
-		"args":    []string{"mcp", "serve", "--mode", mode, "--project", cwd},
-	}
-}
-
-func configLocations() []string {
-	switch runtime.GOOS {
-	case "windows":
-		appdata := os.Getenv("APPDATA")
-		return []string{
-			fmt.Sprintf(`Claude Desktop : %s`, claudeDesktopConfigWindows(appdata)),
-			fmt.Sprintf(`Cursor         : %s\Cursor\User\settings.json  (mcpServers key)`, appdata),
-			fmt.Sprintf(`Gemini CLI     : %s\.gemini\settings.json`, os.Getenv("USERPROFILE")),
-			fmt.Sprintf(`Codex CLI      : %s\.codex\config.toml`, os.Getenv("USERPROFILE")),
-			`Claude Code    : .mcp.json  (project root; run: wick mcp install --client claude-code)`,
-		}
-	case "darwin":
-		home, _ := os.UserHomeDir()
-		return []string{
-			fmt.Sprintf(`Claude Desktop : %s/Library/Application Support/Claude/claude_desktop_config.json`, home),
-			fmt.Sprintf(`Cursor         : %s/Library/Application Support/Cursor/User/settings.json  (mcpServers key)`, home),
-			fmt.Sprintf(`Gemini CLI     : %s/.gemini/settings.json`, home),
-			fmt.Sprintf(`Codex CLI      : %s/.codex/config.toml`, home),
-			`Claude Code    : .mcp.json  (project root; run: wick mcp install --client claude-code)`,
-		}
-	default:
-		home, _ := os.UserHomeDir()
-		return []string{
-			fmt.Sprintf(`Claude Desktop : %s/.config/Claude/claude_desktop_config.json`, home),
-			fmt.Sprintf(`Cursor         : %s/.config/Cursor/User/settings.json  (mcpServers key)`, home),
-			fmt.Sprintf(`Gemini CLI     : %s/.gemini/settings.json`, home),
-			fmt.Sprintf(`Codex CLI      : %s/.codex/config.toml`, home),
-			`Claude Code    : .mcp.json  (project root; run: wick mcp install --client claude-code)`,
-		}
-	}
 }

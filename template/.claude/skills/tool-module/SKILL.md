@@ -352,7 +352,7 @@ After adding or changing a module:
 
 Shortcut: `wick generate` (regenerates templ + tailwind). `wick dev` runs generate + server.
 
-After smoke test: **kill the server on 8080** — this project does not use live reload.
+After smoke test: **kill the server on 9425** — this project does not use live reload.
 
 Manual confirmation:
 - **Tools:** card on home grid, entry in Ctrl+K palette, renders in light + dark + ≤375px viewport, JS-first computation runs without form submit, `/tools/{Key}/static/js/{name}.js` serves, `/tools/{Key}/static/` returns 404.

@@ -1,0 +1,81 @@
+# .graphifyignore — wick
+# Block noise. Index Go source + curated docs.
+
+# ── Build / vendor / cache ─────────────────────────────────────
+vendor/
+node_modules/
+bin/
+dist/
+tmp/
+logs/
+.cache/
+graphify-out/
+
+# ── Editor / VCS / tooling ─────────────────────────────────────
+.git/
+.github/
+.vscode/
+.idea/
+.claude/
+
+# ── VitePress build output (keep docs/*.md sources) ────────────
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+docs/node_modules/
+docs/public/
+docs/**/image/
+
+# ── Frontend build output / static assets ──────────────────────
+web/public/
+desktop/web/public/
+desktop/bin/
+**/static/
+
+# ── Binaries & compiled artifacts ──────────────────────────────
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+gui.exe
+
+# ── Lockfiles & manifests (low semantic signal) ────────────────
+go.sum
+package-lock.json
+yarn.lock
+*.lock
+
+# ── DB / env / secrets ─────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+
+# ── Media / fonts / binary assets ──────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.webp
+*.woff
+*.woff2
+*.ttf
+*.eot
+*.pdf
+*.zip
+*.tar.gz
+
+# ── Generated / templates with low graph value ─────────────────
+*.generated.go
+*.pb.go
+*_gen.go
+
+# ── Heavy / low-signal docs ────────────────────────────────────
+docs/changelog.md
+LICENSE

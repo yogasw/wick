@@ -1,3 +1,13 @@
+# Project display name. Used by the system tray as the title, the MCP
+# server name in client configs, and the user-config folder name under
+# %APPDATA% / Library / .config. Falls back to the directory basename
+# if missing.
+name: app
+
+# App semver. Baked into the binary as app.BuildAppVersion via the
+# build task ldflags. Surfaced in the tray + advertised to MCP clients.
+version: 0.1.0
+
 vars:
   TAILWIND_OS:
     $arch:
@@ -50,7 +60,7 @@ tasks:
     cmds:
       - templ generate ./...
       - "{{.TAILWIND_BIN}} -i web/input.css -o static/output.css --minify"
-      - go build -o bin/app .
+      - wick build
 
   test:
     cmds:

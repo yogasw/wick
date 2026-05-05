@@ -71,10 +71,17 @@ export default withMermaid(defineConfig({
         ],
       },
       {
+        text: 'Distribution',
+        items: [
+          { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+        ],
+      },
+      {
         text: 'Reference',
         items: [
           { text: 'CLI', link: '/reference/cli' },
           { text: 'wick.yml', link: '/reference/wick-yml' },
+          { text: 'wick build', link: '/reference/build' },
           { text: 'Environment Variables', link: '/reference/env-vars' },
           { text: 'Connector API', link: '/reference/connector-api' },
           { text: 'Config Tags', link: '/reference/config-tags' },

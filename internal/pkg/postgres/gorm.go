@@ -37,7 +37,10 @@ func NewGORM(c config.Database) *gorm.DB {
 		sqlDB.SetMaxOpenConns(100)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 	} else {
-		// SQLite: single writer
+		// SQLite: WAL mode for concurrent tray + MCP stdio access,
+		// busy_timeout so writers wait instead of returning SQLITE_BUSY.
+		db.Exec("PRAGMA journal_mode=WAL")
+		db.Exec("PRAGMA busy_timeout=5000")
 		sqlDB.SetMaxOpenConns(1)
 	}
 

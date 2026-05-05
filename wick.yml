@@ -1,3 +1,6 @@
+name: wick
+version: 0.6.4
+
 vars:
   TAILWIND_OS:
     $arch:
@@ -49,7 +52,7 @@ tasks:
   build:
     cmds:
       - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
-      - go build -o bin/app main.go
+      - wick build
 
   test:
     cmds:

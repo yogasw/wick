@@ -37,9 +37,11 @@ type App struct {
 	Name string `env:"APP_NAME" envDefault:""`
 	// Fallback APP_URL used only when the DB has no `app_url` row yet
 	// (first boot). Once written to the DB, the DB value wins.
-	URL string `env:"APP_URL" envDefault:"http://localhost:8080"`
-	// HTTP listen port. CLI --port flag overrides this.
-	Port int `env:"PORT" envDefault:"8080"`
+	URL string `env:"APP_URL" envDefault:"http://localhost:9425"`
+	// HTTP listen port. CLI --port flag overrides this. Default 9425
+	// = "WICK" on T9 keypad — picked to avoid collisions with common
+	// dev tools (3000, 5173) and well-known services.
+	Port int `env:"PORT" envDefault:"9425"`
 }
 
 type Database struct {

@@ -63,7 +63,7 @@ func appDefaults() []entity.Config {
 		{
 			Key:         KeyAppURL,
 			Type:        "url",
-			Value:       "http://localhost:8080",
+			Value:       "http://localhost:9425",
 			Description: "Base URL where this app is reachable. Used to build the OAuth callback URL and other absolute links. Update after moving the app behind a new domain.",
 		},
 		{
