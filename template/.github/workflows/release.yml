@@ -144,6 +144,15 @@ jobs:
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "output=${NAME}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
 
+      - name: Cache wick setup artifacts
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: wick-setup-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('wick.yml') }}
+
+      - name: Setup (download tailwind, install templ, go mod tidy)
+        run: wick setup
+
       - name: Build
         env:
           GOOS: ${{ matrix.os }}
