@@ -16,9 +16,8 @@ import (
 // GitHubPAT / GitHubRepo for the self-updater. Honors GOOS/GOARCH from
 // the environment for cross-compilation.
 //
-// Replaces the prior generic `runTask("build")` wrapper — wick.yml's
-// build task should now invoke `wick build` as its final step instead
-// of a hand-rolled `go build -ldflags "..."` line.
+// Runs the wick.yml `generate` task first when present so templ +
+// CSS + go generate stay in sync with the binary — keeps CI one-shot.
 func buildCmd() *cobra.Command {
 	var (
 		appName    string
@@ -45,14 +44,13 @@ output is bin/<app-name>[.exe]; override with --output.`,
 		RunE: func(c *cobra.Command, args []string) error {
 			appName = firstNonEmpty(appName, os.Getenv("WICK_APP_NAME"))
 			appVersion = firstNonEmpty(appVersion, os.Getenv("WICK_APP_VERSION"))
-			if appName == "" || appVersion == "" {
-				if cfg, err := loadConfig(); err == nil {
-					if appName == "" {
-						appName = cfg.Name
-					}
-					if appVersion == "" {
-						appVersion = cfg.Version
-					}
+			cfg, _ := loadConfig()
+			if cfg != nil {
+				if appName == "" {
+					appName = cfg.Name
+				}
+				if appVersion == "" {
+					appVersion = cfg.Version
 				}
 			}
 			if appName == "" {
@@ -60,6 +58,14 @@ output is bin/<app-name>[.exe]; override with --output.`,
 			}
 			if appVersion == "" {
 				appVersion = "dev"
+			}
+
+			if cfg != nil {
+				if _, ok := cfg.Tasks["generate"]; ok {
+					if err := runTask("generate"); err != nil {
+						return fmt.Errorf("generate task: %w", err)
+					}
+				}
 			}
 			githubPAT = firstNonEmpty(githubPAT, os.Getenv("GITHUB_PAT"))
 			githubRepo = firstNonEmpty(githubRepo, os.Getenv("GITHUB_REPOSITORY"))

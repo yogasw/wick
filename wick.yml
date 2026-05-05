@@ -49,11 +49,6 @@ tasks:
       - go generate ./...
       - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
 
-  build:
-    cmds:
-      - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
-      - wick build
-
   test:
     cmds:
       - go test ./... -coverprofile=./coverage.out
