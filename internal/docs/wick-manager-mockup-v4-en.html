@@ -867,7 +867,7 @@
           </div>
           <div class="hero-label">Admin panel</div>
           <div class="hero-addr" id="hero-addr">
-            <a href="#" id="addr-link"><span class="protocol">http://localhost:</span><span class="port" id="addr-port">8080</span></a>
+            <a href="#" id="addr-link"><span class="protocol">http://localhost:</span><span class="port" id="addr-port">9425</span></a>
           </div>
           <div class="hero-meta">
             <span>PID <strong id="meta-pid">24891</strong></span>
@@ -882,7 +882,7 @@
           <button class="btn" id="btn-restart">Restart</button>
           <div class="port-group">
             <span class="label">Port</span>
-            <input type="number" id="port-input" value="8080" min="1" max="65535">
+            <input type="number" id="port-input" value="9425" min="1" max="65535">
           </div>
         </div>
 
@@ -892,7 +892,7 @@
             <span class="hint">tail -f</span>
           </div>
           <div class="logs" id="logs">
-            <div><span class="ts">[15:42:18]</span> <span class="info">wick admin panel listening on :8080</span></div>
+            <div><span class="ts">[15:42:18]</span> <span class="info">wick admin panel listening on :9425</span></div>
             <div><span class="ts">[15:42:18]</span> <span class="info">SSO module ready</span></div>
             <div><span class="ts">[15:43:01]</span> <span class="info">login successful: admin@example.com</span></div>
             <div><span class="ts">[15:43:14]</span> <span class="info">GET /admin/dashboard 200</span></div>
@@ -1071,7 +1071,7 @@
       <div class="tray-menu">
         <div class="status-line">
           <div class="dot-mini"></div>
-          <span>Admin panel on :8080</span>
+          <span>Admin panel on :9425</span>
         </div>
         <div class="item"><span>Show window</span></div>
         <div class="item"><span>Open admin panel</span></div>
@@ -1091,7 +1091,7 @@
 </div>
 
 <div class="note">
-  <strong>Mockup v4 (English).</strong> The MCP Config tab now includes an <strong>architecture diagram</strong> at the top explaining that MCP is spawned by the client (Claude/Cursor) from the <code>wick.exe</code> binary via stdio — <strong>not</strong> running on the admin panel server. The Server tab no longer references MCP since MCP is unrelated to the admin panel server. Tray menu is also clearer: "Admin panel on :8080" with an "Admin panel" section for Start/Stop/Restart.
+  <strong>Mockup v4 (English).</strong> The MCP Config tab now includes an <strong>architecture diagram</strong> at the top explaining that MCP is spawned by the client (Claude/Cursor) from the <code>wick.exe</code> binary via stdio — <strong>not</strong> running on the admin panel server. The Server tab no longer references MCP since MCP is unrelated to the admin panel server. Tray menu is also clearer: "Admin panel on :9425" with an "Admin panel" section for Start/Stop/Restart.
 </div>
 
 <script>

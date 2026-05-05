@@ -86,7 +86,7 @@ cd my-app
 wick dev
 ```
 
-This generates templ, rebuilds CSS, and starts the server at `http://localhost:8080`.
+This generates templ, rebuilds CSS, and starts the server at `http://localhost:9425`.
 
 ## 6. Let Claude build your tools
 
@@ -115,10 +115,10 @@ The ones you'll reach for day-to-day:
 
 | Command | What it does |
 |---------|-------------|
-| `wick dev` | Generate templ + CSS, start server at `http://localhost:8080` |
+| `wick dev` | Generate templ + CSS, start server at `http://localhost:9425` |
 | `wick server` | Start HTTP server only (`go run . server`) — no asset generation |
 | `wick worker` | Start background job worker (`go run . worker`) |
-| `wick build` | Generate + minify CSS, compile binary |
+| `wick build` | Compile binary with version metadata baked in via ldflags |
 | `wick test` | Run `go test ./...` with coverage |
 | `wick skill sync` | Refresh bundled AI skills after upgrading wick |
 

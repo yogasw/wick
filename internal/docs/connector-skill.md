@@ -117,7 +117,7 @@ Reference contoh: `internal/connectors/crudcrud/` (5 ops, 1 destructive, JSON va
 | Registration | `internal/connectors/registry.go::RegisterBuiltins()` | `main.go` via `app.RegisterConnector(...)` |
 | Built-in example | `internal/connectors/crudcrud/` | `connectors/crudcrud/` (port verbatim) |
 | Imports | `github.com/yogasw/wick/pkg/connector` (sama) | sama |
-| Build verification | `go build ./...` | `wick dev` (smoke test, kill port 8080 setelah selesai per memori `feedback_kill_port`) |
+| Build verification | `go build ./...` | `wick dev` (smoke test, kill port 9425 setelah selesai per memori `feedback_kill_port`) |
 | Docs link | `internal/docs/connectors-design.md` | `<https://yogasw.github.io/wick/guide/connector-module>` (yg akan kita tulis di sec 5) |
 
 **Sections:** sama structure dgn wick-core skill. Sertain section "What this skill does NOT cover" yg tunjuk ke wick-core skill kalau dev mau modify wick framework itself (jarang, tapi guard).

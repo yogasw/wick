@@ -14,13 +14,15 @@ Every variable has a working default — the app boots without any configuration
 ## Server
 
 ### `PORT`
-**Default:** `8080`
+**Default:** `9425`
 
-HTTP listen port.
+HTTP listen port. `9425` spells "WICK" on a T9 keypad — picked to avoid collisions with common dev ports (3000 React, 5173 Vite, 5432 Postgres).
 
 ```env
-PORT=8080
+PORT=9425
 ```
+
+When running under the desktop tray, the resolution order is `PORT` env → `port` in `config.json` → built-in default. See [Desktop Tray ▶ Port](/guide/desktop-tray#port).
 
 ---
 
@@ -53,7 +55,7 @@ APP_NAME=My Internal Tools
 ```
 
 ### `APP_URL`
-**Default:** `http://localhost:8080`
+**Default:** `http://localhost:9425`
 
 Base URL used for SSO callbacks and absolute links. **Only used on first boot.** Change it from `/admin/configs` after the first run.
 
@@ -81,6 +83,46 @@ Password for the admin account created on first boot (only if no admin user exis
 
 ```env
 APP_ADMIN_PASSWORD=changeme
+```
+
+---
+
+## Build-time
+
+These are read by [`wick build`](./build), not by the running binary. They populate `app.BuildAppName` / `BuildAppVersion` / `GitHubPAT` / `GitHubRepo` via Go ldflags. Each falls back to the matching field in `wick.yml` (or empty for the GitHub pair) when not set.
+
+### `WICK_APP_NAME`
+**Default:** `name:` from `wick.yml` (else `"app"`)
+
+Bakes the app name. Used to namespace config / DB / log paths and as the default MCP server name.
+
+```env
+WICK_APP_NAME=myapp
+```
+
+### `WICK_APP_VERSION`
+**Default:** `version:` from `wick.yml` (else `"dev"`)
+
+Bakes the app version. Shown in the tray title and About menu, advertised by MCP.
+
+```env
+WICK_APP_VERSION=1.2.0
+```
+
+### `GITHUB_PAT`
+**Default:** _(empty — self-updater disabled)_
+
+GitHub fine-grained PAT with `Contents: read` on the releases repo. Embedded into the binary so it can poll `releases/latest`. Pair with `GITHUB_REPOSITORY`.
+
+See [`wick build` reference ▶ PAT setup](./build#pat-setup) for scopes and rotation.
+
+### `GITHUB_REPOSITORY`
+**Default:** _(empty — auto-set by GitHub Actions)_
+
+Releases repo in `owner/repo` form. Same env var that GitHub Actions populates automatically inside a workflow.
+
+```env
+GITHUB_REPOSITORY=acme/myapp-releases
 ```
 
 ---

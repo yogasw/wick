@@ -406,7 +406,7 @@ UI dipisah ke `cmd/gui/frontend/` (Svelte+TS+Tailwind) — Go side cuma binding 
 
 **Controls:**
 - Start / Stop / Restart buttons
-- Port input (default 8080)
+- Port input (default 9425)
 
 **Logs:**
 - Live tail of wick stdout/stderr di monospaced text area
@@ -489,7 +489,7 @@ Semua boolean toggle default `true`. Lihat Config struct di section Self-updater
 ### 5. System tray
 
 Right-click menu:
-- Status line: "Admin panel on :8080" / "Stopped"
+- Status line: "Admin panel on :9425" / "Stopped"
 - Show window
 - Open admin panel (browser)
 - --- divider ---

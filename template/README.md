@@ -10,11 +10,11 @@ wick dev
 ```
 
 Open:
-- Tool: http://localhost:8080/tools/convert-text
-- Job (operator): http://localhost:8080/jobs/auto-get-data
-- Job (admin): http://localhost:8080/manager/jobs/auto-get-data
-- Connector (admin): http://localhost:8080/manager/connectors/crudcrud
-- MCP install snippets: http://localhost:8080/profile/mcp (after first login)
+- Tool: http://localhost:9425/tools/convert-text
+- Job (operator): http://localhost:9425/jobs/auto-get-data
+- Job (admin): http://localhost:9425/manager/jobs/auto-get-data
+- Connector (admin): http://localhost:9425/manager/connectors/crudcrud
+- MCP install snippets: http://localhost:9425/profile/mcp (after first login)
 
 ## For AI agents
 

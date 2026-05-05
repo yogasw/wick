@@ -227,15 +227,18 @@ func onReady() {
 			log.Printf("autostart enable: %v", err)
 		}
 	}
+	mPrefs.AddSubMenuItem("── Launch ──", "").Disable()
 	mAutoApp := mPrefs.AddSubMenuItemCheckbox("Auto-start app at login", "Launch this binary at OS user login", userCfg.AutoStartApp)
 	mAutoSrv := mPrefs.AddSubMenuItemCheckbox("Auto-start server on launch", "Start HTTP server immediately when tray opens", userCfg.AutoStartServer)
 	mAutoWrk := mPrefs.AddSubMenuItemCheckbox("Auto-start worker on launch", "Start background worker immediately when tray opens", userCfg.AutoStartWorker)
+	mPrefs.AddSubMenuItem("── Updates ──", "").Disable()
 	mAutoUpd := mPrefs.AddSubMenuItemCheckbox("Auto-update", "Check + download new releases in background", userCfg.AutoUpdate)
-	mPrefs.AddSubMenuItem("─────────────", "").Disable()
+	mPrefs.AddSubMenuItem("── Config ──", "").Disable()
 	mOpenCfg := mPrefs.AddSubMenuItem("Open config file", "Open "+cfgPath)
 	if cfgPath == "" {
 		mOpenCfg.Disable()
 	}
+	systray.AddSeparator()
 
 	// About submenu
 	mAbout := systray.AddMenuItem("About", "")

@@ -48,7 +48,7 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
     - Tray call dua-duanya berurutan → bisa update title di antara fase ("New version X — downloading…")
     - `Updater.CheckNow(ctx)` masih ada sebagai convenience caller non-tray
 
-18. ✅ **Port resolution + custom default** — default port ganti `8080` → `9425` ("WICK" T9 keypad, jarang collide). `userconfig.ResolvePort(cfg.Port)` set `PORT` env sebelum `config.Load()`. Resolution: env `PORT` > `userCfg.Port` > default `9425`. Pola sama persis DB path.
+18. ✅ **Port resolution + custom default** — default port `9425` ("WICK" T9 keypad, jarang collide). `userconfig.ResolvePort(cfg.Port)` set `PORT` env sebelum `config.Load()`. Resolution: env `PORT` > `userCfg.Port` > default `9425`. Pola sama persis DB path.
 19. ✅ **Log rotation per-day + retention** — file ganti dari `wick-YYYY-MM-DD.log` jadi `wick-YYYY-MM-DD.log`. On startup `pruneOldLogs` hapus file > `LogRetentionDays` (default 7) hari. `LogRetentionDays` field di config.json. Cuma server + worker (in-process goroutine di tray binary) yg di-tee ke file — MCP serve subprocess tetap stderr-only.
 20. ✅ **Drop unused config fields** — `default_project` + `recent_projects` di-hapus. Multi-project switcher gak relevan dengan arsitektur final (1 binary = 1 app = 1 DB; multi-project = install binary terpisah, masing-masing dapat config/DB sendiri).
 21. ✅ **OS-level autostart** — `internal/autostart/` cross-platform package (Windows registry HKCU Run, macOS LaunchAgent plist, Linux XDG autostart .desktop). Toggle di Preferences ▶ "Auto-start app at login" (default `false`). Pas Enable, write entry pointing ke `os.Executable()` current path. Pas tray launch dengan AutoStartApp=true, panggil Enable lagi → refresh path otomatis kalau binary pindah/di-rename.
@@ -225,7 +225,7 @@ Preferensi per-project (kalau ada — mis. config khusus app yg user setup di ad
 3. Fallback: 9425 (default di env.go)
 ```
 
-Default `9425` = "WICK" di T9 keypad — dipilih supaya gak collide sama tools dev populer (3000 React, 5173 Vite, 5432 Postgres, 8080 Tomcat/Jenkins). Kalau user mau pin port custom, edit `port: 9876` di config.json — gak perlu ubah `.env`.
+Default `9425` = "WICK" di T9 keypad — dipilih supaya gak collide sama tools dev populer (3000 React, 5173 Vite, 5432 Postgres). Kalau user mau pin port custom, edit `port: 9876` di config.json — gak perlu ubah `.env`.
 
 ## OS-level autostart
 
@@ -770,7 +770,7 @@ Gak wajib v1 — `./bin/app server` udah lets user skip tray.
 ## Open questions
 
 1. **Nama org GitHub** — confirm path `<owner>/<app>-releases` yg di-bake ke binary
-2. **Multiple instance** — kalau user double-launch `./bin/app`, dua tray muncul + dua-duanya try `:8080`. Single-instance lock (file lock di bawah `UserCacheDir`) worth ditambah.
+2. **Multiple instance** — kalau user double-launch `./bin/app`, dua tray muncul + dua-duanya try `:9425`. Single-instance lock (file lock di bawah `UserCacheDir`) worth ditambah.
 3. **macOS code signing** — tray binary unsigned trigger Gatekeeper; defer dulu MVP
 4. **DB choice** — wick framework support PostgreSQL (GORM) + SQLite (`glebarez/sqlite`). Buat single-user desktop scenario, SQLite default-nya lebih masuk akal — confirm wick load config respect ini.
 5. **Recent projects switching** — pointer config nyimpen `recent_projects[]` tapi tray gak punya UI buat switch. Either drop field-nya dari MVP, atau expose lewat halaman Settings di admin panel.
