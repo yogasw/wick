@@ -51,6 +51,7 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
 18. ✅ **Port resolution + custom default** — default port ganti `8080` → `9425` ("WICK" T9 keypad, jarang collide). `userconfig.ResolvePort(cfg.Port)` set `PORT` env sebelum `config.Load()`. Resolution: env `PORT` > `userCfg.Port` > default `9425`. Pola sama persis DB path.
 19. ✅ **Log rotation per-day + retention** — file ganti dari `wick-YYYY-MM-DD.log` jadi `wick-YYYY-MM-DD.log`. On startup `pruneOldLogs` hapus file > `LogRetentionDays` (default 7) hari. `LogRetentionDays` field di config.json. Cuma server + worker (in-process goroutine di tray binary) yg di-tee ke file — MCP serve subprocess tetap stderr-only.
 20. ✅ **Drop unused config fields** — `default_project` + `recent_projects` di-hapus. Multi-project switcher gak relevan dengan arsitektur final (1 binary = 1 app = 1 DB; multi-project = install binary terpisah, masing-masing dapat config/DB sendiri).
+21. ✅ **OS-level autostart** — `internal/autostart/` cross-platform package (Windows registry HKCU Run, macOS LaunchAgent plist, Linux XDG autostart .desktop). Toggle di Preferences ▶ "Auto-start app at login" (default `false`). Pas Enable, write entry pointing ke `os.Executable()` current path. Pas tray launch dengan AutoStartApp=true, panggil Enable lagi → refresh path otomatis kalau binary pindah/di-rename.
 
 ### ⏳ Belum diimplement (ringan, defer sampai ada kebutuhan)
 
@@ -186,6 +187,7 @@ Schema (lihat `internal/userconfig.Config`):
 
 ```json
 {
+  "auto_start_app": false,
   "auto_start_server": true,
   "auto_start_worker": false,
   "auto_update": true,
@@ -198,6 +200,7 @@ Schema (lihat `internal/userconfig.Config`):
 ```
 
 **Field:**
+- `auto_start_app` (default `false`) — register binary ke OS supaya auto-launch pas user login. Lihat [OS-level autostart](#os-level-autostart)
 - `auto_start_server` (default `true`) — saat tray launch, langsung start HTTP server
 - `auto_start_worker` (default `false`) — saat tray launch, langsung start background worker
 - `auto_update` (default `true`) — self-updater check + download di background
@@ -223,6 +226,31 @@ Preferensi per-project (kalau ada — mis. config khusus app yg user setup di ad
 ```
 
 Default `9425` = "WICK" di T9 keypad — dipilih supaya gak collide sama tools dev populer (3000 React, 5173 Vite, 5432 Postgres, 8080 Tomcat/Jenkins). Kalau user mau pin port custom, edit `port: 9876` di config.json — gak perlu ubah `.env`.
+
+## OS-level autostart
+
+Toggle dari Preferences ▶ "Auto-start app at login". Default `false` — opt-in supaya user gak surprise pas install.
+
+`internal/autostart` provide 3 fungsi behind per-OS files (`autostart_{windows,darwin,linux}.go`):
+
+- `autostart.Enable(appName)` — write entry yg point ke `os.Executable()` current path
+- `autostart.Disable(appName)` — hapus entry
+- `autostart.IsEnabled(appName)` — check entry ada/gak
+- `autostart.Path(appName)` — string lokasi entry (buat display)
+
+**Mekanisme per-OS:**
+
+| OS | Lokasi entry |
+|---|---|
+| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<appName>` (registry) |
+| macOS | `~/Library/LaunchAgents/<appName>.plist` (launchd, RunAtLoad=true) |
+| Linux | `~/.config/autostart/<appName>.desktop` (XDG autostart spec) |
+
+Semua user-scoped — gak butuh admin/root.
+
+**Self-healing:** pas tray launch dengan `AutoStartApp=true`, panggil `Enable()` lagi → write entry dengan current `os.Executable()` path. Kalau user pindah binary atau rename, entry stale → next launch refresh otomatis.
+
+**Failure handling:** kalau Enable gagal (mis. registry locked, filesystem RO), title checkbox tetap unchecked + reset `userCfg.AutoStartApp = false` + log error. User aware via `Open logs` di About.
 
 ## SQLite concurrency
 
@@ -412,8 +440,13 @@ internal/
 │   ├── logs.go                  # redirect zerolog ke <UserCacheDir>/<name>/wick-YYYY-MM-DD.log (!headless)
 │   ├── lock.go                  # single-instance lock via 127.0.0.1:47829 (!headless)
 │   └── helpers.go               # openInEditor, jsonIndent (!headless)
+├── autostart/
+│   ├── autostart.go             # shared currentExe()
+│   ├── autostart_windows.go     # registry HKCU\...\Run\<appName>
+│   ├── autostart_darwin.go      # ~/Library/LaunchAgents/<appName>.plist
+│   └── autostart_linux.go       # ~/.config/autostart/<appName>.desktop
 ├── userconfig/
-│   └── config.go                # Load/Save Config + ResolveDBPath
+│   └── config.go                # Load/Save Config + ResolveDBPath + ResolvePort
 │                                  # config: <UserConfigDir>/<name>/config.json
 │                                  # name = app.BuildAppName (baked saat wick build)
 ├── mcpconfig/
@@ -467,7 +500,8 @@ MCP ▶
     ...
 ─────────────────────────────────────
 Preferences ▶
-  ☑ Auto-start server on launch
+  ☐ Auto-start app at login                        ← OS-level (registry / LaunchAgent / .desktop)
+  ☑ Auto-start server on launch                    ← in-app (saat tray buka)
   ☐ Auto-start worker on launch
   ☑ Auto-update
   ─────────────

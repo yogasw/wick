@@ -21,6 +21,7 @@ import (
 
 	"fyne.io/systray"
 
+	"github.com/yogasw/wick/internal/autostart"
 	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
@@ -219,6 +220,14 @@ func onReady() {
 	systray.AddSeparator()
 
 	mPrefs := systray.AddMenuItem("Preferences", "Per-machine settings (saved to "+cfgPath+")")
+	// Sync OS-level autostart with config — handles binary moved/renamed
+	// (re-Enable refreshes the path; user toggling won't notice the diff).
+	if userCfg.AutoStartApp {
+		if err := autostart.Enable(appName); err != nil {
+			log.Printf("autostart enable: %v", err)
+		}
+	}
+	mAutoApp := mPrefs.AddSubMenuItemCheckbox("Auto-start app at login", "Launch this binary at OS user login", userCfg.AutoStartApp)
 	mAutoSrv := mPrefs.AddSubMenuItemCheckbox("Auto-start server on launch", "Start HTTP server immediately when tray opens", userCfg.AutoStartServer)
 	mAutoWrk := mPrefs.AddSubMenuItemCheckbox("Auto-start worker on launch", "Start background worker immediately when tray opens", userCfg.AutoStartWorker)
 	mAutoUpd := mPrefs.AddSubMenuItemCheckbox("Auto-update", "Check + download new releases in background", userCfg.AutoUpdate)
@@ -392,6 +401,22 @@ func onReady() {
 						ui.refresh()
 					}
 				}
+			case <-mAutoApp.ClickedCh:
+				userCfg.AutoStartApp = !userCfg.AutoStartApp
+				if userCfg.AutoStartApp {
+					if err := autostart.Enable(appName); err != nil {
+						log.Printf("autostart enable: %v", err)
+						userCfg.AutoStartApp = false
+					} else {
+						mAutoApp.Check()
+					}
+				} else {
+					if err := autostart.Disable(appName); err != nil {
+						log.Printf("autostart disable: %v", err)
+					}
+					mAutoApp.Uncheck()
+				}
+				_ = saveUserCfg()
 			case <-mAutoSrv.ClickedCh:
 				userCfg.AutoStartServer = !userCfg.AutoStartServer
 				if userCfg.AutoStartServer {

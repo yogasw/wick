@@ -28,6 +28,11 @@ import (
 // Config is the on-disk shape. Add fields with `json:"...,omitempty"`
 // so older config files keep working when the binary upgrades.
 type Config struct {
+	// AutoStartApp registers the binary with the OS so it launches at
+	// user login (Windows: Run registry, macOS: LaunchAgent plist,
+	// Linux: XDG autostart .desktop). Toggle from Preferences ▶ Auto-start app.
+	AutoStartApp bool `json:"auto_start_app"`
+
 	// Tray auto-start toggles — applied at the next tray launch.
 	AutoStartServer bool `json:"auto_start_server"`
 	AutoStartWorker bool `json:"auto_start_worker"`
