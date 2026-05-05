@@ -8,12 +8,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/josephspurrier/goversioninfo"
 	"github.com/spf13/cobra"
-
-	"github.com/yogasw/wick/internal/systemtray"
 )
 
 // buildCmd compiles the downstream binary with -ldflags injecting
@@ -30,6 +26,7 @@ func buildCmd() *cobra.Command {
 		githubPAT  string
 		githubRepo string
 		output     string
+		bundle     bool
 		headless   bool
 	)
 	cmd := &cobra.Command{
@@ -110,60 +107,15 @@ output is bin/<app-name>[.exe]; override with --output.`,
 				ldflags = append(ldflags, "-H=windowsgui")
 			}
 
-			// Windows .exe icon: render the same brand W (running state) the
-			// system tray uses, dump it to a temp .ico, and let goversioninfo
-			// turn it into a COFF .syso resource Go's linker auto-includes
-			// for matching GOARCH. Keeps the tray icon and Explorer thumbnail
-			// visually consistent without shipping a separate .ico file.
+			// Windows .exe metadata: drop a .syso resource file next to
+			// main.go so the next `go build` picks up the brand icon plus
+			// version metadata. Cleanup runs after the build finishes.
 			if goos == "windows" {
-				goarch := os.Getenv("GOARCH")
-				if goarch == "" {
-					goarch = runtime.GOARCH
-				}
-				tmp, err := os.CreateTemp("", "wick-icon-*.ico")
+				cleanup, err := embedWindowsResource(output, appName, appVersion)
 				if err != nil {
-					return fmt.Errorf("icon temp: %w", err)
+					return err
 				}
-				if _, err := tmp.Write(systemtray.BrandIcon(true)); err != nil {
-					tmp.Close()
-					os.Remove(tmp.Name())
-					return fmt.Errorf("write icon: %w", err)
-				}
-				tmp.Close()
-				defer os.Remove(tmp.Name())
-
-				sysoPath := fmt.Sprintf("rsrc_windows_%s.syso", goarch)
-				maj, min, pat := parseSemver(appVersion)
-				vi := &goversioninfo.VersionInfo{
-					IconPath: tmp.Name(),
-					FixedFileInfo: goversioninfo.FixedFileInfo{
-						FileVersion:    goversioninfo.FileVersion{Major: maj, Minor: min, Patch: pat},
-						ProductVersion: goversioninfo.FileVersion{Major: maj, Minor: min, Patch: pat},
-						FileFlagsMask:  "3f",
-						FileFlags:      "00",
-						FileOS:         "040004",
-						FileType:       "01",
-						FileSubType:    "00",
-					},
-					StringFileInfo: goversioninfo.StringFileInfo{
-						FileDescription:  appName,
-						FileVersion:      appVersion,
-						InternalName:     appName,
-						OriginalFilename: filepath.Base(output),
-						ProductName:      appName,
-						ProductVersion:   appVersion,
-						LegalCopyright:   fmt.Sprintf("Copyright © %d %s", time.Now().Year(), appName),
-					},
-					VarFileInfo: goversioninfo.VarFileInfo{
-						Translation: goversioninfo.Translation{LangID: 0x0409, CharsetID: 0x04B0},
-					},
-				}
-				vi.Build()
-				vi.Walk()
-				if err := vi.WriteSyso(sysoPath, goarch); err != nil {
-					return fmt.Errorf("write syso: %w", err)
-				}
-				defer os.Remove(sysoPath)
+				defer cleanup()
 			}
 
 			goArgs := []string{"build", "-ldflags", strings.Join(ldflags, " "), "-o", output}
@@ -177,7 +129,41 @@ output is bin/<app-name>[.exe]; override with --output.`,
 			gobuild.Stdout = os.Stdout
 			gobuild.Stderr = os.Stderr
 			gobuild.Env = os.Environ()
-			return gobuild.Run()
+			if err := gobuild.Run(); err != nil {
+				return err
+			}
+
+			// Optional packaging step: wrap the bare binary into a native
+			// distributable per target OS. Windows has nothing to wrap —
+			// the .exe already carries its icon + version metadata via the
+			// .syso step above. Mac gets a .app bundle, Linux gets a .deb.
+			if !bundle {
+				return nil
+			}
+			goarch := os.Getenv("GOARCH")
+			if goarch == "" {
+				goarch = runtime.GOARCH
+			}
+			switch goos {
+			case "darwin":
+				bundleID := resolveBundleID(appName)
+				app, err := packageMacApp(output, appName, appVersion, bundleID)
+				if err != nil {
+					return fmt.Errorf("package mac app: %w", err)
+				}
+				fmt.Printf("> bundled %s\n", app)
+			case "linux":
+				deb, err := packageLinuxDeb(output, appName, appVersion, goarch)
+				if err != nil {
+					return fmt.Errorf("package linux deb: %w", err)
+				}
+				fmt.Printf("> bundled %s\n", deb)
+			case "windows":
+				// no-op — icon + version metadata already in the .exe
+			default:
+				return fmt.Errorf("--bundle: unsupported GOOS %q", goos)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&appName, "app-name", "", "App name → app.BuildAppName (env: WICK_APP_NAME, fallback: wick.yml name)")
@@ -185,6 +171,7 @@ output is bin/<app-name>[.exe]; override with --output.`,
 	cmd.Flags().StringVar(&githubPAT, "github-pat", "", "GitHub PAT → app.GitHubPAT (env: GITHUB_PAT)")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "GitHub repo owner/<app>-releases → app.GitHubRepo (env: GITHUB_REPOSITORY)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output binary path (default: bin/<app-name>[.exe])")
+	cmd.Flags().BoolVar(&bundle, "bundle", false, "Wrap the binary into a native distributable (mac=.app, linux=.deb; windows already self-contains its icon + version metadata)")
 	cmd.Flags().BoolVar(&headless, "headless", false, "Build with -tags headless (excludes systray)")
 	return cmd
 }
