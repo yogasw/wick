@@ -122,7 +122,7 @@ Schema:
 ```json
 {
   "auto_start_app": false,
-  "auto_start_server": true,
+  "auto_start_server": false,
   "auto_start_worker": false,
   "auto_update": true,
   "port": 0,
@@ -206,7 +206,7 @@ This adds `-tags headless` to the underlying `go build`. The tray subcommand bec
 
 ## Single instance
 
-The tray acquires a TCP lock on `127.0.0.1:47829`. A second invocation finds the port held and exits silently — preventing two trays / two HTTP listeners on the same machine.
+The tray acquires a per-app PID-file lock at `<UserConfigDir>/<app>/instance.pid` and verifies the recorded PID is still alive and points at the same executable basename. A second invocation of the same binary finds the lock held and exits silently. Two different wick-built binaries (`acme-tools` vs `widget-tools`) live in their own files and don't lock each other out. A crashed instance leaves a stale PID; the next launch detects the dead PID and reclaims the slot.
 
 ## See also
 
