@@ -2,9 +2,12 @@ name: Release
 
 # Single-flow release pipeline:
 #   push to main/master
-#     → tag job: read version from wick.yml, push tag if new
-#     → build job: matrix build 6 OS×arch (only if tag created)
-#     → release job: gh release create + upload artifacts
+#     → prepare job: read version from wick.yml, skip if tag already exists
+#     → build job: matrix build 6 OS×arch, fail-fast off
+#     → release job: gh release + push tag IFF at least one build succeeded
+#
+# Tag is only pushed at the end, after the release succeeds — so a failed
+# pipeline leaves no tag behind, and a re-run starts clean.
 #
 # Everything runs in ONE workflow — no cross-workflow trigger,
 # so same-repo setup needs zero PATs for CI itself (only PAT_DOWNLOAD
@@ -16,6 +19,15 @@ on:
 
 permissions:
   contents: write
+
+# Serialize releases on the same branch so two pushes in flight don't
+# race for the same version (both reading wick.yml at 0.6.4 and both
+# trying to release 0.6.5). cancel-in-progress: false → the second
+# workflow waits for the first to finish, then bumps from the freshly
+# committed wick.yml.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 # ── Setup ─────────────────────────────────────────────────────────────────
 #
@@ -68,49 +80,179 @@ permissions:
 # │                                                                        │
 # └────────────────────────────────────────────────────────────────────────┘
 #
+# ┌─ Optional: limit which OS/arch get built ─────────────────────────────┐
+# │                                                                        │
+# │  Settings → Secrets and variables → Actions → Variables               │
+# │    BUILD_TARGETS = comma-separated list of <os>/<arch> to build       │
+# │                                                                        │
+# │  Examples:                                                            │
+# │    (unset)                          → build everything (default)      │
+# │    linux/amd64                      → linux x64 only                  │
+# │    darwin/arm64,linux/amd64         → only mac-silicon + linux x64    │
+# │    windows/amd64,windows/arm64      → windows desktop only            │
+# │                                                                        │
+# │  Valid values: windows/amd64, windows/arm64, darwin/amd64,            │
+# │                darwin/arm64, linux/amd64, linux/arm64                 │
+# │                                                                        │
+# │  Skipped runners exit early — no checkout, no build cost.             │
+# │  Release succeeds as long as at least one build produces an artifact. │
+# │                                                                        │
+# └────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─ Optional: auto-bump version every push ──────────────────────────────┐
+# │                                                                        │
+# │  Settings → Secrets and variables → Actions → Variables               │
+# │    AUTO_VERSION = true                                                │
+# │                                                                        │
+# │  When set, every push to main/master:                                 │
+# │    1. runs `wick version next` — reads `version:` from wick.yml and  │
+# │       bumps the LAST numeric segment by one, writing the new value   │
+# │       back to wick.yml (format follows whatever is there):           │
+# │           1     → 2                                                   │
+# │           0.1   → 0.2                                                 │
+# │           0.6.4 → 0.6.5                                               │
+# │           1.2.3.4 → 1.2.3.5                                           │
+# │    2. uses the bumped value as the release tag (vX.Y.Z) and bakes   │
+# │       it into the binary via WICK_APP_VERSION.                       │
+# │    3. after the release succeeds, commits the wick.yml diff back    │
+# │       to the source branch with "[skip ci]" — so the next push       │
+# │       reads the freshly bumped value and the loop continues.        │
+# │                                                                        │
+# │  The commit-back uses `github.token` (GitHub blocks workflows from   │
+# │  re-triggering on token-pushed commits, so no infinite loop). If     │
+# │  the source branch has protection rules requiring PRs/reviews, you  │
+# │  must allow `github-actions[bot]` to push directly — otherwise the  │
+# │  commit-back step fails and the next run will re-bump from the same  │
+# │  wick.yml value, hitting "tag exists" and skipping.                  │
+# │                                                                        │
+# │  Concurrency is serialized by the workflow-level `concurrency` block │
+# │  so two pushes in flight don't both try to bump 0.6.4 → 0.6.5.       │
+# │                                                                        │
+# │  Manual jump (cut a minor/major release): edit wick.yml `version:`   │
+# │  to the new base (e.g. 0.7.0) and push — that release goes out as    │
+# │  v0.7.0, the commit-back bumps to 0.7.1, and auto continues.        │
+# │                                                                        │
+# │  Default flow (AUTO_VERSION unset/false) keeps reading wick.yml       │
+# │  `version:` as-is and skipping when the tag already exists.          │
+# │                                                                        │
+# └────────────────────────────────────────────────────────────────────────┘
+#
 # ──────────────────────────────────────────────────────────────────────────
 
 jobs:
-  tag:
-    name: Tag if version changed
+  prepare:
+    name: Prepare
     runs-on: ubuntu-latest
     outputs:
-      created: ${{ steps.push.outputs.created }}
+      created: ${{ steps.check.outputs.created }}
       tag: ${{ steps.ver.outputs.tag }}
+      app_version: ${{ steps.ver.outputs.app_version }}
+      sha: ${{ steps.check.outputs.sha }}
+      releases_repo: ${{ steps.repo.outputs.releases_repo }}
+      is_separate: ${{ steps.repo.outputs.is_separate }}
+      auto_version: ${{ vars.AUTO_VERSION }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Read version from wick.yml
-        id: ver
+      - name: Normalize RELEASES_REPO
+        id: repo
+        shell: bash
+        env:
+          RAW: ${{ vars.RELEASES_REPO }}
+        # Accepts any common form and normalizes to owner/repo:
+        #   https://github.com/owner/repo[.git]
+        #   http://github.com/owner/repo[.git]
+        #   git@github.com:owner/repo[.git]
+        #   owner/repo
+        # Empty input → same-repo mode.
         run: |
-          VERSION=$(grep '^version:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
-          if [ -z "$VERSION" ]; then
-            echo "No version: field in wick.yml — skipping." >&2
+          NORM="$RAW"
+          NORM="${NORM#https://github.com/}"
+          NORM="${NORM#http://github.com/}"
+          NORM="${NORM#git@github.com:}"
+          NORM="${NORM%.git}"
+          NORM="${NORM%/}"
+          if [ -z "$NORM" ]; then
+            NORM="${{ github.repository }}"
+            echo "is_separate=false" >> "$GITHUB_OUTPUT"
+            echo "Same-repo mode: releases go to $NORM"
+          else
+            echo "is_separate=true" >> "$GITHUB_OUTPUT"
+            echo "Separate-repo mode: releases go to $NORM (raw input: $RAW)"
+          fi
+          if [[ ! "$NORM" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::RELEASES_REPO normalized to '$NORM' — expected owner/repo format. Raw input: '$RAW'"
             exit 1
           fi
-          TAG="v${VERSION#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "releases_repo=$NORM" >> "$GITHUB_OUTPUT"
 
-      - name: Push tag if new
-        id: push
+      # AUTO_VERSION path: install wick CLI and let `wick version next`
+      # compute the bumped version from wick.yml (last numeric segment +1).
+      # The bump writes wick.yml in this runner's workspace — discarded at
+      # job end. The release job re-runs `wick version next` on the same
+      # baseline to produce the same value, then commits the bumped
+      # wick.yml back to the source branch.
+      - uses: actions/setup-go@v6
+        if: vars.AUTO_VERSION == 'true'
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Install wick CLI
+        if: vars.AUTO_VERSION == 'true'
+        run: go install github.com/yogasw/wick@latest
+
+      - name: Resolve next version
+        id: ver
+        env:
+          AUTO_VERSION: ${{ vars.AUTO_VERSION }}
+        # AUTO_VERSION=true  → wick.yml `version:` +1 last segment via
+        #                       `wick version next`, ignore tag-exists check.
+        # AUTO_VERSION unset → read `version:` from wick.yml as-is, the
+        #                       tag-exists check below decides if we release.
+        run: |
+          set -euo pipefail
+          if [ "$AUTO_VERSION" = "true" ]; then
+            VERSION=$(wick version next)
+            TAG="v${VERSION}"
+            echo "AUTO_VERSION: bumped wick.yml to $VERSION"
+          else
+            VERSION=$(grep '^version:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+            if [ -z "$VERSION" ]; then
+              echo "No version: field in wick.yml — skipping." >&2
+              exit 1
+            fi
+            TAG="v${VERSION#v}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "app_version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag does not exist
+        id: check
+        env:
+          AUTO_VERSION: ${{ vars.AUTO_VERSION }}
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
-          if git ls-remote --tags origin "$TAG" | grep -q .; then
+          if [ "$AUTO_VERSION" = "true" ]; then
+            # Auto mode always produces a fresh tag — no skip path.
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "Will release $TAG at $(git rev-parse HEAD) if build succeeds."
+          elif git ls-remote --tags origin "$TAG" | grep -q .; then
             echo "Tag $TAG already exists — skipping build."
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
-            git tag "$TAG"
-            git push origin "$TAG"
             echo "created=true" >> "$GITHUB_OUTPUT"
-            echo "Pushed $TAG."
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "Will release $TAG at $(git rev-parse HEAD) if build succeeds."
           fi
 
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
-    needs: tag
-    if: needs.tag.outputs.created == 'true'
+    needs: prepare
+    if: needs.prepare.outputs.created == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -124,19 +266,36 @@ jobs:
           - { os: linux,   arch: arm64, runner: ubuntu-latest,  ext: ''     }
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag.outputs.tag }}
+      - name: Gate on BUILD_TARGETS
+        id: gate
+        shell: bash
+        run: |
+          TARGETS="${{ vars.BUILD_TARGETS }}"
+          PAIR="${{ matrix.os }}/${{ matrix.arch }}"
+          if [ -z "$TARGETS" ] || [[ ",$TARGETS," == *",$PAIR,"* ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping $PAIR (not in BUILD_TARGETS=$TARGETS)"
+          fi
 
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - uses: actions/setup-go@v6
+        if: steps.gate.outputs.enabled == 'true'
         with:
           go-version: 'stable'
           cache: true
 
       - name: Install wick CLI
+        if: steps.gate.outputs.enabled == 'true'
         run: go install github.com/yogasw/wick@latest
 
       - name: Resolve app name and output path
+        if: steps.gate.outputs.enabled == 'true'
         id: meta
         shell: bash
         run: |
@@ -145,15 +304,18 @@ jobs:
           echo "output=${NAME}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache wick setup artifacts
-        uses: actions/cache@v4
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/cache@v5
         with:
           path: bin
           key: wick-setup-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('wick.yml') }}
 
       - name: Setup (download tailwind, install templ, go mod tidy)
+        if: steps.gate.outputs.enabled == 'true'
         run: wick setup
 
       - name: Build
+        if: steps.gate.outputs.enabled == 'true'
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
@@ -166,16 +328,22 @@ jobs:
           # Scoped to releases repo only — if it leaks, attacker can only
           # download already-published binaries, nothing else.
           GITHUB_PAT: ${{ secrets.PAT_DOWNLOAD }}
-          GITHUB_REPOSITORY: ${{ vars.RELEASES_REPO || github.repository }}
+          GITHUB_REPOSITORY: ${{ needs.prepare.outputs.releases_repo }}
+          # Override wick.yml `version:` so the binary's --version reflects
+          # the tag we're about to publish. Critical when AUTO_VERSION=true
+          # since wick.yml isn't bumped per release.
+          WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
         run: wick build -o ${{ steps.meta.outputs.output }}
 
       - name: Checksum
+        if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
           sha256sum "${{ steps.meta.outputs.output }}" \
             > "${{ steps.meta.outputs.output }}.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
+        if: steps.gate.outputs.enabled == 'true'
         with:
           name: ${{ steps.meta.outputs.app_name }}-${{ matrix.os }}-${{ matrix.arch }}
           path: |
@@ -185,19 +353,35 @@ jobs:
 
   release:
     name: Publish release
-    needs: [tag, build]
+    needs: [prepare, build]
+    # Run even if some matrix builds failed — release whatever artifacts
+    # made it through. Only skip if nothing reached the build step at all
+    # (prepare didn't create anything, or all builds were cancelled).
+    if: |
+      always() && needs.prepare.outputs.created == 'true'
+        && needs.build.result != 'cancelled'
+        && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.tag.outputs.tag }}
-          sparse-checkout: go.mod
-          sparse-checkout-cone-mode: false
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Verify at least one artifact exists
+        shell: bash
+        run: |
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "::error::No artifacts uploaded — every build failed. Not releasing, not tagging."
+            exit 1
+          fi
+          echo "Found artifacts:"
+          ls -1 artifacts
 
       - name: Resolve app name
         id: meta
@@ -205,14 +389,69 @@ jobs:
           NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub release
+      # Same-repo: gh creates the tag at our SHA atomically.
+      - name: Create GitHub release (same repo)
+        if: needs.prepare.outputs.is_separate == 'false'
         env:
-          # Same-repo: github.token has write access, PAT_BUILD not needed.
-          # Separate releases repo: set PAT_BUILD with Contents read+write.
-          GH_TOKEN: ${{ secrets.PAT_BUILD || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ needs.tag.outputs.tag }}" \
-            --repo "${{ vars.RELEASES_REPO || github.repository }}" \
-            --title "${{ steps.meta.outputs.app_name }} ${{ needs.tag.outputs.tag }}" \
+          gh release create "${{ needs.prepare.outputs.tag }}" \
+            --target "${{ needs.prepare.outputs.sha }}" \
+            --title "${{ steps.meta.outputs.app_name }} ${{ needs.prepare.outputs.tag }}" \
             --generate-notes \
             artifacts/*
+
+      # Separate releases repo: gh tags releases repo at its default branch
+      # (just a marker), then we push the real tag to the source repo.
+      - name: Create GitHub release (separate releases repo)
+        if: needs.prepare.outputs.is_separate == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_BUILD }}
+        run: |
+          gh release create "${{ needs.prepare.outputs.tag }}" \
+            --repo "${{ needs.prepare.outputs.releases_repo }}" \
+            --title "${{ steps.meta.outputs.app_name }} ${{ needs.prepare.outputs.tag }}" \
+            --generate-notes \
+            artifacts/*
+
+      - name: Push source tag (separate releases repo)
+        if: needs.prepare.outputs.is_separate == 'true'
+        run: |
+          git tag "${{ needs.prepare.outputs.tag }}" "${{ needs.prepare.outputs.sha }}"
+          git push origin "${{ needs.prepare.outputs.tag }}"
+
+      # AUTO_VERSION commit-back: bump wick.yml `version:` to match the
+      # tag we just published, then push the diff to the source branch.
+      # Pushes from `github.token` do NOT re-trigger workflows (GitHub
+      # anti-loop guard) so this is safe; the `[skip ci]` marker is
+      # belt-and-suspenders for any setup that might forward the event.
+      - uses: actions/setup-go@v6
+        if: needs.prepare.outputs.auto_version == 'true'
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Install wick CLI
+        if: needs.prepare.outputs.auto_version == 'true'
+        run: go install github.com/yogasw/wick@latest
+
+      - name: Bump wick.yml and commit
+        if: needs.prepare.outputs.auto_version == 'true'
+        env:
+          BRANCH: ${{ github.ref_name }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Re-run `wick version next` on the same baseline as prepare
+          # (same SHA checkout) — produces the same bumped value.
+          wick version next > /dev/null
+          if git diff --quiet -- wick.yml; then
+            echo "wick.yml unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -B "$BRANCH"
+          git add wick.yml
+          git commit -m "release $TAG [skip ci]"
+          git push origin "$BRANCH"

@@ -69,9 +69,11 @@ The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadB
 
 Trigger: `on: push` to `main` / `master`. Three jobs:
 
-1. **`tag`** — read `version:` from `wick.yml`. If `v<version>` is not yet a tag, push it; output `created=true`. If it already exists, output `created=false` and skip downstream jobs.
-2. **`build`** (`needs: tag`, runs only if `created=true`) — checkout `ref: <new-tag>`, then build 6 binaries via the matrix below; upload artifacts.
-3. **`release`** (`needs: [tag, build]`) — download artifacts and `gh release create <tag>` against your releases repo.
+1. **`prepare`** — read `version:` from `wick.yml`. If `v<version>` is not yet a tag on origin, output `created=true` plus the commit SHA. If it already exists, output `created=false` and skip downstream jobs. **The tag is not pushed yet.**
+2. **`build`** (`needs: prepare`, runs only if `created=true`, `fail-fast: false`) — checkout the SHA, build 6 binaries via the matrix below, upload artifacts. A failed matrix entry does not cancel the others.
+3. **`release`** (`needs: [prepare, build]`, runs even if some matrix entries failed) — download artifacts, fail with a clear error if **none** were uploaded, otherwise `gh release create <tag>` against your releases repo and **then** push the tag to the source repo.
+
+**Tag-after-release semantics.** The tag only lands on origin when at least one binary is published. If every build fails, no tag is pushed and a re-run starts from the same SHA. For the same-repo setup, `gh release create --target <sha>` creates the tag atomically with the release; for the separate-releases-repo setup, the tag is pushed via `git push origin <tag>` after `gh release create` succeeds.
 
 **Why one workflow instead of two:** GitHub blocks tag pushes made with the default `GITHUB_TOKEN` from triggering other workflows (anti-loop guard). A split design (`auto-tag.yml` → `release.yml`) needs a user PAT to push the tag, otherwise `release.yml` never fires. The single-flow design uses job dependencies (`needs:`) instead of an event-trigger handoff, so it works with `github.token` alone — no `PAT_BUILD` required for same-repo setups.
 
@@ -87,6 +89,61 @@ Build matrix:
 | linux | arm64 | `<app>-linux-arm64` |
 
 Each binary ships with a `.sha256` sibling that the self-updater verifies before swap.
+
+### Limiting the build matrix
+
+Set the optional `BUILD_TARGETS` Actions variable (Settings → Secrets and variables → Actions → Variables) to a comma-separated list of `<os>/<arch>` pairs. Anything not listed is skipped at the start of its runner — no checkout, no build cost. Leave it unset to build everything (the default).
+
+| `BUILD_TARGETS` value | Effect |
+|---|---|
+| _(unset)_ | Build all six targets. |
+| `linux/amd64` | Linux x64 only — useful for Docker-only deployments. |
+| `darwin/arm64,linux/amd64` | Mac silicon + Linux x64 — common dev/server combo. |
+| `windows/amd64,windows/arm64` | Windows desktop only. |
+| `linux/amd64,linux/arm64` | Both Linux arches, skip mac/windows. |
+
+Valid values: `windows/amd64`, `windows/arm64`, `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`.
+
+The release job ships whatever artifacts made it through, so you can also use this to drop a flaky target temporarily without editing the workflow.
+
+### Auto-bumping the version
+
+Set the optional `AUTO_VERSION` Actions variable to `true` to make every push to `main`/`master` cut a new release automatically. The flow:
+
+1. **`prepare`** runs `wick version next`, which reads `version:` from `wick.yml`, bumps the **last numeric segment** by one, writes the new value back, and prints it.
+2. **`build`** bakes that value into the binary via `WICK_APP_VERSION`.
+3. **`release`** publishes `vX.Y.Z`, pushes the tag, then re-runs `wick version next` on a fresh checkout (idempotent — same baseline, same bump) and commits the wick.yml diff back to the branch with `[skip ci]`.
+
+The bump format follows whatever is already in `wick.yml:version`:
+
+| Current `version:` | Next tag |
+|---|---|
+| `1` | `v2` |
+| `0.1` | `v0.2` |
+| `0.6.4` | `v0.6.5` |
+| `1.2.3.4` | `v1.2.3.5` |
+
+| `AUTO_VERSION` | Behavior |
+|---|---|
+| _(unset)_ or `false` | Existing flow — read `version:` as-is, skip if the tag already exists. Bump `wick.yml` manually before each release. |
+| `true` | `wick version next` bumps `wick.yml` last segment +1, every push releases, commit-back keeps `wick.yml` in sync with the latest tag. |
+
+#### Why this is safe
+
+- **No infinite loop.** The commit-back step pushes via `github.token`. GitHub explicitly does not re-trigger workflows on commits pushed by `GITHUB_TOKEN` ([anti-loop guard](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow)). The `[skip ci]` marker is belt-and-suspenders.
+- **No race.** A workflow-level `concurrency: { group: release-${{ github.ref }}, cancel-in-progress: false }` serializes pushes on the same branch, so two pushes can't both try to bump `0.6.4 → 0.6.5`.
+- **Atomic enough.** If the release succeeds but the commit-back fails (e.g. branch protection blocks the bot push), the next run will read the still-old `wick.yml`, compute the same tag, and skip with "tag exists." The release isn't lost; the wick.yml diff is what's missing — recoverable manually.
+
+#### Manual jump (cut a minor/major release)
+
+Edit `wick.yml:version` to a new base (e.g. `0.7.0`), push:
+- That push releases `v0.7.0`.
+- Commit-back bumps to `0.7.1`.
+- Auto-bump continues `v0.7.2`, `v0.7.3`, …
+
+#### Branch protection
+
+If `main`/`master` requires PRs or status checks, allow `github-actions[bot]` to bypass — otherwise the commit-back fails. The release itself still publishes; only the wick.yml diff is missing.
 
 ## PAT setup
 
@@ -134,28 +191,33 @@ When a PAT expires, the tray menu surfaces it as `Update check failed — PAT ex
 ```
 bump version: in wick.yml → push main
     ↓
-release.yml job 1 (tag): tag exists? created=false (skip) : git tag + push, created=true
+release.yml job 1 (prepare): tag exists on origin?
+                                yes → created=false, stop
+                                no  → created=true, sha=<HEAD>, no push yet
     ↓
-release.yml job 2 (build): build 6 binaries → upload artifacts
+release.yml job 2 (build, fail-fast=false): matrix build N binaries → upload artifacts
+                                            (failed entries don't cancel the others)
     ↓
-release.yml job 3 (release): gh release create
+release.yml job 3 (release): any artifacts uploaded?
+                                no  → error, no tag pushed, re-run starts clean
+                                yes → gh release create + push tag to origin
     ↓
 new binary in <app>-releases
     ↓
 existing install → self-updater downloads → "Restart to apply" appears
 ```
 
-A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this workflow — the trigger is `on: push branches`, not `on: push tags`. To cut a release, bump `version:` in `wick.yml` and push to `main`; that's the single source of truth.
+A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this workflow — the trigger is `on: push branches`, not `on: push tags`. To cut a release, bump `version:` in `wick.yml` and push to `main`; that's the single source of truth — unless `AUTO_VERSION=true`, in which case every push cuts the next tag automatically (see [Auto-bumping the version](#auto-bumping-the-version)).
 
 ## Cross-compilation notes
 
 `fyne.io/systray` keeps the tray cgo-light:
 
-- **Windows**: pure syscall, no cgo.
-- **Linux**: pure DBus, no cgo, no WebKit dependencies.
-- **macOS**: cgo (Cocoa). Builds must run on a `macos-latest` runner.
+- **Windows**: pure syscall, no cgo. Cross-compile from any host.
+- **Linux**: pure DBus, no cgo, no WebKit dependencies. Cross-compile from any host.
+- **macOS**: cgo (Cocoa). Must run on a macOS runner.
 
-Cross-compiling Windows / Linux variants from `ubuntu-latest` works. macOS amd64 → arm64 is fine on the same `macos-latest` runner.
+Cross-compiling Windows / Linux variants from `ubuntu-latest` works because they don't link cgo. macOS arm64 → amd64 (and vice versa) on the same `macos-latest` runner needs `CGO_ENABLED=1` set explicitly — Go disables cgo by default whenever `GOARCH` differs from the host arch, which would skip the `.m` files and fail with `undefined: setInternalLoop` errors. The shipped `release.yml` sets `CGO_ENABLED: 1` only for `darwin/amd64` (the cross combo on Apple Silicon runners) via a `cgo: 1` matrix flag; clang's native `-arch` support handles the rest. See [golang/go#44112](https://github.com/golang/go/issues/44112).
 
 ## See also
 
