@@ -1,11 +1,21 @@
 name: Release
 
+# Single-flow release pipeline:
+#   push to main/master
+#     → tag job: read version from wick.yml, push tag if new
+#     → build job: matrix build 6 OS×arch (only if tag created)
+#     → release job: gh release create + upload artifacts
+#
+# Everything runs in ONE workflow — no cross-workflow trigger,
+# so same-repo setup needs zero PATs for CI itself (only PAT_DOWNLOAD
+# baked into binary for the self-updater).
+
 on:
   push:
-    tags: ['v*.*.*']
+    branches: [main, master]
 
 permissions:
-  contents: read
+  contents: write
 
 # ── Setup ─────────────────────────────────────────────────────────────────
 #
@@ -25,6 +35,7 @@ permissions:
 # │       Expiration        : 90 days (rotate by publishing a new release)│
 # │                                                                        │
 # │     PAT_BUILD    — CI-only, publishes the GitHub release              │
+# │                    (and creates the tag in the releases repo)         │
 # │       Repository access : Only select repositories → <app>-releases   │
 # │       Permissions       : Contents = Read and write                   │
 # │       Expiration        : 90 days                                     │
@@ -49,7 +60,8 @@ permissions:
 # │       Expiration        : 90 days                                     │
 # │                                                                        │
 # │  2. Add secret in this repo (PAT_BUILD not needed — github.token      │
-# │     already has write access to the same repo):                       │
+# │     has write access to same repo, and single-flow design avoids the  │
+# │     cross-workflow trigger problem):                                  │
 # │     Settings → Secrets and variables → Actions                        │
 # │       Secret  PAT_DOWNLOAD  = <token above>                           │
 # │     Leave RELEASES_REPO variable unset.                               │
@@ -59,8 +71,46 @@ permissions:
 # ──────────────────────────────────────────────────────────────────────────
 
 jobs:
+  tag:
+    name: Tag if version changed
+    runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.push.outputs.created }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from wick.yml
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+          if [ -z "$VERSION" ]; then
+            echo "No version: field in wick.yml — skipping." >&2
+            exit 1
+          fi
+          TAG="v${VERSION#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag if new
+        id: push
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          if git ls-remote --tags origin "$TAG" | grep -q .; then
+            echo "Tag $TAG already exists — skipping build."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "Pushed $TAG."
+          fi
+
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -75,6 +125,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
 
       - uses: actions/setup-go@v5
         with:
@@ -119,11 +171,12 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [tag, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.tag.outputs.tag }}
           sparse-checkout: go.mod
           sparse-checkout-cone-mode: false
 
@@ -144,8 +197,8 @@ jobs:
           # Separate releases repo: set PAT_BUILD with Contents read+write.
           GH_TOKEN: ${{ secrets.PAT_BUILD || github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" \
+          gh release create "${{ needs.tag.outputs.tag }}" \
             --repo "${{ vars.RELEASES_REPO || github.repository }}" \
-            --title "${{ steps.meta.outputs.app_name }} ${{ github.ref_name }}" \
+            --title "${{ steps.meta.outputs.app_name }} ${{ needs.tag.outputs.tag }}" \
             --generate-notes \
             artifacts/*

@@ -32,11 +32,13 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
     - `systemtray.Run` terima 4 param tambahan: `commit, builtAt, repo, pat string`; `app.Run()` pass `BuildCommit/BuildTime/GitHubRepo/GitHubPAT`
     - Detail: [3. Self-updater](#3-self-updater)
 13. ✅ **Headless build tag** — `//go:build !headless` di semua 5 file `internal/systemtray/` + stub `systray_headless.go` (`//go:build headless`) print error + exit. `--headless` → `-tags headless` di builder (sudah ada di `cmd/cli/build.go`). Detail: [Build tag headless (optional)](#build-tag-headless-optional)
-14. ✅ **CI/CD template** — 2 workflow di `template/.github/workflows/`:
-    - `auto-tag.yml` — on push main, baca `version:` dari `wick.yml`, push git tag kalau belum ada
-    - `release.yml` — on push tag `v*.*.*`, matrix build 6 OS×arch, `wick build` + sha256, `gh release create` ke `<app>-releases`
+14. ✅ **CI/CD template** — 1 workflow `template/.github/workflows/release.yml`, 3 job inline:
+    - `tag` — on push main/master, baca `version:` dari `wick.yml`, push git tag kalau belum ada
+    - `build` — `needs: tag`, matrix 6 OS×arch, `wick build` + sha256
+    - `release` — `needs: build`, `gh release create` ke `<app>-releases`
+    - Single-flow design ngehindarin anti-loop guard GitHub (tag dari GITHUB_TOKEN gak fire workflow lain) — gak butuh PAT_BUILD di same-repo
     - Support same-repo atau separate releases repo via `vars.RELEASES_REPO`
-    - Setup PAT (PAT_DOWNLOAD baked, PAT_BUILD CI-only) di-dokumen lengkap di header release.yml
+    - Setup PAT (PAT_DOWNLOAD baked, PAT_BUILD CI-only di skenario separate) di-dokumen lengkap di header release.yml
     - Detail: [CI/CD (GitHub Actions)](#cicd-github-actions)
 15. ✅ **SQLite WAL + busy_timeout** — `internal/pkg/postgres/gorm.go` set `PRAGMA journal_mode=WAL` + `PRAGMA busy_timeout=5000` per SQLite open. Cross-process concurrency aman buat tray + MCP stdio. `SetMaxOpenConns(1)` tetap (intra-process serialise writers). Detail: [SQLite concurrency](#sqlite-concurrency)
 16. ✅ **DB path auto-detect** — `userconfig.ResolveDBPath(appName, customPath)` set `DATABASE_URL` env sebelum `config.Load()`. Resolution order: env > `database_path` config > `<binary_dir>/wick.db` (kalau ada `wick.yml`) > `<UserConfigDir>/<appName>/wick.db`. Dipanggil di `systemtray.Run` (tray) + `serverCmd.RunE` + `workerCmd.RunE` (headless). Detail: [Lokasi DB](#lokasi-db)
@@ -331,18 +333,21 @@ wick build -o myapp-linux-amd64
 
 ## CI/CD (GitHub Actions)
 
-2 workflow di `template/.github/workflows/` (di-copy ke downstream lewat `wick init`):
+1 workflow di `template/.github/workflows/release.yml` (di-copy ke downstream lewat `wick init`), trigger `on: push branches: [main, master]`. Tiga job sequential:
 
-1. **`auto-tag.yml`** — on push to main/master:
-   - baca `version:` dari `wick.yml`
-   - cek `git ls-remote --tags origin v<X>` — kalau sudah ada → skip
-   - kalau belum → `git tag` + `git push origin <tag>` → trigger `release.yml`
-2. **`release.yml`** — on push tag `v*.*.*`:
-   - matrix build 6 OS×arch (windows/darwin/linux × amd64/arm64)
+1. **`tag`** — baca `version:` dari `wick.yml`:
+   - cek `git ls-remote --tags origin v<X>` — kalau sudah ada → output `created=false` (sisa job skip)
+   - kalau belum → `git tag` + `git push origin <tag>` → output `created=true`
+2. **`build`** (`needs: tag`, `if: created == 'true'`) — matrix 6 OS×arch (windows/darwin/linux × amd64/arm64):
+   - checkout `ref: <tag-baru>`
    - install wick CLI: `go install github.com/yogasw/wick@latest`
    - build: `wick build -o <app>-<os>-<arch>(.exe)` (`wick.yml` baca version langsung)
-   - sha256 sibling
-   - `gh release create` ke `<app>-releases`
+   - sha256 sibling + upload artifact
+3. **`release`** (`needs: [tag, build]`):
+   - download artifact
+   - `gh release create <tag>` ke `<app>-releases`
+
+**Kenapa single-flow:** kalau split jadi 2 workflow (tag → release), tag yg di-push pake `GITHUB_TOKEN` gak fire `release.yml` (anti-loop guard GitHub). Single-flow pake job dependency (`needs:`) bukan event trigger, jadi imun. Bonus: same-repo gak butuh `PAT_BUILD` sama sekali.
 
 ### Build matrix
 
@@ -371,7 +376,7 @@ wick build -o myapp-linux-amd64
 |---|---|
 | `vars.RELEASES_REPO` | (kosong → fallback `github.repository`) |
 | `secrets.PAT_DOWNLOAD` | fine-grained PAT, scope this repo, Contents read-only — baked ke binary |
-| `secrets.PAT_BUILD` | (kosong → fallback `github.token` yg auto-write same repo) |
+| `secrets.PAT_BUILD` | tidak dibutuhkan — `github.token` udah cukup buat tag push + release publish, dan single-flow design hindarin anti-loop trigger |
 
 Setup lengkap step-by-step ada di header komentar `template/.github/workflows/release.yml` — termasuk URL bikin PAT + path GitHub Settings.
 
@@ -380,16 +385,18 @@ Setup lengkap step-by-step ada di header komentar `template/.github/workflows/re
 ```
 bump version: di wick.yml → push main
     ↓
-auto-tag.yml: tag exist? skip : git tag + push
+release.yml job 1 (tag): tag exist? created=false (skip) : git tag + push, created=true
     ↓
-release.yml: build matrix 6 → gh release create
+release.yml job 2 (build): matrix 6 → upload artifact
+    ↓
+release.yml job 3 (release): gh release create
     ↓
 binary baru di <app>-releases
     ↓
 user yg pake versi lama → auto-updater download → install pas restart
 ```
 
-Bisa juga manual: `git tag v1.2.3 && git push origin v1.2.3` langsung trigger `release.yml` tanpa lewat `auto-tag.yml`.
+Manual tag push (`git tag v1.2.3 && git push origin v1.2.3`) **tidak** trigger workflow ini — trigger-nya `on: push branches`, bukan `on: push tags`. Kalau butuh manual tag, bump `version:` di wick.yml + push main aja (single source of truth).
 
 ### Rotasi PAT
 
@@ -464,8 +471,7 @@ internal/
 
 template/
 └── .github/workflows/
-    ├── auto-tag.yml             # push main → tag dari wick.yml version
-    └── release.yml              # push tag → matrix build + gh release create
+    └── release.yml              # push main → 3 job inline: tag → build → release
                                   # (header komentar = setup PAT step-by-step)
 ```
 

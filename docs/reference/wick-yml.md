@@ -198,12 +198,6 @@ tasks:
       - "{{.TAILWIND_BIN}} -i web/input.css -o static/output.css"
       - go run . server
 
-  build:
-    cmds:
-      - templ generate ./...
-      - "{{.TAILWIND_BIN}} -i web/input.css -o static/output.css --minify"
-      - go build -o bin/app .
-
   test:
     cmds:
       - go test ./... -race
