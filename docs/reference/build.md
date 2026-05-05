@@ -63,15 +63,19 @@ The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadB
 
 ## CI/CD with GitHub Actions
 
-`wick init` copies two workflows into `template/.github/workflows/`. Together they implement push-to-tag-to-release:
-
-### `auto-tag.yml`
-
-On push to `main` / `master`, reads `version:` from `wick.yml`. If `v<version>` is not yet a tag in the source repo, push it.
+`wick init` copies a single workflow into `template/.github/workflows/release.yml`. It implements push-to-tag-to-release as three sequential jobs in one run:
 
 ### `release.yml`
 
-On push of a `v*.*.*` tag, builds 6 binaries and creates a GitHub release in your releases repo:
+Trigger: `on: push` to `main` / `master`. Three jobs:
+
+1. **`tag`** — read `version:` from `wick.yml`. If `v<version>` is not yet a tag, push it; output `created=true`. If it already exists, output `created=false` and skip downstream jobs.
+2. **`build`** (`needs: tag`, runs only if `created=true`) — checkout `ref: <new-tag>`, then build 6 binaries via the matrix below; upload artifacts.
+3. **`release`** (`needs: [tag, build]`) — download artifacts and `gh release create <tag>` against your releases repo.
+
+**Why one workflow instead of two:** GitHub blocks tag pushes made with the default `GITHUB_TOKEN` from triggering other workflows (anti-loop guard). A split design (`auto-tag.yml` → `release.yml`) needs a user PAT to push the tag, otherwise `release.yml` never fires. The single-flow design uses job dependencies (`needs:`) instead of an event-trigger handoff, so it works with `github.token` alone — no `PAT_BUILD` required for same-repo setups.
+
+Build matrix:
 
 | OS | Arch | Output |
 |---|---|---|
@@ -109,7 +113,7 @@ If the embedded PAT leaks, the attacker can download binaries — they cannot re
 |---|---|
 | `vars.RELEASES_REPO` | _(empty — falls back to `github.repository`)_ |
 | `secrets.PAT_DOWNLOAD` | Fine-grained PAT scoped to this repo, Contents read — baked into every binary. |
-| `secrets.PAT_BUILD` | _(empty — workflow falls back to the auto-provided `github.token`, which has write access to the same repo.)_ |
+| `secrets.PAT_BUILD` | _(not needed — `github.token` has write access to the same repo, and the single-flow design avoids the anti-loop trigger problem.)_ |
 
 The exact step-by-step walkthrough — including links to GitHub's PAT and Actions Secrets pages — lives in the header comments of `template/.github/workflows/release.yml`. Open the workflow file in your generated project; the comments are kept current with the workflow logic.
 
@@ -120,7 +124,7 @@ GitHub fine-grained PATs cannot be rotated via API. The flow is manual but self-
 1. Generate a new PAT with the same scope.
 2. Update `secrets.PAT_DOWNLOAD` in the source repo.
 3. Bump `version:` in `wick.yml` and push to `main`.
-4. `auto-tag.yml` tags, `release.yml` builds new binaries with the new PAT embedded.
+4. `release.yml` tags and builds new binaries with the new PAT embedded.
 5. Existing installs auto-update — and the new binaries can keep checking for releases.
 
 When a PAT expires, the tray menu surfaces it as `Update check failed — PAT expired (see logs)`. As long as you ship a new release before the expiry hits every install, no one notices.
@@ -130,16 +134,18 @@ When a PAT expires, the tray menu surfaces it as `Update check failed — PAT ex
 ```
 bump version: in wick.yml → push main
     ↓
-auto-tag.yml: tag exists? skip : git tag + push
+release.yml job 1 (tag): tag exists? created=false (skip) : git tag + push, created=true
     ↓
-release.yml: build 6 binaries → gh release create
+release.yml job 2 (build): build 6 binaries → upload artifacts
+    ↓
+release.yml job 3 (release): gh release create
     ↓
 new binary in <app>-releases
     ↓
 existing install → self-updater downloads → "Restart to apply" appears
 ```
 
-A manual `git tag v1.2.3 && git push origin v1.2.3` also triggers `release.yml` — useful for republishing or out-of-band releases.
+A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this workflow — the trigger is `on: push branches`, not `on: push tags`. To cut a release, bump `version:` in `wick.yml` and push to `main`; that's the single source of truth.
 
 ## Cross-compilation notes
 
