@@ -36,6 +36,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
@@ -295,6 +296,7 @@ func Run() {
 		Use:   "server",
 		Short: "Run web server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			userconfig.ResolveDBPath(BuildAppName, "")
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return api.NewServer().Run(ctx, port)
@@ -306,6 +308,7 @@ func Run() {
 		Use:   "worker",
 		Short: "Run background job worker",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			userconfig.ResolveDBPath(BuildAppName, "")
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return worker.NewServer().Run(ctx)

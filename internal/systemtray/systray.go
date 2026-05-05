@@ -88,7 +88,7 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 		log.Printf("save config (initial): %v", err)
 	}
 
-	resolveDBPath(appName, userCfg.DatabasePath)
+	userconfig.ResolveDBPath(appName, userCfg.DatabasePath)
 	updater.CleanupOldBinary()
 	upd, err := updater.New(&userCfg, saveUserCfg, appName, appVersion, repo, pat)
 	if err != nil {

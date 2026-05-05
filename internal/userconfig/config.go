@@ -111,6 +111,42 @@ func Save(name string, cfg Config) error {
 	return os.Rename(tmp, path)
 }
 
+// ResolveDBPath determines the SQLite DB path and sets DATABASE_URL so
+// config.Load() picks it up wherever it is called next.
+//
+// Resolution order (first non-empty wins, never overwrites a higher priority):
+//  1. DATABASE_URL env already set (explicit env / CI override) → untouched
+//  2. cfg.DatabasePath set (user edited database_path in config.json)
+//  3. <binary_dir>/wick.db when wick.yml exists next to the binary (project mode)
+//  4. <UserConfigDir>/<appName>/wick.db (standalone / downloaded binary)
+func ResolveDBPath(appName, customPath string) {
+	if os.Getenv("DATABASE_URL") != "" {
+		return
+	}
+	if customPath != "" {
+		os.Setenv("DATABASE_URL", customPath)
+		return
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		binDir := filepath.Dir(exe)
+		if _, err := os.Stat(filepath.Join(binDir, "wick.yml")); err == nil {
+			dbPath := filepath.Join(binDir, "wick.db")
+			os.Setenv("DATABASE_URL", dbPath)
+			return
+		}
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return
+	}
+	dbPath := filepath.Join(base, appName, "wick.db")
+	os.Setenv("DATABASE_URL", dbPath)
+}
+
 func binaryName() string {
 	exe, err := os.Executable()
 	if err != nil {
