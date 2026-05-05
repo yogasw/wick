@@ -17,7 +17,12 @@
 package app
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"runtime/debug"
+	"syscall"
 
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/rs/zerolog/log"
@@ -25,9 +30,11 @@ import (
 
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
+	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/worker"
+	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
@@ -35,13 +42,17 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// BuildVersion, BuildCommit, and BuildTime are injected via -ldflags at build time.
-// wick mcp serve reads VERSION from the project root and injects it automatically.
-// When used as a library dependency, init() fills these from the embedded module build info.
+// BuildVersion, BuildCommit, BuildTime, and BuildAppName are injected
+// via -ldflags at build time. The wick.yml `build` task ships the
+// `-X .../app.BuildAppName={{.NAME}}` flag so the tray title, MCP
+// server name, and user-config folder all use the project's declared
+// name. init() fills version/commit/time from embedded module info
+// when wick is used as a library dependency.
 var (
 	BuildVersion = "dev"
 	BuildCommit  = "unknown"
 	BuildTime    = "unknown"
+	BuildAppName = "app"
 )
 
 func init() {
@@ -171,6 +182,76 @@ func RegisterConnector[C any](meta connector.Meta, creds C, ops []connector.Oper
 	})
 }
 
+// mcpInstallCmd writes this binary's MCP entry into the chosen
+// client's config file (Claude Desktop / Cursor / Gemini / Codex /
+// Claude Code). Uses os.Executable() so the entry points at the actual
+// built binary, not wick itself.
+func mcpInstallCmd() *cobra.Command {
+	var clientID, name string
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install this app's MCP entry into a client config",
+		Long: `Write {"command": "<this binary>", "args": ["mcp", "serve"]} into
+the target MCP client's config file, merging with existing servers.
+
+Clients (--client):
+  claude       Claude Desktop
+  cursor       Cursor IDE
+  gemini       Gemini CLI
+  codex        OpenAI Codex CLI
+  claude-code  Claude Code (writes .mcp.json in CWD)
+  all          install into every detected client`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			if name == "" {
+				name = filepath.Base(cwd)
+			}
+			entry, err := mcpconfig.SelfEntry()
+			if err != nil {
+				return err
+			}
+			targets, err := mcpconfig.ResolveTargets(cwd, clientID)
+			if err != nil {
+				return err
+			}
+			mcpconfig.InstallMany(targets, name, entry, os.Stdout)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&clientID, "client", "all", "claude | cursor | gemini | codex | claude-code | all")
+	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
+	return cmd
+}
+
+func mcpUninstallCmd() *cobra.Command {
+	var clientID, name string
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove this app's MCP entry from a client config",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			if name == "" {
+				name = filepath.Base(cwd)
+			}
+			targets, err := mcpconfig.ResolveTargets(cwd, clientID)
+			if err != nil {
+				return err
+			}
+			mcpconfig.UninstallMany(targets, name, os.Stdout)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&clientID, "client", "all", "claude | cursor | gemini | codex | claude-code | all")
+	cmd.Flags().StringVar(&name, "name", "", "Server name in config (default: directory name)")
+	return cmd
+}
+
 // Run parses the command-line flags and starts either the HTTP server
 // or the background worker. Subcommands:
 //
@@ -185,17 +266,24 @@ func Run() {
 	root := &cobra.Command{
 		Use:   "app",
 		Short: "wick-powered service",
-		Run: func(cmd *cobra.Command, args []string) {
-			api.NewServer().Run(port)
+		Long:  "Run with no args to launch the system tray. Use subcommands for headless server / worker / MCP / install.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			systemtray.Run(cwd, BuildAppName)
+			return nil
 		},
 	}
-	root.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
 
 	serverCmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run web server",
-		Run: func(cmd *cobra.Command, args []string) {
-			api.NewServer().Run(port)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return api.NewServer().Run(ctx, port)
 		},
 	}
 	serverCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
@@ -203,8 +291,10 @@ func Run() {
 	workerCmd := &cobra.Command{
 		Use:   "worker",
 		Short: "Run background job worker",
-		Run: func(cmd *cobra.Command, args []string) {
-			worker.NewServer().Run()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return worker.NewServer().Run(ctx)
 		},
 	}
 
@@ -219,9 +309,22 @@ func Run() {
 			api.RunMCPStdio(BuildVersion, BuildCommit, BuildTime)
 		},
 	}
-	mcpCmd.AddCommand(mcpServeCmd)
+	mcpCmd.AddCommand(mcpServeCmd, mcpInstallCmd(), mcpUninstallCmd())
 
-	root.AddCommand(serverCmd, workerCmd, mcpCmd)
+	trayCmd := &cobra.Command{
+		Use:   "tray",
+		Short: "Run system tray UI: start/stop server, install MCP",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			systemtray.Run(cwd, BuildAppName)
+			return nil
+		},
+	}
+
+	root.AddCommand(serverCmd, workerCmd, mcpCmd, trayCmd)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())

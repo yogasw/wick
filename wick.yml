@@ -1,3 +1,5 @@
+name: wick
+
 vars:
   TAILWIND_OS:
     $arch:

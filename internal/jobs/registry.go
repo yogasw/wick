@@ -30,7 +30,18 @@ var extra []job.Module
 
 // Register appends a fully-resolved Module to the registry. Called
 // from app.RegisterJob; do not call directly from app code.
+//
+// Idempotent on Meta.Key — calling twice with the same key is a no-op
+// on the second call. This is needed because the system tray runs both
+// the HTTP server and the background worker in the same process, and
+// each of those independently registers built-in jobs (e.g.,
+// connector-runs-purge) that need a DB handle.
 func Register(m job.Module) {
+	for _, existing := range extra {
+		if existing.Meta.Key == m.Meta.Key {
+			return
+		}
+	}
 	extra = append(extra, m)
 }
 

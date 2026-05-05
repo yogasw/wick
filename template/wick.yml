@@ -1,3 +1,9 @@
+# Project display name. Used by the system tray as the title, the MCP
+# server name in client configs, and the user-config folder name under
+# %APPDATA% / Library / .config. Falls back to the directory basename
+# if missing.
+name: app
+
 vars:
   TAILWIND_OS:
     $arch:
@@ -50,7 +56,7 @@ tasks:
     cmds:
       - templ generate ./...
       - "{{.TAILWIND_BIN}} -i web/input.css -o static/output.css --minify"
-      - go build -o bin/app .
+      - go build -ldflags "-X github.com/yogasw/wick/app.BuildAppName={{.NAME}}" -o bin/app .
 
   test:
     cmds:

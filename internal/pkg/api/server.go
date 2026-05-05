@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -355,7 +353,12 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) Run(port int) {
+// Run starts the HTTP server. Cancel ctx to trigger a graceful
+// shutdown; returns nil on clean stop or the error from
+// ListenAndServe / Shutdown otherwise. CLI callers wrap with
+// signal.NotifyContext; in-process callers (system tray) cancel from
+// the UI.
+func (s *Server) Run(ctx context.Context, port int) error {
 	addr := fmt.Sprintf(":%d", port)
 
 	h := chainMiddleware(
@@ -374,20 +377,14 @@ func (s *Server) Run(port int) {
 		WriteTimeout: 60 * time.Second,
 	}
 
-	done := make(chan bool)
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-
+	shutdownErr := make(chan error, 1)
 	go func() {
-		<-quit
+		<-ctx.Done()
 		log.Info().Msg("server is shutting down...")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		httpSrv.SetKeepAlivesEnabled(false)
-		if err := httpSrv.Shutdown(ctx); err != nil {
-			log.Fatal().Err(err).Msg("could not gracefully shutdown the server")
-		}
-		close(done)
+		shutdownErr <- httpSrv.Shutdown(sctx)
 	}()
 
 	fmt.Printf("\n  ✓ %s is running\n", s.configsSvc.AppName())
@@ -400,11 +397,15 @@ func (s *Server) Run(port int) {
 		fmt.Println()
 	}
 	log.Info().Msgf("server serving on port %d", port)
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal().Err(err).Msgf("could not listen on %s", addr)
+	err := httpSrv.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
-	<-done
+	if e := <-shutdownErr; e != nil {
+		return fmt.Errorf("shutdown: %w", e)
+	}
 	log.Info().Msg("server stopped")
+	return nil
 }
 
 // RunMCPStdio initialises only the connector layer (DB + connectors

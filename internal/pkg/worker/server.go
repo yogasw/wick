@@ -2,9 +2,6 @@ package worker
 
 import (
 	"context"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/yogasw/wick/internal/configs"
@@ -64,21 +61,17 @@ type Server struct {
 	jobsSvc *manager.Service
 }
 
-// Run bootstraps jobs and starts the scheduler loop. It blocks until SIGINT/SIGTERM.
-func (s *Server) Run() {
-	ctx := context.Background()
-
+// Run bootstraps jobs and starts the scheduler loop. Cancel ctx to
+// stop. Returns nil on clean shutdown or the bootstrap error.
+func (s *Server) Run(ctx context.Context) error {
 	allJobs := jobs.All()
 	if err := job.ValidateJobs(allJobs); err != nil {
-		log.Fatal().Msgf("%s", err.Error())
+		return err
 	}
 	if err := s.jobsSvc.Bootstrap(ctx, allJobs); err != nil {
-		log.Fatal().Err(err).Msg("worker: bootstrap jobs")
+		return err
 	}
 	log.Info().Msgf("worker: bootstrapped %d job(s)", len(allJobs))
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -91,9 +84,9 @@ func (s *Server) Run() {
 		select {
 		case <-ticker.C:
 			s.tick(ctx)
-		case <-quit:
+		case <-ctx.Done():
 			log.Info().Msg("worker: shutting down")
-			return
+			return nil
 		}
 	}
 }

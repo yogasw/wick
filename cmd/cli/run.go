@@ -14,6 +14,7 @@ import (
 )
 
 type wickConfig struct {
+	Name  string              `yaml:"name"`
 	Vars  map[string]any      `yaml:"vars"`
 	Tasks map[string]wickTask `yaml:"tasks"`
 }
@@ -87,6 +88,9 @@ func runTask(name string) error {
 		return fmt.Errorf("task %q not found in wick.yml", name)
 	}
 	vars := resolveVars(cfg.Vars)
+	if cfg.Name != "" {
+		vars["NAME"] = cfg.Name
+	}
 	var bgProcs []*os.Process
 	for _, raw := range task.Cmds {
 		proc, err := dispatchCmdBg(raw, vars)
