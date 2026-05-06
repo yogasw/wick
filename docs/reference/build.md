@@ -162,7 +162,7 @@ The bump format follows whatever is already in `wick.yml:version`:
 #### Why this is safe
 
 - **No infinite loop.** The commit-back step pushes via `github.token`. GitHub explicitly does not re-trigger workflows on commits pushed by `GITHUB_TOKEN` ([anti-loop guard](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow)). The `[skip ci]` marker is belt-and-suspenders.
-- **No race.** A workflow-level `concurrency: { group: release-${{ github.ref }}, cancel-in-progress: false }` serializes pushes on the same branch, so two pushes can't both try to bump `0.6.4 → 0.6.5`.
+- **No race.** A workflow-level <code v-pre>concurrency: { group: release-${{ github.ref }}, cancel-in-progress: false }</code> serializes pushes on the same branch, so two pushes can't both try to bump `0.6.4 → 0.6.5`.
 - **Atomic enough.** If the release succeeds but the commit-back fails (e.g. branch protection blocks the bot push), the next run will read the still-old `wick.yml`, compute the same tag, and skip with "tag exists." The release isn't lost; the wick.yml diff is what's missing — recoverable manually.
 
 #### Manual jump (cut a minor/major release)
