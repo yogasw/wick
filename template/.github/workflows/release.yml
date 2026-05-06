@@ -94,7 +94,7 @@ concurrency:
 # │  Valid values: windows/amd64, windows/arm64, darwin/amd64,            │
 # │                darwin/arm64, linux/amd64, linux/arm64                 │
 # │                                                                        │
-# │  Skipped runners exit early — no checkout, no build cost.             │
+# │  Only matched runners are spawned — no phantom jobs, no wasted cost.  │
 # │  Release succeeds as long as at least one build produces an artifact. │
 # │                                                                        │
 # └────────────────────────────────────────────────────────────────────────┘
@@ -151,6 +151,7 @@ jobs:
       releases_repo: ${{ steps.repo.outputs.releases_repo }}
       is_separate: ${{ steps.repo.outputs.is_separate }}
       auto_version: ${{ vars.AUTO_VERSION }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -249,6 +250,28 @@ jobs:
             echo "Will release $TAG at $(git rev-parse HEAD) if build succeeds."
           fi
 
+      - name: Build job matrix
+        id: matrix
+        shell: bash
+        env:
+          TARGETS: ${{ vars.BUILD_TARGETS }}
+        run: |
+          ALL='[
+            {"os":"windows","arch":"amd64","runner":"windows-latest"},
+            {"os":"windows","arch":"arm64","runner":"windows-latest"},
+            {"os":"darwin","arch":"amd64","runner":"macos-latest","cgo":"1"},
+            {"os":"darwin","arch":"arm64","runner":"macos-latest"},
+            {"os":"linux","arch":"amd64","runner":"ubuntu-latest"},
+            {"os":"linux","arch":"arm64","runner":"ubuntu-latest"}
+          ]'
+          if [ -z "$TARGETS" ]; then
+            MATRIX=$(echo "$ALL" | jq -c .)
+          else
+            PATTERN=$(echo "$TARGETS" | tr -d ' ' | tr ',' '|')
+            MATRIX=$(echo "$ALL" | jq -c --arg p "$PATTERN" 'map(select((.os+"/"+.arch) | test($p)))')
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     needs: prepare
@@ -257,45 +280,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: windows, arch: amd64, runner: windows-latest }
-          - { os: windows, arch: arm64, runner: windows-latest }
-          - { os: darwin,  arch: amd64, runner: macos-latest, cgo: 1 }
-          - { os: darwin,  arch: arm64, runner: macos-latest }
-          - { os: linux,   arch: amd64, runner: ubuntu-latest }
-          - { os: linux,   arch: arm64, runner: ubuntu-latest }
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
-      - name: Gate on BUILD_TARGETS
-        id: gate
-        shell: bash
-        run: |
-          TARGETS="${{ vars.BUILD_TARGETS }}"
-          PAIR="${{ matrix.os }}/${{ matrix.arch }}"
-          if [ -z "$TARGETS" ] || [[ ",$TARGETS," == *",$PAIR,"* ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping $PAIR (not in BUILD_TARGETS=$TARGETS)"
-          fi
-
       - uses: actions/checkout@v6
-        if: steps.gate.outputs.enabled == 'true'
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: actions/setup-go@v6
-        if: steps.gate.outputs.enabled == 'true'
         with:
           go-version: 'stable'
           cache: true
 
       - name: Install wick CLI
-        if: steps.gate.outputs.enabled == 'true'
         run: go install github.com/yogasw/wick@latest
 
       - name: Resolve app name and asset path
-        if: steps.gate.outputs.enabled == 'true'
         id: meta
         shell: bash
         # `wick build` produces the platform-native distributable in bin/:
@@ -304,7 +304,8 @@ jobs:
         #   linux   → <app>-linux-<arch>.deb  (alongside the raw binary)
         # Only the bundle is uploaded as the release asset.
         run: |
-          NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+          [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
           case "${{ matrix.os }}" in
             windows) EXT="exe" ;;
             darwin)  EXT="dmg" ;;
@@ -316,18 +317,15 @@ jobs:
           echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
 
       - name: Cache wick setup artifacts
-        if: steps.gate.outputs.enabled == 'true'
         uses: actions/cache@v5
         with:
           path: bin
           key: wick-setup-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('wick.yml') }}
 
       - name: Setup (download tailwind, install templ, go mod tidy)
-        if: steps.gate.outputs.enabled == 'true'
         run: wick setup
 
       - name: Build
-        if: steps.gate.outputs.enabled == 'true'
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
@@ -348,7 +346,6 @@ jobs:
         run: wick build
 
       - name: Checksum
-        if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
           cd bin
@@ -356,7 +353,6 @@ jobs:
             > "${{ steps.meta.outputs.asset }}.sha256"
 
       - uses: actions/upload-artifact@v7
-        if: steps.gate.outputs.enabled == 'true'
         with:
           name: ${{ steps.meta.outputs.app_name }}-${{ matrix.os }}-${{ matrix.arch }}
           path: |
@@ -399,7 +395,8 @@ jobs:
       - name: Resolve app name
         id: meta
         run: |
-          NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+          [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
 
       # Same-repo: gh creates the tag at our SHA atomically.
