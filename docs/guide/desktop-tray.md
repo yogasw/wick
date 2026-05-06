@@ -80,7 +80,7 @@ Behavior with `auto_update` enabled (default):
 
 1. On launch, if a binary was staged in the previous session, apply it and re-exec — before the tray menu appears.
 2. Otherwise spawn a background check against `<owner>/<repo>/releases/latest`.
-3. If a newer version is found, download the matching `<app>-<os>-<arch>` asset to `<UserCacheDir>/<app>/updates/`, verify SHA256 against the `.sha256` sibling, and stage it.
+3. If a newer version is found, download the matching `<app>-<os>-<arch>` asset to `<UserConfigDir>/<app>/updates/`, verify SHA256 against the `.sha256` sibling, and stage it.
 4. The menu shows `Restart to apply vX.Y.Z` — clicking restarts the binary; quitting and relaunching applies it automatically.
 
 Failures are silent — the menu title surfaces the state (`Up to date (vX.Y.Z)`, `Update check failed (see logs)`, `Update check failed — PAT expired (see logs)`). Detail goes to the log file, not a popup.
@@ -122,7 +122,7 @@ Schema:
 ```json
 {
   "auto_start_app": false,
-  "auto_start_server": true,
+  "auto_start_server": false,
   "auto_start_worker": false,
   "auto_update": true,
   "port": 0,
@@ -172,9 +172,11 @@ zerolog writes to a per-day file in addition to stderr. Filename rolls over at t
 
 | OS | Path |
 |---|---|
-| Windows | `%LOCALAPPDATA%\<app>\wick-YYYY-MM-DD.log` |
-| macOS | `~/Library/Caches/<app>/wick-YYYY-MM-DD.log` |
-| Linux | `~/.cache/<app>/wick-YYYY-MM-DD.log` |
+| Windows | `%APPDATA%\<app>\logs\wick-YYYY-MM-DD.log` |
+| macOS | `~/Library/Application Support/<app>/logs/wick-YYYY-MM-DD.log` |
+| Linux | `~/.config/<app>/logs/wick-YYYY-MM-DD.log` |
+
+Co-located with `config.json` and `wick.db` under `UserConfigDir` so everything an app owns lives in one tree. `os.Stdout` and `os.Stderr` are also piped through, so `fmt.Print` calls and third-party library writes land in the same file.
 
 `About ▶ Open logs` opens today's file. Headless subcommands (`server`, `worker`, `mcp serve`) write to stderr only — no file redirect.
 
@@ -204,7 +206,7 @@ This adds `-tags headless` to the underlying `go build`. The tray subcommand bec
 
 ## Single instance
 
-The tray acquires a TCP lock on `127.0.0.1:47829`. A second invocation finds the port held and exits silently — preventing two trays / two HTTP listeners on the same machine.
+The tray acquires a per-app PID-file lock at `<UserConfigDir>/<app>/instance.pid` and verifies the recorded PID is still alive and points at the same executable basename. A second invocation of the same binary finds the lock held and exits silently. Two different wick-built binaries (`acme-tools` vs `widget-tools`) live in their own files and don't lock each other out. A crashed instance leaves a stale PID; the next launch detects the dead PID and reclaims the slot.
 
 ## See also
 

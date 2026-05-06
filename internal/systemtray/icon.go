@@ -1,5 +1,3 @@
-//go:build !headless
-
 package systemtray
 
 import (
@@ -8,13 +6,13 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"runtime"
 
 	ico "github.com/sergeymakinen/go-ico"
 )
 
-// wickIcon renders the brand W with a state-specific corner badge,
-// Defender-style:
+// WickIcon renders the brand W with a state-specific corner badge,
+// Defender-style. Exported so `wick build` can embed the same icon
+// into the downstream Windows .exe via a generated .syso resource.
 //
 //	stopped (both off) : gray bg + dim W (no badge)
 //	server only        : blue bg + W + server-bars badge
@@ -22,8 +20,11 @@ import (
 //	both               : green bg + W + green-check badge
 //
 // 64×64 canvas. Background color is the primary signal at 16-px tray
-// scale; the badge becomes legible at larger DPI.
-func wickIcon(serverRunning, workerRunning bool) []byte {
+// scale; the badge becomes legible at larger DPI. asICO chooses the
+// container format — true for Windows .exe / tray icons, false for PNG
+// (non-Windows tray rendering). Caller decides because the build path
+// cross-compiles where runtime.GOOS doesn't match the target.
+func WickIcon(serverRunning, workerRunning, asICO bool) []byte {
 	const size = 64
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
 
@@ -59,7 +60,26 @@ func wickIcon(serverRunning, workerRunning bool) []byte {
 	}
 
 	var buf bytes.Buffer
-	if runtime.GOOS == "windows" {
+	if asICO {
+		_ = ico.Encode(&buf, img)
+	} else {
+		_ = png.Encode(&buf, img)
+	}
+	return buf.Bytes()
+}
+
+// BrandIcon renders the plain brand mark — green bg + white W, no
+// state badge. Used by `wick build` for the Windows .exe icon so
+// Explorer thumbnail / taskbar entry stay clean (state belongs in the
+// tray, not the file icon).
+func BrandIcon(asICO bool) []byte {
+	const size = 64
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	fillBG(img, color.RGBA{0x1d, 0x7d, 0x4f, 0xff})
+	drawW(img, color.RGBA{0xff, 0xff, 0xff, 0xff})
+
+	var buf bytes.Buffer
+	if asICO {
 		_ = ico.Encode(&buf, img)
 	} else {
 		_ = png.Encode(&buf, img)
