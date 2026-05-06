@@ -4,22 +4,44 @@ package systemtray
 
 import (
 	"fmt"
-	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
 
-// acquireSingleInstance binds 127.0.0.1:<port> as a process-lifetime
-// lock. If another tray instance is already running on this machine,
-// the bind fails and we return an error — caller should bail out
-// instead of starting a second tray icon.
+// acquireSingleInstance is a per-app PID-file lock living next to the
+// app's config / DB / logs under UserConfigDir. Two binaries with
+// different appNames don't collide; two launches of the same binary do.
 //
-// The listener is intentionally never accepted from; it just holds
-// the port for as long as this process is alive. The OS releases it
-// on exit.
-func acquireSingleInstance() (net.Listener, error) {
-	const lockPort = 47829 // arbitrary, picked to be unlikely to collide
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", lockPort))
-	if err != nil {
-		return nil, fmt.Errorf("another instance is already running")
+// On startup we read instance.pid (if present) and ask the OS whether
+// that PID is still a live process whose executable matches ours. A
+// hit means "another copy is already running" and the caller bails. A
+// miss (no file, dead PID, or unrelated process recycled the same PID)
+// means we own the slot — overwrite with our own PID and return a
+// release closer that removes the file on graceful shutdown.
+func acquireSingleInstance() (release func() error, err error) {
+	dir, derr := os.UserConfigDir()
+	if derr != nil {
+		return nil, fmt.Errorf("user config dir: %w", derr)
 	}
-	return ln, nil
+	dir = filepath.Join(dir, appName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	pidPath := filepath.Join(dir, "instance.pid")
+
+	if data, err := os.ReadFile(pidPath); err == nil {
+		if pid, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && pid > 0 && pid != os.Getpid() {
+			if isOurProcessAlive(pid) {
+				return nil, fmt.Errorf("another instance is already running (pid %d)", pid)
+			}
+		}
+	}
+
+	pid := strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(pidPath, []byte(pid), 0o644); err != nil {
+		return nil, fmt.Errorf("write %s: %w", pidPath, err)
+	}
+	return func() error { return os.Remove(pidPath) }, nil
 }

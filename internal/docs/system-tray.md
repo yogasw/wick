@@ -11,10 +11,10 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
 1. ✅ **Bootstrap** — `internal/systemtray/{systray,icon,lock,logs,helpers}.go`, subcommand `tray` (+ default no-arg) di `app.Run()`. Detail: [Project structure](#project-structure)
 2. ✅ **MCP install/uninstall** — `internal/mcpconfig` shared CLI ↔ tray; auto-detect, per-client status label, bulk action, show example config. Detail: [2. MCP install / uninstall](#2-mcp-install--uninstall)
 3. ✅ **Server / worker toggle** — `api.NewServer().Run(ctx, port)` & `worker.NewServer().Run(ctx)` jalan goroutine in-process; cancel via context. Detail: [Run(ctx) sebagai interface boundary](#runctx-sebagai-interface-boundary)
-4. ✅ **Logs ke UserCacheDir** — `setupLogFile()` redirect zerolog tee ke `<UserCacheDir>/<name>/wick-YYYY-MM-DD.log` (per-day file + auto-retention, lihat #19). Detail: [Lokasi log](#lokasi-log)
+4. ✅ **Logs ke UserConfigDir** — `setupLogFile()` redirect zerolog + stdlib log + pipe `os.Stdout`/`os.Stderr` tee ke `<UserConfigDir>/<name>/logs/wick-YYYY-MM-DD.log` (per-day file + auto-retention, lihat #19). Detail: [Lokasi log](#lokasi-log)
 5. ✅ **Tray icon stateful** — `wickIcon(serverRunning, workerRunning)` runtime-generate PNG/ICO, bg color + corner badge per state. Detail: [Tray icon (stateful)](#tray-icon-stateful)
-6. ✅ **Single-instance lock** via TCP `127.0.0.1:47829` (`acquireSingleInstance`). Detail: [Catatan implementasi penting](#catatan-implementasi-penting)
-7. ✅ **User config** — `internal/userconfig/config.go`, atomic save (`<path>.tmp` → rename), defaults (`auto_start_server=true`, `auto_start_worker=false`, `auto_update=true`). Detail: [User config](#user-config-machine-wide-1-project--1-file)
+6. ✅ **Single-instance lock** — per-app PID file di `<UserConfigDir>/<app>/instance.pid`. `acquireSingleInstance` cek alive + exe basename match (Windows: `OpenProcess` + `QueryFullProcessImageName`, Linux: `kill -0` + `/proc/<pid>/exe`, macOS: alive-only). Detail: [Catatan implementasi penting](#catatan-implementasi-penting)
+7. ✅ **User config** — `internal/userconfig/config.go`, atomic save (`<path>.tmp` → rename), defaults (`auto_start_server=false`, `auto_start_worker=false`, `auto_update=true`). Detail: [User config](#user-config-machine-wide-1-project--1-file)
 8. ✅ **Preferences submenu** — toggle auto-start server/worker/update + Open config file. Detail: [4. Preferences](#4-preferences)
 9. ✅ **Build vars** — `app.BuildAppName/AppVersion/WickVersion/Commit/Time/GitHubPAT/GitHubRepo` declared di `app/app.go`; `BuildWickVersion/Commit/Time` auto-fill via `debug.ReadBuildInfo()`. Detail: [3. Self-updater](#3-self-updater) (Variabel build-time)
 10. ✅ **`wick build` subcommand** — `cmd/cli/build.go` real cobra cmd. Flag: `--app-name`, `--app-version`, `--github-pat`, `--github-repo`, `-o/--output`, `--headless`. Resolution per value: flag → env (`WICK_APP_NAME` / `WICK_APP_VERSION` / `GITHUB_PAT` / `GITHUB_REPOSITORY`) → `wick.yml` (name/version doang) → `"app"` / `"dev"` fallback. Inject ldflags `BuildAppName/AppVersion` + optional `GitHubPAT/Repo`. Honor `GOOS`/`GOARCH` env; `--headless` tambah `-tags headless`. Default output `bin/<app-name>[.exe]`. Detail: [Build & distribution](#build--distribution)
@@ -24,7 +24,7 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
     - `Updater.CheckNow(ctx)` + tray orchestrate startup apply + background goroutine
     - GitHub API `/releases/latest` + asset download by `runtime.GOOS`/`runtime.GOARCH`
     - SHA256 verify lawan `.sha256` sibling
-    - stage di `<UserCacheDir>/<app>/updates/`, simpen path+version ke `userconfig.StagedUpdatePath/Version`
+    - stage di `<UserConfigDir>/<app>/updates/`, simpen path+version ke `userconfig.StagedUpdatePath/Version`
     - apply: Linux/macOS `os.Rename` + `syscall.Exec`; Windows rename current → `.old`, rename staged, restart via `exec.Command`
     - menu tray: `Check for updates` (stateful: Checking… / Up to date / Update check failed — PAT expired / etc.), `Restart to apply vX` (hidden sampai download ready)
     - error 401/403 dari GitHub API surface ke menu item title — bukan cuma di log
@@ -69,7 +69,7 @@ End-to-end flow yg jalan:
 - `wick init <app>` → scaffold + workflow CI ke-copy
 - `wick build` → binary dengan ldflags inject (name/version/PAT/repo) + cross-compile + headless tag opsional
 - Push ke main + bump `version:` → auto-tag.yml → release.yml → binary di `<app>-releases`
-- User download / auto-update → tray launch → DB auto-detect ke `%APPDATA%`/binary dir, port resolve ke 9425, log per-day di UserCacheDir, MCP install ke detected client
+- User download / auto-update → tray launch → DB auto-detect ke `%APPDATA%`/binary dir, port resolve ke 9425, log per-day di UserConfigDir, MCP install ke detected client
 - Auto-update background goroutine cek release tiap launch (kalau enabled), download → "Restart to apply vX" muncul
 
 Verified manual: `wick init test4` → `wick build` → copy binary ke folder lain → run → DB otomatis ke `%APPDATA%\test4\` (standalone mode), config terpisah per binary, WAL aktif (file `.shm` + `.wal` muncul), port `:9425` listen. Path stabil pas binary dipindah-pindah.
@@ -190,7 +190,7 @@ Schema (lihat `internal/userconfig.Config`):
 ```json
 {
   "auto_start_app": false,
-  "auto_start_server": true,
+  "auto_start_server": false,
   "auto_start_worker": false,
   "auto_update": true,
   "port": 0,
@@ -203,7 +203,7 @@ Schema (lihat `internal/userconfig.Config`):
 
 **Field:**
 - `auto_start_app` (default `false`) — register binary ke OS supaya auto-launch pas user login. Lihat [OS-level autostart](#os-level-autostart)
-- `auto_start_server` (default `true`) — saat tray launch, langsung start HTTP server
+- `auto_start_server` (default `false`) — saat tray launch, langsung start HTTP server
 - `auto_start_worker` (default `false`) — saat tray launch, langsung start background worker
 - `auto_update` (default `true`) — self-updater check + download di background
 - `port` (default `0` = pakai env `PORT` atau built-in `9425`) — override HTTP listen port. Lihat [Lokasi port](#lokasi-port)
@@ -278,13 +278,15 @@ zerolog di-redirect ke log file pas tray start (selain ke stderr). File pakai pe
 - Filename: `wick-YYYY-MM-DD.log` (ganti otomatis tiap kali tray launch di hari baru)
 - Pas startup, file > `LogRetentionDays` hari (default 7) di-hapus
 
-Path-nya ngikut `os.UserCacheDir()`:
+Path-nya ngikut `os.UserConfigDir()` — co-located dengan `config.json` + `wick.db` biar semua app data satu pohon:
 
 | OS | Path |
 |---|---|
-| Windows | `%LOCALAPPDATA%\<appName>\wick-YYYY-MM-DD.log` |
-| macOS | `~/Library/Caches/<appName>/wick-YYYY-MM-DD.log` |
-| Linux | `~/.cache/<appName>/wick-YYYY-MM-DD.log` |
+| Windows | `%APPDATA%\<appName>\logs\wick-YYYY-MM-DD.log` |
+| macOS | `~/Library/Application Support/<appName>/logs/wick-YYYY-MM-DD.log` |
+| Linux | `~/.config/<appName>/logs/wick-YYYY-MM-DD.log` |
+
+`os.Stdout` + `os.Stderr` juga di-pipe lewat goroutine ke MultiWriter(original, file) — `fmt.Print` calls + third-party lib writes + panic stacktrace ikut nangkring di file (penting buat `windowsgui` build yg ngga punya console attached).
 
 Menu tray ada **Open logs** — buka file di editor default OS (`cmd /c start`, `open`, atau `xdg-open`). File-nya append antar run — rotation di luar scope v1.
 
@@ -444,8 +446,8 @@ internal/
 │   ├── systray.go               # menu tray + glue goroutine (//go:build !headless)
 │   ├── systray_headless.go      # stub Run() yg print error + exit (//go:build headless)
 │   ├── icon.go                  # generator icon 64×64 PNG/ICO (!headless)
-│   ├── logs.go                  # redirect zerolog ke <UserCacheDir>/<name>/wick-YYYY-MM-DD.log (!headless)
-│   ├── lock.go                  # single-instance lock via 127.0.0.1:47829 (!headless)
+│   ├── logs.go                  # redirect zerolog ke <UserConfigDir>/<name>/logs/wick-YYYY-MM-DD.log (!headless)
+│   ├── lock.go                  # single-instance PID-file lock at <UserConfigDir>/<app>/instance.pid (!headless)
 │   └── helpers.go               # openInEditor, jsonIndent (!headless)
 ├── autostart/
 │   ├── autostart.go             # shared currentExe()
@@ -550,12 +552,12 @@ Implementation: `Updater.CheckLatest(ctx)` (fetch + compare semver only) lalu `U
 
 **Worker toggle:** pola sama persis pakai `worker.NewServer().Run(ctx)`.
 
-**Auto-start saat launch:** dikontrol sama `auto_start_server` / `auto_start_worker` di user config. Toggle dari menu **Preferences ▶ Auto-start … on launch** — efek pas next launch (gak start/stop runtime langsung). Default: server `true`, worker `false`.
+**Auto-start saat launch:** dikontrol sama `auto_start_server` / `auto_start_worker` di user config. Toggle dari menu **Preferences ▶ Auto-start … on launch** — efek pas next launch (gak start/stop runtime langsung). Default: server `false`, worker `false` (fresh install ngga listen di port apa pun sampai user toggle).
 
 **Feedback:** zero toast notif — Windows toast cenderung intrusif + nyangkut di Action Center. Visual feedback dari:
 1. Label menu yg auto-update (`Start server` ↔ `Stop server  (running on :9425)`)
 2. Tray icon yg ganti per state — bg color + corner badge (lihat section "Tray icon" di bawah)
-3. Log file di `<UserCacheDir>/<name>/wick-YYYY-MM-DD.log` buat detail/error
+3. Log file di `<UserConfigDir>/<name>/logs/wick-YYYY-MM-DD.log` buat detail/error
 
 ### 2. MCP install / uninstall
 
@@ -632,7 +634,7 @@ Download asset buat runtime.GOOS/runtime.GOARCH ke %TEMP%
     ↓
 Verify SHA256 lawan asset .sha256 sibling
     ↓
-Stage di <UserCacheDir>/<app>/updates/<app>-<version>(.exe)
+Stage di <UserConfigDir>/<app>/updates/<app>-<version>(.exe)
     ↓
 Save staged path + version ke configs table
     ↓
@@ -726,7 +728,7 @@ Disimpen di `internal/userconfig.Config` (file JSON di OS user-config dir, lihat
 
 ```go
 type Config struct {
-    AutoStartServer     bool     `json:"auto_start_server"`      // default: true
+    AutoStartServer     bool     `json:"auto_start_server"`      // default: false
     AutoStartWorker     bool     `json:"auto_start_worker"`      // default: false
     AutoUpdate          bool     `json:"auto_update"`            // default: true
     DefaultProject      string   `json:"default_project,omitempty"`
@@ -776,7 +778,7 @@ Gak wajib v1 — `./bin/app server` udah lets user skip tray.
 ## Open questions
 
 1. **Nama org GitHub** — confirm path `<owner>/<app>-releases` yg di-bake ke binary
-2. **Multiple instance** — kalau user double-launch `./bin/app`, dua tray muncul + dua-duanya try `:9425`. Single-instance lock (file lock di bawah `UserCacheDir`) worth ditambah.
+2. **Multiple instance** — kalau user double-launch `./bin/app`, dua tray muncul + dua-duanya try `:9425`. Single-instance lock (file lock di bawah `UserConfigDir`) worth ditambah.
 3. **macOS code signing** — tray binary unsigned trigger Gatekeeper; defer dulu MVP
 4. **DB choice** — wick framework support PostgreSQL (GORM) + SQLite (`glebarez/sqlite`). Buat single-user desktop scenario, SQLite default-nya lebih masuk akal — confirm wick load config respect ini.
 5. **Recent projects switching** — pointer config nyimpen `recent_projects[]` tapi tray gak punya UI buat switch. Either drop field-nya dari MVP, atau expose lewat halaman Settings di admin panel.

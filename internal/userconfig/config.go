@@ -61,7 +61,7 @@ type Config struct {
 
 func defaults() Config {
 	return Config{
-		AutoStartServer: true,
+		AutoStartServer: false,
 		AutoStartWorker: false,
 		AutoUpdate:      true,
 	}

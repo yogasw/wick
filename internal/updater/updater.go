@@ -7,8 +7,14 @@
 //
 // Asset naming convention (must match the release CI workflow):
 //
-//	<appName>-<GOOS>-<GOARCH>[.exe]            binary
-//	<appName>-<GOOS>-<GOARCH>[.exe].sha256     checksum sibling
+//	<appName>-darwin-<GOARCH>.dmg              macOS disk image
+//	<appName>-linux-<GOARCH>.deb               Debian package
+//	<appName>-windows-<GOARCH>.exe             Windows binary
+//	<asset>.sha256                             checksum sibling
+//
+// The downloaded asset is extracted to its inner binary (per-OS via
+// extractStaged) before being written to the staged path; .exe is a
+// pass-through.
 //
 // Repo resolution:
 //
@@ -86,9 +92,9 @@ func New(cfg *userconfig.Config, save func() error, appName, currentVersion, rep
 	if owner == "" {
 		owner, repo = parseRepo(moduleRepo())
 	}
-	base, err := os.UserCacheDir()
+	base, err := os.UserConfigDir()
 	if err != nil {
-		return nil, fmt.Errorf("user cache dir: %w", err)
+		return nil, fmt.Errorf("user config dir: %w", err)
 	}
 	cache := filepath.Join(base, appName, "updates")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
@@ -201,8 +207,12 @@ func (u *Updater) Download(ctx context.Context, info LatestInfo) error {
 			return fmt.Errorf("sha256 mismatch (got %s, want %s)", got, want)
 		}
 	}
+	binary, err := u.extractStaged(binData)
+	if err != nil {
+		return fmt.Errorf("extract staged: %w", err)
+	}
 	stagedPath := filepath.Join(u.cacheDir, fmt.Sprintf("%s-%s%s", u.appName, info.Version, exeExt()))
-	if err := os.WriteFile(stagedPath, binData, 0o755); err != nil {
+	if err := os.WriteFile(stagedPath, binary, 0o755); err != nil {
 		return fmt.Errorf("write staged: %w", err)
 	}
 	u.cfg.StagedUpdatePath = stagedPath
@@ -419,10 +429,6 @@ func (u *Updater) pickAssets(assets []ghAsset) (bin, sum *ghAsset) {
 		}
 	}
 	return
-}
-
-func (u *Updater) assetName() string {
-	return fmt.Sprintf("%s-%s-%s%s", u.appName, runtime.GOOS, runtime.GOARCH, exeExt())
 }
 
 func exeExt() string {
