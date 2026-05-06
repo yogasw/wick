@@ -74,7 +74,7 @@ The same `internal/mcpconfig` package backs both the tray menu and the headless 
 
 ## Self-update
 
-The tray ships with a GitHub release self-updater. It is opt-in at build time — pass `--github-pat` and `--github-repo` to [`wick build`](/reference/build) (or set `GITHUB_PAT` / `GITHUB_REPOSITORY` in CI). When unconfigured, About shows `Updates: not configured` and `Check for updates` is hidden.
+The tray ships with a GitHub release self-updater. It is opt-in at build time — pass `--release-github-pat` and `--release-github-repo` to [`wick build`](/reference/build) (or set `RELEASE_GITHUB_PAT` / `RELEASE_GITHUB_REPOSITORY` in CI). When unconfigured, About shows `Updates: not configured` and `Check for updates` is hidden.
 
 Behavior with `auto_update` enabled (default):
 
@@ -211,5 +211,5 @@ The tray acquires a per-app PID-file lock at `<UserConfigDir>/<app>/instance.pid
 ## See also
 
 - [`wick build` reference](/reference/build) — flags, CI templates, PAT scopes for the self-updater
-- [Environment Variables](/reference/env-vars) — `PORT`, `WICK_APP_NAME`, `GITHUB_PAT`, etc.
+- [Environment Variables](/reference/env-vars) — `PORT`, `WICK_APP_NAME`, `RELEASE_GITHUB_PAT`, etc.
 - [CLI Reference](/reference/cli) — full subcommand list including `<app> tray`, `<app> mcp serve / install / uninstall`

@@ -10,8 +10,8 @@ name: Release
 # pipeline leaves no tag behind, and a re-run starts clean.
 #
 # Everything runs in ONE workflow — no cross-workflow trigger,
-# so same-repo setup needs zero PATs for CI itself (only PAT_DOWNLOAD
-# baked into binary for the self-updater).
+# so same-repo setup needs zero PATs for CI itself (only
+# RELEASE_GITHUB_DOWNLOAD_PAT baked into binary for the self-updater).
 
 on:
   push:
@@ -40,23 +40,24 @@ concurrency:
 # │  2. Create two fine-grained PATs at:                                  │
 # │     https://github.com/settings/personal-access-tokens                │
 # │                                                                        │
-# │     PAT_DOWNLOAD — baked into binary, used by self-updater to         │
-# │                    download future releases from the releases repo     │
+# │     RELEASE_GITHUB_DOWNLOAD_PAT — baked into binary, used by          │
+# │                    self-updater to download future releases from      │
+# │                    the releases repo                                  │
 # │       Repository access : Only select repositories → <app>-releases   │
 # │       Permissions       : Contents = Read-only                        │
 # │       Expiration        : 90 days (rotate by publishing a new release)│
 # │                                                                        │
-# │     PAT_BUILD    — CI-only, publishes the GitHub release              │
-# │                    (and creates the tag in the releases repo)         │
+# │     RELEASE_GITHUB_PUBLISH_PAT — CI-only, publishes the GitHub        │
+# │                    release (and creates the tag in the releases repo) │
 # │       Repository access : Only select repositories → <app>-releases   │
 # │       Permissions       : Contents = Read and write                   │
 # │       Expiration        : 90 days                                     │
 # │                                                                        │
 # │  3. Add secrets + variable in the SOURCE repo:                        │
 # │     Settings → Secrets and variables → Actions                        │
-# │       Secret  PAT_DOWNLOAD  = <token above>                           │
-# │       Secret  PAT_BUILD     = <token above>                           │
-# │       Variable RELEASES_REPO = org/<app>-releases                     │
+# │       Secret  RELEASE_GITHUB_DOWNLOAD_PAT  = <token above>            │
+# │       Secret  RELEASE_GITHUB_PUBLISH_PAT   = <token above>            │
+# │       Variable RELEASE_GITHUB_REPOSITORY   = org/<app>-releases       │
 # │                                                                        │
 # └────────────────────────────────────────────────────────────────────────┘
 #
@@ -65,25 +66,26 @@ concurrency:
 # │  1. Create one fine-grained PAT:                                      │
 # │     https://github.com/settings/personal-access-tokens                │
 # │                                                                        │
-# │     PAT_DOWNLOAD — baked into binary, used by self-updater to         │
-# │                    download future releases from this same repo        │
+# │     RELEASE_GITHUB_DOWNLOAD_PAT — baked into binary, used by          │
+# │                    self-updater to download future releases from      │
+# │                    this same repo                                     │
 # │       Repository access : Only select repositories → <app> (this repo)│
 # │       Permissions       : Contents = Read-only                        │
 # │       Expiration        : 90 days                                     │
 # │                                                                        │
-# │  2. Add secret in this repo (PAT_BUILD not needed — github.token      │
-# │     has write access to same repo, and single-flow design avoids the  │
-# │     cross-workflow trigger problem):                                  │
+# │  2. Add secret in this repo (RELEASE_GITHUB_PUBLISH_PAT not needed —  │
+# │     github.token has write access to same repo, and single-flow       │
+# │     design avoids the cross-workflow trigger problem):                │
 # │     Settings → Secrets and variables → Actions                        │
-# │       Secret  PAT_DOWNLOAD  = <token above>                           │
-# │     Leave RELEASES_REPO variable unset.                               │
+# │       Secret  RELEASE_GITHUB_DOWNLOAD_PAT = <token above>             │
+# │     Leave RELEASE_GITHUB_REPOSITORY variable unset.                   │
 # │                                                                        │
 # └────────────────────────────────────────────────────────────────────────┘
 #
 # ┌─ Optional: limit which OS/arch get built ─────────────────────────────┐
 # │                                                                        │
 # │  Settings → Secrets and variables → Actions → Variables               │
-# │    BUILD_TARGETS = comma-separated list of <os>/<arch> to build       │
+# │    RELEASE_BUILD_TARGETS = comma-separated <os>/<arch> to build       │
 # │                                                                        │
 # │  Examples:                                                            │
 # │    (unset)                          → build everything (default)      │
@@ -94,7 +96,7 @@ concurrency:
 # │  Valid values: windows/amd64, windows/arm64, darwin/amd64,            │
 # │                darwin/arm64, linux/amd64, linux/arm64                 │
 # │                                                                        │
-# │  Skipped runners exit early — no checkout, no build cost.             │
+# │  Only matched runners are spawned — no phantom jobs, no wasted cost.  │
 # │  Release succeeds as long as at least one build produces an artifact. │
 # │                                                                        │
 # └────────────────────────────────────────────────────────────────────────┘
@@ -102,7 +104,7 @@ concurrency:
 # ┌─ Optional: auto-bump version every push ──────────────────────────────┐
 # │                                                                        │
 # │  Settings → Secrets and variables → Actions → Variables               │
-# │    AUTO_VERSION = true                                                │
+# │    RELEASE_AUTO_VERSION = true                                        │
 # │                                                                        │
 # │  When set, every push to main/master:                                 │
 # │    1. runs `wick version next` — reads `version:` from wick.yml and  │
@@ -132,8 +134,8 @@ concurrency:
 # │  to the new base (e.g. 0.7.0) and push — that release goes out as    │
 # │  v0.7.0, the commit-back bumps to 0.7.1, and auto continues.        │
 # │                                                                        │
-# │  Default flow (AUTO_VERSION unset/false) keeps reading wick.yml       │
-# │  `version:` as-is and skipping when the tag already exists.          │
+# │  Default flow (RELEASE_AUTO_VERSION unset/false) keeps reading       │
+# │  wick.yml `version:` as-is and skipping when the tag already exists. │
 # │                                                                        │
 # └────────────────────────────────────────────────────────────────────────┘
 #
@@ -150,17 +152,18 @@ jobs:
       sha: ${{ steps.check.outputs.sha }}
       releases_repo: ${{ steps.repo.outputs.releases_repo }}
       is_separate: ${{ steps.repo.outputs.is_separate }}
-      auto_version: ${{ vars.AUTO_VERSION }}
+      auto_version: ${{ vars.RELEASE_AUTO_VERSION }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Normalize RELEASES_REPO
+      - name: Normalize RELEASE_GITHUB_REPOSITORY
         id: repo
         shell: bash
         env:
-          RAW: ${{ vars.RELEASES_REPO }}
+          RAW: ${{ vars.RELEASE_GITHUB_REPOSITORY }}
         # Accepts any common form and normalizes to owner/repo:
         #   https://github.com/owner/repo[.git]
         #   http://github.com/owner/repo[.git]
@@ -183,41 +186,41 @@ jobs:
             echo "Separate-repo mode: releases go to $NORM (raw input: $RAW)"
           fi
           if [[ ! "$NORM" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::RELEASES_REPO normalized to '$NORM' — expected owner/repo format. Raw input: '$RAW'"
+            echo "::error::RELEASE_GITHUB_REPOSITORY normalized to '$NORM' — expected owner/repo format. Raw input: '$RAW'"
             exit 1
           fi
           echo "releases_repo=$NORM" >> "$GITHUB_OUTPUT"
 
-      # AUTO_VERSION path: install wick CLI and let `wick version next`
+      # RELEASE_AUTO_VERSION path: install wick CLI and let `wick version next`
       # compute the bumped version from wick.yml (last numeric segment +1).
       # The bump writes wick.yml in this runner's workspace — discarded at
       # job end. The release job re-runs `wick version next` on the same
       # baseline to produce the same value, then commits the bumped
       # wick.yml back to the source branch.
       - uses: actions/setup-go@v6
-        if: vars.AUTO_VERSION == 'true'
+        if: vars.RELEASE_AUTO_VERSION == 'true'
         with:
           go-version: 'stable'
           cache: false
 
       - name: Install wick CLI
-        if: vars.AUTO_VERSION == 'true'
+        if: vars.RELEASE_AUTO_VERSION == 'true'
         run: go install github.com/yogasw/wick@latest
 
       - name: Resolve next version
         id: ver
         env:
-          AUTO_VERSION: ${{ vars.AUTO_VERSION }}
-        # AUTO_VERSION=true  → wick.yml `version:` +1 last segment via
+          RELEASE_AUTO_VERSION: ${{ vars.RELEASE_AUTO_VERSION }}
+        # RELEASE_AUTO_VERSION=true  → wick.yml `version:` +1 last segment via
         #                       `wick version next`, ignore tag-exists check.
-        # AUTO_VERSION unset → read `version:` from wick.yml as-is, the
+        # RELEASE_AUTO_VERSION unset → read `version:` from wick.yml as-is, the
         #                       tag-exists check below decides if we release.
         run: |
           set -euo pipefail
-          if [ "$AUTO_VERSION" = "true" ]; then
+          if [ "$RELEASE_AUTO_VERSION" = "true" ]; then
             VERSION=$(wick version next)
             TAG="v${VERSION}"
-            echo "AUTO_VERSION: bumped wick.yml to $VERSION"
+            echo "RELEASE_AUTO_VERSION: bumped wick.yml to $VERSION"
           else
             VERSION=$(grep '^version:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
             if [ -z "$VERSION" ]; then
@@ -232,10 +235,10 @@ jobs:
       - name: Check tag does not exist
         id: check
         env:
-          AUTO_VERSION: ${{ vars.AUTO_VERSION }}
+          RELEASE_AUTO_VERSION: ${{ vars.RELEASE_AUTO_VERSION }}
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
-          if [ "$AUTO_VERSION" = "true" ]; then
+          if [ "$RELEASE_AUTO_VERSION" = "true" ]; then
             # Auto mode always produces a fresh tag — no skip path.
             echo "created=true" >> "$GITHUB_OUTPUT"
             echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -249,6 +252,28 @@ jobs:
             echo "Will release $TAG at $(git rev-parse HEAD) if build succeeds."
           fi
 
+      - name: Build job matrix
+        id: matrix
+        shell: bash
+        env:
+          TARGETS: ${{ vars.RELEASE_BUILD_TARGETS }}
+        run: |
+          ALL='[
+            {"os":"windows","arch":"amd64","runner":"windows-latest"},
+            {"os":"windows","arch":"arm64","runner":"windows-latest"},
+            {"os":"darwin","arch":"amd64","runner":"macos-latest","cgo":"1"},
+            {"os":"darwin","arch":"arm64","runner":"macos-latest"},
+            {"os":"linux","arch":"amd64","runner":"ubuntu-latest"},
+            {"os":"linux","arch":"arm64","runner":"ubuntu-latest"}
+          ]'
+          if [ -z "$TARGETS" ]; then
+            MATRIX=$(echo "$ALL" | jq -c .)
+          else
+            PATTERN=$(echo "$TARGETS" | tr -d ' ' | tr ',' '|')
+            MATRIX=$(echo "$ALL" | jq -c --arg p "$PATTERN" 'map(select((.os+"/"+.arch) | test($p)))')
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     needs: prepare
@@ -257,45 +282,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: windows, arch: amd64, runner: windows-latest }
-          - { os: windows, arch: arm64, runner: windows-latest }
-          - { os: darwin,  arch: amd64, runner: macos-latest, cgo: 1 }
-          - { os: darwin,  arch: arm64, runner: macos-latest }
-          - { os: linux,   arch: amd64, runner: ubuntu-latest }
-          - { os: linux,   arch: arm64, runner: ubuntu-latest }
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
-      - name: Gate on BUILD_TARGETS
-        id: gate
-        shell: bash
-        run: |
-          TARGETS="${{ vars.BUILD_TARGETS }}"
-          PAIR="${{ matrix.os }}/${{ matrix.arch }}"
-          if [ -z "$TARGETS" ] || [[ ",$TARGETS," == *",$PAIR,"* ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping $PAIR (not in BUILD_TARGETS=$TARGETS)"
-          fi
-
       - uses: actions/checkout@v6
-        if: steps.gate.outputs.enabled == 'true'
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: actions/setup-go@v6
-        if: steps.gate.outputs.enabled == 'true'
         with:
           go-version: 'stable'
           cache: true
 
       - name: Install wick CLI
-        if: steps.gate.outputs.enabled == 'true'
         run: go install github.com/yogasw/wick@latest
 
       - name: Resolve app name and asset path
-        if: steps.gate.outputs.enabled == 'true'
         id: meta
         shell: bash
         # `wick build` produces the platform-native distributable in bin/:
@@ -304,7 +306,8 @@ jobs:
         #   linux   → <app>-linux-<arch>.deb  (alongside the raw binary)
         # Only the bundle is uploaded as the release asset.
         run: |
-          NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+          [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
           case "${{ matrix.os }}" in
             windows) EXT="exe" ;;
             darwin)  EXT="dmg" ;;
@@ -316,18 +319,15 @@ jobs:
           echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
 
       - name: Cache wick setup artifacts
-        if: steps.gate.outputs.enabled == 'true'
         uses: actions/cache@v5
         with:
           path: bin
           key: wick-setup-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('wick.yml') }}
 
       - name: Setup (download tailwind, install templ, go mod tidy)
-        if: steps.gate.outputs.enabled == 'true'
         run: wick setup
 
       - name: Build
-        if: steps.gate.outputs.enabled == 'true'
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
@@ -339,16 +339,20 @@ jobs:
           # Read-only PAT baked into binary for the self-updater.
           # Scoped to releases repo only — if it leaks, attacker can only
           # download already-published binaries, nothing else.
-          GITHUB_PAT: ${{ secrets.PAT_DOWNLOAD }}
-          GITHUB_REPOSITORY: ${{ needs.prepare.outputs.releases_repo }}
+          RELEASE_GITHUB_PAT: ${{ secrets.RELEASE_GITHUB_DOWNLOAD_PAT }}
+          # Releases repo baked into binary for the self-updater. Named
+          # RELEASE_GITHUB_REPOSITORY (not GITHUB_REPOSITORY) because GitHub
+          # silently ignores step-level overrides of reserved GITHUB_* env
+          # vars — runner's auto-set source repo would clobber it.
+          # See https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables
+          RELEASE_GITHUB_REPOSITORY: ${{ needs.prepare.outputs.releases_repo }}
           # Override wick.yml `version:` so the binary's --version reflects
-          # the tag we're about to publish. Critical when AUTO_VERSION=true
+          # the tag we're about to publish. Critical when RELEASE_AUTO_VERSION=true
           # since wick.yml isn't bumped per release.
           WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
         run: wick build
 
       - name: Checksum
-        if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
           cd bin
@@ -356,7 +360,6 @@ jobs:
             > "${{ steps.meta.outputs.asset }}.sha256"
 
       - uses: actions/upload-artifact@v7
-        if: steps.gate.outputs.enabled == 'true'
         with:
           name: ${{ steps.meta.outputs.app_name }}-${{ matrix.os }}-${{ matrix.arch }}
           path: |
@@ -399,7 +402,8 @@ jobs:
       - name: Resolve app name
         id: meta
         run: |
-          NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+          [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
 
       # Same-repo: gh creates the tag at our SHA atomically.
@@ -419,7 +423,7 @@ jobs:
       - name: Create GitHub release (separate releases repo)
         if: needs.prepare.outputs.is_separate == 'true'
         env:
-          GH_TOKEN: ${{ secrets.PAT_BUILD }}
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_PUBLISH_PAT }}
         run: |
           gh release create "${{ needs.prepare.outputs.tag }}" \
             --repo "${{ needs.prepare.outputs.releases_repo }}" \
@@ -433,7 +437,7 @@ jobs:
           git tag "${{ needs.prepare.outputs.tag }}" "${{ needs.prepare.outputs.sha }}"
           git push origin "${{ needs.prepare.outputs.tag }}"
 
-      # AUTO_VERSION commit-back: bump wick.yml `version:` to match the
+      # RELEASE_AUTO_VERSION commit-back: bump wick.yml `version:` to match the
       # tag we just published, then push the diff to the source branch.
       # Pushes from `github.token` do NOT re-trigger workflows (GitHub
       # anti-loop guard) so this is safe; the `[skip ci]` marker is

@@ -96,8 +96,8 @@ Common flags:
 |---|---|---|
 | `--app-name` | `WICK_APP_NAME` | Override `name:` from `wick.yml` |
 | `--app-version` | `WICK_APP_VERSION` | Override `version:` from `wick.yml` |
-| `--github-pat` | `GITHUB_PAT` | Bake PAT for self-updater |
-| `--github-repo` | `GITHUB_REPOSITORY` | Bake `owner/repo` for self-updater |
+| `--release-github-pat` | `RELEASE_GITHUB_PAT` | Bake releases PAT for self-updater |
+| `--release-github-repo` | `RELEASE_GITHUB_REPOSITORY` | Bake releases repo `owner/repo` for self-updater |
 | `-o`, `--output` | — | Raw binary path (default `bin/<name>-<goos>-<goarch>[.exe]`); bundle is written next to it |
 | `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`); mutex with `--goos`/`--goarch` |
 | `--goos` | `GOOS` | Target GOOS; mutex with `--target` |

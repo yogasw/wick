@@ -17,7 +17,7 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
 7. ✅ **User config** — `internal/userconfig/config.go`, atomic save (`<path>.tmp` → rename), defaults (`auto_start_server=false`, `auto_start_worker=false`, `auto_update=true`). Detail: [User config](#user-config-machine-wide-1-project--1-file)
 8. ✅ **Preferences submenu** — toggle auto-start server/worker/update + Open config file. Detail: [4. Preferences](#4-preferences)
 9. ✅ **Build vars** — `app.BuildAppName/AppVersion/WickVersion/Commit/Time/GitHubPAT/GitHubRepo` declared di `app/app.go`; `BuildWickVersion/Commit/Time` auto-fill via `debug.ReadBuildInfo()`. Detail: [3. Self-updater](#3-self-updater) (Variabel build-time)
-10. ✅ **`wick build` subcommand** — `cmd/cli/build.go` real cobra cmd. Flag: `--app-name`, `--app-version`, `--github-pat`, `--github-repo`, `-o/--output`, `--headless`. Resolution per value: flag → env (`WICK_APP_NAME` / `WICK_APP_VERSION` / `GITHUB_PAT` / `GITHUB_REPOSITORY`) → `wick.yml` (name/version doang) → `"app"` / `"dev"` fallback. Inject ldflags `BuildAppName/AppVersion` + optional `GitHubPAT/Repo`. Honor `GOOS`/`GOARCH` env; `--headless` tambah `-tags headless`. Default output `bin/<app-name>[.exe]`. Detail: [Build & distribution](#build--distribution)
+10. ✅ **`wick build` subcommand** — `cmd/cli/build.go` real cobra cmd. Flag: `--app-name`, `--app-version`, `--release-github-pat`, `--release-github-repo`, `-o/--output`, `--headless`. Resolution per value: flag → env (`WICK_APP_NAME` / `WICK_APP_VERSION` / `RELEASE_GITHUB_PAT` / `RELEASE_GITHUB_REPOSITORY`) → `wick.yml` (name/version doang) → `"app"` / `"dev"` fallback. Inject ldflags `BuildAppName/AppVersion` + optional `GitHubPAT/Repo`. Honor `GOOS`/`GOARCH` env; `--headless` tambah `-tags headless`. Default output `bin/<app-name>[.exe]`. Detail: [Build & distribution](#build--distribution)
 11. ✅ **wick.yml build task** — root + template `wick.yml` last cmd jadi `wick build` (drop hand-rolled `go build -ldflags ...`). Subcommand baca `name:`/`version:` langsung dari `wick.yml`. Detail: [Build & distribution](#build--distribution)
 
 12. ✅ **Self-updater** — `internal/updater/updater.go`. Komponen:
@@ -36,9 +36,9 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
     - `tag` — on push main/master, baca `version:` dari `wick.yml`, push git tag kalau belum ada
     - `build` — `needs: tag`, matrix 6 OS×arch, `wick build` + sha256
     - `release` — `needs: build`, `gh release create` ke `<app>-releases`
-    - Single-flow design ngehindarin anti-loop guard GitHub (tag dari GITHUB_TOKEN gak fire workflow lain) — gak butuh PAT_BUILD di same-repo
-    - Support same-repo atau separate releases repo via `vars.RELEASES_REPO`
-    - Setup PAT (PAT_DOWNLOAD baked, PAT_BUILD CI-only di skenario separate) di-dokumen lengkap di header release.yml
+    - Single-flow design ngehindarin anti-loop guard GitHub (tag dari GITHUB_TOKEN gak fire workflow lain) — gak butuh RELEASE_GITHUB_PUBLISH_PAT di same-repo
+    - Support same-repo atau separate releases repo via `vars.RELEASE_GITHUB_REPOSITORY`
+    - Setup PAT (RELEASE_GITHUB_DOWNLOAD_PAT baked, RELEASE_GITHUB_PUBLISH_PAT CI-only di skenario separate) di-dokumen lengkap di header release.yml
     - Detail: [CI/CD (GitHub Actions)](#cicd-github-actions)
 15. ✅ **SQLite WAL + busy_timeout** — `internal/pkg/postgres/gorm.go` set `PRAGMA journal_mode=WAL` + `PRAGMA busy_timeout=5000` per SQLite open. Cross-process concurrency aman buat tray + MCP stdio. `SetMaxOpenConns(1)` tetap (intra-process serialise writers). Detail: [SQLite concurrency](#sqlite-concurrency)
 16. ✅ **DB path auto-detect** — `userconfig.ResolveDBPath(appName, customPath)` set `DATABASE_URL` env sebelum `config.Load()`. Resolution order: env > `database_path` config > `<binary_dir>/wick.db` (kalau ada `wick.yml`) > `<UserConfigDir>/<appName>/wick.db`. Dipanggil di `systemtray.Run` (tray) + `serverCmd.RunE` + `workerCmd.RunE` (headless). Detail: [Lokasi DB](#lokasi-db)
@@ -306,8 +306,8 @@ wick build
 ```bash
 WICK_APP_NAME=myapp \
 WICK_APP_VERSION=1.0.0 \
-GITHUB_PAT=$PAT \
-GITHUB_REPOSITORY=org/myapp-releases \
+RELEASE_GITHUB_PAT=$PAT \
+RELEASE_GITHUB_REPOSITORY=org/myapp-releases \
 wick build -o myapp-linux-amd64
 ```
 
@@ -317,8 +317,8 @@ wick build -o myapp-linux-amd64
 |---|---|
 | App name | `--app-name` → `$WICK_APP_NAME` → `wick.yml name:` → `"app"` |
 | App version | `--app-version` → `$WICK_APP_VERSION` → `wick.yml version:` → `"dev"` |
-| GitHub PAT | `--github-pat` → `$GITHUB_PAT` |
-| GitHub repo | `--github-repo` → `$GITHUB_REPOSITORY` (auto-set GitHub Actions) |
+| GitHub releases PAT | `--release-github-pat` → `$RELEASE_GITHUB_PAT` |
+| GitHub releases repo | `--release-github-repo` → `$RELEASE_GITHUB_REPOSITORY` |
 
 **Tanggung jawab `wick build`:**
 - Default: include tray. Opt-out via `--headless` (`-tags headless`) buat container Linux / headless server.
@@ -349,7 +349,7 @@ wick build -o myapp-linux-amd64
    - download artifact
    - `gh release create <tag>` ke `<app>-releases`
 
-**Kenapa single-flow:** kalau split jadi 2 workflow (tag → release), tag yg di-push pake `GITHUB_TOKEN` gak fire `release.yml` (anti-loop guard GitHub). Single-flow pake job dependency (`needs:`) bukan event trigger, jadi imun. Bonus: same-repo gak butuh `PAT_BUILD` sama sekali.
+**Kenapa single-flow:** kalau split jadi 2 workflow (tag → release), tag yg di-push pake `GITHUB_TOKEN` gak fire `release.yml` (anti-loop guard GitHub). Single-flow pake job dependency (`needs:`) bukan event trigger, jadi imun. Bonus: same-repo gak butuh `RELEASE_GITHUB_PUBLISH_PAT` sama sekali.
 
 ### Build matrix
 
@@ -368,17 +368,17 @@ wick build -o myapp-linux-amd64
 
 | Setting | Value |
 |---|---|
-| `vars.RELEASES_REPO` (Actions variable) | `org/<app>-releases` |
-| `secrets.PAT_DOWNLOAD` | fine-grained PAT, scope `<app>-releases`, Contents read-only — **baked ke binary** |
-| `secrets.PAT_BUILD` | fine-grained PAT, scope `<app>-releases`, Contents read+write — CI only, NOT embedded |
+| `vars.RELEASE_GITHUB_REPOSITORY` (Actions variable) | `org/<app>-releases` |
+| `secrets.RELEASE_GITHUB_DOWNLOAD_PAT` | fine-grained PAT, scope `<app>-releases`, Contents read-only — **baked ke binary** |
+| `secrets.RELEASE_GITHUB_PUBLISH_PAT` | fine-grained PAT, scope `<app>-releases`, Contents read+write — CI only, NOT embedded |
 
 **Skenario B — same repo (source = releases):**
 
 | Setting | Value |
 |---|---|
-| `vars.RELEASES_REPO` | (kosong → fallback `github.repository`) |
-| `secrets.PAT_DOWNLOAD` | fine-grained PAT, scope this repo, Contents read-only — baked ke binary |
-| `secrets.PAT_BUILD` | tidak dibutuhkan — `github.token` udah cukup buat tag push + release publish, dan single-flow design hindarin anti-loop trigger |
+| `vars.RELEASE_GITHUB_REPOSITORY` | (kosong → fallback `github.repository`) |
+| `secrets.RELEASE_GITHUB_DOWNLOAD_PAT` | fine-grained PAT, scope this repo, Contents read-only — baked ke binary |
+| `secrets.RELEASE_GITHUB_PUBLISH_PAT` | tidak dibutuhkan — `github.token` udah cukup buat tag push + release publish, dan single-flow design hindarin anti-loop trigger |
 
 Setup lengkap step-by-step ada di header komentar `template/.github/workflows/release.yml` — termasuk URL bikin PAT + path GitHub Settings.
 
@@ -405,7 +405,7 @@ Manual tag push (`git tag v1.2.3 && git push origin v1.2.3`) **tidak** trigger w
 Manual, ngikut expiry GitHub fine-grained PAT (default 90 hari):
 
 1. Generate PAT baru di GitHub (scope sama)
-2. Update `secrets.PAT_DOWNLOAD` di source repo
+2. Update `secrets.RELEASE_GITHUB_DOWNLOAD_PAT` di source repo
 3. Bump `version:` di `wick.yml` → push → release baru di-build dengan PAT baru di-embed
 4. User auto-update → dapat binary baru → bisa cek update lagi
 

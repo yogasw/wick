@@ -18,6 +18,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -63,12 +64,25 @@ var (
 	BuildCommit      = "unknown"
 	BuildTime        = "unknown"
 
-	// GitHubPAT and GitHubRepo are injected by `wick build --github-pat
-	// --github-repo` for the self-updater. Empty when built without
-	// those flags — updater falls back to manual-only mode.
-	GitHubPAT  = ""
+	// GitHubPATEnc is the base64-of-XOR-encoded PAT injected by
+	// `wick build --release-github-pat ...`. Stored obfuscated so plain
+	// `strings <binary>` does not surface the token; init() below decodes
+	// it into GitHubPAT at runtime.
+	//
+	// This is obfuscation, not encryption — a determined attacker can
+	// extract patObfKey from the binary and decode. Real defense is
+	// scoping PAT to read-only on the releases repo (see release.yml).
+	GitHubPATEnc = ""
+	GitHubPAT    string
+
+	// GitHubRepo is the releases repo (owner/repo) — public information,
+	// not obfuscated.
 	GitHubRepo = ""
 )
+
+// patObfKey MUST match builder/ldflags.go obfPATKey — the builder XORs
+// with this key at compile time, the runtime XORs back with it.
+const patObfKey = "wick-self-updater-pat-v1"
 
 func init() {
 	// Cobra ships an anti-double-click guard: when a binary is launched
@@ -77,6 +91,18 @@ func init() {
 	// apps are tray-first, double-click is the primary launch path.
 	// Disable by emptying the message so cobra's check skips it.
 	cobra.MousetrapHelpText = ""
+
+	// Decode obfuscated PAT into GitHubPAT. Failures fall through to
+	// empty string — updater treats that as "not configured".
+	if GitHubPATEnc != "" {
+		if raw, err := base64.StdEncoding.DecodeString(GitHubPATEnc); err == nil {
+			k := []byte(patObfKey)
+			for i := range raw {
+				raw[i] ^= k[i%len(k)]
+			}
+			GitHubPAT = string(raw)
+		}
+	}
 
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

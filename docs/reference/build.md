@@ -38,8 +38,8 @@ Embed PAT + version for a release build:
 
 ```bash
 WICK_APP_VERSION=1.2.0 \
-GITHUB_PAT=$RELEASE_PAT \
-GITHUB_REPOSITORY=acme/myapp-releases \
+RELEASE_GITHUB_PAT=$RELEASE_PAT \
+RELEASE_GITHUB_REPOSITORY=acme/myapp-releases \
 wick build --target linux/arm64
 ```
 
@@ -49,8 +49,8 @@ wick build --target linux/arm64
 |---|---|---|
 | `--app-name` | `WICK_APP_NAME` | Sets `app.BuildAppName`. Used to namespace config / DB / log paths and as the default MCP server name. |
 | `--app-version` | `WICK_APP_VERSION` | Sets `app.BuildAppVersion`. Shown in the tray title and About menu, advertised by MCP. |
-| `--github-pat` | `GITHUB_PAT` | Sets `app.GitHubPAT`. Empty = self-updater disabled. |
-| `--github-repo` | `GITHUB_REPOSITORY` | Sets `app.GitHubRepo` (`owner/repo`). Empty = self-updater disabled. |
+| `--release-github-pat` | `RELEASE_GITHUB_PAT` | Sets `app.GitHubPAT`. Empty = self-updater disabled. |
+| `--release-github-repo` | `RELEASE_GITHUB_REPOSITORY` | Sets `app.GitHubRepo` (releases repo `owner/repo`). Empty = self-updater disabled. Note: not `GITHUB_REPOSITORY` because GitHub Actions auto-injects that to the source repo and silently blocks step-level overrides. |
 | `-o`, `--output` | — | Raw binary output path. Default `bin/<app-name>-<goos>-<goarch>[.exe]`. The platform-native distributable (.dmg/.deb) is always written next to it; this flag only renames the raw binary. |
 | `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`). Mutually exclusive with `--goos`/`--goarch`. |
 | `--goos` | `GOOS` | Target GOOS. Mutually exclusive with `--target`. |
@@ -66,8 +66,8 @@ Each value is resolved independently, picking the first non-empty source:
 |---|---|
 | App name | `--app-name` → `$WICK_APP_NAME` → `name:` in `wick.yml` → `"app"` |
 | App version | `--app-version` → `$WICK_APP_VERSION` → `version:` in `wick.yml` → `"dev"` |
-| GitHub PAT | `--github-pat` → `$GITHUB_PAT` |
-| GitHub repo | `--github-repo` → `$GITHUB_REPOSITORY` (auto-set by GitHub Actions) |
+| GitHub releases PAT | `--release-github-pat` → `$RELEASE_GITHUB_PAT` |
+| GitHub releases repo | `--release-github-repo` → `$RELEASE_GITHUB_REPOSITORY` |
 
 The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadBuildInfo()` — no flag.
 
@@ -78,11 +78,13 @@ The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadB
 ```
 -X github.com/yogasw/wick/app.BuildAppName=<name>
 -X github.com/yogasw/wick/app.BuildAppVersion=<version>
--X github.com/yogasw/wick/app.GitHubPAT=<pat>          (if non-empty)
--X github.com/yogasw/wick/app.GitHubRepo=<owner/repo>  (if non-empty)
+-X github.com/yogasw/wick/app.GitHubPATEnc=<base64+xor>  (if non-empty)
+-X github.com/yogasw/wick/app.GitHubRepo=<owner/repo>    (if non-empty)
 ```
 
 `BuildCommit` and `BuildTime` are populated by `debug.ReadBuildInfo()` — VCS metadata baked in by the Go toolchain when the build happens inside a git checkout.
+
+**PAT obfuscation:** the PAT is XOR'd with a fixed key and base64-encoded before injection, so plain `strings <binary> | grep ghp_` does not surface the token. This is obfuscation, not encryption — a determined attacker who reads the binary can extract the key and decode. Real defense is scoping the PAT to read-only on the releases repo (a leak only enables downloading already-public release assets).
 
 ## CI/CD with GitHub Actions
 
@@ -98,7 +100,7 @@ Trigger: `on: push` to `main` / `master`. Three jobs:
 
 **Tag-after-release semantics.** The tag only lands on origin when at least one binary is published. If every build fails, no tag is pushed and a re-run starts from the same SHA. For the same-repo setup, `gh release create --target <sha>` creates the tag atomically with the release; for the separate-releases-repo setup, the tag is pushed via `git push origin <tag>` after `gh release create` succeeds.
 
-**Why one workflow instead of two:** GitHub blocks tag pushes made with the default `GITHUB_TOKEN` from triggering other workflows (anti-loop guard). A split design (`auto-tag.yml` → `release.yml`) needs a user PAT to push the tag, otherwise `release.yml` never fires. The single-flow design uses job dependencies (`needs:`) instead of an event-trigger handoff, so it works with `github.token` alone — no `PAT_BUILD` required for same-repo setups.
+**Why one workflow instead of two:** GitHub blocks tag pushes made with the default `GITHUB_TOKEN` from triggering other workflows (anti-loop guard). A split design (`auto-tag.yml` → `release.yml`) needs a user PAT to push the tag, otherwise `release.yml` never fires. The single-flow design uses job dependencies (`needs:`) instead of an event-trigger handoff, so it works with `github.token` alone — no `RELEASE_GITHUB_PUBLISH_PAT` required for same-repo setups.
 
 Build matrix:
 
@@ -191,17 +193,17 @@ If the embedded PAT leaks, the attacker can download binaries — they cannot re
 
 | Setting | Where | Value |
 |---|---|---|
-| `vars.RELEASES_REPO` | Source repo Actions variables | `<owner>/<app>-releases` |
-| `secrets.PAT_DOWNLOAD` | Source repo Actions secrets | Fine-grained PAT scoped to `<app>-releases`, **Contents: read** — gets baked into every binary. |
-| `secrets.PAT_BUILD` | Source repo Actions secrets | Fine-grained PAT scoped to `<app>-releases`, **Contents: read + write** — only used by the workflow to upload assets. |
+| `vars.RELEASE_GITHUB_REPOSITORY` | Source repo Actions variables | `<owner>/<app>-releases` |
+| `secrets.RELEASE_GITHUB_DOWNLOAD_PAT` | Source repo Actions secrets | Fine-grained PAT scoped to `<app>-releases`, **Contents: read** — gets baked into every binary. |
+| `secrets.RELEASE_GITHUB_PUBLISH_PAT` | Source repo Actions secrets | Fine-grained PAT scoped to `<app>-releases`, **Contents: read + write** — only used by the workflow to upload assets. |
 
 ### Single repo (source = releases)
 
 | Setting | Value |
 |---|---|
-| `vars.RELEASES_REPO` | _(empty — falls back to `github.repository`)_ |
-| `secrets.PAT_DOWNLOAD` | Fine-grained PAT scoped to this repo, Contents read — baked into every binary. |
-| `secrets.PAT_BUILD` | _(not needed — `github.token` has write access to the same repo, and the single-flow design avoids the anti-loop trigger problem.)_ |
+| `vars.RELEASE_GITHUB_REPOSITORY` | _(empty — falls back to `github.repository`)_ |
+| `secrets.RELEASE_GITHUB_DOWNLOAD_PAT` | Fine-grained PAT scoped to this repo, Contents read — baked into every binary. |
+| `secrets.RELEASE_GITHUB_PUBLISH_PAT` | _(not needed — `github.token` has write access to the same repo, and the single-flow design avoids the anti-loop trigger problem.)_ |
 
 The exact step-by-step walkthrough — including links to GitHub's PAT and Actions Secrets pages — lives in the header comments of `template/.github/workflows/release.yml`. Open the workflow file in your generated project; the comments are kept current with the workflow logic.
 
@@ -210,7 +212,7 @@ The exact step-by-step walkthrough — including links to GitHub's PAT and Actio
 GitHub fine-grained PATs cannot be rotated via API. The flow is manual but self-healing:
 
 1. Generate a new PAT with the same scope.
-2. Update `secrets.PAT_DOWNLOAD` in the source repo.
+2. Update `secrets.RELEASE_GITHUB_DOWNLOAD_PAT` in the source repo.
 3. Bump `version:` in `wick.yml` and push to `main`.
 4. `release.yml` tags and builds new binaries with the new PAT embedded.
 5. Existing installs auto-update — and the new binaries can keep checking for releases.
@@ -254,4 +256,4 @@ Cross-compiling Windows / Linux variants from `ubuntu-latest` works because they
 
 - [Desktop Tray](/guide/desktop-tray) — what users get when they run a binary built with these flags
 - [`wick.yml` reference](./wick-yml) — top-level `name:` and `version:` fields
-- [Environment Variables](./env-vars) — build-time env (`WICK_APP_NAME`, `GITHUB_PAT`, ...)
+- [Environment Variables](./env-vars) — build-time env (`WICK_APP_NAME`, `RELEASE_GITHUB_PAT`, ...)

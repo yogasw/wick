@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -15,70 +16,120 @@ import (
 )
 
 const (
-	logPrefix       = "wick-"
-	logSuffix       = ".log"
-	dateLayout      = "2006-01-02"
+	logSuffix            = ".log"
+	dateLayout           = "2006-01-02"
 	defaultRetentionDays = 7
 )
 
-// setupLogFile redirects zerolog output to <UserConfigDir>/<appName>/logs/wick-YYYY-MM-DD.log
-// (tee'd with stderr) and prunes per-day files older than retentionDays.
-// Caller defers the returned cleanup func.
+// logSet holds per-component loggers and the log directory path.
+type logSet struct {
+	App    zerolog.Logger
+	Server zerolog.Logger
+	Worker zerolog.Logger
+	Dir    string
+}
+
+// setupLogFiles creates three dated log files under
+// <UserConfigDir>/<appName>/logs/:
 //
-// Co-located with config.json under UserConfigDir so everything an app
-// owns lives in one tree per OS:
+//	app-YYYY-MM-DD.log    — tray / startup / app-level events
+//	server-YYYY-MM-DD.log — HTTP server events
+//	worker-YYYY-MM-DD.log — background job worker events
 //
-//	Windows: %APPDATA%\<appName>\logs\wick-YYYY-MM-DD.log
-//	macOS  : ~/Library/Application Support/<appName>/logs/wick-YYYY-MM-DD.log
-//	Linux  : ~/.config/<appName>/logs/wick-YYYY-MM-DD.log
-//
-// Server + worker goroutines that share this process write here. MCP
-// serve subprocesses (spawned per request by clients like Claude /
-// Cursor) get their own stderr; not tee'd into this file.
-func setupLogFile(appName string, retentionDays int) (string, func(), error) {
+// Each file is also tee'd to the original stderr. The global zerolog
+// log.Logger and stdlib log are set to the App logger. Stdout/Stderr are
+// piped so fmt.Printf and panic traces land in app.log on windowsgui
+// builds where there is no real console. Caller defers the returned
+// cleanup func which flushes the pipe goroutines then closes all files.
+func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		return "", func() {}, err
+		return logSet{}, func() {}, err
 	}
 	dir = filepath.Join(dir, appName, "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", func() {}, err
+		return logSet{}, func() {}, err
 	}
 	if retentionDays <= 0 {
 		retentionDays = defaultRetentionDays
 	}
 	pruneOldLogs(dir, retentionDays)
 
-	path := filepath.Join(dir, logPrefix+time.Now().Format(dateLayout)+logSuffix)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return "", func() {}, err
+	date := time.Now().Format(dateLayout)
+	openLog := func(prefix string) (*os.File, error) {
+		return os.OpenFile(
+			filepath.Join(dir, prefix+"-"+date+logSuffix),
+			os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644,
+		)
 	}
-	// Tee zerolog + stdlib log into the file alongside stderr.
-	mw := io.MultiWriter(os.Stderr, f)
-	log.Logger = zerolog.New(mw).With().Timestamp().Logger()
-	stdlog.SetOutput(mw)
+	fApp, err := openLog("app")
+	if err != nil {
+		return logSet{}, func() {}, err
+	}
+	fSrv, err := openLog("server")
+	if err != nil {
+		fApp.Close()
+		return logSet{}, func() {}, err
+	}
+	fWrk, err := openLog("worker")
+	if err != nil {
+		fApp.Close()
+		fSrv.Close()
+		return logSet{}, func() {}, err
+	}
 
-	// Pipe os.Stdout + os.Stderr through goroutines so any direct write
-	// (fmt.Printf from app code, third-party libs, panic traces) lands
-	// in the same log file. Without this, windowsgui builds drop those
-	// writes silently because there's no real console attached.
 	origOut, origErr := os.Stdout, os.Stderr
+
+	var wg sync.WaitGroup
+	var pipeWriters []*os.File
+
+	// Pipe os.Stdout so fmt.Printf and panic traces land in app.log.
 	if rOut, wOut, perr := os.Pipe(); perr == nil {
 		os.Stdout = wOut
-		go io.Copy(io.MultiWriter(origOut, f), rOut)
+		pipeWriters = append(pipeWriters, wOut)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			io.Copy(io.MultiWriter(origOut, fApp), rOut)
+		}()
 	}
+	// Pipe os.Stderr for windowsgui builds that have no real console.
 	if rErr, wErr, perr := os.Pipe(); perr == nil {
 		os.Stderr = wErr
-		go io.Copy(io.MultiWriter(origErr, f), rErr)
+		pipeWriters = append(pipeWriters, wErr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			io.Copy(io.MultiWriter(origErr, fApp), rErr)
+		}()
 	}
 
-	return path, func() { f.Close() }, nil
+	mwApp := io.MultiWriter(origErr, fApp)
+	mwSrv := io.MultiWriter(origErr, fSrv)
+	mwWrk := io.MultiWriter(origErr, fWrk)
+
+	ls := logSet{
+		App:    zerolog.New(mwApp).With().Timestamp().Logger(),
+		Server: zerolog.New(mwSrv).With().Timestamp().Logger(),
+		Worker: zerolog.New(mwWrk).With().Timestamp().Logger(),
+		Dir:    dir,
+	}
+
+	log.Logger = ls.App
+	stdlog.SetOutput(mwApp)
+
+	return ls, func() {
+		for _, w := range pipeWriters {
+			w.Close()
+		}
+		wg.Wait()
+		fApp.Close()
+		fSrv.Close()
+		fWrk.Close()
+	}, nil
 }
 
-// pruneOldLogs removes wick-YYYY-MM-DD.log files older than retentionDays.
-// Best-effort: errors logged but not surfaced (we don't want startup
-// to fail because the user's filesystem is weird).
+// pruneOldLogs removes <prefix>-YYYY-MM-DD.log files older than retentionDays.
 func pruneOldLogs(dir string, retentionDays int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -90,11 +141,16 @@ func pruneOldLogs(dir string, retentionDays int) {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasPrefix(name, logPrefix) || !strings.HasSuffix(name, logSuffix) {
+		if !strings.HasSuffix(name, logSuffix) {
 			continue
 		}
-		dateStr := strings.TrimSuffix(strings.TrimPrefix(name, logPrefix), logSuffix)
-		t, err := time.Parse(dateLayout, dateStr)
+		// Extract date from app-YYYY-MM-DD.log or legacy wick-YYYY-MM-DD.log
+		base := strings.TrimSuffix(name, logSuffix)
+		idx := strings.LastIndex(base, "-")
+		if idx < 0 {
+			continue
+		}
+		t, err := time.Parse(dateLayout, base[idx+1:])
 		if err != nil {
 			continue
 		}
