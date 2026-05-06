@@ -39,6 +39,7 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/web"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -359,6 +360,7 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 // signal.NotifyContext; in-process callers (system tray) cancel from
 // the UI.
 func (s *Server) Run(ctx context.Context, port int) error {
+	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
 
 	h := chainMiddleware(
@@ -380,7 +382,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	shutdownErr := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		log.Info().Msg("server is shutting down...")
+		logger.Info().Msg("server is shutting down...")
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		httpSrv.SetKeepAlivesEnabled(false)
@@ -396,7 +398,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	} else {
 		fmt.Println()
 	}
-	log.Info().Msgf("server serving on port %d", port)
+	logger.Info().Msgf("server serving on port %d", port)
 	err := httpSrv.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen on %s: %w", addr, err)
@@ -404,7 +406,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	if e := <-shutdownErr; e != nil {
 		return fmt.Errorf("shutdown: %w", e)
 	}
-	log.Info().Msg("server stopped")
+	logger.Info().Msg("server stopped")
 	return nil
 }
 

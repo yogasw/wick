@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/pkg/job"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -64,6 +65,7 @@ type Server struct {
 // Run bootstraps jobs and starts the scheduler loop. Cancel ctx to
 // stop. Returns nil on clean shutdown or the bootstrap error.
 func (s *Server) Run(ctx context.Context) error {
+	logger := zerolog.Ctx(ctx)
 	allJobs := jobs.All()
 	if err := job.ValidateJobs(allJobs); err != nil {
 		return err
@@ -71,12 +73,12 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.jobsSvc.Bootstrap(ctx, allJobs); err != nil {
 		return err
 	}
-	log.Info().Msgf("worker: bootstrapped %d job(s)", len(allJobs))
+	logger.Info().Msgf("worker: bootstrapped %d job(s)", len(allJobs))
 
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
-	log.Info().Msg("worker: scheduler started (checking every 60s)")
+	logger.Info().Msg("worker: scheduler started (checking every 60s)")
 
 	s.tick(ctx)
 
@@ -85,16 +87,17 @@ func (s *Server) Run(ctx context.Context) error {
 		case <-ticker.C:
 			s.tick(ctx)
 		case <-ctx.Done():
-			log.Info().Msg("worker: shutting down")
+			logger.Info().Msg("worker: shutting down")
 			return nil
 		}
 	}
 }
 
 func (s *Server) tick(ctx context.Context) {
+	logger := zerolog.Ctx(ctx)
 	enabled, err := s.jobsSvc.ListEnabledJobs(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("worker: list enabled jobs")
+		logger.Error().Err(err).Msg("worker: list enabled jobs")
 		return
 	}
 
@@ -108,10 +111,10 @@ func (s *Server) tick(ctx context.Context) {
 		}
 		runID, err := s.jobsSvc.RunCron(ctx, j.Key)
 		if err != nil {
-			log.Warn().Str("job", j.Key).Err(err).Msg("worker: skip run")
+			logger.Warn().Str("job", j.Key).Err(err).Msg("worker: skip run")
 			continue
 		}
-		log.Info().Str("job", j.Key).Str("run_id", runID).Msg("worker: triggered")
+		logger.Info().Str("job", j.Key).Str("run_id", runID).Msg("worker: triggered")
 	}
 }
 
