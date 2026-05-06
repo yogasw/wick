@@ -4,9 +4,15 @@ outline: deep
 
 # `wick build`
 
-`wick build` compiles your project to a Go binary with version metadata and (optionally) self-updater credentials baked in via Go ldflags, then wraps it into the platform-native distributable: `.exe` with embedded icon + version metadata on Windows, `.app` bundle plus `.dmg` disk image on macOS, `.deb` package on Linux. Replaces the hand-rolled `go build -ldflags ...` task that older `wick.yml` templates shipped.
+`wick build` compiles the project's `main.go` to a Go binary with version metadata and (optionally) self-updater credentials baked in via `-ldflags`, then wraps it into the platform-native distributable. Replaces the hand-rolled `go build -ldflags …` task that older `wick.yml` templates shipped.
 
-The default behavior reads `wick.yml` and produces in `bin/`:
+| OS | Default artifact | Add with `--installer` |
+|---|---|---|
+| Windows | `.exe` with embedded brand icon + version metadata | `.msi` — per-user install to `%LocalAppData%\Programs\<AppName>`, Start Menu shortcut, Add/Remove Programs entry. No UAC at install or update time; the in-app self-updater keeps working in place. Requires `wixl` on PATH; skipped with a warning if missing. |
+| macOS | `.app` bundle + `.dmg` disk image (host-darwin only — needs `hdiutil`) | `.dmg` is staged with an `Applications` symlink so Finder shows the standard drag-to-install layout. |
+| Linux | `.deb` package (already a proper installer) | unchanged |
+
+## Quick start
 
 ```bash
 wick build
@@ -16,25 +22,60 @@ wick build
 # bin/<name>-linux-<arch>.deb        Debian package (linux only)
 ```
 
-That covers local development. For cross-compile pick one of the flags below (env vars still work for CI compatibility):
+`wick build` reads `name:` and `version:` from `wick.yml`, so a fresh `wick init` project builds without any flags.
+
+## Cross-compile
+
+Pick one — flag, env vars, or both. The flag wins when both are set.
 
 ```bash
-wick build --target linux/arm64       # shorthand
+wick build --target linux/arm64        # shorthand
 wick build --goos linux --goarch arm64 # explicit (mirrors env vars)
 GOOS=linux GOARCH=arm64 wick build     # env vars (CI flow)
 ```
 
-Multi-target in one shot — best-effort, skips targets that can't build on the current host (e.g. darwin/* when not running on macOS):
+Multi-target in one shot — best-effort, skips targets that can't build on the current host (e.g. `darwin/*` when not on macOS):
 
 ```bash
 wick build --all
 # > windows/amd64   ✓ bin/myapp-windows-amd64.exe
-# > linux/amd64     ✓ bin/myapp-linux-amd64
+# > linux/amd64     ✓ bin/myapp-linux-amd64.deb
 # > darwin/amd64    ✗ skipped (darwin needs macOS host)
 # Summary: 4/6 succeeded (2 skipped/failed)
 ```
 
-Embed PAT + version for a release build:
+## Installer mode
+
+`--installer` opts the windows + darwin targets into installer-friendly artifacts on top of the defaults. Off by default so existing pipelines keep producing the same lighter artifacts.
+
+When to enable:
+- The app needs a stable install path for autostart entries, file associations, or the in-app self-updater (a portable `.exe` at an arbitrary location breaks all three when the user moves it).
+- You want a proper Windows uninstaller listed in Add/Remove Programs.
+- You want the macOS `.dmg` to show a drag-to-`Applications` layout instead of just the `.app` icon.
+
+```bash
+wick build --installer
+wick build --installer --target windows/amd64
+```
+
+The Windows `.msi` is built **per-user** and installs to `%LocalAppData%\Programs\<AppName>\<AppName>.exe`. Per-user matters for two reasons:
+
+- **No UAC** at install time, so the wizard runs without admin prompts.
+- The install path is **user-writable**, so the in-app self-updater rewrites the `.exe` the same way it does on portable builds — no admin elevation per update.
+
+Building the `.msi` requires `wixl` from msitools on PATH — skipped with a warning when missing, so the `.exe` still ships:
+
+| Host | Install command |
+|---|---|
+| Ubuntu / Debian | `apt install wixl` |
+| Fedora | `dnf install msitools` |
+| Arch | `pacman -S msitools` |
+| macOS | `brew install msitools` |
+| Windows (msys2) | `pacman -S mingw-w64-x86_64-msitools` |
+
+The MSI never adds the app to autostart — autostart stays an opt-in toggle inside the running app, which writes a `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry pointing at the installed `.exe` path.
+
+## Embed self-updater credentials
 
 ```bash
 WICK_APP_VERSION=1.2.0 \
@@ -51,12 +92,13 @@ wick build --target linux/arm64
 | `--app-version` | `WICK_APP_VERSION` | Sets `app.BuildAppVersion`. Shown in the tray title and About menu, advertised by MCP. |
 | `--release-github-pat` | `RELEASE_GITHUB_PAT` | Sets `app.GitHubPAT`. Empty = self-updater disabled. |
 | `--release-github-repo` | `RELEASE_GITHUB_REPOSITORY` | Sets `app.GitHubRepo` (releases repo `owner/repo`). Empty = self-updater disabled. Note: not `GITHUB_REPOSITORY` because GitHub Actions auto-injects that to the source repo and silently blocks step-level overrides. |
-| `-o`, `--output` | — | Raw binary output path. Default `bin/<app-name>-<goos>-<goarch>[.exe]`. The platform-native distributable (.dmg/.deb) is always written next to it; this flag only renames the raw binary. |
-| `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`). Mutually exclusive with `--goos`/`--goarch`. |
+| `-o`, `--output` | — | Raw binary output path. Default `bin/<app-name>-<goos>-<goarch>[.exe]`. The platform-native distributable (`.dmg` / `.deb` / `.msi`) is always written next to it; this flag only renames the raw binary. |
+| `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`). Mutually exclusive with `--goos` / `--goarch`. |
 | `--goos` | `GOOS` | Target GOOS. Mutually exclusive with `--target`. |
 | `--goarch` | `GOARCH` | Target GOARCH. Mutually exclusive with `--target`. |
-| `--all` | — | Best-effort build for every supported OS/arch. Skips darwin/* on non-darwin hosts. Mutually exclusive with `--target`/`--goos`/`--goarch`/`--output`. |
+| `--all` | — | Best-effort build for every supported OS / arch. Skips `darwin/*` on non-darwin hosts. Mutually exclusive with `--target` / `--goos` / `--goarch` / `--output`. |
 | `--headless` | — | Adds `-tags headless`. Drops the tray UI; keeps `server`, `worker`, `mcp` subcommands. |
+| `--installer` | — | Wrap into installer-friendly artifacts: windows `.msi` (needs `wixl` on PATH) and darwin `.dmg` with Applications symlink. Off by default. |
 
 ## Resolution order
 
@@ -70,6 +112,14 @@ Each value is resolved independently, picking the first non-empty source:
 | GitHub releases repo | `--release-github-repo` → `$RELEASE_GITHUB_REPOSITORY` |
 
 The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadBuildInfo()` — no flag.
+
+## End-user install flow
+
+| OS | Default `wick build` | `wick build --installer` |
+|---|---|---|
+| Windows | Double-click the `.exe` — runs in place. Move the file = move the app. | Double-click the `.msi` → wizard installs to `%LocalAppData%\Programs\<AppName>` (no UAC). Uninstall via Add/Remove Programs. |
+| macOS | Open the `.dmg`, drag `<app>.app` into `/Applications`. | Same gesture, but the mounted volume shows `<app>.app` next to an `Applications` shortcut as a visual hint. |
+| Linux | `sudo apt install ./<app>-linux-<arch>.deb` (or `dpkg -i`). Installs to `/usr/bin/<app>` with `.desktop` entry + icon. Same flow either way. |
 
 ## ldflags injection
 
@@ -88,40 +138,34 @@ The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadB
 
 ## CI/CD with GitHub Actions
 
-`wick init` copies a single workflow into `template/.github/workflows/release.yml`. It implements push-to-tag-to-release as three sequential jobs in one run:
+`wick init` copies a single workflow into `template/.github/workflows/release.yml`. Push-to-tag-to-release runs as three sequential jobs in one workflow:
 
-### `release.yml`
-
-Trigger: `on: push` to `main` / `master`. Three jobs:
-
-1. **`prepare`** — read `version:` from `wick.yml`. If `v<version>` is not yet a tag on origin, output `created=true` plus the commit SHA. If it already exists, output `created=false` and skip downstream jobs. **The tag is not pushed yet.**
-2. **`build`** (`needs: prepare`, runs only if `created=true`, `fail-fast: false`) — checkout the SHA, build 6 binaries via the matrix below, upload artifacts. A failed matrix entry does not cancel the others.
-3. **`release`** (`needs: [prepare, build]`, runs even if some matrix entries failed) — download artifacts, fail with a clear error if **none** were uploaded, otherwise `gh release create <tag>` against your releases repo and **then** push the tag to the source repo.
+1. **`prepare`** — read `version:` from `wick.yml`. If `v<version>` is not yet a tag on origin (and on the releases repo, when separate), output `created=true` plus the commit SHA. Otherwise output `created=false` and skip downstream jobs. **The tag is not pushed yet.**
+2. **`build`** (`needs: prepare`, runs only if `created=true`, `fail-fast: false`) — checkout the SHA, build the matrix targets, upload artifacts. A failed matrix entry does not cancel the others.
+3. **`release`** (`needs: [prepare, build]`, runs even if some matrix entries failed) — download artifacts, fail with a clear error if **none** were uploaded, otherwise `gh release create <tag>` against the releases repo and **then** push the tag to the source repo.
 
 **Tag-after-release semantics.** The tag only lands on origin when at least one binary is published. If every build fails, no tag is pushed and a re-run starts from the same SHA. For the same-repo setup, `gh release create --target <sha>` creates the tag atomically with the release; for the separate-releases-repo setup, the tag is pushed via `git push origin <tag>` after `gh release create` succeeds.
 
-**Why one workflow instead of two:** GitHub blocks tag pushes made with the default `GITHUB_TOKEN` from triggering other workflows (anti-loop guard). A split design (`auto-tag.yml` → `release.yml`) needs a user PAT to push the tag, otherwise `release.yml` never fires. The single-flow design uses job dependencies (`needs:`) instead of an event-trigger handoff, so it works with `github.token` alone — no `RELEASE_GITHUB_PUBLISH_PAT` required for same-repo setups.
+**Why one workflow instead of two.** GitHub blocks tag pushes made with the default `GITHUB_TOKEN` from triggering other workflows (anti-loop guard). A split design (`auto-tag.yml` → `release.yml`) would need a user PAT to push the tag, otherwise `release.yml` never fires. The single-flow design uses job dependencies (`needs:`) instead of an event-trigger handoff, so it works with `github.token` alone — no `RELEASE_GITHUB_PUBLISH_PAT` required for same-repo setups.
 
-Build matrix:
+### Build matrix
 
-| OS | Arch | Released asset |
-|---|---|---|
-| windows | amd64 | `<app>-windows-amd64.exe` |
-| windows | arm64 | `<app>-windows-arm64.exe` |
-| darwin | amd64 | `<app>-darwin-amd64.dmg` |
-| darwin | arm64 | `<app>-darwin-arm64.dmg` |
-| linux | amd64 | `<app>-linux-amd64.deb` |
-| linux | arm64 | `<app>-linux-arm64.deb` |
+The shipped workflow runs `wick build --installer`, so each released asset is the platform-native installer:
+
+| OS | Arch | Runner | Released asset |
+|---|---|---|---|
+| windows | amd64 | `ubuntu-latest` (cross-build) | `<app>-windows-amd64.msi` |
+| windows | arm64 | `ubuntu-latest` (cross-build) | `<app>-windows-arm64.msi` |
+| darwin | amd64 | `macos-latest` | `<app>-darwin-amd64.dmg` |
+| darwin | arm64 | `macos-latest` | `<app>-darwin-arm64.dmg` |
+| linux | amd64 | `ubuntu-latest` | `<app>-linux-amd64.deb` |
+| linux | arm64 | `ubuntu-latest` | `<app>-linux-arm64.deb` |
 
 Each asset ships with a `.sha256` sibling that the self-updater verifies before extracting the inner binary and swapping in place.
 
-User install flow per OS:
+Windows targets cross-compile from `ubuntu-latest` so `wixl` (msitools) can be installed in one `apt install` step — the downstream binary is pure-syscall on windows (no cgo) so the cross-build is byte-identical to a native windows-latest build, and dropping the windows runner shaves ~1 minute off each windows matrix entry.
 
-| OS | Action |
-|---|---|
-| Windows | Double-click the `.exe` — runs directly with embedded icon + version metadata. |
-| macOS | Double-click the `.dmg`, drag `<app>.app` into `/Applications`. |
-| Linux | `sudo apt install ./<app>-linux-<arch>.deb` (or `dpkg -i`). Installs to `/usr/bin/<app>` with `.desktop` entry + icon. |
+To ship the lighter portable `.exe` instead of `.msi`, edit the workflow's build step to `wick build` (drop `--installer`) and update the windows asset extension back to `exe`.
 
 ### Limiting the build matrix
 
@@ -137,15 +181,15 @@ Set the optional `BUILD_TARGETS` Actions variable (Settings → Secrets and vari
 
 Valid values: `windows/amd64`, `windows/arm64`, `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`.
 
-The release job ships whatever artifacts made it through, so you can also use this to drop a flaky target temporarily without editing the workflow.
+The release job ships whatever artifacts made it through, so this is also a way to drop a flaky target temporarily without editing the workflow.
 
 ### Auto-bumping the version
 
-Set the optional `AUTO_VERSION` Actions variable to `true` to make every push to `main`/`master` cut a new release automatically. The flow:
+Set the optional `RELEASE_AUTO_VERSION` Actions variable to `true` to make every push to `main` / `master` cut a new release automatically:
 
-1. **`prepare`** runs `wick version next`, which reads `version:` from `wick.yml`, bumps the **last numeric segment** by one, writes the new value back, and prints it.
+1. **`prepare`** runs `wick version next` — reads `version:` from `wick.yml`, bumps the **last numeric segment** by one, writes the new value back, and prints it. If the resulting tag already exists, it bumps again (capped at 50 retries).
 2. **`build`** bakes that value into the binary via `WICK_APP_VERSION`.
-3. **`release`** publishes `vX.Y.Z`, pushes the tag, then re-runs `wick version next` on a fresh checkout (idempotent — same baseline, same bump) and commits the wick.yml diff back to the branch with `[skip ci]`.
+3. **`release`** publishes `vX.Y.Z`, pushes the tag, then re-runs `wick version next` on a fresh checkout (idempotent — same baseline, same bump) and commits the `wick.yml` diff back to the branch with `[skip ci]`.
 
 The bump format follows whatever is already in `wick.yml:version`:
 
@@ -156,7 +200,7 @@ The bump format follows whatever is already in `wick.yml:version`:
 | `0.6.4` | `v0.6.5` |
 | `1.2.3.4` | `v1.2.3.5` |
 
-| `AUTO_VERSION` | Behavior |
+| `RELEASE_AUTO_VERSION` | Behavior |
 |---|---|
 | _(unset)_ or `false` | Existing flow — read `version:` as-is, skip if the tag already exists. Bump `wick.yml` manually before each release. |
 | `true` | `wick version next` bumps `wick.yml` last segment +1, every push releases, commit-back keeps `wick.yml` in sync with the latest tag. |
@@ -165,18 +209,18 @@ The bump format follows whatever is already in `wick.yml:version`:
 
 - **No infinite loop.** The commit-back step pushes via `github.token`. GitHub explicitly does not re-trigger workflows on commits pushed by `GITHUB_TOKEN` ([anti-loop guard](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow)). The `[skip ci]` marker is belt-and-suspenders.
 - **No race.** A workflow-level <code v-pre>concurrency: { group: release-${{ github.ref }}, cancel-in-progress: false }</code> serializes pushes on the same branch, so two pushes can't both try to bump `0.6.4 → 0.6.5`.
-- **Atomic enough.** If the release succeeds but the commit-back fails (e.g. branch protection blocks the bot push), the next run will read the still-old `wick.yml`, compute the same tag, and skip with "tag exists." The release isn't lost; the wick.yml diff is what's missing — recoverable manually.
+- **Atomic enough.** If the release succeeds but the commit-back fails (e.g. branch protection blocks the bot push), the next run reads the still-old `wick.yml`, computes the same tag, and skips with "tag exists." The release isn't lost; the `wick.yml` diff is what's missing — recoverable manually.
 
-#### Manual jump (cut a minor/major release)
+#### Manual jump (cut a minor / major release)
 
-Edit `wick.yml:version` to a new base (e.g. `0.7.0`), push:
+Edit `wick.yml:version` to a new base (e.g. `0.7.0`) and push:
 - That push releases `v0.7.0`.
 - Commit-back bumps to `0.7.1`.
 - Auto-bump continues `v0.7.2`, `v0.7.3`, …
 
 #### Branch protection
 
-If `main`/`master` requires PRs or status checks, allow `github-actions[bot]` to bypass — otherwise the commit-back fails. The release itself still publishes; only the wick.yml diff is missing.
+If `main` / `master` requires PRs or status checks, allow `github-actions[bot]` to bypass — otherwise the commit-back fails. The release itself still publishes; only the `wick.yml` diff is missing.
 
 ## PAT setup
 
@@ -224,7 +268,7 @@ When a PAT expires, the tray menu surfaces it as `Update check failed — PAT ex
 ```
 bump version: in wick.yml → push main
     ↓
-release.yml job 1 (prepare): tag exists on origin?
+release.yml job 1 (prepare): tag exists on origin (and releases repo, if separate)?
                                 yes → created=false, stop
                                 no  → created=true, sha=<HEAD>, no push yet
     ↓
@@ -240,7 +284,7 @@ new binary in <app>-releases
 existing install → self-updater downloads bundle → extracts inner binary → "Restart to apply" appears
 ```
 
-A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this workflow — the trigger is `on: push branches`, not `on: push tags`. To cut a release, bump `version:` in `wick.yml` and push to `main`; that's the single source of truth — unless `AUTO_VERSION=true`, in which case every push cuts the next tag automatically (see [Auto-bumping the version](#auto-bumping-the-version)).
+A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this workflow — the trigger is `on: push branches`, not `on: push tags`. To cut a release, bump `version:` in `wick.yml` and push to `main`; that's the single source of truth — unless `RELEASE_AUTO_VERSION=true`, in which case every push cuts the next tag automatically (see [Auto-bumping the version](#auto-bumping-the-version)).
 
 ## Cross-compilation notes
 
@@ -256,4 +300,4 @@ Cross-compiling Windows / Linux variants from `ubuntu-latest` works because they
 
 - [Desktop Tray](/guide/desktop-tray) — what users get when they run a binary built with these flags
 - [`wick.yml` reference](./wick-yml) — top-level `name:` and `version:` fields
-- [Environment Variables](./env-vars) — build-time env (`WICK_APP_NAME`, `RELEASE_GITHUB_PAT`, ...)
+- [Environment Variables](./env-vars) — build-time env (`WICK_APP_NAME`, `RELEASE_GITHUB_PAT`, …)

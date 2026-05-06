@@ -3,8 +3,16 @@ name: Release
 # Single-flow release pipeline:
 #   push to main/master
 #     → prepare job: read version from wick.yml, skip if tag already exists
-#     → build job: matrix build 6 OS×arch, fail-fast off
+#     → build job: matrix build 6 OS×arch installer artifacts, fail-fast off
 #     → release job: gh release + push tag IFF at least one build succeeded
+#
+# Build runs `wick build --installer`, so the released artifact per OS is
+# the platform-native installer:
+#   windows → <app>-windows-<arch>.msi (per-user; no UAC; self-update works
+#             in place because %LocalAppData%\Programs is user-writable)
+#   darwin  → <app>-darwin-<arch>.dmg (with Applications symlink for the
+#             standard drag-to-install layout)
+#   linux   → <app>-linux-<arch>.deb  (already a proper installer)
 #
 # Tag is only pushed at the end, after the release succeeds — so a failed
 # pipeline leaves no tag behind, and a re-run starts clean.
@@ -85,7 +93,7 @@ concurrency:
 # ┌─ Optional: limit which OS/arch get built ─────────────────────────────┐
 # │                                                                        │
 # │  Settings → Secrets and variables → Actions → Variables               │
-# │    RELEASE_BUILD_TARGETS = comma-separated <os>/<arch> to build       │
+# │    BUILD_TARGETS = comma-separated <os>/<arch> to build       │
 # │                                                                        │
 # │  Examples:                                                            │
 # │    (unset)                          → build everything (default)      │
@@ -211,16 +219,46 @@ jobs:
         id: ver
         env:
           RELEASE_AUTO_VERSION: ${{ vars.RELEASE_AUTO_VERSION }}
-        # RELEASE_AUTO_VERSION=true  → wick.yml `version:` +1 last segment via
-        #                       `wick version next`, ignore tag-exists check.
+          IS_SEPARATE: ${{ steps.repo.outputs.is_separate }}
+          RELEASES_REPO: ${{ steps.repo.outputs.releases_repo }}
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_PUBLISH_PAT || github.token }}
+        # RELEASE_AUTO_VERSION=true  → loop `wick version next` until the
+        #                       resulting tag does not exist in source repo
+        #                       (and releases repo, if separate). Each iter
+        #                       rewrites wick.yml; final value is what gets
+        #                       committed back. Cap 50 to avoid runaway.
         # RELEASE_AUTO_VERSION unset → read `version:` from wick.yml as-is, the
         #                       tag-exists check below decides if we release.
         run: |
           set -euo pipefail
+          tag_exists() {
+            local t="$1"
+            if git ls-remote --tags origin "$t" | grep -q .; then
+              return 0
+            fi
+            if [ "$IS_SEPARATE" = "true" ]; then
+              if gh release view "$t" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+                return 0
+              fi
+            fi
+            return 1
+          }
           if [ "$RELEASE_AUTO_VERSION" = "true" ]; then
-            VERSION=$(wick version next)
-            TAG="v${VERSION}"
-            echo "RELEASE_AUTO_VERSION: bumped wick.yml to $VERSION"
+            FOUND=false
+            for _ in $(seq 1 50); do
+              VERSION=$(wick version next)
+              TAG="v${VERSION}"
+              if ! tag_exists "$TAG"; then
+                echo "RELEASE_AUTO_VERSION: bumped wick.yml to $VERSION"
+                FOUND=true
+                break
+              fi
+              echo "Tag $TAG already taken — re-bumping."
+            done
+            if [ "$FOUND" != "true" ]; then
+              echo "::error::Could not find free tag after 50 bumps — stuck. Last try: $TAG"
+              exit 1
+            fi
           else
             VERSION=$(grep '^version:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
             if [ -z "$VERSION" ]; then
@@ -256,11 +294,15 @@ jobs:
         id: matrix
         shell: bash
         env:
-          TARGETS: ${{ vars.RELEASE_BUILD_TARGETS }}
+          TARGETS: ${{ vars.BUILD_TARGETS }}
+        # Windows targets cross-compile from ubuntu so we can `apt install
+        # wixl` (msitools) to produce the .msi installer in one step. The
+        # downstream binary is pure-syscall on windows (no cgo) so the
+        # cross-build is byte-identical to a native windows-latest build.
         run: |
           ALL='[
-            {"os":"windows","arch":"amd64","runner":"windows-latest"},
-            {"os":"windows","arch":"arm64","runner":"windows-latest"},
+            {"os":"windows","arch":"amd64","runner":"ubuntu-latest"},
+            {"os":"windows","arch":"arm64","runner":"ubuntu-latest"},
             {"os":"darwin","arch":"amd64","runner":"macos-latest","cgo":"1"},
             {"os":"darwin","arch":"arm64","runner":"macos-latest"},
             {"os":"linux","arch":"amd64","runner":"ubuntu-latest"},
@@ -300,16 +342,19 @@ jobs:
       - name: Resolve app name and asset path
         id: meta
         shell: bash
-        # `wick build` produces the platform-native distributable in bin/:
-        #   windows → <app>-windows-<arch>.exe
-        #   darwin  → <app>-darwin-<arch>.dmg (alongside the raw binary + .app bundle)
-        #   linux   → <app>-linux-<arch>.deb  (alongside the raw binary)
-        # Only the bundle is uploaded as the release asset.
+        # `wick build --installer` produces the installer artifact in bin/:
+        #   windows → <app>-windows-<arch>.msi (per-user; no UAC; self-update
+        #             works in place on the installed .exe)
+        #   darwin  → <app>-darwin-<arch>.dmg (with Applications symlink so
+        #             Finder shows the standard drag-to-install layout)
+        #   linux   → <app>-linux-<arch>.deb  (already a proper installer)
+        # Only the installer is uploaded as the release asset; the raw .exe
+        # / .app bundle stay in bin/ for local debugging.
         run: |
           NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
           [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
           case "${{ matrix.os }}" in
-            windows) EXT="exe" ;;
+            windows) EXT="msi" ;;
             darwin)  EXT="dmg" ;;
             linux)   EXT="deb" ;;
           esac
@@ -326,6 +371,14 @@ jobs:
 
       - name: Setup (download tailwind, install templ, go mod tidy)
         run: wick setup
+
+      # wixl (msitools) is the cross-platform .msi builder wick uses to wrap
+      # the windows .exe into an installer when --installer is passed. Only
+      # needed on the runners that produce a windows target (cross-built
+      # from ubuntu in the matrix above). Other runners skip this step.
+      - name: Install wixl (msitools)
+        if: matrix.os == 'windows'
+        run: sudo apt-get update && sudo apt-get install -y wixl
 
       - name: Build
         env:
@@ -350,7 +403,11 @@ jobs:
           # the tag we're about to publish. Critical when RELEASE_AUTO_VERSION=true
           # since wick.yml isn't bumped per release.
           WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
-        run: wick build
+        # --installer wraps the windows .exe into a per-user .msi (needs
+        # wixl, installed above) and stages the darwin .dmg with an
+        # Applications symlink for the standard drag-to-install layout.
+        # Linux .deb is already a proper installer either way.
+        run: wick build --installer
 
       - name: Checksum
         shell: bash

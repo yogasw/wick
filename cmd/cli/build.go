@@ -27,8 +27,10 @@ var allTargets = []string{
 
 // buildCmd compiles the downstream binary plus the platform-native
 // distributable (.dmg on darwin, .deb on linux, .exe with embedded
-// metadata on windows). Reads name/version from wick.yml and bakes
-// optional GitHubPAT/GitHubRepo into the binary for the self-updater.
+// metadata on windows; --installer adds .msi on windows and a
+// drag-to-install Applications symlink to .dmg on darwin). Reads
+// name/version from wick.yml and bakes optional GitHubPAT/GitHubRepo
+// into the binary for the self-updater.
 //
 // Runs the wick.yml `generate` task first when present so templ +
 // CSS + go generate stay in sync with the binary — keeps CI one-shot.
@@ -42,8 +44,9 @@ func buildCmd() *cobra.Command {
 		target     string
 		goos       string
 		goarch     string
-		headless   bool
-		buildAll   bool
+		headless  bool
+		buildAll  bool
+		installer bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build",
@@ -55,6 +58,11 @@ wrap it into the platform-native distributable:
   windows → .exe with embedded brand icon + version metadata
   darwin  → .app bundle, then .dmg disk image (host-darwin only)
   linux   → .deb binary package
+
+Pass --installer for opt-in installer-friendly artifacts: an .msi on
+windows (requires wixl on PATH; skipped with a warning when missing)
+and a .dmg with an Applications symlink on darwin for the standard
+drag-to-install layout.
 
 Resolution order per value:
   --app-name    flag > $WICK_APP_NAME    > wick.yml name    > "app"
@@ -94,6 +102,7 @@ Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`
 				GitHubPAT:  githubPAT,
 				GitHubRepo: githubRepo,
 				Headless:   headless,
+				Installer:  installer,
 			}
 
 			if buildAll {
@@ -135,6 +144,7 @@ Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`
 	cmd.Flags().StringVar(&goarch, "goarch", "", "Target GOARCH (env: GOARCH). Mutually exclusive with --target")
 	cmd.Flags().BoolVar(&headless, "headless", false, "Build with -tags headless (excludes systray)")
 	cmd.Flags().BoolVar(&buildAll, "all", false, "Best-effort build for every supported OS/arch (skips darwin/* on non-darwin hosts). Mutually exclusive with --target/--goos/--goarch/--output")
+	cmd.Flags().BoolVar(&installer, "installer", false, "Wrap into installer-friendly artifacts: windows .msi (per-user, installs to %LocalAppData%\\Programs\\<AppName> — no UAC, self-update works in place; needs wixl on PATH) and darwin .dmg with Applications symlink. Off by default — keeps the lighter portable .exe / plain .dmg")
 	return cmd
 }
 

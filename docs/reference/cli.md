@@ -142,7 +142,7 @@ $ wick upgrade
 current: v0.1.13
 latest:  v0.4.2
 upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.8.2
+> go get github.com/yogasw/wick@v0.8.3
 > go mod tidy
 > <dev task from wick.yml>
 ```
@@ -153,7 +153,7 @@ Steps:
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
 3. If already on latest, exit without prompting.
 4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.8.2`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+5. Run `go get github.com/yogasw/wick@v0.8.3`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 
@@ -255,7 +255,7 @@ Write the binary's MCP entry into the chosen client's config file. Resolves `os.
 ```bash
 ./bin/myapp mcp install                          # all detected clients
 ./bin/myapp mcp install --client claude          # Claude Desktop only
-./bin/myapp mcp install --client claude-code     # writes .mcp.json in CWD
+./bin/myapp mcp install --client claude-code     # writes ~/.claude.json
 ./bin/myapp mcp install --name custom-server     # override server name
 ```
 

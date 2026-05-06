@@ -301,7 +301,7 @@ wick mcp install [--client <target>] [--name <server-name>] [--mode auto|dev|bui
 | `cursor` | Cursor IDE — `settings.json` |
 | `gemini` | Gemini CLI — `~/.gemini/settings.json` |
 | `codex` | Codex CLI — `~/.codex/config.toml` |
-| `claude-code` | Claude Code (project) — `.mcp.json` in project root |
+| `claude-code` | Claude Code — `~/.claude.json` |
 | `all` | All five targets |
 
 Default `--client` is `claude`.
@@ -312,8 +312,8 @@ From the project root:
 
 ```sh
 wick mcp install --client claude-code
-# ✓ Claude Code (project)
-#   .mcp.json
+# ✓ Claude Code
+#   ~/.claude.json
 ```
 
 Or for dev mode (always recompiles — no stale binary surprises):
@@ -322,7 +322,7 @@ Or for dev mode (always recompiles — no stale binary surprises):
 wick mcp install --client claude-code --mode dev
 ```
 
-The generated `.mcp.json`:
+The merged entry inside `~/.claude.json`:
 
 ```json
 {
@@ -346,14 +346,6 @@ For `auto` / `build` / `rebuild` modes the entry uses the compiled wick binary w
       "args": ["mcp", "serve", "--mode", "auto", "--project", "/path/to/myproject"]
     }
   }
-}
-```
-
-To approve all servers from `.mcp.json` without per-server prompts, add to `.claude/settings.json`:
-
-```json
-{
-  "enableAllProjectMcpServers": true
 }
 ```
 

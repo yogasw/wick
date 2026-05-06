@@ -12,6 +12,13 @@ type Config struct {
 	GitHubPAT  string
 	GitHubRepo string
 	Headless   bool
+	// Installer opts the windows target into building an .msi on top
+	// of the raw .exe (requires `wixl` from msitools on PATH). The
+	// .msi is always built per-user — installs to %LocalAppData%\
+	// Programs\<AppName>, requires no UAC, and lets the in-app
+	// self-updater rewrite the .exe without elevation. Off by default
+	// so existing pipelines keep producing the same artifacts.
+	Installer bool
 }
 
 // Result lists the artifacts a Build produced. Binary is always the
