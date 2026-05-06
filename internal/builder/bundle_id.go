@@ -1,4 +1,4 @@
-package cli
+package builder
 
 import (
 	"os"
@@ -6,14 +6,14 @@ import (
 	"strings"
 )
 
-// resolveBundleID derives a CFBundleIdentifier-style reverse-DNS string
-// from go.mod's module path. github.com/owner/app → com.owner.app.
-// Falls back to com.example.<appName> when go.mod is missing or the
-// module path can't be parsed.
+// ResolveBundleID derives a CFBundleIdentifier-style reverse-DNS
+// string from go.mod's module path. github.com/owner/app →
+// com.owner.app. Falls back to com.example.<appName> when go.mod is
+// missing or the module path can't be parsed.
 //
-// Lowercased, dots only — anything outside [a-z0-9.-] gets replaced with
-// "-" so Apple's bundle ID rules ([A-Za-z0-9-.]) hold.
-func resolveBundleID(appName string) string {
+// Lowercased, dots only — anything outside [a-z0-9.-] gets replaced
+// with "-" so Apple's bundle ID rules ([A-Za-z0-9-.]) hold.
+func ResolveBundleID(appName string) string {
 	const fallback = "com.example."
 	data, err := os.ReadFile("go.mod")
 	if err != nil {
@@ -25,9 +25,6 @@ func resolveBundleID(appName string) string {
 		return sanitizeBundleID(fallback + appName)
 	}
 	parts := strings.Split(strings.ToLower(m[1]), "/")
-	// github.com/owner/app → com.owner.app
-	// gitlab.com/group/sub/app → com.group.sub.app
-	// custom.example.dev/app → dev.example.custom.app (full reverse)
 	if len(parts) >= 3 && (parts[0] == "github.com" || parts[0] == "gitlab.com" || parts[0] == "bitbucket.org") {
 		return sanitizeBundleID("com." + strings.Join(parts[1:], "."))
 	}

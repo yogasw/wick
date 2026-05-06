@@ -4,22 +4,43 @@ outline: deep
 
 # `wick build`
 
-`wick build` compiles your project to a single binary with version metadata and (optionally) self-updater credentials baked in via Go ldflags. It replaces the hand-rolled `go build -ldflags ...` task that older `wick.yml` templates shipped.
+`wick build` compiles your project to a Go binary with version metadata and (optionally) self-updater credentials baked in via Go ldflags, then wraps it into the platform-native distributable: `.exe` with embedded icon + version metadata on Windows, `.app` bundle plus `.dmg` disk image on macOS, `.deb` package on Linux. Replaces the hand-rolled `go build -ldflags ...` task that older `wick.yml` templates shipped.
 
-The default behavior reads `wick.yml` and produces `bin/<name>[.exe]`:
+The default behavior reads `wick.yml` and produces in `bin/`:
 
 ```bash
 wick build
+# bin/<name>-<goos>-<goarch>[.exe]   raw binary
+# bin/<name>.app/                    macOS bundle (darwin only)
+# bin/<name>-darwin-<arch>.dmg       macOS disk image (darwin host only — needs hdiutil)
+# bin/<name>-linux-<arch>.deb        Debian package (linux only)
 ```
 
-That covers local development. For CI and cross-compile, mix flags and env vars:
+That covers local development. For cross-compile pick one of the flags below (env vars still work for CI compatibility):
 
 ```bash
-GOOS=linux GOARCH=arm64 \
+wick build --target linux/arm64       # shorthand
+wick build --goos linux --goarch arm64 # explicit (mirrors env vars)
+GOOS=linux GOARCH=arm64 wick build     # env vars (CI flow)
+```
+
+Multi-target in one shot — best-effort, skips targets that can't build on the current host (e.g. darwin/* when not running on macOS):
+
+```bash
+wick build --all
+# > windows/amd64   ✓ bin/myapp-windows-amd64.exe
+# > linux/amd64     ✓ bin/myapp-linux-amd64
+# > darwin/amd64    ✗ skipped (darwin needs macOS host)
+# Summary: 4/6 succeeded (2 skipped/failed)
+```
+
+Embed PAT + version for a release build:
+
+```bash
 WICK_APP_VERSION=1.2.0 \
 GITHUB_PAT=$RELEASE_PAT \
 GITHUB_REPOSITORY=acme/myapp-releases \
-wick build -o myapp-linux-arm64
+wick build --target linux/arm64
 ```
 
 ## Flags
@@ -30,10 +51,12 @@ wick build -o myapp-linux-arm64
 | `--app-version` | `WICK_APP_VERSION` | Sets `app.BuildAppVersion`. Shown in the tray title and About menu, advertised by MCP. |
 | `--github-pat` | `GITHUB_PAT` | Sets `app.GitHubPAT`. Empty = self-updater disabled. |
 | `--github-repo` | `GITHUB_REPOSITORY` | Sets `app.GitHubRepo` (`owner/repo`). Empty = self-updater disabled. |
-| `-o`, `--output` | — | Output path. Default `bin/<app-name>[.exe]`. |
+| `-o`, `--output` | — | Raw binary output path. Default `bin/<app-name>-<goos>-<goarch>[.exe]`. The platform-native distributable (.dmg/.deb) is always written next to it; this flag only renames the raw binary. |
+| `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`). Mutually exclusive with `--goos`/`--goarch`. |
+| `--goos` | `GOOS` | Target GOOS. Mutually exclusive with `--target`. |
+| `--goarch` | `GOARCH` | Target GOARCH. Mutually exclusive with `--target`. |
+| `--all` | — | Best-effort build for every supported OS/arch. Skips darwin/* on non-darwin hosts. Mutually exclusive with `--target`/`--goos`/`--goarch`/`--output`. |
 | `--headless` | — | Adds `-tags headless`. Drops the tray UI; keeps `server`, `worker`, `mcp` subcommands. |
-
-`GOOS` / `GOARCH` are inherited from the environment — no flag needed.
 
 ## Resolution order
 
@@ -79,16 +102,24 @@ Trigger: `on: push` to `main` / `master`. Three jobs:
 
 Build matrix:
 
-| OS | Arch | Output |
+| OS | Arch | Released asset |
 |---|---|---|
 | windows | amd64 | `<app>-windows-amd64.exe` |
 | windows | arm64 | `<app>-windows-arm64.exe` |
-| darwin | amd64 | `<app>-darwin-amd64` |
-| darwin | arm64 | `<app>-darwin-arm64` |
-| linux | amd64 | `<app>-linux-amd64` |
-| linux | arm64 | `<app>-linux-arm64` |
+| darwin | amd64 | `<app>-darwin-amd64.dmg` |
+| darwin | arm64 | `<app>-darwin-arm64.dmg` |
+| linux | amd64 | `<app>-linux-amd64.deb` |
+| linux | arm64 | `<app>-linux-arm64.deb` |
 
-Each binary ships with a `.sha256` sibling that the self-updater verifies before swap.
+Each asset ships with a `.sha256` sibling that the self-updater verifies before extracting the inner binary and swapping in place.
+
+User install flow per OS:
+
+| OS | Action |
+|---|---|
+| Windows | Double-click the `.exe` — runs directly with embedded icon + version metadata. |
+| macOS | Double-click the `.dmg`, drag `<app>.app` into `/Applications`. |
+| Linux | `sudo apt install ./<app>-linux-<arch>.deb` (or `dpkg -i`). Installs to `/usr/bin/<app>` with `.desktop` entry + icon. |
 
 ### Limiting the build matrix
 
@@ -204,7 +235,7 @@ release.yml job 3 (release): any artifacts uploaded?
     ↓
 new binary in <app>-releases
     ↓
-existing install → self-updater downloads → "Restart to apply" appears
+existing install → self-updater downloads bundle → extracts inner binary → "Restart to apply" appears
 ```
 
 A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this workflow — the trigger is `on: push branches`, not `on: push tags`. To cut a release, bump `version:` in `wick.yml` and push to `main`; that's the single source of truth — unless `AUTO_VERSION=true`, in which case every push cuts the next tag automatically (see [Auto-bumping the version](#auto-bumping-the-version)).

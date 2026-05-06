@@ -1,4 +1,8 @@
-package cli
+// Package linux handles Linux-specific build steps — wrapping the
+// raw binary into a Debian binary package (.deb). Pure-Go ar + tar
+// implementation means no system dpkg-deb is required and the package
+// can be cross-built from any host.
+package linux
 
 import (
 	"archive/tar"
@@ -15,7 +19,7 @@ import (
 	"github.com/yogasw/wick/internal/systemtray"
 )
 
-// packageLinuxDeb builds a Debian binary package from a freshly compiled
+// PackageDeb builds a Debian binary package from a freshly compiled
 // Linux binary. Layout inside the .deb:
 //
 //	usr/bin/<app>                                                   (the binary)
@@ -27,11 +31,13 @@ import (
 // .deb format: ar archive containing debian-binary (text "2.0\n"),
 // control.tar.gz (DEBIAN/*), data.tar.gz (the rest of the filesystem).
 //
-// Pure-Go — no dpkg-deb required, runs from any host.
-func packageLinuxDeb(binPath, appName, appVersion, goarch string) (string, error) {
+// Output path is <dir-of-binPath>/<app>-linux-<arch>.deb — kept
+// consistent with mac (.dmg) and windows (.exe) naming so the
+// self-updater can resolve assets with one rule.
+func PackageDeb(binPath, appName, appVersion, goarch string) (string, error) {
 	debArch := mapGoArchToDeb(goarch)
 	ver := strings.TrimPrefix(appVersion, "v")
-	debPath := filepath.Join(filepath.Dir(binPath), fmt.Sprintf("%s_%s_%s.deb", appName, ver, debArch))
+	debPath := filepath.Join(filepath.Dir(binPath), fmt.Sprintf("%s-linux-%s.deb", appName, goarch))
 
 	binBytes, err := os.ReadFile(binPath)
 	if err != nil {
@@ -39,18 +45,15 @@ func packageLinuxDeb(binPath, appName, appVersion, goarch string) (string, error
 	}
 	iconPNG := systemtray.BrandIcon(false)
 
-	// data.tar.gz — fhs payload installed under /
 	dataTarGz, err := buildDataTarGz(appName, binBytes, iconPNG)
 	if err != nil {
 		return "", fmt.Errorf("data.tar.gz: %w", err)
 	}
-	// control.tar.gz — package metadata at DEBIAN/
 	controlTarGz, err := buildControlTarGz(appName, ver, debArch, len(binBytes)+len(iconPNG))
 	if err != nil {
 		return "", fmt.Errorf("control.tar.gz: %w", err)
 	}
 
-	// ar archive: debian-binary, control.tar.gz, data.tar.gz (in that order).
 	deb, err := os.Create(debPath)
 	if err != nil {
 		return "", fmt.Errorf("create deb: %w", err)
@@ -185,7 +188,6 @@ func buildControlTarGz(appName, ver, debArch string, installedSizeBytes int) ([]
 }
 
 func buildControlFile(appName, ver, debArch string, installedSizeBytes int) string {
-	// Installed-Size is in KB, ceiling. dpkg requires a trailing newline.
 	kb := (installedSizeBytes + 1023) / 1024
 	return fmt.Sprintf(`Package: %s
 Version: %s
@@ -213,8 +215,7 @@ StartupNotify=false
 }
 
 // mapGoArchToDeb translates Go's GOARCH names to dpkg's architecture
-// names. Anything else goes through unchanged so future arches still
-// produce a build-time error from dpkg rather than a silent mismatch.
+// names.
 func mapGoArchToDeb(goarch string) string {
 	switch goarch {
 	case "amd64":
@@ -229,4 +230,3 @@ func mapGoArchToDeb(goarch string) string {
 		return goarch
 	}
 }
-

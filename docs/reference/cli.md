@@ -78,13 +78,16 @@ The skill folder contents are always replaced — local edits inside `./.claude/
 
 ### `wick build`
 
-Compile the project to a single binary with version metadata baked in via Go ldflags. Reads `name:` and `version:` from `wick.yml` by default; flags / env vars override.
+Compile the project to a Go binary with version metadata baked in via Go ldflags, then wrap it into the platform-native distributable (`.exe` / `.dmg` / `.deb`). Reads `name:` and `version:` from `wick.yml` by default; flags / env vars override.
 
 ```bash
-wick build                                 # → bin/<wick.yml name>[.exe]
-wick build -o myapp-linux-amd64            # custom output path
+wick build                                 # → bin/<name>-<goos>-<goarch>[.exe] + native bundle
+wick build --target linux/arm64            # cross-compile via shorthand
+wick build --goos linux --goarch arm64     # cross-compile via explicit flags
+wick build --all                           # build every target the host can produce
+wick build -o custom/path                  # rename the raw binary (bundle name unaffected)
 wick build --headless                      # drop tray UI (-tags headless)
-GOOS=linux GOARCH=arm64 wick build         # cross-compile
+GOOS=linux GOARCH=arm64 wick build         # cross-compile via env (CI flow)
 ```
 
 Common flags:
@@ -95,7 +98,11 @@ Common flags:
 | `--app-version` | `WICK_APP_VERSION` | Override `version:` from `wick.yml` |
 | `--github-pat` | `GITHUB_PAT` | Bake PAT for self-updater |
 | `--github-repo` | `GITHUB_REPOSITORY` | Bake `owner/repo` for self-updater |
-| `-o`, `--output` | — | Output path (default `bin/<app-name>[.exe]`) |
+| `-o`, `--output` | — | Raw binary path (default `bin/<name>-<goos>-<goarch>[.exe]`); bundle is written next to it |
+| `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`); mutex with `--goos`/`--goarch` |
+| `--goos` | `GOOS` | Target GOOS; mutex with `--target` |
+| `--goarch` | `GOARCH` | Target GOARCH; mutex with `--target` |
+| `--all` | — | Best-effort build all OS/arch; auto-skip darwin on non-mac host |
 | `--headless` | — | Add `-tags headless` (no tray) |
 
 Full reference incl. CI workflow templates and PAT setup: [`wick build` reference](./build).

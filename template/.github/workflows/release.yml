@@ -258,12 +258,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows, arch: amd64, runner: windows-latest, ext: '.exe' }
-          - { os: windows, arch: arm64, runner: windows-latest, ext: '.exe' }
-          - { os: darwin,  arch: amd64, runner: macos-latest,   ext: '', cgo: 1 }
-          - { os: darwin,  arch: arm64, runner: macos-latest,   ext: ''     }
-          - { os: linux,   arch: amd64, runner: ubuntu-latest,  ext: ''     }
-          - { os: linux,   arch: arm64, runner: ubuntu-latest,  ext: ''     }
+          - { os: windows, arch: amd64, runner: windows-latest }
+          - { os: windows, arch: arm64, runner: windows-latest }
+          - { os: darwin,  arch: amd64, runner: macos-latest, cgo: 1 }
+          - { os: darwin,  arch: arm64, runner: macos-latest }
+          - { os: linux,   arch: amd64, runner: ubuntu-latest }
+          - { os: linux,   arch: arm64, runner: ubuntu-latest }
 
     steps:
       - name: Gate on BUILD_TARGETS
@@ -294,14 +294,26 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         run: go install github.com/yogasw/wick@latest
 
-      - name: Resolve app name and output path
+      - name: Resolve app name and asset path
         if: steps.gate.outputs.enabled == 'true'
         id: meta
         shell: bash
+        # `wick build` produces the platform-native distributable in bin/:
+        #   windows → <app>-windows-<arch>.exe
+        #   darwin  → <app>-darwin-<arch>.dmg (alongside the raw binary + .app bundle)
+        #   linux   → <app>-linux-<arch>.deb  (alongside the raw binary)
+        # Only the bundle is uploaded as the release asset.
         run: |
           NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
+          case "${{ matrix.os }}" in
+            windows) EXT="exe" ;;
+            darwin)  EXT="dmg" ;;
+            linux)   EXT="deb" ;;
+          esac
+          ASSET="${NAME}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "output=${NAME}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
 
       - name: Cache wick setup artifacts
         if: steps.gate.outputs.enabled == 'true'
@@ -333,22 +345,23 @@ jobs:
           # the tag we're about to publish. Critical when AUTO_VERSION=true
           # since wick.yml isn't bumped per release.
           WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
-        run: wick build -o ${{ steps.meta.outputs.output }}
+        run: wick build
 
       - name: Checksum
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
-          sha256sum "${{ steps.meta.outputs.output }}" \
-            > "${{ steps.meta.outputs.output }}.sha256"
+          cd bin
+          sha256sum "${{ steps.meta.outputs.asset }}" \
+            > "${{ steps.meta.outputs.asset }}.sha256"
 
       - uses: actions/upload-artifact@v7
         if: steps.gate.outputs.enabled == 'true'
         with:
           name: ${{ steps.meta.outputs.app_name }}-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            ${{ steps.meta.outputs.output }}
-            ${{ steps.meta.outputs.output }}.sha256
+            ${{ steps.meta.outputs.asset_path }}
+            ${{ steps.meta.outputs.asset_path }}.sha256
           retention-days: 7
 
   release:

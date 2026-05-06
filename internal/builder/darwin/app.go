@@ -1,10 +1,15 @@
-package cli
+// Package darwin handles macOS-specific build steps — wrapping the
+// raw binary into a .app bundle and (host-darwin only) further
+// wrapping that into a .dmg disk image. Pure-Go .app construction
+// works from any host; .dmg requires the macOS-only `hdiutil` tool.
+package darwin
 
 import (
 	"bytes"
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,17 +20,18 @@ import (
 	"github.com/yogasw/wick/internal/systemtray"
 )
 
-// packageMacApp wraps a built darwin binary into a standard .app bundle:
+// PackageApp wraps a built darwin binary into a standard .app bundle:
 //
 //	bin/<app>.app/
 //	├── Contents/
 //	│   ├── Info.plist
-//	│   ├── MacOS/<app>          (the binary)
+//	│   ├── MacOS/<app>          (the binary, copied)
 //	│   └── Resources/icon.icns  (rendered from the brand W)
 //
-// Returns the bundle root path. binPath is moved into Contents/MacOS/<app>;
-// caller doesn't need to clean it up separately.
-func packageMacApp(binPath, appName, appVersion, bundleID string) (string, error) {
+// Returns the bundle root path. The source binary at binPath is
+// COPIED (not moved) so the raw artifact remains available for the
+// self-updater and for naming-consistent CI uploads.
+func PackageApp(binPath, appName, appVersion, bundleID string) (string, error) {
 	bundleRoot := filepath.Join(filepath.Dir(binPath), appName+".app")
 	contents := filepath.Join(bundleRoot, "Contents")
 	macOS := filepath.Join(contents, "MacOS")
@@ -36,17 +42,11 @@ func packageMacApp(binPath, appName, appVersion, bundleID string) (string, error
 		}
 	}
 
-	// Move the freshly built binary into Contents/MacOS/<app>.
 	dstBin := filepath.Join(macOS, appName)
-	if err := os.Rename(binPath, dstBin); err != nil {
-		return "", fmt.Errorf("move binary into bundle: %w", err)
-	}
-	if err := os.Chmod(dstBin, 0o755); err != nil {
-		return "", fmt.Errorf("chmod binary: %w", err)
+	if err := copyFile(binPath, dstBin, 0o755); err != nil {
+		return "", fmt.Errorf("copy binary into bundle: %w", err)
 	}
 
-	// Render brand icon → PNG → .icns. icns library wants an image.Image,
-	// so we decode the PNG bytes from systemtray.BrandIcon.
 	pngBytes := systemtray.BrandIcon(false)
 	img, err := png.Decode(bytes.NewReader(pngBytes))
 	if err != nil {
@@ -57,7 +57,6 @@ func packageMacApp(binPath, appName, appVersion, bundleID string) (string, error
 		return "", fmt.Errorf("write icns: %w", err)
 	}
 
-	// Info.plist — minimum keys macOS needs to treat the bundle as an app.
 	plist := buildInfoPlist(appName, appVersion, bundleID)
 	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(plist), 0o644); err != nil {
 		return "", fmt.Errorf("write Info.plist: %w", err)
@@ -76,7 +75,6 @@ func writeICNS(path string, img image.Image) error {
 
 func buildInfoPlist(appName, appVersion, bundleID string) string {
 	year := time.Now().Year()
-	// Strip leading "v" so CFBundleShortVersionString stays clean (e.g. 1.2.3 not v1.2.3).
 	ver := strings.TrimPrefix(appVersion, "v")
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -109,3 +107,19 @@ func buildInfoPlist(appName, appVersion, bundleID string) string {
 `, appName, bundleID, appName, ver, ver, year, appName)
 }
 
+func copyFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}

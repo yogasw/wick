@@ -1,10 +1,16 @@
-package cli
+// Package windows handles Windows-specific build steps — currently
+// the .syso resource that embeds the brand icon plus version metadata
+// into the .exe. Compiles on every host (no Windows-only deps), so
+// cross-builds from mac/linux still produce a metadata-rich .exe.
+package windows
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/josephspurrier/goversioninfo"
@@ -12,16 +18,16 @@ import (
 	"github.com/yogasw/wick/internal/systemtray"
 )
 
-// embedWindowsResource generates a COFF .syso resource alongside main.go
-// so the next `go build` for GOOS=windows picks up the brand W icon plus
+// EmbedResource generates a COFF .syso resource alongside main.go so
+// the next `go build` for GOOS=windows picks up the brand W icon plus
 // version metadata (FileDescription, FileVersion, ProductName, etc.).
 //
 // Returns a cleanup func the caller defers — once `go build` finishes,
 // the temporary .ico and the rsrc_windows_<arch>.syso file are removed.
 //
-// outputPath is used only as the OriginalFilename hint inside the version
-// resource; nothing is written there.
-func embedWindowsResource(outputPath, appName, appVersion string) (func(), error) {
+// outputPath is used only as the OriginalFilename hint inside the
+// version resource; nothing is written there.
+func EmbedResource(outputPath, appName, appVersion string) (func(), error) {
 	goarch := os.Getenv("GOARCH")
 	if goarch == "" {
 		goarch = runtime.GOARCH
@@ -76,4 +82,23 @@ func embedWindowsResource(outputPath, appName, appVersion string) (func(), error
 		os.Remove(icoPath)
 		os.Remove(sysoPath)
 	}, nil
+}
+
+// parseSemver pulls the leading major.minor.patch out of a version
+// string. Tolerates a leading "v" and any -suffix / +metadata; missing
+// segments default to 0.
+func parseSemver(v string) (major, minor, patch int) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	get := func(i int) int {
+		if i >= len(parts) {
+			return 0
+		}
+		n, _ := strconv.Atoi(parts[i])
+		return n
+	}
+	return get(0), get(1), get(2)
 }
