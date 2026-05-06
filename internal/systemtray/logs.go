@@ -13,6 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/userconfig"
 )
 
 const (
@@ -46,7 +48,7 @@ func (w *bestEffortWriter) Write(p []byte) (int, error) {
 }
 
 // setupLogFiles creates three dated log files under
-// <UserConfigDir>/<appName>/logs/:
+// ~/.<appName>/logs/:
 //
 //	app-YYYY-MM-DD.log    — tray / startup / app-level events
 //	server-YYYY-MM-DD.log — HTTP server events
@@ -58,11 +60,11 @@ func (w *bestEffortWriter) Write(p []byte) (int, error) {
 // builds where there is no real console. Caller defers the returned
 // cleanup func which flushes the pipe goroutines then closes all files.
 func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
-	dir, err := os.UserConfigDir()
+	dir, err := userconfig.Dir(appName)
 	if err != nil {
 		return logSet{}, func() {}, err
 	}
-	dir = filepath.Join(dir, appName, "logs")
+	dir = filepath.Join(dir, "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return logSet{}, func() {}, err
 	}

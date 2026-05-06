@@ -44,17 +44,17 @@ var (
 	workerCancel context.CancelFunc
 	workerDone   chan struct{}
 
-	project     string
-	appName     string
-	appVersion  string
-	wickVersion string
-	buildCommit string
-	buildTime   string
-	logDir      string
+	project      string
+	appName      string
+	appVersion   string
+	wickVersion  string
+	buildCommit  string
+	buildTime    string
+	logDir       string
 	serverLogger zerolog.Logger
 	workerLogger zerolog.Logger
-	userCfg     userconfig.Config
-	cfgPath     string
+	userCfg      userconfig.Config
+	cfgPath      string
 
 	updaterInst *updater.Updater
 )
@@ -88,7 +88,7 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 		log.Info().Str("app", appName).Str("version", appVer).Str("wick", wickVer).Msg("tray starting")
 	}
 
-	// Per-app PID-file lock under UserConfigDir. A live match for the
+	// Per-app PID-file lock under ~/.<appName>. A live match for the
 	// same exe means another copy is already in the tray — bail so we
 	// don't leave two icons fighting over the same DB / port. Different
 	// appNames have different files, so test-baruN doesn't lock out
