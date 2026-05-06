@@ -26,7 +26,10 @@ type Client struct {
 
 // AllClients returns every supported client with its OS-specific config
 // path resolved (paths may not exist yet — use Detected to filter).
+// cwd is currently unused but retained for callers that may add
+// project-scoped clients later.
 func AllClients(cwd string) []Client {
+	_ = cwd
 	home, _ := os.UserHomeDir()
 	appdata := os.Getenv("APPDATA")
 
@@ -43,22 +46,50 @@ func AllClients(cwd string) []Client {
 		cursorPath = filepath.Join(home, ".config", "Cursor", "User", "settings.json")
 	}
 
-	return []Client{
+	clients := []Client{
 		{"claude", "Claude Desktop", claudePath, "json"},
 		{"cursor", "Cursor", cursorPath, "json"},
 		{"gemini", "Gemini CLI", filepath.Join(home, ".gemini", "settings.json"), "json"},
 		{"codex", "Codex CLI", filepath.Join(home, ".codex", "config.toml"), "toml-codex"},
-		{"claude-code", "Claude Code (project)", filepath.Join(cwd, ".mcp.json"), "json"},
+		{"claude-code", "Claude Code", filepath.Join(home, ".claude.json"), "json"},
 	}
+	if msys := msys2Home(); msys != "" {
+		clients = append(clients,
+			Client{"gemini-msys2", "Gemini CLI (msys2)", filepath.Join(msys, ".gemini", "settings.json"), "json"},
+			Client{"codex-msys2", "Codex CLI (msys2)", filepath.Join(msys, ".codex", "config.toml"), "toml-codex"},
+			Client{"claude-code-msys2", "Claude Code (msys2)", filepath.Join(msys, ".claude.json"), "json"},
+		)
+	}
+	return clients
+}
+
+// msys2Home returns the msys2 user home dir on Windows if msys2 is
+// installed (e.g. C:\msys64\home\NAME), otherwise "". CLIs launched
+// from an msys2 shell read $HOME from the msys2 environment, so their
+// configs land here instead of %USERPROFILE%.
+func msys2Home() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	user := os.Getenv("USERNAME")
+	if user == "" {
+		return ""
+	}
+	for _, root := range []string{`C:\msys64\home`, `C:\msys2\home`} {
+		p := filepath.Join(root, user)
+		if dirExists(p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // Detected returns clients whose parent config directory already exists
-// — i.e., the host has the client installed (or has used it). Claude
-// Code is always returned because its config is project-local.
+// — i.e., the host has the client installed (or has used it).
 func Detected(cwd string) []Client {
 	var out []Client
 	for _, c := range AllClients(cwd) {
-		if c.ID == "claude-code" || dirExists(filepath.Dir(c.Path)) {
+		if dirExists(filepath.Dir(c.Path)) {
 			out = append(out, c)
 		}
 	}
@@ -171,7 +202,12 @@ func ResolveTargets(cwd, clientID string) ([]Client, error) {
 	}
 	c, ok := Find(cwd, clientID)
 	if !ok {
-		return nil, fmt.Errorf("unknown client %q — use: claude | cursor | gemini | codex | claude-code | all", clientID)
+		ids := make([]string, 0, len(AllClients(cwd))+1)
+		for _, c := range AllClients(cwd) {
+			ids = append(ids, c.ID)
+		}
+		ids = append(ids, "all")
+		return nil, fmt.Errorf("unknown client %q — use: %s", clientID, strings.Join(ids, " | "))
 	}
 	return []Client{c}, nil
 }
@@ -213,13 +249,21 @@ func Locations() []string {
 	case "windows":
 		appdata := os.Getenv("APPDATA")
 		userprofile := os.Getenv("USERPROFILE")
-		return []string{
+		out := []string{
 			fmt.Sprintf(`Claude Desktop : %s\Claude\claude_desktop_config.json`, appdata),
 			fmt.Sprintf(`Cursor         : %s\Cursor\User\settings.json  (mcpServers key)`, appdata),
 			fmt.Sprintf(`Gemini CLI     : %s\.gemini\settings.json`, userprofile),
 			fmt.Sprintf(`Codex CLI      : %s\.codex\config.toml`, userprofile),
-			`Claude Code    : .mcp.json  (project root; --client claude-code)`,
+			fmt.Sprintf(`Claude Code    : %s\.claude.json`, userprofile),
 		}
+		if msys := msys2Home(); msys != "" {
+			out = append(out,
+				fmt.Sprintf(`Gemini CLI     : %s\.gemini\settings.json  (msys2)`, msys),
+				fmt.Sprintf(`Codex CLI      : %s\.codex\config.toml  (msys2)`, msys),
+				fmt.Sprintf(`Claude Code    : %s\.claude.json  (msys2)`, msys),
+			)
+		}
+		return out
 	case "darwin":
 		home, _ := os.UserHomeDir()
 		return []string{
@@ -227,7 +271,7 @@ func Locations() []string {
 			fmt.Sprintf(`Cursor         : %s/Library/Application Support/Cursor/User/settings.json  (mcpServers key)`, home),
 			fmt.Sprintf(`Gemini CLI     : %s/.gemini/settings.json`, home),
 			fmt.Sprintf(`Codex CLI      : %s/.codex/config.toml`, home),
-			`Claude Code    : .mcp.json  (project root; --client claude-code)`,
+			fmt.Sprintf(`Claude Code    : %s/.claude.json`, home),
 		}
 	default:
 		home, _ := os.UserHomeDir()
@@ -236,7 +280,7 @@ func Locations() []string {
 			fmt.Sprintf(`Cursor         : %s/.config/Cursor/User/settings.json  (mcpServers key)`, home),
 			fmt.Sprintf(`Gemini CLI     : %s/.gemini/settings.json`, home),
 			fmt.Sprintf(`Codex CLI      : %s/.codex/config.toml`, home),
-			`Claude Code    : .mcp.json  (project root; --client claude-code)`,
+			fmt.Sprintf(`Claude Code    : %s/.claude.json`, home),
 		}
 	}
 }

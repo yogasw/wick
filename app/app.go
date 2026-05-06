@@ -247,7 +247,7 @@ Clients (--client):
   cursor       Cursor IDE
   gemini       Gemini CLI
   codex        OpenAI Codex CLI
-  claude-code  Claude Code (writes .mcp.json in CWD)
+  claude-code  Claude Code (writes ~/.claude.json)
   all          install into every detected client`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()

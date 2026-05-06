@@ -255,7 +255,7 @@ Clients (--client):
   cursor       Cursor IDE
   gemini       Gemini CLI
   codex        OpenAI Codex CLI
-  claude-code  Claude Code — writes to .mcp.json in the project root
+  claude-code  Claude Code — writes to ~/.claude.json
   all          install into all five
 
 Modes (--mode): same as mcp serve --mode. Use "dev" to force go run,

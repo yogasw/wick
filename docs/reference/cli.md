@@ -255,7 +255,7 @@ Write the binary's MCP entry into the chosen client's config file. Resolves `os.
 ```bash
 ./bin/myapp mcp install                          # all detected clients
 ./bin/myapp mcp install --client claude          # Claude Desktop only
-./bin/myapp mcp install --client claude-code     # writes .mcp.json in CWD
+./bin/myapp mcp install --client claude-code     # writes ~/.claude.json
 ./bin/myapp mcp install --name custom-server     # override server name
 ```
 

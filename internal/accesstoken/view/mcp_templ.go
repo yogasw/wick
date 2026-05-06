@@ -309,7 +309,7 @@ func stdioCard() templ.Component {
 		}
 		templ_7745c5c3_Err = snippetBlock(
 			"Claude Code",
-			"Writes .mcp.json to the project root. Restart Claude Code (or /mcp reload) to pick it up.",
+			"Writes the MCP entry into ~/.claude.json. Restart Claude Code (or /mcp reload) to pick it up.",
 			"wick mcp install --client claude-code",
 		).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
