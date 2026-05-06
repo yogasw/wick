@@ -96,8 +96,8 @@ Common flags:
 |---|---|---|
 | `--app-name` | `WICK_APP_NAME` | Override `name:` from `wick.yml` |
 | `--app-version` | `WICK_APP_VERSION` | Override `version:` from `wick.yml` |
-| `--github-pat` | `GITHUB_PAT` | Bake PAT for self-updater |
-| `--github-repo` | `GITHUB_REPOSITORY` | Bake `owner/repo` for self-updater |
+| `--release-github-pat` | `RELEASE_GITHUB_PAT` | Bake releases PAT for self-updater |
+| `--release-github-repo` | `RELEASE_GITHUB_REPOSITORY` | Bake releases repo `owner/repo` for self-updater |
 | `-o`, `--output` | — | Raw binary path (default `bin/<name>-<goos>-<goarch>[.exe]`); bundle is written next to it |
 | `-t`, `--target` | — | Target shorthand `<os>/<arch>` (e.g. `linux/arm64`); mutex with `--goos`/`--goarch` |
 | `--goos` | `GOOS` | Target GOOS; mutex with `--target` |
@@ -142,7 +142,7 @@ $ wick upgrade
 current: v0.1.13
 latest:  v0.4.2
 upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.8.1
+> go get github.com/yogasw/wick@v0.8.2
 > go mod tidy
 > <dev task from wick.yml>
 ```
@@ -153,7 +153,7 @@ Steps:
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
 3. If already on latest, exit without prompting.
 4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.8.1`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+5. Run `go get github.com/yogasw/wick@v0.8.2`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 

@@ -85,8 +85,8 @@ Final binary di-produce dengan:
 
 ```bash
 wick build \
-  --github-pat=$GITHUB_PAT \
-  --github-repo=org/wick-manager-releases \
+  --release-github-pat=$RELEASE_GITHUB_PAT \
+  --release-github-repo=org/wick-manager-releases \
   --output=wick-manager
 ```
 
@@ -190,12 +190,12 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           APP_NAME: ${{ steps.meta.outputs.app_name }}
-          GITHUB_PAT: ${{ secrets.PAT_DOWNLOAD }}
+          RELEASE_GITHUB_PAT: ${{ secrets.RELEASE_GITHUB_DOWNLOAD_PAT }}
           OUTPUT: ${{ steps.meta.outputs.app_name }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
         run: |
           wick build \
-            --github-pat=$GITHUB_PAT \
-            --github-repo=${{ github.repository_owner }}/${{ steps.meta.outputs.app_name }}-releases \
+            --release-github-pat=$RELEASE_GITHUB_PAT \
+            --release-github-repo=${{ github.repository_owner }}/${{ steps.meta.outputs.app_name }}-releases \
             --output=$OUTPUT
 
       - name: Generate SHA256
@@ -231,7 +231,7 @@ jobs:
 
       - name: Create release in releases repo
         env:
-          GH_TOKEN: ${{ secrets.PAT_BUILD }}
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_PUBLISH_PAT }}
           APP_NAME: ${{ steps.meta.outputs.app_name }}
         run: |
           gh release create ${{ github.ref_name }} \
@@ -247,8 +247,8 @@ Di repo source aktor 2 → Settings → Secrets:
 
 | Secret | Scope | Permissions |
 |---|---|---|
-| `PAT_BUILD` | `<aktor2-app>-releases` only | `Contents: Read & Write` (untuk create release + upload assets) |
-| `PAT_DOWNLOAD` | `<aktor2-app>-releases` only | `Contents: Read-only` (di-embed ke binary untuk self-update) |
+| `RELEASE_GITHUB_PUBLISH_PAT` | `<aktor2-app>-releases` only | `Contents: Read & Write` (untuk create release + upload assets) |
+| `RELEASE_GITHUB_DOWNLOAD_PAT` | `<aktor2-app>-releases` only | `Contents: Read-only` (di-embed ke binary untuk self-update) |
 
 **Cara generate fine-grained PAT:**
 1. GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens

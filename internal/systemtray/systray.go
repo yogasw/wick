@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"fyne.io/systray"
+	"github.com/rs/zerolog"
 
 	"github.com/yogasw/wick/internal/autostart"
 	"github.com/yogasw/wick/internal/mcpconfig"
@@ -49,7 +50,9 @@ var (
 	wickVersion string
 	buildCommit string
 	buildTime   string
-	logPath     string
+	logDir      string
+	serverLogger zerolog.Logger
+	workerLogger zerolog.Logger
 	userCfg     userconfig.Config
 	cfgPath     string
 
@@ -75,11 +78,12 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 	buildTime = builtAt
 	serverPort = config.Load().App.Port
 
-	// Log file first — windowsgui builds have no stderr, so any crash
-	// before this point is invisible. UserCfg.LogRetentionDays defaults
-	// to 0 here; setupLogFile substitutes its own default in that case.
-	if p, cleanup, err := setupLogFile(appName, 0); err == nil {
-		logPath = p
+	// Log files first — windowsgui builds have no stderr, so any crash
+	// before this point is invisible.
+	if ls, cleanup, err := setupLogFiles(appName, 0); err == nil {
+		logDir = ls.Dir
+		serverLogger = ls.Server
+		workerLogger = ls.Worker
 		defer cleanup()
 	}
 
@@ -258,11 +262,11 @@ func onReady() {
 	mAbout.AddSubMenuItem(fmt.Sprintf("Commit: %s", fmtBuildField(buildCommit)), "").Disable()
 	mAbout.AddSubMenuItem(fmt.Sprintf("Built:  %s", fmtBuildField(buildTime)), "").Disable()
 	if !updaterReady {
-		mAbout.AddSubMenuItem("Updates: not configured", "Build with --github-repo <owner>/<repo> or use a github.com/owner/repo module path to enable self-update").Disable()
+		mAbout.AddSubMenuItem("Updates: not configured", "Build with --release-github-repo <owner>/<repo> or use a github.com/owner/repo module path to enable self-update").Disable()
 	}
 	mAbout.AddSubMenuItem("─────────────", "").Disable()
-	mLogs := mAbout.AddSubMenuItem("Open logs", "Open "+logPath)
-	if logPath == "" {
+	mLogs := mAbout.AddSubMenuItem("Open logs", "Open "+logDir)
+	if logDir == "" {
 		mLogs.Disable()
 	}
 	mWickRepo := mAbout.AddSubMenuItem("Wick Repository", "https://github.com/yogasw/wick")
@@ -389,8 +393,8 @@ func onReady() {
 				}
 				refreshIcon()
 			case <-mLogs.ClickedCh:
-				if logPath != "" {
-					if err := openInEditor(logPath); err != nil {
+				if logDir != "" {
+					if err := openInEditor(logDir); err != nil {
 						log.Printf("open logs: %v", err)
 					}
 				}
@@ -536,6 +540,7 @@ func startServer() error {
 	ln.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	ctx = serverLogger.WithContext(ctx)
 	serverCancel = cancel
 	serverDone = make(chan struct{})
 	mu.Unlock()
@@ -575,6 +580,7 @@ func startWorker() error {
 		return fmt.Errorf("already running")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	ctx = workerLogger.WithContext(ctx)
 	workerCancel = cancel
 	workerDone = make(chan struct{})
 	mu.Unlock()

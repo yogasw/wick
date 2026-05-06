@@ -109,20 +109,20 @@ Bakes the app version. Shown in the tray title and About menu, advertised by MCP
 WICK_APP_VERSION=1.2.0
 ```
 
-### `GITHUB_PAT`
+### `RELEASE_GITHUB_PAT`
 **Default:** _(empty — self-updater disabled)_
 
-GitHub fine-grained PAT with `Contents: read` on the releases repo. Embedded into the binary so it can poll `releases/latest`. Pair with `GITHUB_REPOSITORY`.
+GitHub fine-grained PAT with `Contents: read` on the releases repo. Embedded into the binary so it can poll `releases/latest`. Pair with `RELEASE_GITHUB_REPOSITORY`.
 
 See [`wick build` reference ▶ PAT setup](./build#pat-setup) for scopes and rotation.
 
-### `GITHUB_REPOSITORY`
-**Default:** _(empty — auto-set by GitHub Actions)_
+### `RELEASE_GITHUB_REPOSITORY`
+**Default:** _(empty — self-updater disabled)_
 
-Releases repo in `owner/repo` form. Same env var that GitHub Actions populates automatically inside a workflow.
+Releases repo in `owner/repo` form. Named `RELEASE_GITHUB_REPOSITORY` (not `GITHUB_REPOSITORY`) because GitHub Actions auto-injects `GITHUB_REPOSITORY` to the source repo and silently blocks step-level overrides — using the prefixed name keeps CI working.
 
 ```env
-GITHUB_REPOSITORY=acme/myapp-releases
+RELEASE_GITHUB_REPOSITORY=acme/myapp-releases
 ```
 
 ---

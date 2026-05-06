@@ -1,7 +1,7 @@
 // Package updater downloads, verifies, and applies new release
 // binaries from GitHub. The current binary embeds a target release
-// repo + PAT (set at build time via `wick build --github-repo ...`
-// and `--github-pat ...`); at startup the system tray asks this
+// repo + PAT (set at build time via `wick build --release-github-repo ...`
+// and `--release-github-pat ...`); at startup the system tray asks this
 // package whether a staged update is pending (apply + re-exec) or
 // whether to fetch a newer release in the background.
 //
@@ -18,7 +18,7 @@
 //
 // Repo resolution:
 //
-//	1. repoFull arg ("owner/repo"), typically baked from --github-repo
+//	1. repoFull arg ("owner/repo"), typically baked from --release-github-repo
 //	2. fallback to debug.ReadBuildInfo() Main.Path when arg is empty
 //	   (lets a "same source repo as releases" setup work without a flag)
 //	3. else updater is disabled — Configured() returns false and
@@ -384,7 +384,7 @@ func (u *Updater) fetchLatest(ctx context.Context) (*ghRelease, error) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return nil, fmt.Errorf("github auth failed (%d) — PAT_DOWNLOAD may be expired; rotate it and publish a new release", resp.StatusCode)
+			return nil, fmt.Errorf("github auth failed (%d) — RELEASE_GITHUB_DOWNLOAD_PAT may be expired; rotate it and publish a new release", resp.StatusCode)
 		}
 		return nil, fmt.Errorf("github %d: %s", resp.StatusCode, string(body))
 	}

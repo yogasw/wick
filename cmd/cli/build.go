@@ -59,8 +59,8 @@ wrap it into the platform-native distributable:
 Resolution order per value:
   --app-name    flag > $WICK_APP_NAME    > wick.yml name    > "app"
   --app-version flag > $WICK_APP_VERSION > wick.yml version > "dev"
-  --github-pat  flag > $GITHUB_PAT
-  --github-repo flag > $GITHUB_REPOSITORY
+  --release-github-pat  flag > $RELEASE_GITHUB_PAT
+  --release-github-repo flag > $RELEASE_GITHUB_REPOSITORY
   --target / --goos+--goarch flag > $GOOS, $GOARCH > host runtime
 
 Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`,
@@ -85,8 +85,8 @@ Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`
 				}
 			}
 
-			githubPAT = firstNonEmpty(githubPAT, os.Getenv("GITHUB_PAT"))
-			githubRepo = firstNonEmpty(githubRepo, os.Getenv("GITHUB_REPOSITORY"))
+			githubPAT = firstNonEmpty(githubPAT, os.Getenv("RELEASE_GITHUB_PAT"))
+			githubRepo = firstNonEmpty(githubRepo, os.Getenv("RELEASE_GITHUB_REPOSITORY"))
 
 			baseCfg := builder.Config{
 				AppName:    appName,
@@ -127,8 +127,8 @@ Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`
 	}
 	cmd.Flags().StringVar(&appName, "app-name", "", "App name → app.BuildAppName (env: WICK_APP_NAME, fallback: wick.yml name)")
 	cmd.Flags().StringVar(&appVersion, "app-version", "", "App version → app.BuildAppVersion (env: WICK_APP_VERSION, fallback: wick.yml version)")
-	cmd.Flags().StringVar(&githubPAT, "github-pat", "", "GitHub PAT → app.GitHubPAT (env: GITHUB_PAT)")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "GitHub repo owner/<app>-releases → app.GitHubRepo (env: GITHUB_REPOSITORY)")
+	cmd.Flags().StringVar(&githubPAT, "release-github-pat", "", "GitHub releases PAT → app.GitHubPAT (env: RELEASE_GITHUB_PAT)")
+	cmd.Flags().StringVar(&githubRepo, "release-github-repo", "", "GitHub releases repo owner/<app>-releases → app.GitHubRepo (env: RELEASE_GITHUB_REPOSITORY)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output binary path (default: bin/<app-name>-<goos>-<goarch>[.exe])")
 	cmd.Flags().StringVarP(&target, "target", "t", "", "Build target shorthand: <os>/<arch> (e.g. linux/arm64, darwin/amd64). Mutually exclusive with --goos/--goarch")
 	cmd.Flags().StringVar(&goos, "goos", "", "Target GOOS (env: GOOS). Mutually exclusive with --target")
