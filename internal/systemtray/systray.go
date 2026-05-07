@@ -68,6 +68,13 @@ var (
 // repo ("owner/repo") and pat are injected by `wick build` for the
 // self-updater; empty values disable it.
 func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
+	// Detach from the inherited console immediately so Explorer
+	// double-clicks don't leave a flashing cmd window. No-op when there
+	// was no console to begin with (Explorer launch on Windows, Linux/
+	// macOS desktop launchers). Must run before any stdout/stderr writes
+	// and before logs.go redirects them to the per-day log files.
+	hideConsole()
+
 	project = projectDir
 	if name == "" {
 		name = filepath.Base(projectDir)
@@ -96,8 +103,9 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 		return worker.NewServer().Run(ctx)
 	}))
 
-	// Log files first — windowsgui builds have no stderr, so any crash
-	// before this point is invisible.
+	// Log files first — hideConsole has detached the console for tray
+	// launches, so any crash before this point is invisible without a
+	// file sink.
 	if ls, cleanup, err := setupLogFiles(appName, 0); err == nil {
 		logDir = ls.Dir
 		serverLogger = ls.Server

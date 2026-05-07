@@ -38,7 +38,7 @@ type logSet struct {
 
 // bestEffortWriter writes to primary; on success also attempts secondary
 // (ignoring secondary errors). Ensures file always receives the write even
-// when stderr is unavailable (windowsgui builds have no console).
+// when stderr is unavailable (tray mode detaches the console).
 type bestEffortWriter struct {
 	primary   io.Writer
 	secondary io.Writer
@@ -61,8 +61,8 @@ func (w *bestEffortWriter) Write(p []byte) (int, error) {
 //
 // Each file is also tee'd to the original stderr. The global zerolog
 // log.Logger and stdlib log are set to the App logger. Stdout/Stderr are
-// piped so fmt.Printf and panic traces land in app.log on windowsgui
-// builds where there is no real console. Caller defers the returned
+// piped so fmt.Printf and panic traces land in app.log even after
+// hideConsole detaches the console. Caller defers the returned
 // cleanup func which flushes the pipe goroutines then closes all files.
 func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 	dir, err := userconfig.Dir(appName)
@@ -123,7 +123,7 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 			io.Copy(&bestEffortWriter{primary: fApp, secondary: origOut}, rOut)
 		}()
 	}
-	// Pipe os.Stderr for windowsgui builds that have no real console.
+	// Pipe os.Stderr — hideConsole has already detached the real one.
 	if rErr, wErr, perr := os.Pipe(); perr == nil {
 		os.Stderr = wErr
 		pipeWriters = append(pipeWriters, wErr)
