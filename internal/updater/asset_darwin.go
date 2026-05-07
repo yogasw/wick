@@ -19,6 +19,10 @@ func (u *Updater) assetName() string {
 	return fmt.Sprintf("%s-darwin-%s.dmg", u.appName, runtime.GOARCH)
 }
 
+// stagedExt is the file extension for the staged update file on disk.
+// Darwin extracts the inner Mach-O binary from the .dmg, so no ext.
+func stagedExt() string { return "" }
+
 // extractStaged mounts the downloaded .dmg via hdiutil, copies the
 // inner Contents/MacOS/<app> binary out, and detaches. The whole .app
 // shell (Info.plist, icns) stays untouched at the install location —

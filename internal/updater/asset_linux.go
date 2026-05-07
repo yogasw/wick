@@ -21,6 +21,10 @@ func (u *Updater) assetName() string {
 	return fmt.Sprintf("%s-linux-%s.deb", u.appName, runtime.GOARCH)
 }
 
+// stagedExt is the file extension for the staged update file on disk.
+// Linux extracts the inner ELF binary from the .deb, so no ext.
+func stagedExt() string { return "" }
+
 // extractStaged peels back the .deb to its inner binary:
 //
 //	.deb (ar archive) → data.tar.gz → ./usr/bin/<app>

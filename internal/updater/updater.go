@@ -211,7 +211,7 @@ func (u *Updater) Download(ctx context.Context, info LatestInfo) error {
 	if err != nil {
 		return fmt.Errorf("extract staged: %w", err)
 	}
-	stagedPath := filepath.Join(u.cacheDir, fmt.Sprintf("%s-%s%s", u.appName, info.Version, exeExt()))
+	stagedPath := filepath.Join(u.cacheDir, fmt.Sprintf("%s-%s%s", u.appName, info.Version, stagedExt()))
 	if err := os.WriteFile(stagedPath, binary, 0o755); err != nil {
 		return fmt.Errorf("write staged: %w", err)
 	}
@@ -274,7 +274,7 @@ func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 	}
 
 	if runtime.GOOS == "windows" {
-		return swapWindows(exe, staged)
+		return swapWindows(exe, staged, u.cacheDir)
 	}
 	return swapUnix(exe, staged)
 }
@@ -296,26 +296,35 @@ func swapUnix(current, staged string) error {
 	return syscall.Exec(current, args, os.Environ())
 }
 
-// swapWindows can't overwrite a running .exe, so it renames the
-// current exe to .old, moves the staged binary into place, spawns
-// the new binary, and exits. The .old is best-effort; Windows GC's
-// it on next reboot if still locked.
-func swapWindows(current, staged string) error {
-	old := current + ".old"
-	_ = os.Remove(old)
-	if err := os.Rename(current, old); err != nil {
-		return fmt.Errorf("rename current → old: %w", err)
-	}
-	if err := os.Rename(staged, current); err != nil {
-		_ = os.Rename(old, current)
-		return fmt.Errorf("rename staged → current: %w", err)
-	}
-	cmd := exec.Command(current, os.Args[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
+// swapWindows hands the staged .msi to msiexec and exits the current
+// process. msiexec runs detached, rewrites the installed .exe in place
+// (per-user MSI, no UAC, MajorUpgrade in WXS handles same-version
+// overwrite), and the WXS LaunchApp custom action relaunches the new
+// .exe when install finishes.
+//
+// The current process MUST exit before msiexec touches the .exe — the
+// installed file is locked while we're running, and msiexec will block
+// (or roll back with "files in use") otherwise. We Start() msiexec then
+// os.Exit(0) immediately; if msiexec itself fails the user sees no
+// feedback in the running process — but `/L*v` writes a verbose
+// install log to <cacheDir>/msiexec-install.log so the failure can be
+// diagnosed after the fact (each install overwrites the previous log).
+//
+// `current` is unused for the MSI flow but kept in the signature to
+// match swapUnix.
+func swapWindows(current, staged, cacheDir string) error {
+	_ = current
+	logPath := filepath.Join(cacheDir, "msiexec-install.log")
+	log.Printf("updater: applying msi via msiexec staged=%s log=%s", staged, logPath)
+	cmd := exec.Command("msiexec",
+		"/i", staged,
+		"/qn",
+		"/norestart",
+		"/L*v", logPath,
+		"REINSTALLMODE=amus",
+	)
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start new binary: %w", err)
+		return fmt.Errorf("start msiexec: %w", err)
 	}
 	os.Exit(0)
 	return nil
@@ -429,13 +438,6 @@ func (u *Updater) pickAssets(assets []ghAsset) (bin, sum *ghAsset) {
 		}
 	}
 	return
-}
-
-func exeExt() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
 }
 
 // ----- helpers -----

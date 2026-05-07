@@ -123,7 +123,7 @@ concurrency:
 # │           0.6.4 → 0.6.5                                               │
 # │           1.2.3.4 → 1.2.3.5                                           │
 # │    2. uses the bumped value as the release tag (vX.Y.Z) and bakes   │
-# │       it into the binary via APP_VERSION.                            │
+# │       it into the binary via WICK_APP_VERSION.                       │
 # │    3. after the release succeeds, commits the wick.yml diff back    │
 # │       to the source branch with "[skip ci]" — so the next push       │
 # │       reads the freshly bumped value and the loop continues.        │
@@ -162,6 +162,7 @@ jobs:
       is_separate: ${{ steps.repo.outputs.is_separate }}
       auto_version: ${{ vars.RELEASE_AUTO_VERSION }}
       matrix: ${{ steps.matrix.outputs.matrix }}
+      wick_version: ${{ steps.wick.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -199,6 +200,21 @@ jobs:
           fi
           echo "releases_repo=$NORM" >> "$GITHUB_OUTPUT"
 
+      # Pin wick CLI to the version recorded in go.mod so CI uses the same
+      # build tooling the developer locked in. Exposed as a job output so the
+      # build/release jobs install (and cache) the same version.
+      - name: Resolve wick CLI version from go.mod
+        id: wick
+        shell: bash
+        run: |
+          VER=$(awk '/^require github.com\/yogasw\/wick / {print $3; exit} /github.com\/yogasw\/wick / && !/^module/ {print $2; exit}' go.mod)
+          if [ -z "$VER" ]; then
+            echo "::error::wick not found in go.mod"
+            exit 1
+          fi
+          echo "wick CLI version: $VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
       # RELEASE_AUTO_VERSION path: install wick CLI and let `wick version next`
       # compute the bumped version from wick.yml (last numeric segment +1).
       # The bump writes wick.yml in this runner's workspace — discarded at
@@ -211,9 +227,21 @@ jobs:
           go-version: 'stable'
           cache: false
 
-      - name: Install wick CLI
+      - name: Cache wick CLI
         if: vars.RELEASE_AUTO_VERSION == 'true'
-        run: go install github.com/yogasw/wick@latest
+        id: cache-wick
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-${{ runner.os }}-${{ steps.wick.outputs.version }}
+
+      - name: Install wick CLI
+        if: vars.RELEASE_AUTO_VERSION == 'true' && steps.cache-wick.outputs.cache-hit != 'true'
+        run: go install github.com/yogasw/wick@${{ steps.wick.outputs.version }}
+
+      - name: Add Go bin to PATH
+        if: vars.RELEASE_AUTO_VERSION == 'true'
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Resolve next version
         id: ver
@@ -336,8 +364,19 @@ jobs:
           go-version: 'stable'
           cache: true
 
+      - name: Cache wick CLI
+        id: cache-wick
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-${{ runner.os }}-${{ needs.prepare.outputs.wick_version }}
+
       - name: Install wick CLI
-        run: go install github.com/yogasw/wick@latest
+        if: steps.cache-wick.outputs.cache-hit != 'true'
+        run: go install github.com/yogasw/wick@${{ needs.prepare.outputs.wick_version }}
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Resolve app name and asset path
         id: meta
@@ -402,7 +441,7 @@ jobs:
           # Override wick.yml `version:` so the binary's --version reflects
           # the tag we're about to publish. Critical when RELEASE_AUTO_VERSION=true
           # since wick.yml isn't bumped per release.
-          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
         # --installer wraps the windows .exe into a per-user .msi (needs
         # wixl, installed above) and stages the darwin .dmg with an
         # Applications symlink for the standard drag-to-install layout.
@@ -505,9 +544,21 @@ jobs:
           go-version: 'stable'
           cache: false
 
-      - name: Install wick CLI
+      - name: Cache wick CLI
         if: needs.prepare.outputs.auto_version == 'true'
-        run: go install github.com/yogasw/wick@latest
+        id: cache-wick
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-${{ runner.os }}-${{ needs.prepare.outputs.wick_version }}
+
+      - name: Install wick CLI
+        if: needs.prepare.outputs.auto_version == 'true' && steps.cache-wick.outputs.cache-hit != 'true'
+        run: go install github.com/yogasw/wick@${{ needs.prepare.outputs.wick_version }}
+
+      - name: Add Go bin to PATH
+        if: needs.prepare.outputs.auto_version == 'true'
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Bump wick.yml and commit
         if: needs.prepare.outputs.auto_version == 'true'
