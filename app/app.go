@@ -19,6 +19,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/internal/autostart"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/internal/mcpconfig"
@@ -300,6 +302,35 @@ func mcpUninstallCmd() *cobra.Command {
 	return cmd
 }
 
+func uninstallCmd() *cobra.Command {
+	var removeMCP bool
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Clean up per-user OS integrations before removing the app",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := autostart.Disable(BuildAppName); err != nil {
+				return err
+			}
+			fmt.Printf("Removed startup entry: %s\n", autostart.Path(BuildAppName))
+
+			if removeMCP {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+				targets, err := mcpconfig.ResolveTargets(cwd, "all")
+				if err != nil {
+					return err
+				}
+				mcpconfig.UninstallMany(targets, BuildAppName, os.Stdout)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&removeMCP, "mcp", true, "also remove this app from detected MCP client configs")
+	return cmd
+}
+
 // Run parses the command-line flags and starts either the HTTP server
 // or the background worker. Subcommands:
 //
@@ -375,7 +406,7 @@ func Run() {
 		},
 	}
 
-	root.AddCommand(serverCmd, workerCmd, mcpCmd, trayCmd)
+	root.AddCommand(serverCmd, workerCmd, mcpCmd, trayCmd, uninstallCmd())
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())

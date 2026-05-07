@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -15,6 +16,12 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 )
+
+// ErrFixedInstanceViolation is returned by Service.Create / Duplicate
+// when trying to add a second instance for a connector whose Meta.Fixed
+// is true. Wick auto-seeds exactly one row for a Fixed connector at
+// Bootstrap; admins cannot add or duplicate beyond that.
+var ErrFixedInstanceViolation = errors.New("connector is fixed: only one instance allowed")
 
 // ownerForConnector returns the configs.Service owner string used to
 // scope a connector instance's per-field config rows. Each instance
@@ -222,6 +229,15 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 	if !ok {
 		return nil, fmt.Errorf("unknown connector key %q", key)
 	}
+	if mod.Meta.Fixed {
+		n, err := s.repo.CountByKey(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if n >= 1 {
+			return nil, ErrFixedInstanceViolation
+		}
+	}
 	c := &entity.Connector{
 		Key:       key,
 		Label:     label,
@@ -377,6 +393,9 @@ func (s *Service) Duplicate(ctx context.Context, sourceID, createdBy string) (*e
 	src, err := s.repo.Get(ctx, sourceID)
 	if err != nil {
 		return nil, err
+	}
+	if mod, ok := s.Module(src.Key); ok && mod.Meta.Fixed {
+		return nil, ErrFixedInstanceViolation
 	}
 	c := &entity.Connector{
 		Key:       src.Key,

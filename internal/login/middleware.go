@@ -39,9 +39,11 @@ func WithUser(ctx context.Context, user *entity.User, tagIDs []string) context.C
 }
 
 // SecretProvider is the minimal interface Middleware needs to read the
-// current session-signing secret. configs.Service satisfies it.
+// current session-signing secret + first-login state. configs.Service
+// satisfies it.
 type SecretProvider interface {
 	SessionSecret() string
+	AdminPasswordChanged() bool
 }
 
 type Middleware struct {
@@ -98,6 +100,11 @@ func (m *Middleware) Session(next http.Handler) http.Handler {
 }
 
 // RequireAuth redirects to /auth/login if there is no authenticated, approved user.
+//
+// First-login enforcement: admins land on /profile/setup until they
+// rotate the auto-generated password (admin_password_changed=false).
+// The setup form itself + POST endpoint are exempt so the user can
+// actually complete the flow.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r.Context())
@@ -109,8 +116,24 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/auth/pending", http.StatusFound)
 			return
 		}
+		if user.IsAdmin() && !m.secrets.AdminPasswordChanged() && !isSetupExempt(r.URL.Path) {
+			http.Redirect(w, r, "/profile/setup", http.StatusFound)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSetupExempt covers the routes that must stay reachable while the
+// admin is being forced through /profile/setup. Logout is included so
+// a stuck admin can always escape; the setup endpoints themselves are
+// the only way to clear the flag.
+func isSetupExempt(path string) bool {
+	switch path {
+	case "/profile/setup", "/auth/logout":
+		return true
+	}
+	return false
 }
 
 // ToolMeta is the minimal info RequireToolAccess needs about each tool.

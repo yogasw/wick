@@ -119,22 +119,36 @@ func (s *Service) SetPassword(ctx context.Context, userID, currentPassword, newP
 	return s.repo.SetPasswordHash(ctx, userID, string(hash))
 }
 
-// BootstrapAdmin is a one-shot seed: if no user with the admin role
-// exists yet, it creates one account per configured admin email and
-// sets the given password on it. When at least one admin is already
-// present the whole thing is a no-op — so the seed can't resurrect
-// deleted admins or overwrite a live password.
-func (s *Service) BootstrapAdmin(ctx context.Context, defaultPassword string) {
-	n, err := s.repo.CountAdmins(ctx)
-	if err != nil || n > 0 {
-		return
+// BootstrapAdmin seeds (or re-seeds) the default admin password while
+// admin_password_changed is still false. Two cases:
+//
+//   - No admin yet → create one per configured admin email and set the
+//     password.
+//   - Admin exists but flag is false → reset the password (the operator
+//     never completed first-login setup, so whatever hash is on disk is
+//     either "admin" or another stale auto-generated value the operator
+//     no longer has).
+//
+// Once admin_password_changed=true, this function is a no-op so a live
+// rotated password is never overwritten on boot.
+//
+// If defaultPassword is empty, a 5-word passphrase is generated and
+// returned so callers can surface it (logs, tray, INITIAL_CREDENTIALS
+// file). The returned password is "" when nothing changed — either
+// setup is already done or the explicit defaultPassword was used (and
+// the caller already knows it from env).
+func (s *Service) BootstrapAdmin(ctx context.Context, defaultPassword string, alreadyChanged bool) (generated string) {
+	if alreadyChanged {
+		return ""
 	}
-	if defaultPassword == "" {
-		return
+	password := defaultPassword
+	if password == "" {
+		password = GeneratePassphrase()
+		generated = password
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(defaultPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return
+		return ""
 	}
 	for email := range s.adminEmails {
 		name := email
@@ -147,6 +161,15 @@ func (s *Service) BootstrapAdmin(ctx context.Context, defaultPassword string) {
 		}
 		_ = s.repo.SetPasswordHash(ctx, u.ID, string(hash))
 	}
+	return generated
+}
+
+// SetEmail updates the user's email address. Used by the first-login
+// setup flow so admins can rename the seed account (admin@admin.com)
+// to a real address. Returns ErrEmailTaken when the new email already
+// belongs to a different user.
+func (s *Service) SetEmail(ctx context.Context, userID, newEmail string) error {
+	return s.repo.SetEmail(ctx, userID, strings.ToLower(strings.TrimSpace(newEmail)))
 }
 
 func (s *Service) CanAccessTool(ctx context.Context, user *entity.User, toolPath string, defaultVis entity.ToolVisibility) bool {

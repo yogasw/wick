@@ -13,6 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/userconfig"
 )
 
 const (
@@ -26,11 +28,32 @@ type logSet struct {
 	App    zerolog.Logger
 	Server zerolog.Logger
 	Worker zerolog.Logger
-	Dir    string
+	// MCP receives audit events emitted by the wickmanager connector
+	// for every tools/list / tools/call (read + write). Sits next to
+	// the other per-component logs; pruning shares the same prefix
+	// rotation pruneOldLogs runs.
+	MCP zerolog.Logger
+	Dir string
+}
+
+// bestEffortWriter writes to primary; on success also attempts secondary
+// (ignoring secondary errors). Ensures file always receives the write even
+// when stderr is unavailable (tray mode detaches the console).
+type bestEffortWriter struct {
+	primary   io.Writer
+	secondary io.Writer
+}
+
+func (w *bestEffortWriter) Write(p []byte) (int, error) {
+	n, err := w.primary.Write(p)
+	if err == nil {
+		w.secondary.Write(p) //nolint:errcheck
+	}
+	return n, err
 }
 
 // setupLogFiles creates three dated log files under
-// <UserConfigDir>/<appName>/logs/:
+// ~/.<appName>/logs/:
 //
 //	app-YYYY-MM-DD.log    — tray / startup / app-level events
 //	server-YYYY-MM-DD.log — HTTP server events
@@ -38,15 +61,15 @@ type logSet struct {
 //
 // Each file is also tee'd to the original stderr. The global zerolog
 // log.Logger and stdlib log are set to the App logger. Stdout/Stderr are
-// piped so fmt.Printf and panic traces land in app.log on windowsgui
-// builds where there is no real console. Caller defers the returned
+// piped so fmt.Printf and panic traces land in app.log even after
+// hideConsole detaches the console. Caller defers the returned
 // cleanup func which flushes the pipe goroutines then closes all files.
 func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
-	dir, err := os.UserConfigDir()
+	dir, err := userconfig.Dir(appName)
 	if err != nil {
 		return logSet{}, func() {}, err
 	}
-	dir = filepath.Join(dir, appName, "logs")
+	dir = filepath.Join(dir, "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return logSet{}, func() {}, err
 	}
@@ -77,6 +100,13 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 		fSrv.Close()
 		return logSet{}, func() {}, err
 	}
+	fMCP, err := openLog("mcp")
+	if err != nil {
+		fApp.Close()
+		fSrv.Close()
+		fWrk.Close()
+		return logSet{}, func() {}, err
+	}
 
 	origOut, origErr := os.Stdout, os.Stderr
 
@@ -90,28 +120,30 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			io.Copy(io.MultiWriter(origOut, fApp), rOut)
+			io.Copy(&bestEffortWriter{primary: fApp, secondary: origOut}, rOut)
 		}()
 	}
-	// Pipe os.Stderr for windowsgui builds that have no real console.
+	// Pipe os.Stderr — hideConsole has already detached the real one.
 	if rErr, wErr, perr := os.Pipe(); perr == nil {
 		os.Stderr = wErr
 		pipeWriters = append(pipeWriters, wErr)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			io.Copy(io.MultiWriter(origErr, fApp), rErr)
+			io.Copy(&bestEffortWriter{primary: fApp, secondary: origErr}, rErr)
 		}()
 	}
 
-	mwApp := io.MultiWriter(origErr, fApp)
-	mwSrv := io.MultiWriter(origErr, fSrv)
-	mwWrk := io.MultiWriter(origErr, fWrk)
+	mwApp := &bestEffortWriter{primary: fApp, secondary: origErr}
+	mwSrv := &bestEffortWriter{primary: fSrv, secondary: origErr}
+	mwWrk := &bestEffortWriter{primary: fWrk, secondary: origErr}
+	mwMCP := &bestEffortWriter{primary: fMCP, secondary: origErr}
 
 	ls := logSet{
 		App:    zerolog.New(mwApp).With().Timestamp().Logger(),
 		Server: zerolog.New(mwSrv).With().Timestamp().Logger(),
 		Worker: zerolog.New(mwWrk).With().Timestamp().Logger(),
+		MCP:    zerolog.New(mwMCP).With().Timestamp().Logger(),
 		Dir:    dir,
 	}
 
@@ -126,6 +158,7 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 		fApp.Close()
 		fSrv.Close()
 		fWrk.Close()
+		fMCP.Close()
 	}, nil
 }
 

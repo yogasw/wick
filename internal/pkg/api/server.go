@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,11 +18,13 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
+	"github.com/yogasw/wick/internal/initcreds"
 	"github.com/yogasw/wick/internal/jobrunner"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
@@ -45,6 +49,16 @@ import (
 
 func NewServer() *Server {
 	cfg := config.Load()
+
+	// Log the runtime mode so first-boot debugging is straightforward —
+	// "stdout banner missing the password? logs going to the wrong file?"
+	// usually traces back to whether WICK_TRAY=1 was set by the spawning
+	// process. App / Server names are part of the line so per-app data
+	// dir mismatches (APP_NAME unset, name typo) are obvious too.
+	log.Info().
+		Bool("tray", os.Getenv("WICK_TRAY") == "1").
+		Str("app_name", strings.TrimSpace(os.Getenv("APP_NAME"))).
+		Msg("server: runtime mode")
 
 	db := postgres.NewGORM(cfg.Database)
 	postgres.Migrate(db)
@@ -117,7 +131,40 @@ func NewServer() *Server {
 	healthHandler := health.NewHttpHandler(healthSvc)
 
 	// One-shot: create the default admin only when no admin user exists yet.
-	authSvc.BootstrapAdmin(context.Background(), cfg.App.AdminPassword)
+	// When APP_ADMIN_PASSWORD is empty, the service auto-generates a 5-word
+	// passphrase and returns it so we can persist it to INITIAL_CREDENTIALS
+	// for the operator to recover. Empty return = no seeding happened
+	// (admins already exist) or env-supplied password (operator already
+	// knows it).
+	envPassword := cfg.App.AdminPassword
+	if envPassword == "admin" {
+		// Treat the historical default as "no explicit password" so
+		// installer-style runs get a real auto-generated secret instead
+		// of the well-known "admin".
+		envPassword = ""
+	}
+	if generated := authSvc.BootstrapAdmin(context.Background(), envPassword, configsSvc.AdminPasswordChanged()); generated != "" {
+		appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+		seedEmail := strings.SplitN(cfg.App.AdminEmails, ",", 2)[0]
+		seedEmail = strings.TrimSpace(seedEmail)
+		path, werr := initcreds.Write(appName, seedEmail, generated, configsSvc.AppURL())
+		if werr != nil {
+			log.Warn().Err(werr).Msg("write initial credentials")
+		}
+		// Print the credentials inline only on headless / CLI runs —
+		// useful for Linux servers / docker logs / systemd journal
+		// where the operator can't see a tray menu. Tray builds set
+		// WICK_TRAY=1 and pipe stdout to the app log, so printing the
+		// password there would leak it to disk; the tray surface (file
+		// path + menu item) is enough.
+		if os.Getenv("WICK_TRAY") != "1" {
+			fmt.Printf("\n  ⚠ Default admin created — credentials saved to %s\n", path)
+			fmt.Printf("  → Email:            %s\n", seedEmail)
+			fmt.Printf("  → Default password: %s\n", generated)
+		} else {
+			fmt.Printf("\n  ⚠ Default admin created — credentials saved to %s\n", path)
+		}
+	}
 
 	// ── Jobs (background workers) ────────────────────────────────
 	jobsSvc := manager.NewServiceFromDB(db)
@@ -154,6 +201,34 @@ func NewServer() *Server {
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	connectorsSvc.SetEnc(encSvc)
 	connectorsSvc.SetConfigs(configsSvc)
+
+	// Resolve every tool meta up front — wick stamps the mount path
+	// from meta.Key so modules never have to. (Earlier here than in
+	// past versions: wickmanager.Module needs the resolved tool list
+	// for its tool_list / tool_get ops, so we have to compute this
+	// before registering wickmanager.)
+	var allItems []tool.Tool
+	for _, m := range modules {
+		meta := m.Meta
+		meta.Path = "/tools/" + meta.Key
+		allItems = append(allItems, meta)
+	}
+
+	// wickmanager is a built-in single-instance connector that exposes
+	// wick's own management plane (apps, jobs, tools, connectors,
+	// process lifecycle) via the same connector contract every
+	// downstream connector uses. Register here, after all services
+	// the handlers need are constructed but before Bootstrap so the
+	// fixed instance gets seeded in the same pass as user connectors.
+	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Configs:    configsSvc,
+		Connectors: connectorsSvc,
+		Jobs:       jobsSvc,
+		Login:      authSvc,
+		Tools:      allItems,
+		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+	}))
+
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -180,15 +255,6 @@ func NewServer() *Server {
 		oauthSvc,
 		strings.TrimRight(configsSvc.AppURL(), "/")+"/.well-known/oauth-protected-resource",
 	)
-
-	// Resolve every tool meta up front — wick stamps the mount path
-	// from meta.Key so modules never have to.
-	var allItems []tool.Tool
-	for _, m := range modules {
-		meta := m.Meta
-		meta.Path = "/tools/" + meta.Key
-		allItems = append(allItems, meta)
-	}
 
 	// Tools declare routes through a write-only Router; wick collects
 	// them here so duplicate "METHOD PATH" across modules fails the boot
@@ -354,6 +420,51 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 	})
 }
 
+// hostAllowlistHandler rejects requests whose Host header doesn't match
+// the host of the configured app_url. The /health endpoint is exempt
+// so external load balancers / uptime checks can probe via the raw
+// listen addr (e.g. http://10.0.0.5:9425/health) without first knowing
+// the public hostname. Empty app_url disables the check entirely (a
+// fresh DB ships with the default localhost URL, so this is mainly a
+// safety valve while the operator is bootstrapping).
+func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		appURL := strings.TrimSpace(s.configsSvc.AppURL())
+		if appURL == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		u, err := neturl.Parse(appURL)
+		if err != nil || u.Host == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Compare host:port. Forwarded headers win when set so reverse
+		// proxies that rewrite Host can still gate by the public name.
+		got := r.Host
+		if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
+			got = fh
+		}
+		if !hostMatches(got, u.Host) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostMatches compares request host against expected host. Both are
+// normalised (lowercased, default ports stripped) so
+// "localhost:9425" matches "localhost:9425" and "example.com" matches
+// "example.com:80" when scheme implied port 80.
+func hostMatches(got, expected string) bool {
+	return strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(expected))
+}
+
 // Run starts the HTTP server. Cancel ctx to trigger a graceful
 // shutdown; returns nil on clean stop or the error from
 // ListenAndServe / Shutdown otherwise. CLI callers wrap with
@@ -368,6 +479,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		recoverHandler,
 		loggerHandler(func(w http.ResponseWriter, r *http.Request) bool { return false }),
 		s.appNameHandler,
+		s.hostAllowlistHandler,
 		realIPHandler,
 		requestIDHandler,
 	)
@@ -377,6 +489,12 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		Handler:      h,
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
+		// BaseContext propagates the caller's logger (tray injects
+		// serverLogger here) into every request context. Without this,
+		// r.Context() defaults to context.Background() and middleware's
+		// log.Ctx() lookups fall back to the global logger — so HTTP
+		// access logs land in app.log instead of server.log.
+		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
 
 	shutdownErr := make(chan error, 1)
@@ -392,9 +510,17 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	fmt.Printf("\n  ✓ %s is running\n", s.configsSvc.AppName())
 	fmt.Printf("  → URL: http://localhost:%d\n", port)
 	if !s.configsSvc.AdminPasswordChanged() {
-		fmt.Printf("  → Email:    admin@admin.com\n")
-		fmt.Printf("  → Password: admin\n")
-		fmt.Printf("\n  ⚠ WARNING: Change the default password at http://localhost:%d/profile\n\n", port)
+		// Tray pipes stdout to app.log, so printing plaintext password
+		// here would leak it to disk. Headless / CLI gets the full
+		// banner (operator might be reading from a journal, no GUI).
+		if os.Getenv("WICK_TRAY") != "1" {
+			appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+			if info, ok := initcreds.Read(appName); ok {
+				fmt.Printf("  → Email:            %s\n", info.Email)
+				fmt.Printf("  → Default password: %s\n", info.Password)
+			}
+		}
+		fmt.Printf("\n  ⚠ WARNING: Change the default password at http://localhost:%d/profile/setup\n\n", port)
 	} else {
 		fmt.Println()
 	}
@@ -449,6 +575,23 @@ func RunMCPStdio(version, commit, buildTime string) {
 	connSvc := connectors.NewServiceFromDB(db)
 	connSvc.SetEnc(encSvc)
 	connSvc.SetConfigs(configsSvc)
+
+	// Stdio mode also needs wickmanager so the LLM can introspect
+	// wick configs over the same stdio link. Jobs / tools surface
+	// degrade to "no rows" because we don't run the manager service
+	// in stdio — that's intentional, the LLM can still read app vars
+	// and connector configs which is the common ask.
+	authSvc := login.NewService(db, cfg.App.AdminEmails)
+	jobsSvc := manager.NewServiceFromDB(db)
+	jobsSvc.SetConfigReader(configsSvc)
+	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Configs:    configsSvc,
+		Connectors: connSvc,
+		Jobs:       jobsSvc,
+		Login:      authSvc,
+		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+	}))
+
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -460,7 +603,6 @@ func RunMCPStdio(version, commit, buildTime string) {
 	// encfields. Fall back to the synthetic id only on a fresh DB with
 	// no admin yet.
 	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
-	authSvc := login.NewService(db, cfg.App.AdminEmails)
 	if u, err := authSvc.FirstAdmin(context.Background()); err == nil && u != nil {
 		localAdmin = u
 	}

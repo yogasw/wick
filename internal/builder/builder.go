@@ -92,6 +92,7 @@ func Build(cfg Config) (Result, error) {
 		fmt.Printf("> bundled %s\n", appPath)
 
 		dmgPath := filepath.Join(filepath.Dir(cfg.Output), fmt.Sprintf("%s-darwin-%s.dmg", cfg.AppName, cfg.GOARCH))
+		fmt.Println("> packaging dmg...")
 		out, err := darwin.PackageDMG(appPath, dmgPath, cfg.AppName, cfg.Installer)
 		switch {
 		case err == darwin.ErrSkippedDMG:
@@ -120,6 +121,7 @@ func Build(cfg Config) (Result, error) {
 		// point at a stable location. Off by default so callers that
 		// just want a portable .exe keep the lighter artifact.
 		if cfg.Installer {
+			fmt.Println("> packaging msi...")
 			msiPath, err := windows.PackageMSI(cfg.Output, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
 			switch {
 			case err == windows.ErrSkippedMSI:

@@ -33,8 +33,8 @@ features:
     title: See Everything That Was Built
     details: Git history IS your tool inventory. Who built what, when, and why — no separate dashboard or admin panel to maintain.
   - icon: 🔐
-    title: SSO & Access Control
-    details: SSO built in. Group tools with tags, set visibility per tool. Configured from admin — no redeploy needed.
+    title: Secure by Default
+    details: First boot generates a random admin passphrase and forces a setup flow before anything else runs. SSO, per-tool visibility, tag-based access — all editable from /admin without a redeploy.
   - icon: ⚙️
     title: Live Config, No Redeploy
     details: Declare a typed Config struct. Fields become admin-editable rows. Secrets, URLs, toggles — updated live without touching code.

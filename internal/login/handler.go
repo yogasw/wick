@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/initcreds"
 	"github.com/yogasw/wick/internal/login/view"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/sso"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -67,6 +69,7 @@ func (h *Handler) consumeAfterLogin(w http.ResponseWriter, r *http.Request) stri
 type appConfig interface {
 	AppURL() string
 	Set(ctx context.Context, key, value string) error
+	AdminPasswordChanged() bool
 }
 
 type Handler struct {
@@ -107,6 +110,8 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *Middleware) {
 	mux.Handle("POST /auth/logout", http.HandlerFunc(h.logout))
 	mux.Handle("GET /auth/pending", http.HandlerFunc(h.pending))
 	mux.Handle("GET /profile", sessionMidd.RequireAuth(http.HandlerFunc(h.profilePage)))
+	mux.Handle("GET /profile/setup", sessionMidd.RequireAuth(http.HandlerFunc(h.setupPage)))
+	mux.Handle("POST /profile/setup", sessionMidd.RequireAuth(http.HandlerFunc(h.setupSubmit)))
 	mux.Handle("POST /profile/password", sessionMidd.RequireAuth(http.HandlerFunc(h.changePassword)))
 	mux.Handle("POST /profile/preferences", sessionMidd.RequireAuth(http.HandlerFunc(h.updatePreferences)))
 	mux.Handle("POST /theme", http.HandlerFunc(h.updateTheme))
@@ -167,6 +172,13 @@ func (h *Handler) loginPassword(w http.ResponseWriter, r *http.Request) {
 
 	if !user.Approved {
 		http.Redirect(w, r, "/auth/pending", http.StatusFound)
+		return
+	}
+	// First-login: admin still on the auto-generated password lands on
+	// the setup form before anything else. Home (/) isn't auth-gated so
+	// the RequireAuth redirect would never fire for this case.
+	if user.IsAdmin() && !h.cfg.AdminPasswordChanged() {
+		http.Redirect(w, r, "/profile/setup", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, h.consumeAfterLogin(w, r), http.StatusFound)
@@ -254,7 +266,7 @@ func (h *Handler) profilePage(w http.ResponseWriter, r *http.Request) {
 	user := GetUser(r.Context())
 	success := r.URL.Query().Get("success") == "1"
 	prefsSaved := r.URL.Query().Get("prefs") == "1"
-	view.ProfilePage(user, "", success, prefsSaved).Render(r.Context(), w)
+	view.ProfilePage(user, "", success, prefsSaved, minPasswordLen()).Render(r.Context(), w)
 }
 
 func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +317,101 @@ func (h *Handler) updatePreferences(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/profile?prefs=1", http.StatusFound)
 }
 
+// setupPage renders the first-login setup form. Reachable for any
+// authenticated admin while admin_password_changed is still false; the
+// middleware redirects there from anywhere else, so this handler does
+// not have to gate access — RequireAuth already covers the unauth case.
+func (h *Handler) setupPage(w http.ResponseWriter, r *http.Request) {
+	user := GetUser(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusFound)
+		return
+	}
+	// Once setup is complete, /profile/setup is dead UI — bounce to /profile.
+	if h.cfg.AdminPasswordChanged() {
+		http.Redirect(w, r, "/profile", http.StatusFound)
+		return
+	}
+	view.SetupPage(user, "", minPasswordLen()).Render(r.Context(), w)
+}
+
+// setupSubmit applies the first-login changes atomically from the
+// caller's POV: validate everything first, then password, then email,
+// then mark setup complete + clear INITIAL_CREDENTIALS. If the email
+// rename fails (UNIQUE conflict) the password change still stands —
+// re-rendering the page lets the admin pick another address without
+// losing the new password.
+func (h *Handler) setupSubmit(w http.ResponseWriter, r *http.Request) {
+	user := GetUser(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusFound)
+		return
+	}
+	if h.cfg.AdminPasswordChanged() {
+		http.Redirect(w, r, "/profile", http.StatusFound)
+		return
+	}
+	email := strings.TrimSpace(r.FormValue("email"))
+	current := r.FormValue("current_password")
+	newPw := r.FormValue("new_password")
+	confirm := r.FormValue("confirm_password")
+
+	if email == "" || !strings.Contains(email, "@") {
+		view.SetupPage(user, "Enter a valid email address.", minPasswordLen()).Render(r.Context(), w)
+		return
+	}
+	if newPw != confirm {
+		view.SetupPage(user, "New passwords do not match.", minPasswordLen()).Render(r.Context(), w)
+		return
+	}
+	min := minPasswordLen()
+	if len(newPw) < min {
+		view.SetupPage(user, fmt.Sprintf("Password must be at least %d characters.", min), min).Render(r.Context(), w)
+		return
+	}
+
+	if err := h.svc.SetPassword(r.Context(), user.ID, current, newPw); err != nil {
+		view.SetupPage(user, err.Error(), minPasswordLen()).Render(r.Context(), w)
+		return
+	}
+	if !strings.EqualFold(email, user.Email) {
+		if err := h.svc.SetEmail(r.Context(), user.ID, email); err != nil {
+			view.SetupPage(user, "Could not update email — that address may already be in use.", minPasswordLen()).Render(r.Context(), w)
+			return
+		}
+	}
+	_ = h.cfg.Set(r.Context(), "admin_password_changed", "true")
+	clearInitialCredentials()
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// minPasswordLen returns the password-length floor for the setup
+// form. Tray builds spawn the server in-process and set WICK_TRAY=1 to
+// flag a local single-user install; we relax to 1 char there because
+// "admin1" on a laptop is a UX hassle, not a real attack surface. CLI
+// `wick server` runs (multi-user, network-reachable) keep the 8-char
+// floor.
+func minPasswordLen() int {
+	if os.Getenv("WICK_TRAY") == "1" {
+		return 1
+	}
+	return 8
+}
+
+// clearInitialCredentials removes ~/.<appName>/INITIAL_CREDENTIALS.txt
+// when present. APP_NAME is set by the system tray (and by `wick run`
+// for CLI installs); empty means "fall back to binary basename" —
+// initcreds.Clear handles both via userconfig.Dir.
+func clearInitialCredentials() {
+	appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+	if err := initcreds.Clear(appName); err != nil {
+		// File-system errors are non-fatal — at worst the operator
+		// sees a stale credentials file with a password that no
+		// longer works.
+		_ = err
+	}
+}
+
 func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	user := GetUser(r.Context())
 	current := r.FormValue("current_password")
@@ -312,19 +419,21 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	confirm := r.FormValue("confirm_password")
 
 	if newPw != confirm {
-		view.ProfilePage(user, "New passwords do not match.", false, false).Render(r.Context(), w)
+		view.ProfilePage(user, "New passwords do not match.", false, false, minPasswordLen()).Render(r.Context(), w)
 		return
 	}
-	if len(newPw) < 8 {
-		view.ProfilePage(user, "Password must be at least 8 characters.", false, false).Render(r.Context(), w)
+	min := minPasswordLen()
+	if len(newPw) < min {
+		view.ProfilePage(user, fmt.Sprintf("Password must be at least %d characters.", min), false, false, min).Render(r.Context(), w)
 		return
 	}
 
 	if err := h.svc.SetPassword(r.Context(), user.ID, current, newPw); err != nil {
-		view.ProfilePage(user, err.Error(), false, false).Render(r.Context(), w)
+		view.ProfilePage(user, err.Error(), false, false, minPasswordLen()).Render(r.Context(), w)
 		return
 	}
 	_ = h.cfg.Set(r.Context(), "admin_password_changed", "true")
+	clearInitialCredentials()
 	http.Redirect(w, r, "/profile?success=1", http.StatusFound)
 }
 

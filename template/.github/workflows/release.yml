@@ -123,7 +123,7 @@ concurrency:
 # │           0.6.4 → 0.6.5                                               │
 # │           1.2.3.4 → 1.2.3.5                                           │
 # │    2. uses the bumped value as the release tag (vX.Y.Z) and bakes   │
-# │       it into the binary via WICK_APP_VERSION.                       │
+# │       it into the binary via APP_VERSION.                            │
 # │    3. after the release succeeds, commits the wick.yml diff back    │
 # │       to the source branch with "[skip ci]" — so the next push       │
 # │       reads the freshly bumped value and the loop continues.        │
@@ -402,7 +402,7 @@ jobs:
           # Override wick.yml `version:` so the binary's --version reflects
           # the tag we're about to publish. Critical when RELEASE_AUTO_VERSION=true
           # since wick.yml isn't bumped per release.
-          WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
         # --installer wraps the windows .exe into a per-user .msi (needs
         # wixl, installed above) and stages the darwin .dmg with an
         # Applications symlink for the standard drag-to-install layout.

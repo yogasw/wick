@@ -9,11 +9,13 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
+	"fmt"
+
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
-func ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool) templ.Component {
+func ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool, minPasswordLen int) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -75,7 +77,7 @@ func ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(errMsg)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/login/view/profile.templ`, Line: 30, Col: 15}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/login/view/profile.templ`, Line: 32, Col: 15}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -96,57 +98,96 @@ func ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<div class=\"flex flex-col gap-1.5\"><label for=\"new_password\" class=\"text-sm font-medium text-black-900 dark:text-white-100\">New password</label> <input id=\"new_password\" name=\"new_password\" type=\"password\" required minlength=\"8\" autocomplete=\"new-password\" placeholder=\"Min. 8 characters\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><div class=\"flex flex-col gap-1.5\"><label for=\"confirm_password\" class=\"text-sm font-medium text-black-900 dark:text-white-100\">Confirm new password</label> <input id=\"confirm_password\" name=\"confirm_password\" type=\"password\" required minlength=\"8\" autocomplete=\"new-password\" placeholder=\"••••••••\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><div class=\"flex justify-end\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<div class=\"flex flex-col gap-1.5\"><label for=\"new_password\" class=\"text-sm font-medium text-black-900 dark:text-white-100\">New password</label> <input id=\"new_password\" name=\"new_password\" type=\"password\" required minlength=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var4 string
+			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(minPasswordLen)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/login/view/profile.templ`, Line: 57, Col: 34}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\" autocomplete=\"new-password\" placeholder=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var5 string
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Min. %d characters", minPasswordLen))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/login/view/profile.templ`, Line: 59, Col: 71}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><div class=\"flex flex-col gap-1.5\"><label for=\"confirm_password\" class=\"text-sm font-medium text-black-900 dark:text-white-100\">Confirm new password</label> <input id=\"confirm_password\" name=\"confirm_password\" type=\"password\" required minlength=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var6 string
+			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(minPasswordLen)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/login/view/profile.templ`, Line: 70, Col: 34}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\" autocomplete=\"new-password\" placeholder=\"••••••••\" class=\"rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800\"></div><div class=\"flex justify-end\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if user.PasswordHash != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "Update password")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "Update password")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "Set password")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "Set password")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</button></div></form></div><!-- Display preferences -->")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</button></div></form></div><!-- Display preferences -->")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			homeView := user.Metadata.HomeViewOrDefault()
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<div class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Display preferences</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Choose how the home tool grid is rendered.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<div class=\"rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Display preferences</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Choose how the home tool grid is rendered.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if prefsSaved {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<div class=\"mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400\">Preferences saved.</div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<div class=\"mt-4 rounded-lg border border-pos-200 bg-pos-100 px-4 py-3 text-sm text-pos-400\">Preferences saved.</div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<form action=\"/profile/preferences\" method=\"POST\" class=\"mt-5 flex flex-col gap-3\"><label class=\"flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400\"><input type=\"radio\" name=\"home_view\" value=\"compact\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<form action=\"/profile/preferences\" method=\"POST\" class=\"mt-5 flex flex-col gap-3\"><label class=\"flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400\"><input type=\"radio\" name=\"home_view\" value=\"compact\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if homeView == "compact" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, " checked")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, " checked")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, " class=\"mt-0.5 h-4 w-4 accent-green-500\"> <span class=\"flex flex-col\"><span class=\"text-sm font-medium text-black-900 dark:text-white-100\">Compact</span> <span class=\"text-xs text-black-700 dark:text-black-600\">Small icon-and-name cards — fit more tools on screen.</span></span></label> <label class=\"flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400\"><input type=\"radio\" name=\"home_view\" value=\"detailed\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, " class=\"mt-0.5 h-4 w-4 accent-green-500\"> <span class=\"flex flex-col\"><span class=\"text-sm font-medium text-black-900 dark:text-white-100\">Compact</span> <span class=\"text-xs text-black-700 dark:text-black-600\">Small icon-and-name cards — fit more tools on screen.</span></span></label> <label class=\"flex cursor-pointer items-start gap-3 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-4 transition-colors hover:border-green-400\"><input type=\"radio\" name=\"home_view\" value=\"detailed\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if homeView == "detailed" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, " checked")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, " checked")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, " class=\"mt-0.5 h-4 w-4 accent-green-500\"> <span class=\"flex flex-col\"><span class=\"text-sm font-medium text-black-900 dark:text-white-100\">Detailed</span> <span class=\"text-xs text-black-700 dark:text-black-600\">Larger cards with full names and descriptions.</span></span></label><div class=\"flex justify-end\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300\">Save preferences</button></div></form></div></div></main>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, " class=\"mt-0.5 h-4 w-4 accent-green-500\"> <span class=\"flex flex-col\"><span class=\"text-sm font-medium text-black-900 dark:text-white-100\">Detailed</span> <span class=\"text-xs text-black-700 dark:text-black-600\">Larger cards with full names and descriptions.</span></span></label><div class=\"flex justify-end\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-5 py-2.5 text-sm font-medium text-white-100 transition-colors hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300\">Save preferences</button></div></form></div></div></main>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

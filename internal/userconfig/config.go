@@ -1,24 +1,24 @@
 // Package userconfig persists per-machine user preferences for the
 // system tray (auto-start toggles, default project, self-update state)
-// in a single JSON file under the OS user-config directory.
+// in a single JSON file under a hidden app directory in the user's home.
 //
 // One installed binary = one config file. The directory is named after
 // the running binary, so a user who installs the same app under two
 // different names ("wick-manager", "client-tools") gets two separate
 // configs without collision.
 //
-// Path per OS:
+// Path:
 //
-//	Windows : %APPDATA%\<binary>\config.json
-//	macOS   : ~/Library/Application Support/<binary>/config.json
-//	Linux   : ~/.config/<binary>/config.json
+//	~/.<binary>/config.json
 //
 // Settings here are machine-wide, not per-project. Per-project state
-// (e.g., wick app data) still lives in the project's wick.db.
+// (e.g., wick app data) still lives in the project's wick.db when
+// launched from a project directory.
 package userconfig
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,7 +50,7 @@ type Config struct {
 
 	// DatabasePath overrides the SQLite DB location. Empty = auto-detect.
 	// Auto-detect: binary dir has wick.yml → <binary_dir>/wick.db,
-	// otherwise %APPDATA%/<appName>/wick.db (Windows) or equivalent.
+	// otherwise ~/.<appName>/wick.db.
 	// Set this manually in config.json if you need a custom location.
 	DatabasePath string `json:"database_path,omitempty"`
 
@@ -67,17 +67,27 @@ func defaults() Config {
 	}
 }
 
-// Path returns the absolute config file path for the given project
-// name. Empty name falls back to the running binary's basename.
-func Path(name string) (string, error) {
+// Dir returns the absolute per-app data directory. Empty name falls
+// back to the running binary's basename.
+func Dir(name string) (string, error) {
 	if name == "" {
 		name = binaryName()
 	}
-	base, err := os.UserConfigDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, name, "config.json"), nil
+	return filepath.Join(home, hiddenName(name)), nil
+}
+
+// Path returns the absolute config file path for the given project
+// name. Empty name falls back to the running binary's basename.
+func Path(name string) (string, error) {
+	dir, err := Dir(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
 }
 
 // Load reads the config file for the given project name. Missing file
@@ -90,6 +100,15 @@ func Load(name string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if legacy, lerr := legacyPath(name); lerr == nil {
+				if data, rerr := os.ReadFile(legacy); rerr == nil {
+					cfg := defaults()
+					if err := json.Unmarshal(data, &cfg); err != nil {
+						return Config{}, err
+					}
+					return cfg, nil
+				}
+			}
 			return defaults(), nil
 		}
 		return Config{}, err
@@ -128,7 +147,7 @@ func Save(name string, cfg Config) error {
 //  1. DATABASE_URL env already set (explicit env / CI override) → untouched
 //  2. cfg.DatabasePath set (user edited database_path in config.json)
 //  3. <binary_dir>/wick.db when wick.yml exists next to the binary (project mode)
-//  4. <UserConfigDir>/<appName>/wick.db (standalone / downloaded binary)
+//  4. ~/.<appName>/wick.db (standalone / downloaded binary)
 func ResolveDBPath(appName, customPath string) {
 	if os.Getenv("DATABASE_URL") != "" {
 		return
@@ -149,11 +168,16 @@ func ResolveDBPath(appName, customPath string) {
 			return
 		}
 	}
-	base, err := os.UserConfigDir()
+	dir, err := Dir(appName)
 	if err != nil {
 		return
 	}
-	dbPath := filepath.Join(base, appName, "wick.db")
+	dbPath := filepath.Join(dir, "wick.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		if legacy, lerr := legacyDBPath(appName); lerr == nil {
+			_ = copyFile(legacy, dbPath)
+		}
+	}
 	os.Setenv("DATABASE_URL", dbPath)
 }
 
@@ -183,4 +207,55 @@ func binaryName() string {
 		name = strings.TrimSuffix(name, ext)
 	}
 	return name
+}
+
+func hiddenName(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	name = strings.TrimLeft(name, ".")
+	if name == "" {
+		name = "wick"
+	}
+	return "." + name
+}
+
+func legacyPath(name string) (string, error) {
+	if name == "" {
+		name = binaryName()
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, name, "config.json"), nil
+}
+
+func legacyDBPath(appName string) (string, error) {
+	if appName == "" {
+		appName = binaryName()
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, appName, "wick.db"), nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

@@ -48,7 +48,15 @@ DATABASE_URL=postgres://user:password@localhost:5432/myapp?sslmode=disable
 ### `APP_NAME`
 **Default:** _(empty — falls back to `"Wick"`)_
 
-App name shown in the UI. **Only used on first boot** to seed the database. After that, change it from `/admin/configs` — the database value always wins.
+App name shown in the UI **and** used to namespace per-app paths
+(`~/.<app>/`) for config / DB / logs. Only used on first boot to seed
+the database display name; the `~/.<app>/` directory layout is fixed
+for the life of the install. After first boot the display name can be
+changed from `/admin/configs` — the database value always wins.
+
+At build time (`wick build`) the same variable bakes the app name into
+the binary via `app.BuildAppName`, used as the default MCP server name
+and the per-app data dir.
 
 ```env
 APP_NAME=My Internal Tools
@@ -77,9 +85,11 @@ APP_ADMIN_EMAILS=alice@example.com,bob@example.com
 ```
 
 ### `APP_ADMIN_PASSWORD`
-**Default:** `admin`
+**Default:** *(empty — auto-generated 5-word passphrase)*
 
-Password for the admin account created on first boot (only if no admin user exists yet). Ignored on every subsequent boot. **Change it from the UI after first login.**
+Seeds the password for the admin account created on first boot. When unset (or left as the historical `"admin"`) wick generates a 5-word passphrase and writes it to `~/.<app>/INITIAL_CREDENTIALS.txt` — operators can recover it from disk, the tray menu (**About → Open default password**), or the stdout banner on headless runs.
+
+Re-seeded on every boot until the admin completes `/profile/setup` (which sets `admin_password_changed=true` and deletes the credentials file). After that, this env is ignored.
 
 ```env
 APP_ADMIN_PASSWORD=changeme
@@ -91,22 +101,22 @@ APP_ADMIN_PASSWORD=changeme
 
 These are read by [`wick build`](./build), not by the running binary. They populate `app.BuildAppName` / `BuildAppVersion` / `GitHubPAT` / `GitHubRepo` via Go ldflags. Each falls back to the matching field in `wick.yml` (or empty for the GitHub pair) when not set.
 
-### `WICK_APP_NAME`
+### `APP_NAME`
 **Default:** `name:` from `wick.yml` (else `"app"`)
 
-Bakes the app name. Used to namespace config / DB / log paths and as the default MCP server name.
+Doubles as runtime display name (see above) and build-time bake. At build time it's stamped into `app.BuildAppName` — used to namespace config / DB / log paths and as the default MCP server name.
 
 ```env
-WICK_APP_NAME=myapp
+APP_NAME=myapp
 ```
 
-### `WICK_APP_VERSION`
+### `APP_VERSION`
 **Default:** `version:` from `wick.yml` (else `"dev"`)
 
 Bakes the app version. Shown in the tray title and About menu, advertised by MCP.
 
 ```env
-WICK_APP_VERSION=1.2.0
+APP_VERSION=1.2.0
 ```
 
 ### `RELEASE_GITHUB_PAT`

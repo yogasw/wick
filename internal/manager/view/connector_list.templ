@@ -35,11 +35,13 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 						</p>
 					</div>
 				</div>
-				<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/new") }>
-					<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
-						+ New row
-					</button>
-				</form>
+				if !mod.Meta.Fixed {
+					<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/new") }>
+						<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
+							+ New row
+						</button>
+					</form>
+				}
 			</div>
 
 			<section class="mt-8">
@@ -54,7 +56,7 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 				} else {
 					<div class="mt-4 flex flex-col gap-2">
 						for _, row := range rows {
-							@connectorListCard(mod.Meta.Key, row, tagsByRow[row.ID])
+							@connectorListCard(mod, row, tagsByRow[row.ID])
 						}
 					</div>
 				}
@@ -67,9 +69,9 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 // label + meta on the left, access tags + status in the middle, kebab
 // menu on the right. The card itself is clickable; the kebab keeps
 // destructive actions one click away without crowding the row.
-templ connectorListCard(key string, row entity.Connector, tagNames []string) {
+templ connectorListCard(mod connector.Module, row entity.Connector, tagNames []string) {
 	<div class="group relative flex items-center gap-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 hover:border-green-400">
-		<a href={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID) } class="absolute inset-0 z-0" aria-label="Open"></a>
+		<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID) } class="absolute inset-0 z-0" aria-label="Open"></a>
 		<div class="pointer-events-none relative min-w-0 flex-1">
 			<p class="truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{ row.Label }</p>
 			<p class="mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600">{ row.ID }</p>
@@ -94,7 +96,7 @@ templ connectorListCard(key string, row entity.Connector, tagNames []string) {
 					<span class="h-1.5 w-1.5 rounded-full bg-pos-400"></span>Published
 				</span>
 			}
-			@kebabMenu(key, row)
+			@kebabMenu(mod, row)
 		</div>
 	</div>
 }
@@ -104,7 +106,7 @@ templ connectorListCard(key string, row entity.Connector, tagNames []string) {
 // other open kebab when one opens (exclusive accordion). The inline
 // blur handler closes the menu when focus leaves the row entirely,
 // so clicking elsewhere on the page also collapses it.
-templ kebabMenu(key string, row entity.Connector) {
+templ kebabMenu(mod connector.Module, row entity.Connector) {
 	<details
 		name="connector-kebab"
 		class="pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden"
@@ -115,26 +117,28 @@ templ kebabMenu(key string, row entity.Connector) {
 		</summary>
 		<div class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg">
 			<a
-				href={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/history") }
+				href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/history") }
 				class="block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800"
 			>History</a>
-			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/disable") }>
+			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/disable") }>
 				if row.Disabled {
 					<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-pos-400 hover:bg-white-200 dark:hover:bg-navy-800">Enable</button>
 				} else {
 					<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-prog-400 hover:bg-white-200 dark:hover:bg-navy-800">Disable</button>
 				}
 			</form>
-			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/duplicate") }>
-				<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800">Duplicate</button>
-			</form>
-			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/delete") }>
-				<button
-					type="submit"
-					onclick="return confirm('Delete this connector row? Run history is kept for audit.');"
-					class="block w-full border-t border-white-300 dark:border-navy-600 px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100"
-				>Delete</button>
-			</form>
+			if !mod.Meta.Fixed {
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/duplicate") }>
+					<button type="submit" class="block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800">Duplicate</button>
+				</form>
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/delete") }>
+					<button
+						type="submit"
+						onclick="return confirm('Delete this connector row? Run history is kept for audit.');"
+						class="block w-full border-t border-white-300 dark:border-navy-600 px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100"
+					>Delete</button>
+				</form>
+			}
 		</div>
 	</details>
 }

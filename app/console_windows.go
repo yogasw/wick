@@ -7,14 +7,16 @@ import (
 	"syscall"
 )
 
-// init attaches stdout/stderr/stdin to the parent console when the binary
-// is launched from cmd / PowerShell. Built with -H=windowsgui (default
-// for non-headless windows builds), Go would otherwise leave the standard
-// streams detached, swallowing all output.
+// init re-binds os.Stdout/Stderr/Stdin to the freshly attached console
+// when the process was launched into one (e.g. Explorer double-click
+// allocates a new console for a console-subsystem binary). Console-aware
+// parents — cmd, PowerShell, msys2, MCP-client pipes — already wired the
+// streams before main, and AttachConsole returns 0 in that case so we
+// fall through without touching them.
 //
-// Called automatically because the package is imported by every wick app.
-// No-op when launched from Explorer (no parent console) — falls through
-// silently and stdout stays nil, which matches GUI expectations.
+// systemtray.Run calls FreeConsole right after dispatch, so the visible
+// console window from an Explorer launch only flashes for the few ms it
+// takes to reach tray init.
 func init() {
 	const attachParentProcess = ^uintptr(0) // -1
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")

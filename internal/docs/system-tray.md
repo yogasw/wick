@@ -17,7 +17,7 @@ Status snapshot 2026-05-05. Click item untuk jump ke section detail.
 7. ✅ **User config** — `internal/userconfig/config.go`, atomic save (`<path>.tmp` → rename), defaults (`auto_start_server=false`, `auto_start_worker=false`, `auto_update=true`). Detail: [User config](#user-config-machine-wide-1-project--1-file)
 8. ✅ **Preferences submenu** — toggle auto-start server/worker/update + Open config file. Detail: [4. Preferences](#4-preferences)
 9. ✅ **Build vars** — `app.BuildAppName/AppVersion/WickVersion/Commit/Time/GitHubPAT/GitHubRepo` declared di `app/app.go`; `BuildWickVersion/Commit/Time` auto-fill via `debug.ReadBuildInfo()`. Detail: [3. Self-updater](#3-self-updater) (Variabel build-time)
-10. ✅ **`wick build` subcommand** — `cmd/cli/build.go` real cobra cmd. Flag: `--app-name`, `--app-version`, `--release-github-pat`, `--release-github-repo`, `-o/--output`, `--headless`. Resolution per value: flag → env (`WICK_APP_NAME` / `WICK_APP_VERSION` / `RELEASE_GITHUB_PAT` / `RELEASE_GITHUB_REPOSITORY`) → `wick.yml` (name/version doang) → `"app"` / `"dev"` fallback. Inject ldflags `BuildAppName/AppVersion` + optional `GitHubPAT/Repo`. Honor `GOOS`/`GOARCH` env; `--headless` tambah `-tags headless`. Default output `bin/<app-name>[.exe]`. Detail: [Build & distribution](#build--distribution)
+10. ✅ **`wick build` subcommand** — `cmd/cli/build.go` real cobra cmd. Flag: `--app-name`, `--app-version`, `--release-github-pat`, `--release-github-repo`, `-o/--output`, `--headless`. Resolution per value: flag → env (`APP_NAME` / `APP_VERSION` / `RELEASE_GITHUB_PAT` / `RELEASE_GITHUB_REPOSITORY`) → `wick.yml` (name/version doang) → `"app"` / `"dev"` fallback. Inject ldflags `BuildAppName/AppVersion` + optional `GitHubPAT/Repo`. Honor `GOOS`/`GOARCH` env; `--headless` tambah `-tags headless`. Default output `bin/<app-name>[.exe]`. Detail: [Build & distribution](#build--distribution)
 11. ✅ **wick.yml build task** — root + template `wick.yml` last cmd jadi `wick build` (drop hand-rolled `go build -ldflags ...`). Subcommand baca `name:`/`version:` langsung dari `wick.yml`. Detail: [Build & distribution](#build--distribution)
 
 12. ✅ **Self-updater** — `internal/updater/updater.go`. Komponen:
@@ -304,8 +304,8 @@ wick build
 **CI / explicit** — flag override yg perlu, sisanya dari env:
 
 ```bash
-WICK_APP_NAME=myapp \
-WICK_APP_VERSION=1.0.0 \
+APP_NAME=myapp \
+APP_VERSION=1.0.0 \
 RELEASE_GITHUB_PAT=$PAT \
 RELEASE_GITHUB_REPOSITORY=org/myapp-releases \
 wick build -o myapp-linux-amd64
@@ -315,8 +315,8 @@ wick build -o myapp-linux-amd64
 
 | Value | Order |
 |---|---|
-| App name | `--app-name` → `$WICK_APP_NAME` → `wick.yml name:` → `"app"` |
-| App version | `--app-version` → `$WICK_APP_VERSION` → `wick.yml version:` → `"dev"` |
+| App name | `--app-name` → `$APP_NAME` → `wick.yml name:` → `"app"` |
+| App version | `--app-version` → `$APP_VERSION` → `wick.yml version:` → `"dev"` |
 | GitHub releases PAT | `--release-github-pat` → `$RELEASE_GITHUB_PAT` |
 | GitHub releases repo | `--release-github-repo` → `$RELEASE_GITHUB_REPOSITORY` |
 

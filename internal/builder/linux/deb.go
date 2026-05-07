@@ -178,6 +178,25 @@ func buildControlTarGz(appName, ver, debArch string, installedSizeBytes int) ([]
 	if _, err := tw.Write([]byte(control)); err != nil {
 		return nil, err
 	}
+	for _, script := range []struct {
+		name string
+		body string
+	}{
+		{"postinst", buildPostinstScript()},
+		{"postrm", buildPostrmScript(appName)},
+	} {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:    "./" + script.name,
+			Mode:    0o755,
+			Size:    int64(len(script.body)),
+			ModTime: now,
+		}); err != nil {
+			return nil, err
+		}
+		if _, err := tw.Write([]byte(script.body)); err != nil {
+			return nil, err
+		}
+	}
 	if err := tw.Close(); err != nil {
 		return nil, err
 	}
@@ -199,6 +218,40 @@ Maintainer: %s <noreply@example.com>
 Description: %s
  Built with wick.
 `, appName, ver, debArch, kb, appName, appName)
+}
+
+func buildPostinstScript() string {
+	return `#!/bin/sh
+set -e
+if command -v update-desktop-database >/dev/null 2>&1; then
+	update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+exit 0
+`
+}
+
+func buildPostrmScript(appName string) string {
+	q := shellQuote(appName)
+	return fmt.Sprintf(`#!/bin/sh
+set -e
+app=%[1]s
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+	rm -f "/etc/xdg/autostart/$app.desktop"
+	rm -f "/root/.config/autostart/$app.desktop"
+	for home in /home/*; do
+		[ -d "$home" ] || continue
+		rm -f "$home/.config/autostart/$app.desktop"
+	done
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+	update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+exit 0
+`, q)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 func buildDesktop(appName string) string {
