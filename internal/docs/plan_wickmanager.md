@@ -295,10 +295,8 @@ wick_manager_system_server_stop
                Access: ADMIN + tray-only.
 
 wick_manager_system_worker_start
-  Input: { "auto_stop_minutes": int (0 = run forever; >0 = auto-stop after N min) }
-  Description: Start the background worker. Optional auto-stop timer cancels itself if Stop is
-               called explicitly.
-               Returns {ok: true, auto_stop_minutes, will_stop_at?}.
+  Description: Start the background worker. Errors if already running.
+               Returns {ok: true}.
                Access: ADMIN + tray-only.
 
 wick_manager_system_worker_stop
@@ -308,7 +306,7 @@ wick_manager_system_worker_stop
 wick_manager_system_prefs_get
   Description: Read per-machine tray preferences from ~/.<appName>/config.json.
                Returns {auto_start_app, auto_start_server, auto_start_worker, auto_update,
-                        port, log_retention_days, database_path, worker_auto_stop_minutes}.
+                        port, log_retention_days, database_path}.
                Access: ADMIN + tray-only.
 
 wick_manager_system_prefs_set
@@ -496,24 +494,6 @@ Total: **24 op** (4 app + 7 job + 3 tool + 3 connector + 7 system). MCP layer ex
 
 (Catatan: `wick_list` / `wick_get` / `wick_execute` existing tetap dipertahankan buat connector lain — wickmanager pelanggan top-level pengecualian.)
 
-### Timer auto-stop worker
-
-Tambah ke `userconfig.Config`:
-
-```go
-WorkerAutoStopMinutes int `json:"worker_auto_stop_minutes,omitempty"` // 0 = jalan terus; >0 = auto-stop setelah N menit
-```
-
-Input op `system_worker_start`:
-
-```go
-type WorkerStartInput struct {
-    AutoStopMinutes int `wick:"number;desc=Auto-stop after N minutes. 0 = run forever. Default uses system_prefs.worker_auto_stop_minutes."`
-}
-```
-
-Implementasi: `processctl.Worker.Start(ctx, autoStopMinutes int)` bungkus `time.AfterFunc` yg panggil `Stop` setelah timer; di-cancel kalau Stop eksplisit.
-
 ### Ekstrak process lifecycle
 
 Sama kayak v2: copot `startServer/stopServer/startWorker/stopWorker` dari `internal/systemtray/systray.go` (di-gate build-tag `!headless`) ke package baru `internal/processctl/` yg dikonsumsi `systemtray` dan `wick-manager`. Tray simpan side-effect UI-nya via callback.
@@ -624,7 +604,6 @@ internal/manager/connectors.go             — UI hide tombol "Add" buat Fixed
 internal/processctl/                       — package BARU; pemilik lifecycle + IsManaged()
 internal/systemtray/systray.go             — refactor konsumsi processctl, set IsManaged=true
 internal/systemtray/logs.go                — tambah field MCP di logSet, buka mcp.log
-internal/userconfig/config.go              — tambah WorkerAutoStopMinutes
 pkg/connector/connector.go                 — tambah field Fixed di Meta
 app/app.go                                 — wiring RegisterWickManagerConnector (Opsi C)
 ```
@@ -664,7 +643,6 @@ Tidak ada — semua udah dijawab. Siap eksekusi mulai dari Fase 0.
 **Fase 4 — process lifecycle (refactor)** (2–3 hari)
 - Ekstrak `internal/processctl` + `IsManaged() bool`.
 - Migrate `systemtray` konsumsi-nya, set IsManaged=true.
-- Tambah `WorkerAutoStopMinutes` ke `userconfig.Config`.
 - Implement `system_status`, `system_server_start/stop`, `system_worker_start/stop`, `system_prefs_get/set`.
 - Helper `requireTray()` di `access.go`.
 

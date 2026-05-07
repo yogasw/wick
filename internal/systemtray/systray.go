@@ -14,12 +14,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"fyne.io/systray"
@@ -32,17 +30,12 @@ import (
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/worker"
+	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
 var (
-	mu sync.Mutex
-
-	serverCancel context.CancelFunc
-	serverDone   chan struct{}
-	serverPort   int
-
 	// Top-of-menu credential entry. Single clickable item that opens
 	// INITIAL_CREDENTIALS.txt so the operator can copy the password —
 	// printing it on a disabled menu row works too but blocks copy on
@@ -51,9 +44,6 @@ var (
 	// the live file state without threading refs through callers.
 	credOpenItem *systray.MenuItem
 	credSepItem  *systray.MenuItem
-
-	workerCancel context.CancelFunc
-	workerDone   chan struct{}
 
 	project      string
 	appName      string
@@ -97,7 +87,14 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 	wickVersion = wickVer
 	buildCommit = commit
 	buildTime = builtAt
-	serverPort = config.Load().App.Port
+	processctl.SetManaged(true)
+	processctl.SetPort(config.Load().App.Port)
+	processctl.SetServerRunner(processctl.RunnerFunc(func(ctx context.Context) error {
+		return api.NewServer().Run(ctx, processctl.ServerPort())
+	}))
+	processctl.SetWorkerRunner(processctl.RunnerFunc(func(ctx context.Context) error {
+		return worker.NewServer().Run(ctx)
+	}))
 
 	// Log files first — windowsgui builds have no stderr, so any crash
 	// before this point is invisible.
@@ -105,6 +102,9 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 		logDir = ls.Dir
 		serverLogger = ls.Server
 		workerLogger = ls.Worker
+		processctl.SetServerLogger(ls.Server)
+		processctl.SetWorkerLogger(ls.Worker)
+		processctl.SetMCPLogger(ls.MCP)
 		defer cleanup()
 		log.Info().Str("app", appName).Str("version", appVer).Str("wick", wickVer).Msg("tray starting")
 	}
@@ -277,6 +277,11 @@ func onReady() {
 	systray.SetTitle(appName)
 	systray.SetTooltip(appName + " — " + project)
 
+	// Refresh tray icon every time processctl flips state. Covers
+	// MCP-driven Start/Stop (wick_manager_system_*) so the icon
+	// matches reality without forcing the user to re-open the menu.
+	processctl.Subscribe(func(_ processctl.StateChange) { refreshIcon() })
+
 	// One-shot launch toast so user sees the app actually started in the
 	// tray (icon alone is easy to miss). Fires per process start, not on
 	// menu clicks — re-open after Quit shows it again.
@@ -413,7 +418,7 @@ func onReady() {
 	setServerLabel := func(running bool, errMsg string) {
 		switch {
 		case running:
-			mServer.SetTitle(fmt.Sprintf("Stop server  (running on :%d)", serverPort))
+			mServer.SetTitle(fmt.Sprintf("Stop server  (running on :%d)", processctl.ServerPort()))
 			mOpenURL.Show()
 			credSepItem.Show()
 		case errMsg != "":
@@ -548,9 +553,9 @@ func onReady() {
 				}
 				refreshIcon()
 			case <-mOpenURL.ClickedCh:
-				log.Info().Bool("running", isServerRunning()).Int("port", serverPort).Msg("menu: open server url")
+				log.Info().Bool("running", isServerRunning()).Int("port", processctl.ServerPort()).Msg("menu: open server url")
 				if isServerRunning() {
-					url := fmt.Sprintf("http://localhost:%d", serverPort)
+					url := fmt.Sprintf("http://localhost:%d", processctl.ServerPort())
 					if err := openInEditor(url); err != nil {
 						log.Error().Str("url", url).Err(err).Msg("open server url")
 					} else {
@@ -708,110 +713,13 @@ func fmtBuildField(v string) string {
 	return v
 }
 
-func isServerRunning() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return serverCancel != nil
-}
+func isServerRunning() bool { return processctl.IsServerRunning() }
+func isWorkerRunning() bool { return processctl.IsWorkerRunning() }
 
-func isWorkerRunning() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return workerCancel != nil
-}
-
-func startServer() error {
-	mu.Lock()
-	if serverCancel != nil {
-		mu.Unlock()
-		return fmt.Errorf("already running")
-	}
-
-	// Pre-flight bind check so port collisions surface synchronously to
-	// the caller (tray menu / auto-start). Tiny race window between
-	// closing this listener and api.NewServer().Run binding the same
-	// port, but the cost of getting it wrong is just a confusing error
-	// message — acceptable for UX feedback on the common case.
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", serverPort))
-	if err != nil {
-		mu.Unlock()
-		return fmt.Errorf("port %d in use: %w", serverPort, err)
-	}
-	ln.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = serverLogger.WithContext(ctx)
-	serverCancel = cancel
-	serverDone = make(chan struct{})
-	mu.Unlock()
-
-	srv := api.NewServer()
-	go func() {
-		defer close(serverDone)
-		if err := srv.Run(ctx, serverPort); err != nil {
-			log.Error().Err(err).Msg("server")
-		}
-		mu.Lock()
-		serverCancel = nil
-		mu.Unlock()
-		refreshIcon()
-	}()
-	return nil
-}
-
-func stopServer() {
-	mu.Lock()
-	cancel := serverCancel
-	done := serverDone
-	mu.Unlock()
-	if cancel == nil {
-		return
-	}
-	cancel()
-	if done != nil {
-		<-done
-	}
-}
-
-func startWorker() error {
-	mu.Lock()
-	if workerCancel != nil {
-		mu.Unlock()
-		return fmt.Errorf("already running")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = workerLogger.WithContext(ctx)
-	workerCancel = cancel
-	workerDone = make(chan struct{})
-	mu.Unlock()
-
-	srv := worker.NewServer()
-	go func() {
-		defer close(workerDone)
-		if err := srv.Run(ctx); err != nil {
-			log.Error().Err(err).Msg("worker")
-		}
-		mu.Lock()
-		workerCancel = nil
-		mu.Unlock()
-		refreshIcon()
-	}()
-	return nil
-}
-
-func stopWorker() {
-	mu.Lock()
-	cancel := workerCancel
-	done := workerDone
-	mu.Unlock()
-	if cancel == nil {
-		return
-	}
-	cancel()
-	if done != nil {
-		<-done
-	}
-}
+func startServer() error { return processctl.StartServer() }
+func stopServer()        { _ = processctl.StopServer() }
+func startWorker() error { return processctl.StartWorker() }
+func stopWorker()        { _ = processctl.StopWorker() }
 
 func installOne(c mcpconfig.Client) error {
 	entry, err := mcpconfig.SelfEntry()

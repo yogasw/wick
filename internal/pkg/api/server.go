@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
@@ -200,6 +201,34 @@ func NewServer() *Server {
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	connectorsSvc.SetEnc(encSvc)
 	connectorsSvc.SetConfigs(configsSvc)
+
+	// Resolve every tool meta up front — wick stamps the mount path
+	// from meta.Key so modules never have to. (Earlier here than in
+	// past versions: wickmanager.Module needs the resolved tool list
+	// for its tool_list / tool_get ops, so we have to compute this
+	// before registering wickmanager.)
+	var allItems []tool.Tool
+	for _, m := range modules {
+		meta := m.Meta
+		meta.Path = "/tools/" + meta.Key
+		allItems = append(allItems, meta)
+	}
+
+	// wickmanager is a built-in single-instance connector that exposes
+	// wick's own management plane (apps, jobs, tools, connectors,
+	// process lifecycle) via the same connector contract every
+	// downstream connector uses. Register here, after all services
+	// the handlers need are constructed but before Bootstrap so the
+	// fixed instance gets seeded in the same pass as user connectors.
+	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Configs:    configsSvc,
+		Connectors: connectorsSvc,
+		Jobs:       jobsSvc,
+		Login:      authSvc,
+		Tools:      allItems,
+		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+	}))
+
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -226,15 +255,6 @@ func NewServer() *Server {
 		oauthSvc,
 		strings.TrimRight(configsSvc.AppURL(), "/")+"/.well-known/oauth-protected-resource",
 	)
-
-	// Resolve every tool meta up front — wick stamps the mount path
-	// from meta.Key so modules never have to.
-	var allItems []tool.Tool
-	for _, m := range modules {
-		meta := m.Meta
-		meta.Path = "/tools/" + meta.Key
-		allItems = append(allItems, meta)
-	}
 
 	// Tools declare routes through a write-only Router; wick collects
 	// them here so duplicate "METHOD PATH" across modules fails the boot
@@ -555,6 +575,23 @@ func RunMCPStdio(version, commit, buildTime string) {
 	connSvc := connectors.NewServiceFromDB(db)
 	connSvc.SetEnc(encSvc)
 	connSvc.SetConfigs(configsSvc)
+
+	// Stdio mode also needs wickmanager so the LLM can introspect
+	// wick configs over the same stdio link. Jobs / tools surface
+	// degrade to "no rows" because we don't run the manager service
+	// in stdio — that's intentional, the LLM can still read app vars
+	// and connector configs which is the common ask.
+	authSvc := login.NewService(db, cfg.App.AdminEmails)
+	jobsSvc := manager.NewServiceFromDB(db)
+	jobsSvc.SetConfigReader(configsSvc)
+	connectors.Register(wickmanager.Module(wickmanager.Deps{
+		Configs:    configsSvc,
+		Connectors: connSvc,
+		Jobs:       jobsSvc,
+		Login:      authSvc,
+		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+	}))
+
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -566,7 +603,6 @@ func RunMCPStdio(version, commit, buildTime string) {
 	// encfields. Fall back to the synthetic id only on a fresh DB with
 	// no admin yet.
 	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
-	authSvc := login.NewService(db, cfg.App.AdminEmails)
 	if u, err := authSvc.FirstAdmin(context.Background()); err == nil && u != nil {
 		localAdmin = u
 	}

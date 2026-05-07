@@ -28,7 +28,12 @@ type logSet struct {
 	App    zerolog.Logger
 	Server zerolog.Logger
 	Worker zerolog.Logger
-	Dir    string
+	// MCP receives audit events emitted by the wickmanager connector
+	// for every tools/list / tools/call (read + write). Sits next to
+	// the other per-component logs; pruning shares the same prefix
+	// rotation pruneOldLogs runs.
+	MCP zerolog.Logger
+	Dir string
 }
 
 // bestEffortWriter writes to primary; on success also attempts secondary
@@ -95,6 +100,13 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 		fSrv.Close()
 		return logSet{}, func() {}, err
 	}
+	fMCP, err := openLog("mcp")
+	if err != nil {
+		fApp.Close()
+		fSrv.Close()
+		fWrk.Close()
+		return logSet{}, func() {}, err
+	}
 
 	origOut, origErr := os.Stdout, os.Stderr
 
@@ -125,11 +137,13 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 	mwApp := &bestEffortWriter{primary: fApp, secondary: origErr}
 	mwSrv := &bestEffortWriter{primary: fSrv, secondary: origErr}
 	mwWrk := &bestEffortWriter{primary: fWrk, secondary: origErr}
+	mwMCP := &bestEffortWriter{primary: fMCP, secondary: origErr}
 
 	ls := logSet{
 		App:    zerolog.New(mwApp).With().Timestamp().Logger(),
 		Server: zerolog.New(mwSrv).With().Timestamp().Logger(),
 		Worker: zerolog.New(mwWrk).With().Timestamp().Logger(),
+		MCP:    zerolog.New(mwMCP).With().Timestamp().Logger(),
 		Dir:    dir,
 	}
 
@@ -144,6 +158,7 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 		fApp.Close()
 		fSrv.Close()
 		fWrk.Close()
+		fMCP.Close()
 	}, nil
 }
 
