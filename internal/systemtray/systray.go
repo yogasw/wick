@@ -147,6 +147,37 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 		log.Error().Err(err).Msg("updater init")
 	} else {
 		updaterInst = upd
+		// Inspect any sentinel left by a prior ApplyStagedAndRestart.
+		// Three outcomes we care about:
+		//   - success: log so the user sees confirmation in the log file
+		//   - stale  : the helper either crashed or the installer
+		//              silently no-op'd — surface this loudly so the
+		//              "icon disappeared, exe missing" failure mode
+		//              doesn't keep happening invisibly
+		//   - pending: another launch interleaved with an in-flight
+		//              install; leave the sentinel for next time
+		if outcome, oerr := upd.CheckUpdateOutcome(appVersion); oerr != nil {
+			log.Warn().Err(oerr).Msg("read update sentinel")
+		} else if outcome != nil {
+			switch {
+			case outcome.Success:
+				log.Info().Str("from", outcome.From).Str("to", outcome.To).Msg("update applied successfully")
+				upd.ClearOutcome()
+			case outcome.Stale:
+				log.Error().
+					Str("from", outcome.From).
+					Str("to", outcome.To).
+					Str("installer_log", outcome.InstallerLog).
+					Str("helper_log", outcome.HelperLog).
+					Msg("previous update did not apply — see installer/helper logs")
+				upd.ClearOutcome()
+			case outcome.Pending:
+				log.Info().Msg("update still in progress, leaving sentinel for next launch")
+			default:
+				log.Info().Str("reason", outcome.Reason).Msg("update outcome")
+				upd.ClearOutcome()
+			}
+		}
 		if upd.HasStaged() {
 			log.Info().Str("version", upd.StagedVersion()).Msg("applying staged update")
 			if err := upd.ApplyStagedAndRestart(stopServer, stopWorker); err != nil {

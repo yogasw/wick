@@ -27,15 +27,30 @@ func (u *Updater) assetName(version string) string {
 }
 
 // stagedExt is the file extension for the staged update file on disk.
-// Linux extracts the inner ELF binary from the .deb, so no ext.
-func stagedExt() string { return "" }
+// On Linux we keep the .deb so swapLinuxDeb can hand it to dpkg via
+// pkexec, which preserves package-manager bookkeeping (dpkg -l, apt
+// upgrade) instead of bypassing dpkg with a raw binary swap. The
+// previous design extracted the inner ELF and renamed it onto
+// /usr/bin/<app>; that "worked" for a single update but desynced
+// dpkg's database, so the next `apt upgrade` would silently overwrite
+// the user's running version with whatever the distro mirror had.
+func stagedExt() string { return ".deb" }
 
-// extractStaged peels back the .deb to its inner binary:
+// extractStaged is now a pass-through — the .deb is what dpkg consumes.
+// The legacy ar-extract path is preserved as extractInnerBinary for
+// the rare case where dpkg/pkexec is unavailable and we need to fall
+// back to a raw binary swap (e.g. minimal containers).
+func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
+	return asset, nil
+}
+
+// extractInnerBinary peels back the .deb to its inner binary:
 //
 //	.deb (ar archive) → data.tar.gz → ./usr/bin/<app>
 //
-// Pure-Go — no system dpkg required.
-func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
+// Pure-Go — no system dpkg required. Used by swapLinuxDeb's fallback
+// path when dpkg is missing.
+func extractInnerBinary(asset []byte, appName string) ([]byte, error) {
 	r := ar.NewReader(bytes.NewReader(asset))
 	for {
 		hdr, err := r.Next()
@@ -52,7 +67,7 @@ func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read data.tar.gz: %w", err)
 		}
-		return extractBinaryFromTarGz(dataGz, u.appName)
+		return extractBinaryFromTarGz(dataGz, appName)
 	}
 }
 
