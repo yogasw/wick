@@ -65,16 +65,16 @@ and a .dmg with an Applications symlink on darwin for the standard
 drag-to-install layout.
 
 Resolution order per value:
-  --app-name    flag > $WICK_APP_NAME    > wick.yml name    > "app"
-  --app-version flag > $WICK_APP_VERSION > wick.yml version > "dev"
+  --app-name    flag > $APP_NAME    > wick.yml name    > "app"
+  --app-version flag > $APP_VERSION > wick.yml version > "dev"
   --release-github-pat  flag > $RELEASE_GITHUB_PAT
   --release-github-repo flag > $RELEASE_GITHUB_REPOSITORY
   --target / --goos+--goarch flag > $GOOS, $GOARCH > host runtime
 
 Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`,
 		RunE: func(c *cobra.Command, args []string) error {
-			appName = firstNonEmpty(appName, os.Getenv("WICK_APP_NAME"))
-			appVersion = firstNonEmpty(appVersion, os.Getenv("WICK_APP_VERSION"))
+			appName = firstNonEmpty(appName, os.Getenv("APP_NAME"))
+			appVersion = firstNonEmpty(appVersion, os.Getenv("APP_VERSION"))
 			cfg, _ := loadConfig()
 			if cfg != nil {
 				if appName == "" {
@@ -134,8 +134,8 @@ Default output is bin/<app-name>-<goos>-<goarch>[.exe]; override with --output.`
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&appName, "app-name", "", "App name → app.BuildAppName (env: WICK_APP_NAME, fallback: wick.yml name)")
-	cmd.Flags().StringVar(&appVersion, "app-version", "", "App version → app.BuildAppVersion (env: WICK_APP_VERSION, fallback: wick.yml version)")
+	cmd.Flags().StringVar(&appName, "app-name", "", "App name → app.BuildAppName (env: APP_NAME, fallback: wick.yml name)")
+	cmd.Flags().StringVar(&appVersion, "app-version", "", "App version → app.BuildAppVersion (env: APP_VERSION, fallback: wick.yml version)")
 	cmd.Flags().StringVar(&githubPAT, "release-github-pat", "", "GitHub releases PAT → app.GitHubPAT (env: RELEASE_GITHUB_PAT)")
 	cmd.Flags().StringVar(&githubRepo, "release-github-repo", "", "GitHub releases repo owner/<app>-releases → app.GitHubRepo (env: RELEASE_GITHUB_REPOSITORY)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output binary path (default: bin/<app-name>-<goos>-<goarch>[.exe])")

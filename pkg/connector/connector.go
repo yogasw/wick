@@ -57,6 +57,15 @@ type Meta struct {
 	Name        string
 	Description string
 	Icon        string
+	// Fixed marks this connector as single-instance. Wick auto-seeds one
+	// row on first boot, the admin UI hides the "Add new instance"
+	// button, and connectors.Repo.Create rejects a second insert with
+	// ErrFixedInstanceViolation. Useful when the connector wraps a
+	// single in-process resource (e.g. wickmanager) or an external
+	// service that can only have one configuration.
+	//
+	// Default false = many instances allowed (existing behaviour).
+	Fixed bool
 }
 
 // ExecuteFunc is the per-operation handler signature. It receives a

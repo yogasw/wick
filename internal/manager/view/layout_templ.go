@@ -55,7 +55,7 @@ func Layout(title string, user *entity.User) templ.Component {
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(ui.AppNameFromContext(ctx))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/layout.templ`, Line: 17, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `layout.templ`, Line: 17, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {

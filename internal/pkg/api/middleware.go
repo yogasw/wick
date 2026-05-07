@@ -123,6 +123,13 @@ func loggerHandler(filter func(w http.ResponseWriter, r *http.Request) bool) fun
 			dur := float64(time.Since(start).Nanoseconds()/1e4) / 100.0
 
 			// Create log fields
+			body := sanitizerInstance.SanitizeJSON(buf)
+			if isCredentialPath(r.URL.Path) {
+				// Form-encoded password posts never round-trip through
+				// the JSON sanitizer (it bails when Unmarshal fails),
+				// so blanket-redact the body for known credential routes.
+				body = "******"
+			}
 			fields := &logFields{
 				RemoteIP:   r.RemoteAddr,
 				Host:       r.Host,
@@ -130,7 +137,7 @@ func loggerHandler(filter func(w http.ResponseWriter, r *http.Request) bool) fun
 				Method:     r.Method,
 				Path:       r.URL.Path,
 				Query:      sanitizerInstance.SanitizeQuery(r.URL.Query()),
-				Body:       sanitizerInstance.SanitizeJSON(buf),
+				Body:       body,
 				Headers:    sanitizerInstance.SanitizeHeaders(r.Header),
 				StatusCode: ww.Status(),
 				Latency:    dur,
@@ -142,6 +149,30 @@ func loggerHandler(filter func(w http.ResponseWriter, r *http.Request) bool) fun
 
 		})
 	}
+}
+
+// isCredentialPath flags routes whose POST body carries a secret —
+// password, session secret, encryption key, connector secret, etc.
+// The access logger blanket-redacts the body for these paths because
+// their form-urlencoded or multipart payloads bypass the JSON-only
+// sanitizer.
+func isCredentialPath(p string) bool {
+	switch p {
+	case "/auth/login-password", "/profile/setup", "/profile/password":
+		return true
+	}
+	// Prefix matches cover dynamic <key> / <id> segments where we'd
+	// otherwise need to chase every new secret config the operator can
+	// edit. /admin/variables/* = app-level secrets; /manager/.../configs/*
+	// = per-connector / per-tool / per-job secrets (any IsSecret row in
+	// the configs reflector).
+	if strings.HasPrefix(p, "/admin/variables/") {
+		return true
+	}
+	if strings.HasPrefix(p, "/manager/") && strings.Contains(p, "/configs/") {
+		return true
+	}
+	return false
 }
 
 func realIPHandler(next http.Handler) http.Handler {
@@ -218,9 +249,14 @@ func requestIDHandler(next http.Handler) http.Handler {
 		// Set request ID in response header
 		w.Header().Set(requestIDHeader, requestID)
 
-		// Store in both zerolog context and regular context
+		// Store in both zerolog context and regular context.
+		// Crucial: derive from zerolog.Ctx(r.Context()), not the
+		// global log.With(), so the logger BaseContext injected
+		// (e.g. tray's serverLogger) is preserved instead of being
+		// silently replaced by the global app-level logger.
 		ctx := context.WithValue(r.Context(), config.RequestIDKey, requestID)
-		ctx = log.With().
+		base := zerolog.Ctx(ctx)
+		ctx = base.With().
 			Str("request_id", requestID).
 			Logger().
 			WithContext(ctx)

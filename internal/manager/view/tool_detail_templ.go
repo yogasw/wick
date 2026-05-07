@@ -62,7 +62,7 @@ func ToolDetailPage(t tool.Tool, configs []entity.Config, editKey string, user *
 			var templ_7745c5c3_Var3 templ.SafeURL
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/tools/" + t.Key))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/tool_detail.templ`, Line: 21, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `tool_detail.templ`, Line: 21, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -75,7 +75,7 @@ func ToolDetailPage(t tool.Tool, configs []entity.Config, editKey string, user *
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(t.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/tool_detail.templ`, Line: 21, Col: 58}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `tool_detail.templ`, Line: 21, Col: 58}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -88,7 +88,7 @@ func ToolDetailPage(t tool.Tool, configs []entity.Config, editKey string, user *
 			var templ_7745c5c3_Var5 string
 			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(t.Icon)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/tool_detail.templ`, Line: 26, Col: 13}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `tool_detail.templ`, Line: 26, Col: 13}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 			if templ_7745c5c3_Err != nil {
@@ -101,7 +101,7 @@ func ToolDetailPage(t tool.Tool, configs []entity.Config, editKey string, user *
 			var templ_7745c5c3_Var6 string
 			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(t.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/tool_detail.templ`, Line: 29, Col: 90}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `tool_detail.templ`, Line: 29, Col: 90}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
@@ -119,7 +119,7 @@ func ToolDetailPage(t tool.Tool, configs []entity.Config, editKey string, user *
 				var templ_7745c5c3_Var7 string
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(t.Description)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/tool_detail.templ`, Line: 31, Col: 82}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `tool_detail.templ`, Line: 31, Col: 82}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {

@@ -38,7 +38,7 @@ func Email(row entity.Config) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(valueFor(row))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/type/email.templ`, Line: 9, Col: 23}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `type/email.templ`, Line: 9, Col: 23}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -51,7 +51,7 @@ func Email(row entity.Config) templ.Component {
 		var templ_7745c5c3_Var3 string
 		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(placeholderFor(row))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/type/email.templ`, Line: 10, Col: 35}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `type/email.templ`, Line: 10, Col: 35}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {

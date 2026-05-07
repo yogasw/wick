@@ -76,6 +76,15 @@ func (r *repo) SetPasswordHash(ctx context.Context, userID, hash string) error {
 		Update("password_hash", hash).Error
 }
 
+// SetEmail rewrites the email column. Returns the underlying gorm
+// error verbatim — UNIQUE-constraint violations bubble up so callers
+// can recognise "already taken" via gorm.ErrDuplicatedKey.
+func (r *repo) SetEmail(ctx context.Context, userID, email string) error {
+	return r.db.WithContext(ctx).Model(&entity.User{}).
+		Where("id = ?", userID).
+		Update("email", email).Error
+}
+
 // CountAdmins returns how many users carry the admin role. Used by
 // the first-boot admin seed to decide whether the default admin
 // should be created.

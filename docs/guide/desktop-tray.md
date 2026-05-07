@@ -14,6 +14,9 @@ The tray is one binary, not a separate executable. The same `./bin/<app>` runs a
 <app> v<version>  (wick v<wickVersion>)
 ─────────────────────────────────────
 Start server  /  Stop server  (running on :9425)
+Open server URL                       (visible while server is up)
+Open default password                 (visible while INITIAL_CREDENTIALS.txt exists)
+─────────────                         (separator only when server is up)
 Start worker  /  Stop worker  (running)
 Check for updates
 Restart to apply v1.2.4              (hidden until a download is staged)
@@ -40,6 +43,7 @@ Preferences ▶
 About ▶
   App / Wick / Commit / Built
   Open logs
+  Open initial credentials            (hidden after first-login setup)
   Wick Repository
   Wick Documentation
 ─────────────────────────────────────
@@ -47,6 +51,22 @@ Quit
 ```
 
 The tray icon background color signals state at a glance: gray (idle), blue (server running), orange (worker running), green (both running). A corner badge adds a glyph for higher-DPI tray slots.
+
+## Initial admin credentials
+
+On first boot wick generates a 5-word passphrase for the seed admin user (when `APP_ADMIN_PASSWORD` is unset / left as the historical `"admin"`) and writes it to `~/.<app>/INITIAL_CREDENTIALS.txt` (mode `0600`). The tray surfaces it three ways:
+
+- **Tray menu — Open default password** appears beneath `Start/Stop server` while the file exists. Clicking opens it in the default text editor for copy-paste.
+- **Toast on first boot** points at the menu so the operator notices.
+- **About → Open initial credentials** is the same file, kept around as a fallback.
+
+The first time the operator logs in, wick force-redirects to `/profile/setup` (email + password rotation). Once that's done, `admin_password_changed` flips, the file is deleted, and all three surfaces disappear on the next tray refresh.
+
+Headless / CLI runs (`wick server`) print the credentials to stdout instead — useful for `docker logs` or `journalctl`.
+
+## Open server URL
+
+Visible only when the server is running. Opens `http://localhost:<port>` in the user's default browser. The handler reads `serverPort` live, so port changes between starts are picked up without re-rendering the menu.
 
 ## Server / worker toggles
 
@@ -80,7 +100,7 @@ Behavior with `auto_update` enabled (default):
 
 1. On launch, if a binary was staged in the previous session, apply it and re-exec — before the tray menu appears.
 2. Otherwise spawn a background check against `<owner>/<repo>/releases/latest`.
-3. If a newer version is found, download the matching `<app>-<os>-<arch>` asset to `<UserConfigDir>/<app>/updates/`, verify SHA256 against the `.sha256` sibling, and stage it.
+3. If a newer version is found, download the matching `<app>-<os>-<arch>` asset to `~/.<app>/updates/`, verify SHA256 against the `.sha256` sibling, and stage it.
 4. The menu shows `Restart to apply vX.Y.Z` — clicking restarts the binary; quitting and relaunching applies it automatically.
 
 Failures are silent — the menu title surfaces the state (`Up to date (vX.Y.Z)`, `Update check failed (see logs)`, `Update check failed — PAT expired (see logs)`). Detail goes to the log file, not a popup.
@@ -105,15 +125,15 @@ When the tray launches with autostart already enabled, it re-writes the entry wi
 
 ## File locations
 
-The tray uses three OS-standard directories. All paths are namespaced by the binary's `BuildAppName` (set at build time from `wick.yml`'s `name:` field — see [Build reference](/reference/build)).
+The tray keeps app-owned files in one hidden home directory. All paths are namespaced by the binary's `BuildAppName` (set at build time from `wick.yml`'s `name:` field).
 
 ### Config
 
 | OS | Path |
 |---|---|
-| Windows | `%APPDATA%\<app>\config.json` |
-| macOS | `~/Library/Application Support/<app>/config.json` |
-| Linux | `~/.config/<app>/config.json` |
+| Windows | `%USERPROFILE%\.app-name\config.json` |
+| macOS | `~/.app-name/config.json` |
+| Linux | `~/.app-name/config.json` |
 
 `Preferences ▶ Open config file` opens it in the default editor. Toggles in the menu write back atomically.
 
@@ -142,15 +162,15 @@ The tray resolves the SQLite path before the app config loads. First non-empty w
 1. `DATABASE_URL` env (already set explicitly — never overridden)
 2. `database_path` in `config.json` (manual override)
 3. `<binary_dir>/wick.db` if `wick.yml` sits next to the binary (project mode)
-4. `<UserConfigDir>/<app>/wick.db` (standalone — for downloaded releases)
+4. `~/.<app>/wick.db` (standalone for downloaded releases)
 
 Standalone mode keeps the DB path stable when the user moves or renames the binary. Project mode keeps the DB next to your source tree during development.
 
 | Scenario | Resolved DB path |
 |---|---|
-| `wick build` in `myapp/` then run `./bin/myapp.exe` | `%APPDATA%\myapp\wick.db` (binary in `bin/`, no `wick.yml` sibling) |
+| `wick build` in `myapp/` then run `./bin/myapp.exe` | `~/.myapp/wick.db` (binary in `bin/`, no `wick.yml` sibling) |
 | `go build .` in project root then run `./myapp.exe` | `<projectroot>/wick.db` (project mode) |
-| User downloads release binary, double-clicks anywhere | `%APPDATA%\<app>\wick.db` |
+| User downloads release binary, double-clicks anywhere | `~/.<app>/wick.db` |
 | User edits `database_path: "D:\\custom\\my.db"` | `D:\custom\my.db` |
 | CI / Docker sets `DATABASE_URL=postgres://...` | Pass-through to that URL |
 
@@ -172,11 +192,11 @@ zerolog writes to a per-day file in addition to stderr. Filename rolls over at t
 
 | OS | Path |
 |---|---|
-| Windows | `%APPDATA%\<app>\logs\wick-YYYY-MM-DD.log` |
-| macOS | `~/Library/Application Support/<app>/logs/wick-YYYY-MM-DD.log` |
-| Linux | `~/.config/<app>/logs/wick-YYYY-MM-DD.log` |
+| Windows | `%USERPROFILE%\.app-name\logs\wick-YYYY-MM-DD.log` |
+| macOS | `~/.app-name/logs/wick-YYYY-MM-DD.log` |
+| Linux | `~/.app-name/logs/wick-YYYY-MM-DD.log` |
 
-Co-located with `config.json` and `wick.db` under `UserConfigDir` so everything an app owns lives in one tree. `os.Stdout` and `os.Stderr` are also piped through, so `fmt.Print` calls and third-party library writes land in the same file.
+Co-located with `config.json` and `wick.db` under `~/.<app>` so everything an app owns lives in one easy-to-find tree. `os.Stdout` and `os.Stderr` are also piped through, so `fmt.Print` calls and third-party library writes land in the same file.
 
 `About ▶ Open logs` opens today's file. Headless subcommands (`server`, `worker`, `mcp serve`) write to stderr only — no file redirect.
 
@@ -206,10 +226,10 @@ This adds `-tags headless` to the underlying `go build`. The tray subcommand bec
 
 ## Single instance
 
-The tray acquires a per-app PID-file lock at `<UserConfigDir>/<app>/instance.pid` and verifies the recorded PID is still alive and points at the same executable basename. A second invocation of the same binary finds the lock held and exits silently. Two different wick-built binaries (`acme-tools` vs `widget-tools`) live in their own files and don't lock each other out. A crashed instance leaves a stale PID; the next launch detects the dead PID and reclaims the slot.
+The tray acquires a per-app PID-file lock at `~/.<app>/instance.pid` and verifies the recorded PID is still alive and points at the same executable basename. A second invocation of the same binary finds the lock held and exits silently. Two different wick-built binaries (`acme-tools` vs `widget-tools`) live in their own files and don't lock each other out. A crashed instance leaves a stale PID; the next launch detects the dead PID and reclaims the slot.
 
 ## See also
 
 - [`wick build` reference](/reference/build) — flags, CI templates, PAT scopes for the self-updater
-- [Environment Variables](/reference/env-vars) — `PORT`, `WICK_APP_NAME`, `RELEASE_GITHUB_PAT`, etc.
+- [Environment Variables](/reference/env-vars) — `PORT`, `APP_NAME`, `RELEASE_GITHUB_PAT`, etc.
 - [CLI Reference](/reference/cli) — full subcommand list including `<app> tray`, `<app> mcp serve / install / uninstall`

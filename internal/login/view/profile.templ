@@ -1,11 +1,13 @@
 package view
 
 import (
+	"fmt"
+
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
-templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool) {
+templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved bool, minPasswordLen int) {
 	@ui.ProfileLayout("Profile", ui.ProfileTabAccount, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Account</h1>
@@ -52,9 +54,9 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 								name="new_password"
 								type="password"
 								required
-								minlength="8"
+								minlength={ minPasswordLen }
 								autocomplete="new-password"
-								placeholder="Min. 8 characters"
+								placeholder={ fmt.Sprintf("Min. %d characters", minPasswordLen) }
 								class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
 							/>
 						</div>
@@ -65,7 +67,7 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 								name="confirm_password"
 								type="password"
 								required
-								minlength="8"
+								minlength={ minPasswordLen }
 								autocomplete="new-password"
 								placeholder="••••••••"
 								class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"

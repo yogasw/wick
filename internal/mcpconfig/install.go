@@ -218,11 +218,14 @@ func ResolveTargets(cwd, clientID string) ([]Client, error) {
 func InstallMany(targets []Client, name string, entry map[string]any, w io.Writer) error {
 	var lastErr error
 	for _, c := range targets {
+		_, wasInstalled := IsInstalled(c, name)
 		if err := Install(c, name, entry); err != nil {
 			fmt.Fprintf(w, "  ✗ %s (%s): %v\n", c.Label, c.Path, err)
 			lastErr = err
+		} else if wasInstalled {
+			fmt.Fprintf(w, "  ✓ %s updated existing %q\n    %s\n", c.Label, name, c.Path)
 		} else {
-			fmt.Fprintf(w, "  ✓ %s\n    %s\n", c.Label, c.Path)
+			fmt.Fprintf(w, "  ✓ %s installed %q\n    %s\n", c.Label, name, c.Path)
 		}
 	}
 	return lastErr

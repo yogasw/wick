@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/yogasw/wick/internal/userconfig"
 )
 
 // acquireSingleInstance is a per-app PID-file lock living next to the
-// app's config / DB / logs under UserConfigDir. Two binaries with
+// app's config / DB / logs under ~/.<appName>. Two binaries with
 // different appNames don't collide; two launches of the same binary do.
 //
 // On startup we read instance.pid (if present) and ask the OS whether
@@ -21,11 +23,10 @@ import (
 // means we own the slot — overwrite with our own PID and return a
 // release closer that removes the file on graceful shutdown.
 func acquireSingleInstance() (release func() error, err error) {
-	dir, derr := os.UserConfigDir()
+	dir, derr := userconfig.Dir(appName)
 	if derr != nil {
 		return nil, fmt.Errorf("user config dir: %w", derr)
 	}
-	dir = filepath.Join(dir, appName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}

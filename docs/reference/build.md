@@ -78,7 +78,7 @@ The MSI never adds the app to autostart — autostart stays an opt-in toggle ins
 ## Embed self-updater credentials
 
 ```bash
-WICK_APP_VERSION=1.2.0 \
+APP_VERSION=1.2.0 \
 RELEASE_GITHUB_PAT=$RELEASE_PAT \
 RELEASE_GITHUB_REPOSITORY=acme/myapp-releases \
 wick build --target linux/arm64
@@ -88,8 +88,8 @@ wick build --target linux/arm64
 
 | Flag | Env fallback | Effect |
 |---|---|---|
-| `--app-name` | `WICK_APP_NAME` | Sets `app.BuildAppName`. Used to namespace config / DB / log paths and as the default MCP server name. |
-| `--app-version` | `WICK_APP_VERSION` | Sets `app.BuildAppVersion`. Shown in the tray title and About menu, advertised by MCP. |
+| `--app-name` | `APP_NAME` | Sets `app.BuildAppName`. Used to namespace config / DB / log paths and as the default MCP server name. |
+| `--app-version` | `APP_VERSION` | Sets `app.BuildAppVersion`. Shown in the tray title and About menu, advertised by MCP. |
 | `--release-github-pat` | `RELEASE_GITHUB_PAT` | Sets `app.GitHubPAT`. Empty = self-updater disabled. |
 | `--release-github-repo` | `RELEASE_GITHUB_REPOSITORY` | Sets `app.GitHubRepo` (releases repo `owner/repo`). Empty = self-updater disabled. Note: not `GITHUB_REPOSITORY` because GitHub Actions auto-injects that to the source repo and silently blocks step-level overrides. |
 | `-o`, `--output` | — | Raw binary output path. Default `bin/<app-name>-<goos>-<goarch>[.exe]`. The platform-native distributable (`.dmg` / `.deb` / `.msi`) is always written next to it; this flag only renames the raw binary. |
@@ -106,8 +106,8 @@ Each value is resolved independently, picking the first non-empty source:
 
 | Value | Order |
 |---|---|
-| App name | `--app-name` → `$WICK_APP_NAME` → `name:` in `wick.yml` → `"app"` |
-| App version | `--app-version` → `$WICK_APP_VERSION` → `version:` in `wick.yml` → `"dev"` |
+| App name | `--app-name` → `$APP_NAME` → `name:` in `wick.yml` → `"app"` |
+| App version | `--app-version` → `$APP_VERSION` → `version:` in `wick.yml` → `"dev"` |
 | GitHub releases PAT | `--release-github-pat` → `$RELEASE_GITHUB_PAT` |
 | GitHub releases repo | `--release-github-repo` → `$RELEASE_GITHUB_REPOSITORY` |
 
@@ -188,7 +188,7 @@ The release job ships whatever artifacts made it through, so this is also a way 
 Set the optional `RELEASE_AUTO_VERSION` Actions variable to `true` to make every push to `main` / `master` cut a new release automatically:
 
 1. **`prepare`** runs `wick version next` — reads `version:` from `wick.yml`, bumps the **last numeric segment** by one, writes the new value back, and prints it. If the resulting tag already exists, it bumps again (capped at 50 retries).
-2. **`build`** bakes that value into the binary via `WICK_APP_VERSION`.
+2. **`build`** bakes that value into the binary via `APP_VERSION`.
 3. **`release`** publishes `vX.Y.Z`, pushes the tag, then re-runs `wick version next` on a fresh checkout (idempotent — same baseline, same bump) and commits the `wick.yml` diff back to the branch with `[skip ci]`.
 
 The bump format follows whatever is already in `wick.yml:version`:
@@ -300,4 +300,4 @@ Cross-compiling Windows / Linux variants from `ubuntu-latest` works because they
 
 - [Desktop Tray](/guide/desktop-tray) — what users get when they run a binary built with these flags
 - [`wick.yml` reference](./wick-yml) — top-level `name:` and `version:` fields
-- [Environment Variables](./env-vars) — build-time env (`WICK_APP_NAME`, `RELEASE_GITHUB_PAT`, …)
+- [Environment Variables](./env-vars) — build-time env (`APP_NAME`, `RELEASE_GITHUB_PAT`, …)

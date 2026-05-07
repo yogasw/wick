@@ -24,9 +24,16 @@ func obfuscatePAT(s string) string {
 
 // assembleLDFlags builds the -ldflags string passed to `go build`,
 // injecting BuildAppName / BuildAppVersion (always) plus optional
-// GitHubPATEnc / GitHubRepo for the self-updater. On Windows we also
-// add -H=windowsgui (unless --headless) so double-click launches
-// without a console window.
+// GitHubPATEnc / GitHubRepo for the self-updater.
+//
+// On Windows we deliberately do NOT pass -H=windowsgui. That flag would
+// hide the console flash on Explorer double-click but also detaches
+// stdin/stdout/stderr from any parent — breaking `mcp serve` (Claude
+// Desktop pipes), `server`, and `worker` whenever they're spawned by a
+// console-aware client. Instead the binary stays a console subsystem
+// executable and systemtray.Run calls FreeConsole on Windows the moment
+// it knows it's in tray mode, so the cmd window vanishes immediately
+// without breaking pipe-attached subcommands.
 func assembleLDFlags(cfg Config) []string {
 	flags := []string{
 		fmt.Sprintf("-X github.com/yogasw/wick/app.BuildAppName=%s", cfg.AppName),
@@ -37,9 +44,6 @@ func assembleLDFlags(cfg Config) []string {
 	}
 	if cfg.GitHubRepo != "" {
 		flags = append(flags, fmt.Sprintf("-X github.com/yogasw/wick/app.GitHubRepo=%s", cfg.GitHubRepo))
-	}
-	if !cfg.Headless && cfg.GOOS == "windows" {
-		flags = append(flags, "-H=windowsgui")
 	}
 	return flags
 }

@@ -18,7 +18,7 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 ## 2. Install Wick CLI
 
 ```bash
-go install github.com/yogasw/wick@v0.8.3
+go install github.com/yogasw/wick@v0.8.9
 ```
 
 Verify:
@@ -75,7 +75,7 @@ All variables have working defaults. The only ones you may want to change before
 |----------|---------|-------|
 | `DATABASE_URL` | *(blank = SQLite)* | Set to a Postgres URL to use PostgreSQL |
 | `APP_ADMIN_EMAILS` | `admin@example.com` | Your email, gets admin on first login |
-| `APP_ADMIN_PASSWORD` | `admin` | Change after first login |
+| `APP_ADMIN_PASSWORD` | *(auto-generated)* | Leave blank → 5-word passphrase saved to `~/.<app>/INITIAL_CREDENTIALS.txt`; first login forces a password rotation |
 
 Everything else (app name, URL, SSO, OAuth) is editable from `/admin/configs` after the app starts.
 

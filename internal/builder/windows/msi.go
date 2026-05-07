@@ -51,6 +51,7 @@ func PackageMSI(exePath, appName, appVersion, goarch string) (string, error) {
 		UpgradeCode:  stableGUID("wick.upgrade." + appName),
 		MainCompGUID: stableGUID("wick.main." + appName),
 		MenuCompGUID: stableGUID("wick.menu." + appName),
+		DeskCompGUID: stableGUID("wick.desktop." + appName),
 		Manufacturer: appName,
 	})
 
@@ -85,6 +86,7 @@ type wxsParams struct {
 	UpgradeCode  string
 	MainCompGUID string
 	MenuCompGUID string
+	DeskCompGUID string
 	Manufacturer string
 }
 
@@ -93,7 +95,7 @@ func buildWXS(p wxsParams) string {
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="%[1]s" Version="%[2]s" Manufacturer="%[3]s" UpgradeCode="%[4]s" Language="1033">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perUser"/>
-    <MajorUpgrade DowngradeErrorMessage="A newer version of %[1]s is already installed."/>
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of %[1]s is already installed."/>
     <Media Id="1" Cabinet="app.cab" EmbedCab="yes"/>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
@@ -108,6 +110,7 @@ func buildWXS(p wxsParams) string {
       <Directory Id="ProgramMenuFolder">
         <Directory Id="AppMenuFolder" Name="%[1]s"/>
       </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop"/>
     </Directory>
     <DirectoryRef Id="AppMenuFolder">
       <Component Id="AppShortcut" Guid="%[9]s"%[6]s>
@@ -117,14 +120,32 @@ func buildWXS(p wxsParams) string {
         <RegistryValue Root="HKCU" Key="Software\%[1]s" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
       </Component>
     </DirectoryRef>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="%[10]s"%[6]s>
+        <Shortcut Id="AppDesktopShortcut" Name="%[1]s"
+                  Target="[INSTALLDIR]%[7]s" WorkingDirectory="INSTALLDIR"/>
+        <RegistryValue Root="HKCU" Key="Software\%[1]s" Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
     <Feature Id="MainFeature" Title="%[1]s" Level="1">
       <ComponentRef Id="MainExecutable"/>
       <ComponentRef Id="AppShortcut"/>
+      <ComponentRef Id="DesktopShortcut"/>
     </Feature>
+    <Property Id="LaunchAppCmd" Value="cmd.exe"/>
+    <CustomAction Id="LaunchApp"
+                  Property="LaunchAppCmd"
+                  ExeCommand='/c start "" "[INSTALLDIR]%[7]s"'
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait"/>
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed AND NOT REMOVE</Custom>
+    </InstallExecuteSequence>
   </Product>
 </Wix>
 `,
-		html.EscapeString(p.AppName),     // 1
+		html.EscapeString(p.AppName),      // 1
 		p.Version,                         // 2
 		html.EscapeString(p.Manufacturer), // 3
 		p.UpgradeCode,                     // 4
@@ -133,6 +154,7 @@ func buildWXS(p wxsParams) string {
 		html.EscapeString(p.ExeName),      // 7
 		html.EscapeString(p.ExeSource),    // 8
 		p.MenuCompGUID,                    // 9
+		p.DeskCompGUID,                    // 10
 	)
 }
 

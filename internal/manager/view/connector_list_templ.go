@@ -128,45 +128,55 @@ func ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow 
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</p></div></div><form method=\"POST\" action=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</p></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var8 templ.SafeURL
-			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/new"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 38, Col: 94}
+			if !mod.Meta.Fixed {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<form method=\"POST\" action=\"")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var8 templ.SafeURL
+				templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/new"))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 39, Col: 95}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600\">+ New row</button></form>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\"><button type=\"submit\" class=\"rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600\">+ New row</button></form></div><section class=\"mt-8\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Instances</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Each row carries its own credentials and label. MCP exposes one tool per (row × enabled operation).</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</div><section class=\"mt-8\"><h2 class=\"text-base font-semibold text-black-900 dark:text-white-100\">Instances</h2><p class=\"mt-1 text-sm text-black-800 dark:text-black-600\">Each row carries its own credentials and label. MCP exposes one tool per (row × enabled operation).</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if len(rows) == 0 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<div class=\"mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center\"><p class=\"text-sm text-black-700 dark:text-black-600\">No rows yet. Click <strong>+ New row</strong> to create one.</p></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<div class=\"mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 text-center\"><p class=\"text-sm text-black-700 dark:text-black-600\">No rows yet. Click <strong>+ New row</strong> to create one.</p></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<div class=\"mt-4 flex flex-col gap-2\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<div class=\"mt-4 flex flex-col gap-2\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				for _, row := range rows {
-					templ_7745c5c3_Err = connectorListCard(mod.Meta.Key, row, tagsByRow[row.ID]).Render(ctx, templ_7745c5c3_Buffer)
+					templ_7745c5c3_Err = connectorListCard(mod, row, tagsByRow[row.ID]).Render(ctx, templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</section></main>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</section></main>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -184,7 +194,7 @@ func ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow 
 // label + meta on the left, access tags + status in the middle, kebab
 // menu on the right. The card itself is clickable; the kebab keeps
 // destructive actions one click away without crowding the row.
-func connectorListCard(key string, row entity.Connector, tagNames []string) templ.Component {
+func connectorListCard(mod connector.Module, row entity.Connector, tagNames []string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -205,91 +215,91 @@ func connectorListCard(key string, row entity.Connector, tagNames []string) temp
 			templ_7745c5c3_Var9 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<div class=\"group relative flex items-center gap-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 hover:border-green-400\"><a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<div class=\"group relative flex items-center gap-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 hover:border-green-400\"><a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var10 templ.SafeURL
-		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID))
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 72, Col: 70}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 74, Col: 79}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\" class=\"absolute inset-0 z-0\" aria-label=\"Open\"></a><div class=\"pointer-events-none relative min-w-0 flex-1\"><p class=\"truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "\" class=\"absolute inset-0 z-0\" aria-label=\"Open\"></a><div class=\"pointer-events-none relative min-w-0 flex-1\"><p class=\"truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(row.Label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 74, Col: 108}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 76, Col: 108}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "</p><p class=\"mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</p><p class=\"mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(row.ID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 75, Col: 95}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 77, Col: 95}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</p></div><div class=\"pointer-events-none relative flex flex-shrink-0 items-center gap-2\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</p></div><div class=\"pointer-events-none relative flex flex-shrink-0 items-center gap-2\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if len(tagNames) == 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<span class=\"hidden rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600 sm:inline\">Everyone</span> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<span class=\"hidden rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600 sm:inline\">Everyone</span> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
 			for _, n := range tagNames {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "<span class=\"inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600\"><svg class=\"h-3 w-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"></path><circle cx=\"9\" cy=\"7\" r=\"4\"></circle></svg> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<span class=\"inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600\"><svg class=\"h-3 w-3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"></path><circle cx=\"9\" cy=\"7\" r=\"4\"></circle></svg> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(n)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 84, Col: 9}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 86, Col: 9}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "</span> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "</span> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 		}
 		if row.Disabled {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<span class=\"inline-flex items-center gap-1.5 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600\"><span class=\"h-1.5 w-1.5 rounded-full bg-black-700\"></span>Disabled</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<span class=\"inline-flex items-center gap-1.5 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600\"><span class=\"h-1.5 w-1.5 rounded-full bg-black-700\"></span>Disabled</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<span class=\"inline-flex items-center gap-1.5 rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400\"><span class=\"h-1.5 w-1.5 rounded-full bg-pos-400\"></span>Published</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<span class=\"inline-flex items-center gap-1.5 rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400\"><span class=\"h-1.5 w-1.5 rounded-full bg-pos-400\"></span>Published</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = kebabMenu(key, row).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = kebabMenu(mod, row).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "</div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "</div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -302,7 +312,7 @@ func connectorListCard(key string, row entity.Connector, tagNames []string) temp
 // other open kebab when one opens (exclusive accordion). The inline
 // blur handler closes the menu when focus leaves the row entirely,
 // so clicking elsewhere on the page also collapses it.
-func kebabMenu(key string, row entity.Connector) templ.Component {
+func kebabMenu(mod connector.Module, row entity.Connector) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -323,74 +333,84 @@ func kebabMenu(key string, row entity.Connector) templ.Component {
 			templ_7745c5c3_Var14 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<details name=\"connector-kebab\" class=\"pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden\" onfocusout=\"if(!this.contains(event.relatedTarget))this.open=false\"><summary class=\"flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-green-600\"><svg class=\"h-4 w-4\" fill=\"currentColor\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"3\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"8\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"13\" r=\"1.5\"></circle></svg></summary><div class=\"absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg\"><a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<details name=\"connector-kebab\" class=\"pointer-events-auto relative z-10 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden\" onfocusout=\"if(!this.contains(event.relatedTarget))this.open=false\"><summary class=\"flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-green-600\"><svg class=\"h-4 w-4\" fill=\"currentColor\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"3\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"8\" r=\"1.5\"></circle><circle cx=\"8\" cy=\"13\" r=\"1.5\"></circle></svg></summary><div class=\"absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg\"><a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var15 templ.SafeURL
-		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/history"))
+		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/history"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 118, Col: 82}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 120, Col: 91}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "\" class=\"block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800\">History</a><form method=\"POST\" action=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "\" class=\"block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800\">History</a><form method=\"POST\" action=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var16 templ.SafeURL
-		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/disable"))
+		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/disable"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 121, Col: 103}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 123, Col: 112}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if row.Disabled {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<button type=\"submit\" class=\"block w-full px-3 py-2 text-left text-sm text-pos-400 hover:bg-white-200 dark:hover:bg-navy-800\">Enable</button>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<button type=\"submit\" class=\"block w-full px-3 py-2 text-left text-sm text-pos-400 hover:bg-white-200 dark:hover:bg-navy-800\">Enable</button>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<button type=\"submit\" class=\"block w-full px-3 py-2 text-left text-sm text-prog-400 hover:bg-white-200 dark:hover:bg-navy-800\">Disable</button>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<button type=\"submit\" class=\"block w-full px-3 py-2 text-left text-sm text-prog-400 hover:bg-white-200 dark:hover:bg-navy-800\">Disable</button>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</form><form method=\"POST\" action=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "</form>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var17 templ.SafeURL
-		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/duplicate"))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 128, Col: 105}
+		if !mod.Meta.Fixed {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "<form method=\"POST\" action=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var17 templ.SafeURL
+			templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/duplicate"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 131, Col: 115}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "\"><button type=\"submit\" class=\"block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800\">Duplicate</button></form><form method=\"POST\" action=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var18 templ.SafeURL
+			templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/delete"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 134, Col: 112}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "\"><button type=\"submit\" onclick=\"return confirm('Delete this connector row? Run history is kept for audit.');\" class=\"block w-full border-t border-white-300 dark:border-navy-600 px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100\">Delete</button></form>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "\"><button type=\"submit\" class=\"block w-full px-3 py-2 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800\">Duplicate</button></form><form method=\"POST\" action=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var18 templ.SafeURL
-		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/manager/connectors/" + key + "/" + row.ID + "/delete"))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/manager/view/connector_list.templ`, Line: 131, Col: 102}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\"><button type=\"submit\" onclick=\"return confirm('Delete this connector row? Run history is kept for audit.');\" class=\"block w-full border-t border-white-300 dark:border-navy-600 px-3 py-2 text-left text-sm text-neg-400 hover:bg-neg-100\">Delete</button></form></div></details>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</div></details>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
