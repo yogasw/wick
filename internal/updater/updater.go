@@ -173,9 +173,9 @@ func (u *Updater) CheckLatest(ctx context.Context) (LatestInfo, error) {
 		info.AlreadyStaged = true
 		return info, nil
 	}
-	info.bin, info.sum = u.pickAssets(rel.Assets)
+	info.bin, info.sum = u.pickAssets(rel.Assets, latest)
 	if info.bin == nil {
-		return info, fmt.Errorf("no asset matched %s", u.assetName())
+		return info, fmt.Errorf("no asset matched %s", u.assetName(latest))
 	}
 	return info, nil
 }
@@ -425,8 +425,8 @@ func (u *Updater) downloadAsset(ctx context.Context, url string) ([]byte, error)
 	return io.ReadAll(resp.Body)
 }
 
-func (u *Updater) pickAssets(assets []ghAsset) (bin, sum *ghAsset) {
-	target := u.assetName()
+func (u *Updater) pickAssets(assets []ghAsset, version string) (bin, sum *ghAsset) {
+	target := u.assetName(version)
 	sumName := target + ".sha256"
 	for i := range assets {
 		a := &assets[i]

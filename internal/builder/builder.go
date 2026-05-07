@@ -91,7 +91,8 @@ func Build(cfg Config) (Result, error) {
 		res.Bundles = append(res.Bundles, appPath)
 		fmt.Printf("> bundled %s\n", appPath)
 
-		dmgPath := filepath.Join(filepath.Dir(cfg.Output), fmt.Sprintf("%s-darwin-%s.dmg", cfg.AppName, cfg.GOARCH))
+		verSlug := strings.TrimPrefix(strings.TrimSpace(cfg.AppVersion), "v")
+		dmgPath := filepath.Join(filepath.Dir(cfg.Output), fmt.Sprintf("%s-%s-darwin-%s.dmg", cfg.AppName, verSlug, cfg.GOARCH))
 		fmt.Println("> packaging dmg...")
 		out, err := darwin.PackageDMG(appPath, dmgPath, cfg.AppName, cfg.Installer)
 		switch {

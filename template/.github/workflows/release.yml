@@ -381,14 +381,20 @@ jobs:
       - name: Resolve app name and asset path
         id: meta
         shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
         # `wick build --installer` produces the installer artifact in bin/:
-        #   windows → <app>-windows-<arch>.msi (per-user; no UAC; self-update
-        #             works in place on the installed .exe)
-        #   darwin  → <app>-darwin-<arch>.dmg (with Applications symlink so
-        #             Finder shows the standard drag-to-install layout)
-        #   linux   → <app>-linux-<arch>.deb  (already a proper installer)
-        # Only the installer is uploaded as the release asset; the raw .exe
-        # / .app bundle stay in bin/ for local debugging.
+        #   windows → <app>-<version>-windows-<arch>.msi (per-user; no UAC;
+        #             self-update works in place on the installed .exe)
+        #   darwin  → <app>-<version>-darwin-<arch>.dmg (with Applications
+        #             symlink so Finder shows drag-to-install layout)
+        #   linux   → <app>-<version>-linux-<arch>.deb  (already a proper
+        #             installer)
+        # Version embedded in filename so the user can identify the build
+        # at a glance (Windows file Properties shows it too via .syso, but
+        # the .msi/.deb don't). Only the installer is uploaded as the
+        # release asset; the raw .exe / .app bundle stay in bin/ for
+        # local debugging.
         run: |
           NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
           [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
@@ -397,7 +403,7 @@ jobs:
             darwin)  EXT="dmg" ;;
             linux)   EXT="deb" ;;
           esac
-          ASSET="${NAME}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
+          ASSET="${NAME}-${APP_VERSION}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
           echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
@@ -440,8 +446,9 @@ jobs:
           RELEASE_GITHUB_REPOSITORY: ${{ needs.prepare.outputs.releases_repo }}
           # Override wick.yml `version:` so the binary's --version reflects
           # the tag we're about to publish. Critical when RELEASE_AUTO_VERSION=true
-          # since wick.yml isn't bumped per release.
-          WICK_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          # since wick.yml isn't bumped per release. `wick build` reads
+          # APP_VERSION (see cmd/cli/build.go resolution chain).
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
         # --installer wraps the windows .exe into a per-user .msi (needs
         # wixl, installed above) and stages the darwin .dmg with an
         # Applications symlink for the standard drag-to-install layout.

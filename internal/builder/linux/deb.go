@@ -37,7 +37,7 @@ import (
 func PackageDeb(binPath, appName, appVersion, goarch string) (string, error) {
 	debArch := mapGoArchToDeb(goarch)
 	ver := strings.TrimPrefix(appVersion, "v")
-	debPath := filepath.Join(filepath.Dir(binPath), fmt.Sprintf("%s-linux-%s.deb", appName, goarch))
+	debPath := filepath.Join(filepath.Dir(binPath), fmt.Sprintf("%s-%s-linux-%s.deb", appName, ver, goarch))
 
 	binBytes, err := os.ReadFile(binPath)
 	if err != nil {
