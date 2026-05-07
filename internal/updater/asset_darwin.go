@@ -14,9 +14,13 @@ import (
 
 // assetName returns the release asset name for this OS/arch:
 //
-//	<app>-darwin-<arch>.dmg
-func (u *Updater) assetName() string {
-	return fmt.Sprintf("%s-darwin-%s.dmg", u.appName, runtime.GOARCH)
+//	<app>-<version>-darwin-<arch>.dmg
+//
+// Version is the release tag (e.g. "v0.1.9") with the leading "v"
+// stripped to match the filename emitted by `wick build`.
+func (u *Updater) assetName(version string) string {
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	return fmt.Sprintf("%s-%s-darwin-%s.dmg", u.appName, v, runtime.GOARCH)
 }
 
 // stagedExt is the file extension for the staged update file on disk.

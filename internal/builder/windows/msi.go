@@ -39,7 +39,8 @@ func PackageMSI(exePath, appName, appVersion, goarch string) (string, error) {
 	}
 
 	wixArch, win64 := mapGoArchToWix(goarch)
-	msiPath := filepath.Join(filepath.Dir(exePath), fmt.Sprintf("%s-windows-%s.msi", appName, goarch))
+	verSlug := strings.TrimPrefix(strings.TrimSpace(appVersion), "v")
+	msiPath := filepath.Join(filepath.Dir(exePath), fmt.Sprintf("%s-%s-windows-%s.msi", appName, verSlug, goarch))
 
 	maj, min, pat := parseSemver(appVersion)
 	wxs := buildWXS(wxsParams{
