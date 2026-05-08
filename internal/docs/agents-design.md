@@ -25,7 +25,37 @@ Update terakhir: 2026-05-08.
 
 **Resume**: wick simpan `cli_session_id` per agent di `agents.json`. Subprocess di-kill saat idle TTL → revive pakai `claude --resume <id>` saat pesan baru masuk.
 
-**Reading order**: §1 implementation roadmap → §2 latar belakang → §3 konsep → §4.1 storage layout (anchor) → §4.2-4.8 entitas + runtime → §5 alur lengkap → §6 struktur kode → §15 security → §16 testing.
+**Reading order**: §0.1 doc sync rules (penting buat kontributor) → §1 implementation roadmap → §2 latar belakang → §3 konsep → §4.1 storage layout (anchor) → §4.2-4.8 entitas + runtime → §5 alur lengkap → §6 struktur kode → §15 security → §16 testing.
+
+---
+
+## 0.1 Doc Sync Rules
+
+Dokumen ini = **single source of truth** untuk design. Doc harus selalu mencerminkan state implementasi terakhir, bukan tertinggal di belakang. Kalau commit ngubah behavior/struktur tapi doc tidak di-update, commit itu belum selesai.
+
+**Aturan**: tiap commit yang masuk salah satu kategori di bawah harus juga touch `agents-design.md` di commit yang sama (atau commit doc-only yang langsung menyusul).
+
+| Trigger | Update doc apa |
+|---|---|
+| Phase task selesai | Centang `[x]` di Progress Tracker (§1) + Phase task list. Tambah ringkasan di kolom "Catatan" + commit ref kalau perlu. |
+| Behavior berubah dari design awal | Update section terkait (mis. §4.6 streaming shape, §5.2 resume flow). Tambah catatan "decided <YYYY-MM-DD>" + alasan singkat. |
+| Struktur folder berubah (split, rename, new pkg) | Update §6 "Struktur Modul" + cross-package deps di akhir §6. |
+| Argv / flag CLI berubah karena verifikasi versi baru | Update §4.6 (Event Types per CLI table) + §5.2 (spawn command). Tambah versi CLI yang diverifikasi. |
+| New flow / sequence diagram | Update §5 alur lengkap. |
+| Decision baru / trade-off | Tambah catatan di section terkait + tanggal. |
+
+Yang **tidak** perlu update doc: refactor internal yang ngga ngubah behavior, rename variabel, perbaikan typo kode, format-only changes.
+
+Verification step sebelum commit:
+
+```
+1. Apa yang berubah di kode? (lihat diff)
+2. Apa yang harus di-update di doc? (cek tabel di atas)
+3. Update doc → masuk commit yang sama
+4. Tetapkan: kalau besok aku baca doc ini, apakah masih akurat?
+```
+
+Kalau jawaban langkah 4 "tidak", balik ke langkah 3 sebelum commit.
 
 ---
 
@@ -42,7 +72,7 @@ Update tabel ini saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
 | Phase | Status | Catatan |
 |---|---|---|
 | Phase 1 — Foundation | `[x]` | `internal/agents/` storage + config + preset + project + session + registry + manager. 28 unit tests hijau. |
-| Phase 2 — Subprocess + Pool | `[x]` | claude only. event/state/store/agent/pool subpackages + integration test via fake spawner (real claude smoke test pending manual). 65 tests across 12 pkgs. |
+| Phase 2 — Subprocess + Pool | `[x]` | claude only. event/state/store/agent/pool subpackages + integration test via fake spawner. Real-claude smoke test landed in commit `928867f` (env-gated `WICK_CLAUDE_E2E=1`) — verified long-lived multi-turn against claude 2.1.132. 68 tests across 19 pkgs (incl. agent/claude, transport split). |
 | Phase 3 — Command Gate | `[ ]` | — |
 | Phase 4 — UI Manager Tool (MVP) | `[ ]` | — |
 | Phase 5 — Slack Transport | `[ ]` | — |
@@ -612,34 +642,43 @@ Setiap CLI emit events yang berbeda saat proses. Wick parse events ini untuk upd
 
 #### Event Types per CLI
 
-| State | **Claude CLI** | **Codex CLI** | **Gemini CLI** |
+> **Status verifikasi (2026-05-08)**: shape Claude di bawah sudah diverifikasi terhadap `claude` CLI versi 2.1.132 lewat e2e test (`agent/claude/real_e2e_test.go`). Codex / Gemini masih dari dokumentasi resmi — diverifikasi saat phase 6 mendarat.
+
+| State | **Claude CLI** ✅ | **Codex CLI** (TBD phase 6) | **Gemini CLI** (TBD phase 6) |
 |---|---|---|---|
-| **Flag streaming** | `--output-format stream-json` | `--json` | `--output-format stream-json` |
-| **Format** | Newline-delimited JSON (SSE-style) | JSONL | Newline-delimited JSON |
-| **Session start** | `message_start` | `thread.started` | `init` |
-| **Thinking / reasoning** | `content_block_start {type:"thinking"}` + `thinking_delta` | Bagian dari `turn.started` (tidak eksplisit) | Tidak didokumentasikan |
-| **Text streaming** | `content_block_delta {type:"text_delta"}` | `item.agent_message` | `message {role:"assistant"}` |
-| **Tool dipanggil** | `content_block_start {type:"tool_use", name:"Bash"}` | `item.command_execution` | `tool_use {name:"..."}` |
-| **Tool selesai** | `content_block_delta {type:"input_json_delta"}` → `content_block_stop` | `turn.completed` | `tool_result` |
-| **Response selesai** | `message_stop` | `turn.completed` | `result` |
-| **Error** | `error` | `turn.failed` | Tidak didokumentasikan |
-| **Session ID** | Field `session_id` di setiap event | `thread_id` di `thread.started` | `session_id` di `init` + env `GEMINI_SESSION_ID` |
-| **Granularitas** | ✅ Fine-grained (delta per karakter) | ⚠️ Turn-based | ⚠️ Moderate |
-| **Thinking visible** | ✅ Ya, `thinking_delta` | ❌ Tidak eksplisit | ❌ Tidak didokumentasikan |
-| **Docs** | [streaming](https://platform.claude.com/docs/en/build-with-claude/streaming) | [noninteractive](https://developers.openai.com/codex/noninteractive) | [headless](https://geminicli.com/docs/cli/headless/) |
+| **Argv headless** | `claude -p --verbose --input-format stream-json --output-format stream-json` | `codex --json` | `gemini --output-format stream-json` |
+| **Lifecycle** | Long-lived per spawn — multi-turn dalam 1 process | Turn-based | Turn-based |
+| **Format** | Newline-delimited JSON | JSONL | Newline-delimited JSON |
+| **Session start** | `system subtype=init` | `thread.started` | `init` |
+| **Text** | `assistant.message.content[].type=text` (full text per frame) | `item.agent_message` | `message {role:"assistant"}` |
+| **Tool dipanggil** | `assistant.message.content[].type=tool_use` (name + input dalam 1 frame) | `item.command_execution` | `tool_use {name:"..."}` |
+| **Tool result** | `user.message.content[].type=tool_result` (di-wrap sebagai user msg) | `turn.completed` | `tool_result` |
+| **Response selesai (1 turn)** | `result subtype=success is_error=false` | `turn.completed` | `result` |
+| **Error per turn** | `result subtype=success is_error=true` (`.result` = pesan error) | `turn.failed` | Tidak didokumentasikan |
+| **Lifecycle noise** | `system subtype=hook_started/hook_response`, `rate_limit_event` (di-skip parser) | — | — |
+| **Session ID** | Field `session_id` di setiap event; capture pertama dari `system init` | `thread_id` di `thread.started` | `session_id` di `init` + env `GEMINI_SESSION_ID` |
+| **Granularitas** | Turn-based (full text/tool per frame, bukan per karakter delta) | Turn-based | Moderate |
+| **Thinking visible** | Tidak terekspos di stream-json output mode normal | Tidak eksplisit | Tidak didokumentasikan |
+| **Docs** | `claude --help`, hooks-guide | [noninteractive](https://developers.openai.com/codex/noninteractive) | [headless](https://geminicli.com/docs/cli/headless/) |
+
+> **Catatan**: phase awal design ini menebak Claude pakai shape lama (`message_start` / `content_block_delta` / `message_stop`) yang seperti format streaming SDK Anthropic. Real `claude` CLI 2.1.x ternyata pakai shape berbeda — `system init`, `assistant message.content[]`, `result`. Refactor di commit `928867f` align ke real shape; semua dokumentasi di bawah sudah pakai versi real.
 
 #### Contoh Raw Event
 
-**Claude** (`--output-format stream-json`):
+**Claude** (long-lived, 1 turn = `system init` → `assistant` → `result`, lalu proses tunggu input berikut):
+
 ```json
-{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}
-{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Perlu clone repo dulu..."}}
-{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"Bash"}}
-{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"git clone"}}
-{"type":"content_block_stop","index":1}
-{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Repo berhasil di-clone."}}
-{"type":"message_stop","session_id":"abc-123"}
+{"type":"system","subtype":"hook_started","hook_id":"...","session_id":"abc-123"}
+{"type":"system","subtype":"hook_response","output":"...","session_id":"abc-123"}
+{"type":"system","subtype":"init","session_id":"abc-123","cwd":"...","tools":["Bash","Edit",...]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"running command"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git clone https://..."}}]},"session_id":"abc-123"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Cloning into..."}]},"session_id":"abc-123"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Repo berhasil di-clone."}]},"session_id":"abc-123"}
+{"type":"rate_limit_event","rate_limit_info":{...}}
+{"type":"result","subtype":"success","is_error":false,"result":"Repo berhasil di-clone.","session_id":"abc-123"}
 ```
+
+Turn berikutnya: kirim user envelope ke stdin (`{"type":"user","message":{"role":"user","content":"..."}}`) → claude balas dengan `system init` baru (`session_id` sama) + `assistant` + `result` lagi. Tidak ada respawn — proses tetap hidup sampai idle TTL atau Stop().
 
 **Codex** (`--json`):
 ```json
@@ -661,7 +700,7 @@ Setiap CLI emit events yang berbeda saat proses. Wick parse events ini untuk upd
 
 #### Yang Wick Harus Implement (Tidak butuh ubah agent.md)
 
-Ini murni kode di `events.go` dan `slack.go`. `agent.md` tidak perlu diubah — streaming adalah runtime behavior, bukan konfigurasi preset.
+Ini murni kode di `event/`, `state/`, `store/`, dan (phase 5) `transport/slack/`. `agent.md` tidak perlu diubah — streaming adalah runtime behavior, bukan konfigurasi preset.
 
 **Step 1 — Internal event type (abstraksi lintas CLI):**
 
@@ -678,25 +717,29 @@ type AgentEvent struct {
 }
 ```
 
-**Step 2 — Parser per CLI (`events.go`):**
+**Step 2 — Parser per CLI (`event/parser.go` interface, `event/<cli>.go` impl):**
 
 ```go
-type EventParser interface {
+type Parser interface {
     Parse(line string) (AgentEvent, error)
 }
 
-// ClaudeParser baca stream-json events
-// content_block_start {type:"thinking"} → EventType.Thinking
-// content_block_delta {type:"text_delta"} → EventType.TextDelta
-// content_block_start {type:"tool_use", name:"Bash"} → EventType.ToolUse
-// message_stop → EventType.Done + extract session_id
+// ClaudeParser (event/claude.go) — verified terhadap claude 2.1.x
+// system subtype=init        → EventType.SessionStart (extract session_id, fired once)
+// system subtype=other       → EventType.Unknown (hook_started, hook_response, dst — skip)
+// assistant.message.content[type=text]      → EventType.TextDelta (concat semua text block)
+// assistant.message.content[type=tool_use]  → EventType.ToolUse (kalau ada di frame yang sama dengan text, tool_use menang — gate-relevant)
+// user.message.content[type=tool_result]    → EventType.ToolResult
+// result subtype=success is_error=false     → EventType.Done
+// result subtype=success is_error=true      → EventType.Error (.result = pesan error)
+// rate_limit_event, status, dst             → EventType.Unknown
 
-// CodexParser baca JSONL events
+// CodexParser (event/codex.go) — phase 6
 // item.command_execution → EventType.ToolUse
 // item.agent_message → EventType.TextDelta
 // turn.completed → EventType.Done
 
-// GeminiParser baca stream-json events
+// GeminiParser (event/gemini.go) — phase 6
 // tool_use → EventType.ToolUse
 // message {role:"assistant"} → EventType.TextDelta
 // result → EventType.Done + extract session_id dari init event
@@ -1042,11 +1085,18 @@ Setiap CLI punya cara berbeda untuk expose session ID:
 | **Codex CLI** | Baca file terbaru di `~/.codex/sessions/YYYY/MM/DD/` | File `rollout-*.jsonl` berisi field `ID`. Wick baca setelah subprocess start. |
 | **Gemini CLI** | Env var `GEMINI_SESSION_ID` | Wick baca env var dari subprocess setelah start, atau scan `~/.gemini/tmp/<hash>/chats/` untuk file terbaru. |
 
-**Claude spawn command:**
+**Claude spawn command** (verified claude 2.1.x):
 ```bash
-claude --output-format stream-json --resume <session_id_if_exists>
+claude -p --verbose \
+  --input-format stream-json \
+  --output-format stream-json \
+  [--settings <path-to-temp-settings.json>] \   # phase 3 gate hook config
+  [--resume <session_id_if_exists>]
 ```
-Wick parse stream JSON, ambil `session_id` dari event pertama, simpan ke `sessions/<id>/agents.json`.
+
+Catatan: `-p --output-format stream-json` butuh `--verbose` (claude error tanpa itu). `--input-format stream-json` bikin proses long-lived — multi-turn dalam 1 spawn (lihat §4.6 lifecycle row).
+
+Wick parse stream JSON, ambil `session_id` dari event `system subtype=init`, simpan ke `sessions/<id>/agents.json` lewat store pipeline (`internal/agents/store/store.go`).
 
 #### Fallback: Inject via Stdin
 
@@ -1134,35 +1184,76 @@ conversation.jsonl (turns appended)
 
 ## 6. Struktur Modul
 
-```
-internal/agents/               ← core engine, tidak ada UI
-  storage.go                   // FS helpers: atomic write json, append jsonl, scan folder
-  registry.go                  // In-memory registry (projects + sessions), boot scan, sync
-  preset.go                    // Preset: CRUD, snapshot, merge ke CLAUDE.md
-  project.go                   // Project: CRUD, git clone/init, worktree add/remove
-  session.go                   // Session: CRUD, agents.json mgmt, switch agent
-  agent.go                     // Agent struct + lifecycle (spawn, kill, idle timer)
-  pool.go                      // Agent Pool: slot management + queue
-  gate.go                      // Command Gate: whitelist check
-  metacmd.go                   // Meta-command parser (ganti agent, pakai project, dashboard, dll)
-  events.go                    // Parse raw CLI events (stream-json) → internal AgentEvent
-  state.go                     // Per-agent state machine (idle/thinking/running_tool/responding)
-  store.go                     // Pipeline AgentEvent → append jsonl + atomic write meta/agents.json
-  transport.go                 // Transport interface + IncomingMessage struct
-  slack.go                     // Slack transport: receive event, reaction lifecycle, chunked reply
-  ui_transport.go              // UI transport: handler glue untuk POST /sessions/{id}/send
-  stream.go                    // SSE broadcaster (dashboard real-time)
-  config.go                    // Config structs + bootstrap seed
+Tiap concern punya subfolder sendiri (one package per folder). Tujuannya: phase 6 nambah `agent/codex` / `agent/gemini` ngga touch `agent/agent.go`, phase 5 nambah `transport/slack` ngga touch `transport.go`. Real state per akhir phase 2 + refactor:
 
-cmd/wick-gate/                 ← binary kecil dipanggil CLI hooks (PreToolUse, BeforeTool, dll)
-  main.go                      // Terima tool context via stdin, check whitelist, exit 0/2
-
-internal/tools/agents/         ← wick Tool: manager UI (lihat §9.2)
-  tool.go                      // Register func + route handlers
-  view.templ                   // Layout (nav kiri + content kanan) + per-page bodies
-  static.go                    // //go:embed js
-  js/agents.js                 // EventSource client + composer + action buttons
 ```
+internal/agents/               ← core engine, no UI
+  storage/                     ← FS primitives
+    json.go                    // atomic JSON write (tmp + rename)
+    jsonl.go                   // append/read/tail/truncate jsonl + _meta header
+    scan.go                    // ScanDirNames, PathExists
+    validate.go                // project/session/preset name regex (path-traversal safe)
+  config/                      ← runtime-editable + path math
+    layout.go                  // Layout struct: BaseDir + all derived paths
+    general.go, slack.go, workspace.go   // wick:"..." tagged config structs
+    seed.go                    // StructToConfigs helpers per section
+  preset/                      ← reusable agent.md templates
+    preset.go                  // CRUD + EnsureDefault
+  project/                     ← master git clones
+    project.go                 // CRUD + meta.json
+    git.go                     // git clone/init + worktree add/remove (also used by session/)
+  session/                     ← per-thread/UI session folders
+    session.go                 // CRUD + meta.json + Origin/Status types
+    agents.go                  // per-session AgentEntry (cli_session_id) + Add/SetActive
+    worktree.go                // git worktree add/remove (delegates to project/git.go)
+  registry/                    ← in-memory cache + mutator wrapper
+    registry.go                // cache map[name]Project / map[id]Session, boot scan
+    manager.go                 // disk mutate + cache refresh wrapper
+    bootstrap.go               // ensure layout + default preset + Reload()
+  event/                       ← stream-json → AgentEvent
+    types.go                   // AgentEvent + EventType enum
+    parser.go                  // Parser interface
+    claude.go                  // ClaudeParser (real claude 2.1.x shapes)
+  state/                       ← per-agent FSM
+    state.go                   // idle → thinking → running_tool → responding
+  store/                       ← event sink
+    store.go                   // pipeline AgentEvent → conversation.jsonl + agents.json (cli_session_id)
+  agent/                       ← subprocess lifecycle
+    agent.go                   // CLI-agnostic lifecycle (spawn, stdin, kill, idle timer, OnEvent/OnExit hooks)
+    spawner.go                 // Spawner interface + SpawnOptions/Process abstraction
+    claude/                    ← claude-specific impl
+      spawn.go                 // ClaudeSpawner: -p --verbose --input-format/--output-format stream-json
+      real_e2e_test.go         // env-gated WICK_CLAUDE_E2E=1 smoke test
+    codex/                     ← phase 6 placeholder (doc.go only)
+    gemini/                    ← phase 6 placeholder (doc.go only)
+  pool/                        ← global slot manager
+    pool.go                    // max_concurrent slots + FIFO queue
+    factory.go                 // ClaudeFactory: builds agent + state + store wired together
+    buffer.go                  // per-session message buffer (drain on slot grant, persisted to meta.PendingInput)
+  transport/                   ← message-source abstraction
+    transport.go               // Transport interface + IncomingMessage / OutgoingMessage
+    ui/                        ← phase 4 placeholder (doc.go)
+    slack/                     ← phase 5 placeholder (doc.go)
+    api/                       ← future placeholder (doc.go)
+  integration_test.go          ← end-to-end: pool → factory → agent → fakeSpawner
+
+cmd/wick-gate/                 ← phase 3 — binary called by claude PreToolUse hook
+  main.go                      // stdin JSON → glob match → exit 0 (allow) / 2 (block)
+
+internal/tools/agents/         ← phase 4 — wick Tool: manager UI (§9.2)
+  tool.go, view.templ, static.go, js/agents.js
+```
+
+Drop the flat-file vs split-folder distinction in mind: every subfolder == one Go package, public API = exported identifiers in that package. Cross-package deps stay shallow:
+
+- `storage/`, `config/` = leaves, depended on by everyone
+- `preset/`, `project/`, `session/` depend on `storage/` + `config/`
+- `registry/` depends on the above
+- `event/`, `state/`, `store/` depend on `storage/` + `config/` + `session/`
+- `agent/` depends on `event/` + `state/` + `store/`
+- `agent/claude/` depends on `agent/` (Spawner interface)
+- `pool/` depends on `agent/` + `agent/claude/` (default factory) + `session/` + `state/` + `store/` + `event/`
+- `transport/` is a sibling package — no agents-internal deps yet (phase 4/5 will wire to `pool/`)
 
 **Pembagian tanggung jawab:**
 
