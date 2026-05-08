@@ -75,8 +75,23 @@ func (s Spawner) Spawn(ctx context.Context, opt agent.SpawnOptions) (agent.Proce
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 	}
+	// Trust the workspace explicitly so claude doesn't refuse to run
+	// inside an "untrusted" directory. Without this, agent sessions
+	// outside ~/.claude/projects/ get a workspace-trust block before
+	// any tool fires.
+	if opt.Workspace != "" {
+		args = append(args, "--add-dir", opt.Workspace)
+	}
 	if s.SettingsPath != "" {
 		args = append(args, "--settings", s.SettingsPath)
+		// When wick injects a settings file with a PreToolUse hook
+		// it's because we want our own gate to be the source of
+		// truth — but claude's default permission mode prompts the
+		// user before every Bash call, which blocks the hook from
+		// even firing in non-interactive sessions. bypassPermissions
+		// disables those prompts so our hook is the authoritative
+		// allow/block decision.
+		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)
 	if opt.ResumeID != "" {
@@ -96,10 +111,27 @@ func (s Spawner) Spawn(ctx context.Context, opt agent.SpawnOptions) (agent.Proce
 		_ = stdin.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	// Stderr is folded into the parent's stderr — claude doesn't
-	// normally write stream-json to stderr, but if it does we want
-	// the operator to see it rather than dropping it on the floor.
-	cmd.Stderr = os.Stderr
+	// Optional stdout tee: dump every line to the log too, so tests
+	// can inspect what claude actually emitted without competing with
+	// the parser for the pipe.
+	if logPath := os.Getenv("WICK_CLAUDE_STDOUT_LOG"); logPath != "" {
+		stdout = tee(stdout, logPath)
+	}
+	// Stderr is folded into the parent's stderr by default — claude
+	// doesn't normally write stream-json to stderr, but if it does we
+	// want the operator to see it rather than dropping it on the
+	// floor. WICK_CLAUDE_STDERR_LOG can redirect to a file for tests
+	// that need to inspect it.
+	if logPath := os.Getenv("WICK_CLAUDE_STDERR_LOG"); logPath != "" {
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			cmd.Stderr = f
+		} else {
+			cmd.Stderr = os.Stderr
+		}
+	} else {
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
@@ -107,6 +139,31 @@ func (s Spawner) Spawn(ctx context.Context, opt agent.SpawnOptions) (agent.Proce
 	}
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
 }
+
+// tee returns a wrapped ReadCloser that mirrors all bytes into
+// `path` (append) as they pass through. Used by debug tests via
+// WICK_CLAUDE_STDOUT_LOG.
+func tee(r io.ReadCloser, path string) io.ReadCloser {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return r
+	}
+	return &teeReader{src: r, f: f}
+}
+
+type teeReader struct {
+	src io.ReadCloser
+	f   *os.File
+}
+
+func (t *teeReader) Read(p []byte) (int, error) {
+	n, err := t.src.Read(p)
+	if n > 0 {
+		_, _ = t.f.Write(p[:n])
+	}
+	return n, err
+}
+func (t *teeReader) Close() error { _ = t.f.Close(); return t.src.Close() }
 
 // process implements agent.Process for a started claude subprocess.
 type process struct {

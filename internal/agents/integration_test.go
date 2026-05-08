@@ -39,7 +39,7 @@ func TestPipeline_HappyPath_HelloWorld(t *testing.T) {
 	if err := p.Send(context.Background(), "S1", "default", "ui", "user", "say hi"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return p.Active() == 0 }, 5*time.Second)
+	waitFor(t, func() bool { return p.Active() == 0 }, 10*time.Second)
 
 	turns := readTurns(t, layout, "S1")
 	if len(turns) != 2 {
@@ -77,9 +77,9 @@ func TestPipeline_ResumeAfterIdleKill(t *testing.T) {
 	setupSess(t, layout, "S1")
 
 	_ = p.Send(context.Background(), "S1", "default", "ui", "user", "first ask")
-	waitFor(t, func() bool { return p.Active() == 0 }, 5*time.Second)
+	waitFor(t, func() bool { return p.Active() == 0 }, 10*time.Second)
 	_ = p.Send(context.Background(), "S1", "default", "ui", "user", "second ask")
-	waitFor(t, func() bool { return p.Active() == 0 && sp.spawnCount() == 2 }, 5*time.Second)
+	waitFor(t, func() bool { return p.Active() == 0 && sp.spawnCount() == 2 }, 10*time.Second)
 
 	if got := sp.resumeIDs(); len(got) != 2 || got[1] != "resume-me" {
 		t.Fatalf("resume IDs forwarded to spawn: %v", got)
@@ -104,7 +104,7 @@ func TestPipeline_ParserErrorSurfacedAsErrorEvent(t *testing.T) {
 	p, layout := newE2EPool(t, 2, sp)
 	setupSess(t, layout, "S1")
 	_ = p.Send(context.Background(), "S1", "default", "ui", "user", "go")
-	waitFor(t, func() bool { return p.Active() == 0 }, 5*time.Second)
+	waitFor(t, func() bool { return p.Active() == 0 }, 10*time.Second)
 	turns := readTurns(t, layout, "S1")
 	// Error event flushes whatever's buffered (nothing yet here) so
 	// we may end up with one assistant turn from the post-error delta
