@@ -29,10 +29,9 @@ import (
 // has user + assistant turns → cli_session_id persisted.
 func TestPipeline_HappyPath_HelloWorld(t *testing.T) {
 	sp := &scriptedSpawner{Lines: [][]string{{
-		`{"type":"message_start","session_id":"claude-abc"}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello "}}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}`,
-		`{"type":"message_stop"}`,
+		`{"type":"system","subtype":"init","session_id":"claude-abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"hello world"}`,
 	}}}
 	p, layout := newE2EPool(t, 2, sp)
 	setupSess(t, layout, "S1")
@@ -64,14 +63,14 @@ func TestPipeline_HappyPath_HelloWorld(t *testing.T) {
 func TestPipeline_ResumeAfterIdleKill(t *testing.T) {
 	sp := &scriptedSpawner{Lines: [][]string{
 		{
-			`{"type":"message_start","session_id":"resume-me"}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"first"}}`,
-			`{"type":"message_stop"}`,
+			`{"type":"system","subtype":"init","session_id":"resume-me"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"first"}`,
 		},
 		{
-			`{"type":"message_start","session_id":"resume-me"}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"second"}}`,
-			`{"type":"message_stop"}`,
+			`{"type":"system","subtype":"init","session_id":"resume-me"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"second"}`,
 		},
 	}}
 	p, layout := newE2EPool(t, 2, sp)
@@ -97,10 +96,10 @@ func TestPipeline_ResumeAfterIdleKill(t *testing.T) {
 // pipeline keeps going.
 func TestPipeline_ParserErrorSurfacedAsErrorEvent(t *testing.T) {
 	sp := &scriptedSpawner{Lines: [][]string{{
-		`{"type":"message_start","session_id":"x"}`,
+		`{"type":"system","subtype":"init","session_id":"x"}`,
 		`not json at all`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"after error"}}`,
-		`{"type":"message_stop"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"after error"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"after error"}`,
 	}}}
 	p, layout := newE2EPool(t, 2, sp)
 	setupSess(t, layout, "S1")

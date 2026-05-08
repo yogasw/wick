@@ -139,9 +139,9 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 
 func TestSendSpawnsAndDelivers(t *testing.T) {
 	sp := &scriptedSpawner{Lines: [][]string{{
-		`{"type":"message_start","session_id":"abc"}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
-		`{"type":"message_stop"}`,
+		`{"type":"system","subtype":"init","session_id":"abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"hi"}`,
 	}}}
 	p, layout := newPool(t, 2, sp)
 	setupSession(t, layout, "S1")
@@ -167,7 +167,7 @@ func TestQueueWhenPoolFull(t *testing.T) {
 	// stays alive until idle TTL fires (no Done in script).
 	sp := &scriptedSpawner{Lines: [][]string{
 		{}, // first spawn: no output, hangs until idle kill
-		{`{"type":"message_stop"}`},
+		{`{"type":"system","subtype":"init","session_id":"x"}`, `{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`, `{"type":"result","subtype":"success","is_error":false,"result":"ok"}`},
 	}}
 	p, layout := newPool(t, 1, sp)
 	setupSession(t, layout, "A")
@@ -209,7 +209,7 @@ func TestBufferDrainsCombined(t *testing.T) {
 	// joins them with newline.
 	sp := &scriptedSpawner{Lines: [][]string{
 		{}, // hold session A indefinitely
-		{`{"type":"message_stop"}`},
+		{`{"type":"system","subtype":"init","session_id":"x"}`, `{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`, `{"type":"result","subtype":"success","is_error":false,"result":"ok"}`},
 	}}
 	p, layout := newPool(t, 1, sp)
 	setupSession(t, layout, "A")

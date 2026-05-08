@@ -14,9 +14,9 @@ import (
 func TestAgentReadsStreamUpdatesState(t *testing.T) {
 	spawner := &fakeSpawner{
 		Lines: [][]string{{
-			`{"type":"message_start","session_id":"abc-123"}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
-			`{"type":"message_stop"}`,
+			`{"type":"system","subtype":"init","session_id":"abc-123"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"hi"}`,
 		}},
 	}
 	collected := collectingHook{}
@@ -87,7 +87,7 @@ func TestAgentSendWritesUserEnvelope(t *testing.T) {
 }
 
 func TestAgentResumeIDPassedToSpawn(t *testing.T) {
-	spawner := &fakeSpawner{Lines: [][]string{{`{"type":"message_stop"}`}}}
+	spawner := &fakeSpawner{Lines: [][]string{{`{"type":"result","subtype":"success","is_error":false,"result":""}`}}}
 	a := New(Options{
 		Workspace:     t.TempDir(),
 		ResumeID:      "prev-session",

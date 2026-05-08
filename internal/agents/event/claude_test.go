@@ -21,62 +21,79 @@ func parseAll(t *testing.T, p Parser, lines []string) []AgentEvent {
 }
 
 func TestClaudeParserSessionStartOnce(t *testing.T) {
+	// Real claude shape: `system subtype=init` carries the session_id.
+	// Subsequent init events (next turn within the same process)
+	// should not re-fire SessionStart.
 	p := NewClaudeParser()
 	lines := []string{
-		`{"type":"message_start","session_id":"abc-123","message":{"id":"m1"}}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"},"session_id":"abc-123"}`,
+		`{"type":"system","subtype":"init","session_id":"abc-123","cwd":"/tmp"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]},"session_id":"abc-123"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"hi","session_id":"abc-123"}`,
+		`{"type":"system","subtype":"init","session_id":"abc-123","cwd":"/tmp"}`, // turn 2 init
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"again"}]},"session_id":"abc-123"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"again","session_id":"abc-123"}`,
 	}
 	events := parseAll(t, p, lines)
-	if len(events) != 2 {
-		t.Fatalf("events: got %d, want 2", len(events))
+	// Expect: 1× SessionStart, 2× TextDelta, 2× Done = 5 events.
+	if len(events) != 5 {
+		t.Fatalf("events: got %d, want 5: %+v", len(events), events)
 	}
 	if events[0].Type != SessionStart || events[0].SessionID != "abc-123" {
 		t.Fatalf("first event: %+v", events[0])
 	}
-	if events[1].Type != TextDelta || events[1].Text != "hi" {
-		t.Fatalf("second event: %+v", events[1])
+	// Second SessionStart should NOT fire — second event must be TextDelta.
+	if events[1].Type != TextDelta {
+		t.Fatalf("expected TextDelta after init, got %+v", events[1])
 	}
 	if p.SessionID() != "abc-123" {
 		t.Fatalf("SessionID(): %q", p.SessionID())
 	}
 }
 
-func TestClaudeParserTextDelta(t *testing.T) {
+func TestClaudeParserAssistantText(t *testing.T) {
 	p := NewClaudeParser()
 	lines := []string{
-		`{"type":"message_start","session_id":"s1","message":{"id":"m"}}`,
-		`{"type":"content_block_start","index":0,"content_block":{"type":"text"}}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello "}}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}`,
-		`{"type":"content_block_stop","index":0}`,
-		`{"type":"message_stop"}`,
+		`{"type":"system","subtype":"init","session_id":"s1"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"hello world"}`,
 	}
 	events := parseAll(t, p, lines)
-	// SessionStart, 2× TextDelta, Done = 4 events.
-	if len(events) != 4 {
-		t.Fatalf("event count: %d (%v)", len(events), events)
+	if len(events) != 3 {
+		t.Fatalf("events: %d (%+v)", len(events), events)
 	}
-	if events[1].Text != "hello " || events[2].Text != "world" {
-		t.Fatalf("text deltas: %+v %+v", events[1], events[2])
+	if events[1].Type != TextDelta || events[1].Text != "hello world" {
+		t.Fatalf("text event: %+v", events[1])
 	}
-	if events[3].Type != Done {
-		t.Fatalf("last event not Done: %+v", events[3])
+	if events[2].Type != Done {
+		t.Fatalf("last event not Done: %+v", events[2])
 	}
 }
 
-func TestClaudeParserToolUseBuffersInputJSON(t *testing.T) {
+func TestClaudeParserAssistantConcatenatesTextBlocks(t *testing.T) {
+	// Claude can pack multiple text blocks in one assistant frame.
 	p := NewClaudeParser()
 	lines := []string{
-		`{"type":"message_start","session_id":"s1","message":{"id":"m"}}`,
-		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"Bash"}}`,
-		`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls"}}`,
-		`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" -la\"}"}}`,
-		`{"type":"content_block_stop","index":1}`,
+		`{"type":"system","subtype":"init","session_id":"s1"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}}`,
 	}
 	events := parseAll(t, p, lines)
-	// SessionStart + ToolUse only — deltas are absorbed.
 	if len(events) != 2 {
-		t.Fatalf("event count: %d (%+v)", len(events), events)
+		t.Fatalf("events: %d (%+v)", len(events), events)
+	}
+	if events[1].Text != "hello world" {
+		t.Fatalf("concat: %q", events[1].Text)
+	}
+}
+
+func TestClaudeParserToolUseExtractsName(t *testing.T) {
+	p := NewClaudeParser()
+	lines := []string{
+		`{"type":"system","subtype":"init","session_id":"s1"}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}`,
+	}
+	events := parseAll(t, p, lines)
+	if len(events) != 2 {
+		t.Fatalf("events: %d (%+v)", len(events), events)
 	}
 	tu := events[1]
 	if tu.Type != ToolUse {
@@ -85,36 +102,70 @@ func TestClaudeParserToolUseBuffersInputJSON(t *testing.T) {
 	if tu.ToolName != "Bash" {
 		t.Fatalf("tool name: %q", tu.ToolName)
 	}
-	if tu.ToolInput != `{"command":"ls -la"}` {
+	if tu.ToolInput == "" || !contains(tu.ToolInput, "ls -la") {
 		t.Fatalf("tool input: %q", tu.ToolInput)
 	}
 }
 
-func TestClaudeParserThinking(t *testing.T) {
+func TestClaudeParserToolUsePreferredOverText(t *testing.T) {
+	// When an assistant frame contains BOTH text and tool_use, we
+	// surface tool_use because it's gate-relevant. The trailing
+	// `result` event still carries the final user-visible text.
 	p := NewClaudeParser()
-	lines := []string{
-		`{"type":"message_start","session_id":"s1"}`,
-		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weighing options"}}`,
-		`{"type":"content_block_stop","index":0}`,
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"running command"},{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}`
+	ev, err := p.Parse(line)
+	if err != nil {
+		t.Fatal(err)
 	}
-	events := parseAll(t, p, lines)
-	if len(events) != 2 {
-		t.Fatalf("events: %d (%+v)", len(events), events)
-	}
-	if events[1].Type != Thinking || events[1].Text != "weighing options" {
-		t.Fatalf("thinking event: %+v", events[1])
+	if ev.Type != ToolUse {
+		t.Fatalf("expected ToolUse, got %v", ev.Type)
 	}
 }
 
-func TestClaudeParserError(t *testing.T) {
+func TestClaudeParserToolResultFromUserMessage(t *testing.T) {
+	// Tool results come back as `user` messages with tool_result blocks.
 	p := NewClaudeParser()
-	ev, err := p.Parse(`{"type":"error","error":{"message":"rate limited"}}`)
+	line := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"file1\nfile2"}]}}`
+	ev, err := p.Parse(line)
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatal(err)
+	}
+	if ev.Type != ToolResult {
+		t.Fatalf("expected ToolResult, got %v", ev.Type)
+	}
+	if !contains(ev.Text, "file1") {
+		t.Fatalf("text: %q", ev.Text)
+	}
+}
+
+func TestClaudeParserResultErrorBecomesErrorEvent(t *testing.T) {
+	p := NewClaudeParser()
+	ev, err := p.Parse(`{"type":"result","subtype":"success","is_error":true,"result":"rate limited"}`)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if ev.Type != Error || ev.ErrorMsg != "rate limited" {
 		t.Fatalf("event: %+v", ev)
+	}
+}
+
+func TestClaudeParserUnknownSystemSubtypeSkipped(t *testing.T) {
+	// hook_started / hook_response / rate_limit_event / etc. should
+	// not drive downstream state. They map to Unknown.
+	p := NewClaudeParser()
+	cases := []string{
+		`{"type":"system","subtype":"hook_started"}`,
+		`{"type":"system","subtype":"hook_response"}`,
+		`{"type":"rate_limit_event","rate_limit_info":{}}`,
+	}
+	for _, line := range cases {
+		ev, err := p.Parse(line)
+		if err != nil {
+			t.Fatalf("parse %q: %v", line, err)
+		}
+		if ev.Type != Unknown {
+			t.Fatalf("expected Unknown for %q, got %v", line, ev.Type)
+		}
 	}
 }
 
@@ -134,4 +185,15 @@ func TestClaudeParserMalformedReturnsError(t *testing.T) {
 	if _, err := p.Parse("not json"); err == nil {
 		t.Fatal("expected parse error on garbage input")
 	}
+}
+
+// contains is a tiny substring helper to keep tests strings.HasPrefix-free
+// (we don't import strings here on purpose — keeps the test file lean).
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
