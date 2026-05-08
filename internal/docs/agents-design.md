@@ -41,7 +41,7 @@ Update tabel ini saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
 
 | Phase | Status | Catatan |
 |---|---|---|
-| Phase 1 — Foundation | `[ ]` | — |
+| Phase 1 — Foundation | `[x]` | `internal/agents/` storage + config + preset + project + session + registry + manager. 28 unit tests hijau. |
 | Phase 2 — Subprocess + Pool | `[ ]` | — |
 | Phase 3 — Command Gate | `[ ]` | — |
 | Phase 4 — UI Manager Tool (MVP) | `[ ]` | — |
@@ -68,13 +68,13 @@ Phase 3 dan 4 bisa parallel kalau ada 2 dev.
 
 Tujuan: bisa buat/hapus project + session dari kode (test). Belum ada subprocess.
 
-- [ ] **1.1** FS helpers: atomic write json, append jsonl, read tail, scan folder → `internal/agents/storage.go`
-- [ ] **1.2** Config structs (`GeneralConfig`, `SlackConfig`, `WorkspaceConfig`) + bootstrap seed → `internal/agents/config.go`
-- [ ] **1.3** Preset CRUD: `presets/<nama>/agent.md` read/write → `internal/agents/preset.go`
-- [ ] **1.4** Project CRUD: `meta.json` + `workspace/` + `git init` / `git clone` → `internal/agents/project.go`
-- [ ] **1.5** Session CRUD: `meta.json`, `agents.json`, `agent.md` snapshot, `git worktree add/remove` → `internal/agents/session.go`
-- [ ] **1.6** In-memory registry: boot scan, sync write per-file + memory → `internal/agents/registry.go`
-- [ ] **1.7** Unit test seluruh CRUD pakai `t.TempDir()` → `internal/agents/*_test.go`
+- [x] **1.1** FS helpers: atomic write json, append jsonl, read tail, scan folder → `internal/agents/storage.go`
+- [x] **1.2** Config structs (`GeneralConfig`, `SlackConfig`, `WorkspaceConfig`) + bootstrap seed → `internal/agents/config.go`
+- [x] **1.3** Preset CRUD: `presets/<nama>/agent.md` read/write → `internal/agents/preset.go`
+- [x] **1.4** Project CRUD: `meta.json` + `workspace/` + `git init` / `git clone` → `internal/agents/project.go`
+- [x] **1.5** Session CRUD: `meta.json`, `agents.json`, `agent.md` snapshot, `git worktree add/remove` → `internal/agents/session.go`
+- [x] **1.6** In-memory registry: boot scan, sync write per-file + memory → `internal/agents/registry.go` + `manager.go`
+- [x] **1.7** Unit test seluruh CRUD pakai `t.TempDir()` → `internal/agents/*_test.go` (28 tests)
 
 **Exit criteria**: bisa create project + session dari Go test, scan folder = same as memory, restart idempotent.
 
