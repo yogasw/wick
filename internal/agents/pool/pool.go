@@ -30,6 +30,12 @@ type Pool struct {
 	queue   []queueEntry
 	buffers map[string]*Buffer // per-session buffer, lazily created
 	closed  bool
+
+	// wg tracks tryGrantQueue background spawns + onAgentExit work so
+	// Stop can wait for all post-exit disk writes (markStatus, queue
+	// drain) to finish before returning. Without this, tests that
+	// observe Active==0 race the trailing meta.json writes.
+	wg sync.WaitGroup
 }
 
 // PoolConfig knobs.
@@ -139,6 +145,12 @@ func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, tex
 // p.mu (we acquire and release it ourselves so the spawn can take
 // time without blocking other Send calls).
 func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("pool closed")
+	}
+	p.mu.Unlock()
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
 		return err
@@ -171,6 +183,13 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		agentNm: agentName,
 	}
 	p.mu.Lock()
+	if p.closed {
+		// Stop raced ahead of us — bail before publishing the entry,
+		// otherwise its later idle exit would call wg.Add after Stop's
+		// wg.Wait has returned.
+		p.mu.Unlock()
+		return errors.New("pool closed")
+	}
 	if buf, ok := p.buffers[sessionID]; ok {
 		entry.buffer = buf
 	}
@@ -201,13 +220,24 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	return nil
 }
 
-// onAgentExit is the hook the factory wires for us. The pool releases
-// the slot, marks the session idle, and tries to grant the slot to
+// onAgentExit is the hook the factory wires for us. The pool marks
+// the session idle, releases the slot, and tries to grant the slot to
 // the next queued session.
+//
+// Order matters: markStatus must run BEFORE releaseSlot so that any
+// caller observing Active==0 also sees the on-disk Status=idle. With
+// the reverse order, a fast Send-after-Active==0 races the trailing
+// meta.json write and can collide with its own meta writes on Windows
+// (os.Rename to the same target from two goroutines).
+//
+// The whole body runs under p.wg so Stop() can wait for any tail
+// work to finish before tearing down.
 func (p *Pool) onAgentExit(sessionID, agentName string) {
+	p.wg.Add(1)
+	defer p.wg.Done()
 	key := sessionKey(sessionID, agentName)
-	p.releaseSlot(key)
 	_ = p.markStatus(sessionID, session.StatusIdle)
+	p.releaseSlot(key)
 	p.tryGrantQueue()
 }
 
@@ -218,18 +248,22 @@ func (p *Pool) releaseSlot(key string) {
 }
 
 // tryGrantQueue pops the head of the queue and spawns it if a slot is
-// free. Runs every time a slot is released.
+// free. Runs every time a slot is released. Skips work entirely if the
+// pool is closed — Stop() relies on this so no fresh spawns sneak past
+// the shutdown barrier.
 func (p *Pool) tryGrantQueue() {
 	p.mu.Lock()
-	if len(p.queue) == 0 || len(p.active) >= p.cfg.MaxConcurrent {
+	if p.closed || len(p.queue) == 0 || len(p.active) >= p.cfg.MaxConcurrent {
 		p.mu.Unlock()
 		return
 	}
 	q := p.queue[0]
 	p.queue = p.queue[1:]
+	p.wg.Add(1)
 	p.mu.Unlock()
 	// Background spawn — don't block whoever fired the exit hook.
 	go func() {
+		defer p.wg.Done()
 		_ = p.spawn(context.Background(), q.sessionID, q.agentName, "queue")
 	}()
 }
@@ -271,7 +305,9 @@ func (p *Pool) markStatus(sessionID string, status session.Status) error {
 	return session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta)
 }
 
-// Stop tears down all active agents. Used on graceful shutdown.
+// Stop tears down all active agents and waits for trailing
+// post-exit work (markStatus, queue drain). Used on graceful shutdown
+// and by tests to flush goroutines before TempDir cleanup.
 func (p *Pool) Stop() {
 	p.mu.Lock()
 	p.closed = true
@@ -283,6 +319,7 @@ func (p *Pool) Stop() {
 	for _, e := range entries {
 		_ = e.agent.Stop()
 	}
+	p.wg.Wait()
 }
 
 // Active returns the number of running agents.

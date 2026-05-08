@@ -122,6 +122,10 @@ func newPool(t *testing.T, max int, sp *scriptedSpawner) (*Pool, config.Layout) 
 		Factory:       factory,
 	})
 	factory.OnExit = p.HandleExit
+	// Stop drains agent + queue goroutines so trailing meta.json writes
+	// don't race t.TempDir cleanup on Windows (or leave the next assert
+	// reading stale state).
+	t.Cleanup(p.Stop)
 	return p, layout
 }
 

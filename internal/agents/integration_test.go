@@ -131,6 +131,7 @@ func newE2EPool(t *testing.T, max int, sp agent.Spawner) (*pool.Pool, config.Lay
 		Factory:       factory,
 	})
 	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
 	return p, layout
 }
 
