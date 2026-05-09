@@ -478,6 +478,12 @@ func hostMatches(got, expected string) bool {
 // signal.NotifyContext; in-process callers (system tray) cancel from
 // the UI.
 func (s *Server) Run(ctx context.Context, port int) error {
+	// Tray injects serverLogger (file sink) via processctl before calling Run.
+	// Lab/CLI pass a plain context — inject global logger with component=server
+	// so log.Ctx(r.Context()) in middleware is not a disabled logger.
+	if zerolog.Ctx(ctx).GetLevel() == zerolog.Disabled {
+		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
+	}
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
 

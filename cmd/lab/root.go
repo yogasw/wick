@@ -28,6 +28,7 @@ func main() {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			ctx = log.Logger.With().Str("component", "server").Logger().WithContext(ctx)
 			return api.NewServer().Run(ctx, port)
 		},
 	}

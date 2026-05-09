@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/pkg/worker"
 
 	"github.com/spf13/cobra"
@@ -18,6 +19,7 @@ func workerCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			ctx = log.Logger.With().Str("component", "worker").Logger().WithContext(ctx)
 			return worker.NewServer().Run(ctx)
 		},
 	}
