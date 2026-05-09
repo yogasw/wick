@@ -1,15 +1,17 @@
-// Package gate is the command whitelist enforcement layer. The
-// `wick-gate` binary (cmd/wick-gate) is invoked by claude's
-// PreToolUse hook with the proposed Bash command on stdin; this
-// package supplies the matcher + log helpers it uses.
+// Package gate is the command whitelist enforcement layer. The gate
+// binary (cmd/gate) is invoked by claude's PreToolUse hook with the
+// proposed Bash command on stdin; this package supplies the matcher
+// + log helpers it uses.
 //
 // Files:
 //   - rule.go         — CommandRule struct + Matcher (glob match,
 //                        shell-metachar guard, scope prefix)
 //   - log.go          — commands.jsonl append helper
 //   - claude_hook.go  — settings.json generator + temp-dir setup
+//   - embed.go        — gate-binary resolver (env / embed / sibling /
+//                        PATH) + per-app branding via AppName ldflag
 //
-// Importers: cmd/wick-gate (binary), pool/factory.go (settings path
+// Importers: cmd/gate (binary), pool/factory.go (settings path
 // generator), tests.
 package gate
 
@@ -57,8 +59,8 @@ func NewMatcher(rules []CommandRule) *Matcher {
 //   - allow=false, reason=<short message>  → block
 //
 // Reason is suitable for logging into commands.jsonl. Caller (the
-// wick-gate binary) chooses the CLI-specific block signal (exit 2
-// for claude, JSON deny for codex/gemini).
+// gate binary) chooses the CLI-specific block signal (exit 2 for
+// claude, JSON deny for codex/gemini).
 func (m *Matcher) Decide(command string) (bool, string) {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {

@@ -9,7 +9,7 @@ import (
 )
 
 func TestClaudeSettings(t *testing.T) {
-	bytes, err := ClaudeSettings("/path/to/wick-gate")
+	bytes, err := ClaudeSettings("/path/to/gate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestClaudeSettings(t *testing.T) {
 	if g.Matcher != "Bash" {
 		t.Errorf("matcher: %q", g.Matcher)
 	}
-	if len(g.Hooks) != 1 || g.Hooks[0].Type != "command" || g.Hooks[0].Command != "/path/to/wick-gate" {
+	if len(g.Hooks) != 1 || g.Hooks[0].Type != "command" || g.Hooks[0].Command != "/path/to/gate" {
 		t.Errorf("hook entry: %+v", g.Hooks)
 	}
 }
@@ -38,7 +38,7 @@ func TestWriteSpawnArtifactsRoundtrip(t *testing.T) {
 		Rules:     []CommandRule{{Pattern: "ls *"}},
 	}
 
-	settings, specPath, err := WriteSpawnArtifacts(dir, spec, "/bin/wick-gate")
+	settings, specPath, err := WriteSpawnArtifacts(dir, spec, "/bin/gate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestSpecApprovalFields(t *testing.T) {
 		AutoApproved: []string{"hash-a", "hash-b"},
 	}
 
-	_, specPath, err := WriteSpawnArtifacts(dir, spec, "/bin/wick-gate")
+	_, specPath, err := WriteSpawnArtifacts(dir, spec, "/bin/gate")
 	if err != nil {
 		t.Fatal(err)
 	}

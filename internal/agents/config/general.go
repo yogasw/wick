@@ -10,7 +10,7 @@ type GeneralConfig struct {
 	DefaultProvider   string `wick:"dropdown=claude|codex|gemini;desc=Default CLI provider."`
 	BypassPermissions bool   `wick:"checkbox;desc=Always pass --permission-mode bypassPermissions to Claude. Enable this if Claude prompts for permission in Slack/HTTP sessions and no gate is configured."`
 	KillAfterIdleSec  int    `wick:"number;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
-	GateEnabled       bool   `wick:"checkbox;desc=Route every Bash command through wick-gate. When off, the provider's own default permission handling applies (claude headless: blocks; others vary)."`
+	GateEnabled       bool   `wick:"checkbox;desc=Route every Bash command through the gate sidecar. When off, the provider's own default permission handling applies (claude headless: blocks; others vary)."`
 	AllowedCmds       string `wick:"kvlist=pattern|scope;desc=Command whitelist. pattern supports a trailing * wildcard (e.g. 'git *'). scope (optional) restricts path args to a directory prefix."`
 	PublicURL         string `wick:"url;desc=Public base URL of this wick instance. Used for the dashboard meta-command."`
 }

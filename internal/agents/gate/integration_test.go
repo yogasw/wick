@@ -16,23 +16,23 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
-// buildWickGate compiles cmd/wick-gate to a temp file and returns
-// the absolute path. Skips the test if `go build` is unavailable.
+// buildGate compiles cmd/gate to a temp file and returns the
+// absolute path. Skips the test if `go build` is unavailable.
 //
 // We build per-test (not once for the package) so each scenario has
 // a clean binary; build cost is ~1s on a warm cache.
-func buildWickGate(t *testing.T) string {
+func buildGate(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("`go` not in PATH — can't compile wick-gate")
+		t.Skip("`go` not in PATH — can't compile gate")
 	}
-	out := filepath.Join(t.TempDir(), "wick-gate")
+	out := filepath.Join(t.TempDir(), "gate")
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", out, "github.com/yogasw/wick/cmd/wick-gate")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/yogasw/wick/cmd/gate")
 	if buildOut, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build wick-gate: %v\n%s", err, buildOut)
+		t.Fatalf("go build gate: %v\n%s", err, buildOut)
 	}
 	return out
 }
@@ -41,7 +41,7 @@ func buildWickGate(t *testing.T) string {
 // gateDir, and returns (binPath, layout, gateDir).
 func setupGate(t *testing.T, rules []gate.CommandRule) (string, config.Layout, string, string) {
 	t.Helper()
-	bin := buildWickGate(t)
+	bin := buildGate(t)
 	layout := config.NewLayout(t.TempDir())
 	if err := layout.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -67,12 +67,12 @@ func setupGate(t *testing.T, rules []gate.CommandRule) (string, config.Layout, s
 	return bin, layout, gateDir, specPath
 }
 
-// runGate invokes the wick-gate binary with the given stdin and
-// $WICK_GATE_SPEC. Returns exit code and stderr text for assertions.
+// runGate invokes the gate binary with the given stdin and
+// $GATE_SPEC. Returns exit code and stderr text for assertions.
 func runGate(t *testing.T, bin, specPath, stdin string) (int, string) {
 	t.Helper()
 	cmd := exec.Command(bin)
-	cmd.Env = append([]string{}, "WICK_GATE_SPEC="+specPath, "PATH="+pathEnv())
+	cmd.Env = append([]string{}, "GATE_SPEC="+specPath, "PATH="+pathEnv())
 	cmd.Stdin = strings.NewReader(stdin)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -82,7 +82,7 @@ func runGate(t *testing.T, bin, specPath, stdin string) (int, string) {
 	if ee, ok := err.(*exec.ExitError); ok {
 		exit = ee.ExitCode()
 	} else if err != nil {
-		t.Fatalf("run wick-gate: %v", err)
+		t.Fatalf("run gate: %v", err)
 	}
 	return exit, stderr.String()
 }
@@ -135,8 +135,8 @@ func TestWickGate_BlockShellMetacharOnAllowedRule(t *testing.T) {
 
 // TestWickGate_AuditTrailLogged: every invocation must emit a
 // "received" stage + a terminal status row. Without the stage row,
-// operators have no way to tell wick-gate-fired-but-failed apart
-// from wick-gate-never-ran. The terminal row is what the UI shows;
+// operators have no way to tell gate-fired-but-failed apart
+// from gate-never-ran. The terminal row is what the UI shows;
 // the stage row is the audit trail.
 func TestWickGate_AuditTrailLogged(t *testing.T) {
 	bin, layout, _, specPath := setupGate(t, []gate.CommandRule{{Pattern: "ls *"}})
@@ -186,9 +186,9 @@ func TestWickGate_MalformedStdin(t *testing.T) {
 
 // TestWickGate_MissingSpecEnvFailsSafe: no env var → block.
 func TestWickGate_MissingSpecEnvFailsSafe(t *testing.T) {
-	bin := buildWickGate(t)
+	bin := buildGate(t)
 	cmd := exec.Command(bin)
-	// Empty env — no WICK_GATE_SPEC.
+	// Empty env — no GATE_SPEC.
 	cmd.Stdin = strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"ls"}}`)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -207,7 +207,7 @@ func TestWickGate_MissingSpecEnvFailsSafe(t *testing.T) {
 func TestWickGate_TimeoutOnHangingStdin(t *testing.T) {
 	bin, _, _, specPath := setupGate(t, []gate.CommandRule{{Pattern: "ls *"}})
 	cmd := exec.Command(bin)
-	cmd.Env = append([]string{}, "WICK_GATE_SPEC="+specPath, "PATH="+pathEnv())
+	cmd.Env = append([]string{}, "GATE_SPEC="+specPath, "PATH="+pathEnv())
 	// Pipe with no writer — Read blocks forever, but binary should
 	// time out on its own and exit 2.
 	stdinR, stdinW, _ := pipePair()
@@ -250,7 +250,7 @@ func readCommands(t *testing.T, layout config.Layout, sessionID string) []gate.E
 }
 
 // terminalOnly drops audit-trail "stage=..." entries so tests can
-// assert just the user-visible decision row. wick-gate emits one
+// assert just the user-visible decision row. The gate binary emits one
 // terminal entry (Status=allowed|blocked, no Stage) per invocation.
 func terminalOnly(entries []gate.Entry) []gate.Entry {
 	out := make([]gate.Entry, 0, len(entries))

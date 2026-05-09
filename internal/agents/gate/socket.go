@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-// ApprovalRequest is what wick-gate sends over the unix socket when
-// it needs an interactive decision. Daemon decodes one per
-// connection, then blocks until a UI POST arrives or the timeout
-// fires.
+// ApprovalRequest is what the gate binary sends over the unix
+// socket when it needs an interactive decision. Daemon decodes one
+// per connection, then blocks until a UI POST arrives or the
+// timeout fires.
 type ApprovalRequest struct {
-	ID        string `json:"id"`         // UUID minted by wick-gate
+	ID        string `json:"id"`         // UUID minted by the gate binary
 	SessionID string `json:"session_id"` // also encoded in spec, but echo for clarity
 	AgentName string `json:"agent_name"`
 	Tool      string `json:"tool"`     // "Bash", "Edit", ...
@@ -26,8 +26,8 @@ type ApprovalRequest struct {
 	Timestamp int64  `json:"ts"` // unix ms
 }
 
-// ApprovalResponse is the daemon's reply. wick-gate maps Decision to
-// an exit code: any "approve_*" → 0, "block" → 2.
+// ApprovalResponse is the daemon's reply. The gate binary maps
+// Decision to an exit code: any "approve_*" → 0, "block" → 2.
 type ApprovalResponse struct {
 	ID       string `json:"id"`
 	Decision string `json:"decision"` // "approve_once" | "approve_session" | "approve_always" | "block"
@@ -60,8 +60,9 @@ type pendingApproval struct {
 }
 
 // Listener owns a Unix domain socket per session. Connections from
-// wick-gate land here, get registered as pending, and resolve when
-// the UI calls Resolve(id, decision) — or when the timeout fires.
+// the gate binary land here, get registered as pending, and resolve
+// when the UI calls Resolve(id, decision) — or when the timeout
+// fires.
 //
 // One Listener per session. Sessions whose gate disabled (no socket)
 // just don't have a Listener at all.

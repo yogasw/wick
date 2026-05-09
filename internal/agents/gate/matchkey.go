@@ -7,7 +7,7 @@ import (
 )
 
 // MatchKey hashes (tool, normalized cmd) into a stable identifier the
-// daemon and wick-gate both compute the same way. Used to look up
+// daemon and the gate binary both compute the same way. Used to look up
 // "allow this session" / "always allow" decisions.
 //
 // Normalization is intentionally minimal for the MVP: trim outer

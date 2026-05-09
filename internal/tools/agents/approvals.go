@@ -12,14 +12,14 @@ import (
 // any other value is treated as block by the underlying manager but
 // rejected here for clarity.
 type approvalReq struct {
-	ID       string `json:"id"`        // pending request UUID minted by wick-gate
+	ID       string `json:"id"`        // pending request UUID minted by the gate binary
 	Decision string `json:"decision"`  // approve_once | approve_session | approve_always | block
 	MatchKey string `json:"match_key"` // hash echoed back; needed for session/always state
 	Reason   string `json:"reason,omitempty"`
 }
 
 // notReadyApprovals is the gate-disabled guard. If the parent process
-// failed to resolve the wick-gate binary, every approval call returns
+// failed to resolve the gate binary, every approval call returns
 // 503 with a hint pointing the operator at the env var override.
 func notReadyApprovals(c *tool.Ctx) bool {
 	if globalApprovals == nil {

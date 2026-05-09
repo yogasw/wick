@@ -14,11 +14,11 @@ import (
 // side. Three concerns:
 //
 //  1. Lifecycle of one Listener per session (Start/StopSession).
-//  2. In-memory "approve this session" set, hot path for wick-gate's
-//     short-circuit AND for /approve POST decisions arriving while a
-//     pending request is open.
-//  3. Persistent "always allow" set, written into spec.json so
-//     wick-gate can short-circuit without ever dialing the socket.
+//  2. In-memory "approve this session" set, hot path for the gate
+//     binary's short-circuit AND for /approve POST decisions arriving
+//     while a pending request is open.
+//  3. Persistent "always allow" set, written into spec.json so the
+//     gate binary can short-circuit without ever dialing the socket.
 //
 // Concurrency: the manager mutex guards all maps; per-Listener
 // concurrency is delegated to Listener itself.
@@ -47,7 +47,7 @@ type ApprovalManagerOptions struct {
 	// wrote for this session. Required for "always allow" persistence.
 	// Output is typically `<layout.SessionDir(id)>/gate/spec.json`.
 	SpecPath func(sessionID string) string
-	// OnRequest fires when wick-gate connects with a new request.
+	// OnRequest fires when the gate binary connects with a new request.
 	// Daemon broadcasts this as SSE `approval_request`.
 	OnRequest func(sessionID string, r ApprovalRequest)
 	// OnResolved fires once a decision is delivered (by any path —
@@ -157,7 +157,7 @@ func (m *ApprovalManager) Stop() {
 //     later requests for the same command auto-resolve.
 //   - approve_always: records matchKey in the in-memory set AND
 //     rewrites spec.json with the updated AutoApproved list, so the
-//     next spawn's wick-gate skips the round-trip entirely.
+//     next spawn's gate binary skips the round-trip entirely.
 func (m *ApprovalManager) Resolve(sessionID, requestID, decision, reason, matchKey string) (bool, error) {
 	switch decision {
 	case DecisionApproveSession:
@@ -228,7 +228,7 @@ func (m *ApprovalManager) PendingFor(sessionID string) []ApprovalRequest {
 
 // AutoApprovedFor returns the persistent always-allow list for
 // sessionID by reading spec.json. Used by pool.GateConfig.AutoApprovedFor
-// at Build time so wick-gate's spec gets pre-populated.
+// at Build time so the gate binary's spec gets pre-populated.
 func (m *ApprovalManager) AutoApprovedFor(sessionID string) []string {
 	spec, err := m.readSpec(sessionID)
 	if err != nil {

@@ -64,6 +64,16 @@ func Build(cfg Config) (Result, error) {
 
 	ldflags := assembleLDFlags(cfg)
 
+	// Build the gate sidecar BEFORE the main `go build` runs. This
+	// drops `internal/agents/gate/assets/gate-<os>-<arch>[.exe]` into
+	// the wick module so //go:embed picks it up, plus copies it to
+	// `bin/<app>-gate-<os>-<arch>[.exe]` as a user-visible sidecar.
+	// Soft-skips on downstream forks that pruned cmd/gate.
+	gateArtifact, err := buildGateBinary(cfg)
+	if err != nil {
+		return Result{}, err
+	}
+
 	// Windows .syso must exist next to main.go BEFORE `go build`
 	// runs — the linker picks it up automatically. Cleanup runs
 	// after the compile finishes regardless of success.
@@ -80,6 +90,9 @@ func Build(cfg Config) (Result, error) {
 	}
 
 	res := Result{Binary: cfg.Output}
+	if gateArtifact != "" {
+		res.Bundles = append(res.Bundles, gateArtifact)
+	}
 
 	switch cfg.GOOS {
 	case "darwin":

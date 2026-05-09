@@ -1,16 +1,19 @@
-// Command wick-gate is the small binary claude's PreToolUse hook
-// invokes before every Bash tool call. It reads a JSON envelope from
-// stdin, decides allow/block via the gate matcher, logs the decision
-// to commands.jsonl, and exits with the claude-expected code:
+// Command gate is the small binary claude's PreToolUse hook invokes
+// before every Bash tool call. It reads a JSON envelope from stdin,
+// decides allow/block via the gate matcher, logs the decision to
+// commands.jsonl, and exits with the claude-expected code:
 //
 //	exit 0 = allow
 //	exit 2 = block (claude cancels the tool call)
 //
-// Configuration is loaded from the file path in $WICK_GATE_SPEC,
-// which the wick parent process writes per spawn (see
-// gate.WriteSpawnArtifacts). All decision state — rules, session
-// commands.jsonl path, agent name — flows through that spec, so the
-// binary itself stays stateless.
+// The binary ships per-app as `<app>-gate[.exe]` (e.g. `myapp-gate`
+// for a project initialized with `wick init myapp`).
+//
+// Configuration is loaded from the file path in $GATE_SPEC, which
+// the parent process writes per spawn (see gate.WriteSpawnArtifacts).
+// All decision state — rules, session commands.jsonl path, agent
+// name — flows through that spec, so the binary itself stays
+// stateless.
 //
 // Fail-safe: if anything goes wrong (spec missing, parse failure,
 // timeout reading stdin), we BLOCK + log. Better to refuse a real
@@ -81,7 +84,7 @@ func run() int {
 	if err != nil {
 		// Spec missing → no SessionCommandsPath to write to. Stderr
 		// is the only channel the operator sees.
-		fmt.Fprintf(os.Stderr, "wick-gate: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gate: %v\n", err)
 		return 2
 	}
 
@@ -90,7 +93,7 @@ func run() int {
 	cmd, perr := readHookCommand(os.Stdin, stdinReadTimeout)
 	if perr != nil {
 		logTerminal(spec, requestID, "", "blocked", "", "stdin parse: "+perr.Error())
-		fmt.Fprintf(os.Stderr, "wick-gate: %v\n", perr)
+		fmt.Fprintf(os.Stderr, "gate: %v\n", perr)
 		return 2
 	}
 
@@ -117,7 +120,7 @@ func run() int {
 		decision, reason, err := requestApprovalWithLog(spec, cmd, key, requestID)
 		if err != nil {
 			logTerminal(spec, requestID, cmd, "blocked", "", "approval rpc: "+err.Error())
-			fmt.Fprintf(os.Stderr, "wick-gate: blocked — approval rpc: %v\n", err)
+			fmt.Fprintf(os.Stderr, "gate: blocked — approval rpc: %v\n", err)
 			return 2
 		}
 		if gate.IsApprove(decision) {
@@ -125,7 +128,7 @@ func run() int {
 			return 0
 		}
 		logTerminal(spec, requestID, cmd, "blocked", decision, reason)
-		fmt.Fprintf(os.Stderr, "wick-gate: blocked — %s\n", reason)
+		fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
 		return 2
 	}
 
@@ -133,7 +136,7 @@ func run() int {
 	// rejection so the operator can see why a command failed.
 	_, matcherReason := matcher.Decide(cmd)
 	logTerminal(spec, requestID, cmd, "blocked", "", matcherReason)
-	fmt.Fprintf(os.Stderr, "wick-gate: blocked — %s\n", matcherReason)
+	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", matcherReason)
 	return 2
 }
 

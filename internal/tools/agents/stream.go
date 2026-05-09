@@ -104,7 +104,7 @@ func (b *Broadcaster) PublishLifecycle(sessionID, agentName, lifecycle string, p
 	})
 }
 
-// PublishApprovalRequest fires when wick-gate dials the daemon socket
+// PublishApprovalRequest fires when the gate binary dials the daemon socket
 // with an unrecognised command. Browsers render this as a modal with
 // 4 decision buttons (approve_once / approve_session / approve_always
 // / block); the user's pick rides back through POST /approve.

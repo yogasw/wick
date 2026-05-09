@@ -7,24 +7,24 @@ import (
 	"testing"
 )
 
-// TestResolveGateBinary_EnvOverrideWins confirms WICK_GATE_BIN
-// short-circuits all other lookups — including missing files. The
-// env var is the user's explicit pointer; we trust it as-is and let
-// the spawn fail loudly later if it's wrong.
+// TestResolveGateBinary_EnvOverrideWins confirms GATE_BIN short-
+// circuits all other lookups — including missing files. The env var
+// is the user's explicit pointer; we trust it as-is and let the
+// spawn fail loudly later if it's wrong.
 func TestResolveGateBinary_EnvOverrideWins(t *testing.T) {
-	t.Setenv(envOverride, "/totally/made/up/path/wick-gate")
+	t.Setenv(envOverride, "/totally/made/up/path/gate")
 	got, err := ResolveGateBinary(t.TempDir())
 	if err != nil {
 		t.Fatalf("ResolveGateBinary: %v", err)
 	}
-	if got != "/totally/made/up/path/wick-gate" {
+	if got != "/totally/made/up/path/gate" {
 		t.Errorf("got %q, want env value", got)
 	}
 }
 
 // TestSiblingGateBinary_FoundNextToExecutable verifies the dev /
-// installer fallback: a wick-gate file dropped next to the running
-// binary is picked up without env or embed.
+// installer fallback: a gate sidecar file dropped next to the
+// running binary is picked up without env or embed.
 //
 // We can't move the test binary, so we plant a file matching the
 // expected name beside it, look up via the helper, then clean up.
@@ -34,15 +34,12 @@ func TestSiblingGateBinary_FoundNextToExecutable(t *testing.T) {
 	if err != nil {
 		t.Skipf("os.Executable not available: %v", err)
 	}
-	name := "wick-gate"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
+	name := brandedGateName()
 	planted := filepath.Join(filepath.Dir(exe), name)
 
 	// Skip if the file already exists — don't trample on a real install.
 	if _, err := os.Stat(planted); err == nil {
-		t.Skip("wick-gate already next to test binary; skipping plant test")
+		t.Skip("gate already next to test binary; skipping plant test")
 	}
 
 	if err := os.WriteFile(planted, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -58,22 +55,21 @@ func TestSiblingGateBinary_FoundNextToExecutable(t *testing.T) {
 
 func TestSiblingGateBinary_AbsentReturnsEmpty(t *testing.T) {
 	// Without planting, the helper should return "". In rare CI
-	// setups the test binary's neighbour might already have a
-	// wick-gate (e.g. dev box with PATH-installed gate); in that
-	// case the helper legitimately returns it — skip rather than
-	// fail.
+	// setups the test binary's neighbour might already have a gate
+	// binary (e.g. dev box with PATH-installed gate); in that case
+	// the helper legitimately returns it — skip rather than fail.
 	exe, err := os.Executable()
 	if err != nil {
 		t.Skipf("os.Executable: %v", err)
 	}
-	name := "wick-gate"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), name)); err == nil {
-		t.Skip("wick-gate already exists next to test binary")
+	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), brandedGateName())); err == nil {
+		t.Skip("gate already exists next to test binary")
 	}
 	if got := siblingGateBinary(); got != "" {
 		t.Errorf("expected empty, got %q", got)
 	}
 }
+
+// suppress unused import warning when runtime no longer used in
+// this file directly.
+var _ = runtime.GOOS

@@ -8,27 +8,27 @@ import (
 )
 
 // Spec describes one gate setup for one spawn — the bundle of paths
-// + env that wick-gate needs to make a decision and log it.
+// + env that the gate binary needs to make a decision and log it.
 //
 // Generated per Spawn by pool/factory.go; written to a file under
 // the session's gate-temp dir so the path can be passed to claude
-// via `--settings <path>` and to wick-gate via env vars.
+// via `--settings <path>` and to the gate binary via env vars.
 type Spec struct {
 	SessionID string        `json:"session_id"`
 	AgentName string        `json:"agent_name"`
 	Layout    SpecLayout    `json:"layout"`
 	Rules     []CommandRule `json:"rules"`
 
-	// SocketPath is the Unix socket wick-gate dials when a command is
-	// not auto-allowed. Empty = no interactive approval (whitelist-only
-	// mode, fail-safe block on unlisted commands).
+	// SocketPath is the Unix socket the gate binary dials when a
+	// command is not auto-allowed. Empty = no interactive approval
+	// (whitelist-only mode, fail-safe block on unlisted commands).
 	SocketPath string `json:"socket_path,omitempty"`
 
 	// AutoApproved holds matchKey hashes the user already chose
-	// "Always allow" for. wick-gate checks this list before dialing
-	// the socket so always-approved commands take a zero-latency
-	// fast path identical to whitelisted ones. Rewritten by the
-	// daemon when the user toggles always-allow / revoke.
+	// "Always allow" for. The gate binary checks this list before
+	// dialing the socket so always-approved commands take a zero-
+	// latency fast path identical to whitelisted ones. Rewritten by
+	// the daemon when the user toggles always-allow / revoke.
 	AutoApproved []string `json:"auto_approved,omitempty"`
 }
 
@@ -40,18 +40,18 @@ type SpecLayout struct {
 	SessionCommandsPath string `json:"session_commands_path"`
 }
 
-// HookEnvVar is the env-var name through which the wick binary tells
-// wick-gate where to find its Spec file. Picked up by wick-gate at
-// startup.
-const HookEnvVar = "WICK_GATE_SPEC"
+// HookEnvVar is the env-var name through which the parent binary
+// tells the gate binary where to find its Spec file. Picked up by
+// the gate binary at startup.
+const HookEnvVar = "GATE_SPEC"
 
 // claudeHookConfig is the JSON shape claude expects in its settings
 // file under .hooks.PreToolUse.
 //
 // Reference: claude hooks-guide. PreToolUse fires before any tool
 // invocation; matcher="Bash" filters to shell commands only. The
-// hook command is the absolute path to wick-gate; exit 0 = allow,
-// exit 2 = block.
+// hook command is the absolute path to the gate binary; exit 0 =
+// allow, exit 2 = block.
 type claudeHookConfig struct {
 	Hooks claudeHooks `json:"hooks"`
 }
@@ -71,17 +71,17 @@ type claudeHookEntry struct {
 }
 
 // ClaudeSettings produces the JSON bytes claude expects in its
-// `--settings` file. wickGateBin is the absolute path to the
-// wick-gate binary (we don't rely on PATH lookup so a per-test
-// build can be used in integration tests).
-func ClaudeSettings(wickGateBin string) ([]byte, error) {
+// `--settings` file. gateBin is the absolute path to the gate
+// binary (we don't rely on PATH lookup so a per-test build can be
+// used in integration tests).
+func ClaudeSettings(gateBin string) ([]byte, error) {
 	cfg := claudeHookConfig{
 		Hooks: claudeHooks{
 			PreToolUse: []claudeHookGroup{{
 				Matcher: "Bash",
 				Hooks: []claudeHookEntry{{
 					Type:    "command",
-					Command: wickGateBin,
+					Command: gateBin,
 				}},
 			}},
 		},
@@ -91,12 +91,12 @@ func ClaudeSettings(wickGateBin string) ([]byte, error) {
 
 // WriteSpawnArtifacts writes both:
 //
-//   - <dir>/spec.json   — the Spec consumed by wick-gate via $WICK_GATE_SPEC
+//   - <dir>/spec.json   — the Spec consumed by the gate binary via $GATE_SPEC
 //   - <dir>/settings.json — the claude --settings file
 //
 // Returns the settings path (caller passes to ClaudeSpawner.SettingsPath)
-// and the spec path (caller injects into ExtraEnv as WICK_GATE_SPEC=<path>).
-func WriteSpawnArtifacts(dir string, spec Spec, wickGateBin string) (settingsPath, specPath string, err error) {
+// and the spec path (caller injects into ExtraEnv as GATE_SPEC=<path>).
+func WriteSpawnArtifacts(dir string, spec Spec, gateBin string) (settingsPath, specPath string, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", err
 	}
@@ -111,7 +111,7 @@ func WriteSpawnArtifacts(dir string, spec Spec, wickGateBin string) (settingsPat
 		return "", "", err
 	}
 
-	settingsBytes, err := ClaudeSettings(wickGateBin)
+	settingsBytes, err := ClaudeSettings(gateBin)
 	if err != nil {
 		return "", "", err
 	}
@@ -121,9 +121,9 @@ func WriteSpawnArtifacts(dir string, spec Spec, wickGateBin string) (settingsPat
 	return settingsPath, specPath, nil
 }
 
-// LoadSpec reads the Spec file pointed to by $WICK_GATE_SPEC. Used
-// by wick-gate at startup. Returns a clear error if the env var is
-// unset so misconfiguration is loud.
+// LoadSpec reads the Spec file pointed to by $GATE_SPEC. Used by
+// the gate binary at startup. Returns a clear error if the env var
+// is unset so misconfiguration is loud.
 func LoadSpec() (Spec, error) {
 	path := os.Getenv(HookEnvVar)
 	if path == "" {

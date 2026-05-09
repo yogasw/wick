@@ -151,7 +151,7 @@ type ProvidersVM struct {
 // GateStatusVM is the small "is the command gate alive?" card on
 // the Providers page. The fields cover the three things an operator
 // needs to glance at when claude is misbehaving:
-//   - Enabled: was the parent able to resolve a wick-gate binary?
+//   - Enabled: was the parent able to resolve a gate binary?
 //   - Binary:  which one (env override / sibling / PATH)?
 //   - Note:    one-sentence consequence text — what gets blocked.
 type GateStatusVM struct {

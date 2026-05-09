@@ -31,7 +31,7 @@ type ClaudeFactory struct {
 	// Gate (optional) attaches a static command whitelist to every spawn.
 	// When non-nil, Build writes a per-session settings.json + spec
 	// file to a temp dir, points the spawner at the settings file,
-	// and injects WICK_GATE_SPEC into ExtraEnv so wick-gate finds
+	// and injects GATE_SPEC into ExtraEnv so the gate binary finds
 	// its config. nil = no gate (fail-open, only safe for tests).
 	Gate *GateConfig
 	// GateLoader (optional) is called on every Build to fetch the
@@ -53,13 +53,13 @@ type ClaudeFactory struct {
 	SpawnLogger *provider.SpawnLogger
 }
 
-// GateConfig describes the gate plumbing: where the wick-gate binary
+// GateConfig describes the gate plumbing: where the gate binary
 // lives + what rules it enforces. The factory turns this into one
 // {settings.json, spec.json} pair per spawn.
 type GateConfig struct {
-	// WickGateBinary is the absolute path to the wick-gate binary.
+	// GateBinary is the absolute path to the gate binary.
 	// Required when Gate != nil.
-	WickGateBinary string
+	GateBinary string
 	// Rules is the whitelist enforced for every spawn under this
 	// factory. Future work may take rules per-session.
 	Rules []gate.CommandRule
@@ -70,9 +70,9 @@ type GateConfig struct {
 
 	// SocketDir is the static (single-session-test) socket dir. The
 	// factory writes `<SocketDir>/gate.sock` into spec.SocketPath so
-	// wick-gate knows where to dial. Empty = no interactive approval
-	// (whitelist-only). Production wires SocketDirFor instead so
-	// each session gets its own socket path.
+	// the gate binary knows where to dial. Empty = no interactive
+	// approval (whitelist-only). Production wires SocketDirFor
+	// instead so each session gets its own socket path.
 	SocketDir string
 
 	// SocketDirFor (preferred over SocketDir for production) returns
@@ -85,7 +85,7 @@ type GateConfig struct {
 
 	// AutoApprovedFor returns the list of "always allow" matchKey
 	// hashes for a given session. Called once per Build to populate
-	// spec.AutoApproved so wick-gate can short-circuit without
+	// spec.AutoApproved so the gate binary can short-circuit without
 	// dialing the socket. nil = no auto-approves.
 	AutoApprovedFor func(sessionID string) []string
 }
@@ -224,7 +224,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 //     the underlying spawner is a real claude.Spawner; for fake
 //     spawners the settings are still written (so tests can read
 //     them) but ignored
-//   - the env-var slice ([WICK_GATE_SPEC=<path>]) the spawner adds
+//   - the env-var slice ([GATE_SPEC=<path>]) the spawner adds
 //     to its subprocess
 func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawner, cfg *GateConfig) (provider.Spawner, []string, error) {
 	root := cfg.TempDirRoot
@@ -259,7 +259,7 @@ func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawn
 		SocketPath:   socketPath,
 		AutoApproved: autoApproved,
 	}
-	settingsPath, specPath, err := gate.WriteSpawnArtifacts(root, spec, cfg.WickGateBinary)
+	settingsPath, specPath, err := gate.WriteSpawnArtifacts(root, spec, cfg.GateBinary)
 	if err != nil {
 		return base, nil, err
 	}

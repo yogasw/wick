@@ -41,7 +41,7 @@ type Entry struct {
 }
 
 // Append writes one entry to sessions/<sessionID>/commands.jsonl.
-// Used by both the wick-gate binary (post-decision) and any in-proc
+// Used by both the gate binary (post-decision) and any in-proc
 // gate logic that wants to record without going through the binary.
 func Append(layout config.Layout, sessionID string, entry Entry) error {
 	if entry.Timestamp.IsZero() {

@@ -425,28 +425,13 @@ jobs:
         if: matrix.os == 'windows'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
-      # wick-gate is the small hook binary claude invokes before every
-      # Bash command (see internal/agents/gate). We compile it for the
-      # target platform and drop it into internal/agents/gate/assets/
-      # so the main `go build` (run by `wick build` below) embeds it
-      # via //go:embed. Skipped on downstream forks that don't ship the
-      # gate dir — the embed has a graceful fallback to PATH lookup.
-      - name: Build wick-gate
-        shell: bash
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-        run: |
-          if [ ! -d cmd/wick-gate ]; then
-            echo "cmd/wick-gate not present — skipping (downstream fork)."
-            exit 0
-          fi
-          mkdir -p internal/agents/gate/assets
-          EXT=""
-          [ "${{ matrix.os }}" = "windows" ] && EXT=".exe"
-          OUT="internal/agents/gate/assets/wick-gate-${{ matrix.os }}-${{ matrix.arch }}${EXT}"
-          go build -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/wick-gate
-          ls -la internal/agents/gate/assets/
+      # The gate sidecar binary (claude's PreToolUse hook invokes it
+      # before every Bash command) is built inline by `wick build`
+      # below — it compiles `github.com/yogasw/wick/cmd/gate` for the
+      # target platform, drops it into `internal/agents/gate/assets/`
+      # (picked up by //go:embed in the main binary), and copies it
+      # to `bin/<app>-gate-<os>-<arch>[.exe]` as a user-visible
+      # sidecar. Soft-skips on downstream forks that pruned cmd/gate.
 
       - name: Build
         env:

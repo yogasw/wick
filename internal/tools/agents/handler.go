@@ -44,12 +44,12 @@ var (
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
 // once during server.go startup and read by the Providers page so
-// operators can tell at a glance whether wick-gate is wired up.
+// operators can tell at a glance whether the gate sidecar is wired up.
 //
 // Enabled=false means ResolveGateBinary returned an error — every
 // command will hit fail-safe block at the matcher / no-socket path,
 // except whitelist matches. Reason carries the error message so
-// the UI can show "set WICK_GATE_BIN" or similar guidance.
+// the UI can show "set GATE_BIN" or similar guidance.
 type GateStatus struct {
 	Enabled bool
 	Binary  string // absolute path

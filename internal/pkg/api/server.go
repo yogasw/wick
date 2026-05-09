@@ -228,7 +228,7 @@ func NewServer() *Server {
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
 
 	// ── Gate (interactive command approval) ───────────────────────
-	// Resolve the wick-gate binary up front: env override for dev,
+	// Resolve the gate binary up front: env override for dev,
 	// embedded asset for production, PATH lookup as a last resort.
 	// Failure here is non-fatal — gate stays disabled and the pool
 	// falls back to whitelist-only mode. Operator sees one log line.
@@ -246,11 +246,11 @@ func NewServer() *Server {
 			gateConfigEnabled = b
 		}
 	}
-	wickGateBin, wickGateSource, gateBinErr := agentgate.ResolveGateBinaryWithSource(filepath.Join(agentsLayout.BaseDir, "_gate-bin"))
+	resolvedGateBin, gateSource, gateBinErr := agentgate.ResolveGateBinaryWithSource(filepath.Join(agentsLayout.BaseDir, "_gate-bin"))
 	gateStatus := agentstool.GateStatus{
 		Enabled: gateBinErr == nil && gateConfigEnabled,
-		Binary:  wickGateBin,
-		Source:  wickGateSource,
+		Binary:  resolvedGateBin,
+		Source:  gateSource,
 	}
 	switch {
 	case !gateConfigEnabled:
@@ -299,7 +299,7 @@ func NewServer() *Server {
 	}
 	if agentsApprovals != nil {
 		agentsFactory.Gate = &agentpool.GateConfig{
-			WickGateBinary: wickGateBin,
+			GateBinary: resolvedGateBin,
 			SocketDirFor: func(sid string) string {
 				return filepath.Join(agentsLayout.SessionDir(sid), "gate")
 			},
@@ -326,9 +326,9 @@ func NewServer() *Server {
 	// GateLoader is evaluated on every agent spawn so UI changes to
 	// gate_enabled / allowed_cmds take effect immediately without
 	// requiring a server restart.
-	gateBin := resolveWickGateBin()
+	gateBin := resolveGateBin()
 	if gateBin == "" {
-		log.Warn().Msg("agents: wick-gate binary not found — gate will be disabled even if gate_enabled=true (build cmd/wick-gate or put it in PATH)")
+		log.Warn().Msg("agents: gate binary not found — gate will be disabled even if gate_enabled=true (build cmd/gate or put <app>-gate in PATH)")
 	}
 	agentsFactory.GateLoader = func() *agentpool.GateConfig {
 		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
@@ -340,8 +340,8 @@ func NewServer() *Server {
 		rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
 		log.Debug().Int("rules", len(rules)).Msg("agents: gate active for spawn")
 		return &agentpool.GateConfig{
-			WickGateBinary: gateBin,
-			Rules:          rules,
+			GateBinary: gateBin,
+			Rules:      rules,
 		}
 	}
 	agentsPool = agentpool.New(agentpool.PoolConfig{
@@ -960,11 +960,20 @@ func RunMCPStdio(version, commit, buildTime string) {
 		ServeStdioOS(ctx)
 }
 
-// resolveWickGateBin finds the wick-gate binary: first next to this
-// executable, then on PATH.
-func resolveWickGateBin() string {
+// resolveGateBin finds the gate binary: first next to this
+// executable, then on PATH. The lookup name is `<AppName>-gate`
+// (or just `gate` when AppName is empty), matching what `wick build`
+// produces in `bin/`. Internal package gate already implements the
+// same resolution for the per-session embed-extracted copy; this
+// helper exists for the GateLoader hot path that runs without a
+// session dir.
+func resolveGateBin() string {
+	base := "gate"
+	if gate.AppName != "" {
+		base = gate.AppName + "-gate"
+	}
 	if exe, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(exe), "wick-gate")
+		candidate := filepath.Join(filepath.Dir(exe), base)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -973,7 +982,7 @@ func resolveWickGateBin() string {
 			return candidate
 		}
 	}
-	if p, err := exec.LookPath("wick-gate"); err == nil {
+	if p, err := exec.LookPath(base); err == nil {
 		return p
 	}
 	return ""

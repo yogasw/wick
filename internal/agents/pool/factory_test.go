@@ -49,7 +49,7 @@ func TestFactoryAttachGate_SocketPath(t *testing.T) {
 		Layout:  config.NewLayout(tmp),
 		Spawner: noopSpawner{},
 		Gate: &GateConfig{
-			WickGateBinary: "/bin/wick-gate",
+			GateBinary:     "/bin/gate",
 			Rules:          []gate.CommandRule{{Pattern: "ls *"}},
 			TempDirRoot:    gateDir,
 			SocketDir:      socketDir,
@@ -76,7 +76,7 @@ func TestFactoryAttachGate_AutoApprovedFor(t *testing.T) {
 		Layout:  config.NewLayout(tmp),
 		Spawner: noopSpawner{},
 		Gate: &GateConfig{
-			WickGateBinary: "/bin/wick-gate",
+			GateBinary:     "/bin/gate",
 			TempDirRoot:    gateDir,
 			AutoApprovedFor: func(sid string) []string {
 				asked = sid
@@ -99,7 +99,7 @@ func TestFactoryAttachGate_AutoApprovedFor(t *testing.T) {
 
 func TestFactoryAttachGate_NoSocketDir(t *testing.T) {
 	// Empty SocketDir = whitelist-only mode. spec.SocketPath stays
-	// empty so wick-gate (Stage 3) never tries to dial a socket.
+	// empty so the gate binary (Stage 3) never tries to dial.
 	tmp := t.TempDir()
 	gateDir := filepath.Join(tmp, "gate-artifacts")
 
@@ -107,7 +107,7 @@ func TestFactoryAttachGate_NoSocketDir(t *testing.T) {
 		Layout:  config.NewLayout(tmp),
 		Spawner: noopSpawner{},
 		Gate: &GateConfig{
-			WickGateBinary: "/bin/wick-gate",
+			GateBinary:     "/bin/gate",
 			TempDirRoot:    gateDir,
 		},
 	}
