@@ -19,6 +19,7 @@ package connectors
 
 import (
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
+	"github.com/yogasw/wick/internal/connectors/postgres"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 )
@@ -44,6 +45,11 @@ func RegisterBuiltins() {
 			Meta:       crudcrud.Meta(),
 			Configs:    entity.StructToConfigs(crudcrud.Configs{}),
 			Operations: crudcrud.Operations(),
+		},
+		connector.Module{
+			Meta:       postgres.Meta(),
+			Configs:    entity.StructToConfigs(postgres.Configs{}),
+			Operations: postgres.Operations(),
 		},
 	)
 }
