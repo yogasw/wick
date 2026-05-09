@@ -169,5 +169,9 @@ type ConnectorOperation struct {
 	ConnectorID  string `gorm:"primaryKey;type:varchar(36)"`
 	OperationKey string `gorm:"primaryKey;type:varchar(100)"`
 	Enabled      bool   `gorm:"default:true"`
-	UpdatedAt    time.Time
+	// AdminOnly restricts this operation to admin users only. Non-admin
+	// MCP callers receive a 403-equivalent error before Execute runs.
+	// Default: false (all authenticated users may call the operation).
+	AdminOnly bool `gorm:"default:false"`
+	UpdatedAt time.Time
 }

@@ -764,6 +764,7 @@ func (h *Handler) handleWickExecute(w http.ResponseWriter, r *http.Request, req 
 		Input:        input,
 		Source:       entity.ConnectorRunSourceMCP,
 		UserID:       user.ID,
+		IsAdmin:      user.IsAdmin(),
 		IPAddress:    clientIP(r),
 		UserAgent:    r.Header.Get("User-Agent"),
 	})

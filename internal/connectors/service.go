@@ -437,6 +437,12 @@ func (s *Service) SetOperationEnabled(ctx context.Context, connectorID, opKey st
 	return s.repo.SetOperation(ctx, connectorID, opKey, enabled)
 }
 
+// SetOperationAdminOnly sets the admin_only restriction for a (connector, op)
+// pair. When true, only admin users may call the operation via MCP.
+func (s *Service) SetOperationAdminOnly(ctx context.Context, connectorID, opKey string, adminOnly bool) error {
+	return s.repo.SetOperationAdminOnly(ctx, connectorID, opKey, adminOnly)
+}
+
 // OperationStates returns the resolved enable state for every op the
 // connector's definition declares: stored toggle when the row exists,
 // otherwise the per-op default (off for Destructive, on for the rest).
@@ -480,6 +486,10 @@ type ExecuteParams struct {
 	UserID       string
 	IPAddress    string
 	UserAgent    string
+	// IsAdmin indicates whether the caller holds admin role. When false,
+	// operations marked AdminOnly in the connector_operations table are
+	// blocked before execution starts.
+	IsAdmin bool
 	// ParentRunID is set when this call replays an earlier run.
 	// Intended for use with Source == ConnectorRunSourceRetry.
 	ParentRunID *string
@@ -547,6 +557,16 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 	if enabled, ok := states[p.OperationKey]; ok && !enabled {
 		return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
+	}
+
+	if !p.IsAdmin {
+		adminOnly, err := s.repo.IsOperationAdminOnly(ctx, c.ID, p.OperationKey)
+		if err != nil {
+			return nil, fmt.Errorf("check op access: %w", err)
+		}
+		if adminOnly {
+			return nil, fmt.Errorf("operation %q is restricted to admin users", p.OperationKey)
+		}
 	}
 
 	// Load the credential map from the configs table — one row per

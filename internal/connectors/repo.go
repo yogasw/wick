@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -268,6 +269,33 @@ func (r *Repo) SetOperation(ctx context.Context, connectorID, opKey string, enab
 		UpdatedAt:    time.Now(),
 	}
 	return r.db.WithContext(ctx).Save(&row).Error
+}
+
+// SetOperationAdminOnly upserts the admin_only flag for a (connector, op)
+// pair without touching the Enabled state. Inserts a new row with
+// Enabled=true (safe default) when no row exists yet.
+func (r *Repo) SetOperationAdminOnly(ctx context.Context, connectorID, opKey string, adminOnly bool) error {
+	return r.db.WithContext(ctx).
+		Where(entity.ConnectorOperation{ConnectorID: connectorID, OperationKey: opKey}).
+		Assign(map[string]any{"admin_only": adminOnly, "updated_at": time.Now()}).
+		FirstOrCreate(&entity.ConnectorOperation{
+			ConnectorID:  connectorID,
+			OperationKey: opKey,
+			Enabled:      true,
+		}).Error
+}
+
+// IsOperationAdminOnly returns true when the stored row has AdminOnly=true.
+// Returns false (not restricted) when no row exists yet.
+func (r *Repo) IsOperationAdminOnly(ctx context.Context, connectorID, opKey string) (bool, error) {
+	var row entity.ConnectorOperation
+	err := r.db.WithContext(ctx).
+		Where("connector_id = ? AND operation_key = ?", connectorID, opKey).
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return row.AdminOnly, err
 }
 
 // ── ConnectorRun (history) ──────────────────────────────────────────
