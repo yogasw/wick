@@ -60,7 +60,7 @@ type GateConfig struct {
 // Build returns a fresh agent + state machine + store wired for one
 // session+agent. Caller (the pool) is responsible for calling
 // agent.Start.
-func (f *ClaudeFactory) Build(opt FactoryOptions) (*provider.Agent, *state.Machine, *store.Store, error) {
+func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	st := state.New(nil)
 	sto := store.New(store.Options{
 		Layout:    f.Layout,
@@ -78,7 +78,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (*provider.Agent, *state.Machi
 	if f.Gate != nil {
 		s, env, err := f.attachGate(opt, spawner)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("attach gate: %w", err)
+			return BuildResult{}, fmt.Errorf("attach gate: %w", err)
 		}
 		spawner = s
 		extraEnv = env
@@ -106,6 +106,10 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (*provider.Agent, *state.Machi
 	spawnStart := time.Now().UTC()
 	if f.SpawnLogger != nil {
 		spawnLogPath = f.SpawnLogger.Path(pType, pName, opt.SessionID, spawnStart)
+		// Pre-start record: what we know before subprocess actually
+		// runs. PID + first message land in a follow-up `start`
+		// event written from OnStarted (after the pool drains the
+		// buffer and reads the OS pid).
 		_ = f.SpawnLogger.Append(spawnLogPath, provider.SpawnEvent{
 			Type:         "start",
 			At:           spawnStart,
@@ -115,6 +119,24 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (*provider.Agent, *state.Machi
 			AgentName:    opt.AgentName,
 			Workspace:    opt.Workspace,
 			ResumeID:     opt.ResumeID,
+		})
+	}
+
+	onStarted := func(meta SpawnStartMeta) {
+		if f.SpawnLogger == nil || spawnLogPath == "" {
+			return
+		}
+		_ = f.SpawnLogger.Append(spawnLogPath, provider.SpawnEvent{
+			Type:             "start",
+			At:               time.Now().UTC(),
+			ProviderType:     pType,
+			ProviderName:     pName,
+			SessionID:        opt.SessionID,
+			AgentName:        opt.AgentName,
+			PID:              meta.PID,
+			Binary:           meta.Binary,
+			Args:             meta.Argv,
+			FirstUserMessage: provider.TruncateFirstMessage(meta.FirstUserMessage),
 		})
 	}
 
@@ -147,7 +169,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (*provider.Agent, *state.Machi
 		OnEvent:       onEvent,
 		OnExit:        onExit,
 	})
-	return a, st, sto, nil
+	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }
 
 // attachGate writes the per-spawn settings.json + spec.json under

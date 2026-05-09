@@ -39,6 +39,7 @@ func (s *fakeSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process, err
 		stdinBuf: &bytes.Buffer{},
 		opt:      opt,
 		done:     make(chan struct{}),
+		pid:      90000 + idx,
 	}
 	s.Last = proc
 
@@ -65,10 +66,14 @@ type fakeProcess struct {
 	opt      SpawnOptions
 	done     chan struct{}
 	once     sync.Once
+	pid      int
 }
 
 func (p *fakeProcess) Stdout() io.Reader     { return p.stdoutR }
 func (p *fakeProcess) Stdin() io.WriteCloser { return &fakeStdin{p: p} }
+func (p *fakeProcess) Pid() int              { return p.pid }
+func (p *fakeProcess) Binary() string        { return "" }
+func (p *fakeProcess) Argv() []string        { return nil }
 
 // Wait blocks until Kill or until stdout writer closes. Mimics how
 // real exec.Cmd.Wait blocks on subprocess exit.
@@ -128,6 +133,7 @@ func (s *keepAliveSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process
 		stdinBuf: &bytes.Buffer{},
 		opt:      opt,
 		done:     make(chan struct{}),
+		pid:      91000,
 	}
 	s.mu.Lock()
 	s.last = proc

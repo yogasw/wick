@@ -1,10 +1,13 @@
 package view
 
+import "fmt"
+
 // AgentsLayout wraps every Agents page with a two-column shell:
 // a fixed left sidebar nav and a flex-1 main content area.
 // The framework's c.HTML already wraps this in the global page shell
 // (navbar + theme), so this component only adds the two-column layout.
 templ AgentsLayout(base, activePage string) {
+	@lifecycleStyles()
 	<div class="mx-auto flex w-full max-w-container gap-0 px-6 pb-8">
 		<aside class="w-44 shrink-0 pt-8 pr-4">
 			<nav class="flex flex-col gap-0.5">
@@ -13,12 +16,91 @@ templ AgentsLayout(base, activePage string) {
 				@agentsNavLink(base+"/workspaces", "Workspaces", activePage == "workspaces")
 				@agentsNavLink(base+"/presets", "Presets", activePage == "presets")
 				@agentsNavLink(base+"/providers", "Providers", activePage == "providers")
+				<div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
+				@agentsNavLink("/admin/tools/agents", "Settings", false)
 			</nav>
 		</aside>
 		<main class="min-w-0 flex-1 pt-8">
 			{ children... }
 		</main>
 	</div>
+}
+
+// kebabAction is one item inside a kebabMenu dropdown. Variant
+// controls the colour scheme — "danger" gets red text + red hover;
+// anything else falls back to neutral.
+type kebabAction struct {
+	Label    string
+	Variant  string
+	DataAttr string // e.g. "data-delete-session"
+	DataVal  string // value paired with DataAttr — usually the row's ID
+}
+
+// kebabActionAttrs renders the per-action data-* attribute as a templ
+// attributes map so callers don't have to spell the binding inline.
+func kebabActionAttrs(a kebabAction) templ.Attributes {
+	if a.DataAttr == "" {
+		return templ.Attributes{}
+	}
+	return templ.Attributes{a.DataAttr: a.DataVal}
+}
+
+// kebabMenu renders a 3-dots vertical button with a dropdown. The
+// dropdown uses <details>/<summary> so it works without JS for show
+// / hide; row-click handlers in agents.js skip elements that live
+// inside [data-row-action] so opening the menu doesn't navigate the
+// row at the same time.
+templ kebabMenu(action kebabAction) {
+	<details class="relative inline-block" data-row-action>
+		<summary
+			class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+			aria-label="More actions"
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor">
+				<circle cx="8" cy="3" r="1.5"></circle>
+				<circle cx="8" cy="8" r="1.5"></circle>
+				<circle cx="8" cy="13" r="1.5"></circle>
+			</svg>
+		</summary>
+		<div class="absolute right-0 mt-1 w-32 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg z-20 py-1">
+			<button
+				type="button"
+				{ kebabActionAttrs(action)... }
+				class={ "block w-full text-left px-3 py-1.5 text-xs transition-colors",
+					templ.KV("text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20", action.Variant == "danger"),
+					templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", action.Variant != "danger"),
+				}
+			>{ action.Label }</button>
+		</div>
+	</details>
+}
+
+// lifecycleStyles is the once-per-page <style> block that drives the
+// lifecycle badge animations. Tailwind has no built-in for the
+// indeterminate ring spin or the centre-dot breathing scale, so we
+// define them here. Stroke-dashoffset (the burning-down idle arc) is
+// transitioned for free so JS can write a fresh value once per second
+// and the ring smooths between frames.
+templ lifecycleStyles() {
+	<style>
+		[data-lifecycle-badge] [data-lifecycle-arc] {
+			transition: stroke-dashoffset 1s linear;
+		}
+		.lifecycle-svg-spin {
+			animation: lifecycle-spin 0.9s linear infinite;
+		}
+		.lifecycle-centre-pulse {
+			transform-origin: center;
+			animation: lifecycle-centre-pulse 1.4s ease-in-out infinite;
+		}
+		@keyframes lifecycle-spin {
+			to { transform: rotate(360deg); }
+		}
+		@keyframes lifecycle-centre-pulse {
+			0%, 100% { opacity: 1; r: 2.5px; }
+			50%      { opacity: 0.5; r: 1.5px; }
+		}
+	</style>
 }
 
 templ agentsNavLink(href, label string, active bool) {
@@ -53,4 +135,115 @@ templ statusBadge(status string) {
 				idle
 			</span>
 	}
+}
+
+// lifecycleBadge renders the per-spawn lifecycle pill consumed by the
+// session detail page + sessions list. The icon side is an SVG with
+// a 24px ring that morphs per state:
+//
+//   spawning : indeterminate spinner (CSS rotate)
+//   working  : full ring + breathing centre dot
+//   idle     : arc shrinking from 100% → 0% as the auto-kill
+//              countdown burns down (JS sets stroke-dashoffset)
+//   killed   : static cross
+//
+// data-* attributes let agents.js mutate the colours, label, ring,
+// and countdown text on every SSE event without a page reload.
+templ lifecycleBadge(lifecycle string, pid int, lastActiveMs int64, idleTimeoutMs int64) {
+	<span
+		data-lifecycle-badge
+		data-lifecycle={ lifecycle }
+		data-pid={ fmt.Sprintf("%d", pid) }
+		data-last-active-ms={ fmt.Sprintf("%d", lastActiveMs) }
+		data-idle-timeout-ms={ fmt.Sprintf("%d", idleTimeoutMs) }
+		title={ lifecycleTooltip(lifecycle, pid) }
+		class={ "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium border",
+			templ.KV("border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300", lifecycle == "spawning"),
+			templ.KV("border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300", lifecycle == "working"),
+			templ.KV("border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300", lifecycle == "idle"),
+			templ.KV("border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300", lifecycle == "killed"),
+			templ.KV("border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-700 dark:text-black-600", lifecycle == ""),
+		}
+	>
+		@lifecycleRing()
+		<span data-lifecycle-label>{ lifecycleLabel(lifecycle) }</span>
+		if lifecycle == "idle" {
+			<span data-lifecycle-countdown class="font-mono text-[10px] opacity-75"></span>
+		}
+		if pid > 0 {
+			<span class="font-mono text-[10px] opacity-60">pid { fmt.Sprintf("%d", pid) }</span>
+		}
+	</span>
+}
+
+// lifecycleRing is the 14px SVG that lives inside lifecycleBadge.
+// One element handles every state — JS toggles classes + attributes
+// on the inner <circle> and centre <g>:
+//
+//   .lifecycle-ring-track    : faint ring, always visible
+//   .lifecycle-ring-progress : the burning-down arc (idle) or full
+//                              ring (working) or rotating arc
+//                              (spawning)
+//   .lifecycle-centre        : dot (working/idle), spinner (spawning),
+//                              or X path (killed)
+//
+// circumference = 2π·6 ≈ 37.7. dasharray hardcoded so JS just sets
+// dashoffset (0 = full ring, 37.7 = empty).
+templ lifecycleRing() {
+	<svg
+		data-lifecycle-ring
+		viewBox="0 0 16 16"
+		class="h-3.5 w-3.5 shrink-0"
+		fill="none"
+	>
+		<circle
+			cx="8" cy="8" r="6"
+			class="opacity-30"
+			stroke="currentColor"
+			stroke-width="1.5"
+		></circle>
+		<circle
+			data-lifecycle-arc
+			cx="8" cy="8" r="6"
+			stroke="currentColor"
+			stroke-width="1.5"
+			stroke-linecap="round"
+			stroke-dasharray="37.7"
+			stroke-dashoffset="0"
+			transform="rotate(-90 8 8)"
+		></circle>
+		<circle
+			data-lifecycle-centre
+			cx="8" cy="8" r="2"
+			fill="currentColor"
+		></circle>
+	</svg>
+}
+
+func lifecycleLabel(l string) string {
+	switch l {
+	case "spawning":
+		return "spawning"
+	case "working":
+		return "working"
+	case "idle":
+		return "idle"
+	case "killed":
+		return "killed"
+	}
+	return "—"
+}
+
+func lifecycleTooltip(l string, pid int) string {
+	switch l {
+	case "spawning":
+		return fmt.Sprintf("subprocess starting (pid %d)", pid)
+	case "working":
+		return fmt.Sprintf("processing turn (pid %d)", pid)
+	case "idle":
+		return fmt.Sprintf("alive but no turn — auto-kill on idle timeout (pid %d)", pid)
+	case "killed":
+		return "subprocess no longer alive"
+	}
+	return "no agent running"
 }

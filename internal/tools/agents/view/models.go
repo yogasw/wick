@@ -8,32 +8,35 @@ import (
 	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
-// OverviewVM holds data for the Overview page.
+// OverviewVM holds data for the Overview page. SessionIDs is the
+// active-only subset (spawning/working/idle) — Killed sessions live
+// in /sessions, not on the Overview. Queued is the per-session FIFO
+// snapshot — operators can kill a queue entry that's been waiting
+// too long.
 type OverviewVM struct {
-	Base       string
-	Active     int
-	QueueLen   int
-	PoolMax    int
-	ActiveList []ActiveAgentVM
-	QueueList  []QueuedAgentVM
-	SessionIDs []string
-	Sessions   map[string]session.Session
+	Base          string
+	Active        int
+	QueueLen      int
+	PoolMax       int
+	SessionIDs    []string
+	Sessions      map[string]session.Session
+	Lifecycle     map[string]SessionLifecycleVM
+	IdleTimeoutMs int64
+	Queued        []QueuedEntryVM
 }
 
-// ActiveAgentVM is the public snapshot of one running agent in the pool.
-type ActiveAgentVM struct {
-	SessionID string
-	AgentName string
-}
-
-// QueuedAgentVM is the public snapshot of one queued request.
-type QueuedAgentVM struct {
+// QueuedEntryVM is one row in the queue panel. WaitingMs drives a
+// "waiting Ns" label so operators see how stale the entry is.
+type QueuedEntryVM struct {
 	SessionID string
 	AgentName string
 	WaitingMs int64
 }
 
-// SessionsListVM holds data for the Sessions list page.
+// SessionsListVM holds data for the Sessions list page. Lifecycle is
+// keyed by session ID so each row can render the live badge — empty
+// means no live entry in the pool (badge falls back to "killed" /
+// no-agent).
 type SessionsListVM struct {
 	Base          string
 	IDs           []string
@@ -41,6 +44,42 @@ type SessionsListVM struct {
 	Workspaces    map[string]workspace.Workspace
 	WorkspaceList []string
 	PresetList    []string
+	Providers     []ProviderChoiceVM
+	Lifecycle     map[string]SessionLifecycleVM
+	IdleTimeoutMs int64
+	Page          int
+	HasNext       bool
+}
+
+// ProviderChoiceVM is one healthy provider row — what the New Session
+// picker offers. Disabled / unprobed / version-failed providers
+// never reach the UI.
+type ProviderChoiceVM struct {
+	Type    string
+	Name    string
+	Version string
+}
+
+// SessionLifecycleVM is the per-row lifecycle snapshot the sessions
+// list table renders. PID + LastActiveMs feed the countdown ring;
+// Lifecycle is the colour key.
+type SessionLifecycleVM struct {
+	Lifecycle    string
+	PID          int
+	LastActiveMs int64
+}
+
+// SessionsTableVM feeds the reusable sessions list table component.
+// The full /sessions page sets ShowPaging=true; the Overview "Active
+// Sessions" panel sets ShowPaging=false and uses a tighter EmptyText.
+type SessionsTableVM struct {
+	Base          string
+	IDs           []string
+	Sessions      map[string]session.Session
+	Lifecycle     map[string]SessionLifecycleVM
+	IdleTimeoutMs int64
+	EmptyText     string
+	ShowPaging    bool
 	Page          int
 	HasNext       bool
 }
@@ -55,12 +94,20 @@ type TurnVM struct {
 }
 
 // SessionDetailVM holds data for the Session detail page.
+//
+// Lifecycle / PID / LastActiveMs / IdleTimeoutMs feed the realtime
+// status badge: the server emits the snapshot at render time and JS
+// updates it from SSE events thereafter.
 type SessionDetailVM struct {
-	Base     string
-	Session  session.Session
-	Tab      string // "conversation" | "commands" | "raw"
-	Turns    []TurnVM
-	CmdLines []string
+	Base          string
+	Session       session.Session
+	Tab           string // "conversation" | "commands" | "raw"
+	Turns         []TurnVM
+	CmdLines      []string
+	Lifecycle     string
+	PID           int
+	LastActiveMs  int64
+	IdleTimeoutMs int64
 }
 
 // WorkspacesVM holds data for the Workspaces page.
@@ -85,11 +132,14 @@ type PresetDetailVM struct {
 }
 
 // ProvidersVM holds data for the Providers page — runtime instance
-// statuses, recent spawn log files, and live pool capacity.
+// statuses, recent spawn log files, and live pool capacity. Spawns
+// is the current page slice; Page/HasNext drive the pager.
 type ProvidersVM struct {
 	Base          string
 	Statuses      []provider.Status
 	Spawns        []provider.SpawnLogFile
+	Page          int
+	HasNext       bool
 	PoolActive    int
 	PoolQueueLen  int
 	PoolMax       int

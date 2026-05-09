@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -244,6 +245,14 @@ func NewServer() *Server {
 			}
 		},
 	}
+	maxConc := 2
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n > 0 {
+		maxConc = n
+	}
+	idleSec := 120
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "idle_timeout_sec")); err == nil && n > 0 {
+		idleSec = n
+	}
 
 	// Wire command gate when gate_enabled=true. The wick-gate binary is
 	// resolved next to the running executable, then falls back to PATH.
@@ -261,13 +270,16 @@ func NewServer() *Server {
 		}
 	}
 	agentsPool = agentpool.New(agentpool.PoolConfig{
-		MaxConcurrent:    2,
-		IdleTimeout:      120 * time.Second,
+		MaxConcurrent:    maxConc,
+		IdleTimeout:      time.Duration(idleSec) * time.Second,
 		Layout:           agentsLayout,
 		Factory:          agentsFactory,
 		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
+		},
+		OnLifecycle: func(ev agentpool.LifecycleEvent) {
+			agentsBcast.PublishLifecycle(ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
 		},
 	})
 	agentstool.SetManager(agentsMgr)

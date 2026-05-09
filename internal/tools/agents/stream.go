@@ -16,12 +16,18 @@ import (
 // a stuck client must never stall the agent reader goroutine.
 const subBuffer = 256
 
-// Event is one SSE payload pushed to browser subscribers.
+// Event is one SSE payload pushed to browser subscribers. Type
+// distinguishes agent stream events ("text_delta", "tool_use", ...)
+// from lifecycle events ("lifecycle"); the latter carry PID +
+// lifecycle label in Data so the UI can update the status badge
+// without re-fetching the page.
 type Event struct {
 	SessionID string `json:"session_id"`
 	AgentName string `json:"agent_name"`
 	Type      string `json:"type"`
 	Data      string `json:"data"`
+	PID       int    `json:"pid,omitempty"`
+	Lifecycle string `json:"lifecycle,omitempty"`
 }
 
 func (e Event) JSON() string {
@@ -80,6 +86,24 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 	if ev.ErrorMsg != "" {
 		payload.Data = ev.ErrorMsg
 	}
+	b.fanout(sessionID, payload)
+}
+
+// PublishLifecycle pushes a lifecycle transition (Spawning, Killed)
+// to subscribers. Idle/Working transitions are inferred from
+// AgentEvent flow on the client side; only the bookend transitions —
+// which never carry an AgentEvent — go through this channel.
+func (b *Broadcaster) PublishLifecycle(sessionID, agentName, lifecycle string, pid int) {
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      "lifecycle",
+		Lifecycle: lifecycle,
+		PID:       pid,
+	})
+}
+
+func (b *Broadcaster) fanout(sessionID string, payload Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for _, key := range []string{sessionID, ""} {
@@ -88,8 +112,8 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 			case ch <- payload:
 			default:
 				log.Warn().
-					Str("session_id", sessionID).
-					Str("agent", agentName).
+					Str("session_id", payload.SessionID).
+					Str("agent", payload.AgentName).
 					Str("event_type", payload.Type).
 					Int("buffer", subBuffer).
 					Msg("sse: subscriber buffer full, dropping event")

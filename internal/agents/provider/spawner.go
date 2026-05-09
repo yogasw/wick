@@ -36,6 +36,20 @@ type Process interface {
 	Stdin() io.WriteCloser
 	Wait() error
 	Kill() error
+	// Pid returns the OS process id of the started subprocess, or 0 if
+	// not applicable (fake spawners in tests). Used by the spawn logger
+	// + Backends UI to verify a re-spawn actually got a new process and
+	// not just the same one looping.
+	Pid() int
+	// Binary is the resolved absolute path of the launched executable
+	// (e.g. "/usr/local/bin/claude"). Empty when the spawner is a test
+	// fake. Logged at spawn-start so operators can debug "claude not
+	// found" / wrong binary issues from the Backends UI alone.
+	Binary() string
+	// Argv is the argument vector handed to the subprocess (excluding
+	// argv[0] = binary). Logged at spawn-start so the operator can
+	// reproduce the spawn manually outside wick.
+	Argv() []string
 }
 
 // Spawner builds a Process from spawn parameters. The agent package

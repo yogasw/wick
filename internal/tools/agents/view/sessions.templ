@@ -32,11 +32,15 @@ templ SessionsList(vm SessionsListVM) {
 						</div>
 						<div>
 							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Provider</label>
-							<select name="provider" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
-								<option value="claude">Claude</option>
-								<option value="codex">Codex</option>
-								<option value="gemini">Gemini</option>
-							</select>
+							if len(vm.Providers) == 0 {
+								<p class="text-xs text-red-600 dark:text-red-400">No healthy providers found. Configure one in <a class="underline" href={ templ.SafeURL(vm.Base + "/providers") }>Providers</a>.</p>
+							} else {
+								<select name="provider" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+									for _, p := range vm.Providers {
+										<option value={ p.Type }>{ p.Type }/{ p.Name } — { p.Version }</option>
+									}
+								</select>
+							}
 						</div>
 						<div class="flex justify-end gap-3 pt-2">
 							<button type="button" onclick="document.getElementById('create-session-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">Cancel</button>
@@ -46,70 +50,88 @@ templ SessionsList(vm SessionsListVM) {
 				</div>
 			</div>
 			<!-- Sessions table -->
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-				if len(vm.IDs) == 0 {
-					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No sessions found.</div>
-				} else {
-					<table class="w-full text-sm">
-						<thead>
-							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-								<th class="px-5 py-3 text-left">Session</th>
-								<th class="px-5 py-3 text-left hidden sm:table-cell">Workspace</th>
-								<th class="px-5 py-3 text-left">Status</th>
-								<th class="px-5 py-3 text-left hidden md:table-cell">Origin</th>
-								<th class="px-5 py-3 text-left hidden lg:table-cell">Last Active</th>
-								<th class="px-5 py-3 text-right">Actions</th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, id := range vm.IDs {
-								if sess, ok := vm.Sessions[id]; ok {
-									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ shortID(id) }</td>
-										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden sm:table-cell">
-											if sess.Meta.Workspace != "" {
-												{ sess.Meta.Workspace }
-											} else {
-												<span class="text-black-600 dark:text-black-700">—</span>
-											}
-										</td>
-										<td class="px-5 py-3">@statusBadge(string(sess.Meta.Status))</td>
-										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ string(sess.Meta.Origin) }</td>
-										<td class="px-5 py-3 text-black-700 dark:text-black-600 hidden lg:table-cell text-xs">{ relTime(sess.Meta.LastActive) }</td>
-										<td class="px-5 py-3 text-right">
-											<div class="flex justify-end gap-2">
-												<a href={ templ.SafeURL(vm.Base + "/sessions/" + id) } class="rounded-md border border-green-500 px-3 py-1 text-xs text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors">Open</a>
-												<button
-													data-delete-session={ id }
-													class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-												>Delete</button>
-											</div>
-										</td>
-									</tr>
-								}
-							}
-						</tbody>
-					</table>
-					if vm.Page > 1 || vm.HasNext {
-						<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
-							if vm.Page > 1 {
-								<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
-							} else {
-								<span></span>
-							}
-							<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
-							if vm.HasNext {
-								<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
-							} else {
-								<span></span>
-							}
-						</div>
-					}
-				}
-			</div>
+			@SessionsTable(SessionsTableVM{
+				Base:          vm.Base,
+				IDs:           vm.IDs,
+				Sessions:      vm.Sessions,
+				Lifecycle:     vm.Lifecycle,
+				IdleTimeoutMs: vm.IdleTimeoutMs,
+				EmptyText:     "No sessions found.",
+				ShowPaging:    true,
+				Page:          vm.Page,
+				HasNext:       vm.HasNext,
+			})
 		</div>
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
 	}
+}
+
+// SessionsTable is the reusable sessions list. The Sessions full page
+// renders it with paging; the Overview "Active Sessions" panel renders
+// it with EmptyText="No active sessions" and ShowPaging=false.
+templ SessionsTable(vm SessionsTableVM) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
+		if len(vm.IDs) == 0 {
+			<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">{ vm.EmptyText }</div>
+		} else {
+			<table class="w-full text-sm">
+				<thead>
+					<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+						<th class="px-5 py-3 text-left">Workspace</th>
+						<th class="px-5 py-3 text-left">Status</th>
+						<th class="px-5 py-3 text-left hidden md:table-cell">Origin</th>
+						<th class="px-5 py-3 text-left hidden lg:table-cell">Last Active</th>
+						<th class="px-5 py-3 text-right w-12"></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, id := range vm.IDs {
+						if sess, ok := vm.Sessions[id]; ok {
+							<tr
+								data-row-link={ vm.Base + "/sessions/" + id }
+								class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+							>
+								<td class="px-5 py-3 text-black-800 dark:text-black-600">
+									if sess.Meta.Workspace != "" {
+										<span class="font-medium text-black-900 dark:text-white-100">{ sess.Meta.Workspace }</span>
+									} else {
+										<span class="text-black-600 dark:text-black-700">—</span>
+									}
+								</td>
+								<td class="px-5 py-3">
+									if lc, ok := vm.Lifecycle[id]; ok {
+										@lifecycleBadge(lc.Lifecycle, lc.PID, lc.LastActiveMs, vm.IdleTimeoutMs)
+									} else {
+										@lifecycleBadge(rowFallbackLifecycle(string(sess.Meta.Status)), 0, 0, vm.IdleTimeoutMs)
+									}
+								</td>
+								<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ string(sess.Meta.Origin) }</td>
+								<td class="px-5 py-3 text-black-700 dark:text-black-600 hidden lg:table-cell text-xs">{ relTime(sess.Meta.LastActive) }</td>
+								<td class="px-5 py-3 text-right">
+									@kebabMenu(kebabAction{Label: "Delete", Variant: "danger", DataAttr: "data-delete-session", DataVal: id})
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+			if vm.ShowPaging && (vm.Page > 1 || vm.HasNext) {
+				<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
+					if vm.Page > 1 {
+						<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
+					} else {
+						<span></span>
+					}
+					<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
+					if vm.HasNext {
+						<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
+					} else {
+						<span></span>
+					}
+				</div>
+			}
+		}
+	</div>
 }
 
 // SessionDetail renders the session detail page with tabs and composer.
@@ -127,7 +149,7 @@ templ SessionDetail(vm SessionDetailVM) {
 						if len(vm.Session.Agents) > 0 {
 							<span>Agent: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Agents[0].Name }</strong> ({ vm.Session.Agents[0].Provider })</span>
 						}
-						@statusBadge(string(vm.Session.Meta.Status))
+						@lifecycleBadge(vm.Lifecycle, vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
 					</div>
 				</div>
 				<div class="flex gap-2">
@@ -224,6 +246,21 @@ templ conversationTurn(t TurnVM) {
 				<div class="rounded-full bg-white-300 dark:bg-navy-600 px-3 py-1 text-xs text-black-700 dark:text-black-600">{ t.Text }</div>
 			</div>
 	}
+}
+
+// rowFallbackLifecycle maps the persisted session.Meta.Status (used
+// when the pool has no live entry for a row) onto a lifecycle the
+// badge renderer understands. Persisted "running" never reaches here
+// because the pool always has a live entry while running; we still
+// map it for completeness.
+func rowFallbackLifecycle(status string) string {
+	switch status {
+	case "running":
+		return "working"
+	case "queued":
+		return "spawning"
+	}
+	return "killed"
 }
 
 // relTime returns a short human-readable relative time string.

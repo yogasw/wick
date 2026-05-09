@@ -63,6 +63,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}", sessionDetail)
 	r.POST("/sessions/{id}/send", sendMessage)
 	r.POST("/sessions/{id}/kill", killAgent)
+	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
 
 	r.GET("/workspaces", workspacesPage)
@@ -99,35 +100,45 @@ func overviewPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	ids := globalMgr.Registry().SessionIDs()
-	recent := ids
-	if len(recent) > 10 {
-		recent = recent[:10]
-	}
+	// Active = sessions whose subprocess is still alive in the pool
+	// (any lifecycle except killed). Cap at 5; rest live in /sessions.
 	active := globalPool.ActiveSnapshot()
-	queued := globalPool.QueueSnapshot()
-	now := time.Now()
-	activeVM := make([]view.ActiveAgentVM, len(active))
-	for i, e := range active {
-		activeVM[i] = view.ActiveAgentVM{SessionID: e.SessionID, AgentName: e.AgentName}
+	const activeCap = 5
+	lc := make(map[string]view.SessionLifecycleVM, len(active))
+	activeIDs := make([]string, 0, len(active))
+	for _, e := range active {
+		entry := view.SessionLifecycleVM{
+			Lifecycle: e.Lifecycle,
+			PID:       e.PID,
+		}
+		if !e.LastActive.IsZero() {
+			entry.LastActiveMs = e.LastActive.UnixMilli()
+		}
+		lc[e.SessionID] = entry
+		if len(activeIDs) < activeCap {
+			activeIDs = append(activeIDs, e.SessionID)
+		}
 	}
-	queueVM := make([]view.QueuedAgentVM, len(queued))
-	for i, q := range queued {
-		queueVM[i] = view.QueuedAgentVM{
+	queue := globalPool.QueueSnapshot()
+	now := time.Now()
+	queued := make([]view.QueuedEntryVM, len(queue))
+	for i, q := range queue {
+		queued[i] = view.QueuedEntryVM{
 			SessionID: q.SessionID,
 			AgentName: q.AgentName,
 			WaitingMs: now.Sub(q.Enqueued).Milliseconds(),
 		}
 	}
 	c.HTML(view.Overview(view.OverviewVM{
-		Base:       c.Base(),
-		Active:     globalPool.Active(),
-		QueueLen:   globalPool.QueueLen(),
-		PoolMax:    globalPool.MaxConcurrent(),
-		ActiveList: activeVM,
-		QueueList:  queueVM,
-		SessionIDs: recent,
-		Sessions:   globalMgr.Registry().Sessions(),
+		Base:          c.Base(),
+		Active:        globalPool.Active(),
+		QueueLen:      globalPool.QueueLen(),
+		PoolMax:       globalPool.MaxConcurrent(),
+		SessionIDs:    activeIDs,
+		Sessions:      globalMgr.Registry().Sessions(),
+		Lifecycle:     lc,
+		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
+		Queued:        queued,
 	}))
 }
 
@@ -151,6 +162,17 @@ func sessionsPage(c *tool.Ctx) {
 	if end > len(ids) {
 		end = len(ids)
 	}
+	lc := make(map[string]view.SessionLifecycleVM)
+	for _, e := range globalPool.ActiveSnapshot() {
+		entry := view.SessionLifecycleVM{
+			Lifecycle: e.Lifecycle,
+			PID:       e.PID,
+		}
+		if !e.LastActive.IsZero() {
+			entry.LastActiveMs = e.LastActive.UnixMilli()
+		}
+		lc[e.SessionID] = entry
+	}
 	c.HTML(view.SessionsList(view.SessionsListVM{
 		Base:          c.Base(),
 		IDs:           ids[start:end],
@@ -158,6 +180,9 @@ func sessionsPage(c *tool.Ctx) {
 		Workspaces:    globalMgr.Registry().Workspaces(),
 		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
 		PresetList:    globalMgr.Registry().PresetNames(),
+		Providers:     providerChoices(c.Context()),
+		Lifecycle:     lc,
+		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
 		Page:          page,
 		HasNext:       end < len(ids),
 	}))
@@ -229,13 +254,26 @@ func sessionDetail(c *tool.Ctx) {
 		}
 		cmdLines = lines
 	}
-	c.HTML(view.SessionDetail(view.SessionDetailVM{
-		Base:     c.Base(),
-		Session:  sess,
-		Tab:      tab,
-		Turns:    turns,
-		CmdLines: cmdLines,
-	}))
+	vm := view.SessionDetailVM{
+		Base:          c.Base(),
+		Session:       sess,
+		Tab:           tab,
+		Turns:         turns,
+		CmdLines:      cmdLines,
+		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
+	}
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.SessionID != id {
+			continue
+		}
+		vm.Lifecycle = e.Lifecycle
+		vm.PID = e.PID
+		if !e.LastActive.IsZero() {
+			vm.LastActiveMs = e.LastActive.UnixMilli()
+		}
+		break
+	}
+	c.HTML(view.SessionDetail(vm))
 }
 
 type sendReq struct {
@@ -276,6 +314,33 @@ func sendMessage(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
+}
+
+func dequeueAgent(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	agentName := sess.Meta.ActiveAgent
+	if agentName == "" && len(sess.Agents) > 0 {
+		agentName = sess.Agents[0].Name
+	}
+	removed := globalPool.Dequeue(id, agentName)
+	_ = session.SaveMeta(globalLayout, id, session.Meta{
+		Workspace:   sess.Meta.Workspace,
+		Origin:      sess.Meta.Origin,
+		ChannelID:   sess.Meta.ChannelID,
+		ActiveAgent: sess.Meta.ActiveAgent,
+		Status:      session.StatusIdle,
+		CreatedAt:   sess.Meta.CreatedAt,
+		LastActive:  time.Now().UTC(),
+	})
+	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
 }
 
 func killAgent(c *tool.Ctx) {

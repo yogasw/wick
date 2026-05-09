@@ -7,93 +7,48 @@ templ Overview(vm OverviewVM) {
 		<div class="space-y-6">
 			<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Overview</h1>
 			<!-- Stats row -->
-			<div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
 				@statCard("Active Slots", fmt.Sprintf("%d / %d", vm.Active, vm.PoolMax), "blue")
 				@statCard("Queued", fmt.Sprintf("%d", vm.QueueLen), "amber")
 				@statCard("Sessions", fmt.Sprintf("%d", len(vm.Sessions)), "green")
-				@statCard("Recent", fmt.Sprintf("%d", len(vm.SessionIDs)), "default")
 			</div>
-			<!-- Pool snapshot -->
-			if len(vm.ActiveList) > 0 || len(vm.QueueList) > 0 {
-				<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-					if len(vm.ActiveList) > 0 {
-						<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-							<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
-								<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Running</h2>
-							</div>
-							<ul class="divide-y divide-white-300 dark:divide-navy-600 text-sm">
-								for _, e := range vm.ActiveList {
-									<li class="flex items-center justify-between px-5 py-2.5">
-										<a href={ templ.SafeURL(vm.Base + "/sessions/" + e.SessionID) } class="font-mono text-xs text-black-900 dark:text-white-100 hover:underline">{ shortID(e.SessionID) }</a>
-										<span class="text-xs text-black-700 dark:text-black-600">{ e.AgentName }</span>
-									</li>
-								}
-							</ul>
-						</div>
-					}
-					if len(vm.QueueList) > 0 {
-						<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-							<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
-								<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Queue</h2>
-							</div>
-							<ul class="divide-y divide-white-300 dark:divide-navy-600 text-sm">
-								for _, q := range vm.QueueList {
-									<li class="flex items-center justify-between px-5 py-2.5">
-										<a href={ templ.SafeURL(vm.Base + "/sessions/" + q.SessionID) } class="font-mono text-xs text-black-900 dark:text-white-100 hover:underline">{ shortID(q.SessionID) }</a>
-										<span class="text-xs text-amber-600 dark:text-amber-400">{ fmt.Sprintf("waiting %ds", q.WaitingMs/1000) }</span>
-									</li>
-								}
-							</ul>
-						</div>
-					}
+			if len(vm.Queued) > 0 {
+				<div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 shadow-sm overflow-visible">
+					<div class="border-b border-amber-300 dark:border-amber-700 px-5 py-3">
+						<h2 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Queue</h2>
+						<p class="text-xs text-amber-700 dark:text-amber-400 mt-0.5">Sessions waiting for a slot. Kill to release.</p>
+					</div>
+					<ul class="divide-y divide-amber-200 dark:divide-amber-800 text-sm">
+						for _, q := range vm.Queued {
+							<li class="flex items-center justify-between px-5 py-2.5">
+								<a href={ templ.SafeURL(vm.Base + "/sessions/" + q.SessionID) } class="font-mono text-xs text-black-900 dark:text-white-100 hover:underline">{ shortID(q.SessionID) }</a>
+								<div class="flex items-center gap-3">
+									<span class="text-xs text-amber-700 dark:text-amber-400">{ fmt.Sprintf("waiting %ds", q.WaitingMs/1000) }</span>
+									<button
+										data-dequeue-session={ q.SessionID }
+										class="rounded-md border border-red-300 dark:border-red-800 px-2 py-0.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+									>Kill</button>
+								</div>
+							</li>
+						}
+					</ul>
 				</div>
 			}
-			<!-- Recent sessions -->
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-				<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 px-5 py-3">
-					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Sessions</h2>
+			<!-- Active sessions (subprocess masih hidup di pool — spawning/working/idle) -->
+			<div class="space-y-2">
+				<div class="flex items-center justify-between">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Active Sessions</h2>
 					<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-xs text-green-600 dark:text-green-400 hover:underline">View all →</a>
 				</div>
-				if len(vm.SessionIDs) == 0 {
-					<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">
-						No sessions yet. <a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-green-600 dark:text-green-400 hover:underline">Create one</a>
-					</div>
-				} else {
-					<table class="w-full text-sm">
-						<thead>
-							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-								<th class="px-5 py-2.5 text-left">Session</th>
-								<th class="px-5 py-2.5 text-left hidden sm:table-cell">Workspace</th>
-								<th class="px-5 py-2.5 text-left">Status</th>
-								<th class="px-5 py-2.5 text-left hidden md:table-cell">Origin</th>
-								<th class="px-5 py-2.5 text-right"></th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, id := range vm.SessionIDs {
-								if sess, ok := vm.Sessions[id]; ok {
-									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ shortID(id) }</td>
-										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden sm:table-cell">
-											if sess.Meta.Workspace != "" {
-												{ sess.Meta.Workspace }
-											} else {
-												<span class="text-black-600 dark:text-black-700">—</span>
-											}
-										</td>
-										<td class="px-5 py-3">
-											@statusBadge(string(sess.Meta.Status))
-										</td>
-										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ string(sess.Meta.Origin) }</td>
-										<td class="px-5 py-3 text-right">
-											<a href={ templ.SafeURL(vm.Base + "/sessions/" + id) } class="text-xs text-green-600 dark:text-green-400 hover:underline">Open →</a>
-										</td>
-									</tr>
-								}
-							}
-						</tbody>
-					</table>
-				}
+				@SessionsTable(SessionsTableVM{
+					Base:          vm.Base,
+					IDs:           vm.SessionIDs,
+					Sessions:      vm.Sessions,
+					Lifecycle:     vm.Lifecycle,
+					IdleTimeoutMs: vm.IdleTimeoutMs,
+					EmptyText:     "No active sessions.",
+					ShowPaging:    false,
+				})
 			</div>
 		</div>
 	}

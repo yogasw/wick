@@ -61,10 +61,18 @@ type SpawnEvent struct {
 	Binary      string    `json:"binary,omitempty"`
 	Args        []string  `json:"args,omitempty"`
 	Env         []string  `json:"env,omitempty"`
-	ExitReason  string    `json:"exit_reason,omitempty"`
-	DurationMs  int64     `json:"duration_ms,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	Message     string    `json:"message,omitempty"`
+	// PID is the OS pid of the started subprocess. Set on the `start`
+	// event after Spawner.Spawn returns; carried on `exit` so listings
+	// can verify the same pid was reaped. 0 = test fake or unknown.
+	PID int `json:"pid,omitempty"`
+	// FirstUserMessage is a short prefix of the user input that
+	// triggered the spawn (truncated). Surfaces in the Backends UI
+	// "Recent Spawns" list so operators see what each spawn was for.
+	FirstUserMessage string    `json:"first_user_message,omitempty"`
+	ExitReason       string    `json:"exit_reason,omitempty"`
+	DurationMs       int64     `json:"duration_ms,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	Message          string    `json:"message,omitempty"`
 }
 
 // Append writes one event to the spawn log file, creating it on first
@@ -87,13 +95,44 @@ func (s *SpawnLogger) Append(path string, ev SpawnEvent) error {
 }
 
 // SpawnLogFile is a parsed metadata view of one spawn log filename —
-// used by the Providers page to filter by `ls` alone.
+// used by the Providers page to filter by `ls` alone. PID +
+// FirstUserMessage + ExitReason + Binary + Argv are populated by List
+// from the file's first/last events (one read per file, cheap because
+// spawn logs are short).
 type SpawnLogFile struct {
-	Path         string
-	ProviderType string
-	ProviderName string
-	SessionID    string
-	StartedAt    time.Time
+	Path             string
+	ProviderType     string
+	ProviderName     string
+	SessionID        string
+	StartedAt        time.Time
+	PID              int
+	FirstUserMessage string
+	Binary           string
+	Argv             []string
+	// ExitReason is "" while the spawn is still alive (no exit event
+	// recorded yet), else "clean" / "idle" / "stopped" / "error".
+	ExitReason string
+}
+
+// FirstMessageWordLimit caps the spawn log's first_user_message at
+// the first N whitespace-separated tokens. Word-based (not byte-based)
+// so the preview reads naturally regardless of language; the UI table
+// stays one line per row.
+const FirstMessageWordLimit = 10
+
+// TruncateFirstMessage keeps the first FirstMessageWordLimit words of
+// text and appends "…" when more content was dropped. Whitespace
+// inside the message is collapsed so multi-line input renders on one
+// line.
+func TruncateFirstMessage(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) <= FirstMessageWordLimit {
+		return strings.Join(fields, " ")
+	}
+	return strings.Join(fields[:FirstMessageWordLimit], " ") + "…"
 }
 
 // List returns parsed metadata for every spawn log file under BaseDir,
@@ -127,6 +166,7 @@ func (s *SpawnLogger) List(providerType, providerName, sessionID string) ([]Spaw
 			continue
 		}
 		f.Path = filepath.Join(s.BaseDir, e.Name())
+		s.enrichFromEvents(&f)
 		out = append(out, f)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -154,6 +194,35 @@ func (s *SpawnLogger) Read(path string) ([]SpawnEvent, error) {
 		out = append(out, ev)
 	}
 	return out, nil
+}
+
+// enrichFromEvents fills PID + FirstUserMessage from the `start` line
+// and ExitReason from the most recent `exit` line, if present. Cheap
+// even on cold disks: spawn log files are typically <10 lines.
+func (s *SpawnLogger) enrichFromEvents(f *SpawnLogFile) {
+	events, err := s.Read(f.Path)
+	if err != nil {
+		return
+	}
+	for _, ev := range events {
+		switch ev.Type {
+		case "start":
+			if ev.PID != 0 {
+				f.PID = ev.PID
+			}
+			if ev.FirstUserMessage != "" {
+				f.FirstUserMessage = ev.FirstUserMessage
+			}
+			if ev.Binary != "" {
+				f.Binary = ev.Binary
+			}
+			if len(ev.Args) > 0 {
+				f.Argv = ev.Args
+			}
+		case "exit":
+			f.ExitReason = ev.ExitReason
+		}
+	}
 }
 
 func parseSpawnLogName(name string) (SpawnLogFile, bool) {

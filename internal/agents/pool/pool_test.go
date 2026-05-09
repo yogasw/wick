@@ -40,6 +40,7 @@ func (s *scriptedSpawner) Spawn(ctx context.Context, opt provider.SpawnOptions) 
 		stdinBuf: &bytes.Buffer{},
 		opt:      opt,
 		done:     make(chan struct{}),
+		pid:      70000 + idx,
 	}
 	s.Last = proc
 	s.Procs = append(s.Procs, proc)
@@ -62,11 +63,15 @@ type scriptedProc struct {
 	opt      provider.SpawnOptions
 	done     chan struct{}
 	once     sync.Once
+	pid      int
 }
 
 func (p *scriptedProc) Stdout() io.Reader     { return p.stdoutR }
 func (p *scriptedProc) Stdin() io.WriteCloser { return &scriptedStdin{p: p} }
 func (p *scriptedProc) Wait() error           { <-p.done; return nil }
+func (p *scriptedProc) Pid() int              { return p.pid }
+func (p *scriptedProc) Binary() string        { return "" }
+func (p *scriptedProc) Argv() []string        { return nil }
 func (p *scriptedProc) Kill() error {
 	p.once.Do(func() {
 		_ = p.stdoutR.Close()

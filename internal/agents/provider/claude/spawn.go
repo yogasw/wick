@@ -175,6 +175,26 @@ type process struct {
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
 func (p *process) Wait() error           { return p.cmd.Wait() }
+func (p *process) Pid() int {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+func (p *process) Binary() string {
+	if p.cmd == nil {
+		return ""
+	}
+	return p.cmd.Path
+}
+func (p *process) Argv() []string {
+	if p.cmd == nil || len(p.cmd.Args) <= 1 {
+		return nil
+	}
+	out := make([]string, len(p.cmd.Args)-1)
+	copy(out, p.cmd.Args[1:])
+	return out
+}
 
 func (p *process) Kill() error {
 	if p.cmd.Process == nil {

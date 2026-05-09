@@ -60,13 +60,59 @@ type PoolConfig struct {
 	// channel message (e.g. Slack thread_ts). Wire this to
 	// manager.Register so the dashboard sees the session immediately.
 	OnSessionCreated func(s session.Session)
+	// OnLifecycle fires when the pool transitions a session+agent's
+	// lifecycle (Spawning, Killed). Idle/Working transitions are
+	// implicit from event flow and are NOT routed here — UIs that
+	// want every transition should subscribe to AgentEvent via
+	// the factory's OnEvent. Optional; nil = no callback.
+	OnLifecycle func(LifecycleEvent)
+}
+
+// LifecycleEvent is emitted for the two transitions the pool drives
+// directly (no parser event triggers them): a fresh spawn coming
+// online, or a subprocess dying. PID is populated for spawning →
+// working; 0 for killed.
+type LifecycleEvent struct {
+	SessionID string
+	AgentName string
+	Lifecycle string // "spawning" | "killed"
+	PID       int
+	At        time.Time
 }
 
 // AgentFactory builds an agent ready to Start. The pool wires the
 // OnExit hook itself (so it can free the slot); the factory should
 // not.
+//
+// BuildResult.OnStarted is called by the pool right after a.Start
+// succeeds — that's when the OS pid is known and the first user
+// message has been drained from the buffer. Factories use it to
+// finish writing the spawn `start` event with both fields. Optional;
+// nil = nothing to record.
 type AgentFactory interface {
-	Build(opt FactoryOptions) (*provider.Agent, *state.Machine, *store.Store, error)
+	Build(opt FactoryOptions) (BuildResult, error)
+}
+
+// BuildResult bundles everything Build returns. New code should pull
+// fields from here; the bare-tuple shape is gone so we don't have to
+// thread one more channel through every callsite when we add another
+// hook later.
+type BuildResult struct {
+	Agent     *provider.Agent
+	State     *state.Machine
+	Store     *store.Store
+	OnStarted func(meta SpawnStartMeta)
+}
+
+// SpawnStartMeta is the post-Start snapshot the pool feeds back to
+// the factory so the spawn log gets a complete `start` record. PID,
+// argv, and binary path are only knowable after Spawner.Spawn
+// returns; FirstUserMessage comes from the buffer drain.
+type SpawnStartMeta struct {
+	PID              int
+	Binary           string
+	Argv             []string
+	FirstUserMessage string
 }
 
 // FactoryOptions is what the pool hands to the factory. ResumeID is
@@ -223,7 +269,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		return err
 	}
 
-	a, st, sto, err := p.cfg.Factory.Build(FactoryOptions{
+	br, err := p.cfg.Factory.Build(FactoryOptions{
 		SessionID:    sessionID,
 		AgentName:    agentName,
 		ProviderType: pType,
@@ -235,6 +281,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	if err != nil {
 		return err
 	}
+	a, st, sto := br.Agent, br.State, br.Store
 	// Wire OnExit so the pool reclaims the slot.
 	key := sessionKey(sessionID, agentName)
 	entry := &runEntry{
@@ -267,9 +314,29 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	if err := p.markStatus(sessionID, session.StatusRunning); err != nil {
 		return err
 	}
+	st.MarkSpawning()
 	if err := a.Start(ctx); err != nil {
 		p.releaseSlot(key)
 		return err
+	}
+	// Spawn metadata (pid + first user message) is only knowable here:
+	// pid arrives from a.Start, first message from the buffer drain.
+	if br.OnStarted != nil {
+		br.OnStarted(SpawnStartMeta{
+			PID:              a.PID(),
+			Binary:           a.Binary(),
+			Argv:             a.Argv(),
+			FirstUserMessage: combined,
+		})
+	}
+	if p.cfg.OnLifecycle != nil {
+		p.cfg.OnLifecycle(LifecycleEvent{
+			SessionID: sessionID,
+			AgentName: agentName,
+			Lifecycle: "spawning",
+			PID:       a.PID(),
+			At:        time.Now().UTC(),
+		})
 	}
 	if combined != "" {
 		if entry.store != nil {
@@ -298,8 +365,21 @@ func (p *Pool) onAgentExit(sessionID, agentName string) {
 	p.wg.Add(1)
 	defer p.wg.Done()
 	key := sessionKey(sessionID, agentName)
+	p.mu.Lock()
+	if entry, ok := p.active[key]; ok && entry.state != nil {
+		entry.state.MarkKilled()
+	}
+	p.mu.Unlock()
 	_ = p.markStatus(sessionID, session.StatusIdle)
 	p.releaseSlot(key)
+	if p.cfg.OnLifecycle != nil {
+		p.cfg.OnLifecycle(LifecycleEvent{
+			SessionID: sessionID,
+			AgentName: agentName,
+			Lifecycle: "killed",
+			At:        time.Now().UTC(),
+		})
+	}
 	p.tryGrantQueue()
 }
 
@@ -520,18 +600,38 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 	defer p.mu.Unlock()
 	out := make([]ActiveEntry, 0, len(p.active))
 	for _, e := range p.active {
-		out = append(out, ActiveEntry{
+		entry := ActiveEntry{
 			SessionID: e.sessID,
 			AgentName: e.agentNm,
-		})
+		}
+		if e.state != nil {
+			entry.Lifecycle = e.state.Lifecycle().String()
+			entry.Substate = e.state.Current().String()
+			entry.LastActive = e.state.LastActive()
+		}
+		if e.agent != nil {
+			entry.PID = e.agent.PID()
+		}
+		out = append(out, entry)
 	}
 	return out
 }
 
+// IdleTimeout returns the configured idle timeout. UI consumers use
+// it to render the auto-kill countdown alongside LastActive.
+func (p *Pool) IdleTimeout() time.Duration { return p.cfg.IdleTimeout }
+
 // ActiveEntry is the public snapshot view of one running agent.
+// Lifecycle / Substate / PID / LastActive are populated when the
+// pool can read them; older callers that only check SessionID + AgentName
+// keep working.
 type ActiveEntry struct {
-	SessionID string
-	AgentName string
+	SessionID  string
+	AgentName  string
+	PID        int
+	Lifecycle  string
+	Substate   string
+	LastActive time.Time
 }
 
 // Kill stops the running agent for sessionID+agentName. Idempotent if
@@ -547,6 +647,26 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 		return nil
 	}
 	return entry.agent.Stop()
+}
+
+// Dequeue drops every queued request matching sessionID+agentName.
+// Returns the number of removed entries — operators use this to
+// cancel a session that has been waiting too long without ever
+// getting a slot. Active spawns are NOT touched; use Kill for that.
+func (p *Pool) Dequeue(sessionID, agentName string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := p.queue[:0]
+	removed := 0
+	for _, q := range p.queue {
+		if q.sessionID == sessionID && q.agentName == agentName {
+			removed++
+			continue
+		}
+		out = append(out, q)
+	}
+	p.queue = out
+	return removed
 }
 
 // HandleExit is the public hook the factory wires into agent.OnExit.

@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,14 +34,30 @@ func providersPage(c *tool.Ctx) {
 		return
 	}
 
+	const perPage = 10
+	page := 1
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
 	var spawns []provider.SpawnLogFile
+	hasNext := false
 	if globalSpawnLog != nil {
-		spawns, err = globalSpawnLog.List("", "", "")
+		all, err := globalSpawnLog.List("", "", "")
 		if err != nil {
 			log.Ctx(c.Context()).Warn().Msgf("providers spawns list: %s", err.Error())
-		}
-		if len(spawns) > 25 {
-			spawns = spawns[:25]
+		} else {
+			start := (page - 1) * perPage
+			if start > len(all) {
+				start = len(all)
+			}
+			end := start + perPage
+			if end > len(all) {
+				end = len(all)
+			}
+			spawns = all[start:end]
+			hasNext = end < len(all)
 		}
 	}
 
@@ -48,6 +65,8 @@ func providersPage(c *tool.Ctx) {
 		Base:          c.Base(),
 		Statuses:      statuses,
 		Spawns:        spawns,
+		Page:          page,
+		HasNext:       hasNext,
 		PoolActive:    globalPool.Active(),
 		PoolQueueLen:  globalPool.QueueLen(),
 		PoolMax:       poolMaxConcurrent(),
@@ -149,6 +168,31 @@ func poolMaxConcurrent() int {
 		return 0
 	}
 	return globalPool.MaxConcurrent()
+}
+
+// providerChoices probes every configured provider and returns only
+// the healthy ones (binary on PATH + --version succeeded + not
+// disabled). Used by every "pick a provider" form so users can't
+// pick a provider that won't spawn.
+func providerChoices(ctx context.Context) []view.ProviderChoiceVM {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	statuses, err := provider.ProbeAll(probeCtx)
+	if err != nil {
+		return nil
+	}
+	out := make([]view.ProviderChoiceVM, 0, len(statuses))
+	for _, st := range statuses {
+		if st.Instance.Disabled || !st.PathFound || st.VersionErr != "" {
+			continue
+		}
+		out = append(out, view.ProviderChoiceVM{
+			Type:    string(st.Instance.Type),
+			Name:    st.Instance.Name,
+			Version: st.Version,
+		})
+	}
+	return out
 }
 
 func supportedTypeKeys() []string {

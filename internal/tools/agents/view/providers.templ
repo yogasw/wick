@@ -33,7 +33,7 @@ templ ProvidersPage(vm ProvidersVM) {
 				}
 			</div>
 			<!-- Recent spawns -->
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
 				<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
 					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
 					<p class="text-xs text-black-700 dark:text-black-600 mt-0.5">One file per spawn under <code class="font-mono">~/.wick/agents/backends/spawns/</code></p>
@@ -46,23 +46,51 @@ templ ProvidersPage(vm ProvidersVM) {
 							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
 								<th class="px-5 py-2.5 text-left">Started</th>
 								<th class="px-5 py-2.5 text-left">Provider</th>
-								<th class="px-5 py-2.5 text-left">Session</th>
-								<th class="px-5 py-2.5 text-right"></th>
+								<th class="px-5 py-2.5 text-left">PID</th>
+								<th class="px-5 py-2.5 text-left">First Message</th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, f := range vm.Spawns {
-								<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+								<tr
+									data-row-link={ vm.Base + "/providers/spawns/" + filenameOf(f.Path) }
+									class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+								>
 									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
 									<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
-									<td class="px-5 py-3 font-mono text-xs text-black-800 dark:text-black-600">{ shortID(f.SessionID) }</td>
-									<td class="px-5 py-3 text-right">
-										<a href={ templ.SafeURL(vm.Base + "/providers/spawns/" + filenameOf(f.Path)) } class="text-xs text-green-600 dark:text-green-400 hover:underline">Open →</a>
+									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
+										if f.PID > 0 {
+											{ fmt.Sprintf("%d", f.PID) }
+										} else {
+											<span class="text-black-600 dark:text-black-700">—</span>
+										}
+									</td>
+									<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600 max-w-xs truncate">
+										if f.FirstUserMessage != "" {
+											{ f.FirstUserMessage }
+										} else {
+											<span class="text-black-600 dark:text-black-700">—</span>
+										}
 									</td>
 								</tr>
 							}
 						</tbody>
 					</table>
+					if vm.Page > 1 || vm.HasNext {
+						<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
+							if vm.Page > 1 {
+								<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
+							} else {
+								<span></span>
+							}
+							<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
+							if vm.HasNext {
+								<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
+							} else {
+								<span></span>
+							}
+						</div>
+					}
 				}
 			</div>
 			<!-- Add custom modal -->
@@ -203,7 +231,14 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 				</div>
 				<a href={ templ.SafeURL(vm.Base + "/providers") } class="text-xs text-green-600 dark:text-green-400 hover:underline">← Back</a>
 			</div>
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+			if vm.File.Binary != "" || len(vm.File.Argv) > 0 {
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-4 space-y-2">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Reproduce</h2>
+					<p class="text-xs text-black-700 dark:text-black-600">Copy this exact command to reproduce the spawn outside wick.</p>
+					<pre class="font-mono text-xs bg-white-200 dark:bg-navy-800 rounded-md p-3 text-black-900 dark:text-white-100 whitespace-pre-wrap break-all select-all">{ shellCommand(vm.File.Binary, vm.File.Argv) }</pre>
+				</div>
+			}
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
 				if len(vm.Events) == 0 {
 					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No events.</div>
 				} else {
@@ -229,6 +264,18 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 								if ev.ResumeID != "" {
 									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">resume: { ev.ResumeID }</p>
 								}
+								if ev.PID != 0 {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600">pid: { fmt.Sprintf("%d", ev.PID) }</p>
+								}
+								if ev.Binary != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">bin: { ev.Binary }</p>
+								}
+								if len(ev.Args) > 0 {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">args: { strings.Join(ev.Args, " ") }</p>
+								}
+								if ev.FirstUserMessage != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">msg: { ev.FirstUserMessage }</p>
+								}
 							</li>
 						}
 					</ul>
@@ -236,6 +283,43 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 			</div>
 		</div>
 	}
+}
+
+// shellCommand renders binary + argv as a copy-pasteable shell line.
+// Args containing whitespace or shell metachars are single-quoted;
+// existing single quotes get the close-quote/escape/open-quote dance
+// so paste-into-bash always works.
+func shellCommand(binary string, argv []string) string {
+	parts := make([]string, 0, len(argv)+1)
+	parts = append(parts, shellQuote(binary))
+	for _, a := range argv {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := true
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.' || r == '/' || r == ':' || r == ',' || r == '=' || r == '@' || r == '+' || r == '%':
+		default:
+			safe = false
+		}
+		if !safe {
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // filenameOf trims everything before the last path separator. Used

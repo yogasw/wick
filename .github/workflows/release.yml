@@ -257,6 +257,20 @@ jobs:
             mv "$docs_tempfile" docs/changelog.md
           fi
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install templ
+        run: go install github.com/a-h/templ/cmd/templ@latest
+
+      - name: Setup Tailwind CLI
+        run: |
+          mkdir -p bin web/public/js web/public/css
+          curl -sSL -o bin/tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-linux-x64
+          chmod +x bin/tailwindcss
+
       - name: Commit, tag, and push
         id: push
         run: |
@@ -266,10 +280,23 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin master
           git checkout -b $BRANCH origin/master
+
+          # Sync commit (clean, no generated files) — basis for branch + PR back to master
           git add template/go.mod.tmpl docs/
           git commit -m "chore: sync go.mod.tmpl and docs for v${VERSION}" || true
-          git tag v${VERSION}
+
+          # Push clean branch first so PR back to master stays generated-file-free
           git push origin $BRANCH
+
+          # Generate templ + tailwind so `go install github.com/yogasw/wick@vX.Y.Z` works
+          # (these files are gitignored, only baked into the tag commit)
+          templ generate ./...
+          ./bin/tailwindcss -i web/src/input.css -o web/public/css/app.css --minify
+
+          # Extra commit on detached state carrying generated files, then tag it
+          git add -f $(find . -name '*_templ.go' -not -path './vendor/*') web/public/css/app.css
+          git commit -m "chore: bundle generated templ + css for v${VERSION}"
+          git tag v${VERSION}
           git push origin v${VERSION}
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
