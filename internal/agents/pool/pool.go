@@ -29,11 +29,12 @@ import (
 type Pool struct {
 	cfg PoolConfig
 
-	mu      sync.Mutex
-	active  map[string]*runEntry // key = sessionKey(sessionID, agentName)
-	queue   []queueEntry
-	buffers map[string]*Buffer // per-session buffer, lazily created
-	closed  bool
+	mu           sync.Mutex
+	active       map[string]*runEntry // key = sessionKey(sessionID, agentName)
+	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
+	queue        []queueEntry
+	buffers      map[string]*Buffer // per-session buffer, lazily created
+	closed       bool
 
 	// wg tracks tryGrantQueue background spawns + onAgentExit work so
 	// Stop can wait for all post-exit disk writes (markStatus, queue
@@ -100,9 +101,10 @@ func New(cfg PoolConfig) *Pool {
 		cfg.IdleTimeout = 120 * time.Second
 	}
 	return &Pool{
-		cfg:     cfg,
-		active:  map[string]*runEntry{},
-		buffers: map[string]*Buffer{},
+		cfg:          cfg,
+		active:       map[string]*runEntry{},
+		spawningKeys: map[string]struct{}{},
+		buffers:      map[string]*Buffer{},
 	}
 }
 
@@ -140,9 +142,22 @@ func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, tex
 	}
 
 	p.mu.Lock()
-	if len(p.active) < p.cfg.MaxConcurrent {
+	// If this session is already mid-spawn, the in-flight spawn's Drain
+	// will pick up the buffered message — nothing more to do here.
+	if _, spawning := p.spawningKeys[key]; spawning {
 		p.mu.Unlock()
-		return p.spawn(ctx, sessionID, agentName, source)
+		return nil
+	}
+	// Count in-flight spawns against the cap so concurrent Sends cannot
+	// each see "slot free" and all call spawn simultaneously.
+	if len(p.active)+len(p.spawningKeys) < p.cfg.MaxConcurrent {
+		p.spawningKeys[key] = struct{}{}
+		p.mu.Unlock()
+		err := p.spawn(ctx, sessionID, agentName, source)
+		p.mu.Lock()
+		delete(p.spawningKeys, key)
+		p.mu.Unlock()
+		return err
 	}
 	// Full — queue the request and update session status.
 	p.queue = append(p.queue, queueEntry{sessionID, agentName, time.Now()})
@@ -268,18 +283,29 @@ func (p *Pool) releaseSlot(key string) {
 // the shutdown barrier.
 func (p *Pool) tryGrantQueue() {
 	p.mu.Lock()
-	if p.closed || len(p.queue) == 0 || len(p.active) >= p.cfg.MaxConcurrent {
+	if p.closed || len(p.queue) == 0 {
+		p.mu.Unlock()
+		return
+	}
+	// Count in-flight spawns — same as Send — so two concurrent exit
+	// hooks cannot both see "slot free" and each pop from the queue.
+	if len(p.active)+len(p.spawningKeys) >= p.cfg.MaxConcurrent {
 		p.mu.Unlock()
 		return
 	}
 	q := p.queue[0]
 	p.queue = p.queue[1:]
+	key := sessionKey(q.sessionID, q.agentName)
+	p.spawningKeys[key] = struct{}{}
 	p.wg.Add(1)
 	p.mu.Unlock()
 	// Background spawn — don't block whoever fired the exit hook.
 	go func() {
 		defer p.wg.Done()
 		_ = p.spawn(context.Background(), q.sessionID, q.agentName, "queue")
+		p.mu.Lock()
+		delete(p.spawningKeys, key)
+		p.mu.Unlock()
 	}()
 }
 
