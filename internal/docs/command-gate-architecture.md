@@ -14,6 +14,8 @@ Dokumen ini menjelaskan:
 - Perbandingan dua pola approval (Claude Code style vs Gate style)
 - Perbandingan empat opsi IPC antara gate dan daemon
 - Detail Unix Domain Socket — cara kerja, keamanan, isi file
+- Bagaimana Web UI perlu render dua jenis interaksi (gate approval + AskUser)
+- Cara release dengan dua binary (`wick` + `wick-gate`) termasuk MSI
 - Rekomendasi akhir dengan justifikasi
 
 ---
@@ -58,94 +60,88 @@ Proses baru hanya di-spawn kalau:
 
 Konsekuensinya: gate bisa block di tengah turn yang sama, Claude tetap menunggu. Tidak ada race condition karena proses mati di tengah jalan.
 
+### 1.4 Built-in vs wick-gate
+
+Claude Code punya dialog permission bawaan (TUI terminal):
+
+```
+Allow this bash command?
+  rtk git status
+  Show working tree status
+
+  1 Yes
+  2 Yes, allow rtk git * for this session
+  3 No
+
+  Tell Claude what to do instead
+```
+
+**Wick sengaja mematikan dialog ini** dengan set `bypassPermissions = true` di `settings.json`, lalu pasang `wick-gate` sebagai penggantinya:
+
+```
+Tanpa Wick → dialog TUI terminal muncul
+Dengan Wick → bypassPermissions = true → dialog mati → wick-gate aktif
+```
+
+| | Claude Code Built-in | wick-gate |
+|---|---|---|
+| UI | Terminal TUI | Web UI Wick |
+| "For this session" | Ada otomatis | Perlu diimplementasi |
+| Siapa yang render | Claude Code harness | Daemon Wick via SSE |
+| Configurable per rule | Terbatas | Full control via spec.json |
+
 ---
 
 ## 2. Dua Pola Approval
 
 Ada dua cara fundamental untuk mendapat konfirmasi user sebelum command jalan.
 
-### 2.1 Pola A — Gate Style (System Intercept)
+### 2.1 Pola A — Gate Style (System Intercept) ✅ REKOMENDASI
 
 System yang memaksa konfirmasi, bukan Claude.
 
 ```
 Step 1:  User kirim pesan ke Claude
 Step 2:  Claude putuskan untuk jalankan command
-         → hook fire → gate dipanggil → gate block
+         → hook fire → gate dipanggil → gate BLOCK
          → UI muncul di user: "Approve rm -rf /data?"
          → user klik Approve
-         → gate exit 0
-         → command jalan (masih dalam turn yang sama)
+         → gate exit 0 → command jalan (masih dalam turn yang sama)
 Step 3:  Claude selesai, balas ke user
 ```
 
-**Flow detail:**
+**Kelebihan:**
+- Jaminan 100% setiap Bash command pasti melewati gate, tidak bisa di-bypass Claude
+- Blocking dalam satu turn — tidak perlu turn baru
+- Audit log otomatis via `commands.jsonl`
 
-```
-User ──────────────────────────────────────────────────────────────────
-  │
-  │  [1] kirim pesan
-  ▼
-Claude (PID 1234) ──────────────────────────────────────────────────────
-  │
-  │  [2] putuskan: jalankan "rm -rf /data"
-  │
-  ├── fork → wick-gate ──────────────────────────────────────────────
-  │              │                                                     │
-  │              │  [3] kirim request ke daemon                        │
-  │              │      {"cmd": "rm -rf /data", "id": "abc"}          │
-  │  NUNGGU      │                                                     │
-  │  exit code   ├── (block di sini sampai daemon balas) ─────────────
-  │              │
-  │              │         Daemon ───────────────────────────────────
-  │              │           │                                        │
-  │              │           │  [4] simpan pending                    │
-  │              │           │  [5] broadcast SSE ke web UI           │
-  │              │           │                                        │
-  │              │         User (Web UI) ────────────────────────────
-  │              │           │                                        │
-  │              │           │  [6] lihat modal approval              │
-  │              │           │  [7] klik "Approve"                    │
-  │              │           │                                        │
-  │              │         Daemon ───────────────────────────────────
-  │              │           │                                        │
-  │              │           │  [8] resolve pending                   │
-  │              │           │  [9] balas ke gate                     │
-  │              │           │      {"decision": "approve"}          │
-  │              │                                                    │
-  │              │  [10] terima response                              │
-  │              └── exit 0 ─────────────────────────────────────────
-  │
-  │  [11] command jalan: rm -rf /data
-  │  [12] balas ke user: "done"
-  ▼
-User menerima hasil
-```
+**Kekurangan:**
+- Lebih kompleks untuk diimplementasi
+- Perlu binary terpisah (`wick-gate`) + endpoint daemon + socket
 
 ### 2.2 Pola B — Claude Code Style (Voluntary Ask)
 
-Claude sendiri yang memutuskan untuk tanya sebelum bertindak.
+Claude sendiri yang memutuskan untuk tanya sebelum bertindak. Ini yang dipakai ketika Claude menampilkan pertanyaan dengan pilihan di chat.
 
 ```
-Step 1:  User kirim pesan
-Step 2:  Claude output: "Mau beneran hapus? (y/n)"
-         → turn selesai, Claude nunggu
-Step 3:  User ketik "y" → masuk sebagai pesan baru
-Step 4:  Claude terima jawaban, jalankan command
+Turn 1: User: "hapus log lama"
+        Claude: "Ini akan hapus /var/log/app.log. Lanjut?" ← turn selesai
+
+Turn 2: User: "iya"
+        Claude: [jalankan: rm /var/log/app.log]
+        Claude: "Berhasil dihapus"
 ```
 
-**Flow detail:**
+Mekanismenya: Claude output `tool_use` dengan nama `AskUserQuestion` ke stream, frontend render jadi UI interaktif, user jawab masuk sebagai tool result ke turn berikutnya.
 
-```
-Turn 1:
-  User: "hapus log lama"
-  Claude: "Ini akan hapus /var/log/app.log. Lanjut?" ← turn selesai
+**Kelebihan:**
+- Tidak perlu gate binary sama sekali
+- Lebih natural, conversational
 
-Turn 2:
-  User: "iya"
-  Claude: [jalankan: rm /var/log/app.log]
-  Claude: "Berhasil dihapus"
-```
+**Kekurangan:**
+- Claude bisa "lupa" untuk tanya → command langsung jalan
+- Tidak bisa jadi security enforcement
+- `AskUserQuestion` adalah tool harness Claude Code — **tidak tersedia** saat Claude jalan sebagai subprocess Wick (`-p` pipe mode)
 
 ### 2.3 Perbandingan Lengkap
 
@@ -159,8 +155,8 @@ Turn 2:
 | **Perlu backend endpoint?** | Ya | Tidak |
 | **Blocking** | Dalam turn yang sama | Butuh turn baru |
 | **Channel komunikasi** | IPC (socket/pipe) | stdin/stdout turn-based |
+| **Tersedia di Wick subprocess** | Ya (kita yang pasang) | Tidak (harness-only) |
 | **Cocok untuk** | Security-critical, audit wajib | UX conversational, low-risk |
-| **Kompleksitas implementasi** | Lebih kompleks | Sederhana |
 
 ### 2.4 Kapan Pakai Yang Mana?
 
@@ -168,11 +164,10 @@ Turn 2:
 Butuh JAMINAN bahwa setiap command pasti di-approve?
 ├── Ya → Pola A (Gate Style)
 └── Tidak
-    ├── Cukup Claude tanya sendiri untuk action besar? → Pola B (Claude Code Style)
-    └── Gabungan? → Pola A untuk destructive commands, Pola B untuk read-only
+    └── Cukup Claude tanya sendiri untuk action besar? → Pola B (Claude Code Style)
 ```
 
-**Rekomendasi**: untuk mid-session approval system, pakai **Pola A**. Pola B tidak bisa menjamin intercept.
+**Keputusan**: Wick pakai **Pola A** untuk enforcement. Pola B tidak bisa menjamin intercept dan tidak tersedia di pipe mode.
 
 ---
 
@@ -182,112 +177,64 @@ Gate adalah subprocess terpisah dari daemon. Mereka perlu berkomunikasi. Ada emp
 
 ### 3.1 HTTP (TCP)
 
-Gate kirim HTTP POST ke daemon yang listen di port tertentu.
-
 ```go
 // gate
 resp, _ := http.Post("http://localhost:9425/api/agents/approve",
     "application/json", payload)
-
-// daemon
-http.HandleFunc("/api/agents/approve", func(w http.ResponseWriter, r *http.Request) {
-    // tunggu user → tulis response
-})
-```
-
-**Diagram:**
-
-```
-gate ──── TCP :9425 ────► daemon
-     ◄─────────────────── response
 ```
 
 | | |
 |---|---|
-| **Kelebihan** | Familiar, tooling lengkap (curl, Postman), mudah debug |
-| **Kekurangan** | Port bisa di-akses dari network, perlu auth, overhead protokol HTTP |
-| **Performa** | ~1-5ms overhead TCP handshake + HTTP parsing |
-| **Keamanan** | Perlu bind ke 127.0.0.1 + auth token, tetap ada risiko port scanning |
-| **Cocok untuk** | Multi-machine, publik API |
+| **Kelebihan** | Familiar, tooling lengkap (curl debug), mudah test |
+| **Kekurangan** | Port bisa diakses dari network, perlu auth token, overhead HTTP |
+| **Performa** | ~1-5ms (TCP handshake + HTTP parsing) |
+| **Keamanan** | Harus bind 127.0.0.1 + auth, tetap ada risiko port scanning |
 
-### 3.2 Unix Domain Socket ✅ REKOMENDASI
-
-Gate connect ke file socket di filesystem, kirim/terima raw JSON.
+### 3.2 Unix Domain Socket ✅ DIPILIH
 
 ```go
 // gate
 conn, _ := net.Dial("unix", "~/.wick/sessions/<id>/gate.sock")
 json.NewEncoder(conn).Encode(request)
-json.NewDecoder(conn).Decode(&response)
-
-// daemon
-ln, _ := net.Listen("unix", "~/.wick/sessions/<id>/gate.sock")
-conn, _ := ln.Accept()
-json.NewDecoder(conn).Decode(&req)
-// ... tunggu user ...
-json.NewEncoder(conn).Encode(response)
-```
-
-**Diagram:**
-
-```
-gate ──── gate.sock ────► daemon
-     ◄─────────────────── response
-     (lewat kernel buffer, tidak ke disk)
+json.NewDecoder(conn).Decode(&response)  // blocking sampai daemon balas
 ```
 
 | | |
 |---|---|
-| **Kelebihan** | Tidak ada network exposure, akses dikontrol file permission, zero port, cepat |
+| **Kelebihan** | Zero network exposure, akses via file permission, zero port, cepat |
 | **Kekurangan** | Hanya lokal, satu machine |
 | **Performa** | ~0.1ms, tanpa TCP overhead, tanpa HTTP parsing |
-| **Keamanan** | Kontrol via chmod + chown, tidak bisa diakses dari network |
-| **Cocok untuk** | Local IPC — persis use case ini |
+| **Keamanan** | chmod 0600 cukup, tidak bisa diakses dari network sama sekali |
+| **OS Support** | Linux ✅, macOS ✅, Windows 10 build 1803+ ✅ |
 
 ### 3.3 Named Pipe / FIFO
 
-Dua file FIFO: satu untuk request, satu untuk response.
-
 ```bash
 mkfifo gate-req.fifo gate-res.fifo
-
-# gate: tulis ke req, baca dari res
-# daemon: baca dari req, tulis ke res
-```
-
-**Diagram:**
-
-```
-gate ──── gate-req.fifo ────► daemon
-     ◄─── gate-res.fifo ───── daemon
+# gate: tulis ke req → baca dari res
+# daemon: baca dari req → tulis ke res
 ```
 
 | | |
 |---|---|
-| **Kelebihan** | Zero dependency, paling primitif, ada di semua Unix |
-| **Kekurangan** | Perlu dua file per session, satu koneksi sekaligus, tidak bisa concurrent |
-| **Performa** | ~0.1ms, sama seperti Unix socket |
-| **Keamanan** | File permission sama, tapi tidak bisa concurrent requests |
-| **Cocok untuk** | Skenario sangat sederhana, satu gate satu daemon |
+| **Kelebihan** | Zero dependency, primitif, ada di semua Unix |
+| **Kekurangan** | Perlu dua file per session, tidak bisa concurrent requests |
+| **Performa** | ~0.1ms |
 
 ### 3.4 File + inotify / Polling
 
-Gate tulis file "pending", daemon watch direktori, daemon tulis file "decision".
-
 ```
 gate tulis → ~/.wick/sessions/<id>/gate/pending/abc123.json
-daemon watch dir → baca file → proses → hapus
+daemon watch dir → baca → proses
 daemon tulis → ~/.wick/sessions/<id>/gate/decision/abc123.json
-gate poll / watch → baca decision
+gate poll / watch → baca
 ```
 
 | | |
 |---|---|
-| **Kelebihan** | Audit trail otomatis (file tersisa), debuggable, survives restart |
-| **Kekurangan** | Polling = latency, inotify = extra dependency, bersih-bersih file |
+| **Kelebihan** | Audit trail otomatis, debuggable dengan `cat` |
+| **Kekurangan** | Polling = latency, file di disk = risiko leak credential |
 | **Performa** | 10-100ms kalau polling, ~1ms kalau inotify |
-| **Keamanan** | File permission, tapi file di disk = risiko leak credential di command |
-| **Cocok untuk** | Audit log use case, bukan real-time approval |
 
 ### 3.5 Perbandingan Empat Opsi
 
@@ -297,31 +244,31 @@ gate poll / watch → baca decision
 | **Concurrent requests** | Ya | Ya | Tidak | Ya (per file) |
 | **Overhead** | Tinggi | Rendah | Rendah | Tinggi (polling) |
 | **Debug** | Mudah (curl) | Sedang | Sulit | Mudah (cat file) |
-| **Auth diperlukan** | Ya | Tidak (chmod cukup) | Tidak | Tidak |
-| **Bidirectional** | Ya (req/resp) | Ya | Perlu 2 pipe | Perlu 2 dir |
-| **Implementasi** | Mudah | Mudah | Sedang | Sedang |
-| **Go stdlib** | `net/http` | `net.Listen("unix")` | `os.OpenFile` | `os` + polling |
+| **Auth diperlukan** | Ya | Tidak | Tidak | Tidak |
+| **Bidirectional** | Ya | Ya | Perlu 2 pipe | Perlu 2 dir |
+| **Windows support** | Ya | Build 1803+ | Tidak | Ya |
+| **Implementasi Go** | `net/http` | `net.Listen("unix")` | `os.OpenFile` | `os` + poll |
+
+**Keputusan: Unix socket.** Tidak ada network exposure, performa terbaik, implementasi hampir sama dengan HTTP tapi ganti `tcp` → `unix`.
 
 ---
 
 ## 4. Deep Dive: Unix Domain Socket
 
-### 4.1 Apa itu Socket File?
+### 4.1 Apa Itu File Socket?
 
-Socket file (`gate.sock`) **bukan file biasa**. Tidak ada data di dalamnya.
+Socket file **bukan file biasa**. Tidak ada data di dalamnya.
 
 ```bash
 $ ls -la gate.sock
 srwxr-xr-x 1 user user 0 May 9 10:00 gate.sock
-# ^
-# "s" = socket type, bukan regular file "-"
-# Ukuran selalu 0 bytes
+# ^--- "s" = socket, bukan "-" regular file. Ukuran selalu 0 bytes.
 
 $ cat gate.sock
 cat: gate.sock: No such device or address  ← tidak bisa dibaca seperti file
 ```
 
-Socket file adalah **alamat titik temu** — seperti nomor telepon. Data yang sebenarnya mengalir di kernel memory buffer, tidak pernah menyentuh disk.
+Socket file adalah **alamat titik temu** — seperti nomor telepon. Data mengalir di kernel memory buffer, tidak pernah menyentuh disk.
 
 ```
 gate.sock di filesystem
@@ -336,7 +283,7 @@ gate.sock di filesystem
                        tidak pernah ke disk
 ```
 
-**Analogi**: colokan listrik di dinding. Tidak ada "isi" di colokannya, tapi kalau kamu colok sesuatu, listrik mengalir.
+**Analogi**: colokan listrik di dinding. Tidak ada "isi" di colokan, tapi kalau kamu colok sesuatu, arus mengalir.
 
 ### 4.2 Protokol: Raw JSON Newline-Delimited
 
@@ -347,255 +294,229 @@ gate → daemon:   {"id":"abc","cmd":"rm -rf /data","agent":"backend"}\n
 daemon → gate:   {"decision":"block","reason":"destructive command"}\n
 ```
 
-Di Go:
+Di Go, `json.NewEncoder` otomatis append newline, `json.NewDecoder` blocking sampai ada data:
 
 ```go
-// Kirim: satu encode = satu baris JSON + newline otomatis
+// Kirim — satu baris JSON + newline otomatis
 json.NewEncoder(conn).Encode(req)
 
-// Terima: baca sampai newline, parse JSON
+// Terima — blocking sampai daemon tulis jawaban
 json.NewDecoder(conn).Decode(&resp)
 ```
 
-`json.NewDecoder` blocking sampai ada data masuk — inilah yang bikin gate "nunggu" tanpa aktif polling.
-
-### 4.3 Keamanan Unix Socket
-
-**Kenapa lebih aman dari HTTP:**
-
-| Ancaman | HTTP :9425 | Unix Socket |
-|---|---|---|
-| Akses dari network | Ya, kalau firewall bocor | Tidak mungkin — by design |
-| Port scanning | Terdeteksi | Tidak ada port |
-| Proses lain di machine sama | Bisa connect ke port | Hanya kalau tahu path + punya permission |
-| Brute force auth | Bisa | Tidak relevan |
-
-**Yang perlu dijaga:**
+### 4.3 Keamanan
 
 ```
-❌ /tmp/wick.sock
-   Masalah: /tmp world-writable, proses lain bisa connect
-
-✅ ~/.wick/sessions/<id>/gate.sock
-   Aman: direktori ini chmod 700, hanya owner yang akses
+❌ /tmp/wick.sock        — /tmp world-writable, proses lain bisa connect
+✅ ~/.wick/sessions/<id>/gate.sock  — direktori chmod 700, hanya owner
 ```
-
-**Set permission socket:**
 
 ```go
 ln, _ := net.Listen("unix", socketPath)
-os.Chmod(socketPath, 0600)  // hanya owner bisa connect
+os.Chmod(socketPath, 0600)  // hanya owner bisa read/write socket ini
 ```
 
-**Opsional: verify peer credentials (SO_PEERCRED)**
-
-```go
-// Pastikan yang connect adalah wick-gate dengan UID yang benar
-uc := conn.(*net.UnixConn)
-raw, _ := uc.SyscallConn()
-raw.Control(func(fd uintptr) {
-    cred, _ := syscall.GetsockoptUcred(int(fd),
-        syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-    if cred.Uid != uint32(os.Getuid()) {
-        conn.Close()  // reject
-    }
-})
-```
-
-Untuk use case Wick, taruh socket di session directory sudah cukup tanpa SO_PEERCRED.
+Kalau mau lebih ketat, bisa verify peer credentials (`SO_PEERCRED`) untuk pastikan hanya `wick-gate` dengan UID yang benar yang bisa connect — tapi untuk Wick, `chmod 0600` di session directory sudah cukup.
 
 ### 4.4 Lifecycle Socket File
 
 ```
 Daemon start:
-  1. os.Remove(socketPath)     ← hapus sisa dari run sebelumnya
-  2. net.Listen("unix", path)  ← buat socket baru
-  3. os.Chmod(path, 0600)      ← lock permission
+  1. os.Remove(socketPath)      ← hapus sisa run sebelumnya
+  2. net.Listen("unix", path)   ← buat socket baru
+  3. os.Chmod(path, 0600)       ← lock permission
 
 Daemon running:
-  ← menerima koneksi masuk
-  ← handle concurrent requests (goroutine per connection)
+  ← terima koneksi masuk (goroutine per connection)
 
-Daemon stop:
-  4. ln.Close()                ← stop accept
-  5. os.Remove(socketPath)     ← bersihkan (optional, step 1 sudah handle)
+Daemon crash/stop:
+  File socket tetap ada di disk tapi tidak bisa di-connect
+  Gate: connect() → "connection refused" → fail-safe exit 2
 
-Kalau daemon mati mendadak (crash):
-  Gate: connect() → "connection refused"
-  Gate: fail-safe → exit 2 (block)  ← aman by default
+Daemon restart:
+  Step 1 hapus sisa → socket baru, tidak ada konflik
 ```
 
 ---
 
 ## 5. Flow Lengkap: Mid-Session Approval
 
-Ini adalah flow end-to-end untuk Pola A (Gate Style) dengan Unix Socket.
-
-### 5.1 Happy Path: User Approve
+### 5.1 Happy Path — User Approve
 
 ```
-Claude (PID 1234)          wick-gate           daemon          User (Web)
-      │                        │                  │                │
-      │ [1] mau jalankan       │                  │                │
-      │     "git clone ABC"    │                  │                │
-      │                        │                  │                │
-      ├──fork──────────────────►                  │                │
-      │   (nunggu exit code)   │                  │                │
-      │                        │ [2] connect      │                │
-      │                        ├─────────────────►│                │
-      │                        │                  │                │
-      │                        │ [3] send JSON    │                │
-      │                        │ {"id":"x",       │                │
-      │                        │  "cmd":"git..."}│                │
-      │                        ├─────────────────►│                │
-      │                        │                  │                │
-      │                        │   (blocking      │ [4] simpan     │
-      │                        │    di sini)      │  pending["x"]  │
-      │                        │                  │                │
-      │                        │                  │ [5] SSE event  │
-      │                        │                  ├───────────────►│
-      │                        │                  │                │
-      │                        │                  │                │ [6] render modal
-      │                        │                  │                │ "Approve git clone ABC?"
-      │                        │                  │                │ [Approve] [Block]
-      │                        │                  │                │
-      │                        │                  │ [7] POST       │
-      │                        │                  │ /approve {"id":"x",
-      │                        │                  │ "decision":"approve"}
-      │                        │                  │◄───────────────┤
-      │                        │                  │                │
-      │                        │ [8] {"decision": │                │
-      │                        │    "approve"}    │                │
-      │                        │◄─────────────────┤                │
-      │                        │                  │                │
-      │                        │ [9] close conn   │                │
-      │                        ├─────────────────►│                │
-      │                        │                  │                │
-      │◄───────────────────────┤                  │                │
-      │   exit 0               │                  │                │
-      │                        │                  │                │
-      │ [10] git clone ABC     │                  │                │
-      │      (jalan!)          │                  │                │
+Claude (PID 1234)        wick-gate          daemon         User (Web)
+      │                      │                 │               │
+      │ mau jalankan         │                 │               │
+      │ "git clone ABC"      │                 │               │
+      ├──fork────────────────►                 │               │
+      │  (nunggu exit code)  │                 │               │
+      │                      ├──connect────────►               │
+      │                      ├──{"id":"x",     │               │
+      │                      │   "cmd":"git"}──►               │
+      │                      │  (BLOCK di sini)│               │
+      │                      │                 ├──SSE event────►
+      │                      │                 │               │ render modal:
+      │                      │                 │               │ "Approve git clone?"
+      │                      │                 │               │ [Approve] [Block]
+      │                      │                 │◄──POST /approve┤
+      │                      │                 │  {"decision":  │
+      │                      │                 │   "approve"}   │
+      │                      │◄──{"decision":  │               │
+      │                      │    "approve"}───┤               │
+      │◄──exit 0─────────────┤                 │               │
+      │                      │                 │               │
+      │ git clone ABC jalan  │                 │               │
 ```
 
-### 5.2 Sad Path: User Block
+### 5.2 User Block
+
+Sama sampai modal muncul, user klik Block:
 
 ```
-      ...sama sampai step [7], tapi user klik Block...
-
-      │                        │ {"decision":     │                │
-      │                        │    "block"}      │                │
-      │                        │◄─────────────────┤                │
-      │                        │                  │                │
-      │◄───────────────────────┤                  │                │
-      │   exit 2               │                  │                │
-      │                        │                  │                │
-      │ [tool blocked]         │                  │                │
-      │ Claude: "Command       │                  │                │
-      │  blocked by user"      │                  │                │
+      │◄──{"decision":"block"}──┤
+      │◄──exit 2────────────────┤
+      │
+      │ [tool blocked]
+      │ Claude: "Command blocked by user"
 ```
 
-### 5.3 Sad Path: Timeout (User Tidak Respond)
+### 5.3 Timeout (User Tidak Respond)
 
 ```
-      ...gate connect, kirim request...
-      ...daemon set deadline 25 detik (< hook timeout 30 detik)...
-
-      Setelah 25 detik:
-      daemon: deadline exceeded → tulis {"decision":"block"}
-      gate: terima response → exit 2
-
-      Claude: "Command blocked (timeout)"
+Daemon set deadline 25 detik (< hook timeout 30 detik Claude)
+Setelah 25 detik:
+  daemon → {"decision":"block","reason":"timeout"}
+  gate → exit 2
+  Claude: "Command blocked (timeout)"
 ```
 
-### 5.4 Sad Path: Daemon Tidak Jalan
+### 5.4 Daemon Tidak Jalan
 
 ```
-      gate: connect() → "no such file or address" atau "connection refused"
-      gate: fail-safe → exit 2 (block semua)
+gate: connect() → "no such file" atau "connection refused"
+gate: fail-safe → exit 2 (block semua)
+Claude: "Command blocked"
 ```
 
 ---
 
-## 6. Struktur Data
+## 6. Web UI: Dua Jenis Interaksi
 
-### 6.1 Request (Gate → Daemon)
+Web UI Wick perlu handle **dua jenis interaksi yang berbeda** yang keduanya muncul dari SSE stream.
+
+### 6.1 Gate Approval (Baru)
+
+Dipicu saat `wick-gate` mengirim request ke daemon. Daemon broadcast SSE event dengan tipe baru.
+
+**SSE event dari daemon:**
+
+```json
+{
+  "session_id": "sess_xyz",
+  "agent_name": "backend",
+  "type": "approval_request",
+  "data": "{\"id\":\"abc123\",\"cmd\":\"rm -rf /data\",\"tool\":\"Bash\",\"work_dir\":\"/home/user/project\"}"
+}
+```
+
+**Yang perlu dirender:** modal/card dengan tombol Approve dan Block, menampilkan command yang mau dieksekusi.
+
+**Response dari UI:** `POST /api/agents/sessions/{id}/approve` dengan `{"id":"abc123","decision":"approve"}`.
+
+**Timing:** harus dijawab dalam 25 detik atau otomatis di-block oleh daemon.
+
+### 6.2 AskUser dari Claude (Sekarang sudah ada sebagian)
+
+Ketika Claude output event `tool_use` dari stream dengan nama tool tertentu yang berisi pertanyaan ke user.
+
+> **Catatan:** `AskUserQuestion` adalah tool harness Claude Code CLI (mode interaktif). Di Wick, Claude jalan dengan `-p` (pipe mode) sehingga tool ini **tidak tersedia**. Tapi Claude masih bisa output teks dengan pilihan sebagai bagian dari response biasa — ini turn-based, bukan blocking.
+
+Kalau ke depan Wick ingin support interactive question dari Claude (yang blocking), perlu:
+1. Detect event tipe `tool_use` dengan nama khusus di stream parser
+2. Render UI pilihan
+3. Inject tool result ke stdin Claude
+
+Ini berbeda dari gate approval karena tidak ada binary yang nunggu exit code.
+
+### 6.3 Perbedaan Dua Interaksi di UI
+
+| | Gate Approval | AskUser Claude |
+|---|---|---|
+| **Trigger** | SSE `type: approval_request` | SSE `type: tool_use` (nama khusus) |
+| **Deadline** | Ya, 25 detik | Tidak (Claude nunggu turn baru) |
+| **Response ke** | `POST /approve` → daemon → gate | `POST /send` → stdin Claude (turn baru) |
+| **Claude state** | Sedang nunggu (mid-turn) | Sudah selesai turn, nunggu input |
+| **Visual** | Modal dengan countdown timer | Card/inline dengan pilihan |
+| **Bisa diabaikan?** | Tidak (auto-block setelah timeout) | Ya (Claude nunggu terus) |
+
+### 6.4 Existing SSE Infrastructure
+
+Wick sudah punya `Broadcaster` di `internal/tools/agents/stream.go` yang fan-out events ke semua SSE subscriber. Event shape yang sudah ada:
+
+```go
+type Event struct {
+    SessionID string `json:"session_id"`
+    AgentName string `json:"agent_name"`
+    Type      string `json:"type"`   // existing: "text", "tool_use", "result", dll.
+    Data      string `json:"data"`
+}
+```
+
+Untuk gate approval, cukup tambah `type: "approval_request"` dan publish via broadcaster yang sama. Frontend tinggal handle tipe baru ini.
+
+---
+
+## 7. Struktur Data
+
+### 7.1 Request: Gate → Daemon
 
 ```go
 type ApprovalRequest struct {
-    ID        string `json:"id"`         // unique per request, UUID
-    SessionID string `json:"session_id"` // untuk daemon routing
-    Agent     string `json:"agent"`      // nama agent (misal: "backend")
+    ID        string `json:"id"`         // UUID per request
+    SessionID string `json:"session_id"`
+    Agent     string `json:"agent"`      // "backend", dll.
     Tool      string `json:"tool"`       // "Bash", "Edit", dll.
     Cmd       string `json:"cmd"`        // command yang mau dieksekusi
-    WorkDir   string `json:"work_dir"`   // current working directory
+    WorkDir   string `json:"work_dir"`   // cwd saat eksekusi
     Timestamp int64  `json:"ts"`         // unix ms
 }
 ```
 
-### 6.2 Response (Daemon → Gate)
+### 7.2 Response: Daemon → Gate
 
 ```go
 type ApprovalResponse struct {
     ID       string `json:"id"`       // sama dengan request ID
     Decision string `json:"decision"` // "approve" atau "block"
-    Reason   string `json:"reason"`   // opsional, alasan block
+    Reason   string `json:"reason"`   // opsional
 }
 ```
 
-### 6.3 SSE Event (Daemon → Web UI)
-
-```json
-{
-    "type": "approval_request",
-    "id": "abc123",
-    "session_id": "sess_xyz",
-    "agent": "backend",
-    "tool": "Bash",
-    "cmd": "rm -rf /data",
-    "work_dir": "/home/user/project",
-    "ts": 1746787200000
-}
-```
-
-### 6.4 HTTP Endpoint (Web UI → Daemon)
-
-```
-POST /api/agents/sessions/{id}/approve
-Content-Type: application/json
-
-{
-    "id": "abc123",
-    "decision": "approve"
-}
-```
-
----
-
-## 7. State Machine di Daemon
+### 7.3 State Machine di Daemon
 
 ```
 [idle]
   │
   │ gate connect + send request
   ▼
-[pending] ─── timeout (25s) ──────────────────► [resolved: block]
-  │                                                    │
-  │ user klik Approve                                  │
-  ▼                                                    │
-[resolved: approve]                                    │
-  │                                                    │
-  └────────────────────────────────────────────────────┘
-                         │
-                         ▼
-               tulis response ke socket
-               hapus dari pending map
-                         │
-                         ▼
-                      [idle]
+[pending] ─── 25s timeout ──────────────────────► [auto-block]
+  │                                                     │
+  │ user klik Approve                                   │
+  ▼                                                     │
+[approved]                                             │
+  │                                                     │
+  └──────────────────────────────────────────────────── ┘
+                        │
+                        ▼
+              tulis response ke socket
+              broadcast SSE "approval_resolved"
+              hapus dari pending map
+                        │
+                        ▼
+                     [idle]
 ```
 
-**Concurrent requests**: daemon bisa pegang banyak pending sekaligus (map[id]channel). Tiap goroutine handle satu koneksi gate, block di channel sampai user decide.
+**Concurrent requests** — daemon pegang banyak pending sekaligus dengan `sync.Map` + channel per connection:
 
 ```go
 type pendingApproval struct {
@@ -603,9 +524,9 @@ type pendingApproval struct {
     ch  chan ApprovalResponse
 }
 
-var pending = sync.Map{} // map[id]pendingApproval
+var pending sync.Map // map[id]pendingApproval
 
-// Gate handler goroutine:
+// per goroutine (satu per koneksi gate):
 ch := make(chan ApprovalResponse, 1)
 pending.Store(req.ID, pendingApproval{req, ch})
 defer pending.Delete(req.ID)
@@ -614,13 +535,134 @@ select {
 case resp := <-ch:
     json.NewEncoder(conn).Encode(resp)
 case <-time.After(25 * time.Second):
-    json.NewEncoder(conn).Encode(ApprovalResponse{Decision: "block", Reason: "timeout"})
+    json.NewEncoder(conn).Encode(ApprovalResponse{
+        Decision: "block", Reason: "timeout",
+    })
 }
 ```
 
 ---
 
-## 8. Lokasi File di Filesystem
+## 8. Release: Dua Binary
+
+Wick saat ini punya satu binary utama. Untuk mid-session approval, perlu ship **dua binary**:
+
+| Binary | Fungsi |
+|---|---|
+| `wick` (atau nama app) | Server daemon, web UI, semua logic utama |
+| `wick-gate` | Hook binary kecil, dipanggil Claude sebelum Bash |
+
+### 8.1 Bagaimana Build System Wick Bekerja
+
+Wick pakai `internal/builder` — satu package yang handle compile + packaging per platform:
+
+```
+wick build              → compile binary + .dmg/.deb/.exe
+wick build --installer  → tambah .msi (Windows) / Applications symlink (macOS)
+wick build --all        → semua target (windows/amd64, windows/arm64, linux/*, darwin/*)
+```
+
+Flow `builder.Build()`:
+1. Generate assets (templ + CSS + go generate)
+2. Windows: embed icon + version metadata via `.syso` sebelum compile
+3. `go build -ldflags "..."` → raw binary
+4. Package per platform: `.app`+`.dmg` (macOS), `.deb` (Linux), `.msi` (Windows, opt-in)
+
+### 8.2 Strategi Ship Dua Binary
+
+**Opsi 1 — Embed wick-gate ke dalam wick binary (Rekomendasi)**
+
+`wick-gate` di-compile dan di-embed sebagai bytes di dalam binary `wick` menggunakan `//go:embed`. Saat daemon start, binary ini di-extract ke session directory.
+
+```go
+//go:embed assets/wick-gate-linux-amd64
+//go:embed assets/wick-gate-windows-amd64.exe
+var embeddedGate embed.FS
+
+// Saat daemon start, extract ke session dir:
+gateBytes, _ := embeddedGate.ReadFile("assets/wick-gate-" + runtime.GOOS + "-" + runtime.GOARCH)
+gatePath := filepath.Join(sessionDir, "gate", "wick-gate")
+os.WriteFile(gatePath, gateBytes, 0755)
+```
+
+Keuntungan:
+- User hanya download satu file
+- Version selalu sinkron antara daemon dan gate
+- Tidak perlu update `PATH` atau installer logic tambahan
+
+Kekurangan:
+- Binary `wick` jadi lebih besar (gate per platform ~2-5MB)
+- Cross-compile butuh build gate untuk semua target dulu
+
+**Opsi 2 — Dua binary terpisah di installer**
+
+MSI include kedua `.exe` dan install keduanya ke `%LocalAppData%\Programs\AppName\`:
+- `appname.exe` (daemon)
+- `wick-gate.exe` (gate, path di-bake ke `settings.json` saat spawn)
+
+Perlu update `windows/msi.go` untuk include file kedua di `<Component>`.
+
+**Opsi 3 — wick-gate sebagai subcommand**
+
+```
+wick gate  ← jalankan gate mode
+```
+
+Binary sama, tapi kalau `os.Args[0]` adalah `wick-gate` atau subcommand `gate` dipanggil, jalankan logic gate. Path di settings.json: `wick gate`.
+
+Keuntungan: satu binary, zero perubahan di installer/release. Kekurangan: binary besar untuk proses kecil yang dipanggil ratusan kali.
+
+### 8.3 MSI dengan Dua Binary (Opsi 2 Detail)
+
+`internal/builder/windows/msi.go` perlu diupdate — tambah `<File>` kedua di dalam `<Component>`:
+
+```xml
+<Component Id="MainExecutable" Guid="...">
+  <File Id="MainExe" Name="appname.exe" Source="bin/appname.exe" KeyPath="yes"/>
+  <File Id="GateExe" Name="wick-gate.exe" Source="bin/wick-gate.exe"/>
+</Component>
+```
+
+Dan `builder.Config` perlu field baru:
+
+```go
+type Config struct {
+    // ... existing fields ...
+    SidecarBinaries []SidecarBinary // binary tambahan untuk di-include di installer
+}
+
+type SidecarBinary struct {
+    Name   string // "wick-gate.exe"
+    Source string // path ke binary yang sudah di-compile
+}
+```
+
+### 8.4 Build Pipeline untuk Dua Binary
+
+Di `wick build --all`, perlu build `wick-gate` untuk setiap target juga:
+
+```
+Untuk tiap target (windows/amd64, linux/amd64, dll.):
+  1. go build -o bin/appname-{os}-{arch} .              ← main binary
+  2. go build -o bin/wick-gate-{os}-{arch} ./cmd/wick-gate  ← gate binary
+  3. Package: masukkan keduanya ke .msi/.deb/.dmg
+```
+
+### 8.5 Template Downstream
+
+Kalau user pakai Wick sebagai framework (bukan langsung dari repo ini), `template/` perlu dokumen bahwa mereka perlu ship `wick-gate` bersama binary mereka. Template `wick.yml` bisa tambah task:
+
+```yaml
+tasks:
+  build:
+    cmds:
+      - wick build --installer  # build main binary + installer
+      # wick-gate di-embed otomatis (kalau pakai opsi 1)
+```
+
+---
+
+## 9. Lokasi File di Filesystem
 
 ```
 ~/.wick/agents/sessions/<session-id>/
@@ -628,53 +670,50 @@ case <-time.After(25 * time.Second):
   ├── agents.json                ← agent list + CLI session ID
   ├── commands.jsonl             ← audit log semua command
   └── gate/
-      ├── spec.json              ← rules whitelist untuk gate binary
-      ├── settings.json          ← Claude hook config (PreToolUse)
-      └── gate.sock              ← Unix domain socket (dibuat saat daemon start)
-                                    chmod 0600, owner = user yang jalankan daemon
+      ├── spec.json              ← rules whitelist untuk gate
+      ├── settings.json          ← Claude hook config (PreToolUse → wick-gate)
+      └── gate.sock              ← Unix domain socket
+                                    dibuat saat daemon start, chmod 0600
+                                    dihapus saat daemon stop
+```
+
+Kalau pakai embed (opsi 1):
+
+```
+~/.wick/agents/sessions/<session-id>/gate/
+  └── wick-gate                  ← di-extract dari embedded binary saat start
+                                    chmod 0755, di-recreate tiap spawn
 ```
 
 ---
 
-## 9. Keputusan Desain
+## 10. Keputusan Desain
 
 | # | Keputusan | Alasan |
 |---|---|---|
 | D1 | Pakai Unix socket, bukan HTTP | Tidak ada network exposure, performa lebih baik, akses dikontrol filesystem |
 | D2 | Socket path di session directory | Direktori sudah chmod 700, isolasi per session, tidak perlu auth tambahan |
 | D3 | Raw JSON newline-delimited, bukan HTTP | Tidak ada overhead parsing HTTP header, protokol lebih simpel |
-| D4 | Timeout 25 detik di daemon (< hook timeout 30 detik) | Pastikan gate sempat exit dengan bersih sebelum Claude timeout |
+| D4 | Timeout 25 detik di daemon (< hook timeout 30 detik) | Pastikan gate sempat exit bersih sebelum Claude timeout |
 | D5 | Fail-safe: block kalau daemon tidak respond | Lebih aman default block daripada default allow |
-| D6 | Pending state pakai `sync.Map` + channel | Concurrent safe, goroutine per koneksi, no mutex contention |
-| D7 | Gate binary tetap stateless | Gate tidak simpan state, semua state di daemon. Gate bisa crash/respawn tanpa kehilangan pending |
+| D6 | Pending state: `sync.Map` + channel per koneksi | Concurrent safe, goroutine per koneksi, no mutex contention |
+| D7 | Gate binary tetap stateless | Semua state di daemon. Gate bisa crash/respawn tanpa kehilangan pending |
+| D8 | Embed wick-gate ke binary utama (rekomendasi) | User satu file, version selalu sync, tidak perlu installer logic baru |
+| D9 | Broadcast approval_request via Broadcaster yang sudah ada | Tidak perlu infrastruktur SSE baru, cukup tambah tipe event |
 
 ---
 
-## 10. Rekomendasi Akhir
-
-**Untuk mid-session approval system di Wick: gunakan Pola A (Gate Style) dengan Unix Domain Socket.**
-
-Ringkasan justifikasi:
+## 11. Checklist Implementasi
 
 ```
-Kebutuhan                    Solusi
-─────────────────────────────────────────────────────────
-Jaminan intercept 100%    → Gate (bukan Claude Code style)
-Tidak ada port terbuka    → Unix socket (bukan HTTP)
-Performa rendah latency   → Unix socket (bukan file+inotify)
-Concurrent requests       → Unix socket (bukan named pipe)
-Keamanan lokal            → chmod 0600 di session dir
-Audit trail               → commands.jsonl tetap dipertahankan
-```
-
-**Yang perlu diimplementasikan:**
-
-```
-[ ] 1. Endpoint approve di daemon (POST /api/agents/sessions/{id}/approve)
-[ ] 2. Unix socket listener di daemon (per session, dibuat saat session start)
-[ ] 3. Pending state manager (sync.Map + goroutine per connection)
-[ ] 4. SSE event type baru: "approval_request"
-[ ] 5. Update wick-gate: tambah Unix socket path dari env, fallback ke rule-based
+[ ] 1. Unix socket listener di daemon (per session, dibuat saat session start)
+[ ] 2. Pending state manager (sync.Map + goroutine per connection + timeout 25s)
+[ ] 3. Endpoint approve: POST /api/agents/sessions/{id}/approve
+[ ] 4. SSE event type baru: "approval_request" dan "approval_resolved"
+[ ] 5. Update wick-gate: baca socket path dari env, connect → send → block → exit
 [ ] 6. Web UI: render modal approval saat terima SSE "approval_request"
-[ ] 7. Wire Gate di factory.go (saat ini masih nil)
+[ ] 7. Web UI: countdown timer 25 detik di modal
+[ ] 8. Wire Gate di factory.go (saat ini masih nil)
+[ ] 9. Pilih strategi ship binary (embed vs sidecar vs subcommand)
+[ ] 10. Update builder jika perlu (opsi 2: dua binary di MSI)
 ```
