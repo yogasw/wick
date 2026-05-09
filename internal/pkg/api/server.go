@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
@@ -240,6 +243,22 @@ func NewServer() *Server {
 				slackChan.OnAgentEvent(sid, doneEv)
 			}
 		},
+	}
+
+	// Wire command gate when gate_enabled=true. The wick-gate binary is
+	// resolved next to the running executable, then falls back to PATH.
+	// Gate config is read at boot; rule changes require a server restart.
+	if configsSvc.GetOwned("agents", "gate_enabled") == "true" {
+		if bin := resolveWickGateBin(); bin != "" {
+			rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
+			agentsFactory.Gate = &agentpool.GateConfig{
+				WickGateBinary: bin,
+				Rules:          rules,
+			}
+			log.Info().Str("bin", bin).Int("rules", len(rules)).Msg("agents: command gate enabled")
+		} else {
+			log.Warn().Msg("agents: gate_enabled=true but wick-gate binary not found — gate disabled (build cmd/wick-gate or put it in PATH)")
+		}
 	}
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent:    2,
@@ -819,4 +838,47 @@ func RunMCPStdio(version, commit, buildTime string) {
 		WithWickRoot(root).
 		WithAppURL(configsSvc.AppURL).
 		ServeStdioOS(ctx)
+}
+
+// resolveWickGateBin finds the wick-gate binary: first next to this
+// executable, then on PATH.
+func resolveWickGateBin() string {
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "wick-gate")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		candidate += ".exe"
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if p, err := exec.LookPath("wick-gate"); err == nil {
+		return p
+	}
+	return ""
+}
+
+// parseGateRules decodes the kvlist JSON (pattern|scope columns) stored in
+// AllowedCmds into a slice of gate.CommandRule.
+func parseGateRules(raw string) []gate.CommandRule {
+	if raw == "" {
+		return nil
+	}
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	rules := make([]gate.CommandRule, 0, len(rows))
+	for _, r := range rows {
+		pattern := strings.TrimSpace(r["pattern"])
+		if pattern == "" {
+			continue
+		}
+		rules = append(rules, gate.CommandRule{
+			Pattern: pattern,
+			Scope:   strings.TrimSpace(r["scope"]),
+		})
+	}
+	return rules
 }
