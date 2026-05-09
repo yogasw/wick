@@ -63,6 +63,14 @@ func (m *Manager) CreateSession(ctx context.Context, opt session.CreateOptions) 
 	return s, nil
 }
 
+// Register adds or updates a session in the in-memory registry without
+// touching disk. Use this when a session was created externally (e.g. by
+// the pool's auto-create path for Slack/channel sessions) so the dashboard
+// sees it immediately without a full Reload.
+func (m *Manager) Register(s session.Session) {
+	m.reg.upsertSession(s)
+}
+
 // DeleteSession removes the session folder + cache entry.
 func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	if err := session.Delete(ctx, m.reg.layout, id); err != nil {

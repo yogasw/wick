@@ -135,10 +135,14 @@ templ WorkspacesPage(vm WorkspacesVM) {
 										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ ws.Meta.DefaultPreset }</td>
 										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ ws.Meta.DefaultProvider }</td>
 										<td class="px-5 py-3 text-right">
-											<button
-												data-delete-workspace={ name }
-												class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-											>Delete</button>
+											if name != "default" {
+												<button
+													data-delete-workspace={ name }
+													class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+												>Delete</button>
+											} else {
+												<span class="text-xs text-black-500 dark:text-black-600 italic">built-in</span>
+											}
 										</td>
 									</tr>
 								}

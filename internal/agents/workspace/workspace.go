@@ -136,11 +136,33 @@ func List(layout config.Layout) ([]string, error) {
 	return storage.ScanDirNames(layout.WorkspacesDir())
 }
 
+// DefaultName is the name of the built-in workspace that ships with every
+// fresh install. It is created by EnsureDefault at boot and cannot be deleted.
+const DefaultName = "default"
+
+// EnsureDefault creates the "default" workspace if it does not yet exist.
+// Mirrors preset.EnsureDefault — called from Bootstrap so fresh installs have
+// a usable workspace without any manual setup.
+func EnsureDefault(layout config.Layout) error {
+	if Exists(layout, DefaultName) {
+		return nil
+	}
+	_, err := Create(layout, CreateOptions{
+		Name:        DefaultName,
+		Description: "Built-in default workspace.",
+	})
+	return err
+}
+
 // Delete removes the workspace metadata folder. For managed
 // workspaces this also removes `workspaces/<name>/files/`. For
 // custom workspaces the user-supplied path is left untouched —
 // wick never owned it, so wick must not delete it.
+// The built-in "default" workspace cannot be deleted.
 func Delete(layout config.Layout, name string) error {
+	if name == DefaultName {
+		return fmt.Errorf("workspace %q is built-in and cannot be deleted", name)
+	}
 	if err := storage.ValidateWorkspaceName(name); err != nil {
 		return err
 	}

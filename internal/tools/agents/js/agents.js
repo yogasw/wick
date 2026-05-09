@@ -130,7 +130,7 @@
       btn.addEventListener("click", function () {
         var id = btn.dataset.deleteSession;
         if (!confirm("Delete this session? This cannot be undone.")) return;
-        var b = base || document.querySelector("[data-base]")?.dataset.base;
+        var b = resolveBase();
         if (!b) return;
         fetch(b + "/sessions/" + encodeURIComponent(id), { method: "DELETE" })
           .then(function () {

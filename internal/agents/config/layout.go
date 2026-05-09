@@ -1,8 +1,8 @@
 // Package config holds the runtime-editable Agents config (General /
 // Slack / Workspace structs reflected into the configs DB table) plus
 // the on-disk Layout — the single source of truth for path math under
-// BaseDir. Every other agents subpackage receives a Layout, never
-// hand-rolls paths.
+// the platform default data directory (~/.wick/agents). Every other
+// agents subpackage receives a Layout, never hand-rolls paths.
 package config
 
 import (
@@ -75,12 +75,9 @@ func (l Layout) EnsureLayout() error {
 	return nil
 }
 
-// ResolveBaseDir returns the effective base directory: the configured
-// value if set, else the platform default (~/.wick/agents).
-func ResolveBaseDir(cfg WorkspaceConfig) string {
-	if cfg.BaseDir != "" {
-		return cfg.BaseDir
-	}
+// ResolveBaseDir returns the platform default base directory (~/.wick/agents).
+// The cfg parameter is kept for call-site compatibility.
+func ResolveBaseDir(_ WorkspaceConfig) string {
 	return defaultBaseDir()
 }
 

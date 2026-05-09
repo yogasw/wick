@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
@@ -55,6 +56,10 @@ type PoolConfig struct {
 	Layout           config.Layout
 	Factory          AgentFactory
 	DefaultWorkspace string
+	// OnSessionCreated is called after the pool auto-creates a session for a
+	// channel message (e.g. Slack thread_ts). Wire this to
+	// manager.Register so the dashboard sees the session immediately.
+	OnSessionCreated func(s session.Session)
 }
 
 // AgentFactory builds an agent ready to Start. The pool wires the
@@ -121,6 +126,16 @@ func New(cfg PoolConfig) *Pool {
 // queued. The on-disk session meta status is updated to reflect
 // running/queued so UI listings stay correct.
 func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, text string) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, "")
+}
+
+// SendWithWorkspace is like Send but binds sessionID to the named workspace
+// when auto-creating the session. Pass an empty string for the default.
+func (p *Pool) SendWithWorkspace(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, workspace)
+}
+
+func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -138,8 +153,14 @@ func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, tex
 		return entry.agent.Send(text)
 	}
 
-	// Not active. Buffer the message and either spawn (slot free) or
-	// queue (pool full).
+	// Not active. Ensure the session exists on disk (channels like Slack
+	// pass a thread_ts as the session ID; the session is never created
+	// via the UI flow).
+	if err := p.ensureSession(ctx, sessionID, source, workspace); err != nil {
+		return err
+	}
+
+	// Buffer the message and either spawn (slot free) or queue (pool full).
 	buf, err := p.bufferFor(sessionID)
 	if err != nil {
 		return err
@@ -341,6 +362,47 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 	p.buffers[sessionID] = buf
 	p.mu.Unlock()
 	return buf, nil
+}
+
+// ensureSession creates the session directory + meta.json when the session
+// does not yet exist. Called by Send for channels (e.g. Slack) that supply
+// their own session ID (thread_ts) without going through the UI create flow.
+// Concurrent calls for the same ID are safe — session.Create returns a
+// benign "already exists" error that we suppress.
+func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace string) error {
+	existing, err := session.Load(p.cfg.Layout, sessionID)
+	if err == nil {
+		// Session exists — backfill workspace if it was created before one was configured.
+		if workspace != "" && existing.Meta.Workspace == "" {
+			if swErr := session.SwitchWorkspace(ctx, p.cfg.Layout, sessionID, workspace); swErr != nil {
+				log.Warn().Str("session", sessionID).Str("workspace", workspace).Err(swErr).Msg("pool: backfill workspace failed")
+			} else if updated, ldErr := session.Load(p.cfg.Layout, sessionID); ldErr == nil {
+				if p.cfg.OnSessionCreated != nil {
+					p.cfg.OnSessionCreated(updated)
+				}
+			}
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
+		ID:        sessionID,
+		Origin:    session.Origin(source),
+		Workspace: workspace,
+	})
+	// Suppress "already exists" — a concurrent call may have won the race.
+	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
+		if cerr.Error() != fmt.Sprintf("session %q already exists", sessionID) {
+			return cerr
+		}
+		return nil // race: other caller created it, that's fine
+	}
+	if p.cfg.OnSessionCreated != nil {
+		p.cfg.OnSessionCreated(sess)
+	}
+	return nil
 }
 
 // resolveCwd determines the spawn cwd for a session. The fallback

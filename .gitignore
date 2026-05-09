@@ -49,3 +49,7 @@ graphify-out/
 # templ generated files
 *_templ.go
 web/public/css/app.css
+
+# Build output binaries
+lab-server
+wick
