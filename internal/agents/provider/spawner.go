@@ -36,6 +36,11 @@ type Process interface {
 	Stdin() io.WriteCloser
 	Wait() error
 	Kill() error
+	// Pid returns the OS process id of the started subprocess, or 0 if
+	// not applicable (fake spawners in tests). Used by the spawn logger
+	// + Backends UI to verify a re-spawn actually got a new process and
+	// not just the same one looping.
+	Pid() int
 }
 
 // Spawner builds a Process from spawn parameters. The agent package

@@ -13,16 +13,28 @@
 
       es.addEventListener("agent", function (e) {
         var ev = JSON.parse(e.data);
+        if (ev.type === "lifecycle") {
+          // Pool-driven transition (spawning / killed). PID arrives
+          // here for fresh spawns; idle / working transitions are
+          // inferred from substate events below.
+          applyLifecycle(ev.lifecycle, ev.pid || 0);
+          return;
+        }
         if (ev.type === "text_delta") {
           appendDelta(ev.data);
         } else if (ev.type === "done") {
           finalizeAssistantTurn();
-          updateStatusBadge("idle");
+          applyLifecycle("idle", 0);
         } else if (ev.type === "session_start") {
-          updateStatusBadge("running");
+          applyLifecycle("working", 0);
         } else if (ev.type === "error") {
           finalizeAssistantTurn();
-          updateStatusBadge("idle");
+          applyLifecycle("idle", 0);
+        } else if (
+          ev.type === "thinking" || ev.type === "tool_use" ||
+          ev.type === "tool_result" || ev.type === "text_delta"
+        ) {
+          applyLifecycle("working", 0);
         }
       });
 
@@ -49,15 +61,147 @@
       function finalizeAssistantTurn() {
         pendingTurnEl = null;
       }
+    }
 
-      function updateStatusBadge(status) {
-        // Re-fetch the badge area by reloading the header — simple approach
-        // for MVP: reload the page header area. Full SPA update is phase 6.
-        var badges = document.querySelectorAll("[class*='rounded-full']");
-        // lightweight: just let the next page load reflect status.
-        void badges;
+    // ── Lifecycle badges (countdown ring + colour swap on SSE) ────────
+    // Pages can render many badges (sessions list table, Recent Spawns
+    // table, session detail header). All of them share the same
+    // lifecycle vocabulary; a single render pass keeps them consistent.
+    var primaryBadge = document.querySelector("[data-session-id] [data-lifecycle-badge]");
+
+    var BADGE_CLASS_MAP = {
+      spawning: ["border-amber-300","dark:border-amber-700","bg-amber-50","dark:bg-amber-900/20","text-amber-700","dark:text-amber-300"],
+      working:  ["border-green-300","dark:border-green-700","bg-green-50","dark:bg-green-900/20","text-green-700","dark:text-green-300"],
+      idle:     ["border-blue-300","dark:border-blue-700","bg-blue-50","dark:bg-blue-900/20","text-blue-700","dark:text-blue-300"],
+      killed:   ["border-red-300","dark:border-red-700","bg-red-50","dark:bg-red-900/20","text-red-700","dark:text-red-300"],
+    };
+    var ALL_BADGE_CLASSES = [].concat(
+      BADGE_CLASS_MAP.spawning, BADGE_CLASS_MAP.working,
+      BADGE_CLASS_MAP.idle, BADGE_CLASS_MAP.killed
+    );
+    // 2π·r where r=6 in the SVG viewBox. JS sets stroke-dashoffset to
+    // shrink the arc as the idle countdown burns down.
+    var RING_CIRCUMFERENCE = 37.7;
+
+    function setBadgeLifecycle(badge, lifecycle, pid) {
+      badge.dataset.lifecycle = lifecycle;
+      if (pid > 0) badge.dataset.pid = String(pid);
+      if (lifecycle === "idle" || lifecycle === "working") {
+        // Fresh activity → reset the countdown clock.
+        badge.dataset.lastActiveMs = String(Date.now());
+      }
+      ALL_BADGE_CLASSES.forEach(function (c) { badge.classList.remove(c); });
+      (BADGE_CLASS_MAP[lifecycle] || []).forEach(function (c) { badge.classList.add(c); });
+
+      var label = badge.querySelector("[data-lifecycle-label]");
+      if (label) label.textContent = lifecycle || "—";
+
+      var countdown = badge.querySelector("[data-lifecycle-countdown]");
+      if (countdown && lifecycle !== "idle") countdown.textContent = "";
+
+      paintRing(badge, lifecycle);
+      if (lifecycle === "killed") badge.dataset.pid = "0";
+    }
+
+    function paintRing(badge, lifecycle) {
+      var svg = badge.querySelector("[data-lifecycle-ring]");
+      if (!svg) return;
+      var arc = svg.querySelector("[data-lifecycle-arc]");
+      var centre = svg.querySelector("[data-lifecycle-centre]");
+      svg.classList.remove("lifecycle-svg-spin");
+      if (centre) centre.classList.remove("lifecycle-centre-pulse");
+      if (lifecycle === "spawning") {
+        // Indeterminate spinner: the arc is a 25% chord that rotates.
+        if (arc) arc.setAttribute("stroke-dashoffset", String(RING_CIRCUMFERENCE * 0.75));
+        svg.classList.add("lifecycle-svg-spin");
+        if (centre) centre.setAttribute("r", "0");
+      } else if (lifecycle === "working") {
+        if (arc) arc.setAttribute("stroke-dashoffset", "0");
+        if (centre) {
+          centre.setAttribute("r", "2.5");
+          centre.classList.add("lifecycle-centre-pulse");
+        }
+      } else if (lifecycle === "idle") {
+        // Real value gets written by the tick below; default to full
+        // until the countdown loop has data.
+        if (arc) arc.setAttribute("stroke-dashoffset", "0");
+        if (centre) centre.setAttribute("r", "1.5");
+      } else if (lifecycle === "killed") {
+        if (arc) arc.setAttribute("stroke-dashoffset", String(RING_CIRCUMFERENCE));
+        if (centre) centre.setAttribute("r", "0");
+      } else {
+        if (arc) arc.setAttribute("stroke-dashoffset", String(RING_CIRCUMFERENCE));
+        if (centre) centre.setAttribute("r", "1");
       }
     }
+
+    function applyLifecycle(lifecycle, pid) {
+      // Session detail SSE only updates its own badge — list pages
+      // have their own row each tied to a different session id, and
+      // wiring them all to one EventSource would require per-row
+      // subscribers (out of scope here).
+      if (!primaryBadge) return;
+      setBadgeLifecycle(primaryBadge, lifecycle, pid);
+    }
+
+    // Initial paint for every badge on the page (list rows, spawn
+    // rows, detail header). The server already set data-lifecycle;
+    // this pass reflects it visually (ring + colours).
+    document.querySelectorAll("[data-lifecycle-badge]").forEach(function (badge) {
+      paintRing(badge, badge.dataset.lifecycle || "");
+    });
+
+    // 1-second countdown tick — sweeps every badge on the page so
+    // sessions list / spawns list / detail all render the same shrink
+    // animation without per-row subscribers.
+    setInterval(function () {
+      document.querySelectorAll('[data-lifecycle-badge][data-lifecycle="idle"]').forEach(function (badge) {
+        var idleTimeout = parseInt(badge.dataset.idleTimeoutMs || "0", 10);
+        var lastActive = parseInt(badge.dataset.lastActiveMs || "0", 10);
+        var countdown = badge.querySelector("[data-lifecycle-countdown]");
+        var arc = badge.querySelector("[data-lifecycle-arc]");
+        if (!idleTimeout || !lastActive) return;
+        var remaining = Math.max(0, lastActive + idleTimeout - Date.now());
+        var ratio = remaining / idleTimeout; // 1 → full, 0 → empty
+        if (arc) {
+          var offset = RING_CIRCUMFERENCE * (1 - ratio);
+          arc.setAttribute("stroke-dashoffset", String(offset.toFixed(2)));
+        }
+        if (countdown) {
+          var s = Math.ceil(remaining / 1000);
+          countdown.textContent = s > 0 ? "kill in " + s + "s" : "0s";
+        }
+      });
+    }, 1000);
+
+    // ── Clickable rows ────────────────────────────────────────────────
+    // Any element with [data-row-link] navigates on click. Children
+    // marked [data-row-action] (kebab menu, inline buttons) opt out so
+    // opening a dropdown or hitting a button doesn't also navigate.
+    document.addEventListener("click", function (e) {
+      if (e.target.closest("[data-row-action]")) return;
+      // Native link/button inside the row should win — let it.
+      if (e.target.closest("a, button, summary, input, select, textarea, label")) return;
+      var row = e.target.closest("[data-row-link]");
+      if (!row) return;
+      var href = row.dataset.rowLink;
+      if (!href) return;
+      // Middle-click / cmd-click open in new tab.
+      if (e.metaKey || e.ctrlKey || e.button === 1) {
+        window.open(href, "_blank");
+        return;
+      }
+      window.location.href = href;
+    });
+
+    // Auto-close any open kebab menu when the user clicks elsewhere
+    // — <details> stays open by default, which leaves stale dropdowns
+    // floating after navigation aborts or after picking an action.
+    document.addEventListener("click", function (e) {
+      document.querySelectorAll("details[data-row-action][open]").forEach(function (d) {
+        if (!d.contains(e.target)) d.removeAttribute("open");
+      });
+    });
 
     // ── Composer (send message) ───────────────────────────────────────
     var sendForm = document.querySelector("[data-send-form]");

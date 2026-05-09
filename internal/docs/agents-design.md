@@ -893,6 +893,69 @@ responding  : dapat TextDelta event, text sedang di-stream
 idle        : dapat Done event, subprocess selesai proses
 ```
 
+#### 4.6.1 Lifecycle vs Substate (Backends UI)
+
+Substate di atas (idle/thinking/running_tool/responding) menjawab "agent lagi ngapain di dalam satu spawn". Di UI Backends, operator perlu satu jawaban yang lebih besar: **subprocess-nya hidup atau ngga, dan kalau hidup itu lagi spawn baru atau lagi nunggu di-kill**. Itu peran `Lifecycle` — FSM kedua, paralel sama substate, di file yang sama (`internal/agents/state/state.go`).
+
+```
+Lifecycle: spawning → working ↔ idle → killed
+                          ↑          ↓
+                          └──────────┘  (turn baru datang)
+
+spawning : pool baru `a.Start()`, belum ada event dari CLI
+working  : ada event aktif (Thinking/ToolUse/TextDelta/ToolResult)
+idle     : Done/Error masuk → subprocess hidup tapi ngga ada turn,
+           countdown auto-kill (LastActive + IdleTimeout) jalan
+killed   : OnExit fired (idle TTL, Stop, error, crash)
+```
+
+Transisi:
+
+| Trigger | Lifecycle |
+|---|---|
+| `pool.spawn()` start (`MarkSpawning`) | → spawning |
+| AgentEvent ≠ Done/Error masuk | → working |
+| Done / Error | → idle |
+| `OnExit` hook (`MarkKilled`) | → killed |
+
+Substate tetap dipakai sebagai *detail* di samping lifecycle — UI tampilin "working · running_tool" misalnya, tapi tag warna utama dari lifecycle.
+
+**Visual yang dipakai UI** — bukan dot statis, tapi SVG ring 14px dengan 3 elemen (`view/layout.templ::lifecycleRing`): track ring (faint), foreground arc, dan centre dot/X. Animasi dipaksa per state biar mata operator langsung tau apa yg lagi terjadi:
+
+| Lifecycle | Border + bg | Arc | Centre | Animasi |
+|---|---|---|---|---|
+| spawning | amber-50 / amber-300 | 25% chord | r=0 | Ring puter (`lifecycle-svg-spin`, 0.9s linear) — indeterminate |
+| working | green-50 / green-300 | full ring | r=2.5 | Centre dot breathing (`lifecycle-centre-pulse`, 1.4s) |
+| idle | blue-50 / blue-300 | shrink dari 100% → 0% | r=1.5 static | JS update `stroke-dashoffset` tiap detik (`transition: 1s linear`) — ring habis = auto-kill |
+| killed | red-50 / red-300 | empty | r=0 | Static, ngga ada animasi |
+
+JS (`tools/agents/js/agents.js`) handle 3 hal:
+1. `paintRing` — set `stroke-dashoffset` + class animasi tiap kali lifecycle berubah.
+2. Tick 1 detik — sweep semua badge dengan `data-lifecycle="idle"` di page, hitung remaining, update arc + countdown text. Sengaja sweep semua biar Sessions list table (banyak row) sama Spawns table render dengan kode yang sama tanpa perlu per-row SSE subscriber.
+3. SSE handler (session detail page) — apply `lifecycle` event ke primary badge, plus infer `working`/`idle` dari substate AgentEvent.
+
+Semua badge punya `data-pid` attribute → tooltip + JS bisa surface-kan PID. Penting karena **PID berubah tiap re-spawn** (idle TTL kill → next message respawn dengan `--resume` → process baru, PID baru). Operator yang lihat angka PID berubah tau "respawn beneran terjadi", bukan stuck di proses yang sama.
+
+**Countdown auto-kill** (idle → killed):
+- Server kirim `last_active` (UnixMilli) + `idle_timeout` (ms) di render awal.
+- JS hitung sendiri remaining = `last_active + idle_timeout − Date.now()` tiap 1 detik.
+- Server tidak push tick — heartbeat ngga perlu, math di client cukup.
+- Tiap event SSE dari pool nge-update `data-last-active-ms` ke `Date.now()` → countdown reset visual tanpa server intervention.
+
+**SSE channel**:
+- Substate transitions sudah di-publish lewat `Broadcaster.Publish` (per AgentEvent). UI infer working/idle dari event type.
+- Lifecycle bookend (spawning, killed) tidak punya AgentEvent — pool fire `LifecycleEvent` lewat `PoolConfig.OnLifecycle`, server.go relay ke `Broadcaster.PublishLifecycle`. Type=`"lifecycle"`, Lifecycle=`"spawning"|"killed"`, PID di payload.
+
+**Spawn log enrichment** (`internal/agents/provider/spawnlog.go`):
+
+`SpawnLogger.List()` membaca tiap file log untuk extract PID + first user message + final exit reason, lalu attach ke `SpawnLogFile`. Recent Spawns table di `/tools/agents/providers` tampilin kolom PID + First Message + lifecycle pill. Cheap karena spawn log per file <10 baris.
+
+`start` event ditulis dua kali per spawn:
+1. Pre-Start (di Build): timestamp, provider, session, agent, workspace, resume_id. PID belum tau.
+2. Post-Start (dari `BuildResult.OnStarted`): PID + first_user_message (truncated 80 chars).
+
+Enrichment scan kedua event, ambil yang non-zero. Kalau spawn crash sebelum Start return → cuma event pertama, PID=0 (UI tampilin "—").
+
 **Step 4 — Slack handler (`slack.go`) — minimal di Slack, detail di dashboard:**
 
 Filosofi: Slack thread = output bersih (tidak nyepam channel diskusi). Detail step-by-step ada di wick dashboard. Dashboard URL on-demand via meta-command `dashboard`/`link`.

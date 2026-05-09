@@ -8,32 +8,24 @@ import (
 	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
-// OverviewVM holds data for the Overview page.
+// OverviewVM holds data for the Overview page. SessionIDs is the
+// active-only subset (spawning/working/idle) — Killed sessions live
+// in /sessions, not on the Overview.
 type OverviewVM struct {
-	Base       string
-	Active     int
-	QueueLen   int
-	PoolMax    int
-	ActiveList []ActiveAgentVM
-	QueueList  []QueuedAgentVM
-	SessionIDs []string
-	Sessions   map[string]session.Session
+	Base          string
+	Active        int
+	QueueLen      int
+	PoolMax       int
+	SessionIDs    []string
+	Sessions      map[string]session.Session
+	Lifecycle     map[string]SessionLifecycleVM
+	IdleTimeoutMs int64
 }
 
-// ActiveAgentVM is the public snapshot of one running agent in the pool.
-type ActiveAgentVM struct {
-	SessionID string
-	AgentName string
-}
-
-// QueuedAgentVM is the public snapshot of one queued request.
-type QueuedAgentVM struct {
-	SessionID string
-	AgentName string
-	WaitingMs int64
-}
-
-// SessionsListVM holds data for the Sessions list page.
+// SessionsListVM holds data for the Sessions list page. Lifecycle is
+// keyed by session ID so each row can render the live badge — empty
+// means no live entry in the pool (badge falls back to "killed" /
+// no-agent).
 type SessionsListVM struct {
 	Base          string
 	IDs           []string
@@ -41,6 +33,32 @@ type SessionsListVM struct {
 	Workspaces    map[string]workspace.Workspace
 	WorkspaceList []string
 	PresetList    []string
+	Lifecycle     map[string]SessionLifecycleVM
+	IdleTimeoutMs int64
+	Page          int
+	HasNext       bool
+}
+
+// SessionLifecycleVM is the per-row lifecycle snapshot the sessions
+// list table renders. PID + LastActiveMs feed the countdown ring;
+// Lifecycle is the colour key.
+type SessionLifecycleVM struct {
+	Lifecycle    string
+	PID          int
+	LastActiveMs int64
+}
+
+// SessionsTableVM feeds the reusable sessions list table component.
+// The full /sessions page sets ShowPaging=true; the Overview "Active
+// Sessions" panel sets ShowPaging=false and uses a tighter EmptyText.
+type SessionsTableVM struct {
+	Base          string
+	IDs           []string
+	Sessions      map[string]session.Session
+	Lifecycle     map[string]SessionLifecycleVM
+	IdleTimeoutMs int64
+	EmptyText     string
+	ShowPaging    bool
 	Page          int
 	HasNext       bool
 }
@@ -55,12 +73,20 @@ type TurnVM struct {
 }
 
 // SessionDetailVM holds data for the Session detail page.
+//
+// Lifecycle / PID / LastActiveMs / IdleTimeoutMs feed the realtime
+// status badge: the server emits the snapshot at render time and JS
+// updates it from SSE events thereafter.
 type SessionDetailVM struct {
-	Base     string
-	Session  session.Session
-	Tab      string // "conversation" | "commands" | "raw"
-	Turns    []TurnVM
-	CmdLines []string
+	Base          string
+	Session       session.Session
+	Tab           string // "conversation" | "commands" | "raw"
+	Turns         []TurnVM
+	CmdLines      []string
+	Lifecycle     string
+	PID           int
+	LastActiveMs  int64
+	IdleTimeoutMs int64
 }
 
 // WorkspacesVM holds data for the Workspaces page.

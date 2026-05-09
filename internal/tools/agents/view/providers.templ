@@ -46,18 +46,31 @@ templ ProvidersPage(vm ProvidersVM) {
 							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
 								<th class="px-5 py-2.5 text-left">Started</th>
 								<th class="px-5 py-2.5 text-left">Provider</th>
-								<th class="px-5 py-2.5 text-left">Session</th>
-								<th class="px-5 py-2.5 text-right"></th>
+								<th class="px-5 py-2.5 text-left">PID</th>
+								<th class="px-5 py-2.5 text-left">First Message</th>
 							</tr>
 						</thead>
 						<tbody>
 							for _, f := range vm.Spawns {
-								<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+								<tr
+									data-row-link={ vm.Base + "/providers/spawns/" + filenameOf(f.Path) }
+									class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+								>
 									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
 									<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
-									<td class="px-5 py-3 font-mono text-xs text-black-800 dark:text-black-600">{ shortID(f.SessionID) }</td>
-									<td class="px-5 py-3 text-right">
-										<a href={ templ.SafeURL(vm.Base + "/providers/spawns/" + filenameOf(f.Path)) } class="text-xs text-green-600 dark:text-green-400 hover:underline">Open →</a>
+									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
+										if f.PID > 0 {
+											{ fmt.Sprintf("%d", f.PID) }
+										} else {
+											<span class="text-black-600 dark:text-black-700">—</span>
+										}
+									</td>
+									<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600 max-w-xs truncate">
+										if f.FirstUserMessage != "" {
+											{ f.FirstUserMessage }
+										} else {
+											<span class="text-black-600 dark:text-black-700">—</span>
+										}
 									</td>
 								</tr>
 							}

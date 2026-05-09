@@ -199,6 +199,19 @@ func (a *Agent) ResumeID() string {
 	return a.resumeID
 }
 
+// PID returns the OS pid of the current subprocess, or 0 if not
+// running. Pool reads this after Start so the spawn log captures the
+// real pid (Build runs before Start, so the start event written there
+// can't know the pid yet).
+func (a *Agent) PID() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc == nil {
+		return 0
+	}
+	return a.proc.Pid()
+}
+
 // run is the reader goroutine. Reads lines from stdout, parses each,
 // applies to state + store, fires the OnEvent hook, resets the idle
 // timer, and detects subprocess exit. Stops when stdout returns EOF or

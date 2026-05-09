@@ -175,6 +175,12 @@ type process struct {
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
 func (p *process) Wait() error           { return p.cmd.Wait() }
+func (p *process) Pid() int {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
 
 func (p *process) Kill() error {
 	if p.cmd.Process == nil {

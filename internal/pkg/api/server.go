@@ -235,6 +235,9 @@ func NewServer() *Server {
 		Layout:           agentsLayout,
 		Factory:          agentsFactory,
 		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,
+		OnLifecycle: func(ev agentpool.LifecycleEvent) {
+			agentsBcast.PublishLifecycle(ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+		},
 	})
 	agentstool.SetManager(agentsMgr)
 	agentstool.SetPool(agentsPool)
