@@ -1,6 +1,8 @@
 package view
 
 import (
+	"fmt"
+
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -62,6 +64,30 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 					Per-row values shared by every operation on this connector. Read in handler code via <code class="font-mono text-xs">c.Cfg(...)</code>.
 				</p>
 				@ConfigsTable(configs, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/configs", editKey, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID)
+			</section>
+
+			<!-- Rate Limit -->
+			<section class="mt-8">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate Limit</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Maximum MCP and test-panel calls per minute for this connector instance. Set to <code class="font-mono text-xs">0</code> to disable limiting.
+				</p>
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/rate-limit") } class="mt-3 flex items-center gap-2">
+					<input
+						name="rpm"
+						type="number"
+						min="0"
+						value={ fmt.Sprintf("%d", row.RateLimitRPM) }
+						class="w-32 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+					/>
+					<span class="text-sm text-black-800 dark:text-black-600">requests / min</span>
+					<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Save</button>
+					if row.RateLimitRPM > 0 {
+						<span class="text-xs text-black-700 dark:text-black-600">Currently limited to { fmt.Sprintf("%d", row.RateLimitRPM) } rpm</span>
+					} else {
+						<span class="text-xs text-black-700 dark:text-black-600">Currently unlimited</span>
+					}
+				</form>
 			</section>
 
 			<!-- Operations -->

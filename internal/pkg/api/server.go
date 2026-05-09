@@ -209,7 +209,11 @@ func NewServer() *Server {
 	// Bootstrap reads or creates the on-disk layout (~/.wick/agents/) and
 	// loads the in-memory registry. Pool is wired with the production
 	// ClaudeFactory and the SSE event broadcaster.
-	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentconfig.WorkspaceConfig{}))
+	agentsWorkspaceCfg := agentconfig.WorkspaceConfig{
+		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
+		DefaultWorkspace: configsSvc.GetOwned("agents", "default_workspace"),
+	}
+	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentsWorkspaceCfg))
 	agentsMgr, agentsBootErr := agentregistry.Bootstrap(agentsLayout)
 	if agentsBootErr != nil {
 		log.Fatal().Msgf("agents bootstrap: %s", agentsBootErr.Error())
@@ -238,10 +242,11 @@ func NewServer() *Server {
 		},
 	}
 	agentsPool = agentpool.New(agentpool.PoolConfig{
-		MaxConcurrent: 2,
-		IdleTimeout:   120 * time.Second,
-		Layout:        agentsLayout,
-		Factory:       agentsFactory,
+		MaxConcurrent:    2,
+		IdleTimeout:      120 * time.Second,
+		Layout:           agentsLayout,
+		Factory:          agentsFactory,
+		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
