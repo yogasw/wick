@@ -23,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -38,6 +39,7 @@ var (
 	globalApprovals  *gate.ApprovalManager
 	globalAskUsers   *askuser.Manager
 	globalGateStatus GateStatus
+	globalConfigs    *configs.Service
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -83,6 +85,11 @@ func SetAskUsers(m *askuser.Manager) { globalAskUsers = m }
 // SetGateStatus records the boot-time gate-resolution result. Read
 // by the Providers page. Call exactly once during server boot.
 func SetGateStatus(s GateStatus) { globalGateStatus = s }
+
+// SetConfigs wires the shared configs service so the Providers page
+// can toggle agents.gate_enabled inline. Without this, the toggle
+// endpoint 503s.
+func SetConfigs(c *configs.Service) { globalConfigs = c }
 
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
@@ -133,6 +140,7 @@ func Register(r tool.Router) {
 	r.POST("/providers", saveProviderInstance)
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
+	r.POST("/providers/gate/toggle", toggleGate)
 
 	r.GET("/stream", streamSSE)
 }

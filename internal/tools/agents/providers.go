@@ -82,15 +82,37 @@ func providersPage(c *tool.Ctx) {
 // next to the UI it shows on.
 func gateStatusVM() view.GateStatusVM {
 	s := GetGateStatus()
+	// Live override from config: the boot snapshot reflects what wick
+	// actually wired up at startup, but the toggle button writes to
+	// the configs table — so the card needs to mirror the live cell so
+	// the operator can confirm their click landed. Wiring still
+	// requires a restart (banner says so on the bool flip).
+	configEnabled := true
+	if globalConfigs != nil {
+		if v := globalConfigs.GetOwned("agents", "gate_enabled"); v != "" {
+			if b, err := strconv.ParseBool(v); err == nil {
+				configEnabled = b
+			}
+		}
+	}
+	bootEnabled := s.Enabled
+	enabled := configEnabled && s.Binary != ""
 	vm := view.GateStatusVM{
-		Enabled: s.Enabled,
+		Enabled: enabled,
 		Binary:  s.Binary,
 		Source:  s.Source,
 		Reason:  s.Reason,
 	}
-	if s.Enabled {
+	switch {
+	case enabled && bootEnabled:
 		vm.Note = "Every Bash command goes through wick-gate. Whitelist + 'always allow' bypass the modal; everything else asks the user via the web UI. Auto-block on 25s timeout."
-	} else {
+	case enabled && !bootEnabled:
+		vm.Note = "Config now says gate is on, but the running process started with it off. Restart wick to wire the gate up."
+	case !enabled && bootEnabled:
+		vm.Note = "Config now says gate is off, but the running process is still gating. Restart wick so providers fall back to their own default permission handling."
+	case !configEnabled:
+		vm.Note = "Gate is off in config. Each provider falls back to its own default permission handling — for claude headless that means Bash calls hang/block since there is no UI to prompt. Turn the gate back on if you want interactive approval."
+	default:
 		vm.Note = "Gate binary not resolved — every Bash command auto-blocks (fail-safe), except those matching a whitelist rule. Set WICK_GATE_BIN, place wick-gate next to the parent binary, or build with the embed step to enable interactive approval."
 	}
 	return vm
@@ -139,6 +161,28 @@ func deleteProviderInstance(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// toggleGate flips agents.gate_enabled in the configs table. The
+// new value takes effect on the next server boot — running sessions
+// keep their existing gate plumbing because Spawner state is
+// captured at Build time and the Spec/SocketPath are baked in.
+//
+// We surface that boot-required note in the redirect target (?gate=
+// query) so the page can render a hint without us touching JS.
+func toggleGate(c *tool.Ctx) {
+	if globalConfigs == nil {
+		c.Error(http.StatusServiceUnavailable, "configs service not wired")
+		return
+	}
+	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
+	next := strconv.FormatBool(!before)
+	if err := globalConfigs.SetOwned(c.Context(), "agents", "gate_enabled", next); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("toggle gate: %s", err.Error())
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
 // providerSpawnDetail renders the timeline of one spawn log file. The

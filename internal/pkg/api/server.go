@@ -226,17 +226,34 @@ func NewServer() *Server {
 	// embedded asset for production, PATH lookup as a last resort.
 	// Failure here is non-fatal — gate stays disabled and the pool
 	// falls back to whitelist-only mode. Operator sees one log line.
+	//
+	// User-controlled toggle: agents.gate_enabled (default true). When
+	// false, every provider falls back to its own default permission
+	// handling (claude headless: blocks). Wick injects no --settings
+	// and no --permission-mode in that path.
 	var agentsApprovals *agentgate.ApprovalManager
+	// Default ON when the cell is empty/unparseable so a fresh DB
+	// without the row still gates by default.
+	gateConfigEnabled := true
+	if v := configsSvc.GetOwned("agents", "gate_enabled"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			gateConfigEnabled = b
+		}
+	}
 	wickGateBin, wickGateSource, gateBinErr := agentgate.ResolveGateBinaryWithSource(filepath.Join(agentsLayout.BaseDir, "_gate-bin"))
 	gateStatus := agentstool.GateStatus{
-		Enabled: gateBinErr == nil,
+		Enabled: gateBinErr == nil && gateConfigEnabled,
 		Binary:  wickGateBin,
 		Source:  wickGateSource,
 	}
-	if gateBinErr != nil {
+	switch {
+	case !gateConfigEnabled:
+		gateStatus.Reason = "disabled via agents.gate_enabled"
+		log.Info().Msg("agents gate disabled via config")
+	case gateBinErr != nil:
 		gateStatus.Reason = gateBinErr.Error()
 		log.Warn().Msgf("agents gate disabled: %s", gateBinErr.Error())
-	} else {
+	default:
 		agentsApprovals, _ = agentgate.NewApprovalManager(agentgate.ApprovalManagerOptions{
 			SocketDir: func(sid string) string {
 				return filepath.Join(agentsLayout.SessionDir(sid), "gate")
@@ -327,6 +344,7 @@ func NewServer() *Server {
 	agentstool.SetBroadcaster(agentsBcast)
 	agentstool.SetLayout(agentsLayout)
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
+	agentstool.SetConfigs(configsSvc)
 	provider.AppName = strings.TrimSpace(os.Getenv("APP_NAME"))
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────

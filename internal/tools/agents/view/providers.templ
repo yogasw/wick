@@ -27,7 +27,7 @@ templ ProvidersPage(vm ProvidersVM) {
 				@statCard("Configured", fmt.Sprintf("%d", len(vm.Statuses)), "default")
 			</div>
 			<!-- Command Gate status -->
-			@gateStatusCard(vm.Gate)
+			@gateStatusCard(vm.Gate, vm.Base)
 			<!-- Provider cards -->
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 				for _, st := range vm.Statuses {
@@ -98,6 +98,7 @@ templ ProvidersPage(vm ProvidersVM) {
 			<!-- Add custom modal -->
 			@addProviderModal(vm)
 		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
 	}
 }
 
@@ -106,9 +107,9 @@ templ ProvidersPage(vm ProvidersVM) {
 // disabled (amber dot, reason + behavior fallback). Either way the
 // Note field carries the user-facing payoff so operators don't
 // have to guess what's allowed and what's blocked right now.
-templ gateStatusCard(g GateStatusVM) {
+templ gateStatusCard(g GateStatusVM, base string) {
 	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-		<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3 flex items-center justify-between">
+		<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3 flex items-center justify-between gap-3">
 			<div class="flex items-center gap-2">
 				if g.Enabled {
 					<span class="inline-flex h-2 w-2 rounded-full bg-green-500"></span>
@@ -120,9 +121,18 @@ templ gateStatusCard(g GateStatusVM) {
 					<span class="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white-100">disabled</span>
 				}
 			</div>
-			if g.Source != "" {
-				<span class="font-mono text-xs text-black-700 dark:text-black-600">resolved via { g.Source }</span>
-			}
+			<div class="flex items-center gap-3">
+				if g.Source != "" {
+					<span class="font-mono text-xs text-black-700 dark:text-black-600">resolved via { g.Source }</span>
+				}
+				<form method="POST" action={ templ.SafeURL(base + "/providers/gate/toggle") }>
+					if g.Enabled {
+						<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Turn off</button>
+					} else {
+						<button type="submit" class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Turn on</button>
+					}
+				</form>
+			</div>
 		</div>
 		<div class="px-5 py-3 space-y-2 text-xs">
 			if g.Enabled {
