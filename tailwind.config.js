@@ -6,6 +6,7 @@ module.exports = {
   content: [
     './internal/**/*.templ',
     './internal/**/*_templ.go',
+    './internal/**/*.js',
     './web/public/js/app.js',
   ],
 

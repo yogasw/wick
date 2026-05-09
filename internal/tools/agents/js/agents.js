@@ -246,8 +246,8 @@
               'text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">' +
               (opts.cancelLabel || "Cancel") + "</button>" +
             '<button type="button" data-confirm autofocus ' +
-              'class="rounded-md bg-red-500 px-2.5 py-1 text-xs font-medium text-white-100 ' +
-              'hover:bg-red-600 active:bg-red-700 transition-colors">' +
+              'class="rounded-md bg-neg-400 px-2.5 py-1 text-xs font-medium text-white-100 ' +
+              'hover:bg-neg-300 active:bg-neg-300 transition-colors">' +
               (opts.confirmLabel || "Confirm") + "</button>" +
           "</div>";
         document.body.appendChild(pop);
