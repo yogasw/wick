@@ -322,6 +322,108 @@ type RunFilter struct {
 	UserID       string
 }
 
+// AuditFilter narrows cross-connector audit queries. All fields are
+// optional — omit to get all runs across every connector instance.
+type AuditFilter struct {
+	ConnectorID  string
+	OperationKey string
+	Source       string
+	Status       string
+	UserID       string
+	From         *time.Time // inclusive lower bound on StartedAt
+	To           *time.Time // inclusive upper bound on StartedAt
+}
+
+// ListRunsAudit returns connector runs across all (or a filtered subset
+// of) connector instances, newest first. Designed for the cross-connector
+// audit log page and the /api/runs JSON endpoint. Admin-only.
+func (r *Repo) ListRunsAudit(ctx context.Context, f AuditFilter, limit, offset int) ([]entity.ConnectorRun, error) {
+	var out []entity.ConnectorRun
+	q := r.auditFilterQuery(ctx, f).Order("started_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if offset > 0 {
+		q = q.Offset(offset)
+	}
+	return out, q.Find(&out).Error
+}
+
+// CountRunsAudit returns the total matching the same filter as
+// ListRunsAudit. Used to drive pagination.
+func (r *Repo) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error) {
+	var n int64
+	return n, r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).Count(&n).Error
+}
+
+// RunSummary holds aggregated stats for a connector run query window.
+type RunSummary struct {
+	Total        int64   `json:"total"`
+	Succeeded    int64   `json:"succeeded"`
+	Errored      int64   `json:"errored"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+}
+
+// SummariseRuns returns aggregate stats for the given audit filter window.
+func (r *Repo) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, error) {
+	type row struct {
+		Status    string
+		Count     int64
+		AvgLatMs  float64
+	}
+	var rows []row
+	err := r.auditFilterQuery(ctx, f).
+		Model(&entity.ConnectorRun{}).
+		Select("status, COUNT(*) as count, AVG(latency_ms) as avg_lat_ms").
+		Group("status").
+		Scan(&rows).Error
+	if err != nil {
+		return RunSummary{}, err
+	}
+	var s RunSummary
+	var totalLatSum float64
+	for _, rr := range rows {
+		s.Total += rr.Count
+		switch entity.ConnectorRunStatus(rr.Status) {
+		case entity.ConnectorRunStatusSuccess:
+			s.Succeeded = rr.Count
+		case entity.ConnectorRunStatusError:
+			s.Errored = rr.Count
+		}
+		totalLatSum += rr.AvgLatMs * float64(rr.Count)
+	}
+	if s.Total > 0 {
+		s.AvgLatencyMs = totalLatSum / float64(s.Total)
+	}
+	return s, nil
+}
+
+func (r *Repo) auditFilterQuery(ctx context.Context, f AuditFilter) *gorm.DB {
+	q := r.db.WithContext(ctx)
+	if f.ConnectorID != "" {
+		q = q.Where("connector_id = ?", f.ConnectorID)
+	}
+	if f.OperationKey != "" {
+		q = q.Where("operation_key = ?", f.OperationKey)
+	}
+	if f.Source != "" {
+		q = q.Where("source = ?", f.Source)
+	}
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.UserID != "" {
+		q = q.Where("user_id = ?", f.UserID)
+	}
+	if f.From != nil {
+		q = q.Where("started_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("started_at <= ?", *f.To)
+	}
+	return q
+}
+
 // ListRunsFiltered returns runs for one connector filtered by op/source/
 // status/user. The history page uses this to power its filter bar.
 // Supports limit+offset for page-based paging.

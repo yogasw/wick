@@ -701,6 +701,23 @@ func (s *Service) CountRunsFiltered(ctx context.Context, connectorID string, f R
 	return s.repo.CountRunsFiltered(ctx, connectorID, f)
 }
 
+// ListRunsAudit returns connector runs across all instances with optional
+// filters. Intended for the cross-connector admin audit log.
+func (s *Service) ListRunsAudit(ctx context.Context, f AuditFilter, limit, offset int) ([]entity.ConnectorRun, error) {
+	return s.repo.ListRunsAudit(ctx, f, limit, offset)
+}
+
+// CountRunsAudit returns total runs for the audit filter — pagination companion.
+func (s *Service) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error) {
+	return s.repo.CountRunsAudit(ctx, f)
+}
+
+// SummariseRuns returns aggregate stats (total, success, error, avg latency)
+// for the given audit filter window.
+func (s *Service) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, error) {
+	return s.repo.SummariseRuns(ctx, f)
+}
+
 // PurgeOldRuns deletes ConnectorRun rows older than retentionDays.
 // Returns the number of rows removed. Called by the cleanup job on a
 // daily cadence (set up in a later phase).
