@@ -23,6 +23,12 @@ import (
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
+	agentstool "github.com/yogasw/wick/internal/tools/agents"
+	"github.com/yogasw/wick/internal/agents/agent"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	agentevent "github.com/yogasw/wick/internal/agents/event"
+	agentpool "github.com/yogasw/wick/internal/agents/pool"
+	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
 	"github.com/yogasw/wick/internal/initcreds"
@@ -194,6 +200,39 @@ func NewServer() *Server {
 	// cost of doing business. Set once here, before any tool route
 	// is mountable.
 	encfieldstool.SetService(encSvc)
+
+	// ── Agents (AI agent sessions / pool) ────────────────────────────
+	// Bootstrap reads or creates the on-disk layout (~/.wick/agents/) and
+	// loads the in-memory registry. Pool is wired with the production
+	// ClaudeFactory and the SSE event broadcaster.
+	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentconfig.WorkspaceConfig{}))
+	agentsMgr, agentsBootErr := agentregistry.Bootstrap(agentsLayout)
+	if agentsBootErr != nil {
+		log.Fatal().Msgf("agents bootstrap: %s", agentsBootErr.Error())
+	}
+	agentsBcast := agentstool.NewBroadcaster()
+	var agentsPool *agentpool.Pool
+	agentsFactory := &agentpool.ClaudeFactory{
+		Layout:    agentsLayout,
+		RecordRaw: false,
+		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
+			agentsBcast.Publish(sid, name, ev)
+		},
+		OnExit: func(sid, name string, reason agent.ExitReason) {
+			agentsPool.HandleExit(sid, name, reason)
+			agentsBcast.Publish(sid, name, agentevent.AgentEvent{Type: agentevent.Done})
+		},
+	}
+	agentsPool = agentpool.New(agentpool.PoolConfig{
+		MaxConcurrent: 2,
+		IdleTimeout:   120 * time.Second,
+		Layout:        agentsLayout,
+		Factory:       agentsFactory,
+	})
+	agentstool.SetManager(agentsMgr)
+	agentstool.SetPool(agentsPool)
+	agentstool.SetBroadcaster(agentsBcast)
+	agentstool.SetLayout(agentsLayout)
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
@@ -408,13 +447,14 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool}
 }
 
 type Server struct {
-	router     *http.ServeMux
-	configsSvc *configs.Service
-	authMidd   *login.Middleware
+	router      *http.ServeMux
+	configsSvc  *configs.Service
+	authMidd    *login.Middleware
+	agentsPool  *agentpool.Pool
 }
 
 // appNameHandler injects the configurable app name into every request
@@ -457,6 +497,7 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			got = fh
 		}
 		if !hostMatches(got, u.Host) {
+			log.Warn().Str("request_host", got).Str("app_url_host", u.Host).Msg("hostAllowlist: forbidden — host mismatch")
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -514,14 +555,22 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	go func() {
 		<-ctx.Done()
 		logger.Info().Msg("server is shutting down...")
+		if s.agentsPool != nil {
+			s.agentsPool.Stop()
+		}
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		httpSrv.SetKeepAlivesEnabled(false)
 		shutdownErr <- httpSrv.Shutdown(sctx)
 	}()
 
+	appURL := strings.TrimRight(s.configsSvc.AppURL(), "/")
+	if appURL == "" {
+		appURL = fmt.Sprintf("http://localhost:%d", port)
+	}
 	fmt.Printf("\n  ✓ %s is running\n", s.configsSvc.AppName())
-	fmt.Printf("  → URL: http://localhost:%d\n", port)
+	fmt.Printf("  → Listening on: :%d\n", port)
+	fmt.Printf("  → App URL:      %s\n", appURL)
 	if !s.configsSvc.AdminPasswordChanged() {
 		// Tray pipes stdout to app.log, so printing plaintext password
 		// here would leak it to disk. Headless / CLI gets the full
@@ -533,7 +582,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 				fmt.Printf("  → Default password: %s\n", info.Password)
 			}
 		}
-		fmt.Printf("\n  ⚠ WARNING: Change the default password at http://localhost:%d/profile/setup\n\n", port)
+		fmt.Printf("\n  ⚠ WARNING: Change the default password at %s/profile/setup\n\n", appURL)
 	} else {
 		fmt.Println()
 	}

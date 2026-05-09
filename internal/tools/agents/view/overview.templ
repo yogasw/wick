@@ -1,0 +1,85 @@
+package view
+
+import "fmt"
+
+templ Overview(vm OverviewVM) {
+	@AgentsLayout(vm.Base, "overview") {
+		<div class="space-y-6">
+			<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Overview</h1>
+			<!-- Stats row -->
+			<div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+				@statCard("Active Agents", fmt.Sprintf("%d", vm.Active), "blue")
+				@statCard("Queued", fmt.Sprintf("%d", vm.QueueLen), "amber")
+				@statCard("Sessions", fmt.Sprintf("%d", len(vm.Sessions)), "green")
+				@statCard("Recent", fmt.Sprintf("%d", len(vm.SessionIDs)), "default")
+			</div>
+			<!-- Recent sessions -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 px-5 py-3">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Sessions</h2>
+					<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-xs text-green-600 dark:text-green-400 hover:underline">View all →</a>
+				</div>
+				if len(vm.SessionIDs) == 0 {
+					<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">
+						No sessions yet. <a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-green-600 dark:text-green-400 hover:underline">Create one</a>
+					</div>
+				} else {
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+								<th class="px-5 py-2.5 text-left">Session</th>
+								<th class="px-5 py-2.5 text-left hidden sm:table-cell">Project</th>
+								<th class="px-5 py-2.5 text-left">Status</th>
+								<th class="px-5 py-2.5 text-left hidden md:table-cell">Origin</th>
+								<th class="px-5 py-2.5 text-right"></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, id := range vm.SessionIDs {
+								if sess, ok := vm.Sessions[id]; ok {
+									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ shortID(id) }</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden sm:table-cell">
+											if sess.Meta.Project != "" {
+												{ sess.Meta.Project }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
+										<td class="px-5 py-3">
+											@statusBadge(string(sess.Meta.Status))
+										</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ string(sess.Meta.Origin) }</td>
+										<td class="px-5 py-3 text-right">
+											<a href={ templ.SafeURL(vm.Base + "/sessions/" + id) } class="text-xs text-green-600 dark:text-green-400 hover:underline">Open →</a>
+										</td>
+									</tr>
+								}
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+	}
+}
+
+templ statCard(label, value, color string) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
+		<p class="text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">{ label }</p>
+		<p class={
+			"mt-1 text-3xl font-bold",
+			templ.KV("text-blue-600 dark:text-blue-400", color == "blue"),
+			templ.KV("text-amber-600 dark:text-amber-400", color == "amber"),
+			templ.KV("text-green-600 dark:text-green-400", color == "green"),
+			templ.KV("text-black-900 dark:text-white-100", color == "default"),
+		}>{ value }</p>
+	</div>
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8] + "…"
+	}
+	return id
+}

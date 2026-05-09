@@ -1,0 +1,245 @@
+package view
+
+import (
+	"fmt"
+	"time"
+)
+
+// SessionsList renders the paginated sessions table with a create form.
+templ SessionsList(vm SessionsListVM) {
+	@AgentsLayout(vm.Base, "sessions") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Sessions</h1>
+				<button
+					onclick="document.getElementById('create-session-modal').classList.remove('hidden')"
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>+ New Session</button>
+			</div>
+			<!-- Create session modal -->
+			<div id="create-session-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+				<div class="w-full max-w-md rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
+					<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Session</h2>
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions") } class="space-y-4">
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Project (optional)</label>
+							<select name="project" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="">— no project —</option>
+								for _, name := range vm.ProjectList {
+									<option value={ name }>{ name }</option>
+								}
+							</select>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Backend</label>
+							<select name="backend" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="claude">Claude</option>
+								<option value="codex">Codex</option>
+								<option value="gemini">Gemini</option>
+							</select>
+						</div>
+						<div class="flex justify-end gap-3 pt-2">
+							<button type="button" onclick="document.getElementById('create-session-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">Cancel</button>
+							<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Create</button>
+						</div>
+					</form>
+				</div>
+			</div>
+			<!-- Sessions table -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				if len(vm.IDs) == 0 {
+					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No sessions found.</div>
+				} else {
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+								<th class="px-5 py-3 text-left">Session</th>
+								<th class="px-5 py-3 text-left hidden sm:table-cell">Project</th>
+								<th class="px-5 py-3 text-left">Status</th>
+								<th class="px-5 py-3 text-left hidden md:table-cell">Origin</th>
+								<th class="px-5 py-3 text-left hidden lg:table-cell">Last Active</th>
+								<th class="px-5 py-3 text-right">Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, id := range vm.IDs {
+								if sess, ok := vm.Sessions[id]; ok {
+									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ shortID(id) }</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden sm:table-cell">
+											if sess.Meta.Project != "" {
+												{ sess.Meta.Project }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
+										<td class="px-5 py-3">@statusBadge(string(sess.Meta.Status))</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ string(sess.Meta.Origin) }</td>
+										<td class="px-5 py-3 text-black-700 dark:text-black-600 hidden lg:table-cell text-xs">{ relTime(sess.Meta.LastActive) }</td>
+										<td class="px-5 py-3 text-right">
+											<div class="flex justify-end gap-2">
+												<a href={ templ.SafeURL(vm.Base + "/sessions/" + id) } class="rounded-md border border-green-500 px-3 py-1 text-xs text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors">Open</a>
+												<button
+													data-delete-session={ id }
+													class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+												>Delete</button>
+											</div>
+										</td>
+									</tr>
+								}
+							}
+						</tbody>
+					</table>
+					if vm.Page > 1 || vm.HasNext {
+						<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
+							if vm.Page > 1 {
+								<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
+							} else {
+								<span></span>
+							}
+							<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
+							if vm.HasNext {
+								<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
+							} else {
+								<span></span>
+							}
+						</div>
+					}
+				}
+			</div>
+		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
+	}
+}
+
+// SessionDetail renders the session detail page with tabs and composer.
+templ SessionDetail(vm SessionDetailVM) {
+	@AgentsLayout(vm.Base, "sessions") {
+		<div class="space-y-4" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+			<div class="flex flex-wrap items-start justify-between gap-3">
+				<div>
+					<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-xs text-black-700 dark:text-black-600 hover:underline">← Sessions</a>
+					<h1 class="mt-1 font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ vm.Session.ID }</h1>
+					<div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
+						if vm.Session.Meta.Project != "" {
+							<span>Project: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Meta.Project }</strong></span>
+						}
+						if len(vm.Session.Agents) > 0 {
+							<span>Agent: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Agents[0].Name }</strong> ({ vm.Session.Agents[0].Backend })</span>
+						}
+						@statusBadge(string(vm.Session.Meta.Status))
+					</div>
+				</div>
+				<div class="flex gap-2">
+					<button
+						data-kill={ vm.Session.ID }
+						class="rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+					>Kill</button>
+					<button
+						data-delete-session={ vm.Session.ID }
+						class="rounded-lg border border-red-300 dark:border-red-800 px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+					>Delete</button>
+				</div>
+			</div>
+			<!-- Tabs -->
+			<div class="flex gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 w-fit">
+				@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=conversation", "Conversation", vm.Tab == "conversation")
+				@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=commands", "Commands", vm.Tab == "commands")
+				@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=raw", "Raw", vm.Tab == "raw")
+			</div>
+			<!-- Tab content -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm flex flex-col" style="min-height:420px">
+				if vm.Tab == "conversation" {
+					<div class="flex-1 overflow-y-auto p-5 space-y-4" data-turns style="max-height:55vh">
+						if len(vm.Turns) == 0 {
+							<p class="text-center text-sm text-black-700 dark:text-black-600 py-10">No messages yet. Send one below.</p>
+						}
+						for _, t := range vm.Turns {
+							@conversationTurn(t)
+						}
+					</div>
+					<div class="border-t border-white-300 dark:border-navy-600 p-4">
+						<form data-send-form class="flex gap-3 items-end">
+							<textarea
+								name="text"
+								rows="2"
+								placeholder="Send a message to the agent… (Ctrl+Enter to submit)"
+								class="flex-1 resize-none rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							></textarea>
+							<button
+								type="submit"
+								class="rounded-lg bg-green-500 px-5 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors disabled:opacity-50"
+							>Send</button>
+						</form>
+					</div>
+				} else if vm.Tab == "commands" {
+					<div class="flex-1 overflow-y-auto p-5" style="max-height:70vh">
+						if len(vm.CmdLines) == 0 {
+							<p class="text-center text-sm text-black-700 dark:text-black-600 py-10">No commands logged yet.</p>
+						} else {
+							<pre class="text-xs font-mono text-black-900 dark:text-white-100 whitespace-pre-wrap break-all">for _, line := range vm.CmdLines {
+								{ line + "\n" }
+							}</pre>
+						}
+					</div>
+				} else {
+					<div class="flex-1 p-5">
+						<p class="text-sm text-black-700 dark:text-black-600">Raw event log is stored at <code class="font-mono text-xs bg-white-200 dark:bg-navy-800 px-1 rounded">raw.jsonl</code> in the session directory when recording is enabled.</p>
+					</div>
+				}
+			</div>
+		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
+	}
+}
+
+templ sessionTab(href, label string, active bool) {
+	<a
+		href={ templ.SafeURL(href) }
+		class={
+			"rounded-md px-4 py-1.5 text-sm font-medium transition-colors",
+			templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),
+			templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", !active),
+		}
+	>{ label }</a>
+}
+
+templ conversationTurn(t TurnVM) {
+	switch t.Role {
+		case "user":
+			<div class="flex justify-end">
+				<div class="max-w-[80%] rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap break-words">{ t.Text }</div>
+			</div>
+		case "assistant":
+			<div class="flex justify-start">
+				<div class="max-w-[80%] rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5 text-sm text-black-900 dark:text-white-100 whitespace-pre-wrap break-words">
+					{ t.Text }
+					if t.Truncated {
+						<p class="mt-1 text-xs text-black-600 dark:text-black-700 italic">…truncated, see raw.jsonl for full output.</p>
+					}
+				</div>
+			</div>
+		default:
+			<div class="flex justify-center">
+				<div class="rounded-full bg-white-300 dark:bg-navy-600 px-3 py-1 text-xs text-black-700 dark:text-black-600">{ t.Text }</div>
+			</div>
+	}
+}
+
+// relTime returns a short human-readable relative time string.
+func relTime(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}

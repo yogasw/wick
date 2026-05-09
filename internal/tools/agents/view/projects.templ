@@ -1,0 +1,125 @@
+package view
+
+templ ProjectsPage(vm ProjectsVM) {
+	@AgentsLayout(vm.Base, "projects") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Projects</h1>
+				<button
+					onclick="document.getElementById('create-project-modal').classList.remove('hidden')"
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>+ New Project</button>
+			</div>
+			<!-- Create project modal -->
+			<div id="create-project-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+				<div class="w-full max-w-md rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
+					<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Project</h2>
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/projects") } class="space-y-4">
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
+							<input
+								type="text"
+								name="name"
+								required
+								placeholder="e.g. frontend"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							/>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Repo URL (optional)</label>
+							<input
+								type="url"
+								name="repo_url"
+								placeholder="https://github.com/org/repo.git"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							/>
+							<p class="mt-1 text-xs text-black-600 dark:text-black-700">Leave empty to initialise a local git repo.</p>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Default Preset</label>
+							<select name="preset" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="default">default</option>
+								for _, name := range vm.PresetList {
+									if name != "default" {
+										<option value={ name }>{ name }</option>
+									}
+								}
+							</select>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Default Backend</label>
+							<select name="backend" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="claude">Claude</option>
+								<option value="codex">Codex</option>
+								<option value="gemini">Gemini</option>
+							</select>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Description (optional)</label>
+							<input
+								type="text"
+								name="description"
+								placeholder="Short description"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							/>
+						</div>
+						<div class="flex justify-end gap-3 pt-2">
+							<button type="button" onclick="document.getElementById('create-project-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">Cancel</button>
+							<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Create</button>
+						</div>
+					</form>
+				</div>
+			</div>
+			<!-- Projects table -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				if len(vm.ProjectList) == 0 {
+					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">
+						No projects yet. <button onclick="document.getElementById('create-project-modal').classList.remove('hidden')" class="text-green-600 dark:text-green-400 hover:underline">Create one</button>
+					</div>
+				} else {
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+								<th class="px-5 py-3 text-left">Name</th>
+								<th class="px-5 py-3 text-left hidden sm:table-cell">Repo</th>
+								<th class="px-5 py-3 text-left hidden md:table-cell">Preset</th>
+								<th class="px-5 py-3 text-left hidden md:table-cell">Backend</th>
+								<th class="px-5 py-3 text-right">Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, name := range vm.ProjectList {
+								if proj, ok := vm.Projects[name]; ok {
+									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+										<td class="px-5 py-3 font-medium text-black-900 dark:text-white-100">
+											{ name }
+											if proj.Meta.Description != "" {
+												<p class="text-xs text-black-600 dark:text-black-700 font-normal">{ proj.Meta.Description }</p>
+											}
+										</td>
+										<td class="px-5 py-3 text-black-700 dark:text-black-600 hidden sm:table-cell text-xs font-mono">
+											if proj.Meta.RepoURL != "" {
+												{ proj.Meta.RepoURL }
+											} else {
+												<span class="text-black-600 dark:text-black-700">local</span>
+											}
+										</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ proj.Meta.DefaultPreset }</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ proj.Meta.DefaultBackend }</td>
+										<td class="px-5 py-3 text-right">
+											<button
+												data-delete-project={ name }
+												class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+											>Delete</button>
+										</td>
+									</tr>
+								}
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
+	}
+}

@@ -1,0 +1,55 @@
+package view
+
+// AgentsLayout wraps every Agents page with a two-column shell:
+// a fixed left sidebar nav and a flex-1 main content area.
+// The framework's c.HTML already wraps this in the global page shell
+// (navbar + theme), so this component only adds the two-column layout.
+templ AgentsLayout(base, activePage string) {
+	<div class="mx-auto flex w-full max-w-container gap-0 px-6 pb-8">
+		<aside class="w-44 shrink-0 pt-8 pr-4">
+			<nav class="flex flex-col gap-0.5">
+				@agentsNavLink(base+"/", "Overview", activePage == "overview")
+				@agentsNavLink(base+"/sessions", "Sessions", activePage == "sessions")
+				@agentsNavLink(base+"/projects", "Projects", activePage == "projects")
+				@agentsNavLink(base+"/presets", "Presets", activePage == "presets")
+			</nav>
+		</aside>
+		<main class="min-w-0 flex-1 pt-8">
+			{ children... }
+		</main>
+	</div>
+}
+
+templ agentsNavLink(href, label string, active bool) {
+	<a
+		href={ templ.SafeURL(href) }
+		class={
+			"flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+			templ.KV("bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400", active),
+			templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100", !active),
+		}
+	>
+		{ label }
+	</a>
+}
+
+// statusBadge renders an inline coloured pill for an agent/session status.
+templ statusBadge(status string) {
+	switch status {
+		case "running":
+			<span class="inline-flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-400">
+				<span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+				running
+			</span>
+		case "queued":
+			<span class="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+				<span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+				queued
+			</span>
+		default:
+			<span class="inline-flex items-center gap-1 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">
+				<span class="h-1.5 w-1.5 rounded-full bg-black-500 dark:bg-black-600"></span>
+				idle
+			</span>
+	}
+}

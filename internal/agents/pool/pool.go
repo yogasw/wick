@@ -336,6 +336,21 @@ func (p *Pool) QueueLen() int {
 	return len(p.queue)
 }
 
+// Kill stops the running agent for sessionID+agentName. Idempotent if
+// the agent is not currently active — returns nil in that case.
+// The normal onAgentExit hook still fires, releasing the slot and
+// draining the queue.
+func (p *Pool) Kill(sessionID, agentName string) error {
+	p.mu.Lock()
+	key := sessionKey(sessionID, agentName)
+	entry, ok := p.active[key]
+	p.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return entry.agent.Stop()
+}
+
 // HandleExit is the public hook the factory wires into agent.OnExit.
 // It defers to the unexported onAgentExit but accepts the reason so
 // future code can branch (e.g. don't grant queue if the previous exit

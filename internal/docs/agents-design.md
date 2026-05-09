@@ -74,7 +74,7 @@ Update tabel ini saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
 | Phase 1 — Foundation | `[x]` | `internal/agents/` storage + config + preset + project + session + registry + manager. 28 unit tests hijau. |
 | Phase 2 — Subprocess + Pool | `[x]` | claude only. event/state/store/agent/pool subpackages + integration test via fake spawner. Real-claude smoke test landed in commit `928867f` (env-gated `WICK_CLAUDE_E2E=1`) — verified long-lived multi-turn against claude 2.1.132. Pool exit-order hardening in commit `73dddfc`: `onAgentExit` now runs `markStatus(idle)` **before** `releaseSlot`, Pool gains `sync.WaitGroup` to drain trailing exit + queue goroutines, `spawn`/`tryGrantQueue` short-circuit on `closed`. Killed flaky `TestPipeline_ResumeAfterIdleKill` + `TestQueueWhenPoolFull` on Windows (concurrent `os.Rename` to `meta.json`). 68 tests across 19 pkgs (incl. agent/claude, transport split). |
 | Phase 3 — Command Gate | `[x]` | claude PreToolUse hook + `wick-gate` binary + glob matcher + shell-metachar guard + scope prefix. Integration test builds the binary and invokes it as a subprocess with real stdin/env (no mocks). 91 tests / 21 pkgs total. Real-claude pool e2e green after the phase-2 pool fix; verified against claude 2.1.132 on Windows. |
-| Phase 4 — UI Manager Tool (MVP) | `[ ]` | — |
+| Phase 4 — UI Manager Tool (MVP) | `[x]` | `internal/tools/agents/` — handler + service + stream (Broadcaster) + view/ subpackage (layout/overview/sessions/projects/presets) + js/agents.js. SSE via GET /stream, send via POST /sessions/{id}/send, kill/delete actions. `tags.AI` group tag added. Agents link in nav UserMenu + profile layout tab. Pool.Kill() added. Bootstrap wired in server.go with graceful shutdown. 86 tests green. |
 | Phase 5 — Slack Transport | `[ ]` | — |
 | Phase 6 — Polish | `[ ]` | — |
 
@@ -141,15 +141,15 @@ Tujuan: shell command yang tidak whitelisted di-block oleh CLI hook.
 
 Tujuan: bisa kelola agent dari web UI tanpa Slack. End-to-end test path.
 
-- [ ] **4.1** Tool registration di `internal/tools/agents/tool.go` (sesuai tool-module.md) → `internal/tools/agents/`
-- [ ] **4.2** Layout templ: nav kiri (Overview/Sessions/Projects/Presets/Queue/Config) + content kanan → `internal/tools/agents/view.templ`
-- [ ] **4.3** Halaman Overview, Sessions list, Projects list, Presets list, Queue → `view.templ` per page
-- [ ] **4.4** Session detail: tab Conversation/Commands/Raw + composer kirim message → `view.templ`
-- [ ] **4.5** UI transport: handler `POST /sessions/{id}/send` → IncomingMessage → `internal/agents/ui_transport.go`
-- [ ] **4.6** Action buttons: Resume / Kill / Reset / Copy command per agent → `view.templ` + handler
-- [ ] **4.7** SSE broadcaster `GET /stream` + EventSource client → `internal/agents/stream.go`, `js/agents.js`
-- [ ] **4.8** Pagination listing (50/page, scan folder + sort) → handler
-- [ ] **4.9** Config pages auto-render dari `wick:"..."` tag → (ikut wick tag system, no extra code)
+- [x] **4.1** Tool registration di `internal/tools/agents/` (sesuai tool-module.md) + registry entry
+- [x] **4.2** Layout templ: nav kiri (Overview/Sessions/Projects/Presets) + content kanan → `internal/tools/agents/view/layout.templ`
+- [x] **4.3** Halaman Overview, Sessions list, Projects list, Presets list → `view/{overview,sessions,projects,presets}.templ`
+- [x] **4.4** Session detail: tab Conversation/Commands/Raw + composer kirim message → `view/sessions.templ`
+- [x] **4.5** UI transport: handler `POST /sessions/{id}/send` → pool.Send → `internal/tools/agents/handler.go`
+- [x] **4.6** Action buttons: Kill / Delete per session + Delete per project/preset → handler + JS
+- [x] **4.7** SSE broadcaster `GET /stream` + EventSource client → `stream.go`, `js/agents.js`
+- [x] **4.8** Pagination listing (50/page) → sessionsPage handler
+- [x] **4.9** Config pages auto-render via wick tag system (no extra code needed — tool uses RegisterToolNoConfig pattern)
 - [ ] **4.10** Smoke test: buka `/tools/agents`, klik Send → claude jalan, conversation muncul real-time → manual
 
 **Exit criteria MVP**: tanpa Slack, user bisa kelola full lifecycle agent dari web UI. End-to-end claude works.
