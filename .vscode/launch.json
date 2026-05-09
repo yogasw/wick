@@ -2,11 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Lab Server",
+      "name": "wicklab",
       "type": "go",
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/lab",
+      "output": "${workspaceFolder}/bin/wicklab",
+      "cwd": "${workspaceFolder}/cmd/lab",
       "args": ["server"],
       "envFile": "${workspaceFolder}/.env",
       "preLaunchTask": "debug: prep"
