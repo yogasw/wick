@@ -948,13 +948,73 @@ Semua badge punya `data-pid` attribute → tooltip + JS bisa surface-kan PID. Pe
 
 **Spawn log enrichment** (`internal/agents/provider/spawnlog.go`):
 
-`SpawnLogger.List()` membaca tiap file log untuk extract PID + first user message + final exit reason, lalu attach ke `SpawnLogFile`. Recent Spawns table di `/tools/agents/providers` tampilin kolom PID + First Message + lifecycle pill. Cheap karena spawn log per file <10 baris.
+`SpawnLogger.List()` membaca tiap file log untuk extract PID + first user message + binary + argv + final exit reason, lalu attach ke `SpawnLogFile`. Recent Spawns table di `/tools/agents/providers` tampilin kolom Started/Provider/PID/First Message (max 10 page, paginated). Cheap karena spawn log per file <10 baris.
 
 `start` event ditulis dua kali per spawn:
 1. Pre-Start (di Build): timestamp, provider, session, agent, workspace, resume_id. PID belum tau.
-2. Post-Start (dari `BuildResult.OnStarted`): PID + first_user_message (truncated 80 chars).
+2. Post-Start (dari `BuildResult.OnStarted`): PID + binary path + argv + first_user_message (truncated 10 kata).
 
-Enrichment scan kedua event, ambil yang non-zero. Kalau spawn crash sebelum Start return → cuma event pertama, PID=0 (UI tampilin "—").
+Enrichment scan kedua event, ambil yang non-zero. Kalau spawn crash sebelum Start return → cuma event pertama, PID=0 (UI tampilin "—") dan ngga ada argv (debug "kenapa gagal" → cek raw event lain di file).
+
+**Reproduce panel di spawn detail** (`/providers/spawns/<file>`): kalau `Binary + Argv` ada di log, render shell command copy-paste-able lewat `shellCommand`/`shellQuote` helper. Operator bisa run perintah identik di terminal manual buat debug "kenapa fail di wick tapi jalan di shell" tanpa nebak argv. Args yg punya whitespace/metachar di-quote pakai `'…'`-escape standar bash.
+
+**`Process.Binary()` + `Process.Argv()`**: interface method baru di `provider.Process`. Real claude impl ambil dari `cmd.Path` + `cmd.Args[1:]`. Test fakes return empty strings. `Agent.Binary()` / `Agent.Argv()` thread-safe accessor — pool baca pas `OnStarted` callback (after subprocess started).
+
+#### 4.6.2 Pool runtime config
+
+Pool knobs (`MaxConcurrent`, `IdleTimeout`) dibaca dari configsSvc di server boot, BUKAN hardcode. Owner = `"agents"` (set otomatis oleh `tools.RegisterBuiltins` saat append modul). Keys reflected dari `agentconfig.GeneralConfig`:
+
+| Config key | Default | Yang dipengaruhi |
+|---|---|---|
+| `max_concurrent` | 2 | `pool.PoolConfig.MaxConcurrent` — slot limit |
+| `idle_timeout_sec` | 120 | `pool.PoolConfig.IdleTimeout` — auto-kill TTL |
+| `default_provider` | "claude" | (TBD; phase 6 sebagai default picker) |
+
+Server boot (`server.go`):
+```go
+maxConc := 2
+if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n > 0 {
+    maxConc = n
+}
+// ... idem idle_timeout_sec
+agentpool.New(agentpool.PoolConfig{MaxConcurrent: maxConc, IdleTimeout: ..., ...})
+```
+
+Edit nilai lewat `/admin/tools/agents` (link "Settings" di sidebar nav agents). Wajib restart wick supaya pool re-init dengan nilai baru — runtime hot-reload not in scope. Doc reminder ini juga di tooltip Settings entry kalau perlu (TODO).
+
+#### 4.6.3 Pool queue + dequeue
+
+Queue FIFO di `pool.Pool.queue`. Saat semua slot penuh, Send append ke queue. Pool fire `tryGrantQueue` setelah tiap exit hook → pop head + spawn. Tapi ada kasus: queue stuck (operator nunggu lama, agent yg blocking ngga selesai-selesai). Operator butuh cara cancel.
+
+`Pool.Dequeue(sessionID, agentName) int`: drop semua entry queue yg match, return count removed. Ngga sentuh active spawn — buat itu pakai `Kill`. UI: Overview punya "Queue" panel (amber theme) per session row dengan tombol Kill → POST `/sessions/{id}/dequeue`. Handler ngubah session status balik ke `idle` di meta.json.
+
+#### 4.6.4 Provider filter di New Session
+
+User ngga boleh bisa pilih provider yg ngga sehat (binary ngga ditemu di PATH, version probe gagal, atau `Disabled`). Solusi: helper `providerChoices(ctx)` di `tools/agents/providers.go` yg probe semua via `provider.ProbeAll`, filter `PathFound && VersionErr == "" && !Disabled`, return `[]ProviderChoiceVM{Type, Name, Version}`.
+
+New Session modal sekarang render `<option value=type>type/name — version</option>` per healthy provider. Kalau kosong → pesan link ke `/providers` buat setup. Reusable: bisa dipake dimanapun "user pick a provider".
+
+#### 4.6.5 UI patterns (Backends pages)
+
+**Clickable rows + kebab menu**: alih-alih tombol Open + Delete di tiap row, row sendiri jadi link target (`data-row-link="<href>"` di `<tr>`/`<li>`), kebab menu (⋮) di kanan untuk action (Delete dst). Klik di mana saja di row → navigate, kecuali di `[data-row-action]` element (kebab dropdown) atau native interactive (`<a>/<button>/<summary>/<input>`).
+
+Implementasi:
+- `view/layout.templ::kebabMenu(action kebabAction)` — komponen reusable, `<details>`/`<summary>` untuk dropdown native (no JS toggle).
+- `agents.js` delegated click listener: navigate row, kecuali target.closest filter di atas. Cmd/middle-click buka tab baru.
+- Container table pakai `overflow-visible` (BUKAN `overflow-hidden`) supaya kebab dropdown ngga ke-clip parent.
+
+**Inline confirm popover**: ganti `window.confirm()` (native dialog jelek + center-screen) dengan `confirmAt(anchor, msg, opts)` JS helper. Popover Tailwind di samping/bawah anchor button, auto-flip ke atas kalau viewport overflow. Esc/click luar = cancel, Enter = confirm. Single-popover-at-a-time (open kedua nutup yg pertama).
+
+Pakai untuk semua destructive action: delete session/workspace/preset, kill agent, dequeue. Confirm label custom per flow ("Delete" / "Kill" / "Drop").
+
+#### 4.6.6 Overview page composition
+
+Overview dipotong jadi 3 zona:
+1. **Stats row** (3 cards): Active Slots `n/max`, Queued count, total Sessions.
+2. **Queue panel** (amber, conditional render `len(Queued) > 0`): tiap session yang nunggu slot, dengan tombol Kill → dequeue.
+3. **Active Sessions** (reuse `SessionsTable`): top 5 session yg subprocess-nya masih hidup di pool (lifecycle ∈ {spawning, working, idle}; killed BUKAN active). View All link ke `/sessions` untuk full history.
+
+`Active Sessions` BEDA dari "Recent Sessions" lama: dulu sort by `last_active desc` apapun status, sekarang strict filter via `pool.ActiveSnapshot()`. Killed sessions ngga muncul di Overview — operator ke `/sessions` kalau mau scroll history.
 
 **Step 4 — Slack handler (`slack.go`) — minimal di Slack, detail di dashboard:**
 
