@@ -68,6 +68,11 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 
 	// Connectors — list + per-row detail with test panel and action menu.
 	h.connectorRoutes(mux, authMidd)
+
+	// Audit log — cross-connector run history (admin only).
+	mux.Handle("GET /manager/runs", adminOnly(h.auditLogPage))
+	mux.Handle("GET /api/runs", adminOnly(h.apiRuns))
+	mux.Handle("GET /api/runs/summary", adminOnly(h.apiRunsSummary))
 }
 
 // requiredMissingKeys returns the keys whose Required flag is set but
