@@ -3,6 +3,9 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
 // Pool is the global slot manager. It tracks how many agent
@@ -39,11 +43,17 @@ type Pool struct {
 }
 
 // PoolConfig knobs.
+//
+// DefaultWorkspace is the workspace name used when a session has no
+// workspace bound. Empty = no default; the pool falls back to a
+// per-session temp dir so claude still has a stable cwd. See
+// agents-design.md §0.2 D4.
 type PoolConfig struct {
-	MaxConcurrent int
-	IdleTimeout   time.Duration
-	Layout        config.Layout
-	Factory       AgentFactory
+	MaxConcurrent    int
+	IdleTimeout      time.Duration
+	Layout           config.Layout
+	Factory          AgentFactory
+	DefaultWorkspace string
 }
 
 // AgentFactory builds an agent ready to Start. The pool wires the
@@ -163,10 +173,15 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		}
 	}
 
+	cwd, err := p.resolveCwd(sess)
+	if err != nil {
+		return err
+	}
+
 	a, st, sto, err := p.cfg.Factory.Build(FactoryOptions{
 		SessionID:   sessionID,
 		AgentName:   agentName,
-		Workspace:   p.cfg.Layout.SessionWorkspace(sessionID),
+		Workspace:   cwd,
 		ResumeID:    resumeID,
 		IdleTimeout: p.cfg.IdleTimeout,
 	})
@@ -289,6 +304,40 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 	p.buffers[sessionID] = buf
 	p.mu.Unlock()
 	return buf, nil
+}
+
+// resolveCwd determines the spawn cwd for a session. The fallback
+// chain (agents-design.md §0.2 D4):
+//
+//  1. session.Meta.Workspace — explicit binding
+//  2. PoolConfig.DefaultWorkspace — tools-config default
+//  3. <BaseDir>/sessions/<id>/cwd/ — per-session temp dir
+//
+// For named workspaces (steps 1-2) the returned path is the
+// workspace's resolved cwd (managed `files/` or custom path). The
+// pool MkdirAll's managed paths so the spawn never fails on a
+// missing directory; custom paths are assumed to exist (validated
+// at workspace create time).
+func (p *Pool) resolveCwd(sess session.Session) (string, error) {
+	name := sess.Meta.Workspace
+	if name == "" {
+		name = p.cfg.DefaultWorkspace
+	}
+	if name != "" {
+		path, err := workspace.ResolvePath(p.cfg.Layout, name)
+		if err != nil {
+			return "", fmt.Errorf("resolve workspace %q: %w", name, err)
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return "", fmt.Errorf("ensure workspace path %q: %w", path, err)
+		}
+		return path, nil
+	}
+	fallback := filepath.Join(p.cfg.Layout.SessionDir(sess.ID), "cwd")
+	if err := os.MkdirAll(fallback, 0o755); err != nil {
+		return "", fmt.Errorf("ensure session fallback cwd %q: %w", fallback, err)
+	}
+	return fallback, nil
 }
 
 // markStatus updates session meta.Status + LastActive.

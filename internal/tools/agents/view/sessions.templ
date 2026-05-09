@@ -22,10 +22,10 @@ templ SessionsList(vm SessionsListVM) {
 					<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Session</h2>
 					<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions") } class="space-y-4">
 						<div>
-							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Project (optional)</label>
-							<select name="project" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
-								<option value="">— no project —</option>
-								for _, name := range vm.ProjectList {
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Workspace (optional)</label>
+							<select name="workspace" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="">— no workspace —</option>
+								for _, name := range vm.WorkspaceList {
 									<option value={ name }>{ name }</option>
 								}
 							</select>
@@ -54,7 +54,7 @@ templ SessionsList(vm SessionsListVM) {
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
 								<th class="px-5 py-3 text-left">Session</th>
-								<th class="px-5 py-3 text-left hidden sm:table-cell">Project</th>
+								<th class="px-5 py-3 text-left hidden sm:table-cell">Workspace</th>
 								<th class="px-5 py-3 text-left">Status</th>
 								<th class="px-5 py-3 text-left hidden md:table-cell">Origin</th>
 								<th class="px-5 py-3 text-left hidden lg:table-cell">Last Active</th>
@@ -67,8 +67,8 @@ templ SessionsList(vm SessionsListVM) {
 									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ shortID(id) }</td>
 										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden sm:table-cell">
-											if sess.Meta.Project != "" {
-												{ sess.Meta.Project }
+											if sess.Meta.Workspace != "" {
+												{ sess.Meta.Workspace }
 											} else {
 												<span class="text-black-600 dark:text-black-700">—</span>
 											}
@@ -121,8 +121,8 @@ templ SessionDetail(vm SessionDetailVM) {
 					<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-xs text-black-700 dark:text-black-600 hover:underline">← Sessions</a>
 					<h1 class="mt-1 font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ vm.Session.ID }</h1>
 					<div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
-						if vm.Session.Meta.Project != "" {
-							<span>Project: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Meta.Project }</strong></span>
+						if vm.Session.Meta.Workspace != "" {
+							<span>Workspace: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Meta.Workspace }</strong></span>
 						}
 						if len(vm.Session.Agents) > 0 {
 							<span>Agent: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Agents[0].Name }</strong> ({ vm.Session.Agents[0].Backend })</span>

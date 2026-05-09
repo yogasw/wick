@@ -144,16 +144,16 @@
       });
     });
 
-    // ── Delete project ────────────────────────────────────────────────
-    document.querySelectorAll("[data-delete-project]").forEach(function (btn) {
+    // ── Delete workspace ──────────────────────────────────────────────
+    document.querySelectorAll("[data-delete-workspace]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var name = btn.dataset.deleteProject;
-        if (!confirm("Delete project \"" + name + "\"? This cannot be undone.")) return;
+        var name = btn.dataset.deleteWorkspace;
+        if (!confirm("Delete workspace \"" + name + "\"? This cannot be undone.")) return;
         var b = resolveBase();
         if (!b) return;
-        fetch(b + "/projects/" + encodeURIComponent(name), { method: "DELETE" })
+        fetch(b + "/workspaces/" + encodeURIComponent(name), { method: "DELETE" })
           .then(function () { location.reload(); })
-          .catch(function (err) { console.error("delete project failed:", err); });
+          .catch(function (err) { console.error("delete workspace failed:", err); });
       });
     });
 

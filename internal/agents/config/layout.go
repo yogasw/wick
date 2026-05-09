@@ -20,17 +20,30 @@ type Layout struct {
 
 func NewLayout(baseDir string) Layout { return Layout{BaseDir: baseDir} }
 
-func (l Layout) PresetsDir() string  { return filepath.Join(l.BaseDir, "presets") }
-func (l Layout) ProjectsDir() string { return filepath.Join(l.BaseDir, "projects") }
-func (l Layout) SessionsDir() string { return filepath.Join(l.BaseDir, "sessions") }
+func (l Layout) PresetsDir() string    { return filepath.Join(l.BaseDir, "presets") }
+func (l Layout) WorkspacesDir() string { return filepath.Join(l.BaseDir, "workspaces") }
+func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessions") }
 
 func (l Layout) PresetDir(name string) string  { return filepath.Join(l.PresetsDir(), name) }
 func (l Layout) PresetFile(name string) string { return filepath.Join(l.PresetDir(name), "agent.md") }
 
-func (l Layout) ProjectDir(name string) string  { return filepath.Join(l.ProjectsDir(), name) }
-func (l Layout) ProjectMeta(name string) string { return filepath.Join(l.ProjectDir(name), "meta.json") }
-func (l Layout) ProjectWorkspace(name string) string {
-	return filepath.Join(l.ProjectDir(name), "workspace")
+// WorkspaceDir is the metadata folder for one workspace
+// (`workspaces/<name>/`). For managed workspaces this also contains
+// the `files/` subfolder used as the agent cwd; custom workspaces
+// store no files here, only meta.json.
+func (l Layout) WorkspaceDir(name string) string {
+	return filepath.Join(l.WorkspacesDir(), name)
+}
+func (l Layout) WorkspaceMeta(name string) string {
+	return filepath.Join(l.WorkspaceDir(name), "meta.json")
+}
+
+// WorkspaceManagedPath is the cwd folder for a managed workspace
+// (`workspaces/<name>/files/`). Use workspace.ResolvePath() instead
+// of calling this directly — it transparently handles the custom
+// path case.
+func (l Layout) WorkspaceManagedPath(name string) string {
+	return filepath.Join(l.WorkspaceDir(name), "files")
 }
 
 func (l Layout) SessionDir(id string) string  { return filepath.Join(l.SessionsDir(), id) }
@@ -50,14 +63,11 @@ func (l Layout) SessionCommands(id string) string {
 func (l Layout) SessionRaw(id string) string {
 	return filepath.Join(l.SessionDir(id), "raw.jsonl")
 }
-func (l Layout) SessionWorkspace(id string) string {
-	return filepath.Join(l.SessionDir(id), "workspace")
-}
 
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {
-	for _, d := range []string{l.PresetsDir(), l.ProjectsDir(), l.SessionsDir()} {
+	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

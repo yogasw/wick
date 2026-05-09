@@ -4,10 +4,10 @@ import "testing"
 
 func TestValidateNames(t *testing.T) {
 	cases := []struct {
-		name    string
-		project bool
-		session bool
-		preset  bool
+		name      string
+		workspace bool
+		session   bool
+		preset    bool
 	}{
 		{"abc", true, true, true},
 		{"abc-1_2", true, true, true},
@@ -18,8 +18,8 @@ func TestValidateNames(t *testing.T) {
 		{"a/b", false, false, false},
 	}
 	for _, tc := range cases {
-		if got := ValidateProjectName(tc.name) == nil; got != tc.project {
-			t.Errorf("project %q: got valid=%v want %v", tc.name, got, tc.project)
+		if got := ValidateWorkspaceName(tc.name) == nil; got != tc.workspace {
+			t.Errorf("workspace %q: got valid=%v want %v", tc.name, got, tc.workspace)
 		}
 		if got := ValidateSessionID(tc.name) == nil; got != tc.session {
 			t.Errorf("session %q: got valid=%v want %v", tc.name, got, tc.session)

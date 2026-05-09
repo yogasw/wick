@@ -1,6 +1,6 @@
 // Package agents backs /tools/agents — the Agents UI Manager. It lets
-// users manage AI agent sessions, projects, and presets from the browser
-// and streams real-time agent output via Server-Sent Events.
+// users manage AI agent sessions, workspaces, and presets from the
+// browser and streams real-time agent output via Server-Sent Events.
 package agents
 
 import (
@@ -16,9 +16,9 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -57,9 +57,9 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
 
-	r.GET("/projects", projectsPage)
-	r.POST("/projects", createProject)
-	r.DELETE("/projects/{name}", deleteProject)
+	r.GET("/workspaces", workspacesPage)
+	r.POST("/workspaces", createWorkspace)
+	r.DELETE("/workspaces/{name}", deleteWorkspace)
 
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
@@ -121,14 +121,14 @@ func sessionsPage(c *tool.Ctx) {
 		end = len(ids)
 	}
 	c.HTML(view.SessionsList(view.SessionsListVM{
-		Base:        c.Base(),
-		IDs:         ids[start:end],
-		Sessions:    globalMgr.Registry().Sessions(),
-		Projects:    globalMgr.Registry().Projects(),
-		ProjectList: globalMgr.Registry().ProjectNames(),
-		PresetList:  globalMgr.Registry().PresetNames(),
-		Page:        page,
-		HasNext:     end < len(ids),
+		Base:          c.Base(),
+		IDs:           ids[start:end],
+		Sessions:      globalMgr.Registry().Sessions(),
+		Workspaces:    globalMgr.Registry().Workspaces(),
+		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
+		PresetList:    globalMgr.Registry().PresetNames(),
+		Page:          page,
+		HasNext:       end < len(ids),
 	}))
 }
 
@@ -136,16 +136,16 @@ func createSession(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	proj := c.Form("project")
+	ws := c.Form("workspace")
 	backend := c.Form("backend")
 	if backend == "" {
 		backend = "claude"
 	}
 	id := uuid.New().String()
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
-		ID:      id,
-		Project: proj,
-		Origin:  session.OriginUI,
+		ID:        id,
+		Workspace: ws,
+		Origin:    session.OriginUI,
 	})
 	if err != nil {
 		log.Ctx(c.Context()).Error().Msgf("create session: %s", err.Error())
@@ -282,32 +282,32 @@ func deleteSession(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ── Projects ──────────────────────────────────────────────────────────
+// ── Workspaces ────────────────────────────────────────────────────────
 
-func projectsPage(c *tool.Ctx) {
+func workspacesPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	c.HTML(view.ProjectsPage(view.ProjectsVM{
-		Base:        c.Base(),
-		ProjectList: globalMgr.Registry().ProjectNames(),
-		Projects:    globalMgr.Registry().Projects(),
-		PresetList:  globalMgr.Registry().PresetNames(),
+	c.HTML(view.WorkspacesPage(view.WorkspacesVM{
+		Base:          c.Base(),
+		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
+		Workspaces:    globalMgr.Registry().Workspaces(),
+		PresetList:    globalMgr.Registry().PresetNames(),
 	}))
 }
 
-func createProject(c *tool.Ctx) {
+func createWorkspace(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	name := strings.TrimSpace(c.Form("name"))
 	if name == "" {
-		c.Error(http.StatusBadRequest, "project name required")
+		c.Error(http.StatusBadRequest, "workspace name required")
 		return
 	}
-	opt := project.CreateOptions{
+	opt := workspace.CreateOptions{
 		Name:           name,
-		RepoURL:        strings.TrimSpace(c.Form("repo_url")),
+		CustomPath:     strings.TrimSpace(c.Form("custom_path")),
 		DefaultPreset:  c.Form("preset"),
 		DefaultBackend: c.Form("backend"),
 		Description:    c.Form("description"),
@@ -318,21 +318,21 @@ func createProject(c *tool.Ctx) {
 	if opt.DefaultBackend == "" {
 		opt.DefaultBackend = "claude"
 	}
-	if _, err := globalMgr.CreateProject(c.Context(), opt); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("create project %s: %s", name, err.Error())
+	if _, err := globalMgr.CreateWorkspace(c.Context(), opt); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("create workspace %s: %s", name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.Redirect(c.Base()+"/projects", http.StatusSeeOther)
+	c.Redirect(c.Base()+"/workspaces", http.StatusSeeOther)
 }
 
-func deleteProject(c *tool.Ctx) {
+func deleteWorkspace(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	name := c.PathValue("name")
-	if err := globalMgr.DeleteProject(c.Context(), name); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("delete project %s: %s", name, err.Error())
+	if err := globalMgr.DeleteWorkspace(c.Context(), name); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("delete workspace %s: %s", name, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

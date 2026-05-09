@@ -2,21 +2,13 @@ package registry
 
 import (
 	"context"
-	"os/exec"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/preset"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/workspace"
 )
-
-func gitAvailable(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not in PATH")
-	}
-}
 
 func newLayout(t *testing.T) config.Layout {
 	t.Helper()
@@ -33,8 +25,8 @@ func TestReloadEmpty(t *testing.T) {
 	if err := r.Reload(); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.ProjectNames()) != 0 {
-		t.Fatal("expected empty projects")
+	if len(r.WorkspaceNames()) != 0 {
+		t.Fatal("expected empty workspaces")
 	}
 	if len(r.SessionIDs()) != 0 {
 		t.Fatal("expected empty sessions")
@@ -42,9 +34,8 @@ func TestReloadEmpty(t *testing.T) {
 }
 
 func TestReloadAfterMutate(t *testing.T) {
-	gitAvailable(t)
 	layout := newLayout(t)
-	_, _ = project.Create(context.Background(), layout, project.CreateOptions{Name: "p"})
+	_, _ = workspace.Create(layout, workspace.CreateOptions{Name: "p"})
 	_, _ = session.Create(context.Background(), layout, session.CreateOptions{ID: "S1", Origin: session.OriginUI})
 	_ = preset.Create(layout, "rev", "x")
 
@@ -52,8 +43,8 @@ func TestReloadAfterMutate(t *testing.T) {
 	if err := r.Reload(); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.ProjectNames(); len(got) != 1 || got[0] != "p" {
-		t.Fatalf("projects: %v", got)
+	if got := r.WorkspaceNames(); len(got) != 1 || got[0] != "p" {
+		t.Fatalf("workspaces: %v", got)
 	}
 	if got := r.SessionIDs(); len(got) != 1 || got[0] != "S1" {
 		t.Fatalf("sessions: %v", got)
@@ -88,20 +79,19 @@ func TestReloadResetsRunningStatus(t *testing.T) {
 }
 
 func TestManagerCreateDelete(t *testing.T) {
-	gitAvailable(t)
 	layout := newLayout(t)
 	mgr, err := Bootstrap(layout)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.CreateProject(context.Background(), project.CreateOptions{Name: "p"}); err != nil {
+	if _, err := mgr.CreateWorkspace(context.Background(), workspace.CreateOptions{Name: "p"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S1", Project: "p", Origin: session.OriginUI}); err != nil {
+	if _, err := mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S1", Workspace: "p", Origin: session.OriginUI}); err != nil {
 		t.Fatal(err)
 	}
-	if got := mgr.Registry().ProjectNames(); len(got) != 1 {
-		t.Fatalf("projects: %v", got)
+	if got := mgr.Registry().WorkspaceNames(); len(got) != 1 {
+		t.Fatalf("workspaces: %v", got)
 	}
 	if got := mgr.Registry().SessionIDs(); len(got) != 1 {
 		t.Fatalf("sessions: %v", got)
@@ -114,30 +104,29 @@ func TestManagerCreateDelete(t *testing.T) {
 		t.Fatalf("sessions after delete: %v", got)
 	}
 
-	if err := mgr.DeleteProject(context.Background(), "p"); err != nil {
+	if err := mgr.DeleteWorkspace(context.Background(), "p"); err != nil {
 		t.Fatal(err)
 	}
-	if got := mgr.Registry().ProjectNames(); len(got) != 0 {
-		t.Fatalf("projects after delete: %v", got)
+	if got := mgr.Registry().WorkspaceNames(); len(got) != 0 {
+		t.Fatalf("workspaces after delete: %v", got)
 	}
 }
 
-func TestManagerDeleteProjectDetachesSessions(t *testing.T) {
-	gitAvailable(t)
+func TestManagerDeleteWorkspaceDetachesSessions(t *testing.T) {
 	layout := newLayout(t)
 	mgr, _ := Bootstrap(layout)
-	_, _ = mgr.CreateProject(context.Background(), project.CreateOptions{Name: "p"})
-	_, _ = mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S1", Project: "p", Origin: session.OriginUI})
+	_, _ = mgr.CreateWorkspace(context.Background(), workspace.CreateOptions{Name: "p"})
+	_, _ = mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S1", Workspace: "p", Origin: session.OriginUI})
 
-	if err := mgr.DeleteProject(context.Background(), "p"); err != nil {
+	if err := mgr.DeleteWorkspace(context.Background(), "p"); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := mgr.Registry().Session("S1")
 	if !ok {
 		t.Fatal("session removed unexpectedly")
 	}
-	if got.Meta.Project != "" {
-		t.Fatalf("session not detached: %q", got.Meta.Project)
+	if got.Meta.Workspace != "" {
+		t.Fatalf("session not detached: %q", got.Meta.Workspace)
 	}
 }
 

@@ -2,6 +2,7 @@ package agents_test
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,14 @@ import (
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/session"
 )
+
+// sessionFallbackCwd mirrors pool.resolveCwd's per-session temp-dir
+// fallback. Tests that want to address per-session spawn scripts use
+// this path because setupSess creates sessions without a workspace
+// binding (see agents-design.md §0.2 D4).
+func sessionFallbackCwd(layout config.Layout, id string) string {
+	return filepath.Join(layout.SessionDir(id), "cwd")
+}
 
 // turn returns a 3-event canned turn (init + assistant text + result).
 // Helper to keep scenario scripts readable.
@@ -39,7 +48,7 @@ func TestScenario_A_MultiTurnIdleKillResume(t *testing.T) {
 	p, layout := newE2EPool(t, 2, sp)
 	setupSess(t, layout, "A")
 
-	workspace := layout.SessionWorkspace("A")
+	workspace := sessionFallbackCwd(layout,"A")
 	sp.SetTurns(workspace,
 		// First spawn: 3 turns, then process exits when stdin closes.
 		[]turnScript{
@@ -121,7 +130,7 @@ func TestScenario_B_MultiTurnExplicitStop(t *testing.T) {
 	p, layout := newE2EPool(t, 2, sp)
 	setupSess(t, layout, "B")
 
-	workspace := layout.SessionWorkspace("B")
+	workspace := sessionFallbackCwd(layout,"B")
 	sp.SetTurns(workspace, []turnScript{
 		turn("sess-B", "rep-a"),
 		turn("sess-B", "rep-b"),
@@ -171,18 +180,18 @@ func TestScenario_ConcurrentSessionsQueueDrains(t *testing.T) {
 		setupSess(t, layout, id)
 	}
 
-	sp.SetTurns(layout.SessionWorkspace("A"), []turnScript{
+	sp.SetTurns(sessionFallbackCwd(layout,"A"), []turnScript{
 		turn("sess-A", "A1"),
 		turn("sess-A", "A2"),
 		turn("sess-A", "A3"),
 	})
-	sp.SetTurns(layout.SessionWorkspace("B"), []turnScript{
+	sp.SetTurns(sessionFallbackCwd(layout,"B"), []turnScript{
 		turn("sess-B", "B1"),
 		turn("sess-B", "B2"),
 		turn("sess-B", "B3"),
 		turn("sess-B", "B4"),
 	})
-	sp.SetTurns(layout.SessionWorkspace("C"), []turnScript{
+	sp.SetTurns(sessionFallbackCwd(layout,"C"), []turnScript{
 		turn("sess-C", "C1"),
 	})
 
@@ -211,7 +220,7 @@ func TestScenario_ConcurrentSessionsQueueDrains(t *testing.T) {
 	if len(sessC.Meta.PendingInput) != 1 || sessC.Meta.PendingInput[0] != "c-msg-1" {
 		t.Fatalf("C pending_input: %v", sessC.Meta.PendingInput)
 	}
-	if cSpawns := sp.SpawnsFor(layout.SessionWorkspace("C")); len(cSpawns) != 0 {
+	if cSpawns := sp.SpawnsFor(sessionFallbackCwd(layout,"C")); len(cSpawns) != 0 {
 		t.Fatalf("C spawned while pool was full: %v", cSpawns)
 	}
 

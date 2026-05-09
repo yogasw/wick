@@ -3,8 +3,8 @@ package view
 import (
 	"time"
 
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
 // OverviewVM holds data for the Overview page.
@@ -18,19 +18,19 @@ type OverviewVM struct {
 
 // SessionsListVM holds data for the Sessions list page.
 type SessionsListVM struct {
-	Base        string
-	IDs         []string
-	Sessions    map[string]session.Session
-	Projects    map[string]project.Project
-	ProjectList []string
-	PresetList  []string
-	Page        int
-	HasNext     bool
+	Base          string
+	IDs           []string
+	Sessions      map[string]session.Session
+	Workspaces    map[string]workspace.Workspace
+	WorkspaceList []string
+	PresetList    []string
+	Page          int
+	HasNext       bool
 }
 
 // TurnVM is one conversation turn for the UI.
 type TurnVM struct {
-	Role      string    // "user" | "assistant" | "system"
+	Role      string // "user" | "assistant" | "system"
 	Agent     string
 	Text      string
 	Truncated bool
@@ -46,12 +46,12 @@ type SessionDetailVM struct {
 	CmdLines []string
 }
 
-// ProjectsVM holds data for the Projects page.
-type ProjectsVM struct {
-	Base        string
-	ProjectList []string
-	Projects    map[string]project.Project
-	PresetList  []string
+// WorkspacesVM holds data for the Workspaces page.
+type WorkspacesVM struct {
+	Base          string
+	WorkspaceList []string
+	Workspaces    map[string]workspace.Workspace
+	PresetList    []string
 }
 
 // PresetsVM holds data for the Presets list page.

@@ -18,8 +18,8 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/preset"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
 // Registry is the in-memory view of the on-disk agents state.
@@ -29,20 +29,20 @@ import (
 type Registry struct {
 	layout config.Layout
 
-	mu       sync.RWMutex
-	projects map[string]project.Project
-	sessions map[string]session.Session
-	presets  map[string]struct{}
+	mu         sync.RWMutex
+	workspaces map[string]workspace.Workspace
+	sessions   map[string]session.Session
+	presets    map[string]struct{}
 }
 
 // New returns an empty registry bound to the given layout. Call
 // Reload() before serving traffic.
 func New(layout config.Layout) *Registry {
 	return &Registry{
-		layout:   layout,
-		projects: map[string]project.Project{},
-		sessions: map[string]session.Session{},
-		presets:  map[string]struct{}{},
+		layout:     layout,
+		workspaces: map[string]workspace.Workspace{},
+		sessions:   map[string]session.Session{},
+		presets:    map[string]struct{}{},
 	}
 }
 
@@ -70,20 +70,20 @@ func (r *Registry) Reload() error {
 		presets[n] = struct{}{}
 	}
 
-	projectNames, err := project.List(r.layout)
+	wsNames, err := workspace.List(r.layout)
 	if err != nil {
 		return err
 	}
-	projects := make(map[string]project.Project, len(projectNames))
-	for _, n := range projectNames {
-		p, err := project.Load(r.layout, n)
+	workspaces := make(map[string]workspace.Workspace, len(wsNames))
+	for _, n := range wsNames {
+		w, err := workspace.Load(r.layout, n)
 		if err != nil {
 			// Skip unreadable folders rather than fail the whole boot.
-			// A broken project shouldn't prevent the rest of wick from
-			// running — operator can fix it manually.
+			// A broken workspace shouldn't prevent the rest of wick
+			// from running — operator can fix it manually.
 			continue
 		}
-		projects[n] = p
+		workspaces[n] = w
 	}
 
 	sessionIDs, err := session.List(r.layout)
@@ -117,42 +117,43 @@ func (r *Registry) Reload() error {
 		sessions[id] = s
 	}
 
-	r.projects = projects
+	r.workspaces = workspaces
 	r.sessions = sessions
 	r.presets = presets
 	return nil
 }
 
-// Projects returns a snapshot copy of the projects map. Callers that
-// just need names should prefer ProjectNames to avoid copying meta.
-func (r *Registry) Projects() map[string]project.Project {
+// Workspaces returns a snapshot copy of the workspaces map. Callers
+// that just need names should prefer WorkspaceNames to avoid copying
+// meta.
+func (r *Registry) Workspaces() map[string]workspace.Workspace {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make(map[string]project.Project, len(r.projects))
-	for k, v := range r.projects {
+	out := make(map[string]workspace.Workspace, len(r.workspaces))
+	for k, v := range r.workspaces {
 		out[k] = v
 	}
 	return out
 }
 
-// ProjectNames returns sorted project names.
-func (r *Registry) ProjectNames() []string {
+// WorkspaceNames returns sorted workspace names.
+func (r *Registry) WorkspaceNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.projects))
-	for k := range r.projects {
+	out := make([]string, 0, len(r.workspaces))
+	for k := range r.workspaces {
 		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out
 }
 
-// Project returns one project by name, ok=false if missing.
-func (r *Registry) Project(name string) (project.Project, bool) {
+// Workspace returns one workspace by name, ok=false if missing.
+func (r *Registry) Workspace(name string) (workspace.Workspace, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	p, ok := r.projects[name]
-	return p, ok
+	w, ok := r.workspaces[name]
+	return w, ok
 }
 
 // Sessions returns a snapshot copy.
@@ -220,10 +221,10 @@ func (r *Registry) HasPreset(name string) bool {
 // upsert / delete helpers used by Manager (same package). Callers must
 // not hold the read lock when invoking these.
 
-func (r *Registry) upsertProject(p project.Project) {
+func (r *Registry) upsertWorkspace(w workspace.Workspace) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.projects[p.Name] = p
+	r.workspaces[w.Name] = w
 }
 
 func (r *Registry) upsertSession(s session.Session) {
@@ -238,10 +239,10 @@ func (r *Registry) upsertPreset(name string) {
 	r.presets[name] = struct{}{}
 }
 
-func (r *Registry) deleteProject(name string) {
+func (r *Registry) deleteWorkspace(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.projects, name)
+	delete(r.workspaces, name)
 }
 
 func (r *Registry) deleteSession(id string) {

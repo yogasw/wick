@@ -28,7 +28,7 @@ templ Overview(vm OverviewVM) {
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
 								<th class="px-5 py-2.5 text-left">Session</th>
-								<th class="px-5 py-2.5 text-left hidden sm:table-cell">Project</th>
+								<th class="px-5 py-2.5 text-left hidden sm:table-cell">Workspace</th>
 								<th class="px-5 py-2.5 text-left">Status</th>
 								<th class="px-5 py-2.5 text-left hidden md:table-cell">Origin</th>
 								<th class="px-5 py-2.5 text-right"></th>
@@ -40,8 +40,8 @@ templ Overview(vm OverviewVM) {
 									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ shortID(id) }</td>
 										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden sm:table-cell">
-											if sess.Meta.Project != "" {
-												{ sess.Meta.Project }
+											if sess.Meta.Workspace != "" {
+												{ sess.Meta.Workspace }
 											} else {
 												<span class="text-black-600 dark:text-black-700">—</span>
 											}

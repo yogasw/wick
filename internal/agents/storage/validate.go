@@ -6,32 +6,33 @@ import (
 	"strings"
 )
 
-// projectNameRe and presetNameRe enforce path-traversal-safe
-// identifiers. Project / preset names are human-typed (underscores and
-// hyphens OK).
+// workspaceNameRe and presetNameRe enforce path-traversal-safe
+// identifiers. Workspace / preset names are human-typed (underscores
+// and hyphens OK).
 //
 // sessionIDRe additionally allows `.` because Slack thread_ts looks
 // like "1715167891.234567".
 var (
-	projectNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	sessionIDRe   = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
-	presetNameRe  = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	workspaceNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	sessionIDRe     = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+	presetNameRe    = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
-// ValidateProjectName rejects names containing path separators, dots,
-// or characters outside [A-Za-z0-9_-]. See agents-design.md §15.7.
-func ValidateProjectName(name string) error {
+// ValidateWorkspaceName rejects names containing path separators,
+// dots, or characters outside [A-Za-z0-9_-]. See agents-design.md
+// §15.7.
+func ValidateWorkspaceName(name string) error {
 	if name == "" {
-		return fmt.Errorf("project name is empty")
+		return fmt.Errorf("workspace name is empty")
 	}
-	if !projectNameRe.MatchString(name) {
-		return fmt.Errorf("invalid project name %q (allowed: [A-Za-z0-9_-])", name)
+	if !workspaceNameRe.MatchString(name) {
+		return fmt.Errorf("invalid workspace name %q (allowed: [A-Za-z0-9_-])", name)
 	}
 	return nil
 }
 
 // ValidateSessionID accepts the dotted Slack thread_ts form in addition
-// to the project-name charset. Leading dots and `..` are still rejected.
+// to the workspace-name charset. Leading dots and `..` are still rejected.
 func ValidateSessionID(id string) error {
 	if id == "" {
 		return fmt.Errorf("session id is empty")
@@ -45,7 +46,7 @@ func ValidateSessionID(id string) error {
 	return nil
 }
 
-// ValidatePresetName mirrors project-name rules.
+// ValidatePresetName mirrors workspace-name rules.
 func ValidatePresetName(name string) error {
 	if name == "" {
 		return fmt.Errorf("preset name is empty")

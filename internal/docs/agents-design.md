@@ -1,7 +1,9 @@
 # Agents — Desain
 
 Status: draft.
-Update terakhir: 2026-05-08.
+Update terakhir: 2026-05-09.
+
+> **⚠️ Refactor in flight: Project → Workspace.** Konsep "Project" (1 repo auto-clone, session = git worktree) sedang diganti jadi "Workspace" (folder shared, session pinjam pakai cwd, no worktree, no auto-clone). Lihat **§0.2** untuk perbandingan lengkap lama vs baru, decisions, dan phase tracker. Section §3-§6 di bawah masih mencerminkan model lama sampai refactor selesai.
 
 ---
 
@@ -59,6 +61,90 @@ Kalau jawaban langkah 4 "tidak", balik ke langkah 3 sebelum commit.
 
 ---
 
+## 0.2 Refactor: Project → Workspace
+
+Status: **planning**. Mulai 2026-05-09. Target: phase R1-R5 selesai sebelum Slack transport (Phase 5) dimulai.
+
+### Kenapa refactor
+
+Bug awal: session tanpa project gagal spawn (`chdir sessions/<id>/workspace: file not found`) karena workspace dir cuma dibuat saat `addWorktree` jalan. Penyelidikan ungkap mismatch fundamental dengan use case nyata user:
+
+> "Aku minta claude clone repoA, minta claude clone repoB. Numpuk di workspace `soluport-ops`. Jadi dia bisa pakai ulang."
+
+Use case = **shared folder berisi banyak repo, dipakai berulang oleh banyak session**. Bukan **1 project = 1 repo, session = worktree branch**.
+
+### Konsep: lama vs baru
+
+| Aspek | **Lama (project-centric)** | **Baru (workspace-centric)** |
+|---|---|---|
+| Entitas utama | `Project` | `Workspace` |
+| Definisi | 1 project = 1 git repo | 1 workspace = 1 folder berisi apapun |
+| Auto-clone? | Iya, `git clone <repo_url>` saat create | Tidak. Folder kosong, claude clone sendiri via Bash kalau perlu |
+| Isi folder | 1 repo (master clone) | Bebas: 0/1/N repo, file random, apapun |
+| Session relasi | Session = git worktree branch dari project | Session = pinjam pakai workspace cwd (no git ops) |
+| `Session.Meta` field | `Project string` | `Workspace string` |
+| Per-session folder | `sessions/<id>/workspace/` (worktree) | Tidak ada — session cuma metadata + log |
+| Session cwd subprocess | `sessions/<id>/workspace/` | `workspaces/<name>/` atau custom path |
+| Branch isolasi | `session/<id>` per session | Tidak ada — claude bebas branch sendiri |
+| Multi-session di "X" yang sama | Mustahil (worktree branch unik) | Boleh paralel, share cwd, no lock wick-side |
+| Workspace path | Selalu `~/.wick/agents/projects/<name>/workspace/` | Default managed `~/.wick/agents/workspaces/<name>/`, optional custom path absolut |
+| Repo URL field UI | "Repo URL (optional)" auto-clone | Buang. Workspace pure folder |
+| Slot pool | Per AI backend (claude/gpt/etc), no change | Sama, no change. Workspace cuma resolve cwd |
+| Session tanpa workspace | Boleh (worktree skipped) | Boleh, fallback ke "default workspace" tools-config; kalau ngga ada → temp dir per session |
+
+### Decisions (tanggal: 2026-05-09)
+
+| # | Putusan | Alasan |
+|---|---|---|
+| D1 | Workspace path: managed default + optional custom absolute path | User mau bisa tunjuk repo existing di disk (`D:/code/...`) tanpa harus copy ke `~/.wick/` |
+| D2 | Multi-session paralel di workspace sama: bebas, no lock | "Ngak semua edit kan biasanya cuma perintah baca file aja". User tanggung race kalau ada |
+| D3 | Pool slot: tetap per AI backend (claude/gpt), bukan per workspace | Pool concern = subprocess count per backend, bukan filesystem concurrency |
+| D4 | Session tanpa workspace: boleh, fallback ke tools-config `default_workspace` | Quick chat tanpa filesystem context tetap valid use case |
+| D5 | Repo URL field di "New Workspace" modal: buang | Cloning = claude job via Bash, bukan wick. Wick cuma manage folder + session |
+| D6 | Migration data lama: tidak ada | Belum di-pakai production. Refactor langsung |
+
+### Impact map (file-level)
+
+| Area | File | Action |
+|---|---|---|
+| Backend pkg | `internal/agents/project/` | Rename → `internal/agents/workspace/`. Buang `git.go` (`MaterializeWorkspace`, `AddWorktree`, `RemoveWorktree`) |
+| Layout | `internal/agents/config/layout.go` | Buang `SessionWorkspace`, `ProjectWorkspace`, `ProjectsDir`, `ProjectDir`. Tambah `WorkspacesDir`, `WorkspaceDir(name)`, `ResolveWorkspacePath(name) (path, isCustom)` |
+| Session | `internal/agents/session/session.go` | `Meta.Project` → `Meta.Workspace`. `SwitchProject` → `SwitchWorkspace` (cuma update meta, no fs ops) |
+| Session | `internal/agents/session/worktree.go` | Hapus file. Buang `addWorktree`, `removeWorktree`, `worktreeBranch` |
+| Pool | `internal/agents/pool/pool.go:169` | `Workspace = SessionWorkspace(id)` → resolve via `workspace.ResolvePath(layout, sess.Meta.Workspace)` dengan fallback rule (D4) |
+| Spawn | `internal/agents/agent/claude/spawn.go` | No change — tetap pakai `opt.Workspace`. Tapi pool harus pastikan path exist (MkdirAll managed; validate exist custom) |
+| Registry | `internal/agents/registry/{registry,manager}.go` | Rename `CreateProject/DeleteProject/Project()/Projects()/ProjectNames()/SwitchProject` → `Workspace*`. Buang `removeSessionWorktree` |
+| Tools config | `internal/tools/agents/` | Tambah field `default_workspace string` (wick tag) ke tool Configs |
+| HTTP | `internal/tools/agents/handler.go:287-340` | `/projects` endpoint cluster → `/workspaces` (`GET/POST/DELETE`). Update form binding (no RepoURL, add CustomPath) |
+| UI templ | `internal/tools/agents/view/projects.templ` | Rename file → `workspaces.templ`. Form fields: Name, Custom Path (optional, helper "Leave empty to use ~/.wick/agents/workspaces/<name>/"), Default Preset, Default Backend, Description. Buang Repo URL |
+| UI nav | `internal/tools/agents/view/layout.templ` | Tab "Projects" → "Workspaces" |
+| UI JS | `internal/tools/agents/js/agents.js:147-158` | `data-delete-project` → `data-delete-workspace` |
+| Tests | `internal/agents/project/project_test.go` | Rewrite → workspace tests. Buang `TestCreateWithClone`, `TestCreateNoRepo` |
+| Tests | `internal/agents/session/session_test.go` | `TestWithProject` assertion `worktree missing` → `workspace path resolves`. `TestSwitchProject` → `TestSwitchWorkspace` (no fs swap) |
+| Tests | `internal/agents/multiturn_scenarios_test.go` | `SessionWorkspace` → `WorkspacePath` lookups |
+| Doc | `internal/docs/agents-design.md` (this file) | Rewrite §0 TL;DR, §3, §4.1-4.3, §5, §6 setelah R3 selesai |
+
+### Phase tracker
+
+Update checkbox saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
+
+| Phase | Status | Catatan |
+|---|---|---|
+| **R0 — Doc this section** | `[x]` | Section §0.2 ditulis. Refactor decisions captured. |
+| **R1 — Backend rename + worktree rip** | `[x]` | New `workspace/` pkg (pure folder, no git), `layout.go` swapped (`WorkspacesDir`/`WorkspaceDir`/`WorkspaceManagedPath`, no `SessionWorkspace`), `session.Meta.Project` → `Meta.Workspace`, `addWorktree`/`removeWorktree`/`worktreeBranch` deleted, `internal/agents/project/` package deleted. Pool gained `resolveCwd` + `DefaultWorkspace` field; fallback chain = session.Workspace → cfg.DefaultWorkspace → `sessions/<id>/cwd/`. Closes original spawn bug (chdir on missing dir). |
+| **R2 — Registry/Manager rename** | `[x]` | Registry: `projects` map → `workspaces`, `Project()/Projects()/ProjectNames()` → `Workspace*`. Manager: `CreateProject/DeleteProject/SwitchProject` → `CreateWorkspace/DeleteWorkspace/SwitchWorkspace`. `removeSessionWorktree` helper deleted. |
+| **R3 — HTTP/UI** | `[x]` | `/workspaces` endpoint cluster (GET/POST/DELETE), `view/projects.templ` → `workspaces.templ` (Repo URL → Custom Path), nav tab "Projects" → "Workspaces", `data-delete-project` → `data-delete-workspace`. Templ regenerated. Browser smoke test pending. |
+| **R4 — Tools config: default_workspace** | `[ ]` | Pool sudah punya `DefaultWorkspace` field (R1); belum di-wire ke tools-config struct. Add field with `wick:"..."` tag + bootstrap inject. |
+| **R5 — Doc rewrite §0/§3/§4/§5/§6** | `[ ]` | Setelah code stable. Rewrite mencerminkan model baru, hapus §0.2 ini (atau pindah ke changelog) saat semua section main udah konsisten. |
+
+**R1-R3 verification (2026-05-09):** `go test ./internal/agents/... ./internal/tools/agents/...` = 82 tests passed across 22 packages. `go build` clean for all wick packages (template/ skipped, unrelated).
+
+### Open questions (tambah/edit di sini saat refactor jalan)
+
+- (none yet)
+
+---
+
 ## 1. Implementation Roadmap
 
 Urutan kerja dipecah jadi 6 fase. Tiap fase butuh fase sebelumnya selesai. Update checkbox `- [ ]` → `- [x]` saat task selesai.
@@ -75,6 +161,7 @@ Update tabel ini saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
 | Phase 2 — Subprocess + Pool | `[x]` | claude only. event/state/store/agent/pool subpackages + integration test via fake spawner. Real-claude smoke test landed in commit `928867f` (env-gated `WICK_CLAUDE_E2E=1`) — verified long-lived multi-turn against claude 2.1.132. Pool exit-order hardening in commit `73dddfc`: `onAgentExit` now runs `markStatus(idle)` **before** `releaseSlot`, Pool gains `sync.WaitGroup` to drain trailing exit + queue goroutines, `spawn`/`tryGrantQueue` short-circuit on `closed`. Killed flaky `TestPipeline_ResumeAfterIdleKill` + `TestQueueWhenPoolFull` on Windows (concurrent `os.Rename` to `meta.json`). 68 tests across 19 pkgs (incl. agent/claude, transport split). |
 | Phase 3 — Command Gate | `[x]` | claude PreToolUse hook + `wick-gate` binary + glob matcher + shell-metachar guard + scope prefix. Integration test builds the binary and invokes it as a subprocess with real stdin/env (no mocks). 91 tests / 21 pkgs total. Real-claude pool e2e green after the phase-2 pool fix; verified against claude 2.1.132 on Windows. |
 | Phase 4 — UI Manager Tool (MVP) | `[x]` | `internal/tools/agents/` — handler + service + stream (Broadcaster) + view/ subpackage (layout/overview/sessions/projects/presets) + js/agents.js. SSE via GET /stream, send via POST /sessions/{id}/send, kill/delete actions. `tags.AI` group tag added. Agents link in nav UserMenu + profile layout tab. Pool.Kill() added. Bootstrap wired in server.go with graceful shutdown. 86 tests green. |
+| Phase 4.5 — Refactor: Project → Workspace | `[~]` | Konsep Project (1 repo auto-clone, session = git worktree) diganti Workspace (folder shared, session pinjam pakai cwd, no worktree, no auto-clone). Detail decisions + impact map + phase tracker R0–R5 di **§0.2**. Trigger: bug spawn `chdir sessions/<id>/workspace: file not found` + use case shared folder berisi banyak repo. R0–R3 selesai 2026-05-09 (82 tests hijau). R4 (default_workspace tools-config) + R5 (doc rewrite §0/§3/§4/§5/§6) tersisa. |
 | Phase 5 — Slack Transport | `[ ]` | — |
 | Phase 6 — Polish | `[ ]` | — |
 
