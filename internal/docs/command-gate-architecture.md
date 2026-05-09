@@ -1,7 +1,13 @@
 # Command Gate — Arsitektur & Approval System
 
-Status: draft.
+Status: draft — arsitektur final, implementasi belum dimulai.
 Update terakhir: 2026-05-09.
+
+Keputusan final yang sudah locked:
+- IPC: Unix Domain Socket (raw JSON, bukan HTTP)
+- Gate binary: embed ke main binary via `//go:embed` (bukan sidecar/subcommand)
+- Dev override: `WICK_GATE_BIN` env var di `.env`
+- Approval style: Gate style (Pola A) — system intercept, bukan Claude Code style
 
 ---
 
@@ -569,97 +575,77 @@ Flow `builder.Build()`:
 3. `go build -ldflags "..."` → raw binary
 4. Package per platform: `.app`+`.dmg` (macOS), `.deb` (Linux), `.msi` (Windows, opt-in)
 
-### 8.2 Strategi Ship Dua Binary
+### 8.2 Strategi: Embed wick-gate ke Main Binary ✅ DIPILIH
 
-**Opsi 1 — Embed wick-gate ke dalam wick binary (Rekomendasi)**
-
-`wick-gate` di-compile dan di-embed sebagai bytes di dalam binary `wick` menggunakan `//go:embed`. Saat daemon start, binary ini di-extract ke session directory.
+`wick-gate` di-compile dulu untuk platform target, lalu di-embed sebagai bytes di dalam main binary via `//go:embed`. Saat daemon start pertama kali per session, binary di-extract ke session directory.
 
 ```go
-//go:embed assets/wick-gate-linux-amd64
-//go:embed assets/wick-gate-windows-amd64.exe
-var embeddedGate embed.FS
+//go:embed assets/wick-gate-*
+var embeddedGates embed.FS
 
-// Saat daemon start, extract ke session dir:
-gateBytes, _ := embeddedGate.ReadFile("assets/wick-gate-" + runtime.GOOS + "-" + runtime.GOARCH)
-gatePath := filepath.Join(sessionDir, "gate", "wick-gate")
-os.WriteFile(gatePath, gateBytes, 0755)
+func extractEmbeddedGate(sessionDir string) (string, error) {
+    name := fmt.Sprintf("assets/wick-gate-%s-%s", runtime.GOOS, runtime.GOARCH)
+    if runtime.GOOS == "windows" {
+        name += ".exe"
+    }
+    data, err := embeddedGates.ReadFile(name)
+    if err != nil {
+        return "", fmt.Errorf("embedded gate not found for %s/%s", runtime.GOOS, runtime.GOARCH)
+    }
+    gatePath := filepath.Join(sessionDir, "gate", "wick-gate")
+    if runtime.GOOS == "windows" {
+        gatePath += ".exe"
+    }
+    if err := os.MkdirAll(filepath.Dir(gatePath), 0700); err != nil {
+        return "", err
+    }
+    if err := os.WriteFile(gatePath, data, 0755); err != nil {
+        return "", err
+    }
+    return gatePath, nil
+}
 ```
 
 Keuntungan:
-- User hanya download satu file
-- Version selalu sinkron antara daemon dan gate
-- Tidak perlu update `PATH` atau installer logic tambahan
+- User download satu file — tidak ada binary terpisah yang bisa ketinggalan
+- Version selalu sinkron (gate di-compile bersama main binary)
+- MSI tidak perlu diubah sama sekali — `msi.go` tetap ship satu `.exe`
+- `.deb`, `.dmg`, raw binary — semua sama, tidak ada perubahan
 
-Kekurangan:
-- Binary `wick` jadi lebih besar (gate per platform ~2-5MB)
-- Cross-compile butuh build gate untuk semua target dulu
+Trade-off:
+- Main binary sedikit lebih besar (~2-5MB per platform yang di-embed)
+- Hanya embed gate untuk platform yang di-build (bukan semua platform sekaligus)
 
-**Opsi 2 — Dua binary terpisah di installer**
+> Opsi yang tidak dipilih: sidecar binary (dua file terpisah di MSI → risiko version mismatch) dan subcommand `wick gate` (load binary besar untuk proses kecil yang dipanggil ratusan kali per session).
 
-MSI include kedua `.exe` dan install keduanya ke `%LocalAppData%\Programs\AppName\`:
-- `appname.exe` (daemon)
-- `wick-gate.exe` (gate, path di-bake ke `settings.json` saat spawn)
+### 8.3 Build Pipeline di CI
 
-Perlu update `windows/msi.go` untuk include file kedua di `<Component>`.
-
-**Opsi 3 — wick-gate sebagai subcommand**
-
-```
-wick gate  ← jalankan gate mode
-```
-
-Binary sama, tapi kalau `os.Args[0]` adalah `wick-gate` atau subcommand `gate` dipanggil, jalankan logic gate. Path di settings.json: `wick gate`.
-
-Keuntungan: satu binary, zero perubahan di installer/release. Kekurangan: binary besar untuk proses kecil yang dipanggil ratusan kali.
-
-### 8.3 MSI dengan Dua Binary (Opsi 2 Detail)
-
-`internal/builder/windows/msi.go` perlu diupdate — tambah `<File>` kedua di dalam `<Component>`:
-
-```xml
-<Component Id="MainExecutable" Guid="...">
-  <File Id="MainExe" Name="appname.exe" Source="bin/appname.exe" KeyPath="yes"/>
-  <File Id="GateExe" Name="wick-gate.exe" Source="bin/wick-gate.exe"/>
-</Component>
-```
-
-Dan `builder.Config` perlu field baru:
-
-```go
-type Config struct {
-    // ... existing fields ...
-    SidecarBinaries []SidecarBinary // binary tambahan untuk di-include di installer
-}
-
-type SidecarBinary struct {
-    Name   string // "wick-gate.exe"
-    Source string // path ke binary yang sudah di-compile
-}
-```
-
-### 8.4 Build Pipeline untuk Dua Binary
-
-Di `wick build --all`, perlu build `wick-gate` untuk setiap target juga:
-
-```
-Untuk tiap target (windows/amd64, linux/amd64, dll.):
-  1. go build -o bin/appname-{os}-{arch} .              ← main binary
-  2. go build -o bin/wick-gate-{os}-{arch} ./cmd/wick-gate  ← gate binary
-  3. Package: masukkan keduanya ke .msi/.deb/.dmg
-```
-
-### 8.5 Template Downstream
-
-Kalau user pakai Wick sebagai framework (bukan langsung dari repo ini), `template/` perlu dokumen bahwa mereka perlu ship `wick-gate` bersama binary mereka. Template `wick.yml` bisa tambah task:
+Template release workflow (`template/.github/workflows/release.yml`) perlu satu step tambahan **sebelum** `wick build --installer` di setiap matrix job:
 
 ```yaml
-tasks:
-  build:
-    cmds:
-      - wick build --installer  # build main binary + installer
-      # wick-gate di-embed otomatis (kalau pakai opsi 1)
+# Di build job, SEBELUM step "Build":
+- name: Build wick-gate
+  env:
+    GOOS: ${{ matrix.os }}
+    GOARCH: ${{ matrix.arch }}
+  run: |
+    EXT=""
+    [ "${{ matrix.os }}" = "windows" ] && EXT=".exe"
+    mkdir -p assets
+    go build -o "assets/wick-gate-${{ matrix.os }}-${{ matrix.arch }}${EXT}" ./cmd/wick-gate
+
+- name: Build          # ← step existing, tidak berubah
+  run: wick build --installer
 ```
+
+`wick-gate` pure Go (no CGO) sehingga cross-compile works di semua runner. Gate di-compile untuk target platform yang sama dengan main binary, lalu `//go:embed assets/wick-gate-*` otomatis picks it up saat `go build` main binary.
+
+### 8.4 Template Downstream
+
+Proyek downstream yang pakai Wick sebagai framework:
+- Tidak perlu buat `cmd/wick-gate/` sendiri — bisa reuse binary dari Wick atau skip gate
+- CI workflow tinggal tambah step build gate seperti di atas
+- `wick build --installer` tetap tidak berubah
 
 ---
 
@@ -876,19 +862,49 @@ Kalau pakai embed (opsi 1):
 
 ## 12. Checklist Implementasi
 
+Urutan logis: gate binary siap dulu → daemon socket → approval flow → web UI → release.
+
+**A. Gate binary & embed**
 ```
-[ ] 1. Unix socket listener di daemon (per session, dibuat saat session start)
-[ ] 2. Pending state manager (sync.Map + goroutine per connection + timeout 25s)
-[ ] 3. Endpoint approve: POST /api/agents/sessions/{id}/approve
-[ ] 4. SSE event type baru: "approval_request" dan "approval_resolved"
-[ ] 5. Update wick-gate: baca socket path dari env, connect → send → block → exit
-[ ] 6. Web UI: render modal approval saat terima SSE "approval_request"
-[ ] 7. Web UI: countdown timer 25 detik di modal
-[ ] 8. Wire Gate di factory.go (saat ini masih nil)
-[ ] 9. Embed wick-gate via //go:embed (compile gate dulu, taruh di assets/)
-[ ] 10. extractEmbeddedGate() — extract ke session dir, chmod 0755, skip kalau sudah ada
-[ ] 11. resolveGateBin() — cek WICK_GATE_BIN dulu, fallback ke extract
-[ ] 12. Update .vscode/tasks.json — tambah go build gate ke "debug: prep"
-[ ] 13. Update .env.example — tambah WICK_GATE_BIN entry (sudah done)
-[ ] 14. Update template release workflow — tambah build gate sebelum wick build --installer
+[ ] A1. //go:embed assets/wick-gate-* di daemon package
+[ ] A2. extractEmbeddedGate() — extract ke session dir, chmod 0755, idempotent
+[ ] A3. resolveGateBin() — cek WICK_GATE_BIN env dulu, fallback ke extractEmbeddedGate
+[ ] A4. Update wick-gate binary: tambah socket path dari spec (baca WICK_GATE_SPEC),
+        connect unix socket → send ApprovalRequest → block → terima response → exit 0/2
+```
+
+**B. Daemon — Unix socket & approval state**
+```
+[ ] B1. Unix socket listener per session (buat saat session start, chmod 0600)
+        path: ~/.wick/sessions/<id>/gate/gate.sock
+[ ] B2. Pending state manager: sync.Map[id]chan ApprovalResponse + goroutine per conn
+[ ] B3. Timeout goroutine: 25s → auto-block kalau user tidak respond
+[ ] B4. Endpoint: POST /api/agents/sessions/{id}/approve
+        body: {"id":"...","decision":"approve|block"}
+        → resolve channel → goroutine balas ke gate
+```
+
+**C. SSE & Web UI**
+```
+[ ] C1. SSE event type baru "approval_request" — broadcast via Broadcaster yang sudah ada
+[ ] C2. SSE event type "approval_resolved" — untuk dismiss modal di semua tab
+[ ] C3. Web UI: render modal approval saat terima SSE "approval_request"
+        tampilkan: command, agent name, work dir, countdown 25s
+[ ] C4. Web UI: tombol Approve dan Block → POST /api/agents/sessions/{id}/approve
+[ ] C5. Web UI: auto-dismiss modal saat terima "approval_resolved"
+```
+
+**D. Wiring & factory**
+```
+[ ] D1. Wire Gate di factory.go (saat ini masih nil) — inject socket path ke spec
+[ ] D2. Spec.json: tambah field socket_path untuk gate → daemon socket
+```
+
+**E. Dev tooling & release**
+```
+[ ] E1. .vscode/tasks.json — update "debug: prep": tambah go build gate ke perintah
+[ ] E2. .vscode/tasks.json — tambah task "gate: sync-spec" (auto-link spec terbaru)
+[ ] E3. .vscode/launch.json — tambah launch "wicklab-gate" (envFile: bin/.gate-debug.env)
+[x] E4. .env.example — WICK_GATE_BIN entry sudah ada
+[ ] E5. template release workflow — tambah step "Build wick-gate" sebelum "wick build --installer"
 ```
