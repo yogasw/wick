@@ -16,6 +16,7 @@ Dokumen ini menjelaskan:
 - Detail Unix Domain Socket — cara kerja, keamanan, isi file
 - Bagaimana Web UI perlu render dua jenis interaksi (gate approval + AskUser)
 - Cara release dengan dua binary (`wick` + `wick-gate`) termasuk MSI
+- Cara resolve path gate di tiga environment: VSCode, serve, MSI
 - Rekomendasi akhir dengan justifikasi
 
 ---
@@ -662,7 +663,105 @@ tasks:
 
 ---
 
-## 9. Lokasi File di Filesystem
+## 9. Resolve Gate Binary per Environment
+
+Ada tiga environment dengan cara berbeda untuk menemukan `wick-gate`:
+
+```
+Environment           Gate binary dari mana         Cara set
+──────────────────────────────────────────────────────────────────
+VSCode (wicklab)   →  bin/wick-gate.exe (lokal)  →  WICK_GATE_BIN di .env
+Serve (raw binary) →  embedded → extract sekali  →  otomatis
+MSI (installer)    →  embedded → extract sekali  →  otomatis
+```
+
+### 9.1 Logic Resolve di Daemon
+
+```go
+func resolveGateBin(sessionDir string) (string, error) {
+    // Dev override — set di .env untuk VSCode / go run
+    if p := os.Getenv("WICK_GATE_BIN"); p != "" {
+        return p, nil
+    }
+    // Production: extract dari embed ke session dir (sekali per session)
+    return extractEmbeddedGate(sessionDir)
+}
+```
+
+Urutan prioritas: `WICK_GATE_BIN` env → embedded binary. Kalau keduanya tidak ada → gate tidak aktif, commands lolos semua (fail-open, logged).
+
+### 9.2 VSCode (wicklab)
+
+**Launch config:** `.vscode/launch.json` → `wicklab` → `preLaunchTask: "debug: prep"`
+
+**Yang perlu dilakukan:**
+
+1. Update `.vscode/tasks.json` — tambah build gate ke task `debug: prep`:
+   ```json
+   {
+     "label": "debug: prep",
+     "type": "shell",
+     "command": "templ generate ./... && bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css && go build -o bin/wick-gate.exe ./cmd/wick-gate",
+     "problemMatcher": []
+   }
+   ```
+   Setiap kali F5, gate binary di-rebuild otomatis sebelum server jalan.
+
+2. Tambah ke `.env` (buat dari `.env.example`):
+   ```env
+   WICK_GATE_BIN=bin/wick-gate.exe
+   ```
+   Launch config sudah punya `"envFile": "${workspaceFolder}/.env"` — langsung terbaca.
+
+**Path note:** `cwd` di launch config adalah `${workspaceFolder}/cmd/lab`, tapi `WICK_GATE_BIN` relatif terhadap CWD daemon saat runtime. Lebih aman pakai path absolut atau `${workspaceFolder}/bin/wick-gate.exe` — atau daemon resolve relatif terhadap executable-nya, bukan CWD.
+
+### 9.3 MSI (Windows Installer)
+
+Dibangun via `wick build --installer`. Flow CI:
+
+```
+1. go build -o bin/wick-gate-windows-amd64.exe ./cmd/wick-gate   ← step baru di workflow
+2. wick build --installer                                          ← existing, tidak berubah
+   → compile main binary (embed wick-gate via //go:embed)
+   → wixl → .msi (satu binary, wick-gate sudah di dalam)
+```
+
+Di-install ke `%LocalAppData%\Programs\<AppName>\<AppName>.exe`. Saat daemon start, gate di-extract ke session dir — tidak perlu WICK_GATE_BIN.
+
+### 9.4 Serve (Raw Binary / Linux / Docker)
+
+Binary dari `wick build` tanpa `--installer`, atau `.deb`, atau Docker image. Sama dengan MSI dari sisi gate: embedded, di-extract ke `~/.wick/sessions/<id>/gate/wick-gate` saat session start.
+
+```
+docker run myapp server     → gate di-extract dari embed otomatis
+./myapp server              → sama
+systemctl start myapp       → sama
+```
+
+Tidak ada konfigurasi tambahan yang diperlukan.
+
+### 9.5 Perbandingan Tiga Environment
+
+| | VSCode (wicklab) | Serve / raw binary | MSI |
+|---|---|---|---|
+| **Gate binary dari** | `bin/wick-gate.exe` (lokal) | Embedded → extracted | Embedded → extracted |
+| **Cara set** | `WICK_GATE_BIN` di `.env` | Otomatis | Otomatis |
+| **Perlu build manual?** | Ya (via `debug: prep` task) | Tidak | Tidak |
+| **Version sync** | Manual (rebuild saat ada perubahan) | Selalu sync (embedded saat compile) | Selalu sync |
+| **File yang perlu diedit** | `.vscode/tasks.json` + `.env` | Tidak ada | Tidak ada |
+
+### 9.6 Template Downstream (cmd/lab)
+
+Proyek yang pakai Wick sebagai framework perlu:
+
+1. `cmd/wick-gate/` — bisa copy dari wick atau implement sendiri sesuai rules mereka
+2. `.env.example` — tambah `WICK_GATE_BIN` entry (sudah ada di template)
+3. `.vscode/tasks.json` — tambah gate build ke `debug: prep`
+4. CI workflow — tambah `go build ./cmd/wick-gate` sebelum `wick build --installer`
+
+---
+
+## 10. Lokasi File di Filesystem (Runtime)
 
 ```
 ~/.wick/agents/sessions/<session-id>/
@@ -687,7 +786,7 @@ Kalau pakai embed (opsi 1):
 
 ---
 
-## 10. Keputusan Desain
+## 11. Keputusan Desain
 
 | # | Keputusan | Alasan |
 |---|---|---|
@@ -700,10 +799,12 @@ Kalau pakai embed (opsi 1):
 | D7 | Gate binary tetap stateless | Semua state di daemon. Gate bisa crash/respawn tanpa kehilangan pending |
 | D8 | Embed wick-gate ke binary utama (rekomendasi) | User satu file, version selalu sync, tidak perlu installer logic baru |
 | D9 | Broadcast approval_request via Broadcaster yang sudah ada | Tidak perlu infrastruktur SSE baru, cukup tambah tipe event |
+| D10 | `WICK_GATE_BIN` env var override untuk dev | VSCode/go run tidak punya embed, perlu path eksplisit. Env var paling tidak invasif — tidak ubah kode path, tidak ubah interface |
+| D11 | `debug: prep` task build gate otomatis | Developer tidak perlu ingat build gate manual sebelum debug — F5 langsung siap |
 
 ---
 
-## 11. Checklist Implementasi
+## 12. Checklist Implementasi
 
 ```
 [ ] 1. Unix socket listener di daemon (per session, dibuat saat session start)
@@ -714,6 +815,10 @@ Kalau pakai embed (opsi 1):
 [ ] 6. Web UI: render modal approval saat terima SSE "approval_request"
 [ ] 7. Web UI: countdown timer 25 detik di modal
 [ ] 8. Wire Gate di factory.go (saat ini masih nil)
-[ ] 9. Pilih strategi ship binary (embed vs sidecar vs subcommand)
-[ ] 10. Update builder jika perlu (opsi 2: dua binary di MSI)
+[ ] 9. Embed wick-gate via //go:embed (compile gate dulu, taruh di assets/)
+[ ] 10. extractEmbeddedGate() — extract ke session dir, chmod 0755, skip kalau sudah ada
+[ ] 11. resolveGateBin() — cek WICK_GATE_BIN dulu, fallback ke extract
+[ ] 12. Update .vscode/tasks.json — tambah go build gate ke "debug: prep"
+[ ] 13. Update .env.example — tambah WICK_GATE_BIN entry (sudah done)
+[ ] 14. Update template release workflow — tambah build gate sebelum wick build --installer
 ```
