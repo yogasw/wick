@@ -4,6 +4,7 @@
 package agents
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -239,7 +240,7 @@ func sendMessage(c *tool.Ctx) {
 		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
 		return
 	}
-	if err := globalPool.Send(c.Context(), id, agentName, "ui", "user", req.Text); err != nil {
+	if err := globalPool.Send(context.Background(), id, agentName, "ui", "user", req.Text); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -431,6 +432,9 @@ func streamSSE(c *tool.Ctx) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	rc := http.NewResponseController(w)
+	// Clear the server's default 60 s write timeout so the SSE connection
+	// stays alive indefinitely until the client disconnects.
+	_ = rc.SetWriteDeadline(time.Time{})
 	ch, unsub := globalBcast.Subscribe(sessionID)
 	defer unsub()
 
