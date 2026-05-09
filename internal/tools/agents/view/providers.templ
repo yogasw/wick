@@ -1,0 +1,249 @@
+package view
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/yogasw/wick/internal/agents/provider"
+)
+
+// ProvidersPage renders the Providers overview: per-instance status
+// cards, pool capacity, and recent spawn logs. Static — user reloads
+// to refresh.
+templ ProvidersPage(vm ProvidersVM) {
+	@AgentsLayout(vm.Base, "providers") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Providers</h1>
+				<button
+					onclick="document.getElementById('add-provider-modal').classList.remove('hidden')"
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>+ Add Custom</button>
+			</div>
+			<!-- Pool stats -->
+			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
+				@statCard("Active Slots", fmt.Sprintf("%d / %d", vm.PoolActive, vm.PoolMax), "blue")
+				@statCard("Queued", fmt.Sprintf("%d", vm.PoolQueueLen), "amber")
+				@statCard("Configured", fmt.Sprintf("%d", len(vm.Statuses)), "default")
+			</div>
+			<!-- Provider cards -->
+			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+				for _, st := range vm.Statuses {
+					@providerCard(vm.Base, st)
+				}
+			</div>
+			<!-- Recent spawns -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
+					<p class="text-xs text-black-700 dark:text-black-600 mt-0.5">One file per spawn under <code class="font-mono">~/.wick/agents/backends/spawns/</code></p>
+				</div>
+				if len(vm.Spawns) == 0 {
+					<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
+				} else {
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+								<th class="px-5 py-2.5 text-left">Started</th>
+								<th class="px-5 py-2.5 text-left">Provider</th>
+								<th class="px-5 py-2.5 text-left">Session</th>
+								<th class="px-5 py-2.5 text-right"></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, f := range vm.Spawns {
+								<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
+									<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
+									<td class="px-5 py-3 font-mono text-xs text-black-800 dark:text-black-600">{ shortID(f.SessionID) }</td>
+									<td class="px-5 py-3 text-right">
+										<a href={ templ.SafeURL(vm.Base + "/providers/spawns/" + filenameOf(f.Path)) } class="text-xs text-green-600 dark:text-green-400 hover:underline">Open →</a>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+			<!-- Add custom modal -->
+			@addProviderModal(vm)
+		</div>
+	}
+}
+
+templ providerCard(base string, st provider.Status) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-3">
+		<div class="flex items-start justify-between gap-3">
+			<div>
+				<p class="text-base font-semibold text-black-900 dark:text-white-100">{ string(st.Instance.Type) }/{ st.Instance.Name }</p>
+				if st.Instance.Disabled {
+					<p class="text-xs text-amber-600 dark:text-amber-400 mt-0.5">disabled</p>
+				} else if !st.PathFound {
+					<p class="text-xs text-red-600 dark:text-red-400 mt-0.5">not found on PATH</p>
+				} else if st.VersionErr != "" {
+					<p class="text-xs text-red-600 dark:text-red-400 mt-0.5">version probe failed</p>
+				} else {
+					<p class="text-xs text-green-600 dark:text-green-400 mt-0.5">{ st.Version }</p>
+				}
+			</div>
+			<form method="POST" action={ templ.SafeURL(base + "/providers") } class="text-xs">
+				<input type="hidden" name="type" value={ string(st.Instance.Type) }/>
+				<input type="hidden" name="name" value={ st.Instance.Name }/>
+				<details class="relative">
+					<summary class="cursor-pointer rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 list-none">Edit</summary>
+					<div class="absolute right-0 mt-2 w-72 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-3 shadow-lg z-10 space-y-2">
+						<label class="block">
+							<span class="text-xs text-black-800 dark:text-black-600">Binary path (empty = auto)</span>
+							<input type="text" name="binary" value={ st.Instance.Binary } placeholder={ string(st.Instance.Type) } class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100"/>
+						</label>
+						<label class="block">
+							<span class="text-xs text-black-800 dark:text-black-600">Extra args (space separated)</span>
+							<input type="text" name="extra_args" value={ strings.Join(st.Instance.ExtraArgs, " ") } class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100"/>
+						</label>
+						<label class="block">
+							<span class="text-xs text-black-800 dark:text-black-600">Env (one KEY=VALUE per line)</span>
+							<textarea name="env" rows="3" class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100">{ strings.Join(st.Instance.Env, "\n") }</textarea>
+						</label>
+						<label class="flex items-center gap-2 text-xs text-black-800 dark:text-black-600">
+							<input type="checkbox" name="disabled" value="on" checked?={ st.Instance.Disabled }/>
+							disabled
+						</label>
+						<button type="submit" class="w-full rounded bg-green-500 px-2 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Save</button>
+					</div>
+				</details>
+			</form>
+		</div>
+		<dl class="text-xs space-y-1">
+			<div class="flex gap-2">
+				<dt class="w-20 text-black-700 dark:text-black-600">resolved</dt>
+				if st.Path != "" {
+					<dd class="font-mono text-black-900 dark:text-white-100 break-all">{ st.Path }</dd>
+				} else {
+					<dd class="text-black-600 dark:text-black-700">—</dd>
+				}
+			</div>
+			if st.VersionErr != "" {
+				<div class="flex gap-2">
+					<dt class="w-20 text-black-700 dark:text-black-600">error</dt>
+					<dd class="font-mono text-red-600 dark:text-red-400 break-all">{ st.VersionErr }</dd>
+				</div>
+			}
+			if len(st.Instance.ExtraArgs) > 0 {
+				<div class="flex gap-2">
+					<dt class="w-20 text-black-700 dark:text-black-600">extra</dt>
+					<dd class="font-mono text-black-900 dark:text-white-100 break-all">{ strings.Join(st.Instance.ExtraArgs, " ") }</dd>
+				</div>
+			}
+			if len(st.Instance.Env) > 0 {
+				<div class="flex gap-2">
+					<dt class="w-20 text-black-700 dark:text-black-600">env</dt>
+					<dd class="font-mono text-black-900 dark:text-white-100 break-all">{ fmt.Sprintf("%d entries", len(st.Instance.Env)) }</dd>
+				</div>
+			}
+		</dl>
+		if st.Instance.Name != string(st.Instance.Type) {
+			<div class="pt-2 border-t border-white-300 dark:border-navy-600">
+				<button
+					data-delete-provider
+					data-type={ string(st.Instance.Type) }
+					data-name={ st.Instance.Name }
+					class="text-xs text-red-600 dark:text-red-400 hover:underline"
+				>Delete instance</button>
+			</div>
+		}
+	</div>
+}
+
+templ addProviderModal(vm ProvidersVM) {
+	<div id="add-provider-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-lg rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
+			<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Provider Instance</h2>
+			<form method="POST" action={ templ.SafeURL(vm.Base + "/providers") } class="space-y-4">
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Type <span class="text-red-500">*</span></label>
+					<select name="type" required class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100">
+						for _, k := range vm.SupportedKeys {
+							<option value={ k }>{ k }</option>
+						}
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
+					<input type="text" name="name" required placeholder="e.g. work, personal" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100"/>
+				</div>
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Binary path (optional)</label>
+					<input type="text" name="binary" placeholder="leave empty to use PATH lookup" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"/>
+				</div>
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Extra args (space separated)</label>
+					<input type="text" name="extra_args" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"/>
+				</div>
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Env (one KEY=VALUE per line)</label>
+					<textarea name="env" rows="3" placeholder={ "ANTHROPIC_API_KEY=sk-..." } class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"></textarea>
+				</div>
+				<div class="flex justify-end gap-3 pt-2">
+					<button type="button" onclick="document.getElementById('add-provider-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
+					<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Create</button>
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+// ProviderSpawnDetail renders the event timeline of one spawn log file.
+templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
+	@AgentsLayout(vm.Base, "providers") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<div>
+					<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Spawn Log</h1>
+					<p class="text-xs text-black-700 dark:text-black-600 mt-0.5 font-mono">{ vm.File.ProviderType }/{ vm.File.ProviderName } · session { shortID(vm.File.SessionID) } · { vm.File.StartedAt.Local().Format("2006-01-02 15:04:05") }</p>
+				</div>
+				<a href={ templ.SafeURL(vm.Base + "/providers") } class="text-xs text-green-600 dark:text-green-400 hover:underline">← Back</a>
+			</div>
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				if len(vm.Events) == 0 {
+					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No events.</div>
+				} else {
+					<ul class="divide-y divide-white-300 dark:divide-navy-600">
+						for _, ev := range vm.Events {
+							<li class="px-5 py-3">
+								<div class="flex items-center gap-3">
+									<span class="font-mono text-xs text-black-700 dark:text-black-600">{ ev.At.Local().Format("15:04:05.000") }</span>
+									<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-900 dark:text-white-100">{ ev.Type }</span>
+									if ev.ExitReason != "" {
+										<span class="text-xs text-black-800 dark:text-black-600">{ ev.ExitReason }</span>
+									}
+									if ev.DurationMs > 0 {
+										<span class="text-xs text-black-700 dark:text-black-600">{ fmt.Sprintf("%dms", ev.DurationMs) }</span>
+									}
+								</div>
+								if ev.Error != "" {
+									<p class="mt-1 font-mono text-xs text-red-600 dark:text-red-400 break-all">{ ev.Error }</p>
+								}
+								if ev.Workspace != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">cwd: { ev.Workspace }</p>
+								}
+								if ev.ResumeID != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">resume: { ev.ResumeID }</p>
+								}
+							</li>
+						}
+					</ul>
+				}
+			</div>
+		</div>
+	}
+}
+
+// filenameOf trims everything before the last path separator. Used
+// inline by the spawn list to build the detail link without exposing
+// host paths.
+func filenameOf(p string) string {
+	if i := strings.LastIndexAny(p, "/\\"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}

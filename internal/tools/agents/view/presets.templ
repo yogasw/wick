@@ -1,0 +1,100 @@
+package view
+
+templ PresetsPage(vm PresetsVM) {
+	@AgentsLayout(vm.Base, "presets") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Presets</h1>
+				<button
+					onclick="document.getElementById('create-preset-modal').classList.remove('hidden')"
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>+ New Preset</button>
+			</div>
+			<!-- Create preset modal -->
+			<div id="create-preset-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+				<div class="w-full max-w-lg rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
+					<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Preset</h2>
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/presets") } class="space-y-4">
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
+							<input
+								type="text"
+								name="name"
+								required
+								placeholder="e.g. reviewer"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							/>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Instructions (agent.md body)</label>
+							<textarea
+								name="body"
+								rows="8"
+								placeholder="You are a code reviewer. Focus on clarity, performance, and correctness…"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none resize-y"
+							></textarea>
+						</div>
+						<div class="flex justify-end gap-3 pt-2">
+							<button type="button" onclick="document.getElementById('create-preset-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">Cancel</button>
+							<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Create</button>
+						</div>
+					</form>
+				</div>
+			</div>
+			<!-- Presets list -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				if len(vm.Names) == 0 {
+					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No presets yet.</div>
+				} else {
+					<ul class="divide-y divide-white-300 dark:divide-navy-600">
+						for _, name := range vm.Names {
+							<li class="flex items-center justify-between px-5 py-4 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+								<span class="font-medium text-black-900 dark:text-white-100 text-sm">{ name }</span>
+								<div class="flex gap-2">
+									<a href={ templ.SafeURL(vm.Base + "/presets/" + name) } class="rounded-md border border-green-500 px-3 py-1 text-xs text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors">Edit</a>
+									if name != "default" {
+										<button
+											data-delete-preset={ name }
+											class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+										>Delete</button>
+									}
+								</div>
+							</li>
+						}
+					</ul>
+				}
+			</div>
+		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
+	}
+}
+
+templ PresetEditor(vm PresetDetailVM) {
+	@AgentsLayout(vm.Base, "presets") {
+		<div class="space-y-4">
+			<div class="flex items-center gap-3">
+				<a href={ templ.SafeURL(vm.Base + "/presets") } class="text-xs text-black-700 dark:text-black-600 hover:underline">← Presets</a>
+			</div>
+			<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{ vm.Name }</h1>
+			<!-- Save feedback -->
+			<div id="preset-save-msg" class="hidden rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-4 py-2 text-sm text-green-700 dark:text-green-400">Saved.</div>
+			<div id="preset-err-msg" class="hidden rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-2 text-sm text-red-700 dark:text-red-400"></div>
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-5">
+				<form data-preset-form action={ templ.SafeURL(vm.Base + "/presets/" + vm.Name) } class="space-y-4">
+					<div>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Instructions (agent.md body)</label>
+						<textarea
+							name="body"
+							rows="20"
+							class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none resize-y"
+						>{ vm.Body }</textarea>
+					</div>
+					<div class="flex justify-end">
+						<button type="submit" class="rounded-lg bg-green-500 px-6 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors">Save</button>
+					</div>
+				</form>
+			</div>
+		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
+	}
+}

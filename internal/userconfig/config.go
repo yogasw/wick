@@ -57,6 +57,54 @@ type Config struct {
 	// Update state — managed by the updater, not user-facing.
 	StagedUpdatePath    string `json:"staged_update_path,omitempty"`
 	StagedUpdateVersion string `json:"staged_update_version,omitempty"`
+
+	// Providers holds per-AI-provider overrides for the agents module
+	// (claude / codex / gemini). Each provider keeps its own binary
+	// path override + extra args. Empty / nil = full auto-detect via
+	// PATH lookup.
+	Providers ProvidersConfig `json:"providers,omitempty"`
+}
+
+// ProvidersConfig groups per-provider-type instance lists. One type
+// (e.g. "claude") can hold multiple named instances so the user can
+// run two different binaries / credential sets in parallel — typical
+// case is a "work" claude on a corporate PAT next to a "personal"
+// claude on a different PAT.
+//
+// Bootstrap rule: on first boot the agents bootstrap auto-seeds one
+// instance per supported type whose Name equals the type itself
+// (`claude`, `codex`, `gemini`) with BinaryPath empty so LookPath
+// resolves the canonical binary on PATH. Adding more instances is
+// purely user-driven via the Providers page.
+type ProvidersConfig struct {
+	Claude []ProviderInstance `json:"claude,omitempty"`
+	Codex  []ProviderInstance `json:"codex,omitempty"`
+	Gemini []ProviderInstance `json:"gemini,omitempty"`
+}
+
+// ProviderInstance is one named configuration of a provider type.
+// Name must be unique within a single type ("claude" can have one
+// "work" + one "personal" but two "work" entries collide).
+//
+// BinaryPath: absolute path to the CLI binary. Empty = LookPath the
+// canonical type name on PATH.
+//
+// Disabled: hide from new-session pickers and refuse to spawn. Useful
+// when an instance is detected but known broken.
+//
+// ExtraArgs: extra CLI flags appended after the canonical headless
+// flags, before --resume. Forwarded to the provider's Spawner.
+//
+// Env: extra `KEY=VALUE` pairs merged into the subprocess env on
+// every spawn. The primary use case is per-instance credentials
+// (different ANTHROPIC_API_KEY between work and personal claude)
+// without leaking those into the user's global shell env.
+type ProviderInstance struct {
+	Name       string   `json:"name"`
+	BinaryPath string   `json:"binary_path,omitempty"`
+	Disabled   bool     `json:"disabled,omitempty"`
+	ExtraArgs  []string `json:"extra_args,omitempty"`
+	Env        []string `json:"env,omitempty"`
 }
 
 func defaults() Config {
@@ -172,6 +220,9 @@ func ResolveDBPath(appName, customPath string) {
 	if err != nil {
 		return
 	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
 	dbPath := filepath.Join(dir, "wick.db")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		if legacy, lerr := legacyDBPath(appName); lerr == nil {
@@ -209,9 +260,26 @@ func binaryName() string {
 	return name
 }
 
+// hiddenName turns an app name into a path-safe hidden directory name.
+// Slugifies: lowercase, spaces → "-", strips chars that break Windows
+// paths (< > : " / \ | ? *) and leading dots. "My App" → ".my-app".
 func hiddenName(name string) string {
 	name = filepath.Base(strings.TrimSpace(name))
 	name = strings.TrimLeft(name, ".")
+	name = strings.ToLower(name)
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r == ' ' || r == '\t':
+			b.WriteByte('-')
+		case r == '<' || r == '>' || r == ':' || r == '"' || r == '/' || r == '\\' || r == '|' || r == '?' || r == '*':
+			// drop
+		default:
+			b.WriteRune(r)
+		}
+	}
+	name = strings.Trim(b.String(), "-.")
 	if name == "" {
 		name = "wick"
 	}

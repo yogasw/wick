@@ -21,6 +21,7 @@ import (
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 
 	converttext "github.com/yogasw/wick/internal/tools/convert-text"
+	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
 
@@ -94,6 +95,18 @@ func RegisterBuiltins() {
 			InitType: "lowercase",
 		}),
 		Register: converttext.Register,
+	})
+	extra = append(extra, tool.Module{
+		Meta: tool.Tool{
+			Key:               "agents",
+			Name:              "Agents",
+			Description:       "Manage AI agent sessions, projects, and presets. Run Claude against your codebase in real-time.",
+			Icon:              "✦",
+			Category:          "AI",
+			DefaultVisibility: entity.VisibilityPrivate,
+			DefaultTags:       []tool.DefaultTag{tags.AI},
+		},
+		Register: agentstool.Register,
 	})
 	for _, e := range external.All() {
 		extra = append(extra, e)

@@ -168,6 +168,15 @@ templ UserMenu(user *entity.User) {
 							</svg>
 							MCP
 						</a>
+						<a
+							href="/tools/agents"
+							class="flex items-center gap-2.5 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+						>
+							<svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z"/>
+							</svg>
+							Agents
+						</a>
 						if user.IsAdmin() {
 							<a
 								href="/admin"
