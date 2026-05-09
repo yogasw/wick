@@ -35,6 +35,7 @@ tmp/
 # bin/tailwindcss.exe
 __debug_bin*
 .db
+/lab
 
 # VitePress
 docs/node_modules/

@@ -364,6 +364,7 @@ func Run() {
 			userconfig.ResolvePort(0)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 			return api.NewServer().Run(ctx, port)
 		},
 	}
@@ -376,6 +377,7 @@ func Run() {
 			userconfig.ResolveDBPath(BuildAppName, "")
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			ctx = log.With().Str("component", "worker").Logger().WithContext(ctx)
 			return worker.NewServer().Run(ctx)
 		},
 	}

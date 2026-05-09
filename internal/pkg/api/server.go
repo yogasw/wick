@@ -19,6 +19,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
+	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
@@ -201,6 +202,8 @@ func NewServer() *Server {
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	connectorsSvc.SetEnc(encSvc)
 	connectorsSvc.SetConfigs(configsSvc)
+	metricsRec := metrics.NewSimpleRecorder()
+	connectorsSvc.SetMetrics(metricsRec)
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to. (Earlier here than in
@@ -398,6 +401,10 @@ func NewServer() *Server {
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
 
+	// Prometheus-compatible metrics scrape endpoint. Admin-only — bearer
+	// token or session required so the endpoint is not public by default.
+	r.Handle("GET /metrics", authMidd.RequireAdmin(metricsRec.Handler()))
+
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
@@ -471,6 +478,12 @@ func hostMatches(got, expected string) bool {
 // signal.NotifyContext; in-process callers (system tray) cancel from
 // the UI.
 func (s *Server) Run(ctx context.Context, port int) error {
+	// Tray injects serverLogger (file sink) via processctl before calling Run.
+	// Lab/CLI pass a plain context — inject global logger with component=server
+	// so log.Ctx(r.Context()) in middleware is not a disabled logger.
+	if zerolog.Ctx(ctx).GetLevel() == zerolog.Disabled {
+		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
+	}
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
 

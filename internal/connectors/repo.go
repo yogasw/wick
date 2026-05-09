@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -234,6 +235,16 @@ func (r *Repo) SetDisabled(ctx context.Context, id string, disabled bool) error 
 		}).Error
 }
 
+// SetRateLimit updates the per-minute call cap for a connector instance.
+// Pass 0 to remove the limit.
+func (r *Repo) SetRateLimit(ctx context.Context, id string, rpm int) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"rate_limit_rpm": rpm,
+			"updated_at":     time.Now(),
+		}).Error
+}
+
 // Delete hard-deletes a connector row plus its operation toggles. Run
 // history is intentionally preserved — deleting a connector should not
 // retroactively erase the audit trail. The retention job purges old
@@ -268,6 +279,33 @@ func (r *Repo) SetOperation(ctx context.Context, connectorID, opKey string, enab
 		UpdatedAt:    time.Now(),
 	}
 	return r.db.WithContext(ctx).Save(&row).Error
+}
+
+// SetOperationAdminOnly upserts the admin_only flag for a (connector, op)
+// pair without touching the Enabled state. Inserts a new row with
+// Enabled=true (safe default) when no row exists yet.
+func (r *Repo) SetOperationAdminOnly(ctx context.Context, connectorID, opKey string, adminOnly bool) error {
+	return r.db.WithContext(ctx).
+		Where(entity.ConnectorOperation{ConnectorID: connectorID, OperationKey: opKey}).
+		Assign(map[string]any{"admin_only": adminOnly, "updated_at": time.Now()}).
+		FirstOrCreate(&entity.ConnectorOperation{
+			ConnectorID:  connectorID,
+			OperationKey: opKey,
+			Enabled:      true,
+		}).Error
+}
+
+// IsOperationAdminOnly returns true when the stored row has AdminOnly=true.
+// Returns false (not restricted) when no row exists yet.
+func (r *Repo) IsOperationAdminOnly(ctx context.Context, connectorID, opKey string) (bool, error) {
+	var row entity.ConnectorOperation
+	err := r.db.WithContext(ctx).
+		Where("connector_id = ? AND operation_key = ?", connectorID, opKey).
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return row.AdminOnly, err
 }
 
 // ── ConnectorRun (history) ──────────────────────────────────────────
@@ -320,6 +358,108 @@ type RunFilter struct {
 	Source       string
 	Status       string
 	UserID       string
+}
+
+// AuditFilter narrows cross-connector audit queries. All fields are
+// optional — omit to get all runs across every connector instance.
+type AuditFilter struct {
+	ConnectorID  string
+	OperationKey string
+	Source       string
+	Status       string
+	UserID       string
+	From         *time.Time // inclusive lower bound on StartedAt
+	To           *time.Time // inclusive upper bound on StartedAt
+}
+
+// ListRunsAudit returns connector runs across all (or a filtered subset
+// of) connector instances, newest first. Designed for the cross-connector
+// audit log page and the /api/runs JSON endpoint. Admin-only.
+func (r *Repo) ListRunsAudit(ctx context.Context, f AuditFilter, limit, offset int) ([]entity.ConnectorRun, error) {
+	var out []entity.ConnectorRun
+	q := r.auditFilterQuery(ctx, f).Order("started_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if offset > 0 {
+		q = q.Offset(offset)
+	}
+	return out, q.Find(&out).Error
+}
+
+// CountRunsAudit returns the total matching the same filter as
+// ListRunsAudit. Used to drive pagination.
+func (r *Repo) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error) {
+	var n int64
+	return n, r.auditFilterQuery(ctx, f).Model(&entity.ConnectorRun{}).Count(&n).Error
+}
+
+// RunSummary holds aggregated stats for a connector run query window.
+type RunSummary struct {
+	Total        int64   `json:"total"`
+	Succeeded    int64   `json:"succeeded"`
+	Errored      int64   `json:"errored"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+}
+
+// SummariseRuns returns aggregate stats for the given audit filter window.
+func (r *Repo) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, error) {
+	type row struct {
+		Status    string
+		Count     int64
+		AvgLatMs  float64
+	}
+	var rows []row
+	err := r.auditFilterQuery(ctx, f).
+		Model(&entity.ConnectorRun{}).
+		Select("status, COUNT(*) as count, AVG(latency_ms) as avg_lat_ms").
+		Group("status").
+		Scan(&rows).Error
+	if err != nil {
+		return RunSummary{}, err
+	}
+	var s RunSummary
+	var totalLatSum float64
+	for _, rr := range rows {
+		s.Total += rr.Count
+		switch entity.ConnectorRunStatus(rr.Status) {
+		case entity.ConnectorRunStatusSuccess:
+			s.Succeeded = rr.Count
+		case entity.ConnectorRunStatusError:
+			s.Errored = rr.Count
+		}
+		totalLatSum += rr.AvgLatMs * float64(rr.Count)
+	}
+	if s.Total > 0 {
+		s.AvgLatencyMs = totalLatSum / float64(s.Total)
+	}
+	return s, nil
+}
+
+func (r *Repo) auditFilterQuery(ctx context.Context, f AuditFilter) *gorm.DB {
+	q := r.db.WithContext(ctx)
+	if f.ConnectorID != "" {
+		q = q.Where("connector_id = ?", f.ConnectorID)
+	}
+	if f.OperationKey != "" {
+		q = q.Where("operation_key = ?", f.OperationKey)
+	}
+	if f.Source != "" {
+		q = q.Where("source = ?", f.Source)
+	}
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.UserID != "" {
+		q = q.Where("user_id = ?", f.UserID)
+	}
+	if f.From != nil {
+		q = q.Where("started_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("started_at <= ?", *f.To)
+	}
+	return q
 }
 
 // ListRunsFiltered returns runs for one connector filtered by op/source/

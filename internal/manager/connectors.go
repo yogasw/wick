@@ -28,9 +28,11 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/label", auth(h.setConnectorLabel))
 	mux.Handle("POST /manager/connectors/{key}/{id}/configs/{configKey}", auth(h.setConnectorConfig))
 	mux.Handle("POST /manager/connectors/{key}/{id}/disable", auth(h.toggleConnectorDisabled))
+	mux.Handle("POST /manager/connectors/{key}/{id}/rate-limit", auth(h.setConnectorRateLimit))
 	mux.Handle("POST /manager/connectors/{key}/{id}/duplicate", auth(h.duplicateConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}", auth(h.toggleConnectorOperation))
+	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.toggleOperationAdminOnly))
 	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(h.connectorTestPage))
 	mux.Handle("POST /manager/connectors/{key}/{id}/test", auth(h.testConnectorOperation))
 	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(h.connectorHistoryPage))
@@ -351,6 +353,28 @@ func (h *Handler) toggleConnectorDisabled(w http.ResponseWriter, r *http.Request
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
 
+func (h *Handler) setConnectorRateLimit(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	rpm, _ := strconv.Atoi(r.FormValue("rpm"))
+	if rpm < 0 {
+		rpm = 0
+	}
+	if err := h.connectors.SetRateLimit(ctx, row.ID, rpm); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
+
 func (h *Handler) duplicateConnector(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
@@ -404,6 +428,26 @@ func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Reques
 	}
 	enabled := boolParam(r, "enabled")
 	if err := h.connectors.SetOperationEnabled(ctx, row.ID, opKey, enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
+
+func (h *Handler) toggleOperationAdminOnly(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+	opKey := r.PathValue("opKey")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	adminOnly := boolParam(r, "admin_only")
+	if err := h.connectors.SetOperationAdminOnly(ctx, row.ID, opKey, adminOnly); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

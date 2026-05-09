@@ -249,6 +249,13 @@ func (u *Updater) CheckNow(ctx context.Context) (Result, error) {
 // return — Unix syscall.Exec replaces our image; Windows spawns a new
 // process and we os.Exit. Returns an error only when the swap itself
 // fails before re-exec.
+//
+// Before handing control to the per-OS swap, an update sentinel is
+// written to cacheDir recording the expected post-install version.
+// The next launch reads it via CheckUpdateOutcome to decide if the
+// install succeeded — installer exit codes alone are not trusted
+// (msiexec /qn, dpkg postinst, and inner-binary swaps all have ways
+// to silently no-op).
 func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 	if !u.HasStaged() {
 		return errors.New("no staged update")
@@ -264,6 +271,7 @@ func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 		exe = real
 	}
 	staged := u.cfg.StagedUpdatePath
+	stagedVersion := u.cfg.StagedUpdateVersion
 
 	// Clear staged state BEFORE swap so a partial failure on next
 	// launch doesn't loop us through a broken update forever.
@@ -273,61 +281,224 @@ func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 		return fmt.Errorf("clear staged: %w", err)
 	}
 
+	sentinel := Sentinel{
+		FromVersion:   u.currentVersion,
+		ToVersion:     stagedVersion,
+		StartedAt:     time.Now().UTC(),
+		ExpectedPath:  exe,
+		OldBinaryPath: exe + ".old",
+	}
+
 	if runtime.GOOS == "windows" {
-		return swapWindows(exe, staged, u.cacheDir)
+		sentinel.Method = "msi"
+		sentinel.InstallerLog = filepath.Join(u.cacheDir, "msiexec-install.log")
+		sentinel.HelperScript = filepath.Join(u.cacheDir, "update-helper.bat")
+		sentinel.HelperLog = filepath.Join(u.cacheDir, "update-helper.log")
+		if err := writeSentinel(u.cacheDir, sentinel); err != nil {
+			return fmt.Errorf("write sentinel: %w", err)
+		}
+		return swapWindows(exe, staged, u.cacheDir, sentinel)
+	}
+	if runtime.GOOS == "linux" && strings.HasSuffix(staged, ".deb") {
+		sentinel.Method = "dpkg"
+		sentinel.InstallerLog = filepath.Join(u.cacheDir, "dpkg-install.log")
+		sentinel.HelperScript = filepath.Join(u.cacheDir, "update-helper.sh")
+		sentinel.HelperLog = filepath.Join(u.cacheDir, "update-helper.log")
+		if err := writeSentinel(u.cacheDir, sentinel); err != nil {
+			return fmt.Errorf("write sentinel: %w", err)
+		}
+		return swapLinuxDeb(exe, staged, u.cacheDir, sentinel)
+	}
+	sentinel.Method = "binary-swap"
+	if err := writeSentinel(u.cacheDir, sentinel); err != nil {
+		return fmt.Errorf("write sentinel: %w", err)
 	}
 	return swapUnix(exe, staged)
 }
 
-// swapUnix renames staged → current then re-execs in place. Atomic
-// on the same filesystem; if cacheDir lives on a different mount the
-// rename falls back to a copy + rename.
+// swapUnix renames staged → current then re-execs in place. On macOS
+// the inner Mach-O binary inside the .app bundle is swappable while
+// the process runs (Darwin allows this), but a fresh download carries
+// com.apple.quarantine — we strip that xattr so Gatekeeper doesn't
+// block the relaunch. The original binary is preserved as <exe>.old
+// so the next launch can verify and roll back if the new binary fails
+// to start (e.g. unsigned, corrupted, ABI mismatch).
+//
+// The previous flow renamed straight onto current and re-exec'd — that
+// works in the happy path but leaves no rollback if the new binary is
+// broken, and skipped quarantine clearing entirely.
 func swapUnix(current, staged string) error {
 	if err := os.Chmod(staged, 0o755); err != nil {
 		return fmt.Errorf("chmod staged: %w", err)
 	}
+	if runtime.GOOS == "darwin" {
+		// Best-effort: missing xattr is fine, but a hard error here
+		// (e.g. permission) means the relaunch will be Gatekeeper-blocked
+		// and the user will see no app — bail and surface it.
+		if err := clearQuarantine(staged); err != nil {
+			return fmt.Errorf("clear quarantine: %w", err)
+		}
+	}
+
+	backup := current + ".old"
+	_ = os.Remove(backup)
+	if err := os.Rename(current, backup); err != nil {
+		// On Linux a non-root user may not be able to rename a binary
+		// in /usr/bin — but we only land here for non-.deb Unix paths
+		// (e.g. someone built locally and dropped the binary in $HOME).
+		return fmt.Errorf("backup current binary: %w", err)
+	}
 	if err := os.Rename(staged, current); err != nil {
-		if err := copyFile(staged, current); err != nil {
-			return fmt.Errorf("rename + copy fallback: %w", err)
+		// Cross-device rename → copy fallback. Keep backup so the
+		// caller can recover manually if both copies fail.
+		if cerr := copyFile(staged, current); cerr != nil {
+			_ = os.Rename(backup, current)
+			return fmt.Errorf("install staged binary: rename=%v copy=%w", err, cerr)
 		}
 		_ = os.Remove(staged)
+	}
+	if err := os.Chmod(current, 0o755); err != nil {
+		return fmt.Errorf("chmod current: %w", err)
 	}
 	args := append([]string{current}, os.Args[1:]...)
 	return syscall.Exec(current, args, os.Environ())
 }
 
-// swapWindows hands the staged .msi to msiexec and exits the current
-// process. msiexec runs detached, rewrites the installed .exe in place
-// (per-user MSI, no UAC, MajorUpgrade in WXS handles same-version
-// overwrite), and the WXS LaunchApp custom action relaunches the new
-// .exe when install finishes.
-//
-// The current process MUST exit before msiexec touches the .exe — the
-// installed file is locked while we're running, and msiexec will block
-// (or roll back with "files in use") otherwise. We Start() msiexec then
-// os.Exit(0) immediately; if msiexec itself fails the user sees no
-// feedback in the running process — but `/L*v` writes a verbose
-// install log to <cacheDir>/msiexec-install.log so the failure can be
-// diagnosed after the fact (each install overwrites the previous log).
-//
-// `current` is unused for the MSI flow but kept in the signature to
-// match swapUnix.
-func swapWindows(current, staged, cacheDir string) error {
-	_ = current
-	logPath := filepath.Join(cacheDir, "msiexec-install.log")
-	log.Printf("updater: applying msi via msiexec staged=%s log=%s", staged, logPath)
-	cmd := exec.Command("msiexec",
-		"/i", staged,
-		"/qn",
-		"/norestart",
-		"/L*v", logPath,
-		"REINSTALLMODE=amus",
-	)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start msiexec: %w", err)
+// clearQuarantine removes the com.apple.quarantine extended attribute
+// from path. macOS adds this xattr to anything downloaded over a
+// network; if it survives onto a binary launched via syscall.Exec, the
+// re-exec is fine but a subsequent open by Finder/launchd would prompt
+// Gatekeeper. Removing it eagerly avoids surprises after the next
+// real reboot/login. Missing xattr is not an error.
+func clearQuarantine(path string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
 	}
+	cmd := exec.Command("xattr", "-d", "com.apple.quarantine", path)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	// xattr returns non-zero when the attribute is absent — distinguish
+	// that from a real failure so we don't fail updates on Macs where
+	// the binary was never quarantined to begin with.
+	if strings.Contains(string(out), "No such xattr") || strings.Contains(string(out), "could not be found") {
+		return nil
+	}
+	return fmt.Errorf("xattr -d: %w (%s)", err, strings.TrimSpace(string(out)))
+}
+
+// swapWindows runs msiexec via a detached helper .bat that waits for
+// this process to exit, applies the MSI, verifies the result, and
+// relaunches the binary. The previous design fired msiexec with
+// cmd.Start() then immediately os.Exit(0) — that races with the OS
+// releasing the locked .exe and produces silent partial-installs:
+// shortcut updated to the new path, .exe never written, user sees
+// "Windows cannot find ...support-tools.exe".
+//
+// The helper does five things the previous flow did not:
+//
+//  1. Wait-for-PID — polls until our PID is gone before touching the
+//     locked .exe (avoids "files in use" rollback that msiexec /qn
+//     would silently swallow).
+//  2. msiexec /wait — runs synchronously and captures the exit code.
+//  3. Verify — checks the expected .exe exists and is non-zero after
+//     install; failure here is reported via the helper log, not
+//     silently lost.
+//  4. Relaunch — only fires if step 3 passed, replacing the WXS
+//     LaunchApp custom action which has historically been flaky.
+//  5. Outcome — leaves a helper log on disk that the next launch can
+//     compare against the sentinel to decide success/failure.
+//
+// `cmd /c start "" /b` detaches the helper from the current console
+// so we can exit immediately without orphaning it; `current` is the
+// post-install .exe path the helper will verify and relaunch.
+func swapWindows(current, staged, cacheDir string, sentinel Sentinel) error {
+	logPath := sentinel.InstallerLog
+	helperPath := sentinel.HelperScript
+	helperLog := sentinel.HelperLog
+	if err := writeWindowsHelper(helperPath, helperLog, current, staged, logPath); err != nil {
+		return fmt.Errorf("write update helper: %w", err)
+	}
+	pid := os.Getpid()
+	log.Printf("updater: scheduling helper=%s pid=%d staged=%s", helperPath, pid, staged)
+
+	cmd := exec.Command("cmd.exe", "/c", "start", "", "/b", helperPath, fmt.Sprintf("%d", pid))
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start update helper: %w", err)
+	}
+	// Detach from helper so it survives our exit. Process.Release
+	// drops the handle without waiting; a zombie wait would defeat
+	// the whole point of the helper.
+	_ = cmd.Process.Release()
 	os.Exit(0)
 	return nil
+}
+
+// writeWindowsHelper materializes the .bat the parent process invokes.
+// Kept on disk (not piped via stdin) so it can be inspected after a
+// failed update — the path is recorded in the sentinel for diagnosis.
+//
+// Layout of arguments / vars:
+//
+//	%1            = parent PID (this process, must exit before msiexec)
+//	expectedExe   = path the installer is expected to (re)create
+//	stagedMsi     = .msi to hand to msiexec
+//	msiLog        = msiexec /L*v output path
+//
+// All paths are quoted so spaces in `Program Files` etc. don't break
+// the script. The script never deletes the staged MSI on failure so
+// the user can re-run it manually from %LocalAppData%\<app>\updates.
+func writeWindowsHelper(helperPath, helperLog, expectedExe, stagedMsi, msiLog string) error {
+	script := fmt.Sprintf(`@echo off
+setlocal
+set "HLOG=%s"
+> "%%HLOG%%" echo [%%date%% %%time%%] update helper start pid=%%1
+
+:wait_pid
+tasklist /FI "PID eq %%1" 2>NUL | find "%%1" >NUL
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >NUL
+  goto wait_pid
+)
+>> "%%HLOG%%" echo [%%date%% %%time%%] parent pid %%1 exited
+
+>> "%%HLOG%%" echo [%%date%% %%time%%] running msiexec
+msiexec /i "%s" /qn /norestart /L*v "%s" REINSTALLMODE=amus
+set MEC=%%errorlevel%%
+>> "%%HLOG%%" echo [%%date%% %%time%%] msiexec exit=%%MEC%%
+
+if not "%%MEC%%"=="0" (
+  >> "%%HLOG%%" echo [%%date%% %%time%%] FAIL: msiexec non-zero exit, see %s
+  exit /b %%MEC%%
+)
+
+if not exist "%s" (
+  >> "%%HLOG%%" echo [%%date%% %%time%%] FAIL: expected exe missing after install
+  exit /b 2
+)
+
+for %%%%I in ("%s") do set SZ=%%%%~zI
+if "%%SZ%%"=="0" (
+  >> "%%HLOG%%" echo [%%date%% %%time%%] FAIL: expected exe is zero bytes
+  exit /b 3
+)
+
+>> "%%HLOG%%" echo [%%date%% %%time%%] OK: launching %s
+start "" "%s"
+exit /b 0
+`,
+		helperLog,
+		stagedMsi,
+		msiLog,
+		msiLog,
+		expectedExe,
+		expectedExe,
+		expectedExe,
+		expectedExe,
+	)
+	return os.WriteFile(helperPath, []byte(script), 0o755)
 }
 
 func copyFile(src, dst string) error {
