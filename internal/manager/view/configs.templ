@@ -111,11 +111,10 @@ templ simpleFieldWidget(row entity.Config) {
 					class={ cfgInputClass }
 				>{ row.Value }</textarea>
 			case "dropdown":
-				<select data-field-key={ row.Key } class={ cfgInputClass + " cursor-pointer appearance-none" }>
-					for _, opt := range strings.Split(row.Options, "|") {
-						if opt == row.Value {
-							<option value={ opt } selected>{ opt }</option>
-						} else {
+				<select data-field-key={ row.Key } data-server-value={ row.Value } class={ cfgInputClass + " cursor-pointer appearance-none" }>
+					<option value="">— select —</option>
+					if row.Options != "" {
+						for _, opt := range strings.Split(row.Options, "|") {
 							<option value={ opt }>{ opt }</option>
 						}
 					}
@@ -410,6 +409,16 @@ templ configsSaveScript() {
 
 		function attachAutoSave(form){
 			var base=form.getAttribute('data-action-base');
+			// Restore server-side value for dropdowns to override browser form-state cache.
+			// If browser auto-selected something different from the server value, save it.
+			form.querySelectorAll('select[data-server-value]').forEach(function(el){
+				var serverVal=el.getAttribute('data-server-value');
+				if(serverVal===''){
+					el.selectedIndex=0;
+				}else{
+					el.value=serverVal;
+				}
+			});
 			// simple fields
 			form.querySelectorAll('[data-field-key]').forEach(function(el){
 				var immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';

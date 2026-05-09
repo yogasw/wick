@@ -362,6 +362,10 @@ func deleteWorkspace(c *tool.Ctx) {
 		return
 	}
 	name := c.PathValue("name")
+	if name == workspace.DefaultName {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "workspace \"default\" is built-in and cannot be deleted"})
+		return
+	}
 	if err := globalMgr.DeleteWorkspace(c.Context(), name); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete workspace %s: %s", name, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})

@@ -8,7 +8,7 @@ import (
 // SessionsList renders the paginated sessions table with a create form.
 templ SessionsList(vm SessionsListVM) {
 	@AgentsLayout(vm.Base, "sessions") {
-		<div class="space-y-6">
+		<div class="space-y-6" data-base={ vm.Base }>
 			<div class="flex items-center justify-between">
 				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Sessions</h1>
 				<button

@@ -30,6 +30,8 @@ import (
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
+	agentsession "github.com/yogasw/wick/internal/agents/session"
+	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
 	"github.com/yogasw/wick/internal/initcreds"
@@ -48,6 +50,7 @@ import (
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/pkg/job"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/web"
 
@@ -214,16 +217,24 @@ func NewServer() *Server {
 	agentsBcast := agentstool.NewBroadcaster()
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
 	var agentsPool *agentpool.Pool
+	var slackChan *agentchannels.SlackChannel // forward ref so factory closure can call it
 	agentsFactory := &agentpool.ClaudeFactory{
 		Layout:      agentsLayout,
 		RecordRaw:   false,
 		SpawnLogger: agentsSpawnLogger,
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
+			if slackChan != nil {
+				slackChan.OnAgentEvent(sid, ev)
+			}
 		},
 		OnExit: func(sid, name string, reason provider.ExitReason) {
 			agentsPool.HandleExit(sid, name, reason)
-			agentsBcast.Publish(sid, name, agentevent.AgentEvent{Type: agentevent.Done})
+			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
+			agentsBcast.Publish(sid, name, doneEv)
+			if slackChan != nil {
+				slackChan.OnAgentEvent(sid, doneEv)
+			}
 		},
 	}
 	agentsPool = agentpool.New(agentpool.PoolConfig{
@@ -231,6 +242,9 @@ func NewServer() *Server {
 		IdleTimeout:   120 * time.Second,
 		Layout:        agentsLayout,
 		Factory:       agentsFactory,
+		OnSessionCreated: func(s agentsession.Session) {
+			agentsMgr.Register(s)
+		},
 	})
 	agentstool.SetManager(agentsMgr)
 	agentstool.SetPool(agentsPool)
@@ -251,9 +265,18 @@ func NewServer() *Server {
 	}
 	slackChannel := agentchannels.NewSlack(
 		slackCfg,
-		agentsPool.Send,
+		func(ctx context.Context, sessionID, agentName, source, role, text string) error {
+			ws := configsSvc.GetOwned("agents", "slack_workspace")
+			if ws == "" {
+				if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
+					ws = wsNames[0]
+				}
+			}
+			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
+		},
 		configsSvc.GetOwned("agents", "public_url"),
 	)
+	slackChan = slackChannel // wire forward ref so factory callbacks can reach it
 	if slackChannel.IsConfigured() {
 		log.Info().Msg("agents: slack channel configured, will start with server")
 	} else {
@@ -343,6 +366,26 @@ func NewServer() *Server {
 
 	tagsSvc := tags.NewService(db)
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
+
+	// Inject live workspace names into the slack_workspace dropdown on the
+	// Agents config page. Options are re-read from disk on every page load
+	// so newly-created workspaces appear immediately without a restart.
+	// If exactly one workspace exists and slack_workspace is not yet set,
+	// auto-save it so the user doesn't need to interact with the dropdown.
+	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
+		wsNames, _ := agentworkspace.List(agentsLayout)
+		options := strings.Join(wsNames, "|")
+		for i := range rows {
+			if rows[i].Key == "slack_workspace" {
+				rows[i].Options = options
+				if len(wsNames) == 1 && rows[i].Value == "" {
+					_ = configsSvc.SetOwned(context.Background(), "agents", "slack_workspace", wsNames[0])
+					rows[i].Value = wsNames[0]
+				}
+			}
+		}
+		return rows
+	})
 
 	// jobrunnerHandler exposes /jobs/{key} — the operator surface with
 	// a Run Now button and run history. Admin-only settings stay on
@@ -484,6 +527,61 @@ type Server struct {
 	slackChannel *agentchannels.SlackChannel
 }
 
+// watchSlackConfig starts the Slack channel immediately if configured, then
+// polls every 30 s. When BotToken or AppToken changes it calls Reload() so
+// the operator never needs to restart the server after updating credentials.
+func (s *Server) watchSlackConfig(ctx context.Context) {
+	readCfg := func() (agentconfig.SlackConfig, string) {
+		return agentconfig.SlackConfig{
+			Mode:          s.configsSvc.GetOwned("agents", "mode"),
+			BotToken:      s.configsSvc.GetOwned("agents", "bot_token"),
+			AppToken:      s.configsSvc.GetOwned("agents", "app_token"),
+			SigningSecret: s.configsSvc.GetOwned("agents", "signing_secret"),
+			AccessMode:    s.configsSvc.GetOwned("agents", "access_mode"),
+			AllowedUsers:  s.configsSvc.GetOwned("agents", "allowed_users"),
+			AllowedGroups: s.configsSvc.GetOwned("agents", "allowed_groups"),
+		}, s.configsSvc.GetOwned("agents", "public_url")
+	}
+	// Hash covers both connection fields (trigger reconnect) and access-control
+	// fields (AllowedUsers, AllowedGroups, AccessMode) so operator changes to
+	// who can trigger agents are picked up without a token rotation.
+	connHash := func(cfg agentconfig.SlackConfig) string {
+		return cfg.BotToken + "|" + cfg.AppToken + "|" + cfg.Mode + "|" +
+			cfg.AccessMode + "|" + cfg.AllowedUsers + "|" + cfg.AllowedGroups
+	}
+
+	cfg, _ := readCfg()
+	hash := connHash(cfg)
+	if s.slackChannel.IsConfigured() {
+		log.Info().Msg("agents: slack channel configured, starting")
+		go func() {
+			if err := s.slackChannel.Start(ctx); err != nil {
+				log.Ctx(ctx).Error().Err(err).Msg("agents: slack channel stopped")
+			}
+		}()
+	} else {
+		log.Info().Msg("agents: slack channel not configured (set BotToken + AppToken in Settings → Agents)")
+	}
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			newCfg, newPubURL := readCfg()
+			newHash := connHash(newCfg)
+			if newHash == hash {
+				continue
+			}
+			hash = newHash
+			log.Info().Msg("agents: slack config changed, hot-reloading")
+			s.slackChannel.Reload(ctx, newCfg, newPubURL)
+		}
+	}
+}
+
 // appNameHandler injects the configurable app name into every request
 // context so templ components can read it via ui.AppNameFromContext.
 func (s *Server) appNameHandler(next http.Handler) http.Handler {
@@ -555,13 +653,12 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
 
-	// Start Slack channel listener if configured. Runs for the server lifetime.
-	if s.slackChannel != nil && s.slackChannel.IsConfigured() {
-		go func() {
-			if err := s.slackChannel.Start(ctx); err != nil {
-				log.Ctx(ctx).Error().Err(err).Msg("agents: slack channel stopped")
-			}
-		}()
+	// Start Slack channel listener and watch for config changes.
+	// watchSlackConfig starts the channel immediately if configured, then
+	// polls every 30 s and hot-reloads when BotToken/AppToken change so
+	// the operator never needs to restart the server after updating creds.
+	if s.slackChannel != nil {
+		go s.watchSlackConfig(ctx)
 	}
 
 	h := chainMiddleware(

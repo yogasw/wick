@@ -22,6 +22,7 @@ import (
 
 	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
 
@@ -96,6 +97,9 @@ func RegisterBuiltins() {
 		}),
 		Register: converttext.Register,
 	})
+	agentsConfigs := agentconfig.SeedGeneralConfig()
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedSlackConfig()...)
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedWorkspaceConfig()...)
 	extra = append(extra, tool.Module{
 		Meta: tool.Tool{
 			Key:               "agents",
@@ -106,6 +110,7 @@ func RegisterBuiltins() {
 			DefaultVisibility: entity.VisibilityPrivate,
 			DefaultTags:       []tool.DefaultTag{tags.AI},
 		},
+		Configs:  agentsConfigs,
 		Register: agentstool.Register,
 	})
 	for _, e := range external.All() {
