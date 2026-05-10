@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Spec is the per-app gate config the binary loads at every
@@ -104,7 +105,14 @@ type claudeHookEntry struct {
 // `--settings` file. gateBin is the absolute path to the gate
 // binary (we don't rely on PATH lookup so a per-test build can be
 // used in integration tests).
+//
+// On Windows, Claude Code invokes hook commands via /usr/bin/bash
+// (WSL or Git Bash). Backslashes in the path are stripped by bash,
+// turning C:\foo\gate.exe into C:foogate.exe (exit 127). Convert
+// all backslashes to forward slashes so the path survives bash on
+// all platforms.
 func ClaudeSettings(gateBin string) ([]byte, error) {
+	gateBin = strings.ReplaceAll(gateBin, "\\", "/")
 	hook := claudeHookEntry{Type: "command", Command: gateBin}
 	// Gate every file-system tool that can read/write outside the workspace.
 	matchers := []string{"Bash", "Read", "Write", "Edit", "Glob"}
@@ -143,6 +151,30 @@ func WriteClaudeSettings(dir, gateBin string) (string, error) {
 	return settingsPath, nil
 }
 
+// WriteWorkspaceHooks writes the gate hook into
+// <workspace>/.claude/settings.local.json so Claude's project-scoped
+// hook loader picks it up. Claude does NOT honour hooks injected via
+// the --settings flag; they must live in the standard settings
+// hierarchy (.claude/settings.json or .claude/settings.local.json).
+// We use the .local variant to avoid conflicting with any
+// settings.json the user may have committed to the workspace.
+// Idempotent: overwrites an existing file with the same content.
+func WriteWorkspaceHooks(workspace, gateBin string) error {
+	dir := filepath.Join(workspace, ".claude")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	data, err := ClaudeSettings(gateBin)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(dir, "settings.local.json")
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	return nil
+}
+
 // WriteSharedSpec persists the shared spec for appName atomically.
 // Caller passes the already-merged spec — appendAlwaysAllow /
 // RevokeAlways handles read-modify-write in the daemon.
@@ -159,6 +191,105 @@ func WriteSharedSpec(appName string, spec Spec) error {
 		return fmt.Errorf("write spec %s: %w", path, err)
 	}
 	return nil
+}
+
+// userClaudeSettingsPath returns the path to ~/.claude/settings.json.
+func userClaudeSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "settings.json"), nil
+}
+
+// MergeUserHooks writes the gate PreToolUse hook into the user's
+// global ~/.claude/settings.json. Claude Code always reads this file
+// regardless of working directory or permission mode — it is the only
+// reliable way to inject hooks when spawning Claude headlessly with
+// `claude -p`. Existing settings (permissions, autoUpdates, etc.) are
+// preserved; only the `hooks` key is replaced.
+//
+// This is called at server startup so Claude sessions started while
+// wick is running pick up the hook. Use RemoveUserHooks at shutdown
+// to restore the file to its original state.
+func MergeUserHooks(gateBin string) error {
+	path, err := userClaudeSettingsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	// Read existing settings (or start with empty object).
+	var settings map[string]any
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	if settings == nil {
+		settings = make(map[string]any)
+	}
+
+	// Build the hooks section with our gate entries.
+	hookData, err := ClaudeSettings(gateBin)
+	if err != nil {
+		return err
+	}
+	var hookCfg claudeHookConfig
+	if err := json.Unmarshal(hookData, &hookCfg); err != nil {
+		return err
+	}
+	settings["hooks"] = hookCfg.Hooks
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".wick.tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	return os.Rename(tmp, path)
+}
+
+// RemoveUserHooks removes the `hooks` key from ~/.claude/settings.json
+// that was written by MergeUserHooks, restoring it to its pre-wick state.
+// Best-effort: errors are logged by the caller, not returned.
+func RemoveUserHooks(gateBin string) error {
+	path, err := userClaudeSettingsPath()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return err
+	}
+	hooks, ok := settings["hooks"]
+	if !ok {
+		return nil // nothing to remove
+	}
+	// Only remove if it's our gate hook (command path contains gateBin).
+	hookJSON, _ := json.Marshal(hooks)
+	if !strings.Contains(string(hookJSON), "gate") {
+		return nil // foreign hooks — don't touch
+	}
+	delete(settings, "hooks")
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".wick.tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // LoadSpec reads the shared Spec for appName from disk. Used by the

@@ -35,15 +35,13 @@ import (
 // and the resume flag when a CLI session ID is available.
 //
 // Binary defaults to `claude` (PATH lookup); operators can override
-// via the Binary field for non-standard installs. SettingsPath is the
-// `--settings <path>` value injected by phase 3 gate; empty = no
-// override.
+// via the Binary field for non-standard installs.
 type Spawner struct {
-	Binary       string // empty → "claude"
-	SettingsPath string // empty → no --settings flag
-	// BypassPermissions forces --permission-mode bypassPermissions even
-	// when no gate settings file is present. Use when running Claude in
-	// non-interactive contexts (Slack/HTTP) without a gate configured.
+	Binary string // empty → "claude"
+	// BypassPermissions forces --permission-mode bypassPermissions.
+	// Set when a gate is active (hook in workspace settings.local.json
+	// is the sole allow/block authority) or for non-interactive channels
+	// (Slack/HTTP) where operator wants to skip Claude's built-in prompts.
 	BypassPermissions bool
 	// ExtraArgs is appended after the canonical headless flags, before
 	// any caller-supplied ResumeID. Useful for tests / debugging
@@ -58,7 +56,7 @@ type Spawner struct {
 //	claude -p --verbose
 //	       --input-format stream-json
 //	       --output-format stream-json
-//	       [--settings <path>]
+//	       [--permission-mode bypassPermissions]
 //	       [--resume <id>]
 //
 // `-p` plus `stream-json` keeps the process alive in a long-lived
@@ -87,12 +85,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if opt.Workspace != "" {
 		args = append(args, "--add-dir", opt.Workspace)
 	}
-	if s.SettingsPath != "" {
-		// Gate is active: bypass interactive prompts so the PreToolUse
-		// hook is the sole allow/block authority.
-		args = append(args, "--permission-mode", "bypassPermissions")
-		args = append(args, "--settings", s.SettingsPath)
-	} else if s.BypassPermissions {
+	if s.BypassPermissions {
+		// Gate is active (hook written to workspace .claude/settings.local.json)
+		// or operator requested bypass for non-interactive channel. Skip
+		// Claude's own permission UI; the gate PreToolUse hook is the
+		// sole allow/block authority.
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)

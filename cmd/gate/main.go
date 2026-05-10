@@ -166,14 +166,16 @@ func run() int {
 	logStage(requestID, "socket_dial", cmd, cwd, "", socketPath)
 	decision, reason, err := requestApprovalWithLog(socketPath, "Bash", cmd, cwd, claudeSID, key, requestID)
 	if err != nil {
-		gate.LogDaily(app, "warn", "approval rpc failed (blocked)", map[string]any{
+		// Fail-open: when the daemon socket is unavailable the wick
+		// server isn't running (or this isn't a wick session).
+		// Allow the command rather than blocking the user's shell.
+		gate.LogDaily(app, "warn", "approval rpc unavailable (allowed)", map[string]any{
 			"request_id": requestID,
 			"cmd":        cmd,
 			"error":      err.Error(),
 		})
-		logTerminalEntry(requestID, "Bash", cmd, cwd, "blocked", "", "approval rpc: "+err.Error())
-		fmt.Fprintf(os.Stderr, "gate: blocked — approval rpc: %v\n", err)
-		return 2
+		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "no_socket", err.Error())
+		return 0
 	}
 	if gate.IsApprove(decision) {
 		gate.LogDaily(app, "info", "allowed via "+decision, map[string]any{
@@ -226,9 +228,9 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	socketPath := gate.SharedSocketPath(gate.AppName())
 	decision, reason, err := requestApprovalWithLog(socketPath, tool, path, in.CWD, in.SessionID, key, requestID)
 	if err != nil {
-		logTerminalEntry(requestID, tool, path, in.CWD, "blocked", "", "approval rpc: "+err.Error())
-		fmt.Fprintf(os.Stderr, "gate: blocked %s(%q) — approval rpc: %v\n", tool, path, err)
-		return 2
+		// Fail-open: socket unavailable means wick not running.
+		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "no_socket", err.Error())
+		return 0
 	}
 	if gate.IsApprove(decision) {
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", decision, reason)

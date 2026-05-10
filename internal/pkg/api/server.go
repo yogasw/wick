@@ -19,6 +19,7 @@ import (
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
+	"github.com/yogasw/wick/internal/appname"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
@@ -74,7 +75,7 @@ func NewServer() *Server {
 	// dir mismatches (APP_NAME unset, name typo) are obvious too.
 	log.Info().
 		Bool("tray", os.Getenv("WICK_TRAY") == "1").
-		Str("app_name", strings.TrimSpace(os.Getenv("APP_NAME"))).
+		Str("app_name", appname.Resolve()).
 		Msg("server: runtime mode")
 
 	db := postgres.NewGORM(cfg.Database)
@@ -171,7 +172,7 @@ func NewServer() *Server {
 		envPassword = ""
 	}
 	if generated := authSvc.BootstrapAdmin(context.Background(), envPassword, configsSvc.AdminPasswordChanged()); generated != "" {
-		appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+		appName := appname.Resolve()
 		seedEmail := strings.SplitN(cfg.App.AdminEmails, ",", 2)[0]
 		seedEmail = strings.TrimSpace(seedEmail)
 		path, werr := initcreds.Write(appName, seedEmail, generated, configsSvc.AppURL())
@@ -350,7 +351,7 @@ func NewServer() *Server {
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
 	agentstool.SetConfigs(configsSvc)
 	agentstool.SetDB(db)
-	provider.AppName = strings.TrimSpace(os.Getenv("APP_NAME"))
+	provider.AppName = appname.Resolve()
 	// Wire the auto-rescan toggle: provider package consults this
 	// before triggering background stale-version re-probes. Defaults
 	// true when configs row is empty.
@@ -429,6 +430,16 @@ func NewServer() *Server {
 		}
 		agentstool.SetApprovals(approvalMgr)
 		log.Info().Str("socket", approvalMgr.SocketPath()).Msg("agents: gate socket ready")
+		// Inject gate hook into ~/.claude/settings.json so headless
+		// `claude -p` sessions pick it up regardless of working directory.
+		// Project-scoped settings.local.json is unreliable in -p mode.
+		if resolvedGateBin != "" {
+			if hErr := agentgate.MergeUserHooks(resolvedGateBin); hErr != nil {
+				log.Warn().Err(hErr).Msg("agents: write user hooks failed")
+			} else {
+				log.Info().Msg("agents: gate hook written to ~/.claude/settings.json")
+			}
+		}
 	}
 	agentstool.SetGateStatus(gateStatus)
 
@@ -546,7 +557,7 @@ func NewServer() *Server {
 		Jobs:       jobsSvc,
 		Login:      authSvc,
 		Tools:      allItems,
-		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+		AppName:    appname.Resolve(),
 	}))
 
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
@@ -774,7 +785,7 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, slackChannel: slackChannel, telegramChannel: telegramChannel, db: db}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, slackChannel: slackChannel, telegramChannel: telegramChannel, db: db, gateBin: resolvedGateBin}
 }
 
 type Server struct {
@@ -785,6 +796,7 @@ type Server struct {
 	slackChannel    *agentchannels.SlackChannel
 	telegramChannel *agentchannels.TelegramChannel
 	db              *gorm.DB
+	gateBin         string // resolved gate binary path; used for hook cleanup on shutdown
 }
 
 // watchSlackConfig starts the Slack channel immediately if configured, then
@@ -995,6 +1007,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
 		}
+		if s.gateBin != "" {
+			_ = agentgate.RemoveUserHooks(s.gateBin)
+		}
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		httpSrv.SetKeepAlivesEnabled(false)
@@ -1013,7 +1028,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		// here would leak it to disk. Headless / CLI gets the full
 		// banner (operator might be reading from a journal, no GUI).
 		if os.Getenv("WICK_TRAY") != "1" {
-			appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+			appName := appname.Resolve()
 			if info, ok := initcreds.Read(appName); ok {
 				fmt.Printf("  → Email:            %s\n", info.Email)
 				fmt.Printf("  → Default password: %s\n", info.Password)
@@ -1088,7 +1103,7 @@ func RunMCPStdio(version, commit, buildTime string) {
 		Connectors: connSvc,
 		Jobs:       jobsSvc,
 		Login:      authSvc,
-		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+		AppName:    appname.Resolve(),
 	}))
 
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {

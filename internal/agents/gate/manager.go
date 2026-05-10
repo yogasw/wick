@@ -118,10 +118,12 @@ func (m *ApprovalManager) Stop() {
 func (m *ApprovalManager) handleRequest(r ApprovalRequest) {
 	sessionID, ok := m.routeByCWD(r.WorkDir)
 	if !ok {
-		// No session owns this cwd. Fall through to UI broadcast
-		// with the empty sessionID; UI can render under "Unrouted"
-		// bucket, or admins can revoke via cwd path.
-		sessionID = ""
+		// No wick session manages this cwd (e.g. Claude launched from
+		// outside a wick workspace via the global PreToolUse hook).
+		// Fail-open: allow immediately so the global hook doesn't block
+		// non-wick Claude sessions.
+		m.resolve("", r.ID, DecisionApproveOnce, "unrouted: no session for cwd")
+		return
 	}
 	if sessionID != "" && m.IsSessionAllApproved(sessionID) {
 		m.resolve(sessionID, r.ID, DecisionApproveAll, "session all-approved")

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -117,6 +116,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			return BuildResult{}, fmt.Errorf("attach gate: %w", err)
 		}
 		spawner = s
+		// Gate is the sole allow/block authority via PreToolUse hook;
+		// bypass Claude's own permission UI to avoid double confirmation.
+		if cs, ok := spawner.(claude.Spawner); ok {
+			cs.BypassPermissions = true
+			spawner = cs
+		}
 	}
 
 	var onEvent func(event.AgentEvent)
@@ -208,27 +213,18 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }
 
-// attachGateConfig writes the per-spawn settings.json (claude's
-// `--settings` file pointing at the gate binary) and returns a
-// wrapped spawner.
+// attachGateConfig writes the gate hook into the workspace's
+// .claude/settings.local.json so Claude's project-scoped hook loader
+// picks it up, and returns the (unmodified) spawner.
 //
-// Rules + AutoApproved are NOT written here anymore — they live in
-// the shared spec at gate.SharedSpecPath(AppName), populated by the
-// daemon at boot and rewritten on always-allow / revoke. The gate
-// binary reads the shared spec at every invocation.
+// Claude does NOT honour hooks injected via --settings; they must live
+// in the standard settings hierarchy. We write to the workspace's
+// .local variant to avoid stomping committed settings.json files.
 //
-// No env vars are injected — gate derives all paths from
-// gate.AppName() (its own exe filename, strip `-gate[.exe]`).
+// Rules + AutoApproved live in the shared spec at
+// gate.SharedSpecPath(AppName); rewritten on every spawn so UI
+// changes propagate without a server restart.
 func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawner, cfg *GateConfig) (provider.Spawner, error) {
-	root := cfg.TempDirRoot
-	if root == "" {
-		root = filepath.Join(f.Layout.SessionDir(opt.SessionID), "gate")
-	}
-	settingsPath, err := gate.WriteClaudeSettings(root, cfg.GateBinary)
-	if err != nil {
-		return base, err
-	}
-
 	// Refresh the shared spec so the gate binary picks up the latest
 	// rules on this spawn. AppName empty falls back to "wick".
 	appName := cfg.AppName
@@ -237,10 +233,18 @@ func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawn
 	}
 	_ = gate.WriteSharedSpec(appName, gate.Spec{Rules: cfg.Rules, DefaultScope: cfg.DefaultScope})
 
-	if cs, ok := base.(claude.Spawner); ok {
-		cs.SettingsPath = settingsPath
-		base = cs
+	// Write hook into the workspace so Claude discovers it via the
+	// standard project-scoped settings hierarchy.
+	workspace := opt.Workspace
+	if workspace == "" {
+		workspace = cfg.TempDirRoot
 	}
+	if workspace != "" {
+		if err := gate.WriteWorkspaceHooks(workspace, cfg.GateBinary); err != nil {
+			return base, fmt.Errorf("write workspace hooks: %w", err)
+		}
+	}
+
 	return base, nil
 }
 
