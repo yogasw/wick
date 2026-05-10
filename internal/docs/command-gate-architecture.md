@@ -14,7 +14,8 @@ Keputusan final yang sudah locked:
 - Resolution: sibling-of-executable (`<app>-gate[.exe]` di samping main, **shipped via installer**) → embedded extract (backup untuk portable .exe / source build) → `<app>-gate` di PATH (last-ditch). Zero env vars.
 - Spec channel: **shared spec** di `~/.<app>/agents/gate/spec.json` (zero env vars; gate derive path dari `gate.AppName()` — strip `-gate` dari `os.Executable()` basename)
 - Socket channel: **shared socket** di `~/.<app>/agents/gate/gate.sock` (single listener, daemon route by cwd dari hook payload → wick session)
-- Audit log: **shared** `~/.<app>/agents/gate/commands.jsonl` (UI session-detail filter by workspace cwd prefix)
+- Audit log (machine-readable, structured): **shared** `~/.<app>/agents/gate/commands.jsonl` (UI session-detail filter by workspace cwd prefix)
+- Daily tail log (human-readable, per-day rotation): `~/.<app>/logs/gate-YYYY-MM-DD.log` — sits next to server/worker/app logs. One line per gate invocation entry + every stage transition. Format `<RFC3339> <level> <msg> {kv}`. Best-effort, errors swallowed (gate must never crash on logging)
 - Approval style: Gate style (Pola A) — system intercept, bukan Claude Code style
 - Decision modes: 4 (`approve_once` / `approve_session` / `approve_always` / `block`)
 - AskUser: MCP tool (bukan harness), bridged ke web UI lewat SSE

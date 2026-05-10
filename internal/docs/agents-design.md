@@ -28,6 +28,12 @@ Update terakhir: 2026-05-10.
 > - Env vars: `WICK_GATE_SPEC` / `GATE_SPEC` / `WICK_GATE_BIN` / `GATE_BIN`
 >   tidak ada (Stage 9). `APP_NAME` tetap dipakai sebagai bagian chain
 >   `appname.Resolve()`.
+> - **Daily tail log** — gate emit `~/.<app>/logs/gate-YYYY-MM-DD.log`
+>   tiap invocation + stage transition (mirror format
+>   `app-/server-/worker-` log). Audit jsonl
+>   (`~/.<app>/agents/gate/commands.jsonl`) tetap source of truth utk
+>   UI; tail log untuk operator yg mau `tail -f` saat debug "gate fired
+>   gak ya".
 > - Spec + socket + audit log jadi **shared per-app** di
 >   `~/.<app>/agents/gate/{spec.json, gate.sock, commands.jsonl}` (bukan per-session
 >   `~/.<app>/agents/sessions/<id>/gate/...` lagi).

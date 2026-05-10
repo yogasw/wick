@@ -81,9 +81,22 @@ func main() {
 // of one command.
 func run() int {
 	requestID := newRequestID()
+	app := gate.AppName()
 
-	spec, err := gate.LoadSpec(gate.AppName())
+	// Tail-log the invocation entry point before doing anything else
+	// so operators can see "gate fired" even when later steps fail
+	// (spec missing, stdin parse error, etc.).
+	gate.LogDaily(app, "info", "gate invoked", map[string]any{
+		"request_id": requestID,
+		"pid":        os.Getpid(),
+	})
+
+	spec, err := gate.LoadSpec(app)
 	if err != nil {
+		gate.LogDaily(app, "error", "load spec", map[string]any{
+			"request_id": requestID,
+			"error":      err.Error(),
+		})
 		fmt.Fprintf(os.Stderr, "gate: load spec: %v\n", err)
 		return 2
 	}
@@ -92,6 +105,10 @@ func run() int {
 
 	cmd, cwd, claudeSID, perr := readHookInput(os.Stdin, stdinReadTimeout)
 	if perr != nil {
+		gate.LogDaily(app, "warn", "stdin parse blocked", map[string]any{
+			"request_id": requestID,
+			"error":      perr.Error(),
+		})
 		logTerminal(requestID, "", "", "blocked", "", "stdin parse: "+perr.Error())
 		fmt.Fprintf(os.Stderr, "gate: %v\n", perr)
 		return 2
@@ -100,6 +117,10 @@ func run() int {
 	// Whitelist match — fastest happy path.
 	matcher := gate.NewMatcher(spec.Rules)
 	if allow, _ := matcher.Decide(cmd); allow {
+		gate.LogDaily(app, "info", "allowed via whitelist", map[string]any{
+			"request_id": requestID,
+			"cmd":        cmd,
+		})
 		logTerminal(requestID, cmd, cwd, "allowed", "whitelist", "")
 		return 0
 	}
@@ -109,23 +130,48 @@ func run() int {
 	// be running.
 	key := gate.MatchKey("Bash", cmd)
 	if gate.IsAutoApproved(spec, key) {
+		gate.LogDaily(app, "info", "allowed via auto_approved", map[string]any{
+			"request_id": requestID,
+			"cmd":        cmd,
+			"match_key":  key,
+		})
 		logTerminal(requestID, cmd, cwd, "allowed", "auto_approved", "")
 		return 0
 	}
 
 	// Interactive approval — dial the shared daemon socket.
-	socketPath := gate.SharedSocketPath(gate.AppName())
+	socketPath := gate.SharedSocketPath(app)
+	gate.LogDaily(app, "info", "dial daemon", map[string]any{
+		"request_id": requestID,
+		"cmd":        cmd,
+		"socket":     socketPath,
+	})
 	logStage(requestID, "socket_dial", cmd, cwd, "", socketPath)
 	decision, reason, err := requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, key, requestID)
 	if err != nil {
+		gate.LogDaily(app, "warn", "approval rpc failed (blocked)", map[string]any{
+			"request_id": requestID,
+			"cmd":        cmd,
+			"error":      err.Error(),
+		})
 		logTerminal(requestID, cmd, cwd, "blocked", "", "approval rpc: "+err.Error())
 		fmt.Fprintf(os.Stderr, "gate: blocked — approval rpc: %v\n", err)
 		return 2
 	}
 	if gate.IsApprove(decision) {
+		gate.LogDaily(app, "info", "allowed via "+decision, map[string]any{
+			"request_id": requestID,
+			"cmd":        cmd,
+			"reason":     reason,
+		})
 		logTerminal(requestID, cmd, cwd, "allowed", decision, reason)
 		return 0
 	}
+	gate.LogDaily(app, "warn", "blocked: "+decision, map[string]any{
+		"request_id": requestID,
+		"cmd":        cmd,
+		"reason":     reason,
+	})
 	logTerminal(requestID, cmd, cwd, "blocked", decision, reason)
 	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
 	return 2

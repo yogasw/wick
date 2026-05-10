@@ -1,9 +1,14 @@
 package gate
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/userconfig"
 )
 
 // Entry is one row appended to the shared commands.jsonl. Each gate
@@ -44,6 +49,43 @@ type Entry struct {
 	RequestID string    `json:"request_id,omitempty"`
 	MatchKey  string    `json:"match_key,omitempty"`
 	WorkDir   string    `json:"work_dir,omitempty"`
+}
+
+// LogDaily writes one human-readable line to
+// ~/.<app>/logs/gate-YYYY-MM-DD.log so operators can tail gate
+// activity alongside server-/worker-/app- logs without parsing
+// commands.jsonl. Fire-and-forget: best-effort, errors swallowed —
+// gate must never crash because logging failed.
+//
+// Format: zerolog-ish single line, `<RFC3339> <level> <msg> <kv pairs>`.
+// The structured commands.jsonl stays the audit source of truth;
+// this file is purely for "what is gate doing right now" tailing.
+func LogDaily(appName, level, msg string, kv map[string]any) {
+	dir, err := userconfig.Dir(appName)
+	if err != nil {
+		return
+	}
+	dir = filepath.Join(dir, "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, "gate-"+time.Now().Format("2006-01-02")+".log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	line := fmt.Sprintf("%s %s %s", time.Now().UTC().Format(time.RFC3339Nano), level, msg)
+	if len(kv) > 0 {
+		// JSON-encode the kv map so values with spaces/quotes round-trip
+		// cleanly — operators tailing the file still get one line per
+		// event.
+		if data, err := json.Marshal(kv); err == nil {
+			line += " " + string(data)
+		}
+	}
+	fmt.Fprintln(f, line)
 }
 
 // Append writes one entry to the shared commands.jsonl for appName.
