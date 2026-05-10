@@ -150,6 +150,7 @@ type runEntry struct {
 	buffer   *Buffer
 	sessID   string
 	agentNm  string
+	cwd      string // resolved workspace path (used by RouteByCWD)
 }
 
 // New returns an empty pool.
@@ -293,6 +294,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		store:   sto,
 		sessID:  sessionID,
 		agentNm: agentName,
+		cwd:     cwd,
 	}
 	p.mu.Lock()
 	if p.closed {
@@ -606,6 +608,7 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 		entry := ActiveEntry{
 			SessionID: e.sessID,
 			AgentName: e.agentNm,
+			CWD:       e.cwd,
 		}
 		if e.state != nil {
 			entry.Lifecycle = e.state.Lifecycle().String()
@@ -631,6 +634,7 @@ func (p *Pool) IdleTimeout() time.Duration { return p.cfg.IdleTimeout }
 type ActiveEntry struct {
 	SessionID  string
 	AgentName  string
+	CWD        string // resolved workspace path, used by RouteByCWD
 	PID        int
 	Lifecycle  string
 	Substate   string

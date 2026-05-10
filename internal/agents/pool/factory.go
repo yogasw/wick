@@ -26,11 +26,11 @@ type ClaudeFactory struct {
 	OnEvent   func(sessionID, agentName string, ev event.AgentEvent)
 	OnExit    func(sessionID, agentName string, reason provider.ExitReason)
 
-	// Gate (optional) attaches the gate sidecar to every spawn. When
-	// non-nil, Build writes a per-spawn settings.json pointing claude
-	// at the gate binary; the gate binary then loads its rules + auto-
-	// approved list from the shared spec at SharedSpecPath(AppName).
-	// nil = no gate (fail-open, only safe for tests).
+	// Gate (optional) attaches a static command whitelist to every spawn.
+	// When non-nil, Build writes a per-session settings.json + spec
+	// file to a temp dir, points the spawner at the settings file,
+	// and injects WICK_GATE_SPEC into ExtraEnv so wick-gate finds
+	// its config. nil = no gate (fail-open, only safe for tests).
 	Gate *GateConfig
 	// GateLoader (optional) is called on every Build to fetch the
 	// current gate config from the live config store. Takes precedence
@@ -51,18 +51,24 @@ type ClaudeFactory struct {
 	SpawnLogger *provider.SpawnLogger
 }
 
-// GateConfig describes the gate plumbing: where the gate binary
-// lives. Rules + auto-approved list now live in the shared spec
-// (see gate.WriteSharedSpec) — the daemon writes them at boot and
-// rewrites on revoke / always-allow, and the gate binary reads them
-// per invocation.
+// GateConfig describes the gate plumbing: where the wick-gate binary
+// lives + what rules it enforces. The factory writes the shared
+// spec.json from Rules on every spawn so UI changes propagate
+// immediately without restarting the server.
 type GateConfig struct {
-	// GateBinary is the absolute path to the gate binary.
-	// Required when Gate != nil.
+	// GateBinary is the absolute path to the wick-gate binary. Required.
 	GateBinary string
-
-	// TempDirRoot is where the per-spawn settings.json lives. If
-	// empty, `<Layout.SessionDir(id)>/gate` is used.
+	// Rules is the whitelist enforced for every spawn under this factory.
+	Rules []gate.CommandRule
+	// AppName drives the shared spec path (~/.<app>/agents/gate/spec.json).
+	// Falls back to "wick" when empty.
+	AppName string
+	// DefaultScope is written into spec.json as the fallback scope for
+	// rules that have an empty Scope field. Typically the default
+	// workspace directory so no-scope rules are still path-restricted.
+	DefaultScope string
+	// TempDirRoot is where per-spawn gate artifacts live. If empty,
+	// `<Layout.SessionDir(id)>/gate` is used.
 	TempDirRoot string
 }
 
@@ -192,16 +198,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 }
 
 // attachGateConfig writes the per-spawn settings.json (claude's
-// `--settings` file pointing at the gate binary) and returns a
-// wrapped spawner.
-//
-// Rules + AutoApproved are NOT written here anymore — they live in
-// the shared spec at gate.SharedSpecPath(AppName), populated by the
-// daemon at boot and rewritten on always-allow / revoke. The gate
-// binary reads the shared spec at every invocation.
-//
-// No env vars are injected — gate derives all paths from its
-// compile-time AppName (set via -ldflags by `wick build`).
+// `--settings` file pointing at the gate binary) and refreshes the
+// shared spec.json so UI rule changes take effect on the next spawn
+// without requiring a server restart.
 func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawner, cfg *GateConfig) (provider.Spawner, error) {
 	root := cfg.TempDirRoot
 	if root == "" {
@@ -212,8 +211,14 @@ func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawn
 		return base, err
 	}
 
-	// If the underlying spawner is real claude, push the settings
-	// path into a fresh copy.
+	// Refresh the shared spec so the gate binary picks up the latest
+	// rules on this spawn. AppName empty falls back to "wick".
+	appName := cfg.AppName
+	if appName == "" {
+		appName = "wick"
+	}
+	_ = gate.WriteSharedSpec(appName, gate.Spec{Rules: cfg.Rules, DefaultScope: cfg.DefaultScope})
+
 	if cs, ok := base.(claude.Spawner); ok {
 		cs.SettingsPath = settingsPath
 		base = cs

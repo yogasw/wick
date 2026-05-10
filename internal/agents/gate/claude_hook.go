@@ -25,6 +25,12 @@ type Spec struct {
 	// dialing the socket so always-approved commands take a zero-
 	// latency fast path identical to whitelisted ones.
 	AutoApproved []string `json:"auto_approved,omitempty"`
+
+	// DefaultScope is the filesystem path used as the scope for rules
+	// that have an empty Scope field. Typically the default workspace
+	// directory (~/.<app>/agents/workspaces/default/files). When
+	// empty, rules with no scope are unrestricted (legacy behaviour).
+	DefaultScope string `json:"default_scope,omitempty"`
 }
 
 // SharedSpecPath returns the on-disk location of the shared gate
@@ -99,16 +105,18 @@ type claudeHookEntry struct {
 // binary (we don't rely on PATH lookup so a per-test build can be
 // used in integration tests).
 func ClaudeSettings(gateBin string) ([]byte, error) {
+	hook := claudeHookEntry{Type: "command", Command: gateBin}
+	// Gate every file-system tool that can read/write outside the workspace.
+	matchers := []string{"Bash", "Read", "Write", "Edit", "Glob"}
+	groups := make([]claudeHookGroup, 0, len(matchers))
+	for _, m := range matchers {
+		groups = append(groups, claudeHookGroup{
+			Matcher: m,
+			Hooks:   []claudeHookEntry{hook},
+		})
+	}
 	cfg := claudeHookConfig{
-		Hooks: claudeHooks{
-			PreToolUse: []claudeHookGroup{{
-				Matcher: "Bash",
-				Hooks: []claudeHookEntry{{
-					Type:    "command",
-					Command: gateBin,
-				}},
-			}},
-		},
+		Hooks: claudeHooks{PreToolUse: groups},
 	}
 	return json.MarshalIndent(cfg, "", "  ")
 }

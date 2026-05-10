@@ -187,6 +187,18 @@ func (l *Listener) Resolve(id string, decision string, reason string) bool {
 	}
 }
 
+// LookupPending returns the ApprovalRequest for id without removing it.
+// Used by the approval handler to retrieve the Cmd before resolving.
+func (l *Listener) LookupPending(id string) (ApprovalRequest, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p, ok := l.pending[id]
+	if !ok {
+		return ApprovalRequest{}, false
+	}
+	return p.req, true
+}
+
 // PendingSnapshot returns a copy of currently-pending requests.
 // Useful for the UI's "approval queue" view + reconnection rehydrate.
 func (l *Listener) PendingSnapshot() []ApprovalRequest {

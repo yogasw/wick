@@ -98,7 +98,7 @@ func RegisterBuiltins() {
 		Register: converttext.Register,
 	})
 	agentsConfigs := agentconfig.SeedGeneralConfig()
-	agentsConfigs = append(agentsConfigs, agentconfig.SeedSlackConfig()...)
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedGateConfig()...)
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedWorkspaceConfig()...)
 	extra = append(extra, tool.Module{
 		Meta: tool.Tool{
