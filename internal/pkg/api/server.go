@@ -2,26 +2,40 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 
+	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
+	"github.com/yogasw/wick/internal/appname"
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	agentevent "github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/gate"
+	agentgate "github.com/yogasw/wick/internal/agents/gate"
+	agentpool "github.com/yogasw/wick/internal/agents/pool"
+	"github.com/yogasw/wick/internal/agents/provider"
+	agentregistry "github.com/yogasw/wick/internal/agents/registry"
+	agentsession "github.com/yogasw/wick/internal/agents/session"
+	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
-	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/health"
 	"github.com/yogasw/wick/internal/home"
 	"github.com/yogasw/wick/internal/initcreds"
@@ -29,9 +43,9 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
+	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -39,12 +53,16 @@ import (
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	agentstool "github.com/yogasw/wick/internal/tools/agents"
+	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/web"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 func NewServer() *Server {
@@ -57,7 +75,7 @@ func NewServer() *Server {
 	// dir mismatches (APP_NAME unset, name typo) are obvious too.
 	log.Info().
 		Bool("tray", os.Getenv("WICK_TRAY") == "1").
-		Str("app_name", strings.TrimSpace(os.Getenv("APP_NAME"))).
+		Str("app_name", appname.Resolve()).
 		Msg("server: runtime mode")
 
 	db := postgres.NewGORM(cfg.Database)
@@ -68,6 +86,16 @@ func NewServer() *Server {
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
+
+	// Static built-in modules every wick app gets by default — agents
+	// tool plus the github / httprest connectors. cmd/lab additionally
+	// registers Lab samples (convert-text, crudcrud, sample-post) from
+	// its own main; downstream user apps see only Builtins here.
+	// All three are idempotent on Meta.Key: a downstream main.go can
+	// re-register the same key without producing duplicates.
+	tools.RegisterBuiltins()
+	jobs.RegisterBuiltins()
+	connectors.RegisterBuiltins()
 
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
@@ -144,7 +172,7 @@ func NewServer() *Server {
 		envPassword = ""
 	}
 	if generated := authSvc.BootstrapAdmin(context.Background(), envPassword, configsSvc.AdminPasswordChanged()); generated != "" {
-		appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+		appName := appname.Resolve()
 		seedEmail := strings.SplitN(cfg.App.AdminEmails, ",", 2)[0]
 		seedEmail = strings.TrimSpace(seedEmail)
 		path, werr := initcreds.Write(appName, seedEmail, generated, configsSvc.AppURL())
@@ -194,6 +222,307 @@ func NewServer() *Server {
 	// is mountable.
 	encfieldstool.SetService(encSvc)
 
+	// ── Agents (AI agent sessions / pool) ────────────────────────────
+	// Bootstrap reads or creates the on-disk layout (~/.wick/agents/) and
+	// loads the in-memory registry. Pool is wired with the production
+	// ClaudeFactory and the SSE event broadcaster.
+	agentsWorkspaceCfg := agentconfig.WorkspaceConfig{
+		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
+		DefaultWorkspace: configsSvc.GetOwned("agents", "default_workspace"),
+	}
+	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentsWorkspaceCfg))
+	agentsMgr, agentsBootErr := agentregistry.Bootstrap(agentsLayout)
+	if agentsBootErr != nil {
+		log.Fatal().Msgf("agents bootstrap: %s", agentsBootErr.Error())
+	}
+	agentsBcast := agentstool.NewBroadcaster()
+	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
+
+	// Resolve the gate binary up front: sibling-of-executable first, embedded
+	// extract as backup, PATH lookup as last resort. Failure is non-fatal —
+	// gate stays disabled and pool falls back to whitelist-only mode.
+	gateConfigEnabled := true
+	if v := configsSvc.GetOwned("agents", "gate_enabled"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			gateConfigEnabled = b
+		}
+	}
+	resolvedGateBin, gateSource, gateBinErr := agentgate.ResolveGateBinaryWithSource(filepath.Join(agentsLayout.BaseDir, "_gate-bin"))
+	gateStatus := agentstool.GateStatus{
+		Enabled: gateBinErr == nil && gateConfigEnabled,
+		Binary:  resolvedGateBin,
+		Source:  gateSource,
+	}
+	switch {
+	case !gateConfigEnabled:
+		gateStatus.Reason = "disabled via agents.gate_enabled"
+		log.Info().Msg("agents gate disabled via config")
+	case gateBinErr != nil:
+		gateStatus.Reason = gateBinErr.Error()
+		log.Warn().Msgf("agents gate disabled: %s", gateBinErr.Error())
+	}
+	var agentsPool *agentpool.Pool
+	var slackChan *agentchannels.SlackChannel    // forward ref so factory closure can call it
+	var telegramChan *agentchannels.TelegramChannel // forward ref
+	agentsFactory := &agentpool.ClaudeFactory{
+		Layout:      agentsLayout,
+		RecordRaw:   false,
+		SpawnLogger: agentsSpawnLogger,
+		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
+			agentsBcast.Publish(sid, name, ev)
+			if slackChan != nil {
+				slackChan.OnAgentEvent(sid, ev)
+			}
+			if telegramChan != nil {
+				telegramChan.OnAgentEvent(sid, ev)
+			}
+		},
+		OnExit: func(sid, name string, reason provider.ExitReason) {
+			agentsPool.HandleExit(sid, name, reason)
+			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
+			agentsBcast.Publish(sid, name, doneEv)
+			if slackChan != nil {
+				slackChan.OnAgentEvent(sid, doneEv)
+			}
+			if telegramChan != nil {
+				telegramChan.OnAgentEvent(sid, doneEv)
+			}
+		},
+	}
+	maxConc := 2
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n > 0 {
+		maxConc = n
+	}
+	idleSec := 120
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "idle_timeout_sec")); err == nil && n > 0 {
+		idleSec = n
+	}
+	killAfterIdleSec := 0
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "kill_after_idle_sec")); err == nil && n >= 0 {
+		killAfterIdleSec = n
+	}
+
+	agentsFactory.BypassPermissionsLoader = func() bool {
+		return configsSvc.GetOwned("agents", "bypass_permissions") == "true"
+	}
+
+	// syncSharedSpec rewrites the shared spec.json on every spawn so
+	// allowed_cmds edits take effect without a server restart.
+	// AutoApproved entries are preserved from disk.
+	syncSharedSpec := func() error {
+		rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
+		spec, _ := agentgate.LoadSpec(agentgate.AppName())
+		spec.Rules = rules
+		return agentgate.WriteSharedSpec(agentgate.AppName(), spec)
+	}
+	agentsFactory.GateLoader = func() *agentpool.GateConfig {
+		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
+			return nil
+		}
+		if resolvedGateBin == "" {
+			return nil
+		}
+		_ = syncSharedSpec()
+		log.Debug().Int("rules", 0).Msg("agents: gate active for spawn")
+		return &agentpool.GateConfig{
+			GateBinary:   resolvedGateBin,
+			AppName:      agentgate.AppName(),
+			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
+		}
+	}
+	agentsPool = agentpool.New(agentpool.PoolConfig{
+		MaxConcurrent:    maxConc,
+		IdleTimeout:      time.Duration(idleSec) * time.Second,
+		KillAfterIdle:    time.Duration(killAfterIdleSec) * time.Second,
+		Layout:           agentsLayout,
+		Factory:          agentsFactory,
+		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,
+		OnSessionCreated: func(s agentsession.Session) {
+			agentsMgr.Register(s)
+		},
+		OnLifecycle: func(ev agentpool.LifecycleEvent) {
+			agentsBcast.PublishLifecycle(ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+		},
+	})
+	agentstool.SetManager(agentsMgr)
+	agentstool.SetPool(agentsPool)
+	agentstool.SetBroadcaster(agentsBcast)
+	agentstool.SetLayout(agentsLayout)
+	agentstool.SetSpawnLogger(agentsSpawnLogger)
+	agentstool.SetConfigs(configsSvc)
+	agentstool.SetDB(db)
+	provider.AppName = appname.Resolve()
+	// Wire the auto-rescan toggle: provider package consults this
+	// before triggering background stale-version re-probes. Defaults
+	// true when configs row is empty.
+	provider.SetAutoRescanLookup(func() bool {
+		v := configsSvc.GetOwned("agents", "auto_rescan")
+		return v != "false"
+	})
+	// Prime the persistent status cache once in the background so the
+	// first load of /tools/agents/providers renders from cache instead
+	// of waiting on three cold `--version` spawns. Subsequent boots
+	// hit the cache directly until 24h staleness or a manual rescan.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = provider.RescanAll(ctx)
+	}()
+
+	// ── Gate: ApprovalManager (shared socket + initial spec.json) ────────
+	// RouteByCWD maps the gate binary's working directory to the wick
+	// session that owns that workspace so SSE events land in the right tab.
+	approvalMgr, amErr := gate.NewApprovalManager(gate.ApprovalManagerOptions{
+		AppName: agentgate.AppName(),
+		// Route by active pool sessions only — multiple sessions can share the
+		// same workspace name, so iterating the registry (which includes idle
+		// sessions) is non-deterministic and picks the wrong session. The active
+		// pool is precise: only the running agent owns that CWD right now.
+		RouteByCWD: func(cwd string) (string, bool) {
+			cleanCWD := filepath.Clean(cwd)
+			for _, entry := range agentsPool.ActiveSnapshot() {
+				if entry.CWD == "" {
+					continue
+				}
+				wsPath := filepath.Clean(entry.CWD)
+				if cleanCWD == wsPath || strings.HasPrefix(cleanCWD, wsPath+string(filepath.Separator)) {
+					return entry.SessionID, true
+				}
+			}
+			return "", false
+		},
+		OnRequest: func(sessionID string, r gate.ApprovalRequest) {
+			agentsBcast.PublishApprovalRequest(sessionID, r)
+			if slackChan != nil {
+				slackChan.OnApprovalRequest(sessionID, r)
+			}
+			if telegramChan != nil {
+				telegramChan.OnApprovalRequest(sessionID, r)
+			}
+		},
+		OnResolved: func(sessionID, requestID, decision string) {
+			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
+			if slackChan != nil {
+				slackChan.OnApprovalResolved(sessionID, requestID, decision)
+			}
+			if telegramChan != nil {
+				telegramChan.OnApprovalResolved(sessionID, requestID, decision)
+			}
+		},
+	})
+	if amErr != nil {
+		log.Warn().Err(amErr).Msg("agents: gate ApprovalManager init failed — interactive approval disabled")
+		gateStatus.Enabled = false
+		gateStatus.Reason = amErr.Error()
+	} else if _, err := approvalMgr.Start(); err != nil {
+		log.Warn().Err(err).Msg("agents: gate socket bind failed — interactive approval disabled")
+		gateStatus.Enabled = false
+		gateStatus.Reason = "listener start: " + err.Error()
+	} else {
+		// Write initial spec.json so the gate binary finds the whitelist
+		// rules on the very first spawn before any agent has started.
+		initialRules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
+		if wsErr := gate.WriteSharedSpec(agentgate.AppName(), gate.Spec{
+			Rules:        initialRules,
+			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
+		}); wsErr != nil {
+			log.Warn().Err(wsErr).Msg("agents: write initial spec.json failed")
+		}
+		agentstool.SetApprovals(approvalMgr)
+		log.Info().Str("socket", approvalMgr.SocketPath()).Msg("agents: gate socket ready")
+		// Inject gate hook into ~/.claude/settings.json so headless
+		// `claude -p` sessions pick it up regardless of working directory.
+		// Project-scoped settings.local.json is unreliable in -p mode.
+		if resolvedGateBin != "" {
+			if hErr := agentgate.MergeUserHooks(resolvedGateBin); hErr != nil {
+				log.Warn().Err(hErr).Msg("agents: write user hooks failed")
+			} else {
+				log.Info().Msg("agents: gate hook written to ~/.claude/settings.json")
+			}
+		}
+	}
+	agentstool.SetGateStatus(gateStatus)
+
+	// ── Agents: Slack channel (optional — only starts when configured) ──
+	if err := agentchannels.EnsureChannel(db, "slack"); err != nil {
+		log.Warn().Err(err).Msg("agents: slack channel ensure failed")
+	}
+	slackCfg, slackPubURL, slackCfgErr := agentchannels.LoadSlackConfig(db)
+	if slackCfgErr != nil {
+		log.Warn().Err(slackCfgErr).Msg("agents: failed to load slack config from agent_channels")
+	}
+	slackChannel := agentchannels.NewSlack(
+		slackCfg,
+		func(ctx context.Context, sessionID, agentName, source, role, text string) error {
+			// Re-read workspace from agent_channels on each send so UI changes
+			// take effect without a restart.
+			ws := ""
+			if m, err := agentchannels.GetChannelConfigMap(db, "slack"); err == nil {
+				ws = m["workspace"]
+			}
+			if ws == "" {
+				if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
+					ws = wsNames[0]
+				}
+			}
+			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
+		},
+		slackPubURL,
+	)
+	slackChan = slackChannel // wire forward ref so factory callbacks can reach it
+	if approvalMgr != nil {
+		slackChannel.SetApproveFn(func(sessionID, requestID, decision, matchKey string) error {
+			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, "slack", matchKey)
+			if !ok && err == nil {
+				return fmt.Errorf("approval request already resolved or timed out")
+			}
+			return err
+		})
+	}
+	if slackChannel.IsConfigured() {
+		log.Info().Msg("agents: slack channel configured, will start with server")
+	} else {
+		log.Info().Msg("agents: slack channel not configured, skipping (set BotToken + AppToken in Channels → Slack)")
+	}
+
+	// ── Agents: Telegram channel (always created; dormant until bot_token set) ──
+	// NewTelegram never returns nil — it starts in dormant mode when unconfigured
+	// so watchTelegramConfig can hot-activate it via Reload without a restart.
+	if err := agentchannels.EnsureChannel(db, "telegram"); err != nil {
+		log.Warn().Err(err).Msg("agents: telegram channel ensure failed")
+	}
+	tgCfg, tgCfgErr := agentchannels.LoadTelegramConfig(db)
+	if tgCfgErr != nil {
+		log.Warn().Err(tgCfgErr).Msg("agents: failed to load telegram config from agent_channels")
+	}
+	telegramChannel := agentchannels.NewTelegram(tgCfg, func(ctx context.Context, sessionID, agentName, source, role, text string) error {
+		ws := ""
+		if m, err := agentchannels.GetChannelConfigMap(db, "telegram"); err == nil {
+			ws = m["workspace"]
+		}
+		if ws == "" {
+			if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
+				ws = wsNames[0]
+			}
+		}
+		return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
+	})
+	telegramChan = telegramChannel // wire forward ref
+	if approvalMgr != nil {
+		telegramChannel.SetApproveFn(func(sessionID, requestID, decision, matchKey string) error {
+			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, "telegram", matchKey)
+			if !ok && err == nil {
+				return fmt.Errorf("approval request already resolved or timed out")
+			}
+			return err
+		})
+	}
+	if telegramChannel.IsConfigured() {
+		log.Info().Msg("agents: telegram channel configured, will start with server")
+	} else {
+		log.Info().Msg("agents: telegram channel not configured, skipping (set BotToken in Channels → Telegram)")
+	}
+
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
 	// one DB row per Key on first boot. The MCP server below is the
@@ -201,6 +530,8 @@ func NewServer() *Server {
 	connectorsSvc := connectors.NewServiceFromDB(db)
 	connectorsSvc.SetEnc(encSvc)
 	connectorsSvc.SetConfigs(configsSvc)
+	metricsRec := metrics.NewSimpleRecorder()
+	connectorsSvc.SetMetrics(metricsRec)
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to. (Earlier here than in
@@ -226,7 +557,7 @@ func NewServer() *Server {
 		Jobs:       jobsSvc,
 		Login:      authSvc,
 		Tools:      allItems,
-		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+		AppName:    appname.Resolve(),
 	}))
 
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
@@ -275,6 +606,50 @@ func NewServer() *Server {
 
 	tagsSvc := tags.NewService(db)
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
+
+	// Build the hidden-key set from the "agents" module's seed. Any config
+	// field tagged with `wick:"hidden"` is managed from a dedicated UI page
+	// (Channels, Providers) and must not appear on the generic Settings page.
+	agentsHidden := make(map[string]bool)
+	for _, m := range modules {
+		if m.Meta.Key == "agents" {
+			for _, row := range m.Configs {
+				if row.Hidden {
+					agentsHidden[row.Key] = true
+				}
+			}
+			break
+		}
+	}
+	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
+		wsNames, _ := agentworkspace.List(agentsLayout)
+		// Build "label::path" options for the allowed_cmds scope column.
+		var scopeOpts string
+		if len(wsNames) > 0 {
+			var parts []string
+			for _, name := range wsNames {
+				path, err := agentworkspace.ResolvePath(agentsLayout, name)
+				if err == nil && path != "" {
+					parts = append(parts, name+"::"+path)
+				}
+			}
+			if len(parts) > 0 {
+				scopeOpts = strings.Join(parts, "|")
+			}
+		}
+		// Return only rows not managed by a dedicated UI page, with ColOptions injected.
+		out := rows[:0]
+		for _, r := range rows {
+			if agentsHidden[r.Key] {
+				continue
+			}
+			if r.Key == "allowed_cmds" && scopeOpts != "" {
+				r.ColOptions = map[string]string{"scope": scopeOpts}
+			}
+			out = append(out, r)
+		}
+		return out
+	})
 
 	// jobrunnerHandler exposes /jobs/{key} — the operator surface with
 	// a Run Now button and run history. Admin-only settings stay on
@@ -375,6 +750,11 @@ func NewServer() *Server {
 	// 302 them into /auth/login which they can't follow.
 	r.Handle("POST /mcp", mcpAuth.Wrap(mcpHandler))
 
+	// Slack HTTP Event API webhook — public, no session auth.
+	// Integrity is enforced inside the handler via HMAC-SHA256 signing secret.
+	// Active only when mode=http and SigningSecret is set; otherwise returns 503.
+	r.Handle("POST /integrations/slack/events", slackChannel.HTTPHandler())
+
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
 	// authorize, token} (public) + /profile/connections (auth-gated
 	// inside, per-user grant dashboard).
@@ -398,16 +778,124 @@ func NewServer() *Server {
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
 
+	// Prometheus-compatible metrics scrape endpoint. Admin-only — bearer
+	// token or session required so the endpoint is not public by default.
+	r.Handle("GET /metrics", authMidd.RequireAdmin(metricsRec.Handler()))
+
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, slackChannel: slackChannel, telegramChannel: telegramChannel, db: db, gateBin: resolvedGateBin}
 }
 
 type Server struct {
-	router     *http.ServeMux
-	configsSvc *configs.Service
-	authMidd   *login.Middleware
+	router          *http.ServeMux
+	configsSvc      *configs.Service
+	authMidd        *login.Middleware
+	agentsPool      *agentpool.Pool
+	slackChannel    *agentchannels.SlackChannel
+	telegramChannel *agentchannels.TelegramChannel
+	db              *gorm.DB
+	gateBin         string // resolved gate binary path; used for hook cleanup on shutdown
+}
+
+// watchSlackConfig starts the Slack channel immediately if configured, then
+// polls every 30 s. When BotToken or AppToken changes it calls Reload() so
+// the operator never needs to restart the server after updating credentials.
+func (s *Server) watchSlackConfig(ctx context.Context) {
+	readCfg := func() (agentconfig.SlackChannelConfig, string) {
+		cfg, pubURL, err := agentchannels.LoadSlackConfig(s.db)
+		if err != nil {
+			log.Warn().Err(err).Msg("agents: watchSlackConfig: load failed")
+		}
+		return cfg, pubURL
+	}
+	// Hash covers both connection fields (trigger reconnect) and access-control
+	// fields (AllowedUsers, AllowedGroups, AccessMode) so operator changes to
+	// who can trigger agents are picked up without a token rotation.
+	connHash := func(cfg agentconfig.SlackChannelConfig) string {
+		return cfg.BotToken + "|" + cfg.AppToken + "|" + cfg.Mode + "|" +
+			cfg.AccessMode + "|" + cfg.AllowedUsers + "|" + cfg.AllowedGroups
+	}
+
+	cfg, _ := readCfg()
+	hash := connHash(cfg)
+	if s.slackChannel.IsConfigured() {
+		log.Info().Msg("agents: slack channel configured, starting")
+		go func() {
+			if err := s.slackChannel.Start(ctx); err != nil {
+				log.Ctx(ctx).Error().Err(err).Msg("agents: slack channel stopped")
+			}
+		}()
+	} else {
+		log.Info().Msg("agents: slack channel not configured (set BotToken + AppToken in Settings → Agents)")
+	}
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			newCfg, newPubURL := readCfg()
+			newHash := connHash(newCfg)
+			if newHash == hash {
+				continue
+			}
+			hash = newHash
+			log.Info().Msg("agents: slack config changed, hot-reloading")
+			s.slackChannel.Reload(ctx, newCfg, newPubURL)
+		}
+	}
+}
+
+// watchTelegramConfig starts the Telegram channel immediately if configured,
+// then polls every 30 s. When any config field changes it calls Reload() so
+// the operator never needs to restart the server after updating credentials.
+func (s *Server) watchTelegramConfig(ctx context.Context) {
+	readCfg := func() agentconfig.TelegramChannelConfig {
+		cfg, err := agentchannels.LoadTelegramConfig(s.db)
+		if err != nil {
+			log.Warn().Err(err).Msg("agents: watchTelegramConfig: load failed")
+		}
+		return cfg
+	}
+	cfgHash := func(cfg agentconfig.TelegramChannelConfig) string {
+		return cfg.BotToken + "|" + cfg.AllowedIDs + "|" + cfg.Workspace
+	}
+
+	if s.telegramChannel.IsConfigured() {
+		log.Info().Msg("agents: telegram channel configured, starting")
+		go func() {
+			if err := s.telegramChannel.Start(ctx); err != nil {
+				log.Ctx(ctx).Error().Err(err).Msg("agents: telegram channel stopped")
+			}
+		}()
+	} else {
+		log.Info().Msg("agents: telegram channel not configured (set BotToken in Channels → Telegram)")
+	}
+
+	cfg := readCfg()
+	hash := cfgHash(cfg)
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			newCfg := readCfg()
+			newHash := cfgHash(newCfg)
+			if newHash == hash {
+				continue
+			}
+			hash = newHash
+			log.Info().Msg("agents: telegram config changed, hot-reloading")
+			s.telegramChannel.Reload(ctx, newCfg)
+		}
+	}
 }
 
 // appNameHandler injects the configurable app name into every request
@@ -450,6 +938,7 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			got = fh
 		}
 		if !hostMatches(got, u.Host) {
+			log.Warn().Str("request_host", got).Str("app_url_host", u.Host).Msg("hostAllowlist: forbidden — host mismatch")
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -471,8 +960,22 @@ func hostMatches(got, expected string) bool {
 // signal.NotifyContext; in-process callers (system tray) cancel from
 // the UI.
 func (s *Server) Run(ctx context.Context, port int) error {
+	// Tray injects serverLogger (file sink) via processctl before calling Run.
+	// Lab/CLI pass a plain context — inject global logger with component=server
+	// so log.Ctx(r.Context()) in middleware is not a disabled logger.
+	if zerolog.Ctx(ctx).GetLevel() == zerolog.Disabled {
+		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
+	}
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
+
+	// Start channel listeners and watch for config changes.
+	if s.slackChannel != nil {
+		go s.watchSlackConfig(ctx)
+	}
+	if s.telegramChannel != nil {
+		go s.watchTelegramConfig(ctx)
+	}
 
 	h := chainMiddleware(
 		s.authMidd.Session(s.router),
@@ -501,26 +1004,37 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	go func() {
 		<-ctx.Done()
 		logger.Info().Msg("server is shutting down...")
+		if s.agentsPool != nil {
+			s.agentsPool.Stop()
+		}
+		if s.gateBin != "" {
+			_ = agentgate.RemoveUserHooks(s.gateBin)
+		}
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		httpSrv.SetKeepAlivesEnabled(false)
 		shutdownErr <- httpSrv.Shutdown(sctx)
 	}()
 
+	appURL := strings.TrimRight(s.configsSvc.AppURL(), "/")
+	if appURL == "" {
+		appURL = fmt.Sprintf("http://localhost:%d", port)
+	}
 	fmt.Printf("\n  ✓ %s is running\n", s.configsSvc.AppName())
-	fmt.Printf("  → URL: http://localhost:%d\n", port)
+	fmt.Printf("  → Listening on: :%d\n", port)
+	fmt.Printf("  → App URL:      %s\n", appURL)
 	if !s.configsSvc.AdminPasswordChanged() {
 		// Tray pipes stdout to app.log, so printing plaintext password
 		// here would leak it to disk. Headless / CLI gets the full
 		// banner (operator might be reading from a journal, no GUI).
 		if os.Getenv("WICK_TRAY") != "1" {
-			appName := strings.TrimSpace(os.Getenv("APP_NAME"))
+			appName := appname.Resolve()
 			if info, ok := initcreds.Read(appName); ok {
 				fmt.Printf("  → Email:            %s\n", info.Email)
 				fmt.Printf("  → Default password: %s\n", info.Password)
 			}
 		}
-		fmt.Printf("\n  ⚠ WARNING: Change the default password at http://localhost:%d/profile/setup\n\n", port)
+		fmt.Printf("\n  ⚠ WARNING: Change the default password at %s/profile/setup\n\n", appURL)
 	} else {
 		fmt.Println()
 	}
@@ -589,7 +1103,7 @@ func RunMCPStdio(version, commit, buildTime string) {
 		Connectors: connSvc,
 		Jobs:       jobsSvc,
 		Login:      authSvc,
-		AppName:    strings.TrimSpace(os.Getenv("APP_NAME")),
+		AppName:    appname.Resolve(),
 	}))
 
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
@@ -614,4 +1128,58 @@ func RunMCPStdio(version, commit, buildTime string) {
 		WithWickRoot(root).
 		WithAppURL(configsSvc.AppURL).
 		ServeStdioOS(ctx)
+}
+
+// resolveWickGateBin finds the wick-gate binary: next to this executable,
+// then ./bin/ relative to cwd (where wick setup puts it), then PATH.
+func resolveWickGateBin() string {
+	names := []string{"wick-gate", "wick-gate.exe"}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		for _, name := range names {
+			if candidate := filepath.Join(dir, name); fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for _, name := range names {
+			if candidate := filepath.Join(cwd, "bin", name); fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	if p, err := exec.LookPath("wick-gate"); err == nil {
+		return p
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// parseGateRules decodes the kvlist JSON (pattern|scope columns) stored in
+// AllowedCmds into a slice of gate.CommandRule.
+func parseGateRules(raw string) []gate.CommandRule {
+	if raw == "" {
+		return nil
+	}
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	rules := make([]gate.CommandRule, 0, len(rows))
+	for _, r := range rows {
+		pattern := strings.TrimSpace(r["pattern"])
+		if pattern == "" {
+			continue
+		}
+		rules = append(rules, gate.CommandRule{
+			Pattern: pattern,
+			Scope:   strings.TrimSpace(r["scope"]),
+		})
+	}
+	return rules
 }

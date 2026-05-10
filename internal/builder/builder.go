@@ -64,6 +64,16 @@ func Build(cfg Config) (Result, error) {
 
 	ldflags := assembleLDFlags(cfg)
 
+	// Build the gate sidecar BEFORE the main `go build` runs. This
+	// drops `internal/agents/gate/assets/gate-<os>-<arch>[.exe]` into
+	// the wick module so //go:embed picks it up, plus copies it to
+	// `bin/<app>-gate-<os>-<arch>[.exe]` as a user-visible sidecar.
+	// Soft-skips on downstream forks that pruned cmd/gate.
+	gateArtifact, err := buildGateBinary(cfg)
+	if err != nil {
+		return Result{}, err
+	}
+
 	// Windows .syso must exist next to main.go BEFORE `go build`
 	// runs — the linker picks it up automatically. Cleanup runs
 	// after the compile finishes regardless of success.
@@ -80,11 +90,14 @@ func Build(cfg Config) (Result, error) {
 	}
 
 	res := Result{Binary: cfg.Output}
+	if gateArtifact != "" {
+		res.Bundles = append(res.Bundles, gateArtifact)
+	}
 
 	switch cfg.GOOS {
 	case "darwin":
 		bundleID := ResolveBundleID(cfg.AppName)
-		appPath, err := darwin.PackageApp(cfg.Output, cfg.AppName, cfg.AppVersion, bundleID)
+		appPath, err := darwin.PackageApp(cfg.Output, gateArtifact, cfg.AppName, cfg.AppVersion, bundleID)
 		if err != nil {
 			return res, fmt.Errorf("package mac app: %w", err)
 		}
@@ -106,7 +119,7 @@ func Build(cfg Config) (Result, error) {
 		}
 
 	case "linux":
-		debPath, err := linux.PackageDeb(cfg.Output, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
+		debPath, err := linux.PackageDeb(cfg.Output, gateArtifact, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
 		if err != nil {
 			return res, fmt.Errorf("package linux deb: %w", err)
 		}
@@ -123,7 +136,7 @@ func Build(cfg Config) (Result, error) {
 		// just want a portable .exe keep the lighter artifact.
 		if cfg.Installer {
 			fmt.Println("> packaging msi...")
-			msiPath, err := windows.PackageMSI(cfg.Output, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
+			msiPath, err := windows.PackageMSI(cfg.Output, gateArtifact, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
 			switch {
 			case err == windows.ErrSkippedMSI:
 				fmt.Println("> msi skipped (wixl not found — install msitools to enable)")

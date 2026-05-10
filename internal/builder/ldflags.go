@@ -36,7 +36,10 @@ func obfuscatePAT(s string) string {
 // without breaking pipe-attached subcommands.
 func assembleLDFlags(cfg Config) []string {
 	flags := []string{
-		fmt.Sprintf("-X github.com/yogasw/wick/app.BuildAppName=%s", cfg.AppName),
+		// Single source of truth for the app brand. `app.BuildAppName`
+		// is mirrored from this in app.init() so legacy callers still
+		// work; agents/gate/Layout read appname.Resolve() directly.
+		fmt.Sprintf("-X github.com/yogasw/wick/internal/appname.BuildAppName=%s", cfg.AppName),
 		fmt.Sprintf("-X github.com/yogasw/wick/app.BuildAppVersion=%s", cfg.AppVersion),
 	}
 	if cfg.GitHubPAT != "" {

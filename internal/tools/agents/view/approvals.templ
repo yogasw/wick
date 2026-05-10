@@ -1,0 +1,116 @@
+package view
+
+// GateDisabledBanner is the warning bar shown at the top of session
+// pages when the parent process couldn't resolve a gate binary.
+// Hidden when Enabled=true. Rendered above the session detail so
+// operators see "agent will run unconstrained" without scrolling
+// down to the providers page to figure out why.
+templ GateDisabledBanner(g GateStatusVM) {
+	if !g.Enabled {
+		<div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 flex items-start gap-3">
+			<span class="mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-pulse"></span>
+			<div class="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+				<strong class="font-semibold">Command Gate disabled.</strong>
+				if g.Reason != "" {
+					{ " " }<span class="font-mono">{ g.Reason }</span>.
+				}
+				{ " " }Bash commands fall back to claude's default behavior — no interactive approval, no audit trail in <code class="font-mono">commands.jsonl</code>. Run <code class="font-mono">wick build</code> to produce the sibling sidecar and embedded fallback.
+			</div>
+		</div>
+	}
+}
+
+// ApprovalModal renders the empty modal shell. JS populates fields
+// from the SSE `approval_request` event payload and toggles
+// visibility. Lives at the bottom of the page so its z-index sits
+// above tab content + sticky composers.
+//
+// Decision values match gate.Decision* constants exactly — the JS
+// passes them straight through to POST /approve.
+templ ApprovalModal(base string) {
+	<div
+		id="approval-modal"
+		data-base={ base }
+		class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+	>
+		<div class="w-full max-w-lg mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl">
+			<!-- Header -->
+			<div class="border-b border-white-300 dark:border-navy-600 px-6 py-4 flex items-center justify-between">
+				<div class="flex items-center gap-2">
+					<span class="inline-flex h-2 w-2 rounded-full bg-amber-500 animate-pulse"></span>
+					<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Approve command?</h2>
+				</div>
+				<div
+					data-approval-countdown
+					class="font-mono text-xs text-black-700 dark:text-black-600 tabular-nums"
+				>25s</div>
+			</div>
+			<!-- Body -->
+			<div class="px-6 py-5 space-y-4">
+				<dl class="space-y-2 text-xs">
+					<div class="flex gap-3">
+						<dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Agent</dt>
+						<dd data-approval-agent class="font-mono text-black-900 dark:text-white-100">—</dd>
+					</div>
+					<div class="flex gap-3">
+						<dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Tool</dt>
+						<dd data-approval-tool class="font-mono text-black-900 dark:text-white-100">—</dd>
+					</div>
+					<div class="flex gap-3">
+						<dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Work dir</dt>
+						<dd data-approval-workdir class="font-mono text-black-900 dark:text-white-100 break-all">—</dd>
+					</div>
+				</dl>
+				<div>
+					<div class="text-xs text-black-700 dark:text-black-600 mb-1">Command</div>
+					<pre data-approval-cmd class="rounded-lg bg-white-200 dark:bg-navy-800 px-3 py-2.5 text-xs font-mono text-black-900 dark:text-white-100 whitespace-pre-wrap break-all">—</pre>
+				</div>
+			</div>
+			<!-- Decision buttons. Layout: 2x2 grid on small screens,
+			     row on >=sm. Order: Approve once (default green),
+			     Allow this session, Always allow, Block (red, right-aligned).  -->
+			<div class="border-t border-white-300 dark:border-navy-600 px-6 py-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+				<button
+					data-approval-decision="approve_once"
+					class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>Approve once</button>
+				<button
+					data-approval-decision="approve_session"
+					class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+				>Allow this session</button>
+				<button
+					data-approval-decision="approve_always"
+					class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+				>Always allow</button>
+				<button
+					data-approval-decision="block"
+					class="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white-100 hover:bg-red-700 active:bg-red-800 transition-colors"
+				>Block</button>
+			</div>
+		</div>
+	</div>
+}
+
+// ApprovedCommandsPanel renders the collapsible "Approved commands"
+// section in session detail. Empty by default — JS hydrates it from
+// GET /approvals snapshot on tab load and on each SSE
+// approval_resolved that touched session/always state.
+templ ApprovedCommandsPanel(base, sessionID string) {
+	<details
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm"
+		data-approved-panel
+		data-session-id={ sessionID }
+		data-base={ base }
+	>
+		<summary class="cursor-pointer px-5 py-3 text-sm font-medium text-black-900 dark:text-white-100 select-none flex items-center justify-between">
+			<span>Approved commands</span>
+			<span data-approved-count class="text-xs text-black-700 dark:text-black-600 font-normal">0</span>
+		</summary>
+		<div class="border-t border-white-300 dark:border-navy-600 px-5 py-3 text-xs space-y-3">
+			<div data-approved-empty class="text-black-700 dark:text-black-600 italic">
+				No commands have been approved yet. The list updates after the next gate decision.
+			</div>
+			<ul data-approved-list class="space-y-2 hidden"></ul>
+		</div>
+	</details>
+}

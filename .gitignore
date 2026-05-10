@@ -35,6 +35,8 @@ tmp/
 # bin/tailwindcss.exe
 __debug_bin*
 .db
+/lab
+/wick-gate
 
 # VitePress
 docs/node_modules/
@@ -42,4 +44,13 @@ docs/.vitepress/dist/
 docs/.vitepress/cache/
 docs/yarn.lock
 bin/
-graphify-out
+graphify-out/
+.debug/
+
+# templ generated files
+*_templ.go
+web/public/css/app.css
+
+# Build output binaries
+lab-server
+wick

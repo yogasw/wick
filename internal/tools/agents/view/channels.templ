@@ -1,0 +1,89 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	managerview "github.com/yogasw/wick/internal/manager/view"
+)
+
+// ChannelVM is one channel card on the channels list page.
+type ChannelVM struct {
+	Name        string
+	Slug        string // "slack" | "telegram"
+	Icon        string
+	Description string
+	Configured  bool   // true when the required credential is set
+	HRef        string // link to config page
+}
+
+// ChannelListVM is the view model for the Channels index page.
+type ChannelListVM struct {
+	Base     string
+	Channels []ChannelVM
+}
+
+// ChannelConfigVM is the view model for a single channel's config page.
+type ChannelConfigVM struct {
+	Base        string
+	ChannelName string
+	ChannelSlug string
+	Rows        []entity.Config
+	ActionBase  string
+}
+
+// ChannelListPage shows available channels as cards.
+templ ChannelListPage(vm ChannelListVM) {
+	@AgentsLayout(vm.Base, "channels") {
+		<div class="max-w-2xl">
+			<h1 class="text-xl font-semibold text-black-900 dark:text-white-100 mb-1">Channels</h1>
+			<p class="text-sm text-black-700 dark:text-black-600 mb-6">
+				Connect messaging platforms so agents can receive tasks and reply in threads.
+			</p>
+			<div class="flex flex-col gap-3">
+				for _, ch := range vm.Channels {
+					@channelCard(ch)
+				}
+			</div>
+		</div>
+	}
+}
+
+templ channelCard(ch ChannelVM) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+		<div class="flex items-center gap-4 px-5 py-4">
+			<span class="text-2xl shrink-0">{ ch.Icon }</span>
+			<div class="min-w-0 flex-1">
+				<div class="flex items-center gap-2 mb-0.5">
+					<span class="font-semibold text-sm text-black-900 dark:text-white-100">{ ch.Name }</span>
+					if ch.Configured {
+						<span class="inline-flex items-center rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-semibold text-pos-400">configured</span>
+					} else {
+						<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-semibold text-black-700 dark:text-black-600">not configured</span>
+					}
+				</div>
+				<p class="text-xs text-black-700 dark:text-black-600 truncate">{ ch.Description }</p>
+			</div>
+			<a
+				href={ templ.SafeURL(ch.HRef) }
+				class="shrink-0 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-500 hover:text-green-600 transition-colors"
+			>Configure</a>
+		</div>
+	</div>
+}
+
+// ChannelConfigPage shows config fields for one channel.
+templ ChannelConfigPage(vm ChannelConfigVM) {
+	@AgentsLayout(vm.Base, "channels") {
+		<div class="max-w-2xl">
+			<nav class="flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 mb-4">
+				<a href={ templ.SafeURL(vm.Base + "/channels") } class="hover:text-green-600 transition-colors">Channels</a>
+				<span>›</span>
+				<span class="text-black-900 dark:text-white-100 font-medium">{ vm.ChannelName }</span>
+			</nav>
+			<h1 class="text-xl font-semibold text-black-900 dark:text-white-100 mb-1">{ vm.ChannelName }</h1>
+			<p class="text-sm text-black-700 dark:text-black-600 mb-2">
+				Configure credentials and access control for the { vm.ChannelName } channel.
+			</p>
+			@managerview.ConfigsTable(vm.Rows, vm.ActionBase, "", "")
+		</div>
+	}
+}

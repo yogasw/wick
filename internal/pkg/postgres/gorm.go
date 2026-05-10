@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"github.com/yogasw/wick/internal/pkg/config"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ func NewGORM(c config.Database) *gorm.DB {
 	if strings.HasPrefix(c.URL, "postgres://") || strings.HasPrefix(c.URL, "postgresql://") {
 		dialector = postgres.Open(c.URL)
 	} else {
+		absPath, _ := filepath.Abs(c.URL)
+		log.Info().Str("path", absPath).Msg("db: sqlite")
 		dialector = sqlite.Open(c.URL)
 	}
 

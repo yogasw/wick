@@ -70,6 +70,41 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
+// auditPageURL builds the /manager/runs?... URL preserving audit filters
+// and setting the target page. Empty fields are omitted.
+func auditPageURL(f connectors.AuditFilter, fromStr, toStr string, page int) string {
+	q := url.Values{}
+	if f.ConnectorID != "" {
+		q.Set("connector_id", f.ConnectorID)
+	}
+	if f.OperationKey != "" {
+		q.Set("op", f.OperationKey)
+	}
+	if f.Source != "" {
+		q.Set("source", f.Source)
+	}
+	if f.Status != "" {
+		q.Set("status", f.Status)
+	}
+	if f.UserID != "" {
+		q.Set("user", f.UserID)
+	}
+	if fromStr != "" {
+		q.Set("from", fromStr)
+	}
+	if toStr != "" {
+		q.Set("to", toStr)
+	}
+	if page > 1 {
+		q.Set("page", strconv.Itoa(page))
+	}
+	base := "/manager/runs"
+	if qs := q.Encode(); qs != "" {
+		return base + "?" + qs
+	}
+	return base
+}
+
 // relativeTime renders a coarse "x minutes ago" string. The tooltip on
 // the cell carries the precise RFC3339 timestamp for callers who need
 // exact times.

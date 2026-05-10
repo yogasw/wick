@@ -22,6 +22,15 @@ var (
 		SortOrder:   10,
 	}
 
+	// AI groups AI-powered tools: agent sessions, presets, project
+	// management, and any future model-backed helpers.
+	AI = tool.DefaultTag{
+		Name:        "AI",
+		Description: "AI-powered tools and agent management.",
+		IsGroup:     true,
+		SortOrder:   20,
+	}
+
 	// API groups developer-facing API tooling: request builders, mocking
 	// servers, anything that helps poke at HTTP endpoints.
 	API = tool.DefaultTag{

@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -85,6 +86,7 @@ func (s *Service) RowConfigs(c entity.Connector) []entity.Config {
 type Service struct {
 	repo       *Repo
 	httpClient *http.Client
+	rl         *rateLimiter
 
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
@@ -101,6 +103,10 @@ type Service struct {
 	// found in the input/credential maps before calling the connector,
 	// and auto-encrypts sensitive plaintext appearing in the response.
 	enc *enc.Service
+
+	// metrics records connector run telemetry. Defaults to Noop when
+	// not wired — safe to call unconditionally.
+	metrics metrics.Recorder
 }
 
 // SetEnc wires the encrypted-fields cipher in after construction. Call
@@ -128,7 +134,20 @@ func NewService(r *Repo) *Service {
 		repo:       r,
 		httpClient: connector.NewHTTPClient(),
 		modules:    make(map[string]connector.Module),
+		rl:         newRateLimiter(),
+		metrics:    metrics.Noop{},
 	}
+}
+
+// SetMetrics wires a telemetry recorder into the service. Call once at
+// boot before the server starts accepting requests. Passing nil is safe
+// — the Noop recorder is used instead.
+func (s *Service) SetMetrics(rec metrics.Recorder) {
+	if rec == nil {
+		s.metrics = metrics.Noop{}
+		return
+	}
+	s.metrics = rec
 }
 
 // NewServiceFromDB is a convenience constructor for the web server and
@@ -370,6 +389,12 @@ func (s *Service) SetDisabled(ctx context.Context, id string, disabled bool) err
 	return s.repo.SetDisabled(ctx, id, disabled)
 }
 
+// SetRateLimit updates the calls-per-minute cap for a connector instance.
+// Pass 0 to remove the limit.
+func (s *Service) SetRateLimit(ctx context.Context, id string, rpm int) error {
+	return s.repo.SetRateLimit(ctx, id, rpm)
+}
+
 // Delete hard-deletes the connector row plus its operation toggles
 // and its per-field config rows. Run history is intentionally
 // preserved for audit.
@@ -420,6 +445,12 @@ func (s *Service) SetOperationEnabled(ctx context.Context, connectorID, opKey st
 	return s.repo.SetOperation(ctx, connectorID, opKey, enabled)
 }
 
+// SetOperationAdminOnly sets the admin_only restriction for a (connector, op)
+// pair. When true, only admin users may call the operation via MCP.
+func (s *Service) SetOperationAdminOnly(ctx context.Context, connectorID, opKey string, adminOnly bool) error {
+	return s.repo.SetOperationAdminOnly(ctx, connectorID, opKey, adminOnly)
+}
+
 // OperationStates returns the resolved enable state for every op the
 // connector's definition declares: stored toggle when the row exists,
 // otherwise the per-op default (off for Destructive, on for the rest).
@@ -463,6 +494,10 @@ type ExecuteParams struct {
 	UserID       string
 	IPAddress    string
 	UserAgent    string
+	// IsAdmin indicates whether the caller holds admin role. When false,
+	// operations marked AdminOnly in the connector_operations table are
+	// blocked before execution starts.
+	IsAdmin bool
 	// ParentRunID is set when this call replays an earlier run.
 	// Intended for use with Source == ConnectorRunSourceRetry.
 	ParentRunID *string
@@ -508,6 +543,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("connector %q is disabled", c.ID)
 	}
 
+	if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
+		return nil, err
+	}
+
 	mod, ok := s.Module(c.Key)
 	if !ok {
 		return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
@@ -530,6 +569,16 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 	if enabled, ok := states[p.OperationKey]; ok && !enabled {
 		return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
+	}
+
+	if !p.IsAdmin {
+		adminOnly, err := s.repo.IsOperationAdminOnly(ctx, c.ID, p.OperationKey)
+		if err != nil {
+			return nil, fmt.Errorf("check op access: %w", err)
+		}
+		if adminOnly {
+			return nil, fmt.Errorf("operation %q is restricted to admin users", p.OperationKey)
+		}
 	}
 
 	// Load the credential map from the configs table — one row per
@@ -574,6 +623,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		masker.add(collectSensitiveValues(mod, op, configs, input))
 	}
 
+	s.metrics.IncActive()
 	startedAt := time.Now()
 	run := &entity.ConnectorRun{
 		ConnectorID:  c.ID,
@@ -644,6 +694,8 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	if err := s.repo.FinishRun(ctx, run.ID, res.Status, res.ResponseJSON, res.ErrorMessage, latencyMs, 0); err != nil {
 		return res, fmt.Errorf("finish run: %w", err)
 	}
+	s.metrics.DecActive()
+	s.metrics.RecordRun(c.Key, op.Key, string(res.Status), latencyMs)
 	return res, execErr
 }
 
@@ -699,6 +751,23 @@ func (s *Service) ListRunsFiltered(ctx context.Context, connectorID string, f Ru
 // of ListRunsFiltered for paging.
 func (s *Service) CountRunsFiltered(ctx context.Context, connectorID string, f RunFilter) (int64, error) {
 	return s.repo.CountRunsFiltered(ctx, connectorID, f)
+}
+
+// ListRunsAudit returns connector runs across all instances with optional
+// filters. Intended for the cross-connector admin audit log.
+func (s *Service) ListRunsAudit(ctx context.Context, f AuditFilter, limit, offset int) ([]entity.ConnectorRun, error) {
+	return s.repo.ListRunsAudit(ctx, f, limit, offset)
+}
+
+// CountRunsAudit returns total runs for the audit filter — pagination companion.
+func (s *Service) CountRunsAudit(ctx context.Context, f AuditFilter) (int64, error) {
+	return s.repo.CountRunsAudit(ctx, f)
+}
+
+// SummariseRuns returns aggregate stats (total, success, error, avg latency)
+// for the given audit filter window.
+func (s *Service) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, error) {
+	return s.repo.SummariseRuns(ctx, f)
 }
 
 // PurgeOldRuns deletes ConnectorRun rows older than retentionDays.

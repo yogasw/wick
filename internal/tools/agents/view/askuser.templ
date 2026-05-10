@@ -1,0 +1,36 @@
+package view
+
+// AskUserCard is the empty inline card that JS hydrates when an
+// ask_user request lands. Rendered once per session detail page;
+// hidden by default. Lives above the composer so the user can
+// answer without scrolling.
+templ AskUserCard(base string) {
+	<div
+		id="ask-user-card"
+		data-base={ base }
+		class="hidden rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-3 shadow-sm"
+	>
+		<div class="flex items-start gap-3">
+			<span class="mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-pulse"></span>
+			<div class="flex-1 min-w-0">
+				<div class="text-xs font-medium uppercase tracking-wide text-amber-700 dark:text-amber-300">Agent is asking you</div>
+				<div data-ask-question class="mt-1 text-sm text-black-900 dark:text-white-100 whitespace-pre-wrap break-words">—</div>
+			</div>
+		</div>
+		<!-- Option buttons. JS rebuilds children per request. -->
+		<div data-ask-options class="flex flex-wrap gap-2"></div>
+		<!-- Freeform answer (JS unhides when allow_freeform=true). -->
+		<form data-ask-freeform class="hidden flex gap-2 items-end">
+			<input
+				type="text"
+				data-ask-text
+				placeholder="Type your answer…"
+				class="flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+			/>
+			<button
+				type="submit"
+				class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+			>Send</button>
+		</form>
+	</div>
+}

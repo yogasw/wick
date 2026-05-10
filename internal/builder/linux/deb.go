@@ -23,6 +23,7 @@ import (
 // Linux binary. Layout inside the .deb:
 //
 //	usr/bin/<app>                                                   (the binary)
+//	usr/bin/<app>-gate                                               (gate sidecar, when shipped)
 //	usr/share/icons/hicolor/256x256/apps/<app>.png                   (brand icon)
 //	usr/share/icons/hicolor/1024x1024/apps/<app>.png                 (brand icon)
 //	usr/share/applications/<app>.desktop                             (.desktop entry)
@@ -31,10 +32,17 @@ import (
 // .deb format: ar archive containing debian-binary (text "2.0\n"),
 // control.tar.gz (DEBIAN/*), data.tar.gz (the rest of the filesystem).
 //
+// gateBinPath (optional) is the gate sidecar to ship as
+// `/usr/bin/<app>-gate`. Empty = no sidecar (the main binary still
+// has gate embedded; runtime extracts to the session dir on first
+// hook fire). When non-empty, the sibling lookup picks up the
+// installed gate before any extract — visible to the operator,
+// no per-session extract churn.
+//
 // Output path is <dir-of-binPath>/<app>-linux-<arch>.deb — kept
 // consistent with mac (.dmg) and windows (.exe) naming so the
 // self-updater can resolve assets with one rule.
-func PackageDeb(binPath, appName, appVersion, goarch string) (string, error) {
+func PackageDeb(binPath, gateBinPath, appName, appVersion, goarch string) (string, error) {
 	debArch := mapGoArchToDeb(goarch)
 	ver := strings.TrimPrefix(appVersion, "v")
 	debPath := filepath.Join(filepath.Dir(binPath), fmt.Sprintf("%s-%s-linux-%s.deb", appName, ver, goarch))
@@ -43,13 +51,20 @@ func PackageDeb(binPath, appName, appVersion, goarch string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read binary: %w", err)
 	}
+	var gateBytes []byte
+	if gateBinPath != "" {
+		gateBytes, err = os.ReadFile(gateBinPath)
+		if err != nil {
+			return "", fmt.Errorf("read gate binary: %w", err)
+		}
+	}
 	iconPNG := systemtray.BrandIcon(false)
 
-	dataTarGz, err := buildDataTarGz(appName, binBytes, iconPNG)
+	dataTarGz, err := buildDataTarGz(appName, binBytes, gateBytes, iconPNG)
 	if err != nil {
 		return "", fmt.Errorf("data.tar.gz: %w", err)
 	}
-	controlTarGz, err := buildControlTarGz(appName, ver, debArch, len(binBytes)+len(iconPNG))
+	controlTarGz, err := buildControlTarGz(appName, ver, debArch, len(binBytes)+len(gateBytes)+len(iconPNG))
 	if err != nil {
 		return "", fmt.Errorf("control.tar.gz: %w", err)
 	}
@@ -91,7 +106,7 @@ func writeARMember(w *ar.Writer, name string, data []byte, mtime int64) error {
 	return err
 }
 
-func buildDataTarGz(appName string, binBytes, iconPNG []byte) ([]byte, error) {
+func buildDataTarGz(appName string, binBytes, gateBytes, iconPNG []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -129,6 +144,13 @@ func buildDataTarGz(appName string, binBytes, iconPNG []byte) ([]byte, error) {
 		{"./usr/share/icons/hicolor/256x256/apps/" + appName + ".png", iconPNG, 0o644},
 		{"./usr/share/icons/hicolor/1024x1024/apps/" + appName + ".png", iconPNG, 0o644},
 		{"./usr/share/applications/" + appName + ".desktop", []byte(buildDesktop(appName)), 0o644},
+	}
+	if len(gateBytes) > 0 {
+		files = append(files, struct {
+			path string
+			data []byte
+			mode int64
+		}{"./usr/bin/" + appName + "-gate", gateBytes, 0o755})
 	}
 	for _, f := range files {
 		if err := tw.WriteHeader(&tar.Header{

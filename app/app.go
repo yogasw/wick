@@ -30,6 +30,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/autostart"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
@@ -60,6 +61,11 @@ import (
 // when ldflags didn't override them — so binaries built without ldflags
 // still report a sensible wick version.
 var (
+	// BuildAppName is set in init() from appname.Resolve() so this
+	// package and `internal/appname` always agree on the active brand.
+	// The ldflag injection target lives in `internal/appname` (single
+	// source of truth); this var is just the local mirror legacy
+	// callers reach for via `app.BuildAppName`.
 	BuildAppName     = "app"
 	BuildAppVersion  = "dev"
 	BuildWickVersion = "dev"
@@ -87,6 +93,11 @@ var (
 const patObfKey = "wick-self-updater-pat-v1"
 
 func init() {
+	// Mirror appname.Resolve() into BuildAppName so legacy callers
+	// reading `app.BuildAppName` see the same value as agents/gate/
+	// Layout etc. that read appname.Resolve() directly.
+	BuildAppName = appname.Resolve()
+
 	// Cobra ships an anti-double-click guard: when a binary is launched
 	// from Explorer on Windows, it prints `MousetrapHelpText` and exits
 	// before any RunE fires. That's exactly what we DON'T want — wick
@@ -364,6 +375,7 @@ func Run() {
 			userconfig.ResolvePort(0)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 			return api.NewServer().Run(ctx, port)
 		},
 	}
@@ -376,6 +388,7 @@ func Run() {
 			userconfig.ResolveDBPath(BuildAppName, "")
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			ctx = log.With().Str("component", "worker").Logger().WithContext(ctx)
 			return worker.NewServer().Run(ctx)
 		},
 	}

@@ -10,6 +10,7 @@ const (
 	ProfileTabTokens      ProfileTabKey = "tokens"
 	ProfileTabConnections ProfileTabKey = "connections"
 	ProfileTabMCP         ProfileTabKey = "mcp"
+	ProfileTabAgents      ProfileTabKey = "agents"
 )
 
 // ProfileLayout is the shared chrome for every page under /profile/*.
@@ -38,6 +39,7 @@ templ ProfileLayout(title string, active ProfileTabKey, user *entity.User) {
 						@profileTab("/profile/tokens", "Access Tokens", active == ProfileTabTokens)
 						@profileTab("/profile/connections", "Connected Apps", active == ProfileTabConnections)
 						@profileTab("/profile/mcp", "MCP", active == ProfileTabMCP)
+						@profileTab("/tools/agents", "Agents", active == ProfileTabAgents)
 					</div>
 				</div>
 				<div class="flex items-center gap-3">

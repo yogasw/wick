@@ -46,9 +46,16 @@ func Migrate(db *gorm.DB) {
 		&entity.OAuthClient{},
 		&entity.OAuthAuthorizationCode{},
 		&entity.OAuthToken{},
+		&entity.AgentChannel{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())
+	}
+
+	// Remove stale per-field Slack/Telegram rows from configs table.
+	// Runs after AutoMigrate so configs table exists. Idempotent.
+	if err := removeChannelConfigsFromConfigs(db); err != nil {
+		log.Warn().Msgf("remove channel configs from configs table: %s", err.Error())
 	}
 }
 
@@ -108,4 +115,27 @@ func migrateConnectorConfigsToConfigs(db *gorm.DB) error {
 	// Bypass gorm's migrator — its sqlite driver panics in recreateTable
 	// when the field has been removed from the entity struct.
 	return db.Exec(`ALTER TABLE connectors DROP COLUMN configs`).Error
+}
+
+// removeChannelConfigsFromConfigs deletes the per-field Slack and Telegram
+// config rows that used to live in the configs table under owner="agents".
+// Since these moved to agent_channels, the old rows are stale noise.
+// Idempotent — deletes rows by key name, safe to run on fresh DBs too.
+//
+// WARNING: these key names ("mode", "bot_token", etc.) are generic and could
+// theoretically collide with future configs under owner="agents". The delete
+// is scoped to owner="agents" only, so non-agent config rows are safe. If a
+// new config key shares a name listed here it will be incorrectly deleted on
+// first boot — rename it or remove it from this list instead.
+func removeChannelConfigsFromConfigs(db *gorm.DB) error {
+	channelKeys := []string{
+		// Slack
+		"mode", "bot_token", "app_token", "signing_secret",
+		"access_mode", "allowed_users", "allowed_groups",
+		"slack_workspace",
+		// Telegram (old prefixed keys)
+		"telegram_bot_token", "telegram_allowed_ids", "telegram_workspace",
+	}
+	return db.Where("owner = ? AND key IN ?", "agents", channelKeys).
+		Delete(&entity.Config{}).Error
 }

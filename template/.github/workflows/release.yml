@@ -425,6 +425,14 @@ jobs:
         if: matrix.os == 'windows'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
+      # The gate sidecar binary (claude's PreToolUse hook invokes it
+      # before every Bash command) is built inline by `wick build`
+      # below — it compiles `github.com/yogasw/wick/cmd/gate` for the
+      # target platform, drops it into `internal/agents/gate/assets/`
+      # (picked up by //go:embed in the main binary), and copies it
+      # to `bin/<app>-gate-<os>-<arch>[.exe]` as a user-visible
+      # sidecar. Soft-skips on downstream forks that pruned cmd/gate.
+
       - name: Build
         env:
           GOOS: ${{ matrix.os }}
