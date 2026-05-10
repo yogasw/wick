@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
@@ -30,6 +31,15 @@ func NewServer() *Server {
 	// runs in internal/pkg/api/server.go so the web process also sees
 	// the row in /admin/jobs.
 	connectorrunspurge.Register(db)
+
+	// Static built-in modules — same idempotent calls the web server
+	// makes. The worker only needs the tool/job rows so configs.Bootstrap
+	// below seeds the right per-key rows; the connector list is unused
+	// here but cheap to register and keeps both processes' registries
+	// identical.
+	tools.RegisterBuiltins()
+	jobs.RegisterBuiltins()
+	connectors.RegisterBuiltins()
 
 	// Reconcile the configs table so job.Ctx.Cfg(...) sees the same
 	// cached values the web process uses. Seeds per-tool / per-job

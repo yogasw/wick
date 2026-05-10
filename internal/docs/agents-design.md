@@ -1077,7 +1077,7 @@ Enrichment scan kedua event, ambil yang non-zero. Kalau spawn crash sebelum Star
 
 #### 4.6.2 Pool runtime config
 
-Pool knobs (`MaxConcurrent`, `IdleTimeout`) dibaca dari configsSvc di server boot, BUKAN hardcode. Owner = `"agents"` (set otomatis oleh `tools.RegisterBuiltins` saat append modul). Keys reflected dari `agentconfig.GeneralConfig`:
+Pool knobs (`MaxConcurrent`, `IdleTimeout`) dibaca dari configsSvc di server boot, BUKAN hardcode. Owner = `"agents"` (set otomatis oleh `tools.RegisterBuiltins` saat append modul — agents tool sekarang masuk **default Builtins** yg dipanggil dari `internal/pkg/api/server.go` boot, bukan lab-only lagi). Keys reflected dari `agentconfig.GeneralConfig`:
 
 | Config key | Default | Yang dipengaruhi |
 |---|---|---|
@@ -1645,6 +1645,33 @@ Drop the flat-file vs split-folder distinction in mind: every subfolder == one G
 | Composer (POST /sessions/{id}/send → ke transport) | — | ✅ (handler), ✅ (transport bus) |
 | Config pages (General, Slack, Workspace) | — | ✅ |
 | HTTP routes `/tools/agents/...` | — | ✅ |
+
+### 6.1 Registry split: Builtins vs Lab Samples
+
+`internal/{tools,jobs,connectors}/registry.go` masing-masing punya **dua** seed function:
+
+| Function | Scope | Caller | Isi |
+|---|---|---|---|
+| `RegisterBuiltins()` | Default-on tiap downstream wick app | `internal/pkg/api/server.go` + `internal/pkg/worker/server.go` (boot, sebelum `tools.All()`) | tools: `agents` · connectors: `github`, `httprest` · jobs: (kosong, deps-needing jobs di-register inline) |
+| `RegisterLabSamples()` | Lab binary saja | `cmd/lab/root.go` | tools: `convert-text`, `convert-text-alt`, `external` · connectors: `crudcrud` · jobs: `sample-post`, `sample-post-typicode` |
+
+**Konsekuensi penting buat agents tool**: `agents` modul sekarang masuk `tools.RegisterBuiltins()`. Artinya:
+
+- Setiap downstream app yang dibuat lewat `wick build` otomatis dapat tool **Agents** + halaman manager + page Settings (general/slack/workspace) tanpa harus `app.RegisterTool` manual di main.go.
+- Owner-stamping config rows (`Owner = "agents"`) tetap jalan lewat `extra` slice yg sama — pool boot di server.go terus baca `configsSvc.GetOwned("agents", …)` tanpa perubahan.
+- `cmd/lab` lab binary panggil **kedua** fungsi (lihat `cmd/lab/root.go`) supaya samples lab + builtins-nya nyala bareng.
+
+**Idempotent on `Meta.Key`**: `Register*` ketiganya pakai dedupe per-Key. Aman kalau:
+- Web server + worker masing-masing panggil `RegisterBuiltins()` di proses yang sama (system tray spawn keduanya).
+- Downstream main.go re-register key yang sama (mis. override `agents` config presets) — call kedua jadi no-op, registrasi pertama menang.
+
+**Yang tetap inline di server.go (bukan static seed)**:
+
+| Modul | Lokasi register | Alasan |
+|---|---|---|
+| `wickmanager` connector | `internal/pkg/api/server.go:494` (web) + line 969 (mcp stdio) | Butuh runtime `Deps{Configs, Connectors, Jobs, Login, Tools, AppName}` yang baru tersedia mid-boot |
+| `connector-runs-purge` job | `connectorrunspurge.Register(db)` di server.go:86 + worker.go:32 | Capture `*gorm.DB` — closure butuh handle yang sama dengan proses pemanggil |
+| `encfields` tool | `tools/registry.go::init()` | Selalu auto-load tiap binary (MCP `wick_encrypt`/`wick_decrypt` redirect ke `/tools/encfields`) — bukan default-on, tapi always-on |
 
 ---
 

@@ -25,6 +25,10 @@ func main() {
 	jobs.RegisterBuiltins()
 	connectors.RegisterBuiltins()
 
+	tools.RegisterLabSamples()
+	jobs.RegisterLabSamples()
+	connectors.RegisterLabSamples()
+
 	var port int
 	var command = &cobra.Command{
 		Use:   "lab",

@@ -3,16 +3,21 @@
 // server.go walks All() at boot to validate, wire routes, and seed
 // config rows.
 //
-// Two seed paths exist:
+// Three seed paths exist:
 //   - init() seeds core tools that ship with every consumer (currently
 //     encfields, since the MCP encrypt/decrypt redirects depend on it).
-//   - RegisterBuiltins() seeds opt-in lab-only tools — convert-text,
-//     external links — and is called only from cmd/lab.
+//   - RegisterBuiltins() seeds the in-house tools every downstream wick
+//     app gets by default — currently the agents session manager. Called
+//     from server.go / worker.go boot, before tools.All().
+//   - RegisterLabSamples() seeds demo-only tools used by cmd/lab —
+//     convert-text variants and the external-links grid. Downstream
+//     apps never see these.
 //
-// To add a built-in tool (wick lab binary only):
+// To add a tool here:
 //  1. Create internal/tools/<name>/ with a Register(r tool.Router) func
 //     and, if the tool has runtime-editable config, a Config struct.
-//  2. Append one or more app.RegisterTool calls to RegisterBuiltins.
+//  2. Append app.RegisterTool calls to RegisterBuiltins (default-on for
+//     every wick app) or RegisterLabSamples (lab binary only).
 package tools
 
 import (
@@ -20,8 +25,8 @@ import (
 	"github.com/yogasw/wick/internal/tags"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 
-	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
@@ -29,9 +34,9 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// extra holds tool instances registered by downstream projects (and,
-// for the wick lab binary, by RegisterBuiltins). All() returns this
-// slice verbatim — wick's own in-house tools are opt-in.
+// extra holds tool instances registered by downstream projects, plus
+// the modules added by RegisterBuiltins / RegisterLabSamples. All()
+// returns this slice verbatim.
 var extra []tool.Module
 
 // Register appends a fully-resolved Module record to the registry.
@@ -61,11 +66,37 @@ func init() {
 	})
 }
 
-// RegisterBuiltins seeds wick's own in-house tools into the registry.
-// Intended for the wick lab binary (cmd/lab) — downstream projects
-// start with an empty registry and register only their own tools.
+// RegisterBuiltins seeds in-house tools every downstream wick app gets
+// by default. Called from internal/pkg/api/server.go (web) and
+// internal/pkg/worker/server.go (worker) at boot, before tools.All().
+//
+// Idempotent on Meta.Key: re-calling appends nothing if the key was
+// already registered (downstream main.go can also explicitly call
+// app.RegisterTool with the same key without producing duplicates).
 func RegisterBuiltins() {
-	extra = append(extra, tool.Module{
+	agentsConfigs := agentconfig.SeedGeneralConfig()
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedSlackConfig()...)
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedWorkspaceConfig()...)
+	registerOnce(tool.Module{
+		Meta: tool.Tool{
+			Key:               "agents",
+			Name:              "Agents",
+			Description:       "Manage AI agent sessions, projects, and presets. Run Claude against your codebase in real-time.",
+			Icon:              "✦",
+			Category:          "AI",
+			DefaultVisibility: entity.VisibilityPrivate,
+			DefaultTags:       []tool.DefaultTag{tags.AI},
+		},
+		Configs:  agentsConfigs,
+		Register: agentstool.Register,
+	})
+}
+
+// RegisterLabSamples seeds demo-only tools shipped with the cmd/lab
+// binary — convert-text and the external-links grid. Downstream wick
+// apps do not call this; their main.go registers the tools they need.
+func RegisterLabSamples() {
+	registerOnce(tool.Module{
 		Meta: tool.Tool{
 			Key:               "convert-text",
 			Name:              "Convert Text",
@@ -81,7 +112,7 @@ func RegisterBuiltins() {
 		}),
 		Register: converttext.Register,
 	})
-	extra = append(extra, tool.Module{
+	registerOnce(tool.Module{
 		Meta: tool.Tool{
 			Key:               "convert-text-alt",
 			Name:              "Convert Text (Alt)",
@@ -97,25 +128,22 @@ func RegisterBuiltins() {
 		}),
 		Register: converttext.Register,
 	})
-	agentsConfigs := agentconfig.SeedGeneralConfig()
-	agentsConfigs = append(agentsConfigs, agentconfig.SeedSlackConfig()...)
-	agentsConfigs = append(agentsConfigs, agentconfig.SeedWorkspaceConfig()...)
-	extra = append(extra, tool.Module{
-		Meta: tool.Tool{
-			Key:               "agents",
-			Name:              "Agents",
-			Description:       "Manage AI agent sessions, projects, and presets. Run Claude against your codebase in real-time.",
-			Icon:              "✦",
-			Category:          "AI",
-			DefaultVisibility: entity.VisibilityPrivate,
-			DefaultTags:       []tool.DefaultTag{tags.AI},
-		},
-		Configs:  agentsConfigs,
-		Register: agentstool.Register,
-	})
 	for _, e := range external.All() {
-		extra = append(extra, e)
+		registerOnce(e)
 	}
+}
+
+// registerOnce is the internal de-dupe helper for the seed paths above.
+// Web + worker both call RegisterBuiltins at boot, and a downstream
+// main.go could legitimately re-register the same module key — neither
+// case should produce duplicate rows in tools.All().
+func registerOnce(m tool.Module) {
+	for _, existing := range extra {
+		if existing.Meta.Key == m.Meta.Key {
+			return
+		}
+	}
+	extra = append(extra, m)
 }
 
 // All returns every registered tool instance in registration order.

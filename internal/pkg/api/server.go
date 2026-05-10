@@ -85,6 +85,16 @@ func NewServer() *Server {
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
 
+	// Static built-in modules every wick app gets by default — agents
+	// tool plus the github / httprest connectors. cmd/lab additionally
+	// registers Lab samples (convert-text, crudcrud, sample-post) from
+	// its own main; downstream user apps see only Builtins here.
+	// All three are idempotent on Meta.Key: a downstream main.go can
+	// re-register the same key without producing duplicates.
+	tools.RegisterBuiltins()
+	jobs.RegisterBuiltins()
+	connectors.RegisterBuiltins()
+
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
 	modules := tools.All()
