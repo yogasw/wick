@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -70,8 +71,39 @@ const socketDialTimeout = 2 * time.Second
 const socketResponseTimeout = 28 * time.Second
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--config", "-config", "config":
+			printConfig()
+			return
+		}
+	}
 	exitCode := run()
 	os.Exit(exitCode)
+}
+
+// printConfig dumps resolved app name and every path the gate writes
+// to. Use when the hook fires but data lands in the wrong tree —
+// usually means BuildAppName ldflag wasn't injected and gate fell
+// back to "wick" instead of e.g. "wick-lab".
+func printConfig() {
+	app := gate.AppName()
+	exe, _ := os.Executable()
+	home, _ := os.UserHomeDir()
+
+	fmt.Printf("app_name:         %s\n", app)
+	fmt.Printf("executable:       %s\n", exe)
+	fmt.Printf("home:             %s\n", home)
+	fmt.Printf("spec:             %s\n", gate.SharedSpecPath(app))
+	fmt.Printf("socket:           %s\n", gate.SharedSocketPath(app))
+	fmt.Printf("commands_jsonl:   %s\n", gate.SharedCommandsPath(app))
+	fmt.Printf("daily_log_dir:    %s\n", filepath.Join(home, "."+app, "logs"))
+
+	if st, err := os.Stat(gate.SharedSpecPath(app)); err == nil {
+		fmt.Printf("spec_size:        %d bytes (mtime %s)\n", st.Size(), st.ModTime().UTC().Format(time.RFC3339))
+	} else {
+		fmt.Printf("spec_size:        MISSING (%v)\n", err)
+	}
 }
 
 // run is split out so tests can drive the same logic without
