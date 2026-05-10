@@ -12,6 +12,7 @@ type GeneralConfig struct {
 	BypassPermissions bool   `wick:"checkbox;desc=Always pass --permission-mode bypassPermissions to Claude. Enable this if Claude prompts for permission in Slack/HTTP sessions and no gate is configured."`
 	KillAfterIdleSec  int    `wick:"number;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PublicURL         string `wick:"url;desc=Public base URL of this wick instance. Used for the dashboard meta-command."`
+	AutoRescan        bool   `wick:"checkbox;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
@@ -22,5 +23,6 @@ func DefaultGeneralConfig() GeneralConfig {
 		MaxConcurrent:   2,
 		IdleTimeoutSec:  120,
 		DefaultProvider: "claude",
+		AutoRescan:      true,
 	}
 }

@@ -72,7 +72,7 @@ func providersPage(c *tool.Ctx) {
 		PoolMax:       poolMaxConcurrent(),
 		SupportedKeys: supportedTypeKeys(),
 		Gate:          gateStatusVM(),
-		AutoRescan:    provider.AutoRescanEnabled(),
+		AutoRescan:    autoRescanEnabled(),
 	}))
 }
 
@@ -164,6 +164,16 @@ func deleteProviderInstance(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// autoRescanEnabled reads agents.auto_rescan from configs. Defaults
+// to true when the row is empty so first-boot users get the standard
+// "stale cache → background re-probe" behaviour without ceremony.
+func autoRescanEnabled() bool {
+	if globalConfigs == nil {
+		return true
+	}
+	return globalConfigs.GetOwned("agents", "auto_rescan") != "false"
+}
+
 // toggleGate flips agents.gate_enabled in the configs table. The
 // new value takes effect on the next server boot — running sessions
 // keep their existing gate plumbing because Spawner state is
@@ -216,8 +226,13 @@ func rescanOneProvider(c *tool.Ctx) {
 // toggleAutoRescan flips agents.auto_rescan in configs. When off, the
 // background staleness re-probe stops; user must hit Rescan manually.
 func toggleAutoRescan(c *tool.Ctx) {
-	on := !provider.AutoRescanEnabled()
-	if err := provider.SetAutoRescan(c.Context(), on); err != nil {
+	if globalConfigs == nil {
+		c.Error(http.StatusServiceUnavailable, "configs service not wired")
+		return
+	}
+	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "auto_rescan"))
+	next := strconv.FormatBool(!before)
+	if err := globalConfigs.SetOwned(c.Context(), "agents", "auto_rescan", next); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("toggle auto-rescan: %s", err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return

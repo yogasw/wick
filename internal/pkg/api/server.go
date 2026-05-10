@@ -351,11 +351,17 @@ func NewServer() *Server {
 	agentstool.SetConfigs(configsSvc)
 	agentstool.SetDB(db)
 	provider.AppName = strings.TrimSpace(os.Getenv("APP_NAME"))
-	provider.SetCacheStore(configsSvc)
+	// Wire the auto-rescan toggle: provider package consults this
+	// before triggering background stale-version re-probes. Defaults
+	// true when configs row is empty.
+	provider.SetAutoRescanLookup(func() bool {
+		v := configsSvc.GetOwned("agents", "auto_rescan")
+		return v != "false"
+	})
 	// Prime the persistent status cache once in the background so the
 	// first load of /tools/agents/providers renders from cache instead
 	// of waiting on three cold `--version` spawns. Subsequent boots
-	// hit the DB cache directly until 24h staleness or a manual rescan.
+	// hit the cache directly until 24h staleness or a manual rescan.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
