@@ -14,6 +14,14 @@ vars:
     $arch:
       windows: bin/tailwindcss.exe
       default: bin/tailwindcss
+  LAB_BIN:
+    $arch:
+      windows: lab.exe
+      default: ./lab
+  GATE_BIN:
+    $arch:
+      windows: lab-gate.exe
+      default: lab-gate
 
 tasks:
   setup:
@@ -29,7 +37,7 @@ tasks:
           cmd: templ
         run: go install github.com/a-h/templ/cmd/templ@latest
       - go mod tidy
-      - go build -ldflags "-X github.com/yogasw/wick/internal/appname.BuildAppName=wick-lab" -o bin/lab-gate ./cmd/gate/
+      - go build -ldflags=-X=github.com/yogasw/wick/internal/appname.BuildAppName=wick-lab -o bin/{{.GATE_BIN}} ./cmd/gate/
     done: |
       Setup complete!
       Run: wick dev
@@ -42,9 +50,9 @@ tasks:
     cmds:
       - templ generate ./...
       - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css"
-      - go build -ldflags "-X github.com/yogasw/wick/internal/appname.BuildAppName=wick-lab" -o lab-gate ./cmd/gate/
-      - go build -o lab ./cmd/lab/
-      - ./lab server
+      - go build -ldflags=-X=github.com/yogasw/wick/internal/appname.BuildAppName=wick-lab -o "{{.GATE_BIN}}" ./cmd/gate/
+      - go build -o "{{.LAB_BIN}}" ./cmd/lab/
+      - "{{.LAB_BIN}} server"
 
   generate:
     cmds:
