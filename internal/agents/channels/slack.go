@@ -638,6 +638,8 @@ func (s *SlackChannel) OnApprovalRequest(sessionID string, req gate.ApprovalRequ
 				slack.NewTextBlockObject("plain_text", "Allow Once", false, false)),
 			slack.NewButtonBlockElement("gate_approve_session", val(gate.DecisionApproveSession),
 				slack.NewTextBlockObject("plain_text", "Allow Session", false, false)),
+			slack.NewButtonBlockElement("gate_approve_all", val(gate.DecisionApproveAll),
+				slack.NewTextBlockObject("plain_text", "Allow All (Session)", false, false)).WithStyle(slack.StylePrimary),
 			slack.NewButtonBlockElement("gate_block", val(gate.DecisionBlock),
 				slack.NewTextBlockObject("plain_text", "Block", false, false)).WithStyle(slack.StyleDanger),
 		),
@@ -690,6 +692,8 @@ func (s *SlackChannel) OnApprovalResolved(sessionID, requestID, decision string)
 		label = "🚫 Blocked"
 	case gate.DecisionApproveSession:
 		label = "✅ Approved for session"
+	case gate.DecisionApproveAll:
+		label = "✅ All commands allowed for session"
 	case gate.DecisionApproveAlways:
 		label = "✅ Always allowed"
 	}

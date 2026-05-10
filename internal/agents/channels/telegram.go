@@ -332,6 +332,9 @@ func (t *TelegramChannel) OnApprovalRequest(sessionID string, req gate.ApprovalR
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("✅ Allow Once", btnData(gate.DecisionApproveOnce)),
 			tgbotapi.NewInlineKeyboardButtonData("✅ Allow Session", btnData(gate.DecisionApproveSession)),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Allow All (Session)", btnData(gate.DecisionApproveAll)),
 			tgbotapi.NewInlineKeyboardButtonData("🚫 Block", btnData(gate.DecisionBlock)),
 		),
 	)
@@ -379,6 +382,8 @@ func (t *TelegramChannel) OnApprovalResolved(sessionID, requestID, decision stri
 		label = "🚫 Blocked"
 	case gate.DecisionApproveSession:
 		label = "✅ Approved for session"
+	case gate.DecisionApproveAll:
+		label = "✅ All commands allowed for session"
 	case gate.DecisionApproveAlways:
 		label = "✅ Always allowed"
 	}

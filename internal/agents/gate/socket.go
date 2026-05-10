@@ -39,6 +39,7 @@ type ApprovalResponse struct {
 const (
 	DecisionApproveOnce    = "approve_once"
 	DecisionApproveSession = "approve_session"
+	DecisionApproveAll     = "approve_all" // approve every future command in this session
 	DecisionApproveAlways  = "approve_always"
 	DecisionBlock          = "block"
 )
@@ -47,7 +48,7 @@ const (
 // Anything else is treated as block by the binary.
 func IsApprove(d string) bool {
 	switch d {
-	case DecisionApproveOnce, DecisionApproveSession, DecisionApproveAlways:
+	case DecisionApproveOnce, DecisionApproveSession, DecisionApproveAll, DecisionApproveAlways:
 		return true
 	}
 	return false
