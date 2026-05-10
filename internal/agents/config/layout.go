@@ -1,13 +1,15 @@
 // Package config holds the runtime-editable Agents config (General /
 // Slack / Workspace structs reflected into the configs DB table) plus
 // the on-disk Layout — the single source of truth for path math under
-// the platform default data directory (~/.wick/agents). Every other
+// the platform default data directory (~/.<app>/agents). Every other
 // agents subpackage receives a Layout, never hand-rolls paths.
 package config
 
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // Layout describes the on-disk folder layout rooted at BaseDir.
@@ -81,13 +83,15 @@ func ResolveBaseDir(_ WorkspaceConfig) string {
 	return defaultBaseDir()
 }
 
-// defaultBaseDir returns the platform default. Falls back to
-// `./.wick/agents` when the home dir lookup fails so we never panic;
-// operator can override via WorkspaceConfig.BaseDir.
+// defaultBaseDir returns the platform default `~/.<app>/agents`,
+// falling back to `./.<app>/agents` when home dir lookup fails so we
+// never panic. `<app>` comes from appname.Resolve() so every wick
+// app's agents tree lives under the same per-app namespace as its DB.
 func defaultBaseDir() string {
+	app := appname.Resolve()
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".", ".wick", "agents")
+		return filepath.Join(".", "."+app, "agents")
 	}
-	return filepath.Join(home, ".wick", "agents")
+	return filepath.Join(home, "."+app, "agents")
 }

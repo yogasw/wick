@@ -63,6 +63,23 @@ type Config struct {
 	// path override + extra args. Empty / nil = full auto-detect via
 	// PATH lookup.
 	Providers ProvidersConfig `json:"providers,omitempty"`
+
+	// ProviderStatuses caches the last-known Probe result per
+	// instance, keyed `<type>/<name>`. Survives restart so the
+	// Providers page renders instantly instead of waiting on cold
+	// `--version` spawns. Refresh policy is owned by the agents
+	// module — this layer is a dumb store. Empty / nil = no cache.
+	ProviderStatuses map[string]ProviderStatus `json:"provider_statuses,omitempty"`
+}
+
+// ProviderStatus is the persisted shape of a Probe result.
+type ProviderStatus struct {
+	Path       string `json:"path"`
+	PathFound  bool   `json:"path_found"`
+	Version    string `json:"version,omitempty"`
+	VersionErr string `json:"version_err,omitempty"`
+	ScannedAt  string `json:"scanned_at,omitempty"`
+	VersionAt  string `json:"version_at,omitempty"`
 }
 
 // ProvidersConfig groups per-provider-type instance lists. One type

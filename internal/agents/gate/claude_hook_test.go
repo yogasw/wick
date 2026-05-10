@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestClaudeSettings(t *testing.T) {
-	bytes, err := ClaudeSettings("/path/to/wick-gate")
+	bytes, err := ClaudeSettings("/path/to/gate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,55 +17,91 @@ func TestClaudeSettings(t *testing.T) {
 	if err := json.Unmarshal(bytes, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Hooks.PreToolUse) != 1 {
-		t.Fatalf("PreToolUse groups: %d", len(got.Hooks.PreToolUse))
+	// Expect one group per gated tool: Bash, Read, Write, Edit, Glob.
+	wantMatchers := []string{"Bash", "Read", "Write", "Edit", "Glob"}
+	if len(got.Hooks.PreToolUse) != len(wantMatchers) {
+		t.Fatalf("PreToolUse groups: got %d, want %d", len(got.Hooks.PreToolUse), len(wantMatchers))
 	}
-	g := got.Hooks.PreToolUse[0]
-	if g.Matcher != "Bash" {
-		t.Errorf("matcher: %q", g.Matcher)
-	}
-	if len(g.Hooks) != 1 || g.Hooks[0].Type != "command" || g.Hooks[0].Command != "/path/to/wick-gate" {
-		t.Errorf("hook entry: %+v", g.Hooks)
+	for i, want := range wantMatchers {
+		g := got.Hooks.PreToolUse[i]
+		if g.Matcher != want {
+			t.Errorf("group[%d] matcher: got %q, want %q", i, g.Matcher, want)
+		}
+		if len(g.Hooks) != 1 || g.Hooks[0].Type != "command" || g.Hooks[0].Command != "/path/to/gate" {
+			t.Errorf("group[%d] hook entry: %+v", i, g.Hooks)
+		}
 	}
 }
 
-func TestWriteSpawnArtifactsRoundtrip(t *testing.T) {
+func TestWriteClaudeSettings(t *testing.T) {
 	dir := t.TempDir()
-	spec := Spec{
-		SessionID: "S1",
-		AgentName: "default",
-		Layout:    SpecLayout{SessionCommandsPath: filepath.Join(dir, "commands.jsonl")},
-		Rules:     []CommandRule{{Pattern: "ls *"}},
-	}
-
-	settings, specPath, err := WriteSpawnArtifacts(dir, spec, "/bin/wick-gate")
+	settings, err := WriteClaudeSettings(dir, "/bin/gate")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if filepath.Dir(settings) != dir {
+		t.Errorf("settings path: %q want under %q", settings, dir)
 	}
 	if _, err := os.Stat(settings); err != nil {
 		t.Fatalf("settings.json missing: %v", err)
 	}
-	if _, err := os.Stat(specPath); err != nil {
-		t.Fatalf("spec.json missing: %v", err)
-	}
-
-	// LoadSpec round-trip via env var.
-	t.Setenv(HookEnvVar, specPath)
-	got, err := LoadSpec()
+	data, err := os.ReadFile(settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SessionID != "S1" || got.AgentName != "default" {
-		t.Fatalf("spec: %+v", got)
-	}
-	if len(got.Rules) != 1 || got.Rules[0].Pattern != "ls *" {
-		t.Fatalf("rules: %+v", got.Rules)
+	if !strings.Contains(string(data), "/bin/gate") {
+		t.Errorf("settings missing gate bin: %s", data)
 	}
 }
 
-func TestLoadSpecMissingEnv(t *testing.T) {
-	t.Setenv(HookEnvVar, "")
-	if _, err := LoadSpec(); err == nil {
-		t.Fatal("expected error when env var unset")
+// TestSharedSpecRoundtrip: WriteSharedSpec + LoadSpec via temp HOME
+// — fakes os.UserHomeDir() through HOME env so paths land under
+// t.TempDir().
+func TestSharedSpecRoundtrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir()) // Windows
+	app := "testapp"
+	want := Spec{
+		Rules:        []CommandRule{{Pattern: "ls *"}, {Pattern: "git status"}},
+		AutoApproved: []string{"hash-a", "hash-b"},
+	}
+	if err := WriteSharedSpec(app, want); err != nil {
+		t.Fatalf("WriteSharedSpec: %v", err)
+	}
+	got, err := LoadSpec(app)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if len(got.Rules) != 2 || got.Rules[0].Pattern != "ls *" {
+		t.Errorf("rules: %+v", got.Rules)
+	}
+	if len(got.AutoApproved) != 2 || got.AutoApproved[0] != "hash-a" || got.AutoApproved[1] != "hash-b" {
+		t.Errorf("AutoApproved: %+v", got.AutoApproved)
+	}
+}
+
+// TestLoadSpecMissingIsEmpty: a missing shared spec returns an
+// empty Spec, no error — matcher then treats every command as
+// non-whitelisted (fail-safe block via daemon socket).
+func TestLoadSpecMissingIsEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	got, err := LoadSpec("never-written")
+	if err != nil {
+		t.Fatalf("LoadSpec on missing should not error, got: %v", err)
+	}
+	if len(got.Rules) != 0 || len(got.AutoApproved) != 0 {
+		t.Errorf("expected empty spec, got: %+v", got)
+	}
+}
+
+func TestSpecApprovalFieldsOmitEmpty(t *testing.T) {
+	bytes, err := json.Marshal(Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(bytes)
+	if strings.Contains(s, "auto_approved") {
+		t.Errorf("expected auto_approved omitted, got: %s", s)
 	}
 }

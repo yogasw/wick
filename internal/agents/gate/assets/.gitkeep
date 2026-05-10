@@ -1,0 +1,4 @@
+# Embedded gate binaries land here at build time.
+# Filename pattern: gate-<goos>-<goarch>[.exe]
+# `wick build` populates this dir by compiling cmd/gate before
+# the main `go build` runs //go:embed.

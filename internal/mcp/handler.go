@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/yogasw/wick/internal/agents/askuser"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -52,6 +54,10 @@ type Handler struct {
 	// crypto themselves, only point the user at the UI form. nil
 	// fallback returns "" so we still serve a relative path.
 	appURL func() string
+	// askUsers handles the ask_user MCP tool: blocks the calling
+	// agent until the user answers via the web UI. nil = tool
+	// returns an error pointing the agent at the dashboard.
+	askUsers *askuser.Manager
 }
 
 func NewHandler(c *connectors.Service) *Handler {
@@ -72,6 +78,15 @@ func (h *Handler) WithAppURL(get func() string) *Handler {
 // the server is running in HTTP mode (no local filesystem access).
 func (h *Handler) WithWickRoot(root string) *Handler {
 	h.wickRoot = root
+	return h
+}
+
+// WithAskUser wires the ask_user MCP tool to a daemon-side
+// Manager that broadcasts SSE + blocks until the user answers in
+// the web UI. nil keeps the tool listed but always returns an
+// error (used in tests / read-only deployments).
+func (h *Handler) WithAskUser(m *askuser.Manager) *Handler {
+	h.askUsers = m
 	return h
 }
 
@@ -371,6 +386,54 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 			},
 		},
 		{
+			Name: "ask_user",
+			Description: "Ask the human operator a question and block until they answer in the Wick web UI. " +
+				"Use sparingly — only when you genuinely need a decision the user must make (e.g. picking between " +
+				"two libraries, confirming a destructive change). The user sees an inline card with optional " +
+				"choices and an optional freeform field; their answer is returned as JSON {\"value\":\"...\",\"text\":\"...\"}. " +
+				"Default timeout is 5 minutes; on timeout the tool returns an error and you should choose a sensible " +
+				"default rather than retrying immediately. session_id is required and must match the active wick agent " +
+				"session — pass the value the user mentioned or that you saw in the conversation context.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "ID of the active wick agent session this question belongs to.",
+					},
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Optional agent name; defaults to 'main'.",
+					},
+					"question": map[string]any{
+						"type":        "string",
+						"description": "The question text shown to the user.",
+					},
+					"options": map[string]any{
+						"type":        "array",
+						"description": "Optional list of preset choices. Each item is {label, value}; the user clicks one and you receive its value.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"label": map[string]any{"type": "string"},
+								"value": map[string]any{"type": "string"},
+							},
+							"required": []string{"label", "value"},
+						},
+					},
+					"allow_freeform": map[string]any{
+						"type":        "boolean",
+						"description": "When true the UI also offers a text input so the user can type a custom answer (returned as text).",
+					},
+				},
+				"required": []string{"session_id", "question"},
+			},
+			Annotations: &toolAnnotation{
+				Title:        "Ask the human operator",
+				ReadOnlyHint: ptrBool(false),
+			},
+		},
+		{
 			Name: "wick_decrypt",
 			Description: "Reveal the plaintext behind a wick_enc_ token. " +
 				"This tool never runs the crypto over MCP — calling it returns a URL pointing " +
@@ -469,6 +532,8 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		h.handleWickEncrypt(w, req)
 	case "wick_decrypt":
 		h.handleWickDecrypt(w, req)
+	case "ask_user":
+		h.handleAskUser(w, r, req, p.Arguments)
 	default:
 		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
 	}
@@ -480,6 +545,85 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 // context window — exactly the leakage the encrypted-fields layer
 // exists to prevent. The redirect forces the user to log in to the UI
 // and complete the operation in their own browser session.
+
+// handleAskUser blocks the calling agent until the human operator
+// answers in the web UI (or the ask times out). Sequence:
+//
+//  1. Validate input + ensure the askuser.Manager is wired.
+//  2. Manager.Ask: register pending → broadcast SSE → block.
+//  3. On answer / timeout, write the JSON answer back as a tool
+//     result. Timeouts surface as `{"error":"timeout: ..."}` with
+//     isError=true so the agent sees it and can pick a default.
+//
+// Cancellation: r.Context() is wired into Manager.Ask's done
+// channel so a transport disconnect (e.g. claude killed) frees
+// the goroutine immediately rather than waiting out the timeout.
+func (h *Handler) handleAskUser(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any) {
+	if h.askUsers == nil {
+		writeRPCError(w, req.ID, errInternal,
+			"ask_user disabled — wick is not running with the agents UI", nil)
+		return
+	}
+
+	type optionIn struct {
+		Label string `json:"label"`
+		Value string `json:"value"`
+	}
+	type input struct {
+		SessionID     string     `json:"session_id"`
+		AgentName     string     `json:"agent_name"`
+		Question      string     `json:"question"`
+		Options       []optionIn `json:"options"`
+		AllowFreeform bool       `json:"allow_freeform"`
+	}
+	raw, _ := json.Marshal(args)
+	var in input
+	if err := json.Unmarshal(raw, &in); err != nil {
+		writeToolError(w, req.ID, "invalid arguments: "+err.Error(), "ask_user")
+		return
+	}
+	if strings.TrimSpace(in.SessionID) == "" {
+		writeToolError(w, req.ID, "session_id is required", "ask_user")
+		return
+	}
+	if strings.TrimSpace(in.Question) == "" {
+		writeToolError(w, req.ID, "question is required", "ask_user")
+		return
+	}
+	opts := make([]askuser.Option, 0, len(in.Options))
+	for _, o := range in.Options {
+		opts = append(opts, askuser.Option{Label: o.Label, Value: o.Value})
+	}
+
+	q := askuser.Question{
+		SessionID:     in.SessionID,
+		AgentName:     in.AgentName,
+		Question:      in.Question,
+		Options:       opts,
+		AllowFreeform: in.AllowFreeform,
+		Timeout:       4 * time.Minute,
+	}
+
+	done := make(chan struct{})
+	if r != nil {
+		ctx := r.Context()
+		go func() {
+			<-ctx.Done()
+			close(done)
+		}()
+	}
+
+	ans, err := h.askUsers.Ask(q, done)
+	if err != nil {
+		writeToolError(w, req.ID, err.Error(), "ask_user")
+		return
+	}
+	out := map[string]string{"value": ans.Value, "text": ans.Text}
+	b, _ := json.Marshal(out)
+	writeRPCResult(w, req.ID, toolCallResult{
+		Content: []toolContent{{Type: "text", Text: string(b)}},
+	})
+}
 
 func (h *Handler) handleWickEncrypt(w http.ResponseWriter, req rpcRequest) {
 	writeToolJSON(w, req.ID, map[string]string{

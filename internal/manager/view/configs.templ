@@ -198,11 +198,57 @@ templ simpleFieldWidget(row entity.Config) {
 	}
 }
 
+// parseColOpts splits "label::value|label::value" into [][label, value] pairs.
+// If an entry has no "::" separator, label and value are identical.
+func parseColOpts(raw string) [][2]string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	out := make([][2]string, 0, len(parts))
+	for _, p := range parts {
+		if i := strings.Index(p, "::"); i >= 0 {
+			out = append(out, [2]string{p[:i], p[i+2:]})
+		} else {
+			out = append(out, [2]string{p, p})
+		}
+	}
+	return out
+}
+
+// colOptsJSON serialises ColOptions as a compact JSON object for the
+// data-col-opts attribute so kvBlockAddRow can build selects for new rows.
+func colOptsJSON(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteByte('{')
+	first := true
+	for k, v := range m {
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		b.WriteByte('"')
+		b.WriteString(k)
+		b.WriteString(`":"`)
+		// escape double-quotes inside the value
+		b.WriteString(strings.ReplaceAll(v, `"`, `\"`))
+		b.WriteByte('"')
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
 templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 	<div
 		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
 		data-kvlist-key={ row.Key }
 		data-kv-cols={ strings.Join(cols, "|") }
+		if len(row.ColOptions) > 0 {
+			data-col-opts={ colOptsJSON(row.ColOptions) }
+		}
 	>
 		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 			<div class="flex items-center gap-2">
@@ -239,7 +285,7 @@ templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 						</div>
 					}
 					for _, entry := range data {
-						@kvDataRow(cols, entry)
+						@kvDataRow(cols, row.ColOptions, entry)
 					}
 				</div>
 			</div>
@@ -252,17 +298,33 @@ templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 	</div>
 }
 
-templ kvDataRow(cols []string, entry map[string]string) {
+templ kvDataRow(cols []string, colOpts map[string]string, entry map[string]string) {
 	<div data-kv-row class="flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 		for _, col := range cols {
 			<div class="flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600 last:border-r-0">
-				<input
-					type="text"
-					data-col={ col }
-					value={ entry[col] }
-					placeholder={ col }
-					class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
-				/>
+				if opts := parseColOpts(colOpts[col]); len(opts) > 0 {
+					<select
+						data-col={ col }
+						class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 cursor-pointer"
+					>
+						<option value="">(no restriction)</option>
+						for _, o := range opts {
+							if entry[col] == o[1] {
+								<option value={ o[1] } selected>{ o[0] }</option>
+							} else {
+								<option value={ o[1] }>{ o[0] }</option>
+							}
+						}
+					</select>
+				} else {
+					<input
+						type="text"
+						data-col={ col }
+						value={ entry[col] }
+						placeholder={ col }
+						class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
+					/>
+				}
 			</div>
 		}
 		<div class="w-10 shrink-0 flex items-center justify-center">
@@ -348,23 +410,54 @@ templ configsSaveScript() {
 			}
 		}
 
+		function buildColSelect(col, colOpts, currentVal){
+			var raw=colOpts[col]||'';
+			if(!raw)return null;
+			var sel=document.createElement('select');
+			sel.setAttribute('data-col',col);
+			sel.className='w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 cursor-pointer';
+			var empty=document.createElement('option');
+			empty.value='';
+			empty.textContent='(no restriction)';
+			sel.appendChild(empty);
+			raw.split('|').forEach(function(pair){
+				var sep=pair.indexOf('::');
+				var label=sep>=0?pair.slice(0,sep):pair;
+				var value=sep>=0?pair.slice(sep+2):pair;
+				var opt=document.createElement('option');
+				opt.value=value;
+				opt.textContent=label;
+				sel.appendChild(opt);
+			});
+			sel.value=currentVal||'';
+			return sel;
+		}
+
 		function kvBlockAddRow(btn){
 			var section=btn.closest('[data-kvlist-key]');
 			var rowsEl=section.querySelector('[data-kv-rows]');
 			var empty=rowsEl.querySelector('[data-kv-empty]');
 			if(empty)empty.remove();
 			var cols=section.getAttribute('data-kv-cols').split('|');
+			var colOpts={};
+			try{colOpts=JSON.parse(section.getAttribute('data-col-opts')||'{}');}catch(e){}
 			var row=document.createElement('div');
 			row.setAttribute('data-kv-row','');
 			row.className=rowCls;
 			cols.forEach(function(col,i){
 				var cell=document.createElement('div');
 				cell.className=cellCls;
-				var inp=document.createElement('input');
-				inp.type='text';
-				inp.setAttribute('data-col',col);
-				inp.placeholder=col;
-				inp.className=inputCls;
+				var sel=buildColSelect(col,colOpts,'');
+				var inp;
+				if(sel){
+					inp=sel;
+				}else{
+					inp=document.createElement('input');
+					inp.type='text';
+					inp.setAttribute('data-col',col);
+					inp.placeholder=col;
+					inp.className=inputCls;
+				}
 				if(i===cols.length-1){
 					inp.addEventListener('keydown',function(e){
 						if(e.key==='Tab'&&!e.shiftKey){
@@ -425,11 +518,15 @@ templ configsSaveScript() {
 				var handler=function(){saveField(el,base);};
 				el.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));
 			});
-			// kvlist blocks — delegate on the rows container
+			// kvlist blocks — delegate on the rows container for both input
+			// (text fields) and change (select dropdowns).
 			form.querySelectorAll('[data-kvlist-key]').forEach(function(section){
 				var debouncedSave=debounce(function(){saveKVBlock(section,base);},800);
 				var rowsEl=section.querySelector('[data-kv-rows]');
-				if(rowsEl)rowsEl.addEventListener('input',debouncedSave);
+				if(rowsEl){
+					rowsEl.addEventListener('input',debouncedSave);
+					rowsEl.addEventListener('change',debouncedSave);
+				}
 			});
 		}
 

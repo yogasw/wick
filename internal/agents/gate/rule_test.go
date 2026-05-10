@@ -9,7 +9,7 @@ func TestMatcherDecide(t *testing.T) {
 		{Pattern: "git diff"},
 		{Pattern: "cat *"},
 	}
-	m := NewMatcher(rules)
+	m := NewMatcher(rules, "")
 
 	cases := []struct {
 		cmd       string
@@ -38,7 +38,7 @@ func TestMatcherDecide(t *testing.T) {
 }
 
 func TestMatcherShellMetacharBlocked(t *testing.T) {
-	m := NewMatcher([]CommandRule{{Pattern: "git *"}})
+	m := NewMatcher([]CommandRule{{Pattern: "git *"}}, "")
 	dangerous := []string{
 		"git status; rm -rf .",
 		"git status | sh",
@@ -61,7 +61,7 @@ func TestMatcherShellMetacharBlocked(t *testing.T) {
 }
 
 func TestMatcherScopePrefix(t *testing.T) {
-	m := NewMatcher([]CommandRule{{Pattern: "cat *", Scope: "/workspace"}})
+	m := NewMatcher([]CommandRule{{Pattern: "cat *", Scope: "/workspace"}}, "")
 	cases := []struct {
 		cmd       string
 		wantAllow bool

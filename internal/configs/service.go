@@ -213,6 +213,12 @@ func (s *Service) reconcile(ctx context.Context, row entity.Config) error {
 			}
 		}
 		_ = s.repo.SetValue(ctx, row.Owner, row.Key, stored)
+	} else if existing.Value == "" && value != "" && !row.IsSecret {
+		// Back-fill: row existed but was seeded empty before the default
+		// was defined. Apply the non-empty default now so operators see
+		// sensible starting values without manual intervention.
+		_ = s.repo.SetValue(ctx, row.Owner, row.Key, value)
+		fresh.Value = value
 	}
 	// Cache holds plaintext: reads via Get/GetOwned must return what
 	// the admin pasted, not the ciphertext.

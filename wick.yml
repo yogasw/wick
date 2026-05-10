@@ -14,6 +14,23 @@ vars:
     $arch:
       windows: bin/tailwindcss.exe
       default: bin/tailwindcss
+  LAB_BIN:
+    $arch:
+      windows: lab.exe
+      default: ./lab
+  # GATE_ASSET is the platform-specific path inside assets/ that Go embeds
+  # into the main binary via //go:embed all:assets in internal/agents/gate/embed.go.
+  # Name must match embeddedGateName(): gate-<os>-<arch>[.exe]
+  GATE_ASSET:
+    $arch:
+      windows: internal/agents/gate/assets/gate-windows-amd64.exe
+      darwin/arm64: internal/agents/gate/assets/gate-darwin-arm64
+      darwin: internal/agents/gate/assets/gate-darwin-amd64
+      linux/arm64: internal/agents/gate/assets/gate-linux-arm64
+      linux: internal/agents/gate/assets/gate-linux-amd64
+  # LDFLAGS bakes the app name into both binaries so paths (socket, logs,
+  # spec) resolve correctly regardless of the working directory at runtime.
+  LDFLAGS: -X=github.com/yogasw/wick/internal/appname.BuildAppName=wick-lab
 
 tasks:
   setup:
@@ -41,7 +58,18 @@ tasks:
     cmds:
       - templ generate ./...
       - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css"
-      - go run main.go server
+      - go build -ldflags={{.LDFLAGS}} -o "{{.GATE_ASSET}}" ./cmd/gate/
+      - go build -ldflags={{.LDFLAGS}} -o "{{.LAB_BIN}}" ./cmd/lab/
+      - "{{.LAB_BIN}} server"
+
+  build:
+    cmds:
+      - templ generate ./...
+      - "{{.TAILWIND_BIN}} -i web/src/input.css -o web/public/css/app.css --minify"
+      - go build -ldflags={{.LDFLAGS}} -o "{{.GATE_ASSET}}" ./cmd/gate/
+      - go build -ldflags={{.LDFLAGS}} -o "{{.LAB_BIN}}" ./cmd/lab/
+    done: |
+      Build complete! Binary: {{.LAB_BIN}} (gate embedded)
 
   generate:
     cmds:

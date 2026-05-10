@@ -5,41 +5,84 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// Spec describes one gate setup for one spawn — the bundle of paths
-// + env that wick-gate needs to make a decision and log it.
+// Spec is the per-app gate config the binary loads at every
+// invocation. Single shared file at SharedSpecPath(AppName) — the
+// gate binary discovers it from compile-time AppName, not runtime
+// env. Rewritten by the daemon when the user toggles always-allow /
+// revoke or edits allowed_cmds.
 //
-// Generated per Spawn by pool/factory.go; written to a file under
-// the session's gate-temp dir so the path can be passed to claude
-// via `--settings <path>` and to wick-gate via env vars.
+// Pre-Stage 9 this struct also carried session-scoped fields
+// (SessionID, AgentName, SocketPath, SessionCommandsPath); those are
+// gone now — gate is session-agnostic, daemon routes approvals via
+// the cwd in the ApprovalRequest.
 type Spec struct {
-	SessionID    string        `json:"session_id"`
-	AgentName    string        `json:"agent_name"`
-	Layout       SpecLayout    `json:"layout"`
-	Rules        []CommandRule `json:"rules"`
+	Rules []CommandRule `json:"rules"`
+
+	// AutoApproved holds matchKey hashes the user already chose
+	// "Always allow" for. The gate binary checks this list before
+	// dialing the socket so always-approved commands take a zero-
+	// latency fast path identical to whitelisted ones.
+	AutoApproved []string `json:"auto_approved,omitempty"`
+
+	// DefaultScope is the filesystem path used as the scope for rules
+	// that have an empty Scope field. Typically the default workspace
+	// directory (~/.<app>/agents/workspaces/default/files). When
+	// empty, rules with no scope are unrestricted (legacy behaviour).
+	DefaultScope string `json:"default_scope,omitempty"`
 }
 
-// SpecLayout is the subset of config.Layout the gate binary needs:
-// just where to append commands.jsonl. We don't pass the whole
-// Layout struct because that would couple the gate binary to the
-// agents config package.
-type SpecLayout struct {
-	SessionCommandsPath string `json:"session_commands_path"`
+// SharedSpecPath returns the on-disk location of the shared gate
+// spec for an app. AppName empty falls back to the wick default.
+//
+// Layout: ~/.<app>/agents/gate/spec.json
+func SharedSpecPath(appName string) string {
+	return filepath.Join(sharedGateDir(appName), "spec.json")
 }
 
-// HookEnvVar is the env-var name through which the wick binary tells
-// wick-gate where to find its Spec file. Picked up by wick-gate at
-// startup.
-const HookEnvVar = "WICK_GATE_SPEC"
+// SharedSocketPath returns the Unix domain socket address the gate
+// dials and the daemon listens on. Single shared socket per app —
+// daemon multiplexes requests by inspecting cwd in the payload.
+//
+// Layout: ~/.<app>/agents/gate/gate.sock
+func SharedSocketPath(appName string) string {
+	return filepath.Join(sharedGateDir(appName), "gate.sock")
+}
+
+// SharedCommandsPath returns the global commands.jsonl audit log.
+// Pre-Stage 9 this lived per-session under
+// `~/.<app>/agents/sessions/<id>/commands.jsonl`; now it's a single
+// app-wide file. UI Commands tab reads from here.
+//
+// Layout: ~/.<app>/agents/gate/commands.jsonl
+func SharedCommandsPath(appName string) string {
+	return filepath.Join(sharedGateDir(appName), "commands.jsonl")
+}
+
+// sharedGateDir returns ~/.<app>/agents/gate, falling back to
+// ./.<app>/agents/gate when the home dir lookup fails so we never
+// panic. Caller is responsible for MkdirAll.
+func sharedGateDir(appName string) string {
+	name := appName
+	if name == "" {
+		name = "wick"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", "."+name, "agents", "gate")
+	}
+	return filepath.Join(home, "."+name, "agents", "gate")
+}
 
 // claudeHookConfig is the JSON shape claude expects in its settings
 // file under .hooks.PreToolUse.
 //
 // Reference: claude hooks-guide. PreToolUse fires before any tool
 // invocation; matcher="Bash" filters to shell commands only. The
-// hook command is the absolute path to wick-gate; exit 0 = allow,
-// exit 2 = block.
+// hook command is the absolute path to the gate binary; exit 0 =
+// allow, exit 2 = block.
 type claudeHookConfig struct {
 	Hooks claudeHooks `json:"hooks"`
 }
@@ -49,8 +92,8 @@ type claudeHooks struct {
 }
 
 type claudeHookGroup struct {
-	Matcher string             `json:"matcher"`
-	Hooks   []claudeHookEntry  `json:"hooks"`
+	Matcher string            `json:"matcher"`
+	Hooks   []claudeHookEntry `json:"hooks"`
 }
 
 type claudeHookEntry struct {
@@ -59,66 +102,207 @@ type claudeHookEntry struct {
 }
 
 // ClaudeSettings produces the JSON bytes claude expects in its
-// `--settings` file. wickGateBin is the absolute path to the
-// wick-gate binary (we don't rely on PATH lookup so a per-test
-// build can be used in integration tests).
-func ClaudeSettings(wickGateBin string) ([]byte, error) {
+// `--settings` file. gateBin is the absolute path to the gate
+// binary (we don't rely on PATH lookup so a per-test build can be
+// used in integration tests).
+//
+// On Windows, Claude Code invokes hook commands via /usr/bin/bash
+// (WSL or Git Bash). Backslashes in the path are stripped by bash,
+// turning C:\foo\gate.exe into C:foogate.exe (exit 127). Convert
+// all backslashes to forward slashes so the path survives bash on
+// all platforms.
+func ClaudeSettings(gateBin string) ([]byte, error) {
+	gateBin = strings.ReplaceAll(gateBin, "\\", "/")
+	hook := claudeHookEntry{Type: "command", Command: gateBin}
+	// Gate every file-system tool that can read/write outside the workspace.
+	matchers := []string{"Bash", "Read", "Write", "Edit", "Glob"}
+	groups := make([]claudeHookGroup, 0, len(matchers))
+	for _, m := range matchers {
+		groups = append(groups, claudeHookGroup{
+			Matcher: m,
+			Hooks:   []claudeHookEntry{hook},
+		})
+	}
 	cfg := claudeHookConfig{
-		Hooks: claudeHooks{
-			PreToolUse: []claudeHookGroup{{
-				Matcher: "Bash",
-				Hooks: []claudeHookEntry{{
-					Type:    "command",
-					Command: wickGateBin,
-				}},
-			}},
-		},
+		Hooks: claudeHooks{PreToolUse: groups},
 	}
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-// WriteSpawnArtifacts writes both:
+// WriteClaudeSettings writes the per-spawn `--settings` file claude
+// expects. Returns the absolute path so the caller can pass it to
+// ClaudeSpawner.SettingsPath.
 //
-//   - <dir>/spec.json   — the Spec consumed by wick-gate via $WICK_GATE_SPEC
-//   - <dir>/settings.json — the claude --settings file
-//
-// Returns the settings path (caller passes to ClaudeSpawner.SettingsPath)
-// and the spec path (caller injects into ExtraEnv as WICK_GATE_SPEC=<path>).
-func WriteSpawnArtifacts(dir string, spec Spec, wickGateBin string) (settingsPath, specPath string, err error) {
+// Pre-Stage 9 this lived inside WriteSpawnArtifacts which also wrote
+// the spec — now spec is shared (see WriteSharedSpec) and only the
+// settings file is per-spawn.
+func WriteClaudeSettings(dir, gateBin string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
+		return "", err
 	}
-	specPath = filepath.Join(dir, "spec.json")
-	settingsPath = filepath.Join(dir, "settings.json")
-
-	specBytes, err := json.MarshalIndent(spec, "", "  ")
+	settingsPath := filepath.Join(dir, "settings.json")
+	settingsBytes, err := ClaudeSettings(gateBin)
 	if err != nil {
-		return "", "", err
-	}
-	if err := os.WriteFile(specPath, specBytes, 0o644); err != nil {
-		return "", "", err
-	}
-
-	settingsBytes, err := ClaudeSettings(wickGateBin)
-	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	if err := os.WriteFile(settingsPath, settingsBytes, 0o644); err != nil {
-		return "", "", err
+		return "", err
 	}
-	return settingsPath, specPath, nil
+	return settingsPath, nil
 }
 
-// LoadSpec reads the Spec file pointed to by $WICK_GATE_SPEC. Used
-// by wick-gate at startup. Returns a clear error if the env var is
-// unset so misconfiguration is loud.
-func LoadSpec() (Spec, error) {
-	path := os.Getenv(HookEnvVar)
-	if path == "" {
-		return Spec{}, fmt.Errorf("%s not set in env", HookEnvVar)
+// WriteWorkspaceHooks writes the gate hook into
+// <workspace>/.claude/settings.local.json so Claude's project-scoped
+// hook loader picks it up. Claude does NOT honour hooks injected via
+// the --settings flag; they must live in the standard settings
+// hierarchy (.claude/settings.json or .claude/settings.local.json).
+// We use the .local variant to avoid conflicting with any
+// settings.json the user may have committed to the workspace.
+// Idempotent: overwrites an existing file with the same content.
+func WriteWorkspaceHooks(workspace, gateBin string) error {
+	dir := filepath.Join(workspace, ".claude")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	data, err := ClaudeSettings(gateBin)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(dir, "settings.local.json")
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	return nil
+}
+
+// WriteSharedSpec persists the shared spec for appName atomically.
+// Caller passes the already-merged spec — appendAlwaysAllow /
+// RevokeAlways handles read-modify-write in the daemon.
+func WriteSharedSpec(appName string, spec Spec) error {
+	path := SharedSpecPath(appName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir gate dir: %w", err)
+	}
+	data, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write spec %s: %w", path, err)
+	}
+	return nil
+}
+
+// userClaudeSettingsPath returns the path to ~/.claude/settings.json.
+func userClaudeSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "settings.json"), nil
+}
+
+// MergeUserHooks writes the gate PreToolUse hook into the user's
+// global ~/.claude/settings.json. Claude Code always reads this file
+// regardless of working directory or permission mode — it is the only
+// reliable way to inject hooks when spawning Claude headlessly with
+// `claude -p`. Existing settings (permissions, autoUpdates, etc.) are
+// preserved; only the `hooks` key is replaced.
+//
+// This is called at server startup so Claude sessions started while
+// wick is running pick up the hook. Use RemoveUserHooks at shutdown
+// to restore the file to its original state.
+func MergeUserHooks(gateBin string) error {
+	path, err := userClaudeSettingsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	// Read existing settings (or start with empty object).
+	var settings map[string]any
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	if settings == nil {
+		settings = make(map[string]any)
+	}
+
+	// Build the hooks section with our gate entries.
+	hookData, err := ClaudeSettings(gateBin)
+	if err != nil {
+		return err
+	}
+	var hookCfg claudeHookConfig
+	if err := json.Unmarshal(hookData, &hookCfg); err != nil {
+		return err
+	}
+	settings["hooks"] = hookCfg.Hooks
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".wick.tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	return os.Rename(tmp, path)
+}
+
+// RemoveUserHooks removes the `hooks` key from ~/.claude/settings.json
+// that was written by MergeUserHooks, restoring it to its pre-wick state.
+// Best-effort: errors are logged by the caller, not returned.
+func RemoveUserHooks(gateBin string) error {
+	path, err := userClaudeSettingsPath()
+	if err != nil {
+		return err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return err
+	}
+	hooks, ok := settings["hooks"]
+	if !ok {
+		return nil // nothing to remove
+	}
+	// Only remove if it's our gate hook (command path contains gateBin).
+	hookJSON, _ := json.Marshal(hooks)
+	if !strings.Contains(string(hookJSON), "gate") {
+		return nil // foreign hooks — don't touch
+	}
+	delete(settings, "hooks")
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".wick.tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadSpec reads the shared Spec for appName from disk. Used by the
+// gate binary at every invocation. Missing file returns an empty
+// Spec without error — that means "no rules configured", which the
+// matcher treats as deny-all (fail-safe block).
+func LoadSpec(appName string) (Spec, error) {
+	path := SharedSpecPath(appName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Spec{}, nil
+		}
 		return Spec{}, fmt.Errorf("read spec %q: %w", path, err)
 	}
 	var s Spec

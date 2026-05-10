@@ -30,10 +30,17 @@ var ErrSkippedMSI = errors.New("msi: wixl not found on PATH")
 // self-updater keeps working on installed builds the same way it
 // works on portable .exe builds.
 //
+// gateExePath (optional) is the gate sidecar to ship as
+// `<AppName>-gate.exe` next to the main .exe. Empty = no sidecar
+// (the main .exe still has the gate binary embedded via //go:embed,
+// extract-on-demand). When non-empty, the runtime resolution prefers
+// the on-disk sibling over the embed extract — visible in Programs
+// folder for the operator, no per-session extract churn.
+//
 // Returns the .msi path on success; returns ErrSkippedMSI when wixl
 // is not on PATH (mirrors the darwin .dmg skip pattern so cross-builds
 // from hosts without wixl still produce a usable .exe).
-func PackageMSI(exePath, appName, appVersion, goarch string) (string, error) {
+func PackageMSI(exePath, gateExePath, appName, appVersion, goarch string) (string, error) {
 	if _, err := exec.LookPath("wixl"); err != nil {
 		return "", ErrSkippedMSI
 	}
@@ -47,10 +54,13 @@ func PackageMSI(exePath, appName, appVersion, goarch string) (string, error) {
 		AppName:      appName,
 		ExeName:      appName + ".exe",
 		ExeSource:    exePath,
+		GateExeName:  appName + "-gate.exe",
+		GateExeSource: gateExePath,
 		Version:      fmt.Sprintf("%d.%d.%d.0", maj, min, pat),
 		Win64:        win64,
 		UpgradeCode:  stableGUID("wick.upgrade." + appName),
 		MainCompGUID: stableGUID("wick.main." + appName),
+		GateCompGUID: stableGUID("wick.gate." + appName),
 		MenuCompGUID: stableGUID("wick.menu." + appName),
 		DeskCompGUID: stableGUID("wick.desktop." + appName),
 		Manufacturer: appName,
@@ -79,19 +89,37 @@ func PackageMSI(exePath, appName, appVersion, goarch string) (string, error) {
 }
 
 type wxsParams struct {
-	AppName      string
-	ExeName      string
-	ExeSource    string
-	Version      string
-	Win64        string
-	UpgradeCode  string
-	MainCompGUID string
-	MenuCompGUID string
-	DeskCompGUID string
-	Manufacturer string
+	AppName       string
+	ExeName       string
+	ExeSource     string
+	GateExeName   string // empty = skip gate component
+	GateExeSource string
+	Version       string
+	Win64         string
+	UpgradeCode   string
+	MainCompGUID  string
+	GateCompGUID  string
+	MenuCompGUID  string
+	DeskCompGUID  string
+	Manufacturer  string
 }
 
 func buildWXS(p wxsParams) string {
+	gateComponent := ""
+	gateRef := ""
+	if p.GateExeSource != "" {
+		gateComponent = fmt.Sprintf(`            <Component Id="GateExecutable" Guid="%s"%s>
+              <File Id="GateExe" Name="%s" Source="%s" KeyPath="yes"/>
+            </Component>
+`,
+			p.GateCompGUID,
+			p.Win64,
+			html.EscapeString(p.GateExeName),
+			html.EscapeString(p.GateExeSource),
+		)
+		gateRef = `      <ComponentRef Id="GateExecutable"/>
+`
+	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="%[1]s" Version="%[2]s" Manufacturer="%[3]s" UpgradeCode="%[4]s" Language="1033">
@@ -105,7 +133,7 @@ func buildWXS(p wxsParams) string {
             <Component Id="MainExecutable" Guid="%[5]s"%[6]s>
               <File Id="MainExe" Name="%[7]s" Source="%[8]s" KeyPath="yes"/>
             </Component>
-          </Directory>
+%[11]s          </Directory>
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
@@ -130,7 +158,7 @@ func buildWXS(p wxsParams) string {
     </DirectoryRef>
     <Feature Id="MainFeature" Title="%[1]s" Level="1">
       <ComponentRef Id="MainExecutable"/>
-      <ComponentRef Id="AppShortcut"/>
+%[12]s      <ComponentRef Id="AppShortcut"/>
       <ComponentRef Id="DesktopShortcut"/>
     </Feature>
     <Property Id="LaunchAppCmd" Value="cmd.exe"/>
@@ -156,6 +184,8 @@ func buildWXS(p wxsParams) string {
 		html.EscapeString(p.ExeSource),    // 8
 		p.MenuCompGUID,                    // 9
 		p.DeskCompGUID,                    // 10
+		gateComponent,                     // 11
+		gateRef,                           // 12
 	)
 }
 

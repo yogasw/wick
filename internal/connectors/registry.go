@@ -9,8 +9,10 @@
 //  1. Package under internal/connectors/<name>/ exposing a Meta builder,
 //     a typed Creds struct (`wick:"..."` tags), a typed Input struct,
 //     and an `Execute(c *connector.Ctx) (any, error)` function.
-//  2. Register here inside RegisterBuiltins() (core wick lab) or in the
-//     downstream project's main.go via app.RegisterConnector.
+//  2. Register here inside RegisterBuiltins() (default-on for every
+//     wick app — github, httprest) or RegisterLabSamples() (cmd/lab
+//     only — crudcrud), or in the downstream project's main.go via
+//     app.RegisterConnector.
 //
 // Connector definitions live in code; per-instance rows (credentials,
 // labels, tags) live in the connector_instances table — populated by
@@ -25,9 +27,9 @@ import (
 	"github.com/yogasw/wick/pkg/entity"
 )
 
-// extra holds connector definitions registered by downstream projects
-// (and, for the wick lab binary, by RegisterBuiltins). All() returns
-// this slice verbatim — wick's own in-house connectors are opt-in.
+// extra holds connector definitions registered by downstream projects,
+// plus the modules added by RegisterBuiltins / RegisterLabSamples.
+// All() returns this slice verbatim.
 var extra []connector.Module
 
 // Register appends a fully-resolved Module record to the registry.
@@ -36,28 +38,49 @@ func Register(m connector.Module) {
 	extra = append(extra, m)
 }
 
-// RegisterBuiltins appends wick's own in-house connectors to the
-// registry. Intended for the wick lab binary (cmd/lab); downstream
-// projects start with an empty registry and register only their own
-// connectors.
+// RegisterBuiltins seeds in-house connectors every downstream wick app
+// gets by default — the public-API connectors (github, httprest) that
+// most apps want available immediately. Called from
+// internal/pkg/api/server.go at boot, before connectors.All().
+//
+// Idempotent on Meta.Key: re-calling appends nothing if the key was
+// already registered.
+//
+// Note: wickmanager is registered inline in server.go (line ~494)
+// because it requires runtime Deps (configsSvc, jobsSvc, etc.) that
+// only exist mid-boot.
 func RegisterBuiltins() {
-	extra = append(extra,
-		connector.Module{
-			Meta:       crudcrud.Meta(),
-			Configs:    entity.StructToConfigs(crudcrud.Configs{}),
-			Operations: crudcrud.Operations(),
-		},
-		connector.Module{
-			Meta:       github.Meta(),
-			Configs:    entity.StructToConfigs(github.Configs{}),
-			Operations: github.Operations(),
-    },
-	  connector.Module{
-			Meta:       httprest.Meta(),
-			Configs:    entity.StructToConfigs(httprest.Configs{}),
-			Operations: httprest.Operations(),
-		},
-	)
+	registerOnce(connector.Module{
+		Meta:       github.Meta(),
+		Configs:    entity.StructToConfigs(github.Configs{}),
+		Operations: github.Operations(),
+	})
+	registerOnce(connector.Module{
+		Meta:       httprest.Meta(),
+		Configs:    entity.StructToConfigs(httprest.Configs{}),
+		Operations: httprest.Operations(),
+	})
+}
+
+// RegisterLabSamples seeds the demo-only connectors shipped with the
+// cmd/lab binary — currently the crudcrud sample. Downstream wick apps
+// do not call this; they register their own connectors via main.go.
+func RegisterLabSamples() {
+	registerOnce(connector.Module{
+		Meta:       crudcrud.Meta(),
+		Configs:    entity.StructToConfigs(crudcrud.Configs{}),
+		Operations: crudcrud.Operations(),
+	})
+}
+
+// registerOnce is the internal de-dupe helper for the seed paths.
+func registerOnce(m connector.Module) {
+	for _, existing := range extra {
+		if existing.Meta.Key == m.Meta.Key {
+			return
+		}
+	}
+	extra = append(extra, m)
 }
 
 // All returns every registered connector definition in registration

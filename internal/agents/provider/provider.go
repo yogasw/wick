@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
@@ -136,7 +137,18 @@ func Save(ins Instance) error {
 	if !updated {
 		*list = append(*list, toUserInstance(ins))
 	}
-	return userconfig.Save(AppName, cfg)
+	if err := userconfig.Save(AppName, cfg); err != nil {
+		return err
+	}
+	InvalidateProbeCache(ins.Type, ins.Name)
+	// Persist a fresh probe in the background — user just changed
+	// Binary/ExtraArgs, the previous cached Status is now stale.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = RescanOne(ctx, ins.Type, ins.Name)
+	}()
+	return nil
 }
 
 // Delete removes an instance. Removing the last instance for a type
@@ -153,7 +165,11 @@ func Delete(t Type, name string) error {
 	for i := range *list {
 		if (*list)[i].Name == name {
 			*list = append((*list)[:i], (*list)[i+1:]...)
-			return userconfig.Save(AppName, cfg)
+			if err := userconfig.Save(AppName, cfg); err != nil {
+				return err
+			}
+			InvalidateProbeCache(t, name)
+			return nil
 		}
 	}
 	return nil
@@ -168,8 +184,10 @@ func Delete(t Type, name string) error {
 // ctx bounds the version probe; HTTP handlers should pass a 3s timeout.
 func Probe(ctx context.Context, ins Instance) Status {
 	st := Status{Instance: ins, ResolvedAt: time.Now()}
+	source := ""
 	if ins.Binary != "" {
 		st.Path = ins.Binary
+		source = "registry"
 		if _, err := exec.LookPath(ins.Binary); err == nil {
 			st.PathFound = true
 		}
@@ -178,8 +196,26 @@ func Probe(ctx context.Context, ins Instance) Status {
 		if err == nil {
 			st.Path = path
 			st.PathFound = true
+			source = "path"
+		} else if p, ok := scanKnownLocations(ins.Type); ok {
+			// PATH miss is normal when CLI is installed via npm/curl
+			// installer that drops binary outside PATH (e.g. claude in
+			// ~/.local/bin on Windows). Fall back to per-OS install
+			// locations so users don't need to edit PATH manually.
+			st.Path = p
+			st.PathFound = true
+			source = "scan"
+		} else {
+			source = "miss"
 		}
 	}
+	log.Debug().
+		Str("type", string(ins.Type)).
+		Str("name", ins.Name).
+		Str("path", st.Path).
+		Str("source", source).
+		Bool("found", st.PathFound).
+		Msg("agents.probe: resolve")
 	if !st.PathFound {
 		return st
 	}
@@ -187,12 +223,24 @@ func Probe(ctx context.Context, ins Instance) Status {
 		return st
 	}
 	cmd := exec.CommandContext(ctx, st.Path, "--version")
+	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		st.VersionErr = err.Error()
+		log.Warn().
+			Str("type", string(ins.Type)).
+			Str("name", ins.Name).
+			Str("path", st.Path).
+			Err(err).
+			Msg("agents.probe: --version failed")
 		return st
 	}
 	st.Version = firstLine(strings.TrimSpace(string(out)))
+	log.Debug().
+		Str("type", string(ins.Type)).
+		Str("name", ins.Name).
+		Str("version", st.Version).
+		Msg("agents.probe: ok")
 	return st
 }
 
@@ -215,6 +263,80 @@ func ProbeAll(ctx context.Context) ([]Status, error) {
 	}
 	wg.Wait()
 	return out, nil
+}
+
+// ── Cached probes ─────────────────────────────────────────────────────
+//
+// Why cache: `<bin> --version` on Windows .cmd shims (npm-installed
+// codex/gemini) cold-starts Node and can take 1–3s each. Without a
+// cache, every Providers page reload re-spawns 3 probes serially in
+// the user's perception, blocking render. The Status payload only
+// changes when the user edits a binary or installs a new CLI, so a
+// short TTL (30s) gives instant reloads while still picking up
+// install/edit changes within the next interval.
+//
+// Mutating ops (Save, Delete) call InvalidateProbeCache to drop the
+// stale entry so the next render re-probes immediately.
+
+const probeCacheTTL = 30 * time.Second
+
+type probeCacheEntry struct {
+	status Status
+	at     time.Time
+}
+
+var (
+	probeCacheMu sync.RWMutex
+	probeCache   = map[string]probeCacheEntry{}
+)
+
+func probeCacheKey(t Type, name string) string { return string(t) + "/" + name }
+
+// ProbeAllCached returns Status per configured instance, serving from
+// an in-memory cache when the entry is younger than probeCacheTTL.
+// Stale or missing entries are re-probed in parallel under ctx.
+func ProbeAllCached(ctx context.Context) ([]Status, error) {
+	all, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Status, len(all))
+	var wg sync.WaitGroup
+	now := time.Now()
+	for i := range all {
+		i := i
+		key := probeCacheKey(all[i].Type, all[i].Name)
+		probeCacheMu.RLock()
+		entry, ok := probeCache[key]
+		probeCacheMu.RUnlock()
+		if ok && now.Sub(entry.at) < probeCacheTTL {
+			out[i] = entry.status
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st := Probe(ctx, all[i])
+			probeCacheMu.Lock()
+			probeCache[key] = probeCacheEntry{status: st, at: time.Now()}
+			probeCacheMu.Unlock()
+			out[i] = st
+		}()
+	}
+	wg.Wait()
+	return out, nil
+}
+
+// InvalidateProbeCache drops the cached Status for one instance.
+// Empty type or name drops the whole cache (useful on bulk ops).
+func InvalidateProbeCache(t Type, name string) {
+	probeCacheMu.Lock()
+	defer probeCacheMu.Unlock()
+	if t == "" || name == "" {
+		probeCache = map[string]probeCacheEntry{}
+		return
+	}
+	delete(probeCache, probeCacheKey(t, name))
 }
 
 // ── internal ──────────────────────────────────────────────────────────

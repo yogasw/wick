@@ -9,8 +9,9 @@
 //     a typed Config struct with `wick:"..."` tags.
 //  2. No NewJob(), no Meta() method, no Handler struct — meta is
 //     declared by the caller of app.RegisterJob and carried by wick.
-//  3. Register here inside RegisterBuiltins() (core wick lab) or in
-//     the downstream project's main.go via app.RegisterJob.
+//  3. Register here inside RegisterBuiltins() (default-on for every wick
+//     app) or RegisterLabSamples() (cmd/lab only), or in the downstream
+//     project's main.go via app.RegisterJob.
 //
 // The manager service reads this list at startup, syncs each job with
 // the jobs table, and the cron server uses the DB-stored schedule to
@@ -24,8 +25,8 @@ import (
 )
 
 // extra holds jobs registered by downstream projects via
-// app.RegisterJob. All() returns only these — wick's own built-in
-// jobs are opt-in via RegisterBuiltins (called by cmd/lab only).
+// app.RegisterJob, plus the modules added by RegisterBuiltins /
+// RegisterLabSamples. All() returns this slice verbatim.
 var extra []job.Module
 
 // Register appends a fully-resolved Module to the registry. Called
@@ -45,33 +46,41 @@ func Register(m job.Module) {
 	extra = append(extra, m)
 }
 
-// RegisterBuiltins appends wick's own in-house jobs to the registry.
-// Intended for the wick lab binary (cmd/lab), not downstream projects.
-func RegisterBuiltins() {
-	extra = append(extra,
-		job.Module{
-			Meta: job.Meta{
-				Key:         "sample-post",
-				Name:        "Sample Post",
-				Description: "Fetches a post from JSONPlaceholder API as a demo job.",
-				Icon:        "📝",
-				DefaultCron: "0 * * * *",
-			},
-			Configs: entity.StructToConfigs(samplepost.Config{}),
-			Run:     samplepost.Run,
+// RegisterBuiltins seeds in-house jobs every downstream wick app gets
+// by default. Currently empty — the only built-in job
+// (connector-runs-purge) needs a *gorm.DB handle and is registered
+// inline in server.go / worker.go via connectorrunspurge.Register(db),
+// not via this static seed. Kept as a stable extension point so future
+// no-deps built-in jobs have an obvious home and the call site in
+// server.go / worker.go stays uniform with tools / connectors.
+func RegisterBuiltins() {}
+
+// RegisterLabSamples seeds the demo-only jobs shipped with the cmd/lab
+// binary — currently sample-post and a second instance to demonstrate
+// the per-key config split.
+func RegisterLabSamples() {
+	Register(job.Module{
+		Meta: job.Meta{
+			Key:         "sample-post",
+			Name:        "Sample Post",
+			Description: "Fetches a post from JSONPlaceholder API as a demo job.",
+			Icon:        "📝",
+			DefaultCron: "0 * * * *",
 		},
-		job.Module{
-			Meta: job.Meta{
-				Key:         "sample-post-typicode",
-				Name:        "Sample Post (Typicode Mirror)",
-				Description: "Second instance of sample-post hitting a different base URL — same logic, different config.",
-				Icon:        "🪞",
-				DefaultCron: "*/15 * * * *",
-			},
-			Configs: entity.StructToConfigs(samplepost.Config{}),
-			Run:     samplepost.Run,
+		Configs: entity.StructToConfigs(samplepost.Config{}),
+		Run:     samplepost.Run,
+	})
+	Register(job.Module{
+		Meta: job.Meta{
+			Key:         "sample-post-typicode",
+			Name:        "Sample Post (Typicode Mirror)",
+			Description: "Second instance of sample-post hitting a different base URL — same logic, different config.",
+			Icon:        "🪞",
+			DefaultCron: "*/15 * * * *",
 		},
-	)
+		Configs: entity.StructToConfigs(samplepost.Config{}),
+		Run:     samplepost.Run,
+	})
 }
 
 // All returns every registered background job in registration order.

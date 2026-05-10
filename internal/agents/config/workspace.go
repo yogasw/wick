@@ -8,8 +8,8 @@ package config
 // hosts without us hard-coding a user-specific path into the configs
 // table.
 type WorkspaceConfig struct {
-	BaseDir          string `wick:"desc=Base directory for all agents data (projects, sessions, presets). Default: ~/.wick/agents/."`
-	DefaultWorkspace string `wick:"desc=Name of the workspace used when a session has no explicit workspace. Leave empty to use a per-session temp dir."`
+	BaseDir          string
+	DefaultWorkspace string
 }
 
 // DefaultWorkspaceConfig returns the empty default.

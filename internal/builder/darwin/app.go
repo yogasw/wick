@@ -25,13 +25,20 @@ import (
 //	bin/<app>.app/
 //	├── Contents/
 //	│   ├── Info.plist
-//	│   ├── MacOS/<app>          (the binary, copied)
+//	│   ├── MacOS/<app>          (the main binary, copied)
+//	│   ├── MacOS/<app>-gate     (gate sidecar, when shipped)
 //	│   └── Resources/icon.icns  (rendered from the brand W)
 //
-// Returns the bundle root path. The source binary at binPath is
-// COPIED (not moved) so the raw artifact remains available for the
-// self-updater and for naming-consistent CI uploads.
-func PackageApp(binPath, appName, appVersion, bundleID string) (string, error) {
+// gateBinPath (optional) is the gate sidecar to ship as
+// `Contents/MacOS/<AppName>-gate`. Empty = no sidecar (the main
+// binary still has gate embedded; runtime extracts to the session
+// dir on first hook fire). When non-empty, sibling lookup picks up
+// the bundled gate before any extract.
+//
+// Returns the bundle root path. Source binaries are COPIED (not
+// moved) so the raw artifacts remain available for the self-updater
+// and for naming-consistent CI uploads.
+func PackageApp(binPath, gateBinPath, appName, appVersion, bundleID string) (string, error) {
 	bundleRoot := filepath.Join(filepath.Dir(binPath), appName+".app")
 	contents := filepath.Join(bundleRoot, "Contents")
 	macOS := filepath.Join(contents, "MacOS")
@@ -45,6 +52,13 @@ func PackageApp(binPath, appName, appVersion, bundleID string) (string, error) {
 	dstBin := filepath.Join(macOS, appName)
 	if err := copyFile(binPath, dstBin, 0o755); err != nil {
 		return "", fmt.Errorf("copy binary into bundle: %w", err)
+	}
+
+	if gateBinPath != "" {
+		dstGate := filepath.Join(macOS, appName+"-gate")
+		if err := copyFile(gateBinPath, dstGate, 0o755); err != nil {
+			return "", fmt.Errorf("copy gate binary into bundle: %w", err)
+		}
 	}
 
 	pngBytes := systemtray.BrandIcon(false)

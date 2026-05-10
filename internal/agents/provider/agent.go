@@ -59,6 +59,11 @@ type Agent struct {
 	// exitReasonSet ensures OnExit fires at most once per spawn, even
 	// when both the idle goroutine and the reader-exit path race.
 	exitReasonSet bool
+
+	// activityCh is signalled on every stdout line so the grace-period
+	// watcher can cancel the kill when the subprocess produces output
+	// during the KillAfterIdle window.
+	activityCh chan struct{}
 }
 
 // ExitReason classifies why the subprocess ended. The pool uses this
@@ -76,13 +81,18 @@ const (
 // parser per spawn (parsers carry per-stream state — block index map
 // and so on — so we can't reuse one across processes).
 type Options struct {
-	Workspace    string
-	ResumeID     string
-	IdleTimeout  time.Duration
+	Workspace     string
+	ResumeID      string
+	IdleTimeout   time.Duration
+	// KillAfterIdle is the extra grace period after IdleTimeout fires
+	// before the subprocess is actually killed. 0 = kill immediately.
+	// During the grace period, new output from the subprocess resets
+	// the cycle (grace is cancelled and IdleTimeout restarts).
+	KillAfterIdle time.Duration
 	ParserFactory func() event.Parser
-	Spawner      Spawner
-	Store        *store.Store
-	State        *state.Machine
+	Spawner       Spawner
+	Store         *store.Store
+	State         *state.Machine
 
 	OnEvent func(event.AgentEvent)
 	OnExit  func(reason ExitReason)
@@ -91,14 +101,15 @@ type Options struct {
 // New builds an Agent from Options. Doesn't spawn — call Start.
 func New(opt Options) *Agent {
 	return &Agent{
-		cfg:      opt,
-		state:    opt.State,
-		store:    opt.Store,
-		spawner:  opt.Spawner,
-		onEvent:  opt.OnEvent,
-		onExit:   opt.OnExit,
-		resumeID: opt.ResumeID,
-		done:     make(chan struct{}),
+		cfg:        opt,
+		state:      opt.State,
+		store:      opt.Store,
+		spawner:    opt.Spawner,
+		onEvent:    opt.OnEvent,
+		onExit:     opt.OnExit,
+		resumeID:   opt.ResumeID,
+		done:       make(chan struct{}),
+		activityCh: make(chan struct{}, 1),
 	}
 }
 
@@ -199,6 +210,41 @@ func (a *Agent) ResumeID() string {
 	return a.resumeID
 }
 
+// PID returns the OS pid of the current subprocess, or 0 if not
+// running. Pool reads this after Start so the spawn log captures the
+// real pid (Build runs before Start, so the start event written there
+// can't know the pid yet).
+func (a *Agent) PID() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc == nil {
+		return 0
+	}
+	return a.proc.Pid()
+}
+
+// Binary returns the resolved binary path of the running subprocess.
+// Empty when not running or when the spawner is a test fake.
+func (a *Agent) Binary() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc == nil {
+		return ""
+	}
+	return a.proc.Binary()
+}
+
+// Argv returns the argument vector of the running subprocess. Empty
+// when not running or when the spawner is a test fake.
+func (a *Agent) Argv() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc == nil {
+		return nil
+	}
+	return a.proc.Argv()
+}
+
 // run is the reader goroutine. Reads lines from stdout, parses each,
 // applies to state + store, fires the OnEvent hook, resets the idle
 // timer, and detects subprocess exit. Stops when stdout returns EOF or
@@ -217,21 +263,52 @@ func (a *Agent) run(ctx context.Context) {
 	idle := time.NewTimer(a.cfg.IdleTimeout)
 	defer idle.Stop()
 
-	// idleHit is set when the timer fires while we were reading.
-	// We can't act on it inline — we're blocked on Scan — so the timer
-	// goroutine kills the process and we observe the closed stdout.
+	// Two-stage idle kill:
+	//   Stage 1 — IdleTimeout fires (no stdout for N seconds): if
+	//             KillAfterIdle == 0, kill immediately (legacy behaviour).
+	//             Otherwise enter grace period.
+	//   Stage 2 — KillAfterIdle expires during grace: kill subprocess.
+	//             New stdout arriving during grace resets the cycle.
 	go func() {
-		select {
-		case <-idle.C:
-			a.mu.Lock()
-			proc := a.proc
-			a.mu.Unlock()
-			if proc != nil {
-				_ = proc.Kill()
+		for {
+			select {
+			case <-idle.C:
+				if a.cfg.KillAfterIdle <= 0 {
+					a.mu.Lock()
+					proc := a.proc
+					a.mu.Unlock()
+					if proc != nil {
+						_ = proc.Kill()
+					}
+					a.exitReason(ExitIdle)
+					return
+				}
+				// Grace period: new output cancels the kill.
+				grace := time.NewTimer(a.cfg.KillAfterIdle)
+				select {
+				case <-grace.C:
+					a.mu.Lock()
+					proc := a.proc
+					a.mu.Unlock()
+					if proc != nil {
+						_ = proc.Kill()
+					}
+					a.exitReason(ExitIdle)
+					grace.Stop()
+					return
+				case <-a.activityCh:
+					// Activity during grace — idle timer already reset
+					// by the scanner loop; restart the outer select.
+					grace.Stop()
+				case <-ctx.Done():
+					grace.Stop()
+					return
+				}
+			case <-a.activityCh:
+				// Drain stale wakeup that arrived before idle.C fired.
+			case <-ctx.Done():
+				return
 			}
-			a.exitReason(ExitIdle)
-		case <-ctx.Done():
-			return
 		}
 	}()
 
@@ -246,6 +323,11 @@ func (a *Agent) run(ctx context.Context) {
 			}
 		}
 		idle.Reset(a.cfg.IdleTimeout)
+		// Signal activity so any active grace period is cancelled.
+		select {
+		case a.activityCh <- struct{}{}:
+		default:
+		}
 
 		ev, err := a.parser.Parse(line)
 		if err != nil {

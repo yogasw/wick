@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/rs/zerolog/log"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -34,12 +35,14 @@ import (
 // and the resume flag when a CLI session ID is available.
 //
 // Binary defaults to `claude` (PATH lookup); operators can override
-// via the Binary field for non-standard installs. SettingsPath is the
-// `--settings <path>` value injected by phase 3 gate; empty = no
-// override.
+// via the Binary field for non-standard installs.
 type Spawner struct {
-	Binary       string // empty → "claude"
-	SettingsPath string // empty → no --settings flag
+	Binary string // empty → "claude"
+	// BypassPermissions forces --permission-mode bypassPermissions.
+	// Set when a gate is active (hook in workspace settings.local.json
+	// is the sole allow/block authority) or for non-interactive channels
+	// (Slack/HTTP) where operator wants to skip Claude's built-in prompts.
+	BypassPermissions bool
 	// ExtraArgs is appended after the canonical headless flags, before
 	// any caller-supplied ResumeID. Useful for tests / debugging
 	// (--debug, --verbose-extra, ...).
@@ -53,7 +56,7 @@ type Spawner struct {
 //	claude -p --verbose
 //	       --input-format stream-json
 //	       --output-format stream-json
-//	       [--settings <path>]
+//	       [--permission-mode bypassPermissions]
 //	       [--resume <id>]
 //
 // `-p` plus `stream-json` keeps the process alive in a long-lived
@@ -82,15 +85,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if opt.Workspace != "" {
 		args = append(args, "--add-dir", opt.Workspace)
 	}
-	if s.SettingsPath != "" {
-		args = append(args, "--settings", s.SettingsPath)
-		// When wick injects a settings file with a PreToolUse hook
-		// it's because we want our own gate to be the source of
-		// truth — but claude's default permission mode prompts the
-		// user before every Bash call, which blocks the hook from
-		// even firing in non-interactive sessions. bypassPermissions
-		// disables those prompts so our hook is the authoritative
-		// allow/block decision.
+	if s.BypassPermissions {
+		// Gate is active (hook written to workspace .claude/settings.local.json)
+		// or operator requested bypass for non-interactive channel. Skip
+		// Claude's own permission UI; the gate PreToolUse hook is the
+		// sole allow/block authority.
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)
@@ -101,6 +100,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
+	hideConsole(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -133,10 +133,24 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		cmd.Stderr = os.Stderr
 	}
 
+	log.Info().
+		Str("bin", bin).
+		Strs("argv", args).
+		Str("cwd", opt.Workspace).
+		Str("resume", opt.ResumeID).
+		Msg("agents.spawn: starting")
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		log.Error().
+			Err(err).
+			Str("bin", bin).
+			Msg("agents.spawn: start failed (set provider.Binary in /tools/agents/providers if claude not on PATH)")
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
+	log.Info().
+		Int("pid", cmd.Process.Pid).
+		Str("bin", bin).
+		Msg("agents.spawn: started")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
 }
 
@@ -175,6 +189,26 @@ type process struct {
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
 func (p *process) Wait() error           { return p.cmd.Wait() }
+func (p *process) Pid() int {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+func (p *process) Binary() string {
+	if p.cmd == nil {
+		return ""
+	}
+	return p.cmd.Path
+}
+func (p *process) Argv() []string {
+	if p.cmd == nil || len(p.cmd.Args) <= 1 {
+		return nil
+	}
+	out := make([]string, len(p.cmd.Args)-1)
+	copy(out, p.cmd.Args[1:])
+	return out
+}
 
 func (p *process) Kill() error {
 	if p.cmd.Process == nil {

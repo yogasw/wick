@@ -36,6 +36,7 @@ tmp/
 __debug_bin*
 .db
 /lab
+/wick-gate
 
 # VitePress
 docs/node_modules/

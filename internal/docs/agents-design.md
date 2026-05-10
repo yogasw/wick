@@ -1,7 +1,7 @@
 # Agents — Desain
 
 Status: draft.
-Update terakhir: 2026-05-09.
+Update terakhir: 2026-05-10.
 
 > **⚠️ Refactor in flight: Project → Workspace** + **Backend → Provider**.
 >
@@ -9,6 +9,49 @@ Update terakhir: 2026-05-09.
 > 2. "Backend" (= AI CLI kind) → "Provider" sepanjang stack: `session.AgentEntry.Provider`, `workspace.Meta.DefaultProvider`, `userconfig.ProvidersConfig`, `pool.FactoryOptions.ProviderType/Name`, dll. Pkg `internal/agents/agent/` digabung jadi `internal/agents/provider/`. Lihat Phase 4.6 di **§1**.
 >
 > Section §3-§6 di bawah masih mencerminkan model lama sampai refactor selesai.
+
+> **🛠 Stage 9 follow-up done (2026-05-10) — Command Gate refactor.** Banyak teks
+> di bawah masih sebut nama-nama lama. Perubahan ringkas:
+>
+> - Source rename: `cmd/wick-gate/` → `cmd/gate/`. Binary user-visible
+>   `<app>-gate[.exe]` (filename mirrors brand for UX, but resolution is
+>   not filename-driven anymore — see next bullet). Embed asset internal
+>   tetap generic (`gate-<os>-<arch>`).
+> - **AppName single source of truth** — `internal/appname.Resolve()`
+>   adalah satu-satunya derivation chain dipakai parent + Layout + gate +
+>   DB. Chain: `BuildAppName` ldflag → `wick.yml` name → "wick".
+>   `APP_NAME` env **bukan** di chain ini — dia label display (boleh
+>   spasi/kapital) untuk UI/login/title, sementara `appname.Resolve()`
+>   keluarin slug path-safe. `wick build` inject ldflag ke
+>   `internal/appname.BuildAppName`; `app.BuildAppName` jadi mirror di
+>   `app.init()`. Gate child proc walk `wick.yml` dari cwd untuk dapat
+>   brand yg sama tanpa ldflag. Hasilnya: DB di `~/.<app>/wick.db`,
+>   agents di `~/.<app>/agents/`, gate spec/socket/log di
+>   `~/.<app>/agents/gate/...` — semua satu pohon.
+> - Env vars: `WICK_GATE_SPEC` / `GATE_SPEC` / `WICK_GATE_BIN` / `GATE_BIN`
+>   tidak ada (Stage 9).
+> - **Daily tail log** — gate emit `~/.<app>/logs/gate-YYYY-MM-DD.log`
+>   tiap invocation + stage transition (mirror format
+>   `app-/server-/worker-` log). Audit jsonl
+>   (`~/.<app>/agents/gate/commands.jsonl`) tetap source of truth utk
+>   UI; tail log untuk operator yg mau `tail -f` saat debug "gate fired
+>   gak ya".
+> - Spec + socket + audit log jadi **shared per-app** di
+>   `~/.<app>/agents/gate/{spec.json, gate.sock, commands.jsonl}` (bukan per-session
+>   `~/.<app>/agents/sessions/<id>/gate/...` lagi).
+> - Daemon route approval ke session via cwd dari hook payload (longest workspace-path
+>   prefix wins).
+> - Installer bundle gate sidecar: MSI ship `<App>-gate.exe`, .deb ship
+>   `/usr/bin/<app>-gate`, .app bundle ship `Contents/MacOS/<App>-gate`.
+>   Sibling-of-executable jadi resolution path utama; embed extract jadi backup.
+> - Builder absorb gate compile dari CI (`internal/builder/gate.go`); template
+>   release.yml drop step "Build wick-gate".
+> - `pool.GateConfig` ramping: `GateBinary` + `TempDirRoot` saja
+>   (Rules/AutoApproved/SocketDir/SocketDirFor/AutoApprovedFor — semua dropped).
+> - `gate.Spec` ramping: `Rules` + `AutoApproved` saja (SessionID/AgentName/Layout/
+>   SocketPath — semua dropped). `gateAwareSpawner` + `extraEnv` dead code dihapus.
+>
+> Detail lengkap + decision log di [command-gate-architecture.md](./command-gate-architecture.md).
 
 ---
 
@@ -25,7 +68,7 @@ Update terakhir: 2026-05-09.
 | **Session** | 1 thread Slack atau 1 conversation UI. Punya worktree + log sendiri | `~/.wick/agents/sessions/<id>/` |
 | **Agent** | Instance dalam session, dibikin dari preset. 1 session bisa banyak agent, 1 aktif | entry di `sessions/<id>/agents.json` |
 | **Agent Pool** | Manage berapa subprocess jalan bersamaan (default 2), idle TTL kill | in-memory |
-| **Command Gate** | Whitelist shell commands via CLI hooks (`wick-gate` binary check exit code) | `~/.wick/agents/sessions/<id>/commands.jsonl` |
+| **Command Gate** | Whitelist shell commands via CLI hooks (`<app>-gate` sidecar binary check exit code) | `~/.<app>/agents/gate/commands.jsonl` (shared per-app post Stage 9) |
 | **Transport** | Sumber pesan: Slack (thread), UI (langsung), API (future) | abstraksi di `internal/agents/transport.go` |
 
 **Storage decision**: semua state agents di **filesystem** (`~/.wick/agents/`), bukan DB. Backup = `tar czf`. Restart = scan folder, idempotent.
@@ -139,7 +182,7 @@ Update checkbox saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
 | **R1 — Backend rename + worktree rip** | `[x]` | New `workspace/` pkg (pure folder, no git), `layout.go` swapped (`WorkspacesDir`/`WorkspaceDir`/`WorkspaceManagedPath`, no `SessionWorkspace`), `session.Meta.Project` → `Meta.Workspace`, `addWorktree`/`removeWorktree`/`worktreeBranch` deleted, `internal/agents/project/` package deleted. Pool gained `resolveCwd` + `DefaultWorkspace` field; fallback chain = session.Workspace → cfg.DefaultWorkspace → `sessions/<id>/cwd/`. Closes original spawn bug (chdir on missing dir). |
 | **R2 — Registry/Manager rename** | `[x]` | Registry: `projects` map → `workspaces`, `Project()/Projects()/ProjectNames()` → `Workspace*`. Manager: `CreateProject/DeleteProject/SwitchProject` → `CreateWorkspace/DeleteWorkspace/SwitchWorkspace`. `removeSessionWorktree` helper deleted. |
 | **R3 — HTTP/UI** | `[x]` | `/workspaces` endpoint cluster (GET/POST/DELETE), `view/projects.templ` → `workspaces.templ` (Repo URL → Custom Path), nav tab "Projects" → "Workspaces", `data-delete-project` → `data-delete-workspace`. Templ regenerated. Browser smoke test pending. |
-| **R4 — Tools config: default_workspace** | `[ ]` | Pool sudah punya `DefaultWorkspace` field (R1); belum di-wire ke tools-config struct. Add field with `wick:"..."` tag + bootstrap inject. |
+| **R4 — Tools config: default_workspace** | `[x]` | `slack_workspace` config key di-wire ke `configsSvc.GetOwned("agents", "slack_workspace")`. Workspace auto-select saat hanya 1 workspace: config-page decorator save otomatis + `sendFn` fallback saat message-send time (tanpa perlu buka page). Selesai di PR #209. |
 | **R5 — Doc rewrite §0/§3/§4/§5/§6** | `[ ]` | Setelah code stable. Rewrite mencerminkan model baru, hapus §0.2 ini (atau pindah ke changelog) saat semua section main udah konsisten. |
 
 **R1-R3 verification (2026-05-09):** `go test ./internal/agents/... ./internal/tools/agents/...` = 82 tests passed across 22 packages. `go build` clean for all wick packages (template/ skipped, unrelated).
@@ -164,12 +207,13 @@ Update tabel ini saat phase selesai. Format `[ ] / [x] / [~] in-progress`.
 |---|---|---|
 | Phase 1 — Foundation | `[x]` | `internal/agents/` storage + config + preset + project + session + registry + manager. 28 unit tests hijau. |
 | Phase 2 — Subprocess + Pool | `[x]` | claude only. event/state/store/agent/pool subpackages + integration test via fake spawner. Real-claude smoke test landed in commit `928867f` (env-gated `WICK_CLAUDE_E2E=1`) — verified long-lived multi-turn against claude 2.1.132. Pool exit-order hardening in commit `73dddfc`: `onAgentExit` now runs `markStatus(idle)` **before** `releaseSlot`, Pool gains `sync.WaitGroup` to drain trailing exit + queue goroutines, `spawn`/`tryGrantQueue` short-circuit on `closed`. Killed flaky `TestPipeline_ResumeAfterIdleKill` + `TestQueueWhenPoolFull` on Windows (concurrent `os.Rename` to `meta.json`). 68 tests across 19 pkgs (incl. agent/claude, transport split). |
-| Phase 3 — Command Gate | `[x]` | claude PreToolUse hook + `wick-gate` binary + glob matcher + shell-metachar guard + scope prefix. Integration test builds the binary and invokes it as a subprocess with real stdin/env (no mocks). 91 tests / 21 pkgs total. Real-claude pool e2e green after the phase-2 pool fix; verified against claude 2.1.132 on Windows. |
+| Phase 3 — Command Gate | `[x]` | claude PreToolUse hook + gate sidecar binary (`<app>-gate`, source `cmd/gate/`) + glob matcher + shell-metachar guard + scope prefix. Integration test builds the binary and invokes it as a subprocess with real stdin (no mocks). 91 tests / 21 pkgs total. Real-claude pool e2e green after the phase-2 pool fix; verified against claude 2.1.132 on Windows. **2026-05-10 (Stage 9 follow-up):** env vars dihapus, single shared spec/socket/audit-log, installer ships sidecar — lihat banner di top doc + [command-gate-architecture.md](./command-gate-architecture.md). |
 | Phase 4 — UI Manager Tool (MVP) | `[x]` | `internal/tools/agents/` — handler + service + stream (Broadcaster) + view/ subpackage (layout/overview/sessions/projects/presets) + js/agents.js. SSE via GET /stream, send via POST /sessions/{id}/send, kill/delete actions. `tags.AI` group tag added. Agents link in nav UserMenu + profile layout tab. Pool.Kill() added. Bootstrap wired in server.go with graceful shutdown. 86 tests green. |
 | Phase 4.5 — Refactor: Project → Workspace | `[~]` | Konsep Project (1 repo auto-clone, session = git worktree) diganti Workspace (folder shared, session pinjam pakai cwd, no worktree, no auto-clone). Detail decisions + impact map + phase tracker R0–R5 di **§0.2**. Trigger: bug spawn `chdir sessions/<id>/workspace: file not found` + use case shared folder berisi banyak repo. R0–R3 selesai 2026-05-09 (82 tests hijau). R4 (default_workspace tools-config) + R5 (doc rewrite §0/§3/§4/§5/§6) tersisa. |
 | Phase 4.6 — Providers Registry & Diagnostics | `[~]` | Rename "backend" → "provider" sepanjang stack (session/workspace/userconfig/pool/UI). Pkg `internal/agents/agent/` dimerge ke `internal/agents/provider/` jadi 1 paket per-CLI: Agent driver + Spawner + Type/Instance config (multi-instance per type, mis. `claude/work` + `claude/personal` beda PAT) + SpawnLogger. Boot wires `provider.NewSpawnLogger(layout.BaseDir)` ke `pool.ClaudeFactory.SpawnLogger`; tiap spawn dump 1 jsonl ke `<base>/providers/spawns/<type>__<name>__<session>__<unix-ms>.jsonl` (start + exit events). UI: nav baru `/tools/agents/providers` (status card per instance dgn LookPath + `--version`, edit binary path / extra args / env, add custom instance), spawn detail page; Overview tampil Active/Max + Running/Queue snapshot. **Selesai 2026-05-09**: 82 tests hijau across 22 pkg, `go build` clean. **Sisa**: real-claude smoke test, doc rewrite §4/§6/§9 mencerminkan pkg baru. |
-| Phase 5 — Slack Transport | `[ ]` | — |
+| Phase 5 — Slack Transport | `[x]` | Socket Mode + HTTP Event API, per-thread session binding, reaction lifecycle (⏳⚙️✅🚫❌), chunked reply (3800-char limit), rate-limit backoff, meta-commands (`/dashboard /reset /status /log /agent`), access control (everyone/users/groups), hot-reload watchSlackConfig (30s poll). Pkg `internal/agents/channels/`. Selesai di PR #209. |
 | Phase 6 — Polish | `[ ]` | — |
+| Phase 7 — Mid-session Gate Approval + AskUser | `[~]` | Stages 1–8 code-complete (166 unit tests hijau across 25 packages relevan). Whitelist-only gate diupgrade ke interactive approval via Unix socket (gate ↔ daemon) + web UI modal 4-mode (`approve_once`/`approve_session`/`approve_always`/`block`) + Approved-commands panel dgn Revoke. AskUser MCP tool wired (agent panggil → SSE → web card → POST /answer). Stage 8 follow-ups: multi-stage audit logging di commands.jsonl (received/socket_dial/socket_sent/socket_recv/terminal, semua di-tie via RequestID), Gate status card di Providers page, GateDisabledBanner di session detail, sibling-of-executable resolution. Sisa: real-claude smoke test (S5.8 + S6.6). Source: [command-gate-architecture.md](./command-gate-architecture.md). |
 
 ### Dependency graph
 
@@ -183,6 +227,8 @@ Phase 3 (gate)   Phase 4 (UI) ← entry point user dimulai sini
                 Phase 5 (slack)
                   ↓
                 Phase 6 (multi-CLI + polish)
+                  ↓
+                Phase 7 (mid-session approval + AskUser)
 ```
 
 Phase 3 dan 4 bisa parallel kalau ada 2 dev.
@@ -221,12 +267,12 @@ Tujuan: bisa spawn claude subprocess, kirim input, capture output, idle TTL kill
 
 Tujuan: shell command yang tidak whitelisted di-block oleh CLI hook.
 
-- [x] **3.1** `wick-gate` binary: stdin parser, glob whitelist match, exit code → `cmd/wick-gate/main.go`
+- [x] **3.1** Gate sidecar binary: stdin parser, glob whitelist match, exit code → `cmd/gate/main.go` (was `cmd/wick-gate/`, renamed Stage 9)
 - [x] **3.2** Hook config generator (Claude `settings.json` via `--settings <path>`) → `internal/agents/gate/claude_hook.go`
-- [x] **3.3** Inject hook config + WICK_GATE_SPEC env via `pool.GateConfig` + `gateAwareSpawner` wrapper → `internal/agents/pool/factory.go`
-- [x] **3.4** Append ke `commands.jsonl` saat hook keputusan allow/block → `internal/agents/gate/log.go` (used by both wick-gate binary + tests)
-- [x] **3.5** Fail-safe: stdin read timeout (3s) → block → `cmd/wick-gate/main.go`
-- [x] **3.6** Tests: matcher table-driven (allow/block/scope/metachar), wick-gate binary subprocess integration (allow / block-unlisted / metachar-on-allowed / malformed-stdin / missing-spec-env / hanging-stdin-timeout) → `internal/agents/gate/{rule,log,claude_hook,integration}_test.go` + `cmd/wick-gate/main_test.go`. Real-claude pool e2e (`TestRealClaudeMultiTurn`, env-gated `WICK_CLAUDE_E2E=1`) green once the phase-2 pool exit-order race was fixed (see Phase 2 row + §5.1 step 12).
+- [x] **3.3** Inject hook config + per-spawn settings.json via `pool.GateConfig` → `internal/agents/pool/factory.go` (Stage 9 dropped env-var inject + `gateAwareSpawner`; gate derives all paths from compile-time AppName)
+- [x] **3.4** Append ke `commands.jsonl` saat hook keputusan allow/block → `internal/agents/gate/log.go` (used by both gate binary + tests; Stage 9 moved log to shared `~/.<app>/agents/gate/commands.jsonl`)
+- [x] **3.5** Fail-safe: stdin read timeout (3s) → block → `cmd/gate/main.go`
+- [x] **3.6** Tests: matcher table-driven (allow/block/scope/metachar), gate binary subprocess integration (allow / block-unlisted / metachar-on-allowed / malformed-stdin / missing-shared-spec / hanging-stdin-timeout) → `internal/agents/gate/{rule,log,claude_hook,integration}_test.go` + `cmd/gate/main_test.go`. Real-claude pool e2e (`TestRealClaudeMultiTurn`, env-gated `WICK_CLAUDE_E2E=1`) green once the phase-2 pool exit-order race was fixed (see Phase 2 row + §5.1 step 12).
 
 **Exit criteria**: claude exec command yang tidak whitelisted → di-block, command_log entry ada.
 
@@ -277,18 +323,114 @@ Tujuan: user bisa lihat path + versi tiap AI CLI provider (claude/codex/gemini),
 
 **Exit criteria**: user bisa Open `/tools/agents/providers`, lihat 3 default cards (claude/codex/gemini), edit binary override + version probe pass, add `claude/work` instance dgn `ANTHROPIC_API_KEY=...` di env, create session pilih instance, spawn jalan + spawn-log file ke-create. Idle/active state yang ke-display di Overview bukan lagi "idle terus tanpa info" — Active/Max + queue waiting time keliat realtime tiap reload.
 
+#### Binary Resolution Chain (Probe + Spawn)
+
+Both `provider.Probe` (UI cards) dan `pool.resolveProviderBinary` (spawn site) pakai chain sama, urutan deterministic — first hit wins:
+
+1. **registry** — `Instance.Binary` set via UI form (`/tools/agents/providers` Edit). Absolute path, ngga di-resolve via PATH lagi.
+2. **path** — `exec.LookPath(<type>)` baca `%PATH%` + `PATHEXT` (Windows). Hit kalau CLI installer udah extend PATH.
+3. **scan** — `scanKnownLocations(<type>)` cek install paths standar yang installer drop tapi sering ngga di PATH (mis. `~/.local/bin/claude.exe` di Windows, `~/.npm-global/bin/codex` di Unix). Per-OS list di `internal/agents/provider/scan_{windows,unix}.go`.
+4. **miss/unconfigured** — semua gagal. Probe set `PathFound=false`; spawn fallback ke bare type name (`exec.Command("claude")`) yang akan error pas `Start()`.
+
+Why scan exists: tray-launched wick inherit PATH dari Explorer/login session, bukan dari user shell. Installer-modified PATH (mis. npm `prefix` / claude installer) often visible di terminal tapi invisible ke tray. Scan close that gap tanpa minta user edit binary path manual.
+
+#### Hide Console Windows (Windows tray spawn)
+
+Windows console subsystem child (claude.exe, codex.exe, npm shims) yg di-spawn dari parent **tanpa attached console** (tray app `-H windowsgui`) bikin Windows alokasi console window baru → flash + auto-close. Solusi: `SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}` (CREATE_NO_WINDOW).
+
+Pattern di-apply 2 tempat:
+- `internal/agents/provider/hide_console_{windows,other}.go` — Probe `--version` exec
+- `internal/agents/provider/claude/hide_console_{windows,other}.go` — long-lived spawn
+
+Same pattern existing di `internal/systemtray/{editor,notify}_windows.go`. Dev mode (`go run` dari shell) parent punya console → child inherit → no flash; CREATE_NO_WINDOW aman dipake universal.
+
+#### Spawn/Probe Log Keys
+
+Prefix konsisten supaya `grep agents.` di server log nge-trace lifecycle satu spawn end-to-end:
+
+| Key | Site | Fields |
+|---|---|---|
+| `agents.probe: resolve` | `provider.Probe` (debug) | `type, name, path, source (registry\|path\|scan\|miss), found` |
+| `agents.probe: ok` | `provider.Probe` (debug) | `type, name, version` |
+| `agents.probe: --version failed` | `provider.Probe` (warn) | `type, name, path, err` |
+| `agents.spawn: resolve provider` | `pool.Build` (info) | `session, provider_type, provider_name, binary, source` |
+| `agents.spawn: starting` | `claude.Spawn` (info) | `bin, argv, cwd, resume` |
+| `agents.spawn: started` | `claude.Spawn` (info) | `pid, bin` |
+| `agents.spawn: start failed` | `claude.Spawn` (error) | `bin, err` + hint untuk set `provider.Binary` |
+
+Output di `<base>/logs/server-YYYY-MM-DD.log` (bukan app-log, karena emit via global `zerolog/log` yg di-init di server boot, bukan tray).
+
+#### Status Cache (userconfig-persisted)
+
+Why: cold `--version` spawn pada Node-shim CLI (codex/gemini `.cmd`) bisa 1-3 detik karena Node start. 3 provider sequential blocking bikin Providers page hang setelah lab/MSI baru install. Cache TTL in-memory 30s sebelumnya cuma masking — restart wick = penalti dibayar lagi.
+
+Solusi: persist `Status` ke userconfig file (`~/.<app>/config.json`, field `provider_statuses` — `map[string]ProviderStatus` keyed `<type>/<name>`). File: `internal/agents/provider/status_cache.go` + struct di `internal/userconfig/config.go`.
+
+**Why userconfig instead of configs table**: status keys dynamic per-instance (`<type>/<name>`) sementara `configs.Service.SetOwned` strict — semua key harus pre-registered di `meta` map via `entity.StructToConfigs`. Userconfig dumb key-value, ngga butuh registrasi.
+
+**Lifecycle**:
+
+| Trigger | Action |
+|---|---|
+| Server boot | Background `RescanAll` (30s ctx timeout) — prime cache sekali |
+| `/tools/agents/providers` GET | `LoadCached` baca cache. **Miss → render empty card + trigger background `RescanOne`**, JANGAN block render dgn live Probe |
+| `Save`/`Delete` provider instance | Background `RescanOne` (10s ctx) — cache refresh sebelum next reload |
+| Tombol "Rescan all" header | `RescanAll` sync (30s ctx) → 303 redirect |
+| Tombol per-card "Rescan" | `RescanOne` sync (15s ctx) → 303 redirect |
+| Auto-rescan ON + entry stale >24h | Page render trigger background `RescanOne` (10s ctx); current render tetap pake cache lama |
+| Auto-rescan OFF | Tidak ada background refresh; user harus klik manual |
+
+**Critical invariant**: `LoadCached` (page render path) **ngga pernah** spawn `--version`. Cache miss = empty card now, fill in background. Sebelum invariant ini ditegakkan, page hang 3-9s saat boot prime + page render race pada `cacheMu` mutex + `userconfig.Save` file write.
+
+**Concurrent rescan dedupe**: `rescanInflight sync.Map` collapse multiple background triggers untuk instance yg sama (page reload selama rescan jalan ngga queue rescan kedua).
+
+**Toggle**: `agents.auto_rescan` registered di `GeneralConfig` struct (wick tag `checkbox`, default `true`). UI button "Auto-rescan: on/off" di header Providers page. `VersionRefreshInterval = 24 * time.Hour`.
+
+**Boot wiring**: `provider.SetAutoRescanLookup(func() bool { return configsSvc.GetOwned("agents", "auto_rescan") != "false" })` — closure pattern instead of injecting `configs.Service` keep provider package zero-dep dari HTTP/config stack.
+
+**Routes**:
+- `POST /tools/agents/providers/rescan` → `RescanAll`
+- `POST /tools/agents/providers/rescan/{type}/{name}` → `RescanOne`
+- `POST /tools/agents/providers/auto-rescan/toggle` → flip `agents.auto_rescan`
+
+#### Scan Known Locations
+
+`scanKnownLocations(Type) (path, ok)` di `scan_{windows,unix}.go` cek install path standar saat `exec.LookPath` miss. Tray-launched wick inherit PATH minimal dari Explorer/login session, jadi installer-modified PATH (npm prefix, claude installer) often invisible — scan close gap.
+
+**Windows** (`scan_windows.go`): npm root list (`%APPDATA%\npm`, `C:\nvm4w\nodejs`, nvm-windows, fnm, volta, `Program Files\nodejs`) cross-product dgn `.cmd`/`.exe`. Plus per-type installer paths (claude: `~/.local/bin`, `LOCALAPPDATA\Programs\claude`, `Program Files\Claude`).
+
+**macOS/Linux** (`scan_unix.go`): per-user bin (`~/.local/bin`, `~/.npm-global/bin`, pnpm/yarn/volta/asdf/bun) + glob versioned dirs (nvm `~/.nvm/versions/node/*/bin`, fnm Linux `~/.local/share/fnm/...`, fnm macOS `~/Library/Application Support/fnm/...`) + system bin (homebrew Apple Silicon + Intel, MacPorts, distro `/usr/bin`).
+
+First hit wins. Order: per-user bin → versioned managers → system bin. Dipake oleh `Probe` (UI cards) + `pool.resolveProviderBinary` (spawn site) lewat helper sama.
+
 ### Phase 5 — Slack Transport
 
 Tujuan: trigger agent dari Slack thread. Reaction lifecycle + final message + meta-command.
 
-- [ ] **5.1** Slack Socket Mode listener (default), HTTP Event API (alternatif) → `internal/agents/slack.go`
-- [ ] **5.2** Access control matcher (everyone/users/groups) → `internal/agents/slack.go`
-- [ ] **5.3** Reaction lifecycle: ⏳→⚙️→✅/🚫/❌ → `internal/agents/slack.go`
-- [ ] **5.4** Final response message + chunking >4000 char → `internal/agents/slack.go`
-- [ ] **5.5** Meta-command parser: ganti agent / pakai project / reset / status / dashboard / link / log → `internal/agents/metacmd.go`
-- [ ] **5.6** `dashboard` command: build URL dari `PublicURL` + thread_ts → `internal/agents/metacmd.go`
-- [ ] **5.7** Slack rate limit handling (exponential backoff) → `internal/agents/slack.go`
-- [ ] **5.8** Manual test: kirim pesan di Slack → reaction berubah, final reply muncul → manual
+**Decisions (PR #209, 2026-05-09)**:
+
+| # | Putusan | Alasan |
+|---|---|---|
+| S1 | Pkg baru `internal/agents/channels/` (bukan `internal/agents/slack.go` seperti rencana semula) | Supaya extensible untuk channel lain (HTTP webhook, Teams, dll) tanpa campur aduk di 1 file. `channel.go` define interface `Channel`, `slack.go` implement. |
+| S2 | Socket Mode sebagai mode default, HTTP Event API sebagai alternatif (`mode=socket\|webhook`) | Socket Mode lebih mudah setup (no public URL), HTTP Event API buat environment yang sudah punya public URL. |
+| S3 | Per-thread session binding via `thread_ts` sebagai session key | 1 Slack thread = 1 session, konsisten dengan design awal. New thread_ts = new session auto-created. |
+| S4 | Chunked reply 3800-char limit (bukan 4000) | Buffer safety dari hard limit Slack 4000. Tiap chunk di-post sebagai reply di thread. |
+| S5 | Hot-reload `watchSlackConfig` 30s poll, hash cover `AccessMode/AllowedUsers/AllowedGroups` | Config change (access control / token rotation) tanpa restart server. Hash trigger reload hanya saat ada diff. |
+| S6 | Workspace auto-select: jika hanya 1 workspace, langsung pakai tanpa user pilih | UX: user tidak perlu set `slack_workspace` config kalau hanya punya 1 workspace. |
+| S7 | `pool.PoolConfig.OnSessionCreated` hook untuk register session ke manager saat channel auto-create | Dashboard langsung lihat session baru dari Slack tanpa reload. |
+
+- [x] **5.1** Slack Socket Mode listener (default) + HTTP Event API (alternatif, `mode=webhook`) → `internal/agents/channels/slack.go`
+- [x] **5.2** Access control matcher (everyone/users/groups), check per-message → `internal/agents/channels/slack.go` (`allowedCfg`)
+- [x] **5.3** Reaction lifecycle: ⏳ (queued) → ⚙️ (working) → ✅ (done) / 🚫 (blocked) / ❌ (error) → `internal/agents/channels/slack.go`
+- [x] **5.4** Final response message + chunking 3800-char limit → `internal/agents/channels/slack.go` (`postReply`, `chunkText`)
+- [x] **5.5** Meta-command parser: `/agent`, `/reset`, `/status`, `/log`, `/dashboard` → `internal/agents/channels/metacmd.go`
+- [x] **5.6** `/dashboard` command: build URL dari `PublicURL` config + thread_ts → `internal/agents/channels/metacmd.go`
+- [x] **5.7** Slack rate limit handling (exponential backoff pada `sendMsg`) → `internal/agents/channels/slack.go`
+- [x] **5.8** Hot-reload: `watchSlackConfig` goroutine 30s poll, hash diff trigger restart listener → `internal/agents/channels/slack.go`
+- [x] **5.9** `pool.PoolConfig.OnSessionCreated` callback + wire ke `agentsMgr.Register` di `server.go` — session auto-created oleh Slack channel langsung muncul di dashboard
+- [ ] **5.10** Manual test: kirim pesan di Slack → reaction berubah, final reply muncul → manual
+
+**Selesai (PR #209, 2026-05-09)**: 5.1–5.9 done. Code quality: dead `allowed()` wrapper removed (callers pakai `allowedCfg` langsung), double-lock di `OnAgentEvent` dimerge jadi single lock per case, `configDecorators` map init di `NewHandler`, guard dropdown `Options` loop di `configs.templ`.
 
 **Exit criteria**: full Slack flow works.
 
@@ -305,6 +447,59 @@ Tujuan: trigger agent dari Slack thread. Reaction lifecycle + final message + me
 - [ ] **6.9** Documentation user-facing (how-to: setup Slack, buat project, dll) → `docs/guide/agents.md`
 
 **Exit criteria**: 3 backend bekerja, retention jalan, doc user lengkap.
+
+### Phase 7 — Mid-session Gate Approval + AskUser
+
+> **Source of truth**: [command-gate-architecture.md](./command-gate-architecture.md). Doc itu detail-kan Unix socket protocol, IPC trade-off, embed strategy, VSCode debug flow. Sini cuma high-level + checklist mirror.
+
+Tujuan: phase 3 gate cuma whitelist binary (allow/block based on glob). Phase 7 tambah **interactive approval mid-turn** — kalau command tidak whitelisted, gate connect ke daemon via Unix socket, daemon broadcast SSE → web UI render modal dgn 4 mode. Plus `ask_user` MCP tool buat pertanyaan dari agent.
+
+**Decisions** (dipinjam dari command-gate-architecture.md §11):
+
+| # | Putusan | Alasan |
+|---|---|---|
+| G1 | Unix domain socket bukan HTTP/named pipe/file polling | Zero network exposure, performa terbaik (~0.1ms), implementasi 1-line ganti dari HTTP, akses dikontrol filesystem (chmod 0600 di session dir) |
+| G2 | Embed gate binary ke main via `//go:embed`, extract ke session dir saat start | User download 1 file, version selalu sync. Trade-off ~2-5MB per platform di main binary acceptable. **Stage 9 update:** installer (.msi/.deb/.app) sekarang juga ship sidecar `<app>-gate` di samping main exe; sibling-of-executable jadi resolution path utama, embed extract jadi backup untuk portable .exe / source build. |
+| G3 | 4 decision modes (`approve_once`/`approve_session`/`approve_always`/`block`) bukan 2 (approve/block) | "Setiap kali" bikin user fatigue; "always" perlu untuk command yg trusted. Session-level cocok untuk one-off task tanpa polusi global config |
+| G4 | `approve_always` persist di `gate/spec.json` field `auto_approved` — gate binary cek langsung tanpa round-trip ke daemon | Zero-latency hot-path; user yg klik "Always" experience-nya identik dgn whitelist asli |
+| G5 | `approve_session` in-memory map di daemon, hilang saat restart | Session-level scope, no persistence overhead, restart = clean slate (intentional) |
+| G6 | Timeout 25 detik di daemon (< 30s hook timeout claude) | Pastikan gate sempat exit bersih sebelum claude timeout dgn pesan ambigu |
+| G7 | Fail-safe block kalau daemon tidak respond / socket missing | Default deny lebih aman daripada default allow saat infra failure |
+| G8 | `ask_user` sebagai MCP tool (bukan harness `AskUserQuestion`) | Harness tool tidak tersedia di pipe mode (`-p`). MCP tool jalan di semua CLI yg attach ke wick MCP, blocking semantics native |
+| G9 | ~~`WICK_GATE_BIN` env var override untuk dev (VSCode/`go run`)~~ — **DROPPED Stage 9** | Awalnya untuk skenario "dev binary tidak ada embed". Setelah installer ship sidecar (G2 update) + sibling-of-executable jadi step resolution pertama, env var redundant. Dev `go run` tinggal jalanin `wick build` sekali (compile gate ke `bin/<app>-gate[.exe]` — sibling lookup picks it up). |
+
+**Checklist** (mirror dari command-gate-architecture.md §12, urut timeline; kelola progress detail di sana):
+
+```
+Stage 1 — Spec & Wiring (gate.Spec field SocketPath + AutoApproved, factory wire)
+Stage 2 — Daemon socket listener (per session, chmod 0600, sync.Map pending, 25s timeout)
+Stage 3 — gate sidecar connect socket + auto_approved short-circuit + fail-safe
+Stage 4 — //go:embed + extractEmbeddedGate + resolveGateBin + CI build step
+Stage 5 — Web UI: SSE event types, POST /approve, modal 4-mode, Approved-commands panel + Revoke
+Stage 6 — ask_user MCP tool + SSE ask_user/_resolved + POST /answer + web card
+Stage 7 — VSCode dev tooling (debug:prep build gate, gate:sync-spec task, wicklab-gate launch)
+Stage 8 — Observability (audit trail, Providers GateStatusCard, sibling resolution)
+Stage 9 — Hapus env vars + single shared spec/socket/audit + installer ship sidecar (post-merge cleanup)
+```
+
+- [x] **7.1** Stage 1 — gate.Spec extension (`SocketPath`, `AutoApproved`) + factory wire (`SocketDirFor`, `AutoApprovedFor`) + tests → `internal/agents/gate/claude_hook.go` + `internal/agents/pool/factory.go` + `factory_test.go` *(Stage 9 ramping: SocketPath/SessionID/AgentName/Layout dropped from Spec; SocketDirFor/AutoApprovedFor dropped from GateConfig)*
+- [x] **7.2** Stage 2 — Unix socket listener + pending state mgr + ApprovalManager (session approve + persistent always-allow) → `internal/agents/gate/{socket,manager}.go` *(Stage 9: per-session listener → single shared listener with cwd-based session routing)*
+- [x] **7.3** Stage 3 — gate sidecar socket client + auto_approved short-circuit + fail-safe → `cmd/gate/main.go` + `internal/agents/gate/matchkey.go`
+- [x] **7.4** Stage 4 — `//go:embed` + `extractEmbeddedGate` + `ResolveGateBinary` + CI build step → `internal/agents/gate/embed.go` + `internal/agents/gate/assets/{.gitkeep,.gitignore}` *(Stage 9: CI step absorbed into `internal/builder/gate.go`; release.yml drop step "Build wick-gate")*
+- [x] **7.5** Stage 5 — SSE `approval_request`/`approval_resolved` + `POST /approve` + 4-mode modal + Approved-commands panel + Revoke → `internal/tools/agents/{handler,stream,approvals}.go` + `view/approvals.templ` + `js/agents.js`
+- [x] **7.6** Stage 6 — `ask_user` MCP tool + SSE `ask_user`/`ask_user_resolved` + `POST /answer` + inline card → `internal/agents/askuser/` + `internal/mcp/handler.go` (descriptor + dispatch + handleAskUser) + `internal/tools/agents/{askuser_handler.go,view/askuser.templ}`
+- [x] **7.7** Stage 7 — VSCode debug tooling: `debug: prep` build gate sidecar sebagai sibling di `bin/<app>-gate[.exe]`, `ResolveGateBinary` tambah sibling-of-executable step → wicklab pickup otomatis tanpa env. `wicklab-gate` standalone launch dihapus → `.vscode/{tasks,launch}.json` + `internal/agents/gate/embed.go`
+- [x] **7.8** Stage 8 — Observability follow-ups: gate emit per-stage audit trail ke `commands.jsonl` (received → socket_dial → socket_sent → socket_recv → terminal, di-tie via RequestID); Entry struct extend dgn Stage/Tool/Decision/RequestID/MatchKey; `ResolveGateBinaryWithSource` return source label; Providers page punya GateStatusCard; SessionDetail tampil GateDisabledBanner kalau gate gak resolved → `internal/agents/gate/{log,embed}.go` + `cmd/gate/main.go` + `internal/tools/agents/{providers,handler}.go` + `view/{approvals,providers,sessions}.templ`
+- [x] **7.9** Stage 9 — Spec resolution refactor + cleanup pass:
+  - **9a Source rename** — `cmd/wick-gate/` → `cmd/gate/`, env vars `WICK_GATE_*` → drop entirely, output user-visible `<app>-gate` (branded by filename — sidecar wajib bernama `<app>-gate[.exe]`); embed asset internal generic `gate-<os>-<arch>`.
+  - **9b Shared model** — single shared spec at `~/.<app>/agents/gate/spec.json`, single shared socket at `~/.<app>/agents/gate/gate.sock`, single shared audit log at `~/.<app>/agents/gate/commands.jsonl`. Per-session always-allow scope di-trade ke per-app. Daemon route by cwd dari hook payload (longest workspace-path prefix wins).
+  - **9c Builder absorb** — `internal/builder/gate.go` compile `cmd/gate` ke `assets/` + `bin/<app>-gate-<os>-<arch>`; template release.yml drop step "Build wick-gate". Soft-skip pada downstream fork tanpa cmd/gate.
+  - **9d Installer ship sidecar** — MSI ship `<App>-gate.exe` di same folder, .deb ship `/usr/bin/<app>-gate`, .app bundle ship `Contents/MacOS/<App>-gate`. Sibling-of-executable jadi resolution path utama, embed extract jadi backup.
+  - **9e Drop GATE_BIN** — env override redundant setelah installer ship sidecar; resolution chain: sibling → embed → PATH.
+  - **9f Cleanup** — `gateAwareSpawner` + `extraEnv` + `requestApproval` test-wrapper + `AutoApprovedFor` shim + duplicate `resolveGateBin` di server.go + `gateAppName` fallback redundant — semua dropped. Pool/factory simplification: `attachGateConfig` return `(Spawner, error)` saja.
+- [ ] **7.10** Smoke test manual: claude jalanin command unlisted → modal muncul → klik tiap mode → behavior konsisten (once tetap muncul, session auto setelah ke-2, always persist after restart). ask_user → card muncul → user pilih → agent terima jawaban. **Belum dijalankan** — manual + butuh real claude binary.
+
+**Exit criteria**: gate punya 4 decision mode dari web UI, `approve_always` survive restart, `approve_session` reset on restart, `ask_user` MCP tool jalan end-to-end (claude ask → web answer → claude lanjut).
 
 ---
 
@@ -683,93 +878,108 @@ Pool mengatur jumlah subprocess agent yang berjalan bersamaan, lintas semua sess
 
 ### 4.5 Command Gate
 
-> **Status**: Claude implementation landed in commit `<phase-3>`. Codex / Gemini variants pending phase 6.
+> **Status**: Claude whitelist gate + interactive approval landed (phase 3 + 7). Codex/Gemini variants pending phase 6. Design lengkap di [command-gate-architecture.md](./command-gate-architecture.md).
 
-Semua tiga CLI support **pre-execution hooks** — hook dipanggil sebelum command dijalankan, bisa return allow atau block. Wick memanfaatkan ini untuk whitelist enforcement.
+Claude support `PreToolUse` hook — dipanggil sebelum setiap tool dijalankan. Gate binary check whitelist + interactive approval lalu return exit code ke Claude.
 
-**Implementation map** (Claude only, phase 3):
+**Implementation map**:
 
 | Concern | File |
 |---|---|
 | Glob matcher + shell-metachar guard + scope prefix | `internal/agents/gate/rule.go` |
-| `commands.jsonl` append helper | `internal/agents/gate/log.go` |
-| `settings.json` generator (`PreToolUse` matcher=Bash) + `WriteSpawnArtifacts` | `internal/agents/gate/claude_hook.go` |
-| Hook binary (stdin → match → exit 0/2 + log) | `cmd/wick-gate/main.go` |
-| Per-spawn artifact write + `--settings` flag injection + `WICK_GATE_SPEC` env | `internal/agents/pool/factory.go` (`GateConfig` + `gateAwareSpawner`) |
-| Spawner `--permission-mode bypassPermissions` + `--add-dir <workspace>` (so the hook is the authoritative decision, not claude's interactive prompt) | `internal/agents/agent/claude/spawn.go` |
+| `commands.jsonl` append + daily tail log | `internal/agents/gate/log.go` |
+| `settings.json` generator (`PreToolUse` hook config) | `internal/agents/gate/claude_hook.go` |
+| Hook binary (stdin → match → socket → exit 0/2) | `cmd/gate/main.go` |
+| Unix socket listener + pending map + timeout | `internal/agents/gate/socket.go` |
+| Shared socket lifecycle + session routing + always-allow | `internal/agents/gate/manager.go` |
+| AppName + gate binary resolution | `internal/agents/gate/embed.go` |
 
-#### Mekanisme per CLI
+#### AppName & Binary Naming
 
-| CLI | Hook | Cara block | Dokumentasi |
-|---|---|---|---|
-| **Claude CLI** | `PreToolUse` di `settings.json` | Exit code `2` = block, `0` = allow | [hooks-guide](https://code.claude.com/docs/en/hooks-guide) |
-| **Codex CLI** | `PermissionRequest` hook | `{"behavior":"deny"}` di stdout | [codex hooks](https://developers.openai.com/codex/hooks) |
-| **Gemini CLI** | `BeforeTool` hook | JSON response block (stdout harus pure JSON) | [gemini hooks](https://geminicli.com/docs/hooks/) |
+Gate binary dinamai `<app>-gate[.exe]` (misal `wick-lab-gate.exe`). AppName di-derive dari nama executable itu sendiri — strip `.exe`, strip `-gate` suffix. Chain:
 
-Wick menulis hook config ke temp dir sebelum spawn subprocess. Hook memanggil wick gate binary yang check whitelist dan return allow/block.
+1. Stem nama executable → `wick-lab-gate.exe` → `wick-lab`
+2. Fallback ke `appname.Resolve()` (ldflag → env → wick.yml → "wick")
+
+Dengan ini socket/spec/log path otomatis landing di `~/.<app>/agents/gate/` yang benar tanpa env var atau ldflag tambahan. Server (`wick-lab.exe`) pakai chain yang sama — stem `wick-lab` → semua path cocok.
+
+#### Flow Gate (per hook invocation)
 
 ```
-CLI subprocess mau jalanin: rm -rf .
-  → panggil hook (wick-gate binary)
-  → wick-gate terima: {"tool":"bash","input":{"command":"rm -rf ."}}
-  → cek whitelist: "rm *" tidak ada
-  → return: block (exit 2 / JSON deny)
-  → CLI batalkan eksekusi
-  → wick log: blocked
+Claude fire PreToolUse
+  → spawn <app>-gate[.exe], stdin = hook JSON
+  → gate baca stdin (timeout 3s)
+  → baca spec.json: command di AutoApproved? → exit 0 langsung
+  → match whitelist rules? → exit 0 langsung
+  → dial Unix socket: ~/.<app>/agents/gate/gate.sock
+  → kirim ApprovalRequest (JSON)
+  → server terima → route by cwd → check session-approved cache
+  → kalau sudah di-approve session → auto-reply ApprovalResponse
+  → kalau belum → broadcast SSE ke UI → user klik Approve/Block
+  → server kirim ApprovalResponse ke gate (timeout 25s)
+  → gate baca response → "approve_*" = exit 0, "block" = exit 2
+  → Claude lanjut atau batalkan tool call
 ```
 
-#### Hook Config yang Di-generate Wick
+Timeout chain: gate tunggu 25s < Claude hook timeout 30s → gate selalu exit duluan.
 
-**Claude** (`settings.json` di temp working dir):
+#### Decisions (approved)
+
+| Decision | Efek |
+|---|---|
+| `approve_once` | Satu request ini saja |
+| `approve_session` | Semua request dengan matchKey sama di session ini (in-memory) |
+| `approve_all` | Semua request di session ini tanpa cek matchKey (in-memory) |
+| `approve_always` | Tulis ke `spec.json` AutoApproved list (persistent, gate baca tiap call) |
+| `block` | Gate exit 2, Claude batalkan tool call |
+
+#### Hook Config (Claude)
+
+Ditulis ke `~/.claude/settings.json` (global, shared):
+
 ```json
 {
   "hooks": {
     "PreToolUse": [{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "wick-gate check"}]
+      "hooks": [{"type": "command", "command": "<abs-path>/<app>-gate[.exe]", "timeout": 30}]
     }]
   }
 }
 ```
 
-**Codex** (`~/.codex/config.json` atau env):
-```json
-{
-  "hooks": {
-    "permissionRequest": {"command": "wick-gate check-codex"}
-  }
-}
+#### Diagnostics: `wick doctor [binary]`
+
+`wick doctor` cek gate setup. Pass path server binary opsional untuk inspect branded build lain:
+
+```
+wick doctor                    # cek gate untuk binary wick itu sendiri
+wick doctor wick-lab.exe       # cek gate untuk wick-lab build
 ```
 
-**Gemini** (`~/.gemini/settings.json`):
-```json
-{
-  "hooks": {
-    "beforeTool": {"command": "wick-gate check-gemini"}
-  }
-}
-```
+Checks yang dijalankan (semua di-indent di bawah "gate"):
+
+| Check | Apa yang dicek |
+|---|---|
+| `gate app_name` | AppName derive dari binary path |
+| `gate binary` | `<app>-gate[.exe]` ada di sibling/bin/PATH |
+| `gate name match` | Stem gate binary == app_name (socket paths align) |
+| `gate socket` | Path socket yang dipakai |
+| `gate round-trip` | Dial socket, kirim probe request (`Probe: true`), server auto-reply tanpa tunggu human — proves full encode→decode path |
+| `gate spec` | `spec.json` ada + ukuran |
+
+Probe request (`Probe: true` di `ApprovalRequest`) di-handle server dengan early-return `approve_once` tanpa masuk pending queue — tidak ganggu session aktif.
 
 #### Whitelist & Log
 
-```go
-type CommandGate struct {
-    Allowed []CommandRule
-}
-
-type CommandRule struct {
-    Pattern string   // glob, e.g. "git *", "ls *", "cat *"
-    Scope   string   // path prefix yang diizinkan (opsional)
-}
-```
-
-- Tidak ada di whitelist → auto-block
-- Semua eksekusi (allowed dan blocked) → append ke `sessions/<id>/commands.jsonl`
+- Tidak ada di whitelist → langsung dial socket untuk interactive approval
+- Semua eksekusi (allowed/blocked + decision source) → append ke `~/.<app>/agents/gate/commands.jsonl`
+- Tiap invocation + stage transition → `~/.<app>/logs/gate-YYYY-MM-DD.log` (tail-able)
 
 Format log (jsonl):
 ```jsonl
-{"ts":"2026-05-08T10:23:11Z","agent":"backend","cmd":"git clone ...","status":"allowed"}
-{"ts":"2026-05-08T10:23:15Z","agent":"backend","cmd":"rm -rf .","status":"blocked"}
+{"ts":"2026-05-10T06:36:34Z","level":"info","cmd":"git status","status":"allowed","decision":"whitelist"}
+{"ts":"2026-05-10T06:36:40Z","level":"info","cmd":"rm -rf .","status":"blocked","decision":"block","reason":"user blocked"}
 ```
 
 ### 4.6 Streaming States & Raw Output
@@ -892,6 +1102,129 @@ running_tool: dapat ToolUse event, command gate sedang check
 responding  : dapat TextDelta event, text sedang di-stream
 idle        : dapat Done event, subprocess selesai proses
 ```
+
+#### 4.6.1 Lifecycle vs Substate (Backends UI)
+
+Substate di atas (idle/thinking/running_tool/responding) menjawab "agent lagi ngapain di dalam satu spawn". Di UI Backends, operator perlu satu jawaban yang lebih besar: **subprocess-nya hidup atau ngga, dan kalau hidup itu lagi spawn baru atau lagi nunggu di-kill**. Itu peran `Lifecycle` — FSM kedua, paralel sama substate, di file yang sama (`internal/agents/state/state.go`).
+
+```
+Lifecycle: spawning → working ↔ idle → killed
+                          ↑          ↓
+                          └──────────┘  (turn baru datang)
+
+spawning : pool baru `a.Start()`, belum ada event dari CLI
+working  : ada event aktif (Thinking/ToolUse/TextDelta/ToolResult)
+idle     : Done/Error masuk → subprocess hidup tapi ngga ada turn,
+           countdown auto-kill (LastActive + IdleTimeout) jalan
+killed   : OnExit fired (idle TTL, Stop, error, crash)
+```
+
+Transisi:
+
+| Trigger | Lifecycle |
+|---|---|
+| `pool.spawn()` start (`MarkSpawning`) | → spawning |
+| AgentEvent ≠ Done/Error masuk | → working |
+| Done / Error | → idle |
+| `OnExit` hook (`MarkKilled`) | → killed |
+
+Substate tetap dipakai sebagai *detail* di samping lifecycle — UI tampilin "working · running_tool" misalnya, tapi tag warna utama dari lifecycle.
+
+**Visual yang dipakai UI** — bukan dot statis, tapi SVG ring 14px dengan 3 elemen (`view/layout.templ::lifecycleRing`): track ring (faint), foreground arc, dan centre dot/X. Animasi dipaksa per state biar mata operator langsung tau apa yg lagi terjadi:
+
+| Lifecycle | Border + bg | Arc | Centre | Animasi |
+|---|---|---|---|---|
+| spawning | amber-50 / amber-300 | 25% chord | r=0 | Ring puter (`lifecycle-svg-spin`, 0.9s linear) — indeterminate |
+| working | green-50 / green-300 | full ring | r=2.5 | Centre dot breathing (`lifecycle-centre-pulse`, 1.4s) |
+| idle | blue-50 / blue-300 | shrink dari 100% → 0% | r=1.5 static | JS update `stroke-dashoffset` tiap detik (`transition: 1s linear`) — ring habis = auto-kill |
+| killed | red-50 / red-300 | empty | r=0 | Static, ngga ada animasi |
+
+JS (`tools/agents/js/agents.js`) handle 3 hal:
+1. `paintRing` — set `stroke-dashoffset` + class animasi tiap kali lifecycle berubah.
+2. Tick 1 detik — sweep semua badge dengan `data-lifecycle="idle"` di page, hitung remaining, update arc + countdown text. Sengaja sweep semua biar Sessions list table (banyak row) sama Spawns table render dengan kode yang sama tanpa perlu per-row SSE subscriber.
+3. SSE handler (session detail page) — apply `lifecycle` event ke primary badge, plus infer `working`/`idle` dari substate AgentEvent.
+
+Semua badge punya `data-pid` attribute → tooltip + JS bisa surface-kan PID. Penting karena **PID berubah tiap re-spawn** (idle TTL kill → next message respawn dengan `--resume` → process baru, PID baru). Operator yang lihat angka PID berubah tau "respawn beneran terjadi", bukan stuck di proses yang sama.
+
+**Countdown auto-kill** (idle → killed):
+- Server kirim `last_active` (UnixMilli) + `idle_timeout` (ms) di render awal.
+- JS hitung sendiri remaining = `last_active + idle_timeout − Date.now()` tiap 1 detik.
+- Server tidak push tick — heartbeat ngga perlu, math di client cukup.
+- Tiap event SSE dari pool nge-update `data-last-active-ms` ke `Date.now()` → countdown reset visual tanpa server intervention.
+
+**SSE channel**:
+- Substate transitions sudah di-publish lewat `Broadcaster.Publish` (per AgentEvent). UI infer working/idle dari event type.
+- Lifecycle bookend (spawning, killed) tidak punya AgentEvent — pool fire `LifecycleEvent` lewat `PoolConfig.OnLifecycle`, server.go relay ke `Broadcaster.PublishLifecycle`. Type=`"lifecycle"`, Lifecycle=`"spawning"|"killed"`, PID di payload.
+
+**Spawn log enrichment** (`internal/agents/provider/spawnlog.go`):
+
+`SpawnLogger.List()` membaca tiap file log untuk extract PID + first user message + binary + argv + final exit reason, lalu attach ke `SpawnLogFile`. Recent Spawns table di `/tools/agents/providers` tampilin kolom Started/Provider/PID/First Message (max 10 page, paginated). Cheap karena spawn log per file <10 baris.
+
+`start` event ditulis dua kali per spawn:
+1. Pre-Start (di Build): timestamp, provider, session, agent, workspace, resume_id. PID belum tau.
+2. Post-Start (dari `BuildResult.OnStarted`): PID + binary path + argv + first_user_message (truncated 10 kata).
+
+Enrichment scan kedua event, ambil yang non-zero. Kalau spawn crash sebelum Start return → cuma event pertama, PID=0 (UI tampilin "—") dan ngga ada argv (debug "kenapa gagal" → cek raw event lain di file).
+
+**Reproduce panel di spawn detail** (`/providers/spawns/<file>`): kalau `Binary + Argv` ada di log, render shell command copy-paste-able lewat `shellCommand`/`shellQuote` helper. Operator bisa run perintah identik di terminal manual buat debug "kenapa fail di wick tapi jalan di shell" tanpa nebak argv. Args yg punya whitespace/metachar di-quote pakai `'…'`-escape standar bash.
+
+**`Process.Binary()` + `Process.Argv()`**: interface method baru di `provider.Process`. Real claude impl ambil dari `cmd.Path` + `cmd.Args[1:]`. Test fakes return empty strings. `Agent.Binary()` / `Agent.Argv()` thread-safe accessor — pool baca pas `OnStarted` callback (after subprocess started).
+
+#### 4.6.2 Pool runtime config
+
+Pool knobs (`MaxConcurrent`, `IdleTimeout`) dibaca dari configsSvc di server boot, BUKAN hardcode. Owner = `"agents"` (set otomatis oleh `tools.RegisterBuiltins` saat append modul — agents tool sekarang masuk **default Builtins** yg dipanggil dari `internal/pkg/api/server.go` boot, bukan lab-only lagi). Keys reflected dari `agentconfig.GeneralConfig`:
+
+| Config key | Default | Yang dipengaruhi |
+|---|---|---|
+| `max_concurrent` | 2 | `pool.PoolConfig.MaxConcurrent` — slot limit |
+| `idle_timeout_sec` | 120 | `pool.PoolConfig.IdleTimeout` — auto-kill TTL |
+| `default_provider` | "claude" | (TBD; phase 6 sebagai default picker) |
+
+Server boot (`server.go`):
+```go
+maxConc := 2
+if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n > 0 {
+    maxConc = n
+}
+// ... idem idle_timeout_sec
+agentpool.New(agentpool.PoolConfig{MaxConcurrent: maxConc, IdleTimeout: ..., ...})
+```
+
+Edit nilai lewat `/admin/tools/agents` (link "Settings" di sidebar nav agents). Wajib restart wick supaya pool re-init dengan nilai baru — runtime hot-reload not in scope. Doc reminder ini juga di tooltip Settings entry kalau perlu (TODO).
+
+#### 4.6.3 Pool queue + dequeue
+
+Queue FIFO di `pool.Pool.queue`. Saat semua slot penuh, Send append ke queue. Pool fire `tryGrantQueue` setelah tiap exit hook → pop head + spawn. Tapi ada kasus: queue stuck (operator nunggu lama, agent yg blocking ngga selesai-selesai). Operator butuh cara cancel.
+
+`Pool.Dequeue(sessionID, agentName) int`: drop semua entry queue yg match, return count removed. Ngga sentuh active spawn — buat itu pakai `Kill`. UI: Overview punya "Queue" panel (amber theme) per session row dengan tombol Kill → POST `/sessions/{id}/dequeue`. Handler ngubah session status balik ke `idle` di meta.json.
+
+#### 4.6.4 Provider filter di New Session
+
+User ngga boleh bisa pilih provider yg ngga sehat (binary ngga ditemu di PATH, version probe gagal, atau `Disabled`). Solusi: helper `providerChoices(ctx)` di `tools/agents/providers.go` yg probe semua via `provider.ProbeAll`, filter `PathFound && VersionErr == "" && !Disabled`, return `[]ProviderChoiceVM{Type, Name, Version}`.
+
+New Session modal sekarang render `<option value=type>type/name — version</option>` per healthy provider. Kalau kosong → pesan link ke `/providers` buat setup. Reusable: bisa dipake dimanapun "user pick a provider".
+
+#### 4.6.5 UI patterns (Backends pages)
+
+**Clickable rows + kebab menu**: alih-alih tombol Open + Delete di tiap row, row sendiri jadi link target (`data-row-link="<href>"` di `<tr>`/`<li>`), kebab menu (⋮) di kanan untuk action (Delete dst). Klik di mana saja di row → navigate, kecuali di `[data-row-action]` element (kebab dropdown) atau native interactive (`<a>/<button>/<summary>/<input>`).
+
+Implementasi:
+- `view/layout.templ::kebabMenu(action kebabAction)` — komponen reusable, `<details>`/`<summary>` untuk dropdown native (no JS toggle).
+- `agents.js` delegated click listener: navigate row, kecuali target.closest filter di atas. Cmd/middle-click buka tab baru.
+- Container table pakai `overflow-visible` (BUKAN `overflow-hidden`) supaya kebab dropdown ngga ke-clip parent.
+
+**Inline confirm popover**: ganti `window.confirm()` (native dialog jelek + center-screen) dengan `confirmAt(anchor, msg, opts)` JS helper. Popover Tailwind di samping/bawah anchor button, auto-flip ke atas kalau viewport overflow. Esc/click luar = cancel, Enter = confirm. Single-popover-at-a-time (open kedua nutup yg pertama).
+
+Pakai untuk semua destructive action: delete session/workspace/preset, kill agent, dequeue. Confirm label custom per flow ("Delete" / "Kill" / "Drop").
+
+#### 4.6.6 Overview page composition
+
+Overview dipotong jadi 3 zona:
+1. **Stats row** (3 cards): Active Slots `n/max`, Queued count, total Sessions.
+2. **Queue panel** (amber, conditional render `len(Queued) > 0`): tiap session yang nunggu slot, dengan tombol Kill → dequeue.
+3. **Active Sessions** (reuse `SessionsTable`): top 5 session yg subprocess-nya masih hidup di pool (lifecycle ∈ {spawning, working, idle}; killed BUKAN active). View All link ke `/sessions` untuk full history.
+
+`Active Sessions` BEDA dari "Recent Sessions" lama: dulu sort by `last_active desc` apapun status, sekarang strict filter via `pool.ActiveSnapshot()`. Killed sessions ngga muncul di Overview — operator ke `/sessions` kalau mau scroll history.
 
 **Step 4 — Slack handler (`slack.go`) — minimal di Slack, detail di dashboard:**
 
@@ -1407,6 +1740,33 @@ Drop the flat-file vs split-folder distinction in mind: every subfolder == one G
 | Composer (POST /sessions/{id}/send → ke transport) | — | ✅ (handler), ✅ (transport bus) |
 | Config pages (General, Slack, Workspace) | — | ✅ |
 | HTTP routes `/tools/agents/...` | — | ✅ |
+
+### 6.1 Registry split: Builtins vs Lab Samples
+
+`internal/{tools,jobs,connectors}/registry.go` masing-masing punya **dua** seed function:
+
+| Function | Scope | Caller | Isi |
+|---|---|---|---|
+| `RegisterBuiltins()` | Default-on tiap downstream wick app | `internal/pkg/api/server.go` + `internal/pkg/worker/server.go` (boot, sebelum `tools.All()`) | tools: `agents` · connectors: `github`, `httprest` · jobs: (kosong, deps-needing jobs di-register inline) |
+| `RegisterLabSamples()` | Lab binary saja | `cmd/lab/root.go` | tools: `convert-text`, `convert-text-alt`, `external` · connectors: `crudcrud` · jobs: `sample-post`, `sample-post-typicode` |
+
+**Konsekuensi penting buat agents tool**: `agents` modul sekarang masuk `tools.RegisterBuiltins()`. Artinya:
+
+- Setiap downstream app yang dibuat lewat `wick build` otomatis dapat tool **Agents** + halaman manager + page Settings (general/slack/workspace) tanpa harus `app.RegisterTool` manual di main.go.
+- Owner-stamping config rows (`Owner = "agents"`) tetap jalan lewat `extra` slice yg sama — pool boot di server.go terus baca `configsSvc.GetOwned("agents", …)` tanpa perubahan.
+- `cmd/lab` lab binary panggil **kedua** fungsi (lihat `cmd/lab/root.go`) supaya samples lab + builtins-nya nyala bareng.
+
+**Idempotent on `Meta.Key`**: `Register*` ketiganya pakai dedupe per-Key. Aman kalau:
+- Web server + worker masing-masing panggil `RegisterBuiltins()` di proses yang sama (system tray spawn keduanya).
+- Downstream main.go re-register key yang sama (mis. override `agents` config presets) — call kedua jadi no-op, registrasi pertama menang.
+
+**Yang tetap inline di server.go (bukan static seed)**:
+
+| Modul | Lokasi register | Alasan |
+|---|---|---|
+| `wickmanager` connector | `internal/pkg/api/server.go:494` (web) + line 969 (mcp stdio) | Butuh runtime `Deps{Configs, Connectors, Jobs, Login, Tools, AppName}` yang baru tersedia mid-boot |
+| `connector-runs-purge` job | `connectorrunspurge.Register(db)` di server.go:86 + worker.go:32 | Capture `*gorm.DB` — closure butuh handle yang sama dengan proses pemanggil |
+| `encfields` tool | `tools/registry.go::init()` | Selalu auto-load tiap binary (MCP `wick_encrypt`/`wick_decrypt` redirect ke `/tools/encfields`) — bukan default-on, tapi always-on |
 
 ---
 
