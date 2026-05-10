@@ -75,6 +75,7 @@ func init() {
 // app.RegisterTool with the same key without producing duplicates).
 func RegisterBuiltins() {
 	agentsConfigs := agentconfig.SeedGeneralConfig()
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedGateConfig()...)
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedSlackChannelConfig()...)
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedTelegramChannelConfig()...)
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedWorkspaceConfig()...)
