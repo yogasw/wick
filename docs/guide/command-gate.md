@@ -20,14 +20,17 @@ Claude: [runs: find /var/log -mtime +30 -delete]
         ← already executed, nothing stopped it
 ```
 
-The Claude CLI's `PreToolUse` hook lets an external binary approve or block each tool call by exit code. The gate is that binary.
+The Claude CLI's `PreToolUse` hook lets an external binary approve or block each tool call. The gate is that binary, and it always exits 0 — the decision is conveyed via stdout JSON:
 
 ```
-exit 0  → command runs
-exit 2  → command cancelled, Claude sees "blocked by user"
+exit 0 + {"hookSpecificOutput": {"permissionDecision": "allow", ...}}  → command runs
+exit 0 + {"hookSpecificOutput": {"permissionDecision": "deny",  ...}}  → command cancelled
+exit 0 + (no JSON)                                                     → falls through to claude's permission flow
 ```
 
-Claude Code also has a built-in TUI permission dialog. Wick disables it (`bypassPermissions = true` in the per-spawn `settings.json`) and uses the gate instead — the goal is a single web-UI surface for approvals, not a terminal prompt.
+Earlier wick releases used `exit 2` for the block path. Claude Code 2.1.138+ ignores stdout when the exit code is non-zero, so the deny envelope was lost and the tool ran anyway. The current gate emits both an explicit allow and an explicit deny envelope on every decision; see [command-gate-claude-2.1-fix.md](https://github.com/yogasw/wick/blob/master/internal/docs/command-gate-claude-2.1-fix.md) for the full incident write-up.
+
+Claude Code also has a built-in TUI permission dialog. Wick suppresses it via the gate's allow envelope (`permissionDecision: "allow"` skips the prompt) — the goal is a single web-UI surface for approvals, not a terminal prompt. We do **not** pass `--permission-mode bypassPermissions` when a gate is attached, because that flag also skips the PreToolUse hook in current claude builds.
 
 ## Approval modes
 
@@ -38,7 +41,7 @@ When a command isn't in the whitelist, the gate dials a Unix socket and the daem
 | **Approve once** | `approve_once` | This request only | Modal again next time |
 | **Allow this session** | `approve_session` | While the session lives (in-memory) | Auto-approved silently |
 | **Always allow** | `approve_always` | Persistent (written to `spec.json`) | Auto-approved across restarts |
-| **Block** | `block` | This request only | Modal again next time |
+| **Reject** | `block` | This request only | Modal again next time |
 
 A countdown shows the remaining 25 seconds. If you don't answer, the daemon auto-blocks.
 
@@ -55,8 +58,8 @@ Claude (long-lived subprocess)
   │
   ├─ stdin: hook JSON ({tool, cmd, cwd, ...})
   ├─ read shared spec.json
-  │     └─ command in AutoApproved? → exit 0 (zero-latency hot path)
-  │     └─ matches whitelist rule?    → exit 0
+  │     └─ command in AutoApproved? → emit allow envelope (zero-latency hot path)
+  │     └─ matches whitelist rule?  → emit allow envelope
   │
   ├─ dial Unix socket: ~/.<app>/agents/gate/gate.sock
   ├─ send ApprovalRequest (raw JSON, newline-delimited)
@@ -69,7 +72,7 @@ Daemon (in main wick process)
   ├─ broadcast SSE event to web UI
   │
   ▼
-Web UI modal → user clicks Approve / Block
+Web UI modal → user clicks Approve / Reject
   │
   ▼
 POST /api/agents/sessions/{id}/approve  →  daemon
@@ -78,7 +81,7 @@ POST /api/agents/sessions/{id}/approve  →  daemon
 Daemon sends ApprovalResponse back through socket
   │
   ▼
-Gate exits 0 (approve) or 2 (block) → Claude continues or aborts
+Gate emits allow or deny envelope on stdout (exit 0 either way) → Claude continues or aborts
 ```
 
 The whole path runs inside Claude's 30-second hook timeout. The daemon's own deadline is 25s, so the gate always exits before Claude gives up with an ambiguous "hook timeout" message.
@@ -197,16 +200,22 @@ The gate section of the doctor report:
 
 A failing round-trip is the most useful signal: the binary resolves, but the daemon isn't listening. Usually that means wick isn't running, or the AppName derived from the gate binary doesn't match the AppName the running daemon used to choose its socket directory.
 
+### Test gate button
+
+The Providers page has a per-card **Test gate** button (claude only). It spawns claude with a force-deny PreToolUse hook in a temp workspace, asks it to touch a sentinel file, and reports whether the file got created. Green = the deny envelope was honored; red = the installed claude version no longer respects the contract and the gate is effectively bypassed.
+
+Use this as a smoke test after upgrading claude — the contract has changed twice (top-level `decision` → `hookSpecificOutput`, exit-2 → exit-0+JSON), and the symptom is silent: sessions look fine until you actually try to block something.
+
 ## Failure modes
 
 | Situation | What the gate does | What you'll see |
 |---|---|---|
-| Daemon not running | `connect()` returns "no such file" or "connection refused" → fail-safe exit 2 | Claude reports the command was blocked. Check whether wick is actually up. |
-| Daemon hangs (25s) | Daemon-side deadline fires → sends `block` with `reason=timeout` → gate exit 2 | Modal disappears mid-render; commands.jsonl entry has `decision=block reason=timeout`. |
+| Daemon not running | `connect()` returns "no such file" or "connection refused" → **fail-open** allow envelope | Command runs unconditionally — wick isn't up to mediate, so the gate gets out of the way rather than blocking the user's shell. |
+| Daemon hangs (25s) | Daemon-side deadline fires → sends `block` with `reason=timeout` → gate emits deny envelope | Modal disappears mid-render; commands.jsonl entry has `decision=block reason=timeout`. |
 | `spec.json` missing | `LoadSpec` returns empty Spec, no error → gate falls through to socket dial | Same as no whitelist — every command hits the modal. |
-| Stdin missing / malformed | 3s read timeout on stdin → gate exits 2 | Hook payload didn't reach the gate. Look at the daily tail log. |
+| Stdin missing / malformed | 3s read timeout on stdin → gate emits deny envelope | Hook payload didn't reach the gate. Look at the daily tail log. |
 
-The default deny is intentional — better to block on infrastructure failure than to let a command through with the gate silently broken.
+Default behavior splits by failure type: infrastructure failures *outside* wick's control (no daemon at all) fail open so the user's shell isn't held hostage by a half-installed wick; failures *inside* the gate (malformed stdin, post-dial hang) fail closed so a half-broken gate can't quietly let commands through.
 
 ## Two patterns of approval
 

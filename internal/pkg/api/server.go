@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/appname"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -262,31 +263,20 @@ func NewServer() *Server {
 		log.Warn().Msgf("agents gate disabled: %s", gateBinErr.Error())
 	}
 	var agentsPool *agentpool.Pool
-	var slackChan *agentchannels.SlackChannel    // forward ref so factory closure can call it
-	var telegramChan *agentchannels.TelegramChannel // forward ref
+	channelReg := agentchannels.NewRegistry()
 	agentsFactory := &agentpool.ClaudeFactory{
 		Layout:      agentsLayout,
 		RecordRaw:   false,
 		SpawnLogger: agentsSpawnLogger,
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
-			if slackChan != nil {
-				slackChan.OnAgentEvent(sid, ev)
-			}
-			if telegramChan != nil {
-				telegramChan.OnAgentEvent(sid, ev)
-			}
+			channelReg.DispatchAgentEvent(sid, ev)
 		},
 		OnExit: func(sid, name string, reason provider.ExitReason) {
 			agentsPool.HandleExit(sid, name, reason)
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
 			agentsBcast.Publish(sid, name, doneEv)
-			if slackChan != nil {
-				slackChan.OnAgentEvent(sid, doneEv)
-			}
-			if telegramChan != nil {
-				telegramChan.OnAgentEvent(sid, doneEv)
-			}
+			channelReg.DispatchAgentEvent(sid, doneEv)
 		},
 	}
 	maxConc := 2
@@ -393,21 +383,11 @@ func NewServer() *Server {
 		},
 		OnRequest: func(sessionID string, r gate.ApprovalRequest) {
 			agentsBcast.PublishApprovalRequest(sessionID, r)
-			if slackChan != nil {
-				slackChan.OnApprovalRequest(sessionID, r)
-			}
-			if telegramChan != nil {
-				telegramChan.OnApprovalRequest(sessionID, r)
-			}
+			channelReg.DispatchApprovalRequest(sessionID, r)
 		},
 		OnResolved: func(sessionID, requestID, decision string) {
 			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
-			if slackChan != nil {
-				slackChan.OnApprovalResolved(sessionID, requestID, decision)
-			}
-			if telegramChan != nil {
-				telegramChan.OnApprovalResolved(sessionID, requestID, decision)
-			}
+			channelReg.DispatchApprovalResolved(sessionID, requestID, decision)
 		},
 	})
 	if amErr != nil {
@@ -443,21 +423,27 @@ func NewServer() *Server {
 	}
 	agentstool.SetGateStatus(gateStatus)
 
-	// ── Agents: Slack channel (optional — only starts when configured) ──
-	if err := agentchannels.EnsureChannel(db, "slack"); err != nil {
-		log.Warn().Err(err).Msg("agents: slack channel ensure failed")
+	// ── Channel registry: shared deps (session checker, approve fn) ──
+	// Per-channel SendFunc is wired below with its own workspace lookup so
+	// each channel can have its own configured workspace.
+	channelReg.WithSessionChecker(agentsPool)
+	if approvalMgr != nil {
+		channelReg.WithApproveFn(func(channelName, sessionID, requestID, decision, matchKey string) error {
+			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, channelName, matchKey)
+			if !ok && err == nil {
+				return fmt.Errorf("approval request already resolved or timed out")
+			}
+			return err
+		})
 	}
-	slackCfg, slackPubURL, slackCfgErr := agentchannels.LoadSlackConfig(db)
-	if slackCfgErr != nil {
-		log.Warn().Err(slackCfgErr).Msg("agents: failed to load slack config from agent_channels")
-	}
-	slackChannel := agentchannels.NewSlack(
-		slackCfg,
-		func(ctx context.Context, sessionID, agentName, source, role, text string) error {
-			// Re-read workspace from agent_channels on each send so UI changes
-			// take effect without a restart.
+
+	// sendFnFor returns a pool-dispatch closure that re-reads the workspace
+	// from agent_channels on every send, so UI changes take effect without
+	// a restart. One closure per channel type so workspaces can differ.
+	sendFnFor := func(channelType string) agentchannels.SendFunc {
+		return func(ctx context.Context, sessionID, agentName, source, role, text string) error {
 			ws := ""
-			if m, err := agentchannels.GetChannelConfigMap(db, "slack"); err == nil {
+			if m, err := agentchannels.GetChannelConfigMap(db, channelType); err == nil {
 				ws = m["workspace"]
 			}
 			if ws == "" {
@@ -466,62 +452,14 @@ func NewServer() *Server {
 				}
 			}
 			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
-		},
-		slackPubURL,
-	)
-	slackChan = slackChannel // wire forward ref so factory callbacks can reach it
-	if approvalMgr != nil {
-		slackChannel.SetApproveFn(func(sessionID, requestID, decision, matchKey string) error {
-			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, "slack", matchKey)
-			if !ok && err == nil {
-				return fmt.Errorf("approval request already resolved or timed out")
-			}
-			return err
-		})
-	}
-	if slackChannel.IsConfigured() {
-		log.Info().Msg("agents: slack channel configured, will start with server")
-	} else {
-		log.Info().Msg("agents: slack channel not configured, skipping (set BotToken + AppToken in Channels → Slack)")
+		}
 	}
 
-	// ── Agents: Telegram channel (always created; dormant until bot_token set) ──
-	// NewTelegram never returns nil — it starts in dormant mode when unconfigured
-	// so watchTelegramConfig can hot-activate it via Reload without a restart.
-	if err := agentchannels.EnsureChannel(db, "telegram"); err != nil {
-		log.Warn().Err(err).Msg("agents: telegram channel ensure failed")
-	}
-	tgCfg, tgCfgErr := agentchannels.LoadTelegramConfig(db)
-	if tgCfgErr != nil {
-		log.Warn().Err(tgCfgErr).Msg("agents: failed to load telegram config from agent_channels")
-	}
-	telegramChannel := agentchannels.NewTelegram(tgCfg, func(ctx context.Context, sessionID, agentName, source, role, text string) error {
-		ws := ""
-		if m, err := agentchannels.GetChannelConfigMap(db, "telegram"); err == nil {
-			ws = m["workspace"]
-		}
-		if ws == "" {
-			if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
-				ws = wsNames[0]
-			}
-		}
-		return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
-	})
-	telegramChan = telegramChannel // wire forward ref
-	if approvalMgr != nil {
-		telegramChannel.SetApproveFn(func(sessionID, requestID, decision, matchKey string) error {
-			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, "telegram", matchKey)
-			if !ok && err == nil {
-				return fmt.Errorf("approval request already resolved or timed out")
-			}
-			return err
-		})
-	}
-	if telegramChannel.IsConfigured() {
-		log.Info().Msg("agents: telegram channel configured, will start with server")
-	} else {
-		log.Info().Msg("agents: telegram channel not configured, skipping (set BotToken in Channels → Telegram)")
-	}
+	// One call wires every built-in channel: setup.All handles EnsureChannel,
+	// config load, NewChannel, setters, and registry.Add per transport.
+	// Adding a new channel = subpackage + composer in channels/setup; this
+	// line never changes.
+	channelsetup.All(channelReg, agentchannels.NewDBStore(db), sendFnFor)
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
@@ -750,10 +688,12 @@ func NewServer() *Server {
 	// 302 them into /auth/login which they can't follow.
 	r.Handle("POST /mcp", mcpAuth.Wrap(mcpHandler))
 
-	// Slack HTTP Event API webhook — public, no session auth.
-	// Integrity is enforced inside the handler via HMAC-SHA256 signing secret.
-	// Active only when mode=http and SigningSecret is set; otherwise returns 503.
-	r.Handle("POST /integrations/slack/events", slackChannel.HTTPHandler())
+	// Channel webhooks — public, no session auth (each channel enforces
+	// integrity inside its handler, e.g. Slack HMAC). Mounted from
+	// whichever channels implement HTTPHandlerProvider.
+	for path, h := range channelReg.HTTPHandlers() {
+		r.Handle(path, h)
+	}
 
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
 	// authorize, token} (public) + /profile/connections (auth-gated
@@ -785,117 +725,26 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, slackChannel: slackChannel, telegramChannel: telegramChannel, db: db, gateBin: resolvedGateBin}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, channelReg: channelReg, db: db, gateBin: resolvedGateBin}
 }
 
 type Server struct {
-	router          *http.ServeMux
-	configsSvc      *configs.Service
-	authMidd        *login.Middleware
-	agentsPool      *agentpool.Pool
-	slackChannel    *agentchannels.SlackChannel
-	telegramChannel *agentchannels.TelegramChannel
-	db              *gorm.DB
-	gateBin         string // resolved gate binary path; used for hook cleanup on shutdown
+	router     *http.ServeMux
+	configsSvc *configs.Service
+	authMidd   *login.Middleware
+	agentsPool *agentpool.Pool
+	channelReg *agentchannels.Registry
+	db         *gorm.DB
+	gateBin    string // resolved gate binary path; used for hook cleanup on shutdown
 }
 
-// watchSlackConfig starts the Slack channel immediately if configured, then
-// polls every 30 s. When BotToken or AppToken changes it calls Reload() so
-// the operator never needs to restart the server after updating credentials.
-func (s *Server) watchSlackConfig(ctx context.Context) {
-	readCfg := func() (agentconfig.SlackChannelConfig, string) {
-		cfg, pubURL, err := agentchannels.LoadSlackConfig(s.db)
-		if err != nil {
-			log.Warn().Err(err).Msg("agents: watchSlackConfig: load failed")
-		}
-		return cfg, pubURL
-	}
-	// Hash covers both connection fields (trigger reconnect) and access-control
-	// fields (AllowedUsers, AllowedGroups, AccessMode) so operator changes to
-	// who can trigger agents are picked up without a token rotation.
-	connHash := func(cfg agentconfig.SlackChannelConfig) string {
-		return cfg.BotToken + "|" + cfg.AppToken + "|" + cfg.Mode + "|" +
-			cfg.AccessMode + "|" + cfg.AllowedUsers + "|" + cfg.AllowedGroups
-	}
-
-	cfg, _ := readCfg()
-	hash := connHash(cfg)
-	if s.slackChannel.IsConfigured() {
-		log.Info().Msg("agents: slack channel configured, starting")
-		go func() {
-			if err := s.slackChannel.Start(ctx); err != nil {
-				log.Ctx(ctx).Error().Err(err).Msg("agents: slack channel stopped")
-			}
-		}()
-	} else {
-		log.Info().Msg("agents: slack channel not configured (set BotToken + AppToken in Settings → Agents)")
-	}
-
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			newCfg, newPubURL := readCfg()
-			newHash := connHash(newCfg)
-			if newHash == hash {
-				continue
-			}
-			hash = newHash
-			log.Info().Msg("agents: slack config changed, hot-reloading")
-			s.slackChannel.Reload(ctx, newCfg, newPubURL)
-		}
-	}
-}
-
-// watchTelegramConfig starts the Telegram channel immediately if configured,
-// then polls every 30 s. When any config field changes it calls Reload() so
-// the operator never needs to restart the server after updating credentials.
-func (s *Server) watchTelegramConfig(ctx context.Context) {
-	readCfg := func() agentconfig.TelegramChannelConfig {
-		cfg, err := agentchannels.LoadTelegramConfig(s.db)
-		if err != nil {
-			log.Warn().Err(err).Msg("agents: watchTelegramConfig: load failed")
-		}
-		return cfg
-	}
-	cfgHash := func(cfg agentconfig.TelegramChannelConfig) string {
-		return cfg.BotToken + "|" + cfg.AllowedIDs + "|" + cfg.Workspace
-	}
-
-	if s.telegramChannel.IsConfigured() {
-		log.Info().Msg("agents: telegram channel configured, starting")
-		go func() {
-			if err := s.telegramChannel.Start(ctx); err != nil {
-				log.Ctx(ctx).Error().Err(err).Msg("agents: telegram channel stopped")
-			}
-		}()
-	} else {
-		log.Info().Msg("agents: telegram channel not configured (set BotToken in Channels → Telegram)")
-	}
-
-	cfg := readCfg()
-	hash := cfgHash(cfg)
-
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			newCfg := readCfg()
-			newHash := cfgHash(newCfg)
-			if newHash == hash {
-				continue
-			}
-			hash = newHash
-			log.Info().Msg("agents: telegram config changed, hot-reloading")
-			s.telegramChannel.Reload(ctx, newCfg)
-		}
-	}
+// startChannels starts every configured channel and launches the
+// registry's hot-reload watcher. Replaces the per-channel watchSlack /
+// watchTelegram methods — Reload semantics now live inside each
+// channel's ConfigSource.
+func (s *Server) startChannels(ctx context.Context) {
+	s.channelReg.StartAll(ctx)
+	go s.channelReg.WatchConfigs(ctx, 30*time.Second)
 }
 
 // appNameHandler injects the configurable app name into every request
@@ -970,12 +819,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	addr := fmt.Sprintf(":%d", port)
 
 	// Start channel listeners and watch for config changes.
-	if s.slackChannel != nil {
-		go s.watchSlackConfig(ctx)
-	}
-	if s.telegramChannel != nil {
-		go s.watchTelegramConfig(ctx)
-	}
+	s.startChannels(ctx)
 
 	h := chainMiddleware(
 		s.authMidd.Session(s.router),

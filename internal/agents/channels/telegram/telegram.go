@@ -1,25 +1,8 @@
-// Package channels — Telegram channel implementation.
-//
-// Purpose:    Bridges Telegram chats to the wick agent pool via long polling.
-//             Handles incoming messages (dispatched to pool via sendFn) and
-//             gate approval requests (inline keyboard buttons).
-// Caller:     server.go wires TelegramChannel the same way as SlackChannel.
-// Dependencies:
-//   - github.com/go-telegram-bot-api/telegram-bot-api/v5
-//   - internal/agents/gate  (ApprovalRequest, Decision* constants)
-//
-// Main Functions:
-//   - NewTelegram         — construct and validate bot token
-//   - Start               — long-poll loop (blocks until ctx cancelled)
-//   - Stop                — cancel the poll loop
-//   - OnApprovalRequest   — post inline-keyboard approval message
-//   - OnApprovalResolved  — edit approval message to show outcome
-//   - OnAgentEvent        — stream agent reply back to chat
-//   - SetApproveFn        — wire gate resolution callback
+// Package telegram implements the Telegram transport for the agents
+// channel registry. See package channels for the shared interfaces.
 //
 // Side Effects: Opens a persistent long-poll connection to Telegram servers.
-
-package channels
+package telegram
 
 import (
 	"context"
@@ -32,79 +15,63 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/rs/zerolog/log"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 )
-
-// TelegramChannelConfig is the canonical config type for the Telegram channel.
-// Defined in internal/agents/config; aliased here for convenience.
-type TelegramChannelConfig = agentconfig.TelegramChannelConfig
 
 // pendingApproval tracks an in-flight gate approval message for one session.
 type pendingApproval struct {
 	chatID    int64
 	messageID int
 	requestID string
-	token     string // short token used in button callback data
+	token     string
 }
 
-// telegramCallbackPayload is the server-side lookup entry for a button token.
-// Telegram limits callback_data to 64 bytes, so we store the full gate fields
-// here and only embed the short token in the button.
-type telegramCallbackPayload struct {
+// callbackPayload is the server-side lookup entry for a button token.
+type callbackPayload struct {
 	requestID string
 	sessionID string
 	matchKey  string
 }
 
-// telegramTurn holds per-session state for accumulating agent output.
-// Telegram has a 4096-char message limit, so we buffer all text and
-// send it chunked on Done rather than streaming individual deltas.
-type telegramTurn struct {
+// turn holds per-session state for accumulating agent output.
+type turn struct {
 	chatID int64
 	buf    strings.Builder
 }
 
-// TelegramChannel implements Channel for Telegram using long polling.
-//
-// Lifecycle:
-//  1. NewTelegram validates the token and builds the BotAPI client.
-//  2. Start launches a long-poll loop via tgbotapi.NewUpdate.
-//  3. Incoming messages are access-checked then forwarded to sendFn.
-//  4. Callback queries prefixed "gate|" are parsed and routed to approveFn.
-//  5. OnAgentEvent accumulates text and posts the final reply on Done.
-type TelegramChannel struct {
+// Channel implements agentchannels.Channel for Telegram via long polling.
+type Channel struct {
 	mu  sync.Mutex
-	cfg TelegramChannelConfig
-	bot *tgbotapi.BotAPI // nil when not configured
+	cfg agentconfig.TelegramChannelConfig
+	bot *tgbotapi.BotAPI
 
-	sendFn    SendFunc
-	approveFn ApproveFn
+	sendFn         agentchannels.SendFunc
+	approveFn      agentchannels.ApproveFn
+	sessions       agentchannels.SessionChecker
+	onSessionStart agentchannels.SessionStartHook
 
-	// pendingApprovals: sessionID → approval message tracking (for editing on resolve)
 	pendingApprovals map[string]pendingApproval
-	// pendingCallbacks: short token → full gate payload (avoids 64-byte Telegram limit)
-	pendingCallbacks map[string]telegramCallbackPayload
+	pendingCallbacks map[string]callbackPayload
 
-	// turns: sessionID → current text accumulation buffer
-	turns map[string]*telegramTurn
+	turns map[string]*turn
 
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
 }
 
-// NewTelegram constructs a TelegramChannel. When BotToken is empty or the
-// Telegram API rejects it the channel is created in dormant mode (bot == nil)
-// so watchTelegramConfig can hot-activate it later without a server restart.
-// sendFn is pool.Send (or a wrapper).
-func NewTelegram(cfg TelegramChannelConfig, sendFn SendFunc) *TelegramChannel {
-	tc := &TelegramChannel{
+// New constructs a Telegram Channel from cfg alone. SendFunc and other
+// dependencies are wired by *agentchannels.Registry via setter
+// interfaces before Start. When BotToken is empty or invalid the channel
+// is dormant — Reload can hot-activate it later.
+func New(cfg agentconfig.TelegramChannelConfig) *Channel {
+	tc := &Channel{
 		cfg:              cfg,
-		sendFn:           sendFn,
 		pendingApprovals: make(map[string]pendingApproval),
-		pendingCallbacks: make(map[string]telegramCallbackPayload),
-		turns:            make(map[string]*telegramTurn),
+		pendingCallbacks: make(map[string]callbackPayload),
+		turns:            make(map[string]*turn),
 	}
 	if cfg.BotToken != "" {
 		if bot, err := tgbotapi.NewBotAPI(cfg.BotToken); err == nil {
@@ -116,27 +83,97 @@ func NewTelegram(cfg TelegramChannelConfig, sendFn SendFunc) *TelegramChannel {
 	return tc
 }
 
+// SetSendFunc satisfies channels.SendFuncSetter.
+func (t *Channel) SetSendFunc(fn agentchannels.SendFunc) {
+	t.mu.Lock()
+	t.sendFn = fn
+	t.mu.Unlock()
+}
+
 // Name satisfies Channel.
-func (t *TelegramChannel) Name() string { return "telegram" }
+func (t *Channel) Name() string { return "telegram" }
 
 // IsConfigured returns true when a bot token is present.
-func (t *TelegramChannel) IsConfigured() bool {
+func (t *Channel) IsConfigured() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.cfg.BotToken != ""
 }
 
-// SetApproveFn wires the gate approval resolver. Must be called before Start.
-func (t *TelegramChannel) SetApproveFn(fn ApproveFn) {
+// SetApproveFn satisfies channels.ApproveFnSetter.
+func (t *Channel) SetApproveFn(fn agentchannels.ApproveFn) {
 	t.mu.Lock()
 	t.approveFn = fn
 	t.mu.Unlock()
 }
 
-// Start begins long polling for updates. Blocks until ctx is cancelled or
-// Stop is called. Call IsConfigured() before Start — returns an error when
-// the bot is nil (unconfigured).
-func (t *TelegramChannel) Start(ctx context.Context) error {
+// SetSessionChecker satisfies channels.SessionCheckerSetter.
+func (t *Channel) SetSessionChecker(c agentchannels.SessionChecker) {
+	t.sessions = c
+}
+
+// SetSessionStartHook satisfies channels.SessionStartHookSetter.
+func (t *Channel) SetSessionStartHook(fn agentchannels.SessionStartHook) {
+	t.onSessionStart = fn
+}
+
+func (t *Channel) sessionOnDisk(sessionID string) bool {
+	if t.sessions == nil {
+		return false
+	}
+	return t.sessions.SessionExists(sessionID)
+}
+
+func (t *Channel) buildSessionContext(msg *tgbotapi.Message, sessionID string) string {
+	if msg == nil || msg.Chat == nil {
+		return ""
+	}
+	chatType := msg.Chat.Type
+	chatTitle := msg.Chat.Title
+	if chatTitle == "" && msg.Chat.UserName != "" {
+		chatTitle = "@" + msg.Chat.UserName
+	}
+
+	t.mu.Lock()
+	bot := t.bot
+	t.mu.Unlock()
+	botName := ""
+	if bot != nil {
+		botName = bot.Self.UserName
+	}
+
+	chatLine := chatType
+	if chatTitle != "" {
+		chatLine = fmt.Sprintf("%s — %s", chatType, chatTitle)
+	}
+
+	lines := []string{"[Telegram chat context — sent automatically by wick]"}
+	if botName != "" {
+		lines = append(lines, "Bot: @"+botName)
+	}
+	lines = append(lines, fmt.Sprintf("Chat: %s [id %d]", chatLine, msg.Chat.ID))
+
+	if msg.From != nil {
+		name := strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
+		if name == "" {
+			name = msg.From.UserName
+		}
+		userLine := name
+		if msg.From.UserName != "" {
+			userLine = fmt.Sprintf("%s (@%s)", name, msg.From.UserName)
+		}
+		lines = append(lines, fmt.Sprintf("User: %s [id %d]", userLine, msg.From.ID))
+	}
+
+	if chatType == "supergroup" && msg.Chat.UserName != "" {
+		lines = append(lines, "Link: https://t.me/"+msg.Chat.UserName)
+	}
+	lines = append(lines, "Session: "+sessionID)
+	return strings.Join(lines, "\n")
+}
+
+// Start begins long polling. Blocks until ctx is cancelled or Stop is called.
+func (t *Channel) Start(ctx context.Context) error {
 	t.mu.Lock()
 	bot := t.bot
 	t.mu.Unlock()
@@ -175,8 +212,8 @@ func (t *TelegramChannel) Start(ctx context.Context) error {
 	}
 }
 
-// Stop signals the current Start() to exit cleanly and waits for it.
-func (t *TelegramChannel) Stop() {
+// Stop cancels the poll loop and waits for it.
+func (t *Channel) Stop() {
 	t.mu.Lock()
 	cancel := t.runCancel
 	t.mu.Unlock()
@@ -186,11 +223,8 @@ func (t *TelegramChannel) Stop() {
 	t.runWg.Wait()
 }
 
-// Reload stops the current polling loop, applies the new config, and
-// restarts if the new config is valid. Mirrors SlackChannel.Reload so
-// operators can update the bot token in Channels → Telegram without
-// restarting the server.
-func (t *TelegramChannel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelConfig) {
+// Reload stops, applies new config, and restarts if valid.
+func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelConfig) {
 	t.Stop()
 
 	if cfg.BotToken == "" {
@@ -221,8 +255,7 @@ func (t *TelegramChannel) Reload(ctx context.Context, cfg agentconfig.TelegramCh
 	}()
 }
 
-// handleUpdate dispatches a single Telegram update to the appropriate handler.
-func (t *TelegramChannel) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+func (t *Channel) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 	switch {
 	case update.CallbackQuery != nil:
 		t.handleCallback(ctx, update.CallbackQuery)
@@ -231,9 +264,7 @@ func (t *TelegramChannel) handleUpdate(ctx context.Context, update tgbotapi.Upda
 	}
 }
 
-// handleMessage processes an inbound text message, applies access control,
-// and forwards to the agent pool via sendFn.
-func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
+func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	if msg.Text == "" {
 		return
 	}
@@ -241,7 +272,6 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 	chatID := msg.Chat.ID
 	sessionID := fmt.Sprintf("tg-%d", chatID)
 
-	// Access control: check AllowedIDs if configured.
 	t.mu.Lock()
 	allowed := t.cfg.AllowedIDs
 	sendFn := t.sendFn
@@ -252,10 +282,9 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 		return
 	}
 
-	// Ensure a turn exists for this session.
 	t.mu.Lock()
 	if _, ok := t.turns[sessionID]; !ok {
-		t.turns[sessionID] = &telegramTurn{chatID: chatID}
+		t.turns[sessionID] = &turn{chatID: chatID}
 	}
 	t.mu.Unlock()
 
@@ -264,17 +293,25 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 		workspace = "main"
 	}
 
+	if !t.sessionOnDisk(sessionID) {
+		ctxText := t.buildSessionContext(msg, sessionID)
+		if ctxText != "" {
+			if err := sendFn(ctx, sessionID, workspace, "telegram", "system", ctxText); err != nil {
+				log.Warn().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("inject session context failed")
+			}
+		}
+		if hook := t.onSessionStart; hook != nil {
+			hook(sessionID, "telegram", ctxText)
+		}
+	}
+
 	if err := sendFn(ctx, sessionID, workspace, "telegram", "user", msg.Text); err != nil {
 		log.Error().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("pool send failed")
 		t.postMessage(chatID, "Agent error: could not queue message. Check the dashboard for details.")
 	}
 }
 
-// handleCallback processes an inline keyboard callback query. Gate approval
-// callbacks are prefixed with "gate|" and contain five pipe-separated fields:
-// "gate|decision|requestID|sessionID|matchKey".
-func (t *TelegramChannel) handleCallback(_ context.Context, cb *tgbotapi.CallbackQuery) {
-	// Always answer the callback to dismiss the loading spinner in Telegram.
+func (t *Channel) handleCallback(_ context.Context, cb *tgbotapi.CallbackQuery) {
 	answer := tgbotapi.NewCallback(cb.ID, "")
 	t.mu.Lock()
 	bot := t.bot
@@ -289,12 +326,9 @@ func (t *TelegramChannel) handleCallback(_ context.Context, cb *tgbotapi.Callbac
 
 	data := cb.Data
 	if !strings.HasPrefix(data, "gate|") {
-		return // not a gate approval callback
+		return
 	}
 
-	// Format: "gate|decision|token" (3 parts).
-	// The token is looked up in pendingCallbacks to recover requestID, sessionID,
-	// and matchKey — Telegram's 64-byte callback_data limit prevents embedding them.
 	parts := strings.SplitN(data, "|", 3)
 	if len(parts) != 3 {
 		log.Warn().Str("channel", "telegram").Str("data", data).Msg("malformed gate callback data")
@@ -323,33 +357,25 @@ func (t *TelegramChannel) handleCallback(_ context.Context, cb *tgbotapi.Callbac
 	}
 }
 
-// OnApprovalRequest posts an inline-keyboard message with Allow Once /
-// Allow Session / Block buttons. Called by the server when the gate binary
-// requests interactive approval for a Telegram-originated session.
-func (t *TelegramChannel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) {
+// OnApprovalRequest satisfies channels.ApprovalReceiver.
+func (t *Channel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) {
 	t.mu.Lock()
-	turn := t.turns[sessionID]
+	tn := t.turns[sessionID]
 	bot := t.bot
 	t.mu.Unlock()
 
-	if turn == nil || bot == nil {
-		return // not a Telegram-originated session
+	if tn == nil || bot == nil {
+		return
 	}
 
-	chatID := turn.chatID
+	chatID := tn.chatID
 
-	// Telegram limits callback_data to 64 bytes. The full gate payload
-	// (requestID + sessionID + matchKey) far exceeds this, so we store the
-	// payload server-side under a short 8-byte random token and only embed
-	// "gate|<decision>|<token>" in the button (≤ 33 bytes for the longest
-	// decision string). handleCallback looks up the token to recover the full
-	// payload. Keep in sync with handleCallback.
 	var tokenBytes [8]byte
 	_, _ = rand.Read(tokenBytes[:])
 	token := hex.EncodeToString(tokenBytes[:])
 
 	t.mu.Lock()
-	t.pendingCallbacks[token] = telegramCallbackPayload{
+	t.pendingCallbacks[token] = callbackPayload{
 		requestID: req.ID,
 		sessionID: sessionID,
 		matchKey:  req.MatchKey,
@@ -403,10 +429,8 @@ func (t *TelegramChannel) OnApprovalRequest(sessionID string, req gate.ApprovalR
 	t.mu.Unlock()
 }
 
-// OnApprovalResolved edits the approval message to replace the inline keyboard
-// with the final decision text. Called by the server when any channel (web UI
-// or Telegram button) resolves the approval.
-func (t *TelegramChannel) OnApprovalResolved(sessionID, requestID, decision string) {
+// OnApprovalResolved satisfies channels.ApprovalReceiver.
+func (t *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 	t.mu.Lock()
 	pa, ok := t.pendingApprovals[sessionID]
 	if !ok || pa.requestID != requestID {
@@ -414,8 +438,6 @@ func (t *TelegramChannel) OnApprovalResolved(sessionID, requestID, decision stri
 		return
 	}
 	delete(t.pendingApprovals, sessionID)
-	// Clean up the callback token in case the approval came from the web UI
-	// rather than the Telegram button (handleCallback deletes it on button click).
 	if pa.token != "" {
 		delete(t.pendingCallbacks, pa.token)
 	}
@@ -444,28 +466,27 @@ func (t *TelegramChannel) OnApprovalResolved(sessionID, requestID, decision stri
 	}
 }
 
-// OnAgentEvent accumulates streaming text and posts the final reply when Done.
-// Sessions that did not originate from Telegram (no turn entry) are ignored.
-func (t *TelegramChannel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
+// OnAgentEvent satisfies channels.AgentEventReceiver.
+func (t *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	switch ev.Type {
 	case event.TextDelta:
 		t.mu.Lock()
-		turn := t.turns[sessionID]
-		if turn != nil {
-			turn.buf.WriteString(ev.Text)
+		tn := t.turns[sessionID]
+		if tn != nil {
+			tn.buf.WriteString(ev.Text)
 		}
 		t.mu.Unlock()
 
 	case event.Done:
 		t.mu.Lock()
-		turn := t.turns[sessionID]
-		if turn == nil {
+		tn := t.turns[sessionID]
+		if tn == nil {
 			t.mu.Unlock()
 			return
 		}
-		text := turn.buf.String()
-		chatID := turn.chatID
-		turn.buf.Reset()
+		text := tn.buf.String()
+		chatID := tn.chatID
+		tn.buf.Reset()
 		t.mu.Unlock()
 
 		if ev.ErrorMsg != "" {
@@ -478,21 +499,20 @@ func (t *TelegramChannel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 
 	case event.Error:
 		t.mu.Lock()
-		turn := t.turns[sessionID]
+		tn := t.turns[sessionID]
 		t.mu.Unlock()
-		if turn == nil {
+		if tn == nil {
 			return
 		}
 		msg := ev.ErrorMsg
 		if msg == "" {
 			msg = ev.Text
 		}
-		t.postMessage(turn.chatID, "Agent error: "+msg)
+		t.postMessage(tn.chatID, "Agent error: "+msg)
 	}
 }
 
-// postMessage sends a single plain-text message to chatID.
-func (t *TelegramChannel) postMessage(chatID int64, text string) {
+func (t *Channel) postMessage(chatID int64, text string) {
 	t.mu.Lock()
 	bot := t.bot
 	t.mu.Unlock()
@@ -505,9 +525,7 @@ func (t *TelegramChannel) postMessage(chatID int64, text string) {
 	}
 }
 
-// postChunked splits text into Telegram-safe chunks (4096 chars max) and
-// sends each as a separate message.
-func (t *TelegramChannel) postChunked(chatID int64, text string) {
+func (t *Channel) postChunked(chatID int64, text string) {
 	const maxTGChunk = 4000
 	chunks := chunkText(text, maxTGChunk)
 	for _, chunk := range chunks {
@@ -515,10 +533,26 @@ func (t *TelegramChannel) postChunked(chatID int64, text string) {
 	}
 }
 
-// isChatAllowed checks whether chatID is permitted. If allowedIDs is empty,
-// all chats are permitted. Otherwise the ID must appear in the
-// newline/comma-separated list.
-func (t *TelegramChannel) isChatAllowed(chatID int64, allowedIDs string) bool {
+func chunkText(s string, max int) []string {
+	if len(s) <= max {
+		return []string{s}
+	}
+	var chunks []string
+	for len(s) > max {
+		cut := max
+		if idx := strings.LastIndex(s[:cut], "\n"); idx > cut-200 {
+			cut = idx + 1
+		}
+		chunks = append(chunks, strings.TrimRight(s[:cut], "\n"))
+		s = s[cut:]
+	}
+	if s != "" {
+		chunks = append(chunks, s)
+	}
+	return chunks
+}
+
+func (t *Channel) isChatAllowed(chatID int64, allowedIDs string) bool {
 	if allowedIDs == "" {
 		return true
 	}
@@ -533,7 +567,6 @@ func (t *TelegramChannel) isChatAllowed(chatID int64, allowedIDs string) bool {
 	return false
 }
 
-// escapeMarkdown escapes special characters for Telegram MarkdownV2 format.
 func escapeMarkdown(s string) string {
 	replacer := strings.NewReplacer(
 		"_", "\\_", "*", "\\*", "[", "\\[", "]", "\\]",

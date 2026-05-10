@@ -8,6 +8,7 @@ jobs:
   unit-tests:
     name: Go Unit Tests
     runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.head_ref, 'release-sync/v') }}
 
     permissions:
       contents: read

@@ -113,7 +113,7 @@ When **only one workspace exists**, Slack uses it without asking — the operato
 
 ### App manifest
 
-A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.yml`](https://github.com/yogasw/wick/blob/master/docs/slack-app-manifest.yml). Drop it into the Slack app create flow and you get the right scopes (`app_mentions:read`, `chat:write`, `reactions:write`, etc.) without hand-toggling.
+A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](https://github.com/yogasw/wick/blob/master/docs/slack-app-manifest.json). Drop it into the Slack app create flow and you get the right scopes (`app_mentions:read`, `chat:write`, `reactions:write`, etc.) without hand-toggling.
 
 ## Telegram
 

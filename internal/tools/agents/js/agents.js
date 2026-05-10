@@ -840,5 +840,48 @@
       el.classList.remove("hidden");
       setTimeout(function () { el.classList.add("hidden"); }, 5000);
     }
+
+    // ── Test gate button (Providers page) ──────────────────────────────
+    // Single delegated click handler for every per-card "Test gate"
+    // button. Disables the button while the spawn runs (5–30s) and
+    // shows a one-line result inline so the operator gets feedback
+    // without leaving the page.
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-probe-gate]");
+      if (!btn) return;
+      var url = btn.dataset.probeUrl;
+      if (!url) return;
+      var card = btn.closest(".rounded-xl") || btn.parentElement;
+      var origLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Testing…";
+
+      fetch(url, { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          var note = card.querySelector("[data-probe-result]");
+          if (!note) {
+            note = document.createElement("p");
+            note.dataset.probeResult = "";
+            note.className = "text-xs mt-2 leading-relaxed";
+            card.appendChild(note);
+          }
+          var ms = res.duration_ms || 0;
+          if (res.supported) {
+            note.className = "text-xs mt-2 leading-relaxed text-green-600 dark:text-green-400";
+            note.textContent = "✓ gate honored — " + res.reason + " (" + ms + "ms)";
+          } else {
+            note.className = "text-xs mt-2 leading-relaxed text-red-600 dark:text-red-400";
+            note.textContent = "✗ gate NOT honored — " + res.reason + " (" + ms + "ms)";
+          }
+        })
+        .catch(function (err) {
+          alert("probe failed: " + err);
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = origLabel;
+        });
+    });
   });
 })();

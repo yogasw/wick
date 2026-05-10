@@ -1,10 +1,18 @@
 // Command gate is the small binary claude's PreToolUse hook invokes
 // before every Bash tool call. It reads a JSON envelope from stdin,
 // decides allow/block via the gate matcher, logs the decision to
-// the shared commands.jsonl, and exits with the claude-expected code:
+// the shared commands.jsonl, and signals claude via stdout JSON.
 //
-//	exit 0 = allow
-//	exit 2 = block (claude cancels the tool call)
+// Block contract (per Claude Code docs):
+//
+//	exit 0, no stdout JSON      → allow
+//	exit 0, stdout JSON with
+//	  hookSpecificOutput
+//	  .permissionDecision="deny" → block (claude cancels the tool call)
+//
+// Note: exit 2 alone is NOT a block — claude ignores any stdout JSON
+// when the exit code is non-zero, so the tool would still run. We
+// always exit 0 from this binary.
 //
 // The binary ships per-app as `<app>-gate[.exe]` (e.g. `myapp-gate`
 // for a project initialized with `wick init myapp`).
@@ -59,6 +67,54 @@ type hookToolInput struct {
 // kicks in and we block.
 const stdinReadTimeout = 3 * time.Second
 
+// emitBlock writes the PreToolUse deny envelope to stdout and the
+// human-readable reason to stderr.
+//
+// Per Claude Code docs: JSON output is processed ONLY on exit 0.
+// Exit 2 makes claude ignore the JSON and the tool still runs (we
+// hit this on Windows with claude 2.1.138). Callers therefore pair
+// this with `return 0`, not `return 2`. The deny is conveyed via
+// hookSpecificOutput.permissionDecision="deny".
+func emitBlock(reason string) {
+	payload := map[string]any{
+		"continue":   false,
+		"stopReason": reason,
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "deny",
+			"permissionDecisionReason": reason,
+		},
+	}
+	if data, err := json.Marshal(payload); err == nil {
+		fmt.Fprintln(os.Stdout, string(data))
+	}
+	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
+}
+
+// emitAllow writes the PreToolUse allow envelope, telling claude to
+// skip the permission prompt and run the tool directly.
+//
+// Why this is mandatory: if we exit 0 with no JSON, claude falls
+// back to its built-in permission flow. In headless `claude -p`
+// runs there's no UI to prompt, so the tool either hangs or gets
+// sandbox-blocked even though our gate already approved it. The
+// allow envelope short-circuits that path.
+//
+// Pair with `return 0`. Reason is shown in claude's audit log; "" is
+// fine for non-noteworthy approvals (whitelist match, auto-approved).
+func emitAllow(reason string) {
+	payload := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "allow",
+			"permissionDecisionReason": reason,
+		},
+	}
+	if data, err := json.Marshal(payload); err == nil {
+		fmt.Fprintln(os.Stdout, string(data))
+	}
+}
+
 // socketDialTimeout caps the time we'll wait for the daemon's socket
 // to accept our connection. Short — if the daemon is up at all the
 // connect is sub-millisecond; if it's not we'd rather fail-safe
@@ -75,6 +131,15 @@ func main() {
 		switch os.Args[1] {
 		case "--config", "-config", "config":
 			printConfig()
+			return
+		case "--probe-deny":
+			// Always-deny mode for ProbeGateSupport. Drains stdin so
+			// claude's hook write doesn't block, then emits the deny
+			// envelope + exits 0. If claude honors the contract the
+			// tool is cancelled; if not, the probe sees the side
+			// effect and reports unsupported.
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			emitBlock("probe: forced deny")
 			return
 		}
 	}
@@ -146,8 +211,8 @@ func run() int {
 			"error":      perr.Error(),
 		})
 		logTerminalEntry(requestID, "Bash", "", "", "blocked", "", "stdin parse: "+perr.Error())
-		fmt.Fprintf(os.Stderr, "gate: %v\n", perr)
-		return 2
+		emitBlock("stdin parse: " + perr.Error())
+		return 0
 	}
 
 	if in.ToolName != "Bash" {
@@ -157,7 +222,8 @@ func run() int {
 	cmd := in.ToolInput.Command
 	if cmd == "" {
 		logTerminalEntry(requestID, "Bash", "", in.CWD, "blocked", "", "empty command")
-		return 2
+		emitBlock("empty command")
+		return 0
 	}
 	cwd := in.CWD
 	claudeSID := in.SessionID
@@ -170,6 +236,7 @@ func run() int {
 			"cmd":        cmd,
 		})
 		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "whitelist", "")
+		emitAllow("whitelist")
 		return 0
 	}
 
@@ -184,6 +251,7 @@ func run() int {
 			"match_key":  key,
 		})
 		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "auto_approved", "")
+		emitAllow("auto_approved")
 		return 0
 	}
 
@@ -206,6 +274,7 @@ func run() int {
 			"error":      err.Error(),
 		})
 		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "no_socket", err.Error())
+		emitAllow("no_socket")
 		return 0
 	}
 	if gate.IsApprove(decision) {
@@ -215,6 +284,7 @@ func run() int {
 			"reason":     reason,
 		})
 		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", decision, reason)
+		emitAllow(decision)
 		return 0
 	}
 	gate.LogDaily(app, "warn", "blocked: "+decision, map[string]any{
@@ -223,8 +293,8 @@ func run() int {
 		"reason":     reason,
 	})
 	logTerminalEntry(requestID, "Bash", cmd, cwd, "blocked", decision, reason)
-	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
-	return 2
+	emitBlock(reason)
+	return 0
 }
 
 // runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob).
@@ -239,12 +309,14 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	// absolute but don't start with "/", so HasPrefix alone misses them.
 	if path == "" || (!strings.HasPrefix(path, "/") && !filepath.IsAbs(path)) {
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "relative_path", "")
+		emitAllow("relative_path")
 		return 0
 	}
 
 	// Within default scope → allow immediately.
 	if spec.DefaultScope != "" && gate.PathWithinScope(path, spec.DefaultScope) {
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "scope", "")
+		emitAllow("scope")
 		return 0
 	}
 
@@ -252,6 +324,7 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	key := gate.MatchKey(tool, path)
 	if gate.IsAutoApproved(spec, key) {
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "auto_approved", "")
+		emitAllow("auto_approved")
 		return 0
 	}
 
@@ -261,15 +334,17 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	if err != nil {
 		// Fail-open: socket unavailable means wick not running.
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "no_socket", err.Error())
+		emitAllow("no_socket")
 		return 0
 	}
 	if gate.IsApprove(decision) {
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", decision, reason)
+		emitAllow(decision)
 		return 0
 	}
 	logTerminalEntry(requestID, tool, path, in.CWD, "blocked", decision, reason)
-	fmt.Fprintf(os.Stderr, "gate: blocked %s(%q) — %s\n", tool, path, reason)
-	return 2
+	emitBlock(fmt.Sprintf("%s(%q) — %s", tool, path, reason))
+	return 0
 }
 
 // logStage writes one intermediate audit-trail entry. Used to track

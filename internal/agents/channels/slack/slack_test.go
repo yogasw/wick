@@ -1,4 +1,4 @@
-package channels
+package slack
 
 import (
 	"strings"
@@ -50,7 +50,7 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 }
 
 func TestAllowed(t *testing.T) {
-	s := &SlackChannel{}
+	s := &Channel{}
 
 	// everyone
 	s.cfg.AccessMode = "everyone"
@@ -83,7 +83,7 @@ func TestAllowed(t *testing.T) {
 }
 
 func TestDashboardURL(t *testing.T) {
-	s := &SlackChannel{pubURL: "https://wick.example.com"}
+	s := &Channel{pubURL: "https://wick.example.com"}
 	got := s.dashboardURL("1715167891.234567")
 	want := "https://wick.example.com/tools/agents/sessions/1715167891.234567"
 	if got != want {
