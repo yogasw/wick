@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -238,6 +239,9 @@ func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawn
 	workspace := opt.Workspace
 	if workspace == "" {
 		workspace = cfg.TempDirRoot
+	}
+	if workspace == "" && opt.SessionID != "" {
+		workspace = filepath.Join(f.Layout.SessionDir(opt.SessionID), "gate")
 	}
 	if workspace != "" {
 		if err := gate.WriteWorkspaceHooks(workspace, cfg.GateBinary); err != nil {

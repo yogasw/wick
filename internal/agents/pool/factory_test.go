@@ -41,8 +41,8 @@ func TestFactoryAttachGate_WritesClaudeSettings(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(gateDir, "settings.json")); err != nil {
-		t.Fatalf("settings.json missing: %v", err)
+	if _, err := os.Stat(filepath.Join(gateDir, ".claude", "settings.local.json")); err != nil {
+		t.Fatalf(".claude/settings.local.json missing: %v", err)
 	}
 	// Stage 9 invariant: factory MUST NOT write spec.json — that
 	// file lives at SharedSpecPath and is owned by the daemon.
@@ -65,8 +65,8 @@ func TestFactoryAttachGate_DefaultsTempDir(t *testing.T) {
 	if _, err := f.Build(FactoryOptions{SessionID: "S2", AgentName: "main"}); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	want := filepath.Join(f.Layout.SessionDir("S2"), "gate", "settings.json")
+	want := filepath.Join(f.Layout.SessionDir("S2"), "gate", ".claude", "settings.local.json")
 	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("default settings.json path missing: %v", err)
+		t.Fatalf("default settings path missing: %v", err)
 	}
 }
