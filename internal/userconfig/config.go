@@ -73,6 +73,14 @@ type Config struct {
 }
 
 // ProviderStatus is the persisted shape of a Probe result.
+//
+// Hooks holds per-event capability info (currently just "PreToolUse"
+// for the command gate; future events like "SessionStart" or
+// "UserPromptSubmit" land as additional map keys without struct churn).
+// Persisting it here means the Providers page renders the gate-toggle
+// state from disk without re-spawning the provider on every render —
+// same TTL strategy as the version probe. Re-probe only fires when
+// Version changes or the user clicks Rescan.
 type ProviderStatus struct {
 	Path       string `json:"path"`
 	PathFound  bool   `json:"path_found"`
@@ -80,6 +88,24 @@ type ProviderStatus struct {
 	VersionErr string `json:"version_err,omitempty"`
 	ScannedAt  string `json:"scanned_at,omitempty"`
 	VersionAt  string `json:"version_at,omitempty"`
+
+	// Hooks captures the runtime capability check per hook event name.
+	// Keys are provider-agnostic event names ("PreToolUse",
+	// "SessionStart", ...). Empty map = never probed, UI surfaces
+	// "click Test to verify".
+	Hooks map[string]HookCapability `json:"hooks,omitempty"`
+}
+
+// HookCapability is the persisted snapshot of one hook-event probe.
+// Mirrors capability.Capability — kept here as a separate struct so
+// the userconfig package stays self-contained (no import of
+// internal/agents/capability, which would invert the dependency).
+type HookCapability struct {
+	Supported bool   `json:"supported,omitempty"`
+	Verified  bool   `json:"verified,omitempty"`
+	ProbedAt  string `json:"probed_at,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Scope     string `json:"scope,omitempty"` // "bash+edit+mcp" | "shell-only" | "untested"
 }
 
 // ProvidersConfig groups per-provider-type instance lists. One type

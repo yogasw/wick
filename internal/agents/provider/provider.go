@@ -67,6 +67,11 @@ func (i Instance) Bin() string {
 }
 
 // Status is the live health of one instance, as shown in the UI.
+//
+// Hooks is per-hook-event capability info, keyed by event name
+// ("PreToolUse" for the command gate; more events join the map
+// later without struct churn). Empty map = never probed; UI shows
+// a "Click Test" prompt.
 type Status struct {
 	Instance   Instance
 	ResolvedAt time.Time
@@ -74,7 +79,26 @@ type Status struct {
 	PathFound  bool
 	Version    string // first line of `<bin> --version`
 	VersionErr string // error message when version probe failed
+
+	Hooks map[string]HookCapability
 }
+
+// HookCapability is the in-memory mirror of userconfig.HookCapability
+// — same fields, ProbedAt parsed as time.Time so handlers don't have
+// to re-parse on every render.
+type HookCapability struct {
+	Supported bool
+	Verified  bool
+	ProbedAt  time.Time
+	Error     string
+	Scope     string
+}
+
+// HookEventPreToolUse is the well-known event key for the command gate.
+// Hard-coded here so callers don't have to spell the string. New event
+// keys are added as constants alongside this one as wick learns to
+// intercept additional lifecycle hooks.
+const HookEventPreToolUse = "PreToolUse"
 
 // ── Config helpers ────────────────────────────────────────────────────
 

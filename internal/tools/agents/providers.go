@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -264,6 +265,69 @@ func probeProviderGate(c *tool.Ctx) {
 	gateBin := GetGateStatus().Binary
 	res := gate.ProbeGateSupport(ctx, claudeBin, gateBin)
 	c.JSON(http.StatusOK, res)
+}
+
+// checkProviderHook runs the capability probe for one hook event on
+// one provider instance. The handler is provider-agnostic — it looks
+// up the registered Writer + Prober for the named provider, spawns
+// the binary in a throwaway workspace with a force-deny hook, and
+// reports whether the deny envelope was honored.
+//
+// Path: POST /agents/providers/{type}/{name}/hooks/{event}/check
+//
+// The result is merged into the persisted ProviderStatus so the next
+// page render reflects the verified state without re-probing. Empty
+// event defaults to PreToolUse (the command gate). The merge keeps
+// version/path fields intact — see provider.MergeHookCapability.
+func checkProviderHook(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	event := c.PathValue("event")
+	if event == "" {
+		event = provider.HookEventPreToolUse
+	}
+	if t == "" || name == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "type and name required"})
+		return
+	}
+
+	gateBin := GetGateStatus().Binary
+	if gateBin == "" {
+		c.JSON(http.StatusOK, map[string]any{
+			"verified": false,
+			"error":    "gate binary not resolved — run `wick build`",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Context(), 60*time.Second)
+	defer cancel()
+
+	res := capability.HookCapabilityCheck(ctx, capability.CheckInput{
+		ProviderName: string(t),
+		GateBinary:   gateBin + " --probe-deny --provider=" + string(t),
+	})
+
+	// Persist so /providers reload reflects new state without re-probe.
+	provider.MergeHookCapability(t, name, event, provider.HookCapability{
+		Supported: res.HookSupported,
+		Verified:  res.HookVerified,
+		ProbedAt:  res.HookProbedAt,
+		Error:     res.HookError,
+		Scope:     res.InterceptScope,
+	})
+
+	c.JSON(http.StatusOK, map[string]any{
+		"supported": res.HookSupported,
+		"verified":  res.HookVerified,
+		"probed_at": res.HookProbedAt.Format(time.RFC3339),
+		"error":     res.HookError,
+		"scope":     res.InterceptScope,
+		"event":     event,
+	})
 }
 
 // rescanOneProvider re-probes a single instance. Used by the per-card

@@ -151,6 +151,7 @@ func Register(r tool.Router) {
 	r.POST("/providers/rescan", rescanAllProviders)
 	r.POST("/providers/rescan/{type}/{name}", rescanOneProvider)
 	r.POST("/providers/probe-gate/{type}/{name}", probeProviderGate)
+	r.POST("/providers/{type}/{name}/hooks/{event}/check", checkProviderHook)
 	r.POST("/providers/auto-rescan/toggle", toggleAutoRescan)
 
 	r.GET("/channels", channelsPage)

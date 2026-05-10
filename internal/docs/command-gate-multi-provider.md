@@ -1,6 +1,6 @@
 # Command Gate — Multi-Provider Design
 
-Status: **proposal**.
+Status: **Priority 0 done** — capability detection landed end-to-end. Phase 1+ pending.
 Update terakhir: 2026-05-11.
 
 Doc ini supersede arsitektur lama yang Claude-only ([command-gate-architecture.md](command-gate-architecture.md)). Tujuan: gate jadi generic, per-provider hook contract di-translate sama adapter, capability dicek runtime jadi user gak nyalain gate di provider yang gak support hook.
@@ -12,7 +12,7 @@ Tujuan: implement capability detection **dulu**, terisolasi dari spawn/chat path
 Urutan task — tiap step bisa landed independent, gak block phase berikutnya.
 
 ```
-[ ] D1. Capability registry skeleton
+[x] D1. Capability registry skeleton
     - internal/agents/capability/capability.go (separate package — hindari circular
       import dari spawner subpackages yang juga butuh baca Capability)
     - Capability struct + HookSupported static map
@@ -21,15 +21,26 @@ Urutan task — tiap step bisa landed independent, gak block phase berikutnya.
     - Self-registration pattern: tiap provider sub-package (claude/codex/gemini)
       manggil capability.Register("claude", Capability{...}) di init() — central map
       gak perlu di-edit tiap nambah provider
-    - Unit test: registry lookup per Type returns expected struct
+    - Unit test:
+        - Register + Lookup roundtrip
+        - Lookup unknown name → (zero, false)
+        - Concurrent Register calls safe (race detector pass)
+        - Duplicate Register: last-write-wins atau panic (decide saat impl, document)
 
-[ ] D2. Hook config writer per provider (project-scoped, dry-run mode)
+[x] D2. Hook config writer per provider (project-scoped, dry-run mode)
     - internal/agents/provider/claude/hookconfig.go: WriteHookConfig + RemoveHookConfig
-    - Same untuk codex/, gemini/ (gemini bisa stub return ErrUnsupported)
+    - Same untuk codex/, gemini/ (semua ship implementation, gemini boleh return
+      stub gate path tapi argv shape harus match docs)
     - Dry-run flag: write ke temp dir, return path, jangan touch real config
-    - Unit test: assert JSON shape match expected per provider docs
+    - Unit test:
+        - WriteHookConfig produces JSON matching golden file per provider
+        - RemoveHookConfig deletes file, no-op kalau gak ada
+        - Idempotent: WriteHookConfig twice = same file content
+        - Merge behavior: kalau target file existing dgn unrelated keys, preserve
+          (penting — user mungkin punya hook config lain)
+        - Dry-run: returns path tanpa side effect di filesystem nyata
 
-[ ] D2b. Spawner sub-package per provider (all 3: claude, codex, gemini)
+[x] D2b. Spawner sub-package per provider (all 3: claude, codex, gemini)
     Scope: ship spawn.go untuk ketiga provider supaya factory bisa dispatch
     uniform. Test coverage realistis:
       - claude: full test (user punya install)
@@ -54,24 +65,37 @@ Urutan task — tiap step bisa landed independent, gak block phase berikutnya.
         - switch case 3 way: claude / codex / gemini → instantiate Spawner respective
         - Factory tetap pegang rule "gate active → skip provider's bypass flag", translate per-provider
     - Unit test:
-        - claude: argv shape with + without gate (existing pattern)
-        - codex: argv shape with + without gate (user bisa verify lokal)
-        - gemini: argv shape test only, skip integration (TBD)
+        - claude: argv shape with + without gate (existing pattern preserved)
+        - codex: argv shape with + without gate, --ask-for-approval flag wiring
+        - gemini: argv shape only (integration t.Skip — need install)
+        - All three: SpawnOptions{Workspace, ResumeID, ExtraEnv} respected
+        - All three: BypassPermissions/equivalent NOT set when gate active (factory rule)
+        - Factory dispatch test: opt.ProviderType="codex" → codex.Spawner instance,
+          dst (table-driven test mudah extend)
 
-[ ] D3. Gate probe mode (--probe)
+[x] D3. Gate probe mode (--probe)
     - cmd/gate: tambah --probe flag
-    - Behavior: parse stdin, kirim canonical Decision ke daemon dgn ProbeRequest=true
+    - Behavior: parse stdin, set Decision.Probe=true, kirim ke daemon
     - Daemon: route ke probe handler (lihat D4), bukan ke session
     - Adapter emit canned deny output, exit sesuai provider quirks
-    - Unit test: golden file stdin → stdout per adapter
+    - Unit test:
+        - per adapter: golden file stdin → stdout (with Probe=true)
+        - flag parsing: --probe absent vs present → Decision.Probe shape
+        - fail-open behavior unchanged saat daemon socket missing
 
-[ ] D4. Daemon probe handler
-    - internal/agents/gate/daemon: handle ProbeRequest tanpa SSE broadcast
+[x] D4. Daemon probe handler
+    - internal/agents/gate/daemon: handle Decision.Probe==true tanpa SSE broadcast
     - Reply Result{Allow:false, Reason:"capability probe"}
     - Log probe event ke commands.jsonl dgn stage=probe
-    - Integration test: dial socket, kirim probe, assert reply shape
+    - Daemon path harus exist sebelum D3 (cek `internal/agents/gate/` repo —
+      kalau belum ada daemon entrypoint, D4 included scaffolding listener)
+    - Unit test:
+        - probe request → Result{Allow:false, Reason:"capability probe"}
+        - non-probe request → normal flow (whitelist eval atau pending channel)
+        - jsonl entry stage=probe written correctly
+    - Integration test: dial socket dari fake gate, kirim probe, assert reply shape
 
-[ ] D5. HookCapabilityCheck function
+[x] D5. HookCapabilityCheck function
     - internal/agents/capability/check.go: HookCapabilityCheck(ctx, ins) Capability
       (same package as D1's registry; check func reads registry + invokes per-provider Prober)
     - Spawn provider dgn project-scoped hook config (D2) pointing ke gate --probe (D3)
@@ -79,39 +103,97 @@ Urutan task — tiap step bisa landed independent, gak block phase berikutnya.
     - Verify provider honors deny: sentinel file should NOT exist after spawn exits
     - Timeout 10s, cleanup temp workspace
     - HookVerified=true kalau sentinel absent, false kalau ada
-    - Integration test per provider:
+    - Unit test (mock Prober):
+        - HookSupported=false → return early, no spawn attempt
+        - Prober returns nil → HookVerified=true
+        - Prober returns error → HookVerified=false, HookError populated
+        - ctx canceled → HookError="canceled", no leak
+        - Timeout exceeded → HookError="timeout"
+    - Integration test per provider (real binary):
         - claude: full integration test (user bisa verify)
         - codex: full integration test (user bisa verify)
         - gemini: code path exist, runtime test t.Skip dgn note "needs gemini install"
-    - Skip kalau binary gak install di CI runner
+        - Skip kalau binary gak install di CI runner (gunakan exec.LookPath guard)
+        - Cleanup: workspace temp dir di-defer remove regardless of test outcome
 
-[ ] D6. Capability cache + invalidation
+[x] D6. Capability cache + invalidation
     - probeCache di provider.go diperluas: simpan Capability bareng Status
     - Cache key: Type + ResolvedPath + Version (re-probe saat version berubah)
-    - InvalidateProbeCache juga drop capability entry
-    - Unit test: cache hit returns cached, version change forces re-probe
+    - Invalidation triggers:
+        - Save/Delete instance (existing — extend untuk drop capability)
+        - Version change detected di Probe (existing version refresh)
+        - Manual Rescan dari UI / `wick agents rescan`
+    - TTL: tetap pakai probeCacheTTL existing (30s) untuk Status, tapi Capability
+      pakai TTL lebih panjang (1h) karena hook contract jarang berubah dalam
+      satu version. Pisah TTL biar version probe tetap fresh tanpa re-probe hook.
+    - Unit test:
+        - cache hit returns cached Capability
+        - version change forces re-probe
+        - InvalidateProbeCache drops both Status + Capability
+        - concurrent ProbeAllCached calls gak duplikat probe (sync.Once or mutex)
 
-[ ] D7. CLI subcommand untuk manual probe (debugging)
-    - `wick agents capability <type>` → run HookCapabilityCheck, print result
+[~] D7. (SKIPPED — capability check dari web UI only, gak butuh CLI)
+        CLI subcommand untuk manual probe (debugging)
+    - `wick agents capability <type> [--name <name>] [--json]` → run HookCapabilityCheck
+    - Default output: human-readable text format:
+        ```
+        Provider: claude/claude
+        Binary:   /usr/local/bin/claude
+        Version:  claude 2.1.142
+        Hook support:  yes (bash+edit+mcp)
+        Hook verified: yes (probed 2026-05-11T10:23:00Z)
+        ```
+    - `--json` flag: emit raw Capability struct sebagai JSON untuk scripting
+    - Exit code: 0 kalau HookVerified=true, 1 kalau HookError non-empty
     - Useful buat reproduce CI failure di local
     - Help text jelasin "this spawns the provider with a sentinel; expect a deny"
+    - Unit test:
+        - text format snapshot test (stable output across runs)
+        - json output parsable
+        - exit code matches HookVerified state
 
-[ ] D8. Integration test harness
+[x] D8. Integration test harness
     - test/integration/gate_capability_test.go
     - Spin up daemon socket, fake provider binary (shell script yg simulate hook call)
     - Walk through full D3→D4→D5 flow tanpa real claude/codex
     - Run di CI di setiap PR (cheap, no external deps)
+    - Test scenarios:
+        - Happy path: fake provider invokes gate --probe → daemon replies deny → assert audit log
+        - Daemon down: gate fail-open allow, sentinel created (negative case)
+        - Adapter parse error: malformed stdin → fail-closed deny + stderr log
+        - Concurrent probes: 5 parallel HookCapabilityCheck calls share daemon socket OK
+        - Cleanup: socket file removed after daemon shutdown
+    - Fake provider script per OS:
+        - Linux/macOS: bash script
+        - Windows: powershell script (.ps1)
+        - Build tag `//go:build integration` to opt-in
 ```
 
-**Exit criteria Priority 0**:
-- D1–D8 hijau di CI (unit tests, harness)
-- Manual `wick agents capability claude` lokal → `HookVerified=true` (user verify)
-- Manual `wick agents capability codex` lokal → `HookVerified=true` (user verify)
-- Manual `wick agents capability gemini` → ship code, expected `HookError=untested`
-  sampai ada akses gemini install. Field `HookSupported=true` (adapter ada di code)
-  tapi `HookVerified=false` sampai diverifikasi manual oleh kontributor yang punya gemini.
+**Exit criteria Priority 0** — ✅ done:
+- D1–D6, D8 hijau di CI (unit tests + integration harness with build tag)
+- D7 skipped — capability check dari web UI only
+- Provider self-registration via init() shipped untuk claude+codex+gemini
+- Existing claude path UNTOUCHED (factory.go + gate.WriteWorkspaceHooks intact)
+- TestProviderRegistrationsLoadAll proves all 3 registries populated
 
-Setelah claude+codex verified, boleh lanjut ke Phase 1 (refactor existing claude spawn jadi adapter-based). Gemini stays "shipped but unverified" status — di UI tampil banner "experimental, please report".
+**Implementation notes (post-merge):**
+- Capability state persists ke `userconfig.ProviderStatus.Hooks` map (Opsi B nested
+  shape — extensible buat hook event lain di masa depan tanpa schema churn)
+- `provider.MergeHookCapability(t, name, event, hc)` helper buat HTTP handler
+- Fake provider Go binary (build on-the-fly) jadi backbone integration test —
+  cross-platform tanpa per-OS script
+- Codex argv `codex exec --sandbox workspace-write` + hook config di
+  `<ws>/.codex/hooks.json` — verify ulang against codex 0.129 binary saat
+  pertama kali user toggle gate ON
+- Gemini argv `gemini -p` + hook config di `<ws>/.gemini/settings.json` — UNVERIFIED,
+  scope tetap "untested" di registry sampai ada kontributor yang verify
+
+**Next (Phase 1+):**
+- HTTP handler `POST /api/agents/providers/{type}/{name}/hooks/{event}/check`
+  → call `capability.HookCapabilityCheck` + `provider.MergeHookCapability`
+- UI Command Gate section per provider card (default OFF, status badge, Test button)
+- Phase 1 refactor existing claude spawn jadi adapter-based (drop attachGateConfig
+  dispatch, route lewat capability writers)
 
 ## Ringkasan keputusan
 
@@ -165,6 +247,7 @@ type Decision struct {
     Cwd       string `json:"cwd"`
     RequestID string `json:"request_id"`
     Provider  string `json:"provider"`    // for audit only
+    Probe     bool   `json:"probe,omitempty"` // true = capability probe, daemon skips SSE
     Raw       json.RawMessage `json:"raw,omitempty"` // original payload preserved
 }
 
@@ -208,7 +291,12 @@ package adapter
 
 var registry = map[string]Adapter{}
 
+// Register adds an adapter to the lookup table. Called from adapter
+// sub-packages in init(). Adapter.Name() determines the lookup key.
 func Register(a Adapter) { registry[a.Name()] = a }
+
+// Lookup returns the adapter registered for provider name, or error
+// "unknown provider" if no adapter registered (cmd/gate forgot blank import).
 func Lookup(name string) (Adapter, error) { ... }
 ```
 
@@ -316,7 +404,7 @@ Per provider implementation:
 
 Tiap Prober ada di `provider/<name>/prober.go`, register ke `capability` package via init.
 
-Result di-cache bareng `Status` (probeCacheTTL same as version). User klik Rescan = re-probe.
+Result di-cache (lihat D6 — Capability TTL 1h, terpisah dari Status TTL 30s, karena hook contract jarang berubah dalam satu version). User klik Rescan = re-probe.
 
 ### UI behavior
 
@@ -381,7 +469,7 @@ func WriteHookConfig(gateBin string, scope HookScope) error
 func RemoveHookConfig() error
 ```
 
-Scope = path config file (per-instance via env var? per-project via `.claude/settings.json`?). Untuk Phase 1, project-scoped lebih aman (gak nyentuh user-global config). Detailnya per provider:
+Scope = project-scoped config file (decided: gak nyentuh user-global config — session cleanup otomatis hapus, dan user-managed settings tetap intact). Detailnya per provider:
 
 - **Claude**: `<sessionDir>/.claude/settings.json` — sudah ada mekanisme di repo
 - **Codex**: `<sessionDir>/.codex/hooks.json` — verify path saat impl
@@ -445,6 +533,19 @@ Daily tail log unchanged.
 | Hook config write fail | Spawn error, abort | gak boleh spawn tanpa gate kalau user opt-in |
 
 ## Migration / rollout
+
+**Relationship: D-tasks vs Phases**
+
+Priority 0 (D1–D8) = detection infrastructure, **independent** dari Phase 1-5 rollout sequence. Bisa landed paralel:
+
+- D1, D2, D2b, D6 = pure infrastructure → bisa merged kapan saja, no user-visible change
+- D3, D4, D5 = probe path → enables capability UI di Phase 2
+- D7, D8 = tooling + test harness → support development semua phase
+
+Phase 2 ready saat D1+D5+D6 hijau (capability registry + probe + cache).
+Phase 3 (codex) ready saat semua D-task hijau + codex adapter shipped.
+
+Phase 1 (refactor claude) bisa start paralel dengan D-tasks selama gak break existing whitelist behavior.
 
 1. **Phase 1**: refactor existing claude path jadi adapter-based, no behavior change. Daemon hold whitelist. Existing users gak ngerasain apa-apa.
 2. **Phase 2**: per-instance `GateEnabled` flag, capability registry (self-registering), UI toggle. Default OFF for all instances — banner "Gate is now per-provider, re-enable if needed".

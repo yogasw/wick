@@ -134,17 +134,74 @@ func main() {
 			return
 		case "--probe-deny":
 			// Always-deny mode for ProbeGateSupport. Drains stdin so
-			// claude's hook write doesn't block, then emits the deny
-			// envelope + exits 0. If claude honors the contract the
-			// tool is cancelled; if not, the probe sees the side
-			// effect and reports unsupported.
+			// the provider's hook write doesn't block, then emits the
+			// deny envelope (per provider's contract) + exits 0. If
+			// the provider honors the contract the tool is cancelled;
+			// if not, the probe sees the side effect and reports
+			// unsupported.
+			//
+			// Optional `--provider=<name>` second arg picks the deny
+			// envelope shape. Empty / absent → claude shape (default
+			// for backward compat with existing claude-only callers).
+			providerName := parseProviderArg(os.Args[2:])
 			_, _ = io.Copy(io.Discard, os.Stdin)
-			emitBlock("probe: forced deny")
+			emitBlockForProvider(providerName, "probe: forced deny")
 			return
 		}
 	}
 	exitCode := run()
 	os.Exit(exitCode)
+}
+
+// parseProviderArg extracts the value of --provider=X (or --provider X)
+// from a list of args, returning "" when absent. Tolerates unknown
+// flags to keep the parser permissive — we only care about one key.
+func parseProviderArg(args []string) string {
+	for i, a := range args {
+		switch {
+		case strings.HasPrefix(a, "--provider="):
+			return strings.TrimPrefix(a, "--provider=")
+		case a == "--provider" && i+1 < len(args):
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// emitBlockForProvider writes the deny envelope in the format the
+// named provider expects. Falls back to claude's shape when name is
+// empty or unknown — claude is the canonical reference and was the
+// only supported provider before the multi-provider refactor, so
+// preserving that shape keeps existing `ProbeGateSupport` callers
+// working without changes.
+func emitBlockForProvider(name, reason string) {
+	switch name {
+	case "codex":
+		// Codex accepts a flat permissionDecision object with reason.
+		// Per OpenAI's hooks doc (codex 0.129) exit-0 + JSON is the
+		// safe path; exit 2 + stderr also works but is harder to test.
+		payload := map[string]any{
+			"permissionDecision": "deny",
+			"reason":             reason,
+		}
+		if data, err := json.Marshal(payload); err == nil {
+			fmt.Fprintln(os.Stdout, string(data))
+		}
+		fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
+	case "gemini":
+		// Per public docs gemini reads `decision: deny` with reason.
+		// UNVERIFIED — flip the shape once an integrator validates.
+		payload := map[string]any{
+			"decision": "deny",
+			"reason":   reason,
+		}
+		if data, err := json.Marshal(payload); err == nil {
+			fmt.Fprintln(os.Stdout, string(data))
+		}
+		fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
+	default:
+		emitBlock(reason)
+	}
 }
 
 // printConfig dumps resolved app name and every path the gate writes
