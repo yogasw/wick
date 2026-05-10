@@ -83,35 +83,6 @@ type Status struct {
 // agents config in ~/.foo/config.json.
 var AppName = ""
 
-// CacheStore is the small slice of internal/configs the provider
-// package needs to persist Status across restarts. Defining the
-// interface here (instead of importing configs) keeps provider
-// dependency-free of the HTTP/config stack — the boot wiring injects
-// the real *configs.Service.
-type CacheStore interface {
-	GetOwned(owner, key string) string
-	SetOwned(ctx context.Context, owner, key, value string) error
-}
-
-var (
-	cacheStoreMu sync.RWMutex
-	cacheStore   CacheStore
-)
-
-// SetCacheStore wires the persistent cache backend. Until called,
-// status cache lives in-memory only (probeCache TTL).
-func SetCacheStore(s CacheStore) {
-	cacheStoreMu.Lock()
-	cacheStore = s
-	cacheStoreMu.Unlock()
-}
-
-func getCacheStore() CacheStore {
-	cacheStoreMu.RLock()
-	defer cacheStoreMu.RUnlock()
-	return cacheStore
-}
-
 // Load returns every configured instance across all supported types,
 // auto-seeding the per-type default entry when its list is empty so
 // the UI always has at least one row per supported runtime.

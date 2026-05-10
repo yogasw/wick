@@ -13,6 +13,7 @@ type GeneralConfig struct {
 	GateEnabled       bool   `wick:"checkbox;desc=Route every Bash command through the gate sidecar. When off, the provider's own default permission handling applies (claude headless: blocks; others vary)."`
 	AllowedCmds       string `wick:"kvlist=pattern|scope;desc=Command whitelist. pattern supports a trailing * wildcard (e.g. 'git *'). scope (optional) restricts path args to a directory prefix."`
 	PublicURL         string `wick:"url;desc=Public base URL of this wick instance. Used for the dashboard meta-command."`
+	AutoRescan        bool   `wick:"checkbox;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
@@ -27,5 +28,6 @@ func DefaultGeneralConfig() GeneralConfig {
 		DefaultProvider: "claude",
 		GateEnabled:     false,
 		AllowedCmds:     `[{"pattern":"git status"},{"pattern":"git diff *"},{"pattern":"git log *"},{"pattern":"ls *"},{"pattern":"cat *"}]`,
+		AutoRescan:      true,
 	}
 }

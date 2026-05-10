@@ -360,32 +360,38 @@ Prefix konsisten supaya `grep agents.` di server log nge-trace lifecycle satu sp
 
 Output di `<base>/logs/server-YYYY-MM-DD.log` (bukan app-log, karena emit via global `zerolog/log` yg di-init di server boot, bukan tray).
 
-#### Status Cache (DB-persisted)
+#### Status Cache (userconfig-persisted)
 
 Why: cold `--version` spawn pada Node-shim CLI (codex/gemini `.cmd`) bisa 1-3 detik karena Node start. 3 provider sequential blocking bikin Providers page hang setelah lab/MSI baru install. Cache TTL in-memory 30s sebelumnya cuma masking — restart wick = penalti dibayar lagi.
 
-Solusi: persist `Status` ke `configs` table satu row per instance, key `provider_status:<type>/<name>`, value JSON `{path, path_found, version, version_err, scanned_at, version_at}`. Owner `agents`. File: `internal/agents/provider/status_cache.go`.
+Solusi: persist `Status` ke userconfig file (`~/.<app>/config.json`, field `provider_statuses` — `map[string]ProviderStatus` keyed `<type>/<name>`). File: `internal/agents/provider/status_cache.go` + struct di `internal/userconfig/config.go`.
+
+**Why userconfig instead of configs table**: status keys dynamic per-instance (`<type>/<name>`) sementara `configs.Service.SetOwned` strict — semua key harus pre-registered di `meta` map via `entity.StructToConfigs`. Userconfig dumb key-value, ngga butuh registrasi.
 
 **Lifecycle**:
 
 | Trigger | Action |
 |---|---|
-| Server boot | Background `RescanAll` (30s ctx timeout) — prime DB sekali |
-| `/tools/agents/providers` GET | `LoadCached` baca DB, render instant. Miss → fall through `Probe` + persist |
-| `Save`/`Delete` provider instance | Background `RescanOne` (10s ctx) — DB row refresh sebelum next reload |
+| Server boot | Background `RescanAll` (30s ctx timeout) — prime cache sekali |
+| `/tools/agents/providers` GET | `LoadCached` baca cache. **Miss → render empty card + trigger background `RescanOne`**, JANGAN block render dgn live Probe |
+| `Save`/`Delete` provider instance | Background `RescanOne` (10s ctx) — cache refresh sebelum next reload |
 | Tombol "Rescan all" header | `RescanAll` sync (30s ctx) → 303 redirect |
 | Tombol per-card "Rescan" | `RescanOne` sync (15s ctx) → 303 redirect |
-| Auto-rescan ON + entry stale >24h | Page render trigger background `RescanOne` (10s ctx); current render tetap pake cache |
+| Auto-rescan ON + entry stale >24h | Page render trigger background `RescanOne` (10s ctx); current render tetap pake cache lama |
 | Auto-rescan OFF | Tidak ada background refresh; user harus klik manual |
 
-**Toggle**: `agents.auto_rescan` config key (default `true`). UI button "Auto-rescan: on/off" di header Providers page. `VersionRefreshInterval = 24 * time.Hour`.
+**Critical invariant**: `LoadCached` (page render path) **ngga pernah** spawn `--version`. Cache miss = empty card now, fill in background. Sebelum invariant ini ditegakkan, page hang 3-9s saat boot prime + page render race pada `cacheMu` mutex + `userconfig.Save` file write.
 
-**Storage abstraction**: `provider.CacheStore` interface (`GetOwned/SetOwned`) injected via `provider.SetCacheStore(configsSvc)` di boot. Interface kecil ini memungkinkan provider package tetap bebas import `internal/configs`. Sebelum injection (boot belum jalan), cache no-op — `LoadCached` fall through ke live `Probe`.
+**Concurrent rescan dedupe**: `rescanInflight sync.Map` collapse multiple background triggers untuk instance yg sama (page reload selama rescan jalan ngga queue rescan kedua).
+
+**Toggle**: `agents.auto_rescan` registered di `GeneralConfig` struct (wick tag `checkbox`, default `true`). UI button "Auto-rescan: on/off" di header Providers page. `VersionRefreshInterval = 24 * time.Hour`.
+
+**Boot wiring**: `provider.SetAutoRescanLookup(func() bool { return configsSvc.GetOwned("agents", "auto_rescan") != "false" })` — closure pattern instead of injecting `configs.Service` keep provider package zero-dep dari HTTP/config stack.
 
 **Routes**:
 - `POST /tools/agents/providers/rescan` → `RescanAll`
 - `POST /tools/agents/providers/rescan/{type}/{name}` → `RescanOne`
-- `POST /tools/agents/providers/auto-rescan/toggle` → flip toggle
+- `POST /tools/agents/providers/auto-rescan/toggle` → flip `agents.auto_rescan`
 
 #### Scan Known Locations
 
