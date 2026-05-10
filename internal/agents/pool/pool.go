@@ -174,6 +174,20 @@ func New(cfg PoolConfig) *Pool {
 // the message is appended to the session's buffer and the request is
 // queued. The on-disk session meta status is updated to reflect
 // running/queued so UI listings stay correct.
+// SessionExists reports whether sessionID already has on-disk state.
+// Cheap stat — no JSON parse. Used by channels (Slack, Telegram) to decide
+// whether the next inbound message starts a brand-new session and needs
+// a one-time origin-context turn injected before the user message.
+//
+// Implements channels.SessionChecker.
+func (p *Pool) SessionExists(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	_, err := os.Stat(p.cfg.Layout.SessionDir(sessionID))
+	return err == nil
+}
+
 func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, text string) error {
 	return p.send(ctx, sessionID, agentName, source, role, text, "")
 }

@@ -140,3 +140,27 @@ func LoadTelegramConfig(db *gorm.DB) (agentconfig.TelegramChannelConfig, error) 
 		Workspace:  m["workspace"],
 	}, nil
 }
+
+// DBStore satisfies SlackConfigStore + TelegramConfigStore by delegating
+// to the package-level Load*Config helpers. Server wires one of these at
+// boot so per-channel ConfigSource implementations don't need to import
+// gorm directly.
+type DBStore struct{ db *gorm.DB }
+
+// NewDBStore returns a DBStore bound to db.
+func NewDBStore(db *gorm.DB) DBStore { return DBStore{db: db} }
+
+// LoadSlack satisfies SlackConfigStore.
+func (s DBStore) LoadSlack() (agentconfig.SlackChannelConfig, string, error) {
+	return LoadSlackConfig(s.db)
+}
+
+// LoadTelegram satisfies TelegramConfigStore.
+func (s DBStore) LoadTelegram() (agentconfig.TelegramChannelConfig, error) {
+	return LoadTelegramConfig(s.db)
+}
+
+// EnsureChannel satisfies ChannelEnsurer.
+func (s DBStore) EnsureChannel(channelType string) error {
+	return EnsureChannel(s.db, channelType)
+}

@@ -1,11 +1,14 @@
 package gate
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Spec is the per-app gate config the binary loads at every
@@ -290,6 +293,171 @@ func RemoveUserHooks(gateBin string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// ProbeResult is what ProbeGateSupport reports back to the UI. The
+// shape is intentionally flat so the JSON survives a frontend JSON
+// stringify without surprises.
+type ProbeResult struct {
+	// Supported is the headline answer: did claude honor the deny
+	// envelope? True iff the probe file did NOT get created.
+	Supported bool `json:"supported"`
+
+	// Reason is a one-sentence explanation safe to show in a toast.
+	Reason string `json:"reason"`
+
+	// ClaudeVersion is the `claude --version` first line — we capture
+	// it so the user can paste a bug report without re-running.
+	ClaudeVersion string `json:"claude_version,omitempty"`
+
+	// Stderr / Stdout from the probe spawn, truncated. Help the
+	// operator debug "supported=false" without re-running on the CLI.
+	Stderr string `json:"stderr,omitempty"`
+	Stdout string `json:"stdout,omitempty"`
+
+	// DurationMs is wall-clock for the spawn. UI can warn if probe
+	// took unusually long (e.g. login interactive prompt blocked).
+	DurationMs int64 `json:"duration_ms"`
+}
+
+// ProbeGateSupport runs a one-shot end-to-end check: does this
+// `claude` build honor our PreToolUse hook's deny envelope?
+//
+// Why this exists: the hook contract has churned across claude
+// releases (top-level `decision` → `hookSpecificOutput.permission
+// Decision`, exit-2 → exit-0+JSON). A version check is brittle; the
+// only reliable signal is "spawn claude, force-deny, see if the
+// tool actually ran". This function does exactly that:
+//
+//  1. tempdir as workspace + sentinel file path inside it
+//  2. write a `--settings` file routing PreToolUse[Bash] to
+//     `<gateBin> --probe-deny`, which always emits the deny envelope
+//  3. `claude -p --settings ... "create file <sentinel>"`
+//  4. check if sentinel exists. Exists = claude ignored deny =
+//     unsupported. Missing = supported.
+//
+// Returns Supported=false on any infra failure (claude not on PATH,
+// timeout, etc.) so the UI can surface a single boolean. The Reason
+// field disambiguates "claude broken" vs "gate bypassed".
+func ProbeGateSupport(ctx context.Context, claudeBin, gateBin string) ProbeResult {
+	start := time.Now()
+	finish := func(r ProbeResult) ProbeResult {
+		r.DurationMs = time.Since(start).Milliseconds()
+		return r
+	}
+
+	if claudeBin == "" {
+		return finish(ProbeResult{Supported: false, Reason: "claude binary not configured"})
+	}
+	if gateBin == "" {
+		return finish(ProbeResult{Supported: false, Reason: "gate binary not resolved — run `wick build`"})
+	}
+
+	// Capture version best-effort; failure is non-fatal for the probe
+	// itself.
+	ver := claudeVersionString(ctx, claudeBin)
+
+	dir, err := os.MkdirTemp("", "wick-gate-probe-*")
+	if err != nil {
+		return finish(ProbeResult{Supported: false, Reason: "mkdir temp: " + err.Error(), ClaudeVersion: ver})
+	}
+	defer os.RemoveAll(dir)
+
+	// Settings file routes Bash through `<gate> --probe-deny`.
+	settingsPath := filepath.Join(dir, "settings.json")
+	hookCmd := strings.ReplaceAll(gateBin, "\\", "/") + " --probe-deny"
+	cfg := claudeHookConfig{Hooks: claudeHooks{PreToolUse: []claudeHookGroup{
+		{Matcher: "Bash", Hooks: []claudeHookEntry{{Type: "command", Command: hookCmd}}},
+	}}}
+	settingsBytes, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return finish(ProbeResult{Supported: false, Reason: "marshal settings: " + err.Error(), ClaudeVersion: ver})
+	}
+	if err := os.WriteFile(settingsPath, settingsBytes, 0o644); err != nil {
+		return finish(ProbeResult{Supported: false, Reason: "write settings: " + err.Error(), ClaudeVersion: ver})
+	}
+
+	// Sentinel: if claude executes the bash despite our deny, this
+	// file appears. We use a path inside the workspace tempdir so the
+	// probe leaves no trace outside.
+	sentinel := filepath.Join(dir, "probe-sentinel.txt")
+	sentinelMsys := "/" + strings.ReplaceAll(strings.Replace(sentinel, ":", "", 1), "\\", "/")
+	if !strings.HasPrefix(sentinel, "/") {
+		// On POSIX no rewrite needed.
+		sentinelMsys = sentinel
+	}
+
+	prompt := fmt.Sprintf(`Run this exact bash command without asking: touch "%s"`, sentinelMsys)
+
+	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cctx, claudeBin,
+		"-p",
+		"--settings", settingsPath,
+		"--output-format", "stream-json",
+		"--verbose",
+		prompt,
+	)
+	cmd.Dir = dir
+
+	out, err := cmd.CombinedOutput()
+	stdout := string(out)
+	stderr := ""
+	if err != nil {
+		stderr = err.Error()
+	}
+
+	// Truncate to keep payload small for the UI.
+	if len(stdout) > 2000 {
+		stdout = stdout[:2000] + "...(truncated)"
+	}
+
+	_, statErr := os.Stat(sentinel)
+	switch {
+	case statErr == nil:
+		return finish(ProbeResult{
+			Supported:     false,
+			Reason:        "claude ignored the deny envelope — sentinel file was created",
+			ClaudeVersion: ver,
+			Stdout:        stdout,
+			Stderr:        stderr,
+		})
+	case os.IsNotExist(statErr):
+		return finish(ProbeResult{
+			Supported:     true,
+			Reason:        "claude honored the deny envelope — Bash tool was cancelled",
+			ClaudeVersion: ver,
+			Stdout:        stdout,
+			Stderr:        stderr,
+		})
+	default:
+		return finish(ProbeResult{
+			Supported:     false,
+			Reason:        "stat sentinel: " + statErr.Error(),
+			ClaudeVersion: ver,
+			Stdout:        stdout,
+			Stderr:        stderr,
+		})
+	}
+}
+
+// claudeVersionString runs `claude --version` and returns the first
+// line, or "" on failure. Best-effort, short timeout — if version
+// probe hangs we give up and let the caller proceed.
+func claudeVersionString(ctx context.Context, claudeBin string) string {
+	vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(vctx, claudeBin, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // LoadSpec reads the shared Spec for appName from disk. Used by the

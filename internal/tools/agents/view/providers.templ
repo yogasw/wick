@@ -182,6 +182,15 @@ templ providerCard(base string, st provider.Status) {
 				<form method="POST" action={ templ.SafeURL(base + "/providers/rescan/" + string(st.Instance.Type) + "/" + st.Instance.Name) } class="text-xs">
 					<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" title="Re-probe this provider's binary + version">Rescan</button>
 				</form>
+				if st.Instance.Type == "claude" {
+					<button
+						type="button"
+						class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
+						title="Spawn this claude with a force-deny hook and check whether the deny envelope was honored. Takes 5–30s."
+						data-probe-gate
+						data-probe-url={ base + "/providers/probe-gate/" + string(st.Instance.Type) + "/" + st.Instance.Name }
+					>Test gate</button>
+				}
 				<form method="POST" action={ templ.SafeURL(base + "/providers") } class="text-xs">
 					<input type="hidden" name="type" value={ string(st.Instance.Type) }/>
 					<input type="hidden" name="name" value={ st.Instance.Name }/>

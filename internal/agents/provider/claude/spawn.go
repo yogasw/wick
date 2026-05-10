@@ -39,9 +39,12 @@ import (
 type Spawner struct {
 	Binary string // empty → "claude"
 	// BypassPermissions forces --permission-mode bypassPermissions.
-	// Set when a gate is active (hook in workspace settings.local.json
-	// is the sole allow/block authority) or for non-interactive channels
-	// (Slack/HTTP) where operator wants to skip Claude's built-in prompts.
+	// Set ONLY when there is no gate to fall back on — for non-
+	// interactive channels (Slack/HTTP) where operator can't approve
+	// in a UI. When the gate is active, leave this false: claude
+	// 2.1.138+ bypasses PreToolUse hooks entirely under
+	// bypassPermissions, so flipping it kills the gate's deny
+	// envelope and every command runs.
 	BypassPermissions bool
 	// ExtraArgs is appended after the canonical headless flags, before
 	// any caller-supplied ResumeID. Useful for tests / debugging

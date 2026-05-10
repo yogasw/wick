@@ -90,9 +90,9 @@ func runGate(t *testing.T, bin, stdin string) (int, string) {
 	t.Helper()
 	cmd := exec.Command(bin)
 	cmd.Stdin = strings.NewReader(stdin)
-	var stderr strings.Builder
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Stdout = nil
 	err := cmd.Run()
 	exit := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -100,7 +100,7 @@ func runGate(t *testing.T, bin, stdin string) (int, string) {
 	} else if err != nil {
 		t.Fatalf("run gate: %v", err)
 	}
-	return exit, stderr.String()
+	return exit, stdout.String()
 }
 
 // TestGate_Allow: a "ls *" rule lets `ls -la` through.
@@ -199,12 +199,18 @@ func TestGate_AuditTrailLogged(t *testing.T) {
 	}
 }
 
-// TestGate_MalformedStdin: garbage input fails safe (block).
+// TestGate_MalformedStdin: garbage input fails safe (block). The
+// block contract is exit 0 + stdout JSON with permissionDecision=
+// "deny" — exit code alone is no longer authoritative since claude
+// only honors the deny envelope when stdout JSON arrives.
 func TestGate_MalformedStdin(t *testing.T) {
 	bin, _, _ := setupGate(t, []gate.CommandRule{{Pattern: "ls *"}})
-	exit, _ := runGate(t, bin, "not json")
-	if exit != 2 {
-		t.Fatalf("malformed should block: exit %d", exit)
+	exit, stdout := runGate(t, bin, "not json")
+	if exit != 0 {
+		t.Fatalf("malformed should exit 0 with deny json: exit %d", exit)
+	}
+	if !strings.Contains(stdout, `"permissionDecision":"deny"`) {
+		t.Fatalf("malformed should emit deny envelope, got stdout %q", stdout)
 	}
 }
 
@@ -234,13 +240,18 @@ func TestGate_MissingSharedSpecIsEmpty(t *testing.T) {
 }
 
 // TestGate_TimeoutOnHangingStdin: if stdin never delivers, the 3s
-// read timeout fires + binary blocks.
+// read timeout fires + binary blocks. Block is signalled via stdout
+// JSON, not via exit code (see TestGate_MalformedStdin for the
+// rationale).
 func TestGate_TimeoutOnHangingStdin(t *testing.T) {
 	bin, _, _ := setupGate(t, []gate.CommandRule{{Pattern: "ls *"}})
 	cmd := exec.Command(bin)
 	stdinR, stdinW, _ := pipePair()
 	cmd.Stdin = stdinR
 	defer stdinW.Close()
+
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
 
 	start := time.Now()
 	err := cmd.Run()
@@ -251,8 +262,11 @@ func TestGate_TimeoutOnHangingStdin(t *testing.T) {
 	} else if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if exit != 2 {
-		t.Errorf("timeout should block: exit %d", exit)
+	if exit != 0 {
+		t.Errorf("timeout should exit 0 with deny json: exit %d", exit)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Errorf("timeout should emit deny envelope, got stdout %q", stdout.String())
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("timeout took too long: %v (binary expected ~3s)", elapsed)

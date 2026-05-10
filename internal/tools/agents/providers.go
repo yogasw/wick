@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
@@ -206,6 +207,63 @@ func rescanAllProviders(c *tool.Ctx) {
 	defer cancel()
 	provider.RescanAll(ctx)
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
+// probeProviderGate runs the end-to-end gate-honor check on one
+// provider instance: spawns claude with a force-deny PreToolUse
+// hook, asks it to touch a sentinel, and reports whether the file
+// got created. Used by the per-card "Test gate" button so the user
+// can verify their installed claude actually honors the deny
+// envelope before relying on the approval modal.
+//
+// Only meaningful for `claude` instances today — codex/gemini have
+// different (or no) hook contracts. We still run the probe for
+// non-claude rows so the UI can return a "not applicable" message
+// in one place.
+func probeProviderGate(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	if t == "" || name == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "type and name required"})
+		return
+	}
+	if t != "claude" {
+		c.JSON(http.StatusOK, gate.ProbeResult{
+			Supported: false,
+			Reason:    "gate probe only applies to `claude` instances",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Context(), 60*time.Second)
+	defer cancel()
+
+	statuses, err := provider.LoadCached(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var claudeBin string
+	for _, st := range statuses {
+		if st.Instance.Type == t && st.Instance.Name == name {
+			claudeBin = st.Path
+			break
+		}
+	}
+	if claudeBin == "" {
+		c.JSON(http.StatusOK, gate.ProbeResult{
+			Supported: false,
+			Reason:    "claude binary not resolved on PATH for this instance",
+		})
+		return
+	}
+
+	gateBin := GetGateStatus().Binary
+	res := gate.ProbeGateSupport(ctx, claudeBin, gateBin)
+	c.JSON(http.StatusOK, res)
 }
 
 // rescanOneProvider re-probes a single instance. Used by the per-card

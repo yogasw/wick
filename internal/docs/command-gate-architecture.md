@@ -6,6 +6,12 @@ dihapus, single shared spec + single shared socket, gate session-agnostic, daemo
 route by cwd, installer ship sidecar `<app>-gate`, `gateAwareSpawner` + sisa
 dead-code dari mekanisme env-var dropped).
 
+> **Hotfix log (2026-05-10):** Claude Code 2.1.138 ngubah kontrak
+> PreToolUse — exit-2 ngga block lagi, `--permission-mode
+> bypassPermissions` skip hook total, dan tool yg di-approve butuh
+> allow envelope eksplisit biar lolos sandbox baru. Write-up insiden
+> + fix + cara verifikasi di [command-gate-claude-2.1-fix.md](command-gate-claude-2.1-fix.md).
+
 Keputusan final yang sudah locked:
 - IPC: Unix Domain Socket (raw JSON, bukan HTTP)
 - Gate binary: embed ke main binary via `//go:embed` (bukan sidecar/subcommand)

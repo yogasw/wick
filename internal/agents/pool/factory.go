@@ -117,12 +117,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			return BuildResult{}, fmt.Errorf("attach gate: %w", err)
 		}
 		spawner = s
-		// Gate is the sole allow/block authority via PreToolUse hook;
-		// bypass Claude's own permission UI to avoid double confirmation.
-		if cs, ok := spawner.(claude.Spawner); ok {
-			cs.BypassPermissions = true
-			spawner = cs
-		}
+		// Do NOT set BypassPermissions when the gate is active. claude
+		// 2.1.138+ skips PreToolUse hooks under bypassPermissions mode,
+		// which would silently disable the gate. The hook itself is
+		// what suppresses the permission prompt — when it emits a deny
+		// envelope, claude cancels the tool without asking the user.
 	}
 
 	var onEvent func(event.AgentEvent)
