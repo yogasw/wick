@@ -1,10 +1,13 @@
 package pool
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -84,7 +87,15 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	}
 	spawner := f.Spawner
 	if spawner == nil {
-		spawner = claude.Spawner{BypassPermissions: bypassPerms}
+		bin, src := resolveProviderBinary(opt.ProviderType, opt.ProviderName)
+		log.Info().
+			Str("session", opt.SessionID).
+			Str("provider_type", opt.ProviderType).
+			Str("provider_name", opt.ProviderName).
+			Str("binary", bin).
+			Str("source", src).
+			Msg("agents.spawn: resolve provider")
+		spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms}
 	}
 
 	// Resolve active gate config: dynamic loader takes precedence so
@@ -219,6 +230,31 @@ func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawn
 		base = cs
 	}
 	return base, nil
+}
+
+// resolveProviderBinary picks the binary the spawner should exec for
+// a given provider {type, name}: the per-instance Binary override
+// (set via /tools/agents/providers UI) wins, else PATH lookup of the
+// type name, else empty (Spawner falls back to bare type name).
+//
+// Returned source is one of: registry, path, unconfigured — surfaced
+// in the spawn log so a "claude not found" failure tells the operator
+// whether the registry path was wrong vs whether they never set one.
+func resolveProviderBinary(providerType, providerName string) (bin, source string) {
+	t := provider.Type(providerType)
+	if t == "" {
+		t = provider.TypeClaude
+	}
+	if ins, err := provider.Find(t, providerName); err == nil && ins.Binary != "" {
+		return ins.Binary, "registry"
+	}
+	if p, err := exec.LookPath(string(t)); err == nil {
+		return p, "path"
+	}
+	if st := provider.Probe(context.Background(), provider.Instance{Type: t, Name: providerName}); st.PathFound {
+		return st.Path, "scan"
+	}
+	return "", "unconfigured"
 }
 
 // exitReasonString maps the typed ExitReason to the short label

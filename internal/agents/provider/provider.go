@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
@@ -168,8 +169,10 @@ func Delete(t Type, name string) error {
 // ctx bounds the version probe; HTTP handlers should pass a 3s timeout.
 func Probe(ctx context.Context, ins Instance) Status {
 	st := Status{Instance: ins, ResolvedAt: time.Now()}
+	source := ""
 	if ins.Binary != "" {
 		st.Path = ins.Binary
+		source = "registry"
 		if _, err := exec.LookPath(ins.Binary); err == nil {
 			st.PathFound = true
 		}
@@ -178,8 +181,26 @@ func Probe(ctx context.Context, ins Instance) Status {
 		if err == nil {
 			st.Path = path
 			st.PathFound = true
+			source = "path"
+		} else if p, ok := scanKnownLocations(ins.Type); ok {
+			// PATH miss is normal when CLI is installed via npm/curl
+			// installer that drops binary outside PATH (e.g. claude in
+			// ~/.local/bin on Windows). Fall back to per-OS install
+			// locations so users don't need to edit PATH manually.
+			st.Path = p
+			st.PathFound = true
+			source = "scan"
+		} else {
+			source = "miss"
 		}
 	}
+	log.Debug().
+		Str("type", string(ins.Type)).
+		Str("name", ins.Name).
+		Str("path", st.Path).
+		Str("source", source).
+		Bool("found", st.PathFound).
+		Msg("agents.probe: resolve")
 	if !st.PathFound {
 		return st
 	}
@@ -187,12 +208,24 @@ func Probe(ctx context.Context, ins Instance) Status {
 		return st
 	}
 	cmd := exec.CommandContext(ctx, st.Path, "--version")
+	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		st.VersionErr = err.Error()
+		log.Warn().
+			Str("type", string(ins.Type)).
+			Str("name", ins.Name).
+			Str("path", st.Path).
+			Err(err).
+			Msg("agents.probe: --version failed")
 		return st
 	}
 	st.Version = firstLine(strings.TrimSpace(string(out)))
+	log.Debug().
+		Str("type", string(ins.Type)).
+		Str("name", ins.Name).
+		Str("version", st.Version).
+		Msg("agents.probe: ok")
 	return st
 }
 

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/rs/zerolog/log"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -102,6 +103,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
+	hideConsole(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -134,10 +136,24 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		cmd.Stderr = os.Stderr
 	}
 
+	log.Info().
+		Str("bin", bin).
+		Strs("argv", args).
+		Str("cwd", opt.Workspace).
+		Str("resume", opt.ResumeID).
+		Msg("agents.spawn: starting")
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		log.Error().
+			Err(err).
+			Str("bin", bin).
+			Msg("agents.spawn: start failed (set provider.Binary in /tools/agents/providers if claude not on PATH)")
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
+	log.Info().
+		Int("pid", cmd.Process.Pid).
+		Str("bin", bin).
+		Msg("agents.spawn: started")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
 }
 

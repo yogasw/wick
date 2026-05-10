@@ -323,6 +323,43 @@ Tujuan: user bisa lihat path + versi tiap AI CLI provider (claude/codex/gemini),
 
 **Exit criteria**: user bisa Open `/tools/agents/providers`, lihat 3 default cards (claude/codex/gemini), edit binary override + version probe pass, add `claude/work` instance dgn `ANTHROPIC_API_KEY=...` di env, create session pilih instance, spawn jalan + spawn-log file ke-create. Idle/active state yang ke-display di Overview bukan lagi "idle terus tanpa info" — Active/Max + queue waiting time keliat realtime tiap reload.
 
+#### Binary Resolution Chain (Probe + Spawn)
+
+Both `provider.Probe` (UI cards) dan `pool.resolveProviderBinary` (spawn site) pakai chain sama, urutan deterministic — first hit wins:
+
+1. **registry** — `Instance.Binary` set via UI form (`/tools/agents/providers` Edit). Absolute path, ngga di-resolve via PATH lagi.
+2. **path** — `exec.LookPath(<type>)` baca `%PATH%` + `PATHEXT` (Windows). Hit kalau CLI installer udah extend PATH.
+3. **scan** — `scanKnownLocations(<type>)` cek install paths standar yang installer drop tapi sering ngga di PATH (mis. `~/.local/bin/claude.exe` di Windows, `~/.npm-global/bin/codex` di Unix). Per-OS list di `internal/agents/provider/scan_{windows,unix}.go`.
+4. **miss/unconfigured** — semua gagal. Probe set `PathFound=false`; spawn fallback ke bare type name (`exec.Command("claude")`) yang akan error pas `Start()`.
+
+Why scan exists: tray-launched wick inherit PATH dari Explorer/login session, bukan dari user shell. Installer-modified PATH (mis. npm `prefix` / claude installer) often visible di terminal tapi invisible ke tray. Scan close that gap tanpa minta user edit binary path manual.
+
+#### Hide Console Windows (Windows tray spawn)
+
+Windows console subsystem child (claude.exe, codex.exe, npm shims) yg di-spawn dari parent **tanpa attached console** (tray app `-H windowsgui`) bikin Windows alokasi console window baru → flash + auto-close. Solusi: `SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}` (CREATE_NO_WINDOW).
+
+Pattern di-apply 2 tempat:
+- `internal/agents/provider/hide_console_{windows,other}.go` — Probe `--version` exec
+- `internal/agents/provider/claude/hide_console_{windows,other}.go` — long-lived spawn
+
+Same pattern existing di `internal/systemtray/{editor,notify}_windows.go`. Dev mode (`go run` dari shell) parent punya console → child inherit → no flash; CREATE_NO_WINDOW aman dipake universal.
+
+#### Spawn/Probe Log Keys
+
+Prefix konsisten supaya `grep agents.` di server log nge-trace lifecycle satu spawn end-to-end:
+
+| Key | Site | Fields |
+|---|---|---|
+| `agents.probe: resolve` | `provider.Probe` (debug) | `type, name, path, source (registry\|path\|scan\|miss), found` |
+| `agents.probe: ok` | `provider.Probe` (debug) | `type, name, version` |
+| `agents.probe: --version failed` | `provider.Probe` (warn) | `type, name, path, err` |
+| `agents.spawn: resolve provider` | `pool.Build` (info) | `session, provider_type, provider_name, binary, source` |
+| `agents.spawn: starting` | `claude.Spawn` (info) | `bin, argv, cwd, resume` |
+| `agents.spawn: started` | `claude.Spawn` (info) | `pid, bin` |
+| `agents.spawn: start failed` | `claude.Spawn` (error) | `bin, err` + hint untuk set `provider.Binary` |
+
+Output di `<base>/logs/server-YYYY-MM-DD.log` (bukan app-log, karena emit via global `zerolog/log` yg di-init di server boot, bukan tray).
+
 ### Phase 5 — Slack Transport
 
 Tujuan: trigger agent dari Slack thread. Reaction lifecycle + final message + meta-command.
