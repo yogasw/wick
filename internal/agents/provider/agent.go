@@ -354,7 +354,10 @@ func (a *Agent) run(ctx context.Context) {
 	waitErr := a.proc.Wait()
 	a.state.MarkIdle()
 
-	if a.exitReasonSet {
+	a.mu.Lock()
+	already := a.exitReasonSet
+	a.mu.Unlock()
+	if already {
 		// idle goroutine already fired the hook
 		return
 	}

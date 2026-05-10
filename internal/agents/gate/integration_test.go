@@ -56,15 +56,16 @@ func buildGate(t *testing.T) string {
 func setupGate(t *testing.T, rules []gate.CommandRule) (bin, app string, layout config.Layout) {
 	t.Helper()
 	app = "itest"
+
+	// Build BEFORE swapping HOME — otherwise `go build` populates
+	// $TempDir/go/pkg/mod with read-only module-cache files, and
+	// t.TempDir cleanup fails with "permission denied" on Linux.
+	bin = buildGate(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	// Build BEFORE chdir — `go build` needs repo cwd to find go.mod.
-	bin = buildGate(t)
-	// Now chdir into a tempdir holding our minimal wick.yml. Gate
-	// child proc inherits cwd → appname.Resolve() picks up our test
-	// brand from `name:` without ldflags or env wiring.
 	writeTestWickYML(t, app)
 	layout = config.NewLayout(t.TempDir())
 	if err := layout.EnsureLayout(); err != nil {
@@ -117,44 +118,44 @@ func TestGate_Allow(t *testing.T) {
 }
 
 // TestGate_BlockUnlistedCommand: `rm -rf .` is not whitelisted →
-// gate dials the shared socket; with no daemon listening, fail-safe
-// kicks in and terminal entry is "blocked".
+// gate dials the shared socket; with no daemon listening, fail-OPEN
+// kicks in (allow) so non-wick Claude sessions don't break. Terminal
+// entry is "allowed" with reason "no_socket".
 func TestGate_BlockUnlistedCommand(t *testing.T) {
 	bin, app, _ := setupGate(t, []gate.CommandRule{{Pattern: "ls *"}})
-	exit, stderr := runGate(t, bin,
+	exit, _ := runGate(t, bin,
 		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf ."}}`)
-	if exit != 2 {
-		t.Fatalf("exit: got %d, want 2 (block)", exit)
-	}
-	if !strings.Contains(stderr, "blocked") {
-		t.Errorf("stderr should mention block: %q", stderr)
+	if exit != 0 {
+		t.Fatalf("exit: got %d, want 0 (fail-open allow)", exit)
 	}
 	entries := terminalOnly(readSharedCommands(t, app))
-	if len(entries) != 1 || entries[0].Status != "blocked" || entries[0].Cmd != "rm -rf ." {
+	if len(entries) != 1 || entries[0].Status != "allowed" || entries[0].Cmd != "rm -rf ." {
 		t.Fatalf("commands.jsonl: %+v", entries)
+	}
+	if entries[0].Decision != "no_socket" {
+		t.Errorf("expected decision no_socket, got %q", entries[0].Decision)
 	}
 }
 
 // TestGate_BlockShellMetacharOnAllowedRule: even a "git *" match
-// must not let a piped command through. The matcher rejects with a
-// "metacharacter" reason before any socket dial happens.
+// must not let a piped command through. Matcher returns false → fall
+// through to socket dial → no daemon → fail-OPEN allow with reason
+// "no_socket". A terminal allowed row with that reason confirms the
+// metachar bypassed the rule and went through the dial path.
 func TestGate_BlockShellMetacharOnAllowedRule(t *testing.T) {
 	bin, app, _ := setupGate(t, []gate.CommandRule{{Pattern: "git *"}})
 	exit, _ := runGate(t, bin,
 		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status; rm -rf ."}}`)
-	if exit != 2 {
-		t.Fatalf("metachar should block: exit %d", exit)
+	if exit != 0 {
+		t.Fatalf("fail-open allow expected: exit %d", exit)
 	}
-	// Metachar block goes through the socket dial path now (matcher
-	// returns false → fall through to interactive approval → no
-	// daemon → fail-safe block). Confirm a terminal blocked row exists.
 	entries := terminalOnly(readSharedCommands(t, app))
 	if len(entries) == 0 {
 		t.Fatalf("expected at least one terminal entry, got none")
 	}
 	last := entries[len(entries)-1]
-	if last.Status != "blocked" {
-		t.Errorf("expected blocked, got %q", last.Status)
+	if last.Status != "allowed" || last.Decision != "no_socket" {
+		t.Errorf("expected allowed/no_socket, got status=%q decision=%q", last.Status, last.Decision)
 	}
 }
 
@@ -209,12 +210,13 @@ func TestGate_MalformedStdin(t *testing.T) {
 
 // TestGate_MissingSharedSpecIsEmpty: no spec file → empty rules →
 // every command falls through to the socket dial → no daemon →
-// fail-safe block. Confirms LoadSpec doesn't panic on missing file.
+// fail-OPEN allow. Confirms LoadSpec doesn't panic on missing file
+// and the no-socket path returns exit 0.
 func TestGate_MissingSharedSpecIsEmpty(t *testing.T) {
+	bin := buildGate(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	bin := buildGate(t)
 	writeTestWickYML(t, "itest-empty")
 
 	cmd := exec.Command(bin)
@@ -226,8 +228,8 @@ func TestGate_MissingSharedSpecIsEmpty(t *testing.T) {
 	if ee, ok := err.(*exec.ExitError); ok {
 		exit = ee.ExitCode()
 	}
-	if exit != 2 {
-		t.Fatalf("missing spec should block: exit %d, stderr %q", exit, stderr.String())
+	if exit != 0 {
+		t.Fatalf("missing spec fail-open expected: exit %d, stderr %q", exit, stderr.String())
 	}
 }
 

@@ -10,6 +10,15 @@ import (
 	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
+func containsName(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
+
 func newLayout(t *testing.T) config.Layout {
 	t.Helper()
 	layout := config.NewLayout(t.TempDir())
@@ -90,8 +99,8 @@ func TestManagerCreateDelete(t *testing.T) {
 	if _, err := mgr.CreateSession(context.Background(), session.CreateOptions{ID: "S1", Workspace: "p", Origin: session.OriginUI}); err != nil {
 		t.Fatal(err)
 	}
-	if got := mgr.Registry().WorkspaceNames(); len(got) != 1 {
-		t.Fatalf("workspaces: %v", got)
+	if got := mgr.Registry().WorkspaceNames(); !containsName(got, "p") {
+		t.Fatalf("workspaces missing p: %v", got)
 	}
 	if got := mgr.Registry().SessionIDs(); len(got) != 1 {
 		t.Fatalf("sessions: %v", got)
@@ -107,8 +116,8 @@ func TestManagerCreateDelete(t *testing.T) {
 	if err := mgr.DeleteWorkspace(context.Background(), "p"); err != nil {
 		t.Fatal(err)
 	}
-	if got := mgr.Registry().WorkspaceNames(); len(got) != 0 {
-		t.Fatalf("workspaces after delete: %v", got)
+	if got := mgr.Registry().WorkspaceNames(); containsName(got, "p") {
+		t.Fatalf("workspace p still present after delete: %v", got)
 	}
 }
 

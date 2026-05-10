@@ -39,7 +39,7 @@ func TestTailwindCandidates(t *testing.T) {
 }
 
 func TestCollectChecksStructure(t *testing.T) {
-	checks := collectChecks()
+	checks := collectChecks("")
 
 	// Must always have at minimum: wick CLI, go, wick.yml, templ, tailwindcss, MCP header
 	assert.GreaterOrEqual(t, len(checks), 6)
@@ -58,7 +58,7 @@ func TestCollectChecksStructure(t *testing.T) {
 
 func TestDoctorCmdRegistered(t *testing.T) {
 	cmd := doctorCmd()
-	assert.Equal(t, "doctor", cmd.Use)
+	assert.Equal(t, "doctor [binary]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }

@@ -86,6 +86,28 @@ func (p *scriptedProc) recordedStdin() string {
 	return p.stdinBuf.String()
 }
 
+// callsSnapshot / procAt are mutex-guarded reads so tests can poll
+// scriptedSpawner state from the main goroutine while Spawn writes
+// concurrently from the pool worker.
+func (s *scriptedSpawner) callsSnapshot() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Calls
+}
+func (s *scriptedSpawner) procAt(i int) *scriptedProc {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i < 0 || i >= len(s.Procs) {
+		return nil
+	}
+	return s.Procs[i]
+}
+func (s *scriptedSpawner) procCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.Procs)
+}
+
 type scriptedStdin struct{ p *scriptedProc }
 
 func (s *scriptedStdin) Write(b []byte) (int, error) {
@@ -160,7 +182,10 @@ func TestSendSpawnsAndDelivers(t *testing.T) {
 	}
 	waitFor(t, func() bool { return p.Active() == 0 }, 2*time.Second)
 
-	stdin := sp.Last.recordedStdin()
+	sp.mu.Lock()
+	last := sp.Last
+	sp.mu.Unlock()
+	stdin := last.recordedStdin()
 	if stdin == "" {
 		t.Fatal("nothing written to stdin")
 	}
@@ -228,15 +253,15 @@ func TestBufferDrainsCombined(t *testing.T) {
 	_ = p.Send(context.Background(), "B", "default", "ui", "user", "first")
 	_ = p.Send(context.Background(), "B", "default", "ui", "user", "second")
 
-	waitFor(t, func() bool { return sp.Calls >= 2 }, 5*time.Second)
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, 5*time.Second)
 	// After A idle-kills, B is spawned. Wait a moment for stdin write.
 	time.Sleep(300 * time.Millisecond)
 
 	// Find B's process — second spawn.
-	if len(sp.Procs) < 2 {
-		t.Fatalf("expected 2 spawns, got %d", len(sp.Procs))
+	if n := sp.procCount(); n < 2 {
+		t.Fatalf("expected 2 spawns, got %d", n)
 	}
-	bStdin := sp.Procs[1].recordedStdin()
+	bStdin := sp.procAt(1).recordedStdin()
 	// Should contain both messages joined by \n inside a single user envelope.
 	if !contains(bStdin, "first") || !contains(bStdin, "second") {
 		t.Fatalf("combined stdin missing parts: %q", bStdin)

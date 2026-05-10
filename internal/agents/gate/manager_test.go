@@ -208,37 +208,41 @@ func TestManager_OnResolved_Fires(t *testing.T) {
 	}
 }
 
-// TestManager_RouteByCWD_NoMatch shows that an unroutable cwd still
-// fans out to onRequest with empty sessionID — useful for the UI to
-// render an "unrouted" bucket instead of dropping silently.
+// TestManager_RouteByCWD_NoMatch verifies an unroutable cwd is
+// fail-open auto-approved (DecisionApproveOnce) so non-wick Claude
+// sessions launched outside any wick workspace aren't blocked by the
+// global PreToolUse hook. onRequest must NOT fire — there's no UI to
+// route it to.
 func TestManager_RouteByCWD_NoMatch(t *testing.T) {
 	setupSharedHome(t)
 	mgr := newTestManager(t, "appF", func(string) (string, bool) { return "", false })
 	defer mgr.Stop()
 
-	requested := make(chan struct {
-		sid string
-		req ApprovalRequest
-	}, 1)
+	requested := make(chan struct{}, 1)
 	mgr.onRequest = func(sid string, r ApprovalRequest) {
-		requested <- struct {
-			sid string
-			req ApprovalRequest
-		}{sid, r}
+		requested <- struct{}{}
 	}
 
 	sock, err := mgr.Start()
 	if err != nil {
 		t.Fatal(err)
 	}
-	go dialAndSend(t, sock, ApprovalRequest{ID: "rZ", Cmd: "ls", WorkDir: "/orphan", MatchKey: "k"})
+	respCh := make(chan ApprovalResponse, 1)
+	go func() {
+		respCh <- dialAndSend(t, sock, ApprovalRequest{ID: "rZ", Cmd: "ls", WorkDir: "/orphan", MatchKey: "k"})
+	}()
 
 	select {
-	case got := <-requested:
-		if got.sid != "" {
-			t.Errorf("expected empty sessionID for unroutable cwd, got %q", got.sid)
+	case resp := <-respCh:
+		if resp.Decision != DecisionApproveOnce {
+			t.Errorf("unrouted cwd: got decision %q, want %q", resp.Decision, DecisionApproveOnce)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("onRequest never fired")
+		t.Fatal("no response for unrouted cwd")
+	}
+	select {
+	case <-requested:
+		t.Error("onRequest fired for unrouted cwd; should be auto-approved")
+	default:
 	}
 }

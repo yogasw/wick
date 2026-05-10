@@ -1,0 +1,41 @@
+name: PR Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  unit-tests:
+    name: Go Unit Tests
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install templ (version pinned to go.mod)
+        run: |
+          TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          echo "Using templ $TEMPL_VERSION"
+          go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
+
+      - name: Generate templ files
+        run: templ generate ./...
+
+      - name: Build
+        run: go build ./internal/... ./cmd/... ./pkg/...
+
+      - name: Run unit tests
+        run: go test -race -timeout 10m ./internal/... ./cmd/... ./pkg/...
