@@ -52,7 +52,7 @@ func loadCommands(layout agentconfig.Layout, sessionID string) ([]string, error)
 			}
 		}
 	}
-	app := gate.AppName
+	app := gate.AppName()
 	if app == "" {
 		app = "wick"
 	}

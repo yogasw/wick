@@ -3,7 +3,6 @@ package gate_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -17,20 +16,20 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
-// buildGate compiles cmd/gate to a temp file with gate.AppName
-// baked via -ldflags so the binary's shared-spec lookup lands under
-// the per-test HOME we set up. Skips when `go build` is unavailable.
+// buildGate compiles cmd/gate into a temp file named `<app>-gate[.exe]`
+// so gate.AppName() (which strips `-gate` from the running exe's
+// basename) resolves to `<app>` at runtime — no ldflags, no env vars.
+// Skips when `go build` is unavailable.
 func buildGate(t *testing.T, app string) string {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("`go` not in PATH — can't compile gate")
 	}
-	out := filepath.Join(t.TempDir(), "gate")
+	out := filepath.Join(t.TempDir(), app+"-gate")
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
-	ldflag := fmt.Sprintf("-X github.com/yogasw/wick/internal/agents/gate.AppName=%s", app)
-	cmd := exec.Command("go", "build", "-ldflags", ldflag, "-o", out, "github.com/yogasw/wick/cmd/gate")
+	cmd := exec.Command("go", "build", "-o", out, "github.com/yogasw/wick/cmd/gate")
 	if buildOut, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build gate: %v\n%s", err, buildOut)
 	}
@@ -65,8 +64,8 @@ func setupGate(t *testing.T, rules []gate.CommandRule) (bin, app string, layout 
 }
 
 // runGate invokes the gate binary with the given stdin. The binary
-// derives all paths from its compile-time AppName + the HOME env var
-// inherited from the test process — no GATE_* env vars needed.
+// derives all paths from gate.AppName() (its own filename) + the HOME
+// env var inherited from the test process — no env vars, no ldflags.
 func runGate(t *testing.T, bin, stdin string) (int, string) {
 	t.Helper()
 	cmd := exec.Command(bin)

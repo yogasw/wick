@@ -10,10 +10,9 @@
 // for a project initialized with `wick init myapp`).
 //
 // Configuration is loaded from the shared spec at
-// ~/.<app>/agents/gate/spec.json — the gate binary derives this path
-// from the compile-time `gate.AppName` (injected via -ldflags by
-// `wick build`). No runtime env var is consulted; this is the
-// post-Stage 9 model.
+// ~/.<app>/agents/gate/spec.json — the gate binary derives `<app>`
+// from its own executable filename via gate.AppName() (strip
+// `-gate[.exe]` suffix). No env var, no ldflag injection.
 //
 // Fail-safe: if anything goes wrong (spec missing, parse failure,
 // timeout reading stdin), we BLOCK + log. Better to refuse a real
@@ -83,7 +82,7 @@ func main() {
 func run() int {
 	requestID := newRequestID()
 
-	spec, err := gate.LoadSpec(gate.AppName)
+	spec, err := gate.LoadSpec(gate.AppName())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gate: load spec: %v\n", err)
 		return 2
@@ -115,7 +114,7 @@ func run() int {
 	}
 
 	// Interactive approval — dial the shared daemon socket.
-	socketPath := gate.SharedSocketPath(gate.AppName)
+	socketPath := gate.SharedSocketPath(gate.AppName())
 	logStage(requestID, "socket_dial", cmd, cwd, "", socketPath)
 	decision, reason, err := requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, key, requestID)
 	if err != nil {
@@ -146,7 +145,7 @@ func logStage(requestID, stage, cmd, cwd, decision, reason string) {
 		Reason:    reason,
 		RequestID: requestID,
 	}
-	_ = gate.Append(gate.AppName, entry)
+	_ = gate.Append(gate.AppName(), entry)
 }
 
 // logTerminal writes the final allowed/blocked entry. This is the
@@ -167,7 +166,7 @@ func logTerminal(requestID, cmd, cwd, status, decision, reason string) {
 		RequestID: requestID,
 		MatchKey:  key,
 	}
-	_ = gate.Append(gate.AppName, entry)
+	_ = gate.Append(gate.AppName(), entry)
 }
 
 // requestApprovalWithLog dials the shared daemon socket, sends one

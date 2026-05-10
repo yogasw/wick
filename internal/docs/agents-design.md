@@ -14,11 +14,11 @@ Update terakhir: 2026-05-10.
 > di bawah masih sebut nama-nama lama. Perubahan ringkas:
 >
 > - Source rename: `cmd/wick-gate/` → `cmd/gate/`. Binary user-visible
->   `<app>-gate[.exe]`, branded via `gate.AppName` ldflag. Embed asset internal
->   tetap generic (`gate-<os>-<arch>`).
+>   `<app>-gate[.exe]`, branded by filename convention (sidecar wajib bernama
+>   `<app>-gate[.exe]`). Embed asset internal tetap generic (`gate-<os>-<arch>`).
 > - Env vars dihapus seluruhnya: `WICK_GATE_SPEC` / `GATE_SPEC` /
->   `WICK_GATE_BIN` / `GATE_BIN` semua tidak ada. Gate derive path dari
->   compile-time `gate.AppName`.
+>   `WICK_GATE_BIN` / `GATE_BIN` semua tidak ada. Gate derive `<app>` dari
+>   `os.Executable()` basename (strip `-gate[.exe]`) — runtime, no ldflag.
 > - Spec + socket + audit log jadi **shared per-app** di
 >   `~/.<app>/agents/gate/{spec.json, gate.sock, commands.jsonl}` (bukan per-session
 >   `~/.<app>/agents/sessions/<id>/gate/...` lagi).
@@ -394,7 +394,7 @@ Stage 9 — Hapus env vars + single shared spec/socket/audit + installer ship si
 - [x] **7.7** Stage 7 — VSCode debug tooling: `debug: prep` build gate sidecar sebagai sibling di `bin/<app>-gate[.exe]`, `ResolveGateBinary` tambah sibling-of-executable step → wicklab pickup otomatis tanpa env. `wicklab-gate` standalone launch dihapus → `.vscode/{tasks,launch}.json` + `internal/agents/gate/embed.go`
 - [x] **7.8** Stage 8 — Observability follow-ups: gate emit per-stage audit trail ke `commands.jsonl` (received → socket_dial → socket_sent → socket_recv → terminal, di-tie via RequestID); Entry struct extend dgn Stage/Tool/Decision/RequestID/MatchKey; `ResolveGateBinaryWithSource` return source label; Providers page punya GateStatusCard; SessionDetail tampil GateDisabledBanner kalau gate gak resolved → `internal/agents/gate/{log,embed}.go` + `cmd/gate/main.go` + `internal/tools/agents/{providers,handler}.go` + `view/{approvals,providers,sessions}.templ`
 - [x] **7.9** Stage 9 — Spec resolution refactor + cleanup pass:
-  - **9a Source rename** — `cmd/wick-gate/` → `cmd/gate/`, env vars `WICK_GATE_*` → drop entirely, output user-visible `<app>-gate` (branded via `gate.AppName` ldflag); embed asset internal generic `gate-<os>-<arch>`.
+  - **9a Source rename** — `cmd/wick-gate/` → `cmd/gate/`, env vars `WICK_GATE_*` → drop entirely, output user-visible `<app>-gate` (branded by filename — sidecar wajib bernama `<app>-gate[.exe]`); embed asset internal generic `gate-<os>-<arch>`.
   - **9b Shared model** — single shared spec at `~/.<app>/agents/gate/spec.json`, single shared socket at `~/.<app>/agents/gate/gate.sock`, single shared audit log at `~/.<app>/agents/gate/commands.jsonl`. Per-session always-allow scope di-trade ke per-app. Daemon route by cwd dari hook payload (longest workspace-path prefix wins).
   - **9c Builder absorb** — `internal/builder/gate.go` compile `cmd/gate` ke `assets/` + `bin/<app>-gate-<os>-<arch>`; template release.yml drop step "Build wick-gate". Soft-skip pada downstream fork tanpa cmd/gate.
   - **9d Installer ship sidecar** — MSI ship `<App>-gate.exe` di same folder, .deb ship `/usr/bin/<app>-gate`, .app bundle ship `Contents/MacOS/<App>-gate`. Sibling-of-executable jadi resolution path utama, embed extract jadi backup.

@@ -296,7 +296,7 @@ func NewServer() *Server {
 			return best, best != ""
 		}
 		agentsApprovals, _ = agentgate.NewApprovalManager(agentgate.ApprovalManagerOptions{
-			AppName:    agentgate.AppName,
+			AppName:    agentgate.AppName(),
 			RouteByCWD: routeByCWD,
 			OnRequest: func(sid string, r agentgate.ApprovalRequest) {
 				agentsBcast.PublishApprovalRequest(sid, r)
@@ -367,9 +367,9 @@ func NewServer() *Server {
 		rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
 		// Preserve AutoApproved from disk so edits to allowed_cmds
 		// don't drop the user's "always allow" entries.
-		spec, _ := agentgate.LoadSpec(agentgate.AppName)
+		spec, _ := agentgate.LoadSpec(agentgate.AppName())
 		spec.Rules = rules
-		return agentgate.WriteSharedSpec(agentgate.AppName, spec)
+		return agentgate.WriteSharedSpec(agentgate.AppName(), spec)
 	}
 	agentsFactory.GateLoader = func() *agentpool.GateConfig {
 		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {

@@ -46,7 +46,7 @@
     {
       "label": "debug: prep",
       "type": "shell",
-      "command": "templ generate ./... && bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css && go build -o bin/wick-gate.exe ./cmd/gate",
+      "command": "templ generate ./... && bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css && go build -o bin/wick-lab-gate.exe ./cmd/gate",
       "problemMatcher": []
     },
     {
