@@ -878,93 +878,108 @@ Pool mengatur jumlah subprocess agent yang berjalan bersamaan, lintas semua sess
 
 ### 4.5 Command Gate
 
-> **Status**: Claude whitelist gate landed in phase 3. Codex/Gemini variants pending phase 6. **Mid-session interactive approval + AskUser MCP tool pending phase 7** — design lengkap di [command-gate-architecture.md](./command-gate-architecture.md).
+> **Status**: Claude whitelist gate + interactive approval landed (phase 3 + 7). Codex/Gemini variants pending phase 6. Design lengkap di [command-gate-architecture.md](./command-gate-architecture.md).
 
-Semua tiga CLI support **pre-execution hooks** — hook dipanggil sebelum command dijalankan, bisa return allow atau block. Wick memanfaatkan ini untuk whitelist enforcement.
+Claude support `PreToolUse` hook — dipanggil sebelum setiap tool dijalankan. Gate binary check whitelist + interactive approval lalu return exit code ke Claude.
 
-**Implementation map** (Claude only, phase 3):
+**Implementation map**:
 
 | Concern | File |
 |---|---|
 | Glob matcher + shell-metachar guard + scope prefix | `internal/agents/gate/rule.go` |
-| `commands.jsonl` append helper | `internal/agents/gate/log.go` |
-| `settings.json` generator (`PreToolUse` matcher=Bash) + `WriteSpawnArtifacts` | `internal/agents/gate/claude_hook.go` |
-| Hook binary (stdin → match → exit 0/2 + log) | `cmd/wick-gate/main.go` |
-| Per-spawn artifact write + `--settings` flag injection + `WICK_GATE_SPEC` env | `internal/agents/pool/factory.go` (`GateConfig` + `gateAwareSpawner`) |
-| Spawner `--permission-mode bypassPermissions` + `--add-dir <workspace>` (so the hook is the authoritative decision, not claude's interactive prompt) | `internal/agents/agent/claude/spawn.go` |
+| `commands.jsonl` append + daily tail log | `internal/agents/gate/log.go` |
+| `settings.json` generator (`PreToolUse` hook config) | `internal/agents/gate/claude_hook.go` |
+| Hook binary (stdin → match → socket → exit 0/2) | `cmd/gate/main.go` |
+| Unix socket listener + pending map + timeout | `internal/agents/gate/socket.go` |
+| Shared socket lifecycle + session routing + always-allow | `internal/agents/gate/manager.go` |
+| AppName + gate binary resolution | `internal/agents/gate/embed.go` |
 
-#### Mekanisme per CLI
+#### AppName & Binary Naming
 
-| CLI | Hook | Cara block | Dokumentasi |
-|---|---|---|---|
-| **Claude CLI** | `PreToolUse` di `settings.json` | Exit code `2` = block, `0` = allow | [hooks-guide](https://code.claude.com/docs/en/hooks-guide) |
-| **Codex CLI** | `PermissionRequest` hook | `{"behavior":"deny"}` di stdout | [codex hooks](https://developers.openai.com/codex/hooks) |
-| **Gemini CLI** | `BeforeTool` hook | JSON response block (stdout harus pure JSON) | [gemini hooks](https://geminicli.com/docs/hooks/) |
+Gate binary dinamai `<app>-gate[.exe]` (misal `wick-lab-gate.exe`). AppName di-derive dari nama executable itu sendiri — strip `.exe`, strip `-gate` suffix. Chain:
 
-Wick menulis hook config ke temp dir sebelum spawn subprocess. Hook memanggil wick gate binary yang check whitelist dan return allow/block.
+1. Stem nama executable → `wick-lab-gate.exe` → `wick-lab`
+2. Fallback ke `appname.Resolve()` (ldflag → env → wick.yml → "wick")
+
+Dengan ini socket/spec/log path otomatis landing di `~/.<app>/agents/gate/` yang benar tanpa env var atau ldflag tambahan. Server (`wick-lab.exe`) pakai chain yang sama — stem `wick-lab` → semua path cocok.
+
+#### Flow Gate (per hook invocation)
 
 ```
-CLI subprocess mau jalanin: rm -rf .
-  → panggil hook (wick-gate binary)
-  → wick-gate terima: {"tool":"bash","input":{"command":"rm -rf ."}}
-  → cek whitelist: "rm *" tidak ada
-  → return: block (exit 2 / JSON deny)
-  → CLI batalkan eksekusi
-  → wick log: blocked
+Claude fire PreToolUse
+  → spawn <app>-gate[.exe], stdin = hook JSON
+  → gate baca stdin (timeout 3s)
+  → baca spec.json: command di AutoApproved? → exit 0 langsung
+  → match whitelist rules? → exit 0 langsung
+  → dial Unix socket: ~/.<app>/agents/gate/gate.sock
+  → kirim ApprovalRequest (JSON)
+  → server terima → route by cwd → check session-approved cache
+  → kalau sudah di-approve session → auto-reply ApprovalResponse
+  → kalau belum → broadcast SSE ke UI → user klik Approve/Block
+  → server kirim ApprovalResponse ke gate (timeout 25s)
+  → gate baca response → "approve_*" = exit 0, "block" = exit 2
+  → Claude lanjut atau batalkan tool call
 ```
 
-#### Hook Config yang Di-generate Wick
+Timeout chain: gate tunggu 25s < Claude hook timeout 30s → gate selalu exit duluan.
 
-**Claude** (`settings.json` di temp working dir):
+#### Decisions (approved)
+
+| Decision | Efek |
+|---|---|
+| `approve_once` | Satu request ini saja |
+| `approve_session` | Semua request dengan matchKey sama di session ini (in-memory) |
+| `approve_all` | Semua request di session ini tanpa cek matchKey (in-memory) |
+| `approve_always` | Tulis ke `spec.json` AutoApproved list (persistent, gate baca tiap call) |
+| `block` | Gate exit 2, Claude batalkan tool call |
+
+#### Hook Config (Claude)
+
+Ditulis ke `~/.claude/settings.json` (global, shared):
+
 ```json
 {
   "hooks": {
     "PreToolUse": [{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "wick-gate check"}]
+      "hooks": [{"type": "command", "command": "<abs-path>/<app>-gate[.exe]", "timeout": 30}]
     }]
   }
 }
 ```
 
-**Codex** (`~/.codex/config.json` atau env):
-```json
-{
-  "hooks": {
-    "permissionRequest": {"command": "wick-gate check-codex"}
-  }
-}
+#### Diagnostics: `wick doctor [binary]`
+
+`wick doctor` cek gate setup. Pass path server binary opsional untuk inspect branded build lain:
+
+```
+wick doctor                    # cek gate untuk binary wick itu sendiri
+wick doctor wick-lab.exe       # cek gate untuk wick-lab build
 ```
 
-**Gemini** (`~/.gemini/settings.json`):
-```json
-{
-  "hooks": {
-    "beforeTool": {"command": "wick-gate check-gemini"}
-  }
-}
-```
+Checks yang dijalankan (semua di-indent di bawah "gate"):
+
+| Check | Apa yang dicek |
+|---|---|
+| `gate app_name` | AppName derive dari binary path |
+| `gate binary` | `<app>-gate[.exe]` ada di sibling/bin/PATH |
+| `gate name match` | Stem gate binary == app_name (socket paths align) |
+| `gate socket` | Path socket yang dipakai |
+| `gate round-trip` | Dial socket, kirim probe request (`Probe: true`), server auto-reply tanpa tunggu human — proves full encode→decode path |
+| `gate spec` | `spec.json` ada + ukuran |
+
+Probe request (`Probe: true` di `ApprovalRequest`) di-handle server dengan early-return `approve_once` tanpa masuk pending queue — tidak ganggu session aktif.
 
 #### Whitelist & Log
 
-```go
-type CommandGate struct {
-    Allowed []CommandRule
-}
-
-type CommandRule struct {
-    Pattern string   // glob, e.g. "git *", "ls *", "cat *"
-    Scope   string   // path prefix yang diizinkan (opsional)
-}
-```
-
-- Tidak ada di whitelist → auto-block
-- Semua eksekusi (allowed dan blocked) → append ke `sessions/<id>/commands.jsonl`
+- Tidak ada di whitelist → langsung dial socket untuk interactive approval
+- Semua eksekusi (allowed/blocked + decision source) → append ke `~/.<app>/agents/gate/commands.jsonl`
+- Tiap invocation + stage transition → `~/.<app>/logs/gate-YYYY-MM-DD.log` (tail-able)
 
 Format log (jsonl):
 ```jsonl
-{"ts":"2026-05-08T10:23:11Z","agent":"backend","cmd":"git clone ...","status":"allowed"}
-{"ts":"2026-05-08T10:23:15Z","agent":"backend","cmd":"rm -rf .","status":"blocked"}
+{"ts":"2026-05-10T06:36:34Z","level":"info","cmd":"git status","status":"allowed","decision":"whitelist"}
+{"ts":"2026-05-10T06:36:40Z","level":"info","cmd":"rm -rf .","status":"blocked","decision":"block","reason":"user blocked"}
 ```
 
 ### 4.6 Streaming States & Raw Output

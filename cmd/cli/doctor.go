@@ -1,14 +1,18 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/mcpconfig"
 )
 
@@ -20,14 +24,23 @@ const (
 
 func doctorCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "doctor",
+		Use:   "doctor [binary]",
 		Short: "Check your wick environment and report any issues",
 		Long: `doctor runs a series of environment checks and prints a summary.
 
 Each check reports ✓ (ok), ✗ (missing/broken), or ! (warning).
-Exit code is 0 when all required checks pass, 1 otherwise.`,
+Exit code is 0 when all required checks pass, 1 otherwise.
+
+Pass an optional binary path (e.g. wick-lab.exe) to inspect a specific
+branded build — doctor will derive its AppName, locate the matching gate
+binary, and verify socket/spec paths.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDoctor()
+			file := ""
+			if len(args) > 0 {
+				file = args[0]
+			}
+			return runDoctor(file)
 		},
 	}
 }
@@ -40,8 +53,8 @@ type check struct {
 	required bool
 }
 
-func runDoctor() error {
-	checks := collectChecks()
+func runDoctor(file string) error {
+	checks := collectChecks(file)
 
 	maxLabel := 0
 	for _, c := range checks {
@@ -78,7 +91,7 @@ func runDoctor() error {
 	return nil
 }
 
-func collectChecks() []check {
+func collectChecks(file string) []check {
 	var checks []check
 	cwd, _ := os.Getwd()
 
@@ -136,8 +149,8 @@ func collectChecks() []check {
 		})
 	}
 
-	// ── wick-gate ─────────────────────────────────────────────────────
-	checks = append(checks, checkWickGate())
+	// ── gate ──────────────────────────────────────────────────────────
+	checks = append(checks, checkGate(file)...)
 
 	// ── templ ─────────────────────────────────────────────────────────
 	checks = append(checks, checkBinary("templ", "run: wick setup"))
@@ -182,30 +195,192 @@ func collectChecks() []check {
 	return checks
 }
 
-// checkWickGate checks for wick-gate next to this binary, in ./bin/, or PATH.
-func checkWickGate() check {
-	// Same resolution order as server.go resolveWickGateBin.
-	names := []string{"wick-gate", "wick-gate.exe"}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		for _, name := range names {
-			if p := filepath.Join(dir, name); statOK(p) {
-				return check{label: "wick-gate", status: checkOK, detail: p}
-			}
+// checkGate returns checks for the branded gate binary, AppName
+// consistency, socket file, and socket liveness.
+// appNameFromFile derives AppName from a binary path the same way
+// gate.AppName() does from os.Executable — strip .exe, strip -gate suffix.
+// Returns "" when file is empty or the stem is blank.
+func appNameFromFile(file string) string {
+	if file == "" {
+		return ""
+	}
+	stem := strings.TrimSuffix(filepath.Base(file), ".exe")
+	stem = strings.TrimSuffix(stem, "-gate")
+	return stem
+}
+
+func checkGate(file string) []check {
+	var out []check
+
+	// Derive AppName from --file binary stem, fallback to agentgate.AppName().
+	appName := appNameFromFile(file)
+	if appName == "" {
+		appName = agentgate.AppName()
+	}
+	gateName := appName + "-gate"
+	if runtime.GOOS == "windows" {
+		gateName += ".exe"
+	}
+
+	// ── app_name derived from this binary ──────────────────────────────
+	out = append(out, check{
+		label:  "gate app_name",
+		status: checkOK,
+		detail: appName,
+	})
+
+	// ── gate binary (sibling > ./bin/ > PATH) ─────────────────────────
+	// Sibling dir: prefer --file's dir, fallback to this exe's dir.
+	gatePath := ""
+	gateSource := ""
+	siblingDir := ""
+	if file != "" {
+		siblingDir = filepath.Dir(file)
+	} else if exe, err := os.Executable(); err == nil {
+		siblingDir = filepath.Dir(exe)
+	}
+	if siblingDir != "" {
+		if p := filepath.Join(siblingDir, gateName); statOK(p) {
+			gatePath, gateSource = p, "sibling"
 		}
 	}
-	for _, name := range names {
-		if p := localBinPath(name); statOK(p) {
-			return check{label: "wick-gate", status: checkOK, detail: p}
+	if gatePath == "" {
+		if p := localBinPath(gateName); statOK(p) {
+			gatePath, gateSource = p, "bin/"
 		}
 	}
-	if p, err := exec.LookPath("wick-gate"); err == nil {
-		return check{label: "wick-gate", status: checkOK, detail: p}
+	if gatePath == "" {
+		if p, err := exec.LookPath(strings.TrimSuffix(gateName, ".exe")); err == nil {
+			gatePath, gateSource = p, "PATH"
+		}
+	}
+	if gatePath != "" {
+		out = append(out, check{
+			label:  "gate binary",
+			status: checkOK,
+			detail: fmt.Sprintf("%s  (%s)", gatePath, gateSource),
+			indent: 1,
+		})
+	} else {
+		out = append(out, check{
+			label:    "gate binary",
+			status:   checkFail,
+			detail:   fmt.Sprintf("%s not found — run: wick build", gateName),
+			indent:   1,
+			required: true,
+		})
+	}
+
+	// ── AppName match: gate binary stem == server AppName ─────────────
+	// Verify gate binary derives the same AppName so socket paths align.
+	if gatePath != "" {
+		stem := strings.TrimSuffix(filepath.Base(gatePath), ".exe")
+		stem = strings.TrimSuffix(stem, "-gate")
+		if stem == appName {
+			out = append(out, check{
+				label:  "gate name match",
+				status: checkOK,
+				detail: fmt.Sprintf("gate stem %q == app_name %q", stem, appName),
+				indent: 1,
+			})
+		} else {
+			out = append(out, check{
+				label:  "gate name match",
+				status: checkFail,
+				detail: fmt.Sprintf("gate stem %q != app_name %q — socket paths will diverge", stem, appName),
+				indent: 1,
+			})
+		}
+	}
+
+	// ── socket path ───────────────────────────────────────────────────
+	socketPath := agentgate.SharedSocketPath(appName)
+	out = append(out, check{
+		label:  "gate socket",
+		status: checkOK,
+		detail: socketPath,
+		indent: 1,
+	})
+
+	// ── gate round-trip ───────────────────────────────────────────────
+	// Send a probe ApprovalRequest and expect any ApprovalResponse back
+	// (server will block+timeout it, but the JSON decode proves the
+	// full encode→decode path works). We use a 3s deadline so doctor
+	// doesn't hang waiting for a human to click Approve.
+	out = append(out, checkGateRoundTrip(socketPath))
+
+	// ── spec file ─────────────────────────────────────────────────────
+	specPath := agentgate.SharedSpecPath(appName)
+	if st, err := os.Stat(specPath); err == nil {
+		out = append(out, check{
+			label:  "gate spec",
+			status: checkOK,
+			detail: fmt.Sprintf("%s  (%d bytes)", specPath, st.Size()),
+			indent: 1,
+		})
+	} else {
+		out = append(out, check{
+			label:  "gate spec",
+			status: checkWarn,
+			detail: fmt.Sprintf("%s missing — created on first server start", specPath),
+			indent: 1,
+		})
+	}
+
+	return out
+}
+
+// checkGateRoundTrip dials the socket, sends a probe ApprovalRequest,
+// and waits up to 3s for any response. A timeout reply from the server
+// still counts as success — it proves encode→decode works end-to-end.
+// "connection refused" or EOF means the server is not ready.
+func checkGateRoundTrip(socketPath string) check {
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	if err != nil {
+		return check{
+			label:  "gate round-trip",
+			status: checkWarn,
+			detail: "not listening — start the server first",
+			indent: 1,
+		}
+	}
+	defer conn.Close()
+
+	req := agentgate.ApprovalRequest{
+		ID:        "doctor-probe",
+		SessionID: "doctor",
+		Tool:      "Bash",
+		Cmd:       "echo doctor-probe",
+		WorkDir:   "/",
+		MatchKey:  "doctor",
+		Timestamp: time.Now().UnixMilli(),
+		Probe:     true,
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return check{
+			label:  "gate round-trip",
+			status: checkFail,
+			detail: fmt.Sprintf("send failed: %v", err),
+			indent: 1,
+		}
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var resp agentgate.ApprovalResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return check{
+			label:  "gate round-trip",
+			status: checkFail,
+			detail: fmt.Sprintf("read response failed: %v", err),
+			indent: 1,
+		}
 	}
 	return check{
-		label:  "wick-gate",
-		status: checkWarn,
-		detail: "not found — run: wick setup  (or: go install github.com/yogasw/wick/cmd/wick-gate@latest)",
+		label:  "gate round-trip",
+		status: checkOK,
+		detail: fmt.Sprintf("ok — server replied decision=%q", resp.Decision),
+		indent: 1,
 	}
 }
 

@@ -17,12 +17,20 @@ import (
 //go:embed all:assets
 var embeddedGateFS embed.FS
 
-// AppName returns the active app brand via appname.Resolve() —
-// shared chain (BuildAppName ldflag → APP_NAME env → wick.yml →
-// "wick"). Both the parent app and the gate sidecar resolve through
-// the same code path, so spec/socket/log paths land under the same
-// `~/.<app>/` tree as the DB and other wick artefacts.
+// AppName returns the active app brand. Gate sidecars derive the brand
+// from their own executable name (wick-lab-gate.exe → "wick-lab") so
+// socket/spec paths land under the correct ~/.<app>/ tree even when no
+// ldflag, APP_NAME env, or wick.yml is present. appname.Resolve() is
+// used only when the exe-derived name is empty or equals the bare
+// default.
 func AppName() string {
+	if exe, err := os.Executable(); err == nil {
+		stem := strings.TrimSuffix(filepath.Base(exe), ".exe")
+		stem = strings.TrimSuffix(stem, "-gate")
+		if stem != "" && stem != "gate" {
+			return stem
+		}
+	}
 	return appname.Resolve()
 }
 

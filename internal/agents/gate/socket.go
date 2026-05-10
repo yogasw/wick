@@ -23,7 +23,8 @@ type ApprovalRequest struct {
 	Cmd       string `json:"cmd"`      // raw command string
 	WorkDir   string `json:"work_dir"` // cwd at exec time
 	MatchKey  string `json:"match_key"`
-	Timestamp int64  `json:"ts"` // unix ms
+	Timestamp int64  `json:"ts"`           // unix ms
+	Probe     bool   `json:"probe,omitempty"` // doctor health-check — server auto-replies immediately
 }
 
 // ApprovalResponse is the daemon's reply. The gate binary maps
@@ -246,6 +247,18 @@ func (l *Listener) handleConn(conn net.Conn) {
 		return
 	}
 	if req.ID == "" {
+		return
+	}
+
+	// Probe request from `wick doctor` — reply immediately without
+	// queuing into pending or firing onRequest.
+	if req.Probe {
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		_ = json.NewEncoder(conn).Encode(ApprovalResponse{
+			ID:       req.ID,
+			Decision: DecisionApproveOnce,
+			Reason:   "probe",
+		})
 		return
 	}
 
