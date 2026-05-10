@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -46,7 +47,10 @@ type hookInput struct {
 }
 
 type hookToolInput struct {
-	Command string `json:"command"`
+	Command  string `json:"command"`   // Bash
+	FilePath string `json:"file_path"` // Read, Write, Edit
+	Pattern  string `json:"pattern"`   // Glob
+	Path     string `json:"path"`      // Glob base / LS
 }
 
 // stdinReadTimeout is the upper bound for waiting on hook stdin. If
@@ -103,25 +107,37 @@ func run() int {
 
 	logStage(requestID, "received", "", "", "", "")
 
-	cmd, cwd, claudeSID, perr := readHookInput(os.Stdin, stdinReadTimeout)
+	in, perr := readHookInput(os.Stdin, stdinReadTimeout)
 	if perr != nil {
 		gate.LogDaily(app, "warn", "stdin parse blocked", map[string]any{
 			"request_id": requestID,
 			"error":      perr.Error(),
 		})
-		logTerminal(requestID, "", "", "blocked", "", "stdin parse: "+perr.Error())
+		logTerminalEntry(requestID, "Bash", "", "", "blocked", "", "stdin parse: "+perr.Error())
 		fmt.Fprintf(os.Stderr, "gate: %v\n", perr)
 		return 2
 	}
 
+	if in.ToolName != "Bash" {
+		return runPathGate(requestID, spec, in)
+	}
+
+	cmd := in.ToolInput.Command
+	if cmd == "" {
+		logTerminalEntry(requestID, "Bash", "", in.CWD, "blocked", "", "empty command")
+		return 2
+	}
+	cwd := in.CWD
+	claudeSID := in.SessionID
+
 	// Whitelist match — fastest happy path.
-	matcher := gate.NewMatcher(spec.Rules)
+	matcher := gate.NewMatcher(spec.Rules, spec.DefaultScope)
 	if allow, _ := matcher.Decide(cmd); allow {
 		gate.LogDaily(app, "info", "allowed via whitelist", map[string]any{
 			"request_id": requestID,
 			"cmd":        cmd,
 		})
-		logTerminal(requestID, cmd, cwd, "allowed", "whitelist", "")
+		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "whitelist", "")
 		return 0
 	}
 
@@ -135,7 +151,7 @@ func run() int {
 			"cmd":        cmd,
 			"match_key":  key,
 		})
-		logTerminal(requestID, cmd, cwd, "allowed", "auto_approved", "")
+		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "auto_approved", "")
 		return 0
 	}
 
@@ -147,14 +163,14 @@ func run() int {
 		"socket":     socketPath,
 	})
 	logStage(requestID, "socket_dial", cmd, cwd, "", socketPath)
-	decision, reason, err := requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, key, requestID)
+	decision, reason, err := requestApprovalWithLog(socketPath, "Bash", cmd, cwd, claudeSID, key, requestID)
 	if err != nil {
 		gate.LogDaily(app, "warn", "approval rpc failed (blocked)", map[string]any{
 			"request_id": requestID,
 			"cmd":        cmd,
 			"error":      err.Error(),
 		})
-		logTerminal(requestID, cmd, cwd, "blocked", "", "approval rpc: "+err.Error())
+		logTerminalEntry(requestID, "Bash", cmd, cwd, "blocked", "", "approval rpc: "+err.Error())
 		fmt.Fprintf(os.Stderr, "gate: blocked — approval rpc: %v\n", err)
 		return 2
 	}
@@ -164,7 +180,7 @@ func run() int {
 			"cmd":        cmd,
 			"reason":     reason,
 		})
-		logTerminal(requestID, cmd, cwd, "allowed", decision, reason)
+		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", decision, reason)
 		return 0
 	}
 	gate.LogDaily(app, "warn", "blocked: "+decision, map[string]any{
@@ -172,8 +188,51 @@ func run() int {
 		"cmd":        cmd,
 		"reason":     reason,
 	})
-	logTerminal(requestID, cmd, cwd, "blocked", decision, reason)
+	logTerminalEntry(requestID, "Bash", cmd, cwd, "blocked", decision, reason)
 	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
+	return 2
+}
+
+// runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob).
+// Only enforces scope restriction — no command whitelist applies.
+// Within scope → allow. Outside scope → interactive approval or block.
+func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
+	path := pathFromInput(in)
+	tool := in.ToolName
+
+	// No path extracted or relative path — safe (CWD = workspace).
+	if path == "" || !strings.HasPrefix(path, "/") {
+		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "relative_path", "")
+		return 0
+	}
+
+	// Within default scope → allow immediately.
+	if spec.DefaultScope != "" && gate.PathWithinScope(path, spec.DefaultScope) {
+		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "scope", "")
+		return 0
+	}
+
+	// Auto-approved.
+	key := gate.MatchKey(tool, path)
+	if gate.IsAutoApproved(spec, key) {
+		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "auto_approved", "")
+		return 0
+	}
+
+	// Interactive approval via shared socket.
+	socketPath := gate.SharedSocketPath(gate.AppName())
+	decision, reason, err := requestApprovalWithLog(socketPath, tool, path, in.CWD, in.SessionID, key, requestID)
+	if err != nil {
+		logTerminalEntry(requestID, tool, path, in.CWD, "blocked", "", "approval rpc: "+err.Error())
+		fmt.Fprintf(os.Stderr, "gate: blocked %s(%q) — approval rpc: %v\n", tool, path, err)
+		return 2
+	}
+	if gate.IsApprove(decision) {
+		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", decision, reason)
+		return 0
+	}
+	logTerminalEntry(requestID, tool, path, in.CWD, "blocked", decision, reason)
+	fmt.Fprintf(os.Stderr, "gate: blocked %s(%q) — %s\n", tool, path, reason)
 	return 2
 }
 
@@ -194,16 +253,16 @@ func logStage(requestID, stage, cmd, cwd, decision, reason string) {
 	_ = gate.Append(gate.AppName(), entry)
 }
 
-// logTerminal writes the final allowed/blocked entry. This is the
-// row the UI Commands tab displays as the user-visible decision.
-func logTerminal(requestID, cmd, cwd, status, decision, reason string) {
+// logTerminalEntry writes the final allowed/blocked entry for any tool.
+// This is the row the UI Commands tab displays as the user-visible decision.
+func logTerminalEntry(requestID, tool, cmd, cwd, status, decision, reason string) {
 	key := ""
 	if cmd != "" {
-		key = gate.MatchKey("Bash", cmd)
+		key = gate.MatchKey(tool, cmd)
 	}
 	entry := gate.Entry{
 		Timestamp: time.Now().UTC(),
-		Tool:      "Bash",
+		Tool:      tool,
 		Cmd:       cmd,
 		WorkDir:   cwd,
 		Status:    status,
@@ -221,7 +280,8 @@ func logTerminal(requestID, cmd, cwd, status, decision, reason string) {
 // exactly where a stuck approval got stuck. requestID ties all
 // stages together; pass "" to skip the per-stage audit logging
 // (used by tests). On any IO error the caller fail-safes to block.
-func requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, matchKey, requestID string) (decision, reason string, err error) {
+// toolName is the Claude tool name (e.g. "Bash", "Read", "Glob").
+func requestApprovalWithLog(socketPath, toolName, cmd, cwd, claudeSID, matchKey, requestID string) (decision, reason string, err error) {
 	conn, err := net.DialTimeout("unix", socketPath, socketDialTimeout)
 	if err != nil {
 		if requestID != "" {
@@ -235,7 +295,7 @@ func requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, matchKey, requestID
 	req := gate.ApprovalRequest{
 		ID:        socketReqID,
 		SessionID: claudeSID,
-		Tool:      "Bash",
+		Tool:      toolName,
 		Cmd:       cmd,
 		WorkDir:   cwd,
 		MatchKey:  matchKey,
@@ -279,9 +339,9 @@ func newRequestID() string {
 }
 
 // readHookInput reads the entire stdin payload (claude writes one
-// JSON object then EOF), parses it, and returns (cmd, cwd, claudeSID).
+// JSON object then EOF), parses it, and returns the full hookInput.
 // Caps wall-time via timeout.
-func readHookInput(r io.Reader, timeout time.Duration) (cmd, cwd, claudeSID string, err error) {
+func readHookInput(r io.Reader, timeout time.Duration) (hookInput, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -298,23 +358,43 @@ func readHookInput(r io.Reader, timeout time.Duration) (cmd, cwd, claudeSID stri
 	var data []byte
 	select {
 	case <-ctx.Done():
-		return "", "", "", fmt.Errorf("stdin read timeout after %v", timeout)
+		return hookInput{}, fmt.Errorf("stdin read timeout after %v", timeout)
 	case res := <-ch:
 		if res.err != nil {
-			return "", "", "", fmt.Errorf("stdin read: %w", res.err)
+			return hookInput{}, fmt.Errorf("stdin read: %w", res.err)
 		}
 		data = res.data
 	}
 
 	if len(data) == 0 {
-		return "", "", "", fmt.Errorf("empty stdin")
+		return hookInput{}, fmt.Errorf("empty stdin")
 	}
 	var in hookInput
 	if err := json.Unmarshal(data, &in); err != nil {
-		return "", "", "", fmt.Errorf("hook input parse: %w", err)
+		return hookInput{}, fmt.Errorf("hook input parse: %w", err)
 	}
-	if in.ToolInput.Command == "" {
-		return "", "", "", fmt.Errorf("hook input missing tool_input.command (tool=%q)", in.ToolName)
+	return in, nil
+}
+
+// pathFromInput extracts the primary filesystem path from a non-Bash tool's
+// input. Returns "" when no path can be determined (relative pattern, etc.).
+func pathFromInput(in hookInput) string {
+	switch in.ToolName {
+	case "Read", "Write", "Edit":
+		return in.ToolInput.FilePath
+	case "Glob":
+		// Prefer explicit path (search root). Fall back to extracting the
+		// non-wildcard prefix from the pattern.
+		if in.ToolInput.Path != "" {
+			return in.ToolInput.Path
+		}
+		p := in.ToolInput.Pattern
+		if i := strings.IndexAny(p, "*?["); i >= 0 {
+			p = p[:i]
+		}
+		return strings.TrimRight(p, "/")
+	case "LS":
+		return in.ToolInput.Path
 	}
-	return in.ToolInput.Command, in.CWD, in.SessionID, nil
+	return ""
 }

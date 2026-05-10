@@ -36,6 +36,15 @@ type Config struct {
 	Required      bool   `gorm:"default:false"`
 	Description   string `gorm:"type:text"`
 	UpdatedAt     time.Time
+	// Hidden is set from the `wick:"hidden"` tag at seed time. Not persisted
+	// (gorm:"-") — tells the manager Settings page to skip this row. Hidden
+	// configs are still seeded to DB so runtime reads work normally.
+	Hidden bool `gorm:"-" json:"-"`
+	// ColOptions holds per-column select options for kvlist rows. Not persisted.
+	// Key = column name; Value = pipe-separated "label::value" pairs (or just
+	// "value" when label == value). The kvlist component renders a <select>
+	// instead of <input> for columns that have options set.
+	ColOptions map[string]string `gorm:"-" json:"-"`
 }
 
 func (Config) TableName() string { return "configs" }

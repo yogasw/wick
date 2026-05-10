@@ -74,6 +74,7 @@ func StructToConfigs(cfg any) []Config {
 			Locked:        tag["locked"] == "true",
 			Required:      tag["required"] == "true",
 			Description:   tag["desc"],
+			Hidden:        tag["hidden"] == "true",
 		})
 	}
 	return out

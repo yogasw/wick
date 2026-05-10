@@ -2,19 +2,31 @@ package config
 
 import pkgentity "github.com/yogasw/wick/pkg/entity"
 
-// SeedGeneralConfig returns the StructToConfigs rows for GeneralConfig
-// using DefaultGeneralConfig as the seed values. Used by tool
-// registration so the admin UI shows non-empty defaults on first boot.
+// SeedGeneralConfig returns the StructToConfigs rows for GeneralConfig.
 func SeedGeneralConfig() []pkgentity.Config {
 	return pkgentity.StructToConfigs(DefaultGeneralConfig())
 }
 
-// SeedSlackConfig is the Slack counterpart.
-func SeedSlackConfig() []pkgentity.Config {
-	return pkgentity.StructToConfigs(DefaultSlackConfig())
+// SeedGateConfig returns the StructToConfigs rows for GateConfig.
+func SeedGateConfig() []pkgentity.Config {
+	return pkgentity.StructToConfigs(DefaultGateConfig())
 }
 
-// SeedWorkspaceConfig is the Workspace counterpart.
+// SeedSlackChannelConfig returns UI field metadata (key, label, type, description)
+// for the Slack channel form. Used ONLY for rendering the config page —
+// values come from agent_channels table, not from this seed.
+func SeedSlackChannelConfig() []pkgentity.Config {
+	return pkgentity.StructToConfigs(DefaultSlackChannelConfig())
+}
+
+// SeedTelegramChannelConfig returns UI field metadata (key, label, type, description)
+// for the Telegram channel form. Used ONLY for rendering the config page —
+// values come from agent_channels table, not from this seed.
+func SeedTelegramChannelConfig() []pkgentity.Config {
+	return pkgentity.StructToConfigs(DefaultTelegramChannelConfig())
+}
+
+// SeedWorkspaceConfig is the workspace counterpart.
 func SeedWorkspaceConfig() []pkgentity.Config {
 	return pkgentity.StructToConfigs(DefaultWorkspaceConfig())
 }

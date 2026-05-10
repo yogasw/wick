@@ -136,6 +136,9 @@ func collectChecks() []check {
 		})
 	}
 
+	// ── wick-gate ─────────────────────────────────────────────────────
+	checks = append(checks, checkWickGate())
+
 	// ── templ ─────────────────────────────────────────────────────────
 	checks = append(checks, checkBinary("templ", "run: wick setup"))
 
@@ -177,6 +180,38 @@ func collectChecks() []check {
 	}
 
 	return checks
+}
+
+// checkWickGate checks for wick-gate next to this binary, in ./bin/, or PATH.
+func checkWickGate() check {
+	// Same resolution order as server.go resolveWickGateBin.
+	names := []string{"wick-gate", "wick-gate.exe"}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		for _, name := range names {
+			if p := filepath.Join(dir, name); statOK(p) {
+				return check{label: "wick-gate", status: checkOK, detail: p}
+			}
+		}
+	}
+	for _, name := range names {
+		if p := localBinPath(name); statOK(p) {
+			return check{label: "wick-gate", status: checkOK, detail: p}
+		}
+	}
+	if p, err := exec.LookPath("wick-gate"); err == nil {
+		return check{label: "wick-gate", status: checkOK, detail: p}
+	}
+	return check{
+		label:  "wick-gate",
+		status: checkWarn,
+		detail: "not found — run: wick setup  (or: go install github.com/yogasw/wick/cmd/wick-gate@latest)",
+	}
+}
+
+func statOK(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // checkBinary checks whether a binary is available in PATH or ./bin/.

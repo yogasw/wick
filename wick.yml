@@ -29,6 +29,7 @@ tasks:
           cmd: templ
         run: go install github.com/a-h/templ/cmd/templ@latest
       - go mod tidy
+      - go build -o bin/wick-gate ./cmd/gate/
     done: |
       Setup complete!
       Run: wick dev

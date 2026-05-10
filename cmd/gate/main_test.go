@@ -13,39 +13,48 @@ import (
 
 func TestReadHookInputHappyPath(t *testing.T) {
 	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"/tmp/x","session_id":"abc","tool_input":{"command":"ls -la"}}`)
-	cmd, cwd, sid, err := readHookInput(in, time.Second)
+	got, err := readHookInput(in, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd != "ls -la" {
-		t.Fatalf("cmd: %q", cmd)
+	if got.ToolInput.Command != "ls -la" {
+		t.Fatalf("cmd: %q", got.ToolInput.Command)
 	}
-	if cwd != "/tmp/x" {
-		t.Fatalf("cwd: %q", cwd)
+	if got.CWD != "/tmp/x" {
+		t.Fatalf("cwd: %q", got.CWD)
 	}
-	if sid != "abc" {
-		t.Fatalf("session_id: %q", sid)
+	if got.SessionID != "abc" {
+		t.Fatalf("session_id: %q", got.SessionID)
 	}
 }
 
 func TestReadHookInputEmpty(t *testing.T) {
 	in := strings.NewReader("")
-	if _, _, _, err := readHookInput(in, time.Second); err == nil {
+	if _, err := readHookInput(in, time.Second); err == nil {
 		t.Fatal("empty stdin should error")
 	}
 }
 
 func TestReadHookInputMalformed(t *testing.T) {
 	in := strings.NewReader("not json")
-	if _, _, _, err := readHookInput(in, time.Second); err == nil {
+	if _, err := readHookInput(in, time.Second); err == nil {
 		t.Fatal("malformed json should error")
 	}
 }
 
 func TestReadHookInputMissingCommandField(t *testing.T) {
-	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`)
-	if _, _, _, err := readHookInput(in, time.Second); err == nil {
-		t.Fatal("missing command field should error")
+	// Non-Bash tools may omit command — parse should succeed now.
+	// A Bash call with no command is caught in run(), not readHookInput.
+	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/foo"}}`)
+	got, err := readHookInput(in, time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ToolName != "Read" {
+		t.Fatalf("tool_name: %q", got.ToolName)
+	}
+	if got.ToolInput.FilePath != "/tmp/foo" {
+		t.Fatalf("file_path: %q", got.ToolInput.FilePath)
 	}
 }
 
@@ -61,7 +70,7 @@ func TestReadHookInputTimeout(t *testing.T) {
 	r := &blockingReader{ch: make(chan struct{})}
 	defer close(r.ch)
 	start := time.Now()
-	_, _, _, err := readHookInput(r, 50*time.Millisecond)
+	_, err := readHookInput(r, 50*time.Millisecond)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected timeout error")
@@ -106,7 +115,7 @@ func startFakeApprovalServer(t *testing.T, decision, reason string) string {
 
 func TestRequestApprovalApprove(t *testing.T) {
 	sock := startFakeApprovalServer(t, gate.DecisionApproveOnce, "user clicked")
-	dec, _, err := requestApprovalWithLog(sock, "git status", "/cwd", "claude-sid", gate.MatchKey("Bash", "git status"), "")
+	dec, _, err := requestApprovalWithLog(sock, "Bash", "git status", "/cwd", "claude-sid", gate.MatchKey("Bash", "git status"), "")
 	if err != nil {
 		t.Fatalf("requestApproval: %v", err)
 	}
@@ -117,7 +126,7 @@ func TestRequestApprovalApprove(t *testing.T) {
 
 func TestRequestApprovalBlock(t *testing.T) {
 	sock := startFakeApprovalServer(t, gate.DecisionBlock, "user said no")
-	dec, reason, err := requestApprovalWithLog(sock, "rm -rf /", "/cwd", "", gate.MatchKey("Bash", "rm -rf /"), "")
+	dec, reason, err := requestApprovalWithLog(sock, "Bash", "rm -rf /", "/cwd", "", gate.MatchKey("Bash", "rm -rf /"), "")
 	if err != nil {
 		t.Fatalf("requestApproval: %v", err)
 	}
@@ -131,7 +140,7 @@ func TestRequestApprovalBlock(t *testing.T) {
 
 func TestRequestApprovalNoServer(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.sock")
-	if _, _, err := requestApprovalWithLog(missing, "ls", "/cwd", "", gate.MatchKey("Bash", "ls"), ""); err == nil {
+	if _, _, err := requestApprovalWithLog(missing, "Bash", "ls", "/cwd", "", gate.MatchKey("Bash", "ls"), ""); err == nil {
 		t.Fatal("expected dial error when socket file missing")
 	}
 }

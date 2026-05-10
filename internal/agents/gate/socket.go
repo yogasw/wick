@@ -39,6 +39,7 @@ type ApprovalResponse struct {
 const (
 	DecisionApproveOnce    = "approve_once"
 	DecisionApproveSession = "approve_session"
+	DecisionApproveAll     = "approve_all" // approve every future command in this session
 	DecisionApproveAlways  = "approve_always"
 	DecisionBlock          = "block"
 )
@@ -47,7 +48,7 @@ const (
 // Anything else is treated as block by the binary.
 func IsApprove(d string) bool {
 	switch d {
-	case DecisionApproveOnce, DecisionApproveSession, DecisionApproveAlways:
+	case DecisionApproveOnce, DecisionApproveSession, DecisionApproveAll, DecisionApproveAlways:
 		return true
 	}
 	return false
@@ -185,6 +186,18 @@ func (l *Listener) Resolve(id string, decision string, reason string) bool {
 		// Connection goroutine already gave up (timeout). Drop.
 		return false
 	}
+}
+
+// LookupPending returns the ApprovalRequest for id without removing it.
+// Used by the approval handler to retrieve the Cmd before resolving.
+func (l *Listener) LookupPending(id string) (ApprovalRequest, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p, ok := l.pending[id]
+	if !ok {
+		return ApprovalRequest{}, false
+	}
+	return p.req, true
 }
 
 // PendingSnapshot returns a copy of currently-pending requests.

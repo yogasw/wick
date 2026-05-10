@@ -22,6 +22,7 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/gate"
 )
 
 const (
@@ -38,6 +39,11 @@ const (
 	reactionError   = "x"                      // ❌
 )
 
+// ApproveFn resolves a gate approval request from a channel (e.g. Slack).
+// sessionID is the wick session (= Slack threadTS), requestID is the gate
+// request UUID, decision is one of the gate.Decision* constants.
+type ApproveFn func(sessionID, requestID, decision, matchKey string) error
+
 // slackTurn holds the per-turn state for a Slack session (thread). A new turn
 // is created each time the user sends a message to the thread. All fields are
 // protected by SlackChannel.mu.
@@ -50,6 +56,9 @@ type slackTurn struct {
 	msgTS      string         // ts of the user message — used for reactions
 	buf        strings.Builder
 	hasStarted bool           // true after first TextDelta (⚙️ already set)
+	// approval tracking
+	pendingApprovalID    string // gate request UUID while waiting for decision
+	pendingApprovalMsgTS string // ts of the Slack approval message (for update)
 }
 
 // SlackChannel implements Channel for Slack, supporting both Socket Mode
@@ -71,7 +80,7 @@ type SlackChannel struct {
 	// cfg, pubURL, api, socket are replaced atomically by Reload().
 	// Protected by cfgMu; read under cfgMu or only from a single goroutine.
 	cfgMu  sync.Mutex
-	cfg    agentconfig.SlackConfig
+	cfg    agentconfig.SlackChannelConfig
 	pubURL string
 	api    *slack.Client
 	socket *socketmode.Client
@@ -84,6 +93,10 @@ type SlackChannel struct {
 	// turn carries over the accumulated text so it is not lost.
 	turns map[string]*slackTurn
 
+	// approveFn resolves gate approval requests. Set via SetApproveFn after
+	// the ApprovalManager is wired up (post-construction).
+	approveFn ApproveFn
+
 	// runMu guards runCancel; runWg tracks the active Start() call.
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
@@ -92,7 +105,7 @@ type SlackChannel struct {
 
 // NewSlack builds a SlackChannel from the operator-supplied config.
 // sendFn is pool.Send (or a wrapper). pubURL is used for dashboard links.
-func NewSlack(cfg agentconfig.SlackConfig, sendFn SendFunc, pubURL string) *SlackChannel {
+func NewSlack(cfg agentconfig.SlackChannelConfig, sendFn SendFunc, pubURL string) *SlackChannel {
 	ch := &SlackChannel{
 		sendFn: sendFn,
 		turns:  make(map[string]*slackTurn),
@@ -103,7 +116,7 @@ func NewSlack(cfg agentconfig.SlackConfig, sendFn SendFunc, pubURL string) *Slac
 
 // applyConfig replaces cfg/pubURL/api/socket atomically. Called by NewSlack
 // and Reload. Must NOT be called while Start() is reading from s.socket.Events.
-func (s *SlackChannel) applyConfig(cfg agentconfig.SlackConfig, pubURL string) {
+func (s *SlackChannel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string) {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken))
 	socket := socketmode.New(api)
 	s.cfgMu.Lock()
@@ -217,7 +230,7 @@ func (s *SlackChannel) Stop() {
 // if the new config is valid. Safe to call from any goroutine at any time —
 // typically called by the server's config watcher when the operator updates
 // BotToken/AppToken in the Settings UI without restarting the server.
-func (s *SlackChannel) Reload(ctx context.Context, cfg agentconfig.SlackConfig, pubURL string) {
+func (s *SlackChannel) Reload(ctx context.Context, cfg agentconfig.SlackChannelConfig, pubURL string) {
 	// Stop the current run and wait for it to exit cleanly before we
 	// replace the socket client (avoids reading from a closed Events channel).
 	s.Stop()
@@ -248,6 +261,13 @@ func (s *SlackChannel) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 			return
 		}
 		s.handleEventsAPI(ctx, apiEvent)
+	case socketmode.EventTypeInteractive:
+		s.socket.Ack(*evt.Request)
+		cb, ok := evt.Data.(slack.InteractionCallback)
+		if !ok {
+			return
+		}
+		go s.handleInteraction(ctx, cb)
 	case socketmode.EventTypeConnecting:
 		log.Debug().Str("channel", "slack").Msg("connecting")
 	case socketmode.EventTypeConnected:
@@ -263,8 +283,13 @@ func (s *SlackChannel) handleEventsAPI(ctx context.Context, outer slackevents.Ev
 	case slackevents.CallbackEvent:
 		switch ev := outer.InnerEvent.Data.(type) {
 		case *slackevents.MessageEvent:
-			// Ignore bot messages to avoid feedback loops.
-			if ev.BotID != "" || ev.SubType == "bot_message" {
+			// Only handle plain user messages. Any non-empty SubType indicates
+			// a system event (message_changed, message_deleted, bot_message, etc.)
+			// that should not trigger the agent. For message_changed specifically,
+			// the top-level ev.BotID is empty even for bot-edited messages because
+			// the bot_id lives inside the nested "message" object — so checking
+			// BotID alone is insufficient.
+			if ev.BotID != "" || ev.SubType != "" {
 				return
 			}
 			s.handleMessage(ctx, ev)
@@ -365,7 +390,7 @@ func verifySlackSignature(h http.Header, body []byte, signingSecret string) erro
 
 // snapshot returns a consistent copy of the connection-independent config
 // fields. Use instead of reading s.cfg directly in hot paths.
-func (s *SlackChannel) snapshot() agentconfig.SlackConfig {
+func (s *SlackChannel) snapshot() agentconfig.SlackChannelConfig {
 	s.cfgMu.Lock()
 	c := s.cfg
 	s.cfgMu.Unlock()
@@ -557,6 +582,162 @@ func (s *SlackChannel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	}
 }
 
+// SetApproveFn wires the gate approval resolver. Must be called before any
+// agent session starts. Safe to call concurrently.
+func (s *SlackChannel) SetApproveFn(fn ApproveFn) {
+	s.mu.Lock()
+	s.approveFn = fn
+	s.mu.Unlock()
+}
+
+// OnApprovalRequest is called by the server when the gate binary requests
+// interactive approval for a session that originated from Slack. It posts
+// a Block Kit message with three buttons so the Slack user can decide
+// without opening the web UI.
+func (s *SlackChannel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) {
+	s.mu.Lock()
+	t := s.turns[sessionID]
+	if t == nil {
+		s.mu.Unlock()
+		return // not a Slack-originated session
+	}
+	t.pendingApprovalID = req.ID
+	channelID := t.channelID
+	threadTS := sessionID
+	s.mu.Unlock()
+
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	// Button value format: "decision|requestID|sessionID|matchKey" (4 parts).
+	// Slack discriminates gate callbacks by BlockID == "gate_approval" (see handleInteraction).
+	// Telegram uses a different format: "gate|decision|requestID|sessionID|matchKey" (5 parts)
+	// with a "gate|" prefix as the discriminator. Keep in sync with TelegramChannel.OnApprovalRequest.
+	val := func(decision string) string {
+		return decision + "|" + req.ID + "|" + sessionID + "|" + req.MatchKey
+	}
+
+	cmd := req.Cmd
+	if len(cmd) > 200 {
+		cmd = cmd[:200] + "…"
+	}
+
+	blocks := []slack.Block{
+		slack.NewHeaderBlock(slack.NewTextBlockObject("plain_text", "⚠️ Command Approval Required", false, false)),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("*Tool:* `%s`\n*Command:* `%s`\n*Directory:* `%s`",
+					req.Tool, cmd, req.WorkDir), false, false),
+			nil, nil),
+		slack.NewActionBlock("gate_approval",
+			slack.NewButtonBlockElement("gate_approve_once", val(gate.DecisionApproveOnce),
+				slack.NewTextBlockObject("plain_text", "Allow Once", false, false)),
+			slack.NewButtonBlockElement("gate_approve_session", val(gate.DecisionApproveSession),
+				slack.NewTextBlockObject("plain_text", "Allow Session", false, false)),
+			slack.NewButtonBlockElement("gate_approve_all", val(gate.DecisionApproveAll),
+				slack.NewTextBlockObject("plain_text", "Allow All (Session)", false, false)).WithStyle(slack.StylePrimary),
+			slack.NewButtonBlockElement("gate_block", val(gate.DecisionBlock),
+				slack.NewTextBlockObject("plain_text", "Block", false, false)).WithStyle(slack.StyleDanger),
+		),
+	}
+
+	_, approvalTS, err := api.PostMessage(channelID,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionTS(threadTS),
+	)
+	if err != nil {
+		log.Warn().Str("channel", "slack").Err(err).Msg("post approval blocks failed")
+		return
+	}
+	s.mu.Lock()
+	if t2 := s.turns[sessionID]; t2 != nil {
+		t2.pendingApprovalMsgTS = approvalTS
+	}
+	s.mu.Unlock()
+}
+
+// OnApprovalResolved is called by the server when the gate decision is
+// delivered (from web UI or Slack button). It updates the Slack approval
+// message to replace the buttons with the final decision text.
+func (s *SlackChannel) OnApprovalResolved(sessionID, requestID, decision string) {
+	s.mu.Lock()
+	t := s.turns[sessionID]
+	if t == nil || t.pendingApprovalID != requestID {
+		s.mu.Unlock()
+		return
+	}
+	channelID := t.channelID
+	approvalMsgTS := t.pendingApprovalMsgTS
+	t.pendingApprovalID = ""
+	t.pendingApprovalMsgTS = ""
+	s.mu.Unlock()
+
+	if approvalMsgTS == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	label := "✅ Approved"
+	switch decision {
+	case gate.DecisionBlock:
+		label = "🚫 Blocked"
+	case gate.DecisionApproveSession:
+		label = "✅ Approved for session"
+	case gate.DecisionApproveAll:
+		label = "✅ All commands allowed for session"
+	case gate.DecisionApproveAlways:
+		label = "✅ Always allowed"
+	}
+	_, _, _, err := api.UpdateMessage(channelID, approvalMsgTS,
+		slack.MsgOptionBlocks(
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", label, false, false),
+				nil, nil),
+		),
+	)
+	if err != nil {
+		log.Debug().Str("channel", "slack").Err(err).Msg("update approval message failed")
+	}
+}
+
+// handleInteraction processes a Slack interactive component callback (button
+// click). Gate approval buttons encode their payload as
+// "decision|requestID|sessionID|matchKey" in the action value.
+func (s *SlackChannel) handleInteraction(_ context.Context, cb slack.InteractionCallback) {
+	if len(cb.ActionCallback.BlockActions) == 0 {
+		return
+	}
+	action := cb.ActionCallback.BlockActions[0]
+	// Only handle gate approval actions.
+	if action.BlockID != "gate_approval" {
+		return
+	}
+	parts := strings.SplitN(action.Value, "|", 4)
+	if len(parts) != 4 {
+		return
+	}
+	decision, requestID, sessionID, matchKey := parts[0], parts[1], parts[2], parts[3]
+
+	s.mu.Lock()
+	fn := s.approveFn
+	s.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	if err := fn(sessionID, requestID, decision, matchKey); err != nil {
+		log.Warn().Str("channel", "slack").Err(err).Msg("gate approval resolve failed")
+	}
+}
+
 // setReaction removes `old` (if non-empty) and adds `new` on the given message.
 // Both operations use exponential backoff for Slack rate limits.
 func (s *SlackChannel) setReaction(newReaction, channelID, msgTS, oldReaction string) {
@@ -657,7 +838,7 @@ func isRateLimit(err error) bool {
 		strings.Contains(err.Error(), "ratelimited")
 }
 
-func (s *SlackChannel) allowedCfg(cfg agentconfig.SlackConfig, userID string, groupIDs []string) bool {
+func (s *SlackChannel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string) bool {
 	switch cfg.AccessMode {
 	case "everyone", "":
 		return true

@@ -30,9 +30,10 @@ type ApprovalManager struct {
 	onRequest  func(sessionID string, r ApprovalRequest)
 	onResolved func(sessionID, requestID, decision string)
 
-	mu              sync.Mutex
-	listener        *Listener
-	sessionApproved map[string]map[string]bool // sessionID → matchKey → true
+	mu                  sync.Mutex
+	listener            *Listener
+	sessionApproved     map[string]map[string]bool // sessionID → matchKey → true
+	sessionAllApproved  map[string]bool            // sessionID → approve every command
 }
 
 // ApprovalManagerOptions wires the manager to its environment.
@@ -67,12 +68,13 @@ func NewApprovalManager(opt ApprovalManagerOptions) (*ApprovalManager, error) {
 	}
 	timeout := opt.Timeout
 	return &ApprovalManager{
-		appName:         opt.AppName,
-		timeout:         func() time.Duration { return timeout },
-		routeByCWD:      opt.RouteByCWD,
-		onRequest:       opt.OnRequest,
-		onResolved:      opt.OnResolved,
-		sessionApproved: make(map[string]map[string]bool),
+		appName:            opt.AppName,
+		timeout:            func() time.Duration { return timeout },
+		routeByCWD:         opt.RouteByCWD,
+		onRequest:          opt.OnRequest,
+		onResolved:         opt.OnResolved,
+		sessionApproved:    make(map[string]map[string]bool),
+		sessionAllApproved: make(map[string]bool),
 	}, nil
 }
 
@@ -103,6 +105,7 @@ func (m *ApprovalManager) Stop() {
 	l := m.listener
 	m.listener = nil
 	m.sessionApproved = nil
+	m.sessionAllApproved = nil
 	m.mu.Unlock()
 	if l != nil {
 		_ = l.Close()
@@ -119,6 +122,10 @@ func (m *ApprovalManager) handleRequest(r ApprovalRequest) {
 		// with the empty sessionID; UI can render under "Unrouted"
 		// bucket, or admins can revoke via cwd path.
 		sessionID = ""
+	}
+	if sessionID != "" && m.IsSessionAllApproved(sessionID) {
+		m.resolve(sessionID, r.ID, DecisionApproveAll, "session all-approved")
+		return
 	}
 	if sessionID != "" && m.IsSessionApproved(sessionID, r.MatchKey) {
 		m.resolve(sessionID, r.ID, DecisionApproveSession, "session auto-approved")
@@ -141,6 +148,8 @@ func (m *ApprovalManager) Resolve(sessionID, requestID, decision, reason, matchK
 	switch decision {
 	case DecisionApproveSession:
 		m.markSessionApproved(sessionID, matchKey)
+	case DecisionApproveAll:
+		m.markSessionAllApproved(sessionID)
 	case DecisionApproveAlways:
 		m.markSessionApproved(sessionID, matchKey)
 		if err := m.appendAlwaysAllow(matchKey); err != nil {
@@ -165,6 +174,14 @@ func (m *ApprovalManager) resolve(sessionID, requestID, decision, reason string)
 		m.onResolved(sessionID, requestID, decision)
 	}
 	return ok
+}
+
+// IsSessionAllApproved reports whether the user clicked "Allow All for Session",
+// which bypasses per-command hash checks for every future request in the session.
+func (m *ApprovalManager) IsSessionAllApproved(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessionAllApproved != nil && m.sessionAllApproved[sessionID]
 }
 
 // IsSessionApproved reports whether the user clicked "Allow this
@@ -253,6 +270,20 @@ func (m *ApprovalManager) RevokeSession(sessionID, matchKey string) {
 	m.mu.Unlock()
 }
 
+// LookupPending returns the ApprovalRequest for requestID without
+// removing it from the pending set. Used by the approval handler to
+// retrieve the Cmd before calling Resolve so approve_always can write
+// the command back to the persistent allowed_cmds config.
+func (m *ApprovalManager) LookupPending(requestID string) (ApprovalRequest, bool) {
+	m.mu.Lock()
+	l := m.listener
+	m.mu.Unlock()
+	if l == nil {
+		return ApprovalRequest{}, false
+	}
+	return l.LookupPending(requestID)
+}
+
 // SocketPath returns the bound socket path. Empty if Start hasn't
 // been called or the listener failed to bind.
 func (m *ApprovalManager) SocketPath() string {
@@ -262,6 +293,17 @@ func (m *ApprovalManager) SocketPath() string {
 		return ""
 	}
 	return m.listener.SocketPath()
+}
+
+func (m *ApprovalManager) markSessionAllApproved(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	m.mu.Lock()
+	if m.sessionAllApproved != nil {
+		m.sessionAllApproved[sessionID] = true
+	}
+	m.mu.Unlock()
 }
 
 func (m *ApprovalManager) markSessionApproved(sessionID, matchKey string) {

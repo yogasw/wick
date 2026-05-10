@@ -590,6 +590,10 @@
       modal.querySelector("[data-approval-tool]").textContent = req.tool || "—";
       modal.querySelector("[data-approval-workdir]").textContent = req.work_dir || "—";
       modal.querySelector("[data-approval-cmd]").textContent = req.cmd || "";
+      // Re-enable buttons — they may be disabled from a previous approval click.
+      modal.querySelectorAll("[data-approval-decision]").forEach(function (b) {
+        b.disabled = false;
+      });
       modal.classList.remove("hidden");
       startApprovalCountdown(modal);
     }

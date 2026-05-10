@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/askuser"
@@ -40,6 +41,7 @@ var (
 	globalAskUsers   *askuser.Manager
 	globalGateStatus GateStatus
 	globalConfigs    *configs.Service
+	globalDB         *gorm.DB
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -91,6 +93,10 @@ func SetGateStatus(s GateStatus) { globalGateStatus = s }
 // endpoint 503s.
 func SetConfigs(c *configs.Service) { globalConfigs = c }
 
+// SetDB wires the shared GORM DB so channel handlers can read/write
+// agent_channels rows. Without this, channel config endpoints 503.
+func SetDB(db *gorm.DB) { globalDB = db }
+
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
 func GetGateStatus() GateStatus { return globalGateStatus }
@@ -127,6 +133,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/asks", asksSnapshot)
 
 	r.GET("/workspaces", workspacesPage)
+	r.GET("/workspaces/options", workspaceOptionsJSON)
 	r.POST("/workspaces", createWorkspace)
 	r.DELETE("/workspaces/{name}", deleteWorkspace)
 
@@ -144,6 +151,12 @@ func Register(r tool.Router) {
 	r.POST("/providers/rescan", rescanAllProviders)
 	r.POST("/providers/rescan/{type}/{name}", rescanOneProvider)
 	r.POST("/providers/auto-rescan/toggle", toggleAutoRescan)
+
+	r.GET("/channels", channelsPage)
+	r.GET("/channels/slack", slackChannelPage)
+	r.POST("/channels/slack/{key}", makeChannelSaveHandler("slack"))
+	r.GET("/channels/telegram", telegramChannelPage)
+	r.POST("/channels/telegram/{key}", makeChannelSaveHandler("telegram"))
 
 	r.GET("/stream", streamSSE)
 }
@@ -461,6 +474,28 @@ func workspacesPage(c *tool.Ctx) {
 		Workspaces:    globalMgr.Registry().Workspaces(),
 		PresetList:    globalMgr.Registry().PresetNames(),
 	}))
+}
+
+// workspaceOptionsJSON returns [{name, path}] for every workspace —
+// consumed by the allowed_cmds scope dropdown in the settings UI.
+func workspaceOptionsJSON(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	type option struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	wss := globalMgr.Registry().Workspaces()
+	opts := make([]option, 0, len(wss))
+	for _, ws := range wss {
+		path := ws.Meta.CustomPath
+		if path == "" {
+			path = globalLayout.WorkspaceManagedPath(ws.Name)
+		}
+		opts = append(opts, option{Name: ws.Name, Path: path})
+	}
+	c.JSON(http.StatusOK, opts)
 }
 
 func createWorkspace(c *tool.Ctx) {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,7 +19,6 @@ import (
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
-	agentaskuser "github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
@@ -61,6 +61,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 func NewServer() *Server {
@@ -236,23 +237,9 @@ func NewServer() *Server {
 	agentsBcast := agentstool.NewBroadcaster()
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
 
-	// ── Gate (interactive command approval) ───────────────────────
-	// Resolve the gate binary up front: sibling-of-executable first
-	// (production path — installer ships <app>-gate next to the main
-	// exe), embedded extract as backup, PATH lookup as last resort.
-	// Failure here is non-fatal — gate stays disabled and the pool
-	// falls back to whitelist-only mode. Operator sees one log line.
-	//
-	// User-controlled toggle: agents.gate_enabled (default true). When
-	// false, every provider falls back to its own default permission
-	// handling (claude headless: blocks). Wick injects no --settings
-	// and no --permission-mode in that path.
-	//
-	// Stage 9 model: single shared listener at SharedSocketPath(app),
-	// single shared spec at SharedSpecPath(app). cwd→session routing
-	// scans active sessions' workspace paths; longest-prefix wins so
-	// nested workspaces resolve to the deeper session.
-	var agentsApprovals *agentgate.ApprovalManager
+	// Resolve the gate binary up front: sibling-of-executable first, embedded
+	// extract as backup, PATH lookup as last resort. Failure is non-fatal —
+	// gate stays disabled and pool falls back to whitelist-only mode.
 	gateConfigEnabled := true
 	if v := configsSvc.GetOwned("agents", "gate_enabled"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
@@ -272,61 +259,10 @@ func NewServer() *Server {
 	case gateBinErr != nil:
 		gateStatus.Reason = gateBinErr.Error()
 		log.Warn().Msgf("agents gate disabled: %s", gateBinErr.Error())
-	default:
-		routeByCWD := func(cwd string) (string, bool) {
-			if cwd == "" || agentsMgr == nil {
-				return "", false
-			}
-			abs := cwd
-			if a, err := filepath.Abs(cwd); err == nil {
-				abs = a
-			}
-			abs = filepath.Clean(abs)
-			best := ""
-			bestLen := 0
-			for sid, s := range agentsMgr.Registry().Sessions() {
-				if s.Meta.Workspace == "" {
-					continue
-				}
-				p, err := agentworkspace.ResolvePath(agentsLayout, s.Meta.Workspace)
-				if err != nil {
-					continue
-				}
-				if a, err := filepath.Abs(p); err == nil {
-					p = a
-				}
-				p = filepath.Clean(p)
-				if abs == p || strings.HasPrefix(abs, p+string(filepath.Separator)) {
-					if len(p) > bestLen {
-						best = sid
-						bestLen = len(p)
-					}
-				}
-			}
-			return best, best != ""
-		}
-		agentsApprovals, _ = agentgate.NewApprovalManager(agentgate.ApprovalManagerOptions{
-			AppName:    agentgate.AppName(),
-			RouteByCWD: routeByCWD,
-			OnRequest: func(sid string, r agentgate.ApprovalRequest) {
-				agentsBcast.PublishApprovalRequest(sid, r)
-			},
-			OnResolved: func(sid, requestID, decision string) {
-				agentsBcast.PublishApprovalResolved(sid, requestID, decision)
-			},
-		})
-		if agentsApprovals != nil {
-			if _, err := agentsApprovals.Start(); err != nil {
-				log.Warn().Err(err).Msg("agents gate listener start failed")
-				agentsApprovals = nil
-				gateStatus.Enabled = false
-				gateStatus.Reason = "listener start: " + err.Error()
-			}
-		}
 	}
-
 	var agentsPool *agentpool.Pool
-	var slackChan *agentchannels.SlackChannel // forward ref so factory closure can call it
+	var slackChan *agentchannels.SlackChannel    // forward ref so factory closure can call it
+	var telegramChan *agentchannels.TelegramChannel // forward ref
 	agentsFactory := &agentpool.ClaudeFactory{
 		Layout:      agentsLayout,
 		RecordRaw:   false,
@@ -336,6 +272,9 @@ func NewServer() *Server {
 			if slackChan != nil {
 				slackChan.OnAgentEvent(sid, ev)
 			}
+			if telegramChan != nil {
+				telegramChan.OnAgentEvent(sid, ev)
+			}
 		},
 		OnExit: func(sid, name string, reason provider.ExitReason) {
 			agentsPool.HandleExit(sid, name, reason)
@@ -344,12 +283,10 @@ func NewServer() *Server {
 			if slackChan != nil {
 				slackChan.OnAgentEvent(sid, doneEv)
 			}
+			if telegramChan != nil {
+				telegramChan.OnAgentEvent(sid, doneEv)
+			}
 		},
-	}
-	if agentsApprovals != nil {
-		agentsFactory.Gate = &agentpool.GateConfig{
-			GateBinary: resolvedGateBin,
-		}
 	}
 	maxConc := 2
 	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n > 0 {
@@ -368,15 +305,11 @@ func NewServer() *Server {
 		return configsSvc.GetOwned("agents", "bypass_permissions") == "true"
 	}
 
-	// GateLoader is evaluated on every agent spawn. Stage 9 model:
-	// rules + auto-approved live in the shared spec.json (rewritten
-	// here on every Build so allowed_cmds edits take effect on the
-	// next spawn without a server restart). Factory only needs the
-	// binary path now — reuse the boot-time resolution.
+	// syncSharedSpec rewrites the shared spec.json on every spawn so
+	// allowed_cmds edits take effect without a server restart.
+	// AutoApproved entries are preserved from disk.
 	syncSharedSpec := func() error {
 		rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
-		// Preserve AutoApproved from disk so edits to allowed_cmds
-		// don't drop the user's "always allow" entries.
 		spec, _ := agentgate.LoadSpec(agentgate.AppName())
 		spec.Rules = rules
 		return agentgate.WriteSharedSpec(agentgate.AppName(), spec)
@@ -388,16 +321,13 @@ func NewServer() *Server {
 		if resolvedGateBin == "" {
 			return nil
 		}
-		if err := syncSharedSpec(); err != nil {
-			log.Warn().Err(err).Msg("agents: sync shared spec")
+		_ = syncSharedSpec()
+		log.Debug().Int("rules", 0).Msg("agents: gate active for spawn")
+		return &agentpool.GateConfig{
+			GateBinary:   resolvedGateBin,
+			AppName:      agentgate.AppName(),
+			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}
-		return &agentpool.GateConfig{GateBinary: resolvedGateBin}
-	}
-	// Boot-time sync so the gate works on first spawn after a fresh
-	// install (no spawn has happened yet but the user might invoke
-	// the binary via something else).
-	if err := syncSharedSpec(); err != nil {
-		log.Warn().Err(err).Msg("agents: initial shared spec write")
 	}
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent:    maxConc,
@@ -413,34 +343,13 @@ func NewServer() *Server {
 			agentsBcast.PublishLifecycle(ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
 		},
 	})
-	if agentsApprovals != nil {
-		agentstool.SetApprovals(agentsApprovals)
-	}
-	agentstool.SetGateStatus(gateStatus)
-
-	// ── ask_user MCP tool wiring ─────────────────────────────────
-	// One Manager per process: agents tool publishes SSE on
-	// OnRequest/OnResolved, MCP handler calls Ask() and blocks.
-	agentsAskUsers := agentaskuser.NewManager(agentaskuser.Options{
-		OnRequest: func(req agentaskuser.AskRequest) {
-			payload, err := json.Marshal(req)
-			if err != nil {
-				log.Warn().Err(err).Msg("ask_user marshal failed")
-				return
-			}
-			agentsBcast.PublishAskUser(req.SessionID, req.AgentName, payload)
-		},
-		OnResolved: func(sid, requestID string) {
-			agentsBcast.PublishAskUserResolved(sid, requestID)
-		},
-	})
-	agentstool.SetAskUsers(agentsAskUsers)
 	agentstool.SetManager(agentsMgr)
 	agentstool.SetPool(agentsPool)
 	agentstool.SetBroadcaster(agentsBcast)
 	agentstool.SetLayout(agentsLayout)
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
 	agentstool.SetConfigs(configsSvc)
+	agentstool.SetDB(db)
 	provider.AppName = strings.TrimSpace(os.Getenv("APP_NAME"))
 	// Wire the auto-rescan toggle: provider package consults this
 	// before triggering background stale-version re-probes. Defaults
@@ -459,20 +368,87 @@ func NewServer() *Server {
 		_ = provider.RescanAll(ctx)
 	}()
 
+	// ── Gate: ApprovalManager (shared socket + initial spec.json) ────────
+	// RouteByCWD maps the gate binary's working directory to the wick
+	// session that owns that workspace so SSE events land in the right tab.
+	approvalMgr, amErr := gate.NewApprovalManager(gate.ApprovalManagerOptions{
+		AppName: agentgate.AppName(),
+		// Route by active pool sessions only — multiple sessions can share the
+		// same workspace name, so iterating the registry (which includes idle
+		// sessions) is non-deterministic and picks the wrong session. The active
+		// pool is precise: only the running agent owns that CWD right now.
+		RouteByCWD: func(cwd string) (string, bool) {
+			cleanCWD := filepath.Clean(cwd)
+			for _, entry := range agentsPool.ActiveSnapshot() {
+				if entry.CWD == "" {
+					continue
+				}
+				wsPath := filepath.Clean(entry.CWD)
+				if cleanCWD == wsPath || strings.HasPrefix(cleanCWD, wsPath+string(filepath.Separator)) {
+					return entry.SessionID, true
+				}
+			}
+			return "", false
+		},
+		OnRequest: func(sessionID string, r gate.ApprovalRequest) {
+			agentsBcast.PublishApprovalRequest(sessionID, r)
+			if slackChan != nil {
+				slackChan.OnApprovalRequest(sessionID, r)
+			}
+			if telegramChan != nil {
+				telegramChan.OnApprovalRequest(sessionID, r)
+			}
+		},
+		OnResolved: func(sessionID, requestID, decision string) {
+			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
+			if slackChan != nil {
+				slackChan.OnApprovalResolved(sessionID, requestID, decision)
+			}
+			if telegramChan != nil {
+				telegramChan.OnApprovalResolved(sessionID, requestID, decision)
+			}
+		},
+	})
+	if amErr != nil {
+		log.Warn().Err(amErr).Msg("agents: gate ApprovalManager init failed — interactive approval disabled")
+		gateStatus.Enabled = false
+		gateStatus.Reason = amErr.Error()
+	} else if _, err := approvalMgr.Start(); err != nil {
+		log.Warn().Err(err).Msg("agents: gate socket bind failed — interactive approval disabled")
+		gateStatus.Enabled = false
+		gateStatus.Reason = "listener start: " + err.Error()
+	} else {
+		// Write initial spec.json so the gate binary finds the whitelist
+		// rules on the very first spawn before any agent has started.
+		initialRules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
+		if wsErr := gate.WriteSharedSpec(agentgate.AppName(), gate.Spec{
+			Rules:        initialRules,
+			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
+		}); wsErr != nil {
+			log.Warn().Err(wsErr).Msg("agents: write initial spec.json failed")
+		}
+		agentstool.SetApprovals(approvalMgr)
+		log.Info().Str("socket", approvalMgr.SocketPath()).Msg("agents: gate socket ready")
+	}
+	agentstool.SetGateStatus(gateStatus)
+
 	// ── Agents: Slack channel (optional — only starts when configured) ──
-	slackCfg := agentconfig.SlackConfig{
-		Mode:          configsSvc.GetOwned("agents", "mode"),
-		BotToken:      configsSvc.GetOwned("agents", "bot_token"),
-		AppToken:      configsSvc.GetOwned("agents", "app_token"),
-		SigningSecret: configsSvc.GetOwned("agents", "signing_secret"),
-		AccessMode:    configsSvc.GetOwned("agents", "access_mode"),
-		AllowedUsers:  configsSvc.GetOwned("agents", "allowed_users"),
-		AllowedGroups: configsSvc.GetOwned("agents", "allowed_groups"),
+	if err := agentchannels.EnsureChannel(db, "slack"); err != nil {
+		log.Warn().Err(err).Msg("agents: slack channel ensure failed")
+	}
+	slackCfg, slackPubURL, slackCfgErr := agentchannels.LoadSlackConfig(db)
+	if slackCfgErr != nil {
+		log.Warn().Err(slackCfgErr).Msg("agents: failed to load slack config from agent_channels")
 	}
 	slackChannel := agentchannels.NewSlack(
 		slackCfg,
 		func(ctx context.Context, sessionID, agentName, source, role, text string) error {
-			ws := configsSvc.GetOwned("agents", "slack_workspace")
+			// Re-read workspace from agent_channels on each send so UI changes
+			// take effect without a restart.
+			ws := ""
+			if m, err := agentchannels.GetChannelConfigMap(db, "slack"); err == nil {
+				ws = m["workspace"]
+			}
 			if ws == "" {
 				if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
 					ws = wsNames[0]
@@ -480,13 +456,60 @@ func NewServer() *Server {
 			}
 			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
 		},
-		configsSvc.GetOwned("agents", "public_url"),
+		slackPubURL,
 	)
 	slackChan = slackChannel // wire forward ref so factory callbacks can reach it
+	if approvalMgr != nil {
+		slackChannel.SetApproveFn(func(sessionID, requestID, decision, matchKey string) error {
+			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, "slack", matchKey)
+			if !ok && err == nil {
+				return fmt.Errorf("approval request already resolved or timed out")
+			}
+			return err
+		})
+	}
 	if slackChannel.IsConfigured() {
 		log.Info().Msg("agents: slack channel configured, will start with server")
 	} else {
-		log.Info().Msg("agents: slack channel not configured, skipping (set BotToken + AppToken in Settings → Agents)")
+		log.Info().Msg("agents: slack channel not configured, skipping (set BotToken + AppToken in Channels → Slack)")
+	}
+
+	// ── Agents: Telegram channel (always created; dormant until bot_token set) ──
+	// NewTelegram never returns nil — it starts in dormant mode when unconfigured
+	// so watchTelegramConfig can hot-activate it via Reload without a restart.
+	if err := agentchannels.EnsureChannel(db, "telegram"); err != nil {
+		log.Warn().Err(err).Msg("agents: telegram channel ensure failed")
+	}
+	tgCfg, tgCfgErr := agentchannels.LoadTelegramConfig(db)
+	if tgCfgErr != nil {
+		log.Warn().Err(tgCfgErr).Msg("agents: failed to load telegram config from agent_channels")
+	}
+	telegramChannel := agentchannels.NewTelegram(tgCfg, func(ctx context.Context, sessionID, agentName, source, role, text string) error {
+		ws := ""
+		if m, err := agentchannels.GetChannelConfigMap(db, "telegram"); err == nil {
+			ws = m["workspace"]
+		}
+		if ws == "" {
+			if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
+				ws = wsNames[0]
+			}
+		}
+		return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
+	})
+	telegramChan = telegramChannel // wire forward ref
+	if approvalMgr != nil {
+		telegramChannel.SetApproveFn(func(sessionID, requestID, decision, matchKey string) error {
+			ok, err := approvalMgr.Resolve(sessionID, requestID, decision, "telegram", matchKey)
+			if !ok && err == nil {
+				return fmt.Errorf("approval request already resolved or timed out")
+			}
+			return err
+		})
+	}
+	if telegramChannel.IsConfigured() {
+		log.Info().Msg("agents: telegram channel configured, will start with server")
+	} else {
+		log.Info().Msg("agents: telegram channel not configured, skipping (set BotToken in Channels → Telegram)")
 	}
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
@@ -545,9 +568,7 @@ func NewServer() *Server {
 	// Bearer auth in front, connector dispatch behind. PAT and
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
-	mcpHandler := mcp.NewHandler(connectorsSvc).
-		WithAppURL(configsSvc.AppURL).
-		WithAskUser(agentstool.AskUsers())
+	mcpHandler := mcp.NewHandler(connectorsSvc).WithAppURL(configsSvc.AppURL)
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -575,24 +596,48 @@ func NewServer() *Server {
 	tagsSvc := tags.NewService(db)
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
 
-	// Inject live workspace names into the slack_workspace dropdown on the
-	// Agents config page. Options are re-read from disk on every page load
-	// so newly-created workspaces appear immediately without a restart.
-	// If exactly one workspace exists and slack_workspace is not yet set,
-	// auto-save it so the user doesn't need to interact with the dropdown.
-	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
-		wsNames, _ := agentworkspace.List(agentsLayout)
-		options := strings.Join(wsNames, "|")
-		for i := range rows {
-			if rows[i].Key == "slack_workspace" {
-				rows[i].Options = options
-				if len(wsNames) == 1 && rows[i].Value == "" {
-					_ = configsSvc.SetOwned(context.Background(), "agents", "slack_workspace", wsNames[0])
-					rows[i].Value = wsNames[0]
+	// Build the hidden-key set from the "agents" module's seed. Any config
+	// field tagged with `wick:"hidden"` is managed from a dedicated UI page
+	// (Channels, Providers) and must not appear on the generic Settings page.
+	agentsHidden := make(map[string]bool)
+	for _, m := range modules {
+		if m.Meta.Key == "agents" {
+			for _, row := range m.Configs {
+				if row.Hidden {
+					agentsHidden[row.Key] = true
 				}
 			}
+			break
 		}
-		return rows
+	}
+	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
+		wsNames, _ := agentworkspace.List(agentsLayout)
+		// Build "label::path" options for the allowed_cmds scope column.
+		var scopeOpts string
+		if len(wsNames) > 0 {
+			var parts []string
+			for _, name := range wsNames {
+				path, err := agentworkspace.ResolvePath(agentsLayout, name)
+				if err == nil && path != "" {
+					parts = append(parts, name+"::"+path)
+				}
+			}
+			if len(parts) > 0 {
+				scopeOpts = strings.Join(parts, "|")
+			}
+		}
+		// Return only rows not managed by a dedicated UI page, with ColOptions injected.
+		out := rows[:0]
+		for _, r := range rows {
+			if agentsHidden[r.Key] {
+				continue
+			}
+			if r.Key == "allowed_cmds" && scopeOpts != "" {
+				r.ColOptions = map[string]string{"scope": scopeOpts}
+			}
+			out = append(out, r)
+		}
+		return out
 	})
 
 	// jobrunnerHandler exposes /jobs/{key} — the operator surface with
@@ -729,36 +774,34 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, slackChannel: slackChannel}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, slackChannel: slackChannel, telegramChannel: telegramChannel, db: db}
 }
 
 type Server struct {
-	router       *http.ServeMux
-	configsSvc   *configs.Service
-	authMidd     *login.Middleware
-	agentsPool   *agentpool.Pool
-	slackChannel *agentchannels.SlackChannel
+	router          *http.ServeMux
+	configsSvc      *configs.Service
+	authMidd        *login.Middleware
+	agentsPool      *agentpool.Pool
+	slackChannel    *agentchannels.SlackChannel
+	telegramChannel *agentchannels.TelegramChannel
+	db              *gorm.DB
 }
 
 // watchSlackConfig starts the Slack channel immediately if configured, then
 // polls every 30 s. When BotToken or AppToken changes it calls Reload() so
 // the operator never needs to restart the server after updating credentials.
 func (s *Server) watchSlackConfig(ctx context.Context) {
-	readCfg := func() (agentconfig.SlackConfig, string) {
-		return agentconfig.SlackConfig{
-			Mode:          s.configsSvc.GetOwned("agents", "mode"),
-			BotToken:      s.configsSvc.GetOwned("agents", "bot_token"),
-			AppToken:      s.configsSvc.GetOwned("agents", "app_token"),
-			SigningSecret: s.configsSvc.GetOwned("agents", "signing_secret"),
-			AccessMode:    s.configsSvc.GetOwned("agents", "access_mode"),
-			AllowedUsers:  s.configsSvc.GetOwned("agents", "allowed_users"),
-			AllowedGroups: s.configsSvc.GetOwned("agents", "allowed_groups"),
-		}, s.configsSvc.GetOwned("agents", "public_url")
+	readCfg := func() (agentconfig.SlackChannelConfig, string) {
+		cfg, pubURL, err := agentchannels.LoadSlackConfig(s.db)
+		if err != nil {
+			log.Warn().Err(err).Msg("agents: watchSlackConfig: load failed")
+		}
+		return cfg, pubURL
 	}
 	// Hash covers both connection fields (trigger reconnect) and access-control
 	// fields (AllowedUsers, AllowedGroups, AccessMode) so operator changes to
 	// who can trigger agents are picked up without a token rotation.
-	connHash := func(cfg agentconfig.SlackConfig) string {
+	connHash := func(cfg agentconfig.SlackChannelConfig) string {
 		return cfg.BotToken + "|" + cfg.AppToken + "|" + cfg.Mode + "|" +
 			cfg.AccessMode + "|" + cfg.AllowedUsers + "|" + cfg.AllowedGroups
 	}
@@ -791,6 +834,54 @@ func (s *Server) watchSlackConfig(ctx context.Context) {
 			hash = newHash
 			log.Info().Msg("agents: slack config changed, hot-reloading")
 			s.slackChannel.Reload(ctx, newCfg, newPubURL)
+		}
+	}
+}
+
+// watchTelegramConfig starts the Telegram channel immediately if configured,
+// then polls every 30 s. When any config field changes it calls Reload() so
+// the operator never needs to restart the server after updating credentials.
+func (s *Server) watchTelegramConfig(ctx context.Context) {
+	readCfg := func() agentconfig.TelegramChannelConfig {
+		cfg, err := agentchannels.LoadTelegramConfig(s.db)
+		if err != nil {
+			log.Warn().Err(err).Msg("agents: watchTelegramConfig: load failed")
+		}
+		return cfg
+	}
+	cfgHash := func(cfg agentconfig.TelegramChannelConfig) string {
+		return cfg.BotToken + "|" + cfg.AllowedIDs + "|" + cfg.Workspace
+	}
+
+	if s.telegramChannel.IsConfigured() {
+		log.Info().Msg("agents: telegram channel configured, starting")
+		go func() {
+			if err := s.telegramChannel.Start(ctx); err != nil {
+				log.Ctx(ctx).Error().Err(err).Msg("agents: telegram channel stopped")
+			}
+		}()
+	} else {
+		log.Info().Msg("agents: telegram channel not configured (set BotToken in Channels → Telegram)")
+	}
+
+	cfg := readCfg()
+	hash := cfgHash(cfg)
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			newCfg := readCfg()
+			newHash := cfgHash(newCfg)
+			if newHash == hash {
+				continue
+			}
+			hash = newHash
+			log.Info().Msg("agents: telegram config changed, hot-reloading")
+			s.telegramChannel.Reload(ctx, newCfg)
 		}
 	}
 }
@@ -866,12 +957,12 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
 
-	// Start Slack channel listener and watch for config changes.
-	// watchSlackConfig starts the channel immediately if configured, then
-	// polls every 30 s and hot-reloads when BotToken/AppToken change so
-	// the operator never needs to restart the server after updating creds.
+	// Start channel listeners and watch for config changes.
 	if s.slackChannel != nil {
 		go s.watchSlackConfig(ctx)
+	}
+	if s.telegramChannel != nil {
+		go s.watchTelegramConfig(ctx)
 	}
 
 	h := chainMiddleware(
@@ -1022,6 +1113,36 @@ func RunMCPStdio(version, commit, buildTime string) {
 		WithWickRoot(root).
 		WithAppURL(configsSvc.AppURL).
 		ServeStdioOS(ctx)
+}
+
+// resolveWickGateBin finds the wick-gate binary: next to this executable,
+// then ./bin/ relative to cwd (where wick setup puts it), then PATH.
+func resolveWickGateBin() string {
+	names := []string{"wick-gate", "wick-gate.exe"}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		for _, name := range names {
+			if candidate := filepath.Join(dir, name); fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for _, name := range names {
+			if candidate := filepath.Join(cwd, "bin", name); fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	if p, err := exec.LookPath("wick-gate"); err == nil {
+		return p
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // parseGateRules decodes the kvlist JSON (pattern|scope columns) stored in

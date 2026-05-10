@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -58,6 +60,14 @@ func approveCommand(c *tool.Ctx) {
 		return
 	}
 
+	// Snapshot the cmd before Resolve removes it from the pending set.
+	var pendingCmd string
+	if req.Decision == gate.DecisionApproveAlways {
+		if pr, ok := globalApprovals.LookupPending(req.ID); ok {
+			pendingCmd = pr.Cmd
+		}
+	}
+
 	ok, err := globalApprovals.Resolve(sessionID, req.ID, req.Decision, req.Reason, req.MatchKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -69,6 +79,13 @@ func approveCommand(c *tool.Ctx) {
 		})
 		return
 	}
+
+	// Persist the approved command so future sessions hit the whitelist
+	// directly without going through the socket.
+	if pendingCmd != "" {
+		appendToAllowedCmds(c.Context(), pendingCmd)
+	}
+
 	c.JSON(http.StatusOK, map[string]string{"status": "resolved"})
 }
 
@@ -87,6 +104,32 @@ func approvalsSnapshot(c *tool.Ctx) {
 		"always_approved":  globalApprovals.AutoApproved(),
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// appendToAllowedCmds adds cmd as an exact pattern to the allowed_cmds
+// config if not already present. Runs best-effort; errors are silently
+// dropped — the always-allow hash in spec.json is already written so
+// the gate binary still fast-paths the command on future invocations.
+func appendToAllowedCmds(ctx context.Context, cmd string) {
+	if globalConfigs == nil || cmd == "" {
+		return
+	}
+	raw := globalConfigs.GetOwned("agents", "allowed_cmds")
+	var rows []map[string]string
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &rows)
+	}
+	for _, r := range rows {
+		if r["pattern"] == cmd {
+			return // already present
+		}
+	}
+	rows = append(rows, map[string]string{"pattern": cmd})
+	data, err := json.Marshal(rows)
+	if err != nil {
+		return
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "allowed_cmds", string(data))
 }
 
 // revokeApproval drops one matchKey from the session set, the
