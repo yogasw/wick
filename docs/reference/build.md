@@ -98,7 +98,7 @@ wick build --target linux/arm64
 | `--goarch` | `GOARCH` | Target GOARCH. Mutually exclusive with `--target`. |
 | `--all` | — | Best-effort build for every supported OS / arch. Skips `darwin/*` on non-darwin hosts. Mutually exclusive with `--target` / `--goos` / `--goarch` / `--output`. |
 | `--headless` | — | Adds `-tags headless`. Drops the tray UI; keeps `server`, `worker`, `mcp` subcommands. |
-| `--installer` | — | Wrap into installer-friendly artifacts: windows `.msi` (needs `wixl` on PATH) and darwin `.dmg` with Applications symlink. Off by default. |
+| `--installer` | — | Wrap into installer-friendly artifacts: windows `.msi` (needs `wixl` on PATH) and darwin `.dmg` with Applications symlink. Also bundles the [Command Gate](../guide/command-gate) sidecar (`<app>-gate[.exe]`) alongside the main binary. Off by default. |
 
 ## Resolution order
 
@@ -296,8 +296,30 @@ A manual `git tag v1.2.3 && git push origin v1.2.3` does **not** trigger this wo
 
 Cross-compiling Windows / Linux variants from `ubuntu-latest` works because they don't link cgo. macOS arm64 → amd64 (and vice versa) on the same `macos-latest` runner needs `CGO_ENABLED=1` set explicitly — Go disables cgo by default whenever `GOARCH` differs from the host arch, which would skip the `.m` files and fail with `undefined: setInternalLoop` errors. The shipped `release.yml` sets `CGO_ENABLED: 1` only for `darwin/amd64` (the cross combo on Apple Silicon runners) via a `cgo: 1` matrix flag; clang's native `-arch` support handles the rest. See [golang/go#44112](https://github.com/golang/go/issues/44112).
 
+## Command Gate sidecar
+
+`wick build` compiles `cmd/gate/` as part of the same pipeline (no separate CI step) and writes the result to two places:
+
+- `internal/agents/gate/assets/gate-<os>-<arch>[.exe]` — picked up by `//go:embed` and shipped inside the main binary as a fallback for portable / source builds.
+- `bin/<app>-gate-<os>-<arch>[.exe]` — sibling artifact for distribution.
+
+When `--installer` is set, the sidecar is added to the installer:
+
+| OS | Where the sidecar lands |
+|---|---|
+| Windows MSI | Same folder as `<App>.exe` (`%LocalAppData%\Programs\<AppName>\<App>-gate.exe`) |
+| Linux .deb | `/usr/bin/<app>-gate` |
+| macOS .app bundle | `Contents/MacOS/<App>-gate` |
+
+The runtime resolves the gate binary in this order: sibling-of-executable → embedded extract → `PATH`. There are no environment variables in the chain.
+
+If your fork removes `cmd/gate/`, the builder soft-skips this step — the build still succeeds, the gate just won't be available and the [Providers page](../guide/agents#diagnostics) will surface a "gate disabled" banner.
+
+See [Command Gate](../guide/command-gate) for the runtime architecture.
+
 ## See also
 
 - [Desktop Tray](/guide/desktop-tray) — what users get when they run a binary built with these flags
 - [`wick.yml` reference](./wick-yml) — top-level `name:` and `version:` fields
 - [Environment Variables](./env-vars) — build-time env (`APP_NAME`, `RELEASE_GITHUB_PAT`, …)
+- [AI Agents](../guide/agents) — what the gate sidecar is part of

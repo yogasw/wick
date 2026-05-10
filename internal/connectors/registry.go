@@ -34,7 +34,20 @@ var extra []connector.Module
 
 // Register appends a fully-resolved Module record to the registry.
 // Called from app.RegisterConnector; do not call directly from app code.
+//
+// Idempotent on Meta.Key: re-registering the same key REPLACES the
+// existing entry. This keeps server stop→start safe — wickmanager is
+// registered mid-boot with runtime Deps (configsSvc, jobsSvc, ...) that
+// are rebuilt on each boot. A plain append would trip Bootstrap's
+// duplicate-key check; a skip would leave handlers wired to stale
+// services from the previous boot.
 func Register(m connector.Module) {
+	for i, existing := range extra {
+		if existing.Meta.Key == m.Meta.Key {
+			extra[i] = m
+			return
+		}
+	}
 	extra = append(extra, m)
 }
 
