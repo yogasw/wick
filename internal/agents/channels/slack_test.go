@@ -54,30 +54,30 @@ func TestAllowed(t *testing.T) {
 
 	// everyone
 	s.cfg.AccessMode = "everyone"
-	if !s.allowed("U123", nil) {
+	if !s.allowedCfg(s.cfg, "U123", nil) {
 		t.Error("everyone mode: should allow any user")
 	}
 
 	// users
 	s.cfg.AccessMode = "users"
 	s.cfg.AllowedUsers = "U001\nU002"
-	if !s.allowed("U001", nil) {
+	if !s.allowedCfg(s.cfg, "U001", nil) {
 		t.Error("users mode: U001 should be allowed")
 	}
-	if s.allowed("U999", nil) {
+	if s.allowedCfg(s.cfg, "U999", nil) {
 		t.Error("users mode: U999 should be denied")
 	}
 
 	// groups
 	s.cfg.AccessMode = "groups"
 	s.cfg.AllowedGroups = "G001\nG002"
-	if !s.allowed("Uany", []string{"G001"}) {
+	if !s.allowedCfg(s.cfg, "Uany", []string{"G001"}) {
 		t.Error("groups mode: member of G001 should be allowed")
 	}
-	if s.allowed("Uany", []string{"G999"}) {
+	if s.allowedCfg(s.cfg, "Uany", []string{"G999"}) {
 		t.Error("groups mode: member of G999 should be denied")
 	}
-	if s.allowed("Uany", nil) {
+	if s.allowedCfg(s.cfg, "Uany", nil) {
 		t.Error("groups mode: no groups should be denied")
 	}
 }

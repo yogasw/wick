@@ -138,6 +138,13 @@ func dispatchCmdBg(raw any, vars map[string]string) (*os.Process, error) {
 			fmt.Printf("> %s &\n", cmd)
 			return startBackground(cmd)
 		}
+		// plain run: multi-line shell script — runs in a real shell so
+		// $(...), pipes, and multi-line bodies work as authored.
+		if run, ok := v["run"]; ok {
+			script := interpolate(fmt.Sprint(run), vars)
+			fmt.Printf("> %s\n", strings.TrimSpace(script))
+			return nil, execShell(script)
+		}
 	}
 	return nil, fmt.Errorf("unknown cmd: %v", raw)
 }
@@ -308,6 +315,27 @@ func execCmd(cmd string) error {
 	parts := splitFields(cmd)
 	bin, args := resolveLocalBin(parts[0]), parts[1:]
 	c := exec.Command(bin, args...)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return c.Run()
+}
+
+// execShell runs script through a POSIX shell so multi-line bodies,
+// pipes, and command substitution ($(...)) behave as authored.
+// On Windows we require bash on PATH (Git Bash / WSL / MSYS2) — cmd.exe
+// can't parse $(...) or ${VAR}, so silently falling back would give
+// confusing failures mid-script.
+func execShell(script string) error {
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		bash, err := exec.LookPath("bash")
+		if err != nil {
+			return fmt.Errorf("run: bash not found on PATH — install Git Bash, WSL, or MSYS2 to run shell scripts on Windows")
+		}
+		c = exec.Command(bash, "-c", script)
+	} else {
+		c = exec.Command("/bin/sh", "-c", script)
+	}
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
