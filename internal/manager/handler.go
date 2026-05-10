@@ -24,16 +24,34 @@ var StaticFS embed.FS
 // runtime configs for jobs and tools, and the admin surface for
 // connector rows.
 type Handler struct {
-	svc        *Service
-	configs    *configs.Service
-	connectors *connectors.Service
-	tags       *tags.Service
-	users      *login.Service
-	tools      []tool.Tool
+	svc              *Service
+	configs          *configs.Service
+	connectors       *connectors.Service
+	tags             *tags.Service
+	users            *login.Service
+	tools            []tool.Tool
+	// configDecorators: per-tool key → function that can mutate config rows
+	// before they are rendered (e.g. to inject dynamic dropdown options).
+	configDecorators map[string]func([]entity.Config) []entity.Config
+}
+
+// RegisterConfigDecorator registers a function that is called on the config
+// rows for toolKey just before the manager detail page is rendered. Use it
+// to inject dynamic Options (e.g. workspace names) into specific rows.
+func (h *Handler) RegisterConfigDecorator(toolKey string, fn func([]entity.Config) []entity.Config) {
+	h.configDecorators[toolKey] = fn
 }
 
 func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, usersSvc *login.Service, tools []tool.Tool) *Handler {
-	return &Handler{svc: svc, configs: configsSvc, connectors: connectorsSvc, tags: tagsSvc, users: usersSvc, tools: tools}
+	return &Handler{
+		svc:              svc,
+		configs:          configsSvc,
+		connectors:       connectorsSvc,
+		tags:             tagsSvc,
+		users:            usersSvc,
+		tools:            tools,
+		configDecorators: make(map[string]func([]entity.Config) []entity.Config),
+	}
 }
 
 // Register wires /manager/* to mux. All pages require auth; admin-only
@@ -68,6 +86,11 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 
 	// Connectors — list + per-row detail with test panel and action menu.
 	h.connectorRoutes(mux, authMidd)
+
+	// Audit log — cross-connector run history (admin only).
+	mux.Handle("GET /manager/runs", adminOnly(h.auditLogPage))
+	mux.Handle("GET /api/runs", adminOnly(h.apiRuns))
+	mux.Handle("GET /api/runs/summary", adminOnly(h.apiRunsSummary))
 }
 
 // requiredMissingKeys returns the keys whose Required flag is set but
@@ -205,6 +228,9 @@ func (h *Handler) toolDetailPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows := h.configs.ListOwned(t.Key)
+	if dec, ok := h.configDecorators[t.Key]; ok {
+		rows = dec(rows)
+	}
 	editKey := r.URL.Query().Get("edit")
 	view.ToolDetailPage(t, rows, editKey, user, h.toolBanner(t, rows)).Render(ctx, w)
 }

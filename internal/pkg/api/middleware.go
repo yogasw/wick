@@ -52,6 +52,12 @@ func (rw *responseWriter) WriteHeader(code int) {
 	}
 }
 
+// Unwrap allows http.NewResponseController to traverse the wrapper chain
+// and reach the real http.Flusher / deadline setter on the underlying conn.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 func logSeverity(statusCode int) zerolog.Level {
 	switch {
 	case statusCode >= 500:

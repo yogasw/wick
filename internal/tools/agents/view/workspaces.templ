@@ -1,0 +1,153 @@
+package view
+
+templ WorkspacesPage(vm WorkspacesVM) {
+	@AgentsLayout(vm.Base, "workspaces") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Workspaces</h1>
+				<button
+					onclick="document.getElementById('create-workspace-modal').classList.remove('hidden')"
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>+ New Workspace</button>
+			</div>
+			<!-- Create workspace modal -->
+			<div id="create-workspace-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+				<div class="w-full max-w-md rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
+					<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Workspace</h2>
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/workspaces") } data-create-workspace-form class="space-y-4">
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
+							<input
+								type="text"
+								name="name"
+								required
+								placeholder="e.g. soluport-ops"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							/>
+						</div>
+						<div>
+							<label class="flex items-center gap-2 text-xs font-medium text-black-800 dark:text-black-600 mb-1 cursor-pointer">
+								<input
+									type="checkbox"
+									data-custom-path-toggle
+									class="h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"
+								/>
+								Use custom folder on disk
+							</label>
+							<div data-custom-path-fields class="hidden mt-2 space-y-2">
+								<div class="flex gap-2">
+									<input
+										type="text"
+										name="custom_path"
+										data-custom-path-input
+										placeholder="D:/code/your-folder"
+										class="flex-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+									/>
+									<label class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer transition-colors whitespace-nowrap">
+										Choose…
+										<input
+											type="file"
+											data-folder-picker
+											webkitdirectory
+											directory
+											multiple
+											class="hidden"
+										/>
+									</label>
+								</div>
+								<p data-custom-path-error class="hidden text-xs text-red-600 dark:text-red-400"></p>
+								<div class="rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-2.5 text-xs text-amber-800 dark:text-amber-300">
+									<p class="font-medium mb-1">⚠️ Browser limitation</p>
+									<p>For security, browsers do not expose absolute paths. The picker only fills in the <strong>folder name</strong> — you must prefix the parent path manually.</p>
+									<p class="mt-1.5">Example: picker → <code class="font-mono bg-amber-100 dark:bg-amber-900/40 px-1 rounded">work</code> → edit to <code class="font-mono bg-amber-100 dark:bg-amber-900/40 px-1 rounded">D:/code/work</code></p>
+								</div>
+							</div>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Default Preset</label>
+							<select name="preset" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="default">default</option>
+								for _, name := range vm.PresetList {
+									if name != "default" {
+										<option value={ name }>{ name }</option>
+									}
+								}
+							</select>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Default Provider</label>
+							<select name="provider" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
+								<option value="claude">Claude</option>
+								<option value="codex">Codex</option>
+								<option value="gemini">Gemini</option>
+							</select>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Description (optional)</label>
+							<input
+								type="text"
+								name="description"
+								placeholder="Short description"
+								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+							/>
+						</div>
+						<div class="flex justify-end gap-3 pt-2">
+							<button type="button" onclick="document.getElementById('create-workspace-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">Cancel</button>
+							<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Create</button>
+						</div>
+					</form>
+				</div>
+			</div>
+			<!-- Workspaces table -->
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
+				if len(vm.WorkspaceList) == 0 {
+					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">
+						No workspaces yet. <button onclick="document.getElementById('create-workspace-modal').classList.remove('hidden')" class="text-green-600 dark:text-green-400 hover:underline">Create one</button>
+					</div>
+				} else {
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+								<th class="px-5 py-3 text-left">Name</th>
+								<th class="px-5 py-3 text-left hidden sm:table-cell">Path</th>
+								<th class="px-5 py-3 text-left hidden md:table-cell">Preset</th>
+								<th class="px-5 py-3 text-left hidden md:table-cell">Provider</th>
+								<th class="px-5 py-3 text-right w-12"></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, name := range vm.WorkspaceList {
+								if ws, ok := vm.Workspaces[name]; ok {
+									<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+										<td class="px-5 py-3 font-medium text-black-900 dark:text-white-100">
+											{ name }
+											if ws.Meta.Description != "" {
+												<p class="text-xs text-black-600 dark:text-black-700 font-normal">{ ws.Meta.Description }</p>
+											}
+										</td>
+										<td class="px-5 py-3 text-black-700 dark:text-black-600 hidden sm:table-cell text-xs font-mono">
+											if ws.Meta.CustomPath != "" {
+												{ ws.Meta.CustomPath }
+											} else {
+												<span class="text-black-600 dark:text-black-700">managed</span>
+											}
+										</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ ws.Meta.DefaultPreset }</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ ws.Meta.DefaultProvider }</td>
+										<td class="px-5 py-3 text-right">
+											<button
+												data-delete-workspace={ name }
+												class="rounded-md border border-red-300 dark:border-red-800 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+											>Delete</button>
+										</td>
+									</tr>
+								}
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
+	}
+}

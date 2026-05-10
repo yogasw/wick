@@ -52,9 +52,13 @@ type Connector struct {
 	Key       string `gorm:"type:varchar(100);index;not null"`
 	Label     string `gorm:"type:varchar(255);not null"`
 	Disabled  bool   `gorm:"default:false"`
-	CreatedBy string `gorm:"type:varchar(36)"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// RateLimitRPM caps how many times this connector instance may be
+	// called per minute across all users. 0 means unlimited. Enforced
+	// in-process via a sliding-window counter — not distributed.
+	RateLimitRPM int    `gorm:"default:0"`
+	CreatedBy    string `gorm:"type:varchar(36)"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 func (c *Connector) BeforeCreate(tx *gorm.DB) error {
@@ -169,5 +173,9 @@ type ConnectorOperation struct {
 	ConnectorID  string `gorm:"primaryKey;type:varchar(36)"`
 	OperationKey string `gorm:"primaryKey;type:varchar(100)"`
 	Enabled      bool   `gorm:"default:true"`
-	UpdatedAt    time.Time
+	// AdminOnly restricts this operation to admin users only. Non-admin
+	// MCP callers receive a 403-equivalent error before Execute runs.
+	// Default: false (all authenticated users may call the operation).
+	AdminOnly bool `gorm:"default:false"`
+	UpdatedAt time.Time
 }

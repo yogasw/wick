@@ -27,7 +27,7 @@ func mcpLogger() zerolog.Logger {
 	if l, ok := processctl.MCPLogger(); ok {
 		return l
 	}
-	return log.Logger
+	return log.With().Str("component", "mcp").Logger()
 }
 
 func logOp(user *entity.User, op string, args any, err error, elapsed time.Duration) {
