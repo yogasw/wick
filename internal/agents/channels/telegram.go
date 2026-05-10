@@ -23,6 +23,8 @@ package channels
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,6 +46,16 @@ type pendingApproval struct {
 	chatID    int64
 	messageID int
 	requestID string
+	token     string // short token used in button callback data
+}
+
+// telegramCallbackPayload is the server-side lookup entry for a button token.
+// Telegram limits callback_data to 64 bytes, so we store the full gate fields
+// here and only embed the short token in the button.
+type telegramCallbackPayload struct {
+	requestID string
+	sessionID string
+	matchKey  string
 }
 
 // telegramTurn holds per-session state for accumulating agent output.
@@ -70,8 +82,10 @@ type TelegramChannel struct {
 	sendFn    SendFunc
 	approveFn ApproveFn
 
-	// pendingApprovals: sessionID → approval tracking state
+	// pendingApprovals: sessionID → approval message tracking (for editing on resolve)
 	pendingApprovals map[string]pendingApproval
+	// pendingCallbacks: short token → full gate payload (avoids 64-byte Telegram limit)
+	pendingCallbacks map[string]telegramCallbackPayload
 
 	// turns: sessionID → current text accumulation buffer
 	turns map[string]*telegramTurn
@@ -89,6 +103,7 @@ func NewTelegram(cfg TelegramChannelConfig, sendFn SendFunc) *TelegramChannel {
 		cfg:              cfg,
 		sendFn:           sendFn,
 		pendingApprovals: make(map[string]pendingApproval),
+		pendingCallbacks: make(map[string]telegramCallbackPayload),
 		turns:            make(map[string]*telegramTurn),
 	}
 	if cfg.BotToken != "" {
@@ -277,19 +292,33 @@ func (t *TelegramChannel) handleCallback(_ context.Context, cb *tgbotapi.Callbac
 		return // not a gate approval callback
 	}
 
-	// Format: "gate|decision|requestID|sessionID|matchKey"
-	parts := strings.SplitN(data, "|", 5)
-	if len(parts) != 5 {
+	// Format: "gate|decision|token" (3 parts).
+	// The token is looked up in pendingCallbacks to recover requestID, sessionID,
+	// and matchKey — Telegram's 64-byte callback_data limit prevents embedding them.
+	parts := strings.SplitN(data, "|", 3)
+	if len(parts) != 3 {
 		log.Warn().Str("channel", "telegram").Str("data", data).Msg("malformed gate callback data")
 		return
 	}
-	_, decision, requestID, sessionID, matchKey := parts[0], parts[1], parts[2], parts[3], parts[4]
+	_, decision, token := parts[0], parts[1], parts[2]
+
+	t.mu.Lock()
+	payload, ok := t.pendingCallbacks[token]
+	if ok {
+		delete(t.pendingCallbacks, token)
+	}
+	t.mu.Unlock()
+
+	if !ok {
+		log.Warn().Str("channel", "telegram").Str("token", token).Msg("gate callback token not found (already resolved?)")
+		return
+	}
 
 	if fn == nil {
 		log.Warn().Str("channel", "telegram").Msg("approveFn not set; dropping gate callback")
 		return
 	}
-	if err := fn(sessionID, requestID, decision, matchKey); err != nil {
+	if err := fn(payload.sessionID, payload.requestID, decision, payload.matchKey); err != nil {
 		log.Warn().Str("channel", "telegram").Err(err).Msg("gate approval resolve failed")
 	}
 }
@@ -308,12 +337,27 @@ func (t *TelegramChannel) OnApprovalRequest(sessionID string, req gate.ApprovalR
 	}
 
 	chatID := turn.chatID
-	// Callback data format: "gate|decision|requestID|sessionID|matchKey" (5 parts).
-	// The "gate|" prefix discriminates gate callbacks from any other inline buttons.
-	// Slack uses a different format: "decision|requestID|sessionID|matchKey" (4 parts)
-	// discriminated by BlockID == "gate_approval". Keep in sync with handleCallback.
+
+	// Telegram limits callback_data to 64 bytes. The full gate payload
+	// (requestID + sessionID + matchKey) far exceeds this, so we store the
+	// payload server-side under a short 8-byte random token and only embed
+	// "gate|<decision>|<token>" in the button (≤ 33 bytes for the longest
+	// decision string). handleCallback looks up the token to recover the full
+	// payload. Keep in sync with handleCallback.
+	var tokenBytes [8]byte
+	_, _ = rand.Read(tokenBytes[:])
+	token := hex.EncodeToString(tokenBytes[:])
+
+	t.mu.Lock()
+	t.pendingCallbacks[token] = telegramCallbackPayload{
+		requestID: req.ID,
+		sessionID: sessionID,
+		matchKey:  req.MatchKey,
+	}
+	t.mu.Unlock()
+
 	btnData := func(decision string) string {
-		return "gate|" + decision + "|" + req.ID + "|" + sessionID + "|" + req.MatchKey
+		return "gate|" + decision + "|" + token
 	}
 
 	cmd := req.Cmd
@@ -354,6 +398,7 @@ func (t *TelegramChannel) OnApprovalRequest(sessionID string, req gate.ApprovalR
 		chatID:    chatID,
 		messageID: sent.MessageID,
 		requestID: req.ID,
+		token:     token,
 	}
 	t.mu.Unlock()
 }
@@ -369,6 +414,11 @@ func (t *TelegramChannel) OnApprovalResolved(sessionID, requestID, decision stri
 		return
 	}
 	delete(t.pendingApprovals, sessionID)
+	// Clean up the callback token in case the approval came from the web UI
+	// rather than the Telegram button (handleCallback deletes it on button click).
+	if pa.token != "" {
+		delete(t.pendingCallbacks, pa.token)
+	}
 	bot := t.bot
 	t.mu.Unlock()
 
