@@ -6,7 +6,7 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `skill`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `skill`, `doctor`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
 Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `mcp serve / install / uninstall`) — see [Built apps](#built-apps) below.
@@ -130,6 +130,21 @@ wick worker
 ```
 
 Runs the same worker process as `./myapp worker` but straight from source. Useful for running server and worker in separate terminals during development.
+
+---
+
+### `wick doctor [binary]`
+
+Run a sequence of environment checks and print a summary. Each line reports `✓` (ok), `✗` (missing / broken), or `!` (warning). Exit code `0` when all required checks pass, `1` otherwise.
+
+```bash
+wick doctor                    # check the wick binary itself
+wick doctor wick-lab.exe       # inspect a specific branded build
+```
+
+When you pass a binary path, doctor derives that build's `AppName`, locates the matching `<app>-gate` sidecar, and verifies socket / spec paths line up. Useful when you've shipped a branded MSI / .deb and want to confirm the [Command Gate](../guide/command-gate) is wired up before users see it.
+
+The gate-specific checks are detailed in the [Command Gate guide](../guide/command-gate#diagnostics).
 
 ---
 

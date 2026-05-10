@@ -71,6 +71,17 @@ export default withMermaid(defineConfig({
         ],
       },
       {
+        text: 'AI Agents',
+        items: [
+          { text: 'Overview', link: '/guide/agents' },
+          { text: 'Workspaces', link: '/guide/agents/workspaces' },
+          { text: 'Providers', link: '/guide/agents/providers' },
+          { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
+          { text: 'Pool & Sessions', link: '/guide/agents/pool' },
+          { text: 'Command Gate', link: '/guide/command-gate' },
+        ],
+      },
+      {
         text: 'Distribution',
         items: [
           { text: 'Desktop Tray', link: '/guide/desktop-tray' },

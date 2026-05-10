@@ -34,13 +34,14 @@ my-app/
     └── defaults.go     # shared tag catalog
 ```
 
-## Three Module Types
+## Module Types
 
 | Type | Audience | Location | Entry Point | URL |
 |------|----------|----------|-------------|-----|
 | Tool | Humans (web UI) | `tools/{name}/` | `Register(r tool.Router)` | `/tools/{key}` |
 | Job | Scheduler | `jobs/{name}/` | `Run(ctx) (string, error)` | `/jobs/{key}` |
 | Connector | LLMs (via MCP) | `connectors/{name}/` | `Operations()` + `ExecuteFunc` | `/mcp` (LLM) + `/manager/connectors/{key}` (admin) |
+| **Agents** | Slack / Telegram / Web UI | built-in | `/tools/agents` | spawns Claude / Codex / Gemini as subprocess, multi-channel routing |
 
 ## What the Framework Handles
 
@@ -69,3 +70,14 @@ Connectors are exposed to LLM clients via the [Model Context Protocol](./mcp). E
 - [Connector Module](./connector-module) — module shape and per-row admin UI
 - [MCP for LLMs](./mcp) — transport, meta-tool dispatch, install snippets
 - [Access Tokens](./access-tokens) and [OAuth Connections](./oauth-connections) — auth modes
+
+### AI Agents (Slack / Telegram / Web)
+
+Wick can host AI coding agents — Claude, Codex, Gemini — as long-lived subprocesses, reachable from **Slack threads, Telegram chats, and the web UI** at the same time. Each conversation = a wick session, sharing a workspace folder and a multi-instance provider config.
+
+- **Multi-channel routing** — same agent reachable from three transports.
+- **Multi-session pool** — concurrent slot cap, FIFO queue, idle-kill, `--resume` revive.
+- **[Command Gate](./command-gate)** — every Bash command intercepted; 4-mode interactive approval surfaced in whichever channel the conversation lives in.
+- **AskUser MCP tool** — agent asks a mid-turn question, web UI renders a card, answer goes back as MCP tool result.
+
+See the [AI Agents guide](./agents) for the full breakdown.
