@@ -97,7 +97,7 @@ func Build(cfg Config) (Result, error) {
 	switch cfg.GOOS {
 	case "darwin":
 		bundleID := ResolveBundleID(cfg.AppName)
-		appPath, err := darwin.PackageApp(cfg.Output, cfg.AppName, cfg.AppVersion, bundleID)
+		appPath, err := darwin.PackageApp(cfg.Output, gateArtifact, cfg.AppName, cfg.AppVersion, bundleID)
 		if err != nil {
 			return res, fmt.Errorf("package mac app: %w", err)
 		}
@@ -119,7 +119,7 @@ func Build(cfg Config) (Result, error) {
 		}
 
 	case "linux":
-		debPath, err := linux.PackageDeb(cfg.Output, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
+		debPath, err := linux.PackageDeb(cfg.Output, gateArtifact, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
 		if err != nil {
 			return res, fmt.Errorf("package linux deb: %w", err)
 		}
@@ -136,7 +136,7 @@ func Build(cfg Config) (Result, error) {
 		// just want a portable .exe keep the lighter artifact.
 		if cfg.Installer {
 			fmt.Println("> packaging msi...")
-			msiPath, err := windows.PackageMSI(cfg.Output, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
+			msiPath, err := windows.PackageMSI(cfg.Output, gateArtifact, cfg.AppName, cfg.AppVersion, cfg.GOARCH)
 			switch {
 			case err == windows.ErrSkippedMSI:
 				fmt.Println("> msi skipped (wixl not found — install msitools to enable)")

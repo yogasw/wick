@@ -14,7 +14,7 @@ templ GateDisabledBanner(g GateStatusVM) {
 				if g.Reason != "" {
 					{ " " }<span class="font-mono">{ g.Reason }</span>.
 				}
-				{ " " }Bash commands fall back to claude's default behavior — no interactive approval, no audit trail in <code class="font-mono">commands.jsonl</code>. Set <code class="font-mono">WICK_GATE_BIN</code> or build with the embed step to re-enable.
+				{ " " }Bash commands fall back to claude's default behavior — no interactive approval, no audit trail in <code class="font-mono">commands.jsonl</code>. Run <code class="font-mono">wick build</code> to produce the sibling sidecar and embedded fallback.
 			</div>
 		</div>
 	}

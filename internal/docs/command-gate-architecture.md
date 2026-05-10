@@ -1,16 +1,20 @@
 # Command Gate — Arsitektur & Approval System
 
-Status: **implementasi selesai** (Stage 1–8 done, Stage 9 in-progress, smoke test pending).
-Update terakhir: 2026-05-10 (sync rename pass: `wick-gate`/`WICK_GATE_*` → `gate`/`GATE_*`,
-binary user-visible jadi `<app>-gate`, builder absorb gate compile dari CI).
+Status: **implementasi selesai** (Stage 1–9 done, smoke test pending).
+Update terakhir: 2026-05-10 (Stage 9 + post-merge cleanup: GATE_SPEC + GATE_BIN
+dihapus, single shared spec + single shared socket, gate session-agnostic, daemon
+route by cwd, installer ship sidecar `<app>-gate`, `gateAwareSpawner` + sisa
+dead-code dari mekanisme env-var dropped).
 
 Keputusan final yang sudah locked:
 - IPC: Unix Domain Socket (raw JSON, bukan HTTP)
 - Gate binary: embed ke main binary via `//go:embed` (bukan sidecar/subcommand)
 - Source: `cmd/gate/` di repo wick, di-build via `wick build` sebagai bagian dari builder pipeline (bukan step CI manual lagi)
 - Branding: binary user-visible jadi `<app>-gate` (mis. `myapp-gate.exe`); embed asset internal generic `gate-<os>-<arch>`; `AppName` di-inject via ldflag
-- Dev override: `GATE_BIN` env var di `.env`
-- Spec channel: `GATE_SPEC` env var (rename dari `WICK_GATE_SPEC`; full removal lihat Stage 9)
+- Resolution: sibling-of-executable (`<app>-gate[.exe]` di samping main, **shipped via installer**) → embedded extract (backup untuk portable .exe / source build) → `<app>-gate` di PATH (last-ditch). Zero env vars.
+- Spec channel: **shared spec** di `~/.<app>/agents/gate/spec.json` (zero env vars; gate derive path dari compile-time `gate.AppName` ldflag)
+- Socket channel: **shared socket** di `~/.<app>/agents/gate/gate.sock` (single listener, daemon route by cwd dari hook payload → wick session)
+- Audit log: **shared** `~/.<app>/agents/gate/commands.jsonl` (UI session-detail filter by workspace cwd prefix)
 - Approval style: Gate style (Pola A) — system intercept, bukan Claude Code style
 - Decision modes: 4 (`approve_once` / `approve_session` / `approve_always` / `block`)
 - AskUser: MCP tool (bukan harness), bridged ke web UI lewat SSE
@@ -47,7 +51,7 @@ Stage 3 — Gate Binary Upgrade                                         ✅ done
 Stage 4 — Embed + Binary Resolution                                   ✅ done
 [x] S4.1 //go:embed assets/gate-* (generic, ke-pickup runtime via OS/arch lookup)
 [x] S4.2 extractEmbeddedGate(sessionDir) → <session>/gate/gate[.exe], chmod 0755, idempotent
-[x] S4.3 resolveGateBin: GATE_BIN env → embed → sibling-of-exe (<app>-gate) → PATH
+[x] S4.3 resolveGateBin: sibling-of-exe (<app>-gate, installer-shipped) → embed extract → PATH
 [x] S4.4 Wire ke factory.go
 [x] S4.5 Build gate sidecar inline di internal/builder (drop dari CI, soft-skip pada
          downstream fork tanpa cmd/gate)
@@ -74,7 +78,7 @@ Stage 7 — Dev Tooling                                                 ✅ done
 [x] S7.1 .vscode/tasks.json: debug:prep build bin/<app>-gate[.exe] sibling
 [-] S7.2 task "gate: sync-spec" — dropped (gak diperlukan, lihat D12)
 [-] S7.3 launch "wicklab-gate" — dropped (gate gak bisa standalone, lihat D13)
-[x] S7.4 .env.example: GATE_BIN dokumented (opsional override)
+[-] S7.4 .env.example: GATE_BIN entry — DROPPED (env var dihapus, resolution otomatis dari sibling/embed/PATH)
 [x] S7.5 ResolveGateBinary tambah sibling-of-exe step (auto-discover bin/)
 [x] S7.6 Doc updated dgn flow normal + cara debug via test/logs
 
@@ -88,23 +92,63 @@ Stage 8 — Observability + Status (post-7 follow-ups)                  ✅ done
 [x] S8.4 Session detail: GateDisabledBanner di top kalau gate gak resolved
 [x] S8.5 ResolveGateBinaryWithSource() — return source label utk UI debug
 
-Stage 9 — Spec Resolution Refactor (hapus GATE_SPEC env var)          🚧 in-progress
-Catatan 2026-05-10: env var sudah di-rename `WICK_GATE_SPEC` → `GATE_SPEC` (renaming pass);
-removal penuh ke compile-time path resolution belum dikerjakan.
-[ ] S9.1 Hapus GATE_SPEC env var dari gate.LoadSpec() — ganti ke path resolve
-         dari AppName compile-time constant
-[x] S9.2 Tambah compile-time var di gate package (gate.AppName, di-inject builder
-         via -ldflags). default kosong → fallback "gate" / "<app>-gate" sesuai konteks
-[ ] S9.3 gate.LoadSpec() resolve path: os.UserHomeDir() + ".<AppName>" +
-         "agents/providers/.../spec.json" (detail path TBD — update saat implementasi)
+Stage 9 — Spec Resolution Refactor (hapus GATE_SPEC env var)          ✅ done
+Catatan 2026-05-10: full removal selesai. Single shared spec + single shared socket;
+gate session-agnostic; daemon route approval ke session berdasarkan cwd di hook payload.
+[x] S9.1 GATE_SPEC env var dihapus dari gate.LoadSpec() — path derived dari
+         gate.AppName ldflag → ~/.<app>/agents/gate/spec.json
+[x] S9.2 gate.AppName ldflag di package gate (di-share antara binary lookup +
+         shared paths). default kosong → fallback "wick"
+[x] S9.3 gate.LoadSpec(appName) resolve path: os.UserHomeDir() + ".<app>" +
+         "agents/gate/spec.json". Missing file = empty Spec, no error
 [x] S9.4 Builder inject AppName via ldflags (`-X .../gate.AppName=<app>`) — applies
          ke semua wick build invocations termasuk `wick build --all`
-[ ] S9.5 Hapus GATE_SPEC env var dari: spawner.go, factory.go, .env.example,
-         semua doc reference (sekarang tinggal rename, bukan remove)
-[ ] S9.6 Update unit test LoadSpec() — tidak ada env var setup, pakai
-         t.TempDir() dengan struktur folder yang mencerminkan path convention baru
-[ ] S9.7 Verifikasi fail-safe tetap jalan: kalau spec.json tidak ada di path
-         yang di-resolve → exit 2 (block), bukan panic
+[x] S9.5 GATE_SPEC env var dihapus dari: pool/factory.go (drop ExtraEnv inject),
+         claude_hook.go (drop HookEnvVar const), cmd/gate/main.go (drop env read)
+[x] S9.6 Unit tests refactored: pakai t.Setenv("HOME", ...) + WriteSharedSpec()
+         daripada env var setup; integration_test build gate dgn ldflag AppName
+[x] S9.7 Fail-safe: missing shared spec.json → LoadSpec returns empty Spec, gate
+         falls through to socket dial → no daemon → exit 2 (verified via
+         TestGate_MissingSharedSpecIsEmpty)
+
+Stage 9 follow-ups (in same pass):
+[x] S9.8  ApprovalManager: single shared listener (drop StartSession/StopSession),
+          routeByCWD callback maps hook cwd → session for SSE broadcast routing
+[x] S9.9  commands.jsonl: shared global file (~/.<app>/agents/gate/commands.jsonl);
+          UI session-detail Commands tab filters by workspace cwd prefix
+[x] S9.10 ApprovalManager.Resolve: approve_always rewrites SHARED spec
+          (was per-session); RevokeAlways same
+[x] S9.11 server.go boot syncSharedSpec — writes Rules from configsSvc on boot
+          + every Build invocation, preserves existing AutoApproved
+
+Stage 9 post-merge cleanup pass:
+[x] S9.12 Installer ship sidecar — MSI: `<App>-gate.exe` di same folder via WXS
+          GateExecutable component; .deb: `/usr/bin/<app>-gate`; .app:
+          `Contents/MacOS/<App>-gate`. PackageMSI/PackageDeb/PackageApp signatures
+          extended with `gateBinPath` param wired from builder.go
+[x] S9.13 Drop GATE_BIN env var — sibling-of-executable jadi resolution path
+          pertama (installer ships it), embed extract jadi backup, PATH last.
+          envOverride const + SourceEnvOverride label + os.Getenv check semua
+          dropped dari embed.go; embed_test.go drop env-override test
+[x] S9.14 Dead code cleanup di pool/factory.go — `gateAwareSpawner` struct +
+          `Spawn` method + `extraEnv` local di Build + nil-tuple return dari
+          `attachGateConfig` semua dropped (artefak dari era env-var injection).
+          Signature: `attachGateConfig` jadi `(Spawner, error)`
+[x] S9.15 Redundancy cleanup di server.go — `resolveGateBin` local helper
+          (duplicate dari `agentgate.ResolveGateBinaryWithSource`) dropped,
+          GateLoader pakai `resolvedGateBin` dari boot-time resolve. `gateAppName
+          := agentgate.AppName; if "" { = "wick" }` fallback dropped (gate
+          package internal udah handle empty di sharedGateDir). `os/exec` import
+          dropped. UI copy + comments updated (no env var mentions)
+[x] S9.16 Misc surface cleanup — `requestApproval` test-only wrapper di
+          cmd/gate/main.go dropped (test pakai requestApprovalWithLog langsung
+          dgn requestID=""). `AutoApprovedFor(_)` shim di manager.go dropped
+          (caller pakai `AutoApproved()` global). `PendingFor(sessionID)` arg
+          unused — keep signature untuk JSON view-model readability tapi underscore
+[x] S9.17 UI copy update — providers.go Note + approvals.go error msg + 
+          approvals.templ banner: drop "Set GATE_BIN" / "WICK_GATE_BIN" mentions,
+          ganti dgn "Run `wick build` to produce the sibling sidecar and embedded
+          fallback"
 ```
 
 | Stage | Hot files |
@@ -827,9 +871,12 @@ Ada tiga environment dengan cara berbeda untuk menemukan gate binary:
 ```
 Environment           Gate binary dari mana                  Cara set
 ─────────────────────────────────────────────────────────────────────────────
-VSCode (wicklab)   →  bin/<app>-gate[.exe] (sibling)      →  GATE_BIN di .env (optional)
-Serve (raw binary) →  embedded → extract sekali           →  otomatis
-MSI (installer)    →  embedded → extract sekali           →  otomatis
+VSCode (wicklab)   →  bin/<app>-gate[.exe] (sibling)      →  otomatis (sibling discovery)
+Serve (raw binary) →  bin/<app>-gate[.exe] (sibling)      →  otomatis
+                  ↳   atau embed extract (kalau sibling absent)
+MSI (installer)    →  %LocalAppData%\Programs\<App>\<App>-gate.exe (sibling, shipped) → otomatis
+.deb (installer)   →  /usr/bin/<app>-gate (sibling, shipped) →  otomatis
+.app (installer)   →  Contents/MacOS/<App>-gate (sibling, shipped) → otomatis
 ```
 
 ### 9.1 Logic Resolve di Daemon
@@ -839,19 +886,17 @@ MSI (installer)    →  embedded → extract sekali           →  otomatis
 // Empty → fallback "gate" / "<app>-gate" sesuai konteks.
 
 func ResolveGateBinaryWithSource(sessionDir string) (path, source string, err error) {
-    // 1. Dev override
-    if p := os.Getenv("GATE_BIN"); p != "" {
-        return p, "env_override", nil
-    }
-    // 2. Embedded asset → extract ke session dir (idempotent)
-    if p, err := extractEmbeddedGate(sessionDir); err == nil {
-        return p, "embed", nil
-    }
-    // 3. Sibling-of-executable: <app>-gate[.exe] di samping parent
+    // 1. Sibling-of-executable: <app>-gate[.exe] di samping parent
+    //    (production path — installer ships this).
     if p := siblingGateBinary(); p != "" {
         return p, "sibling", nil
     }
-    // 4. PATH lookup
+    // 2. Embedded asset → extract ke session dir (idempotent).
+    //    Backup untuk portable .exe / source build.
+    if p, err := extractEmbeddedGate(sessionDir); err == nil {
+        return p, "embed", nil
+    }
+    // 3. PATH lookup — last-ditch fallback.
     name := "gate"
     if AppName != "" {
         name = AppName + "-gate"
@@ -863,7 +908,7 @@ func ResolveGateBinaryWithSource(sessionDir string) (path, source string, err er
 }
 ```
 
-Urutan prioritas: `GATE_BIN` env → embedded binary → **sibling-of-executable** (`<app>-gate[.exe]` di folder yang sama dgn parent binary, branded via ldflag) → `<app>-gate` di PATH. Kalau semuanya gak ada → gate tidak aktif, log warning, commands lolos semua (fail-open, logged).
+Urutan prioritas: **sibling-of-executable** (`<app>-gate[.exe]` di folder yang sama dgn parent binary — installer ships this) → **embedded extract** (backup) → `<app>-gate` di PATH. Tidak ada env-var override — Stage 9 hapus `GATE_BIN` setelah installer mulai bundle sidecar (sibling reliable cukup tanpa knob ekstra). Kalau semuanya gak ada → gate tidak aktif, log warning, commands lolos semua (fail-open, logged).
 
 ### 9.2 VSCode (wicklab)
 
@@ -936,7 +981,7 @@ wick build --installer (one shot)
   └── wixl → .msi (satu binary, gate sudah di dalam main)
 ```
 
-Di-install ke `%LocalAppData%\Programs\<AppName>\<AppName>.exe`. Saat daemon start, gate di-extract ke session dir — tidak perlu `GATE_BIN`.
+Di-install ke `%LocalAppData%\Programs\<AppName>\<AppName>.exe` PLUS `<AppName>-gate.exe` di folder yang sama. Sibling lookup picks up the installed gate — no env vars, no per-session extract.
 
 ### 9.4 Serve (Raw Binary / Linux / Docker)
 
@@ -965,7 +1010,7 @@ Tidak ada konfigurasi tambahan yang diperlukan.
 Proyek yang pakai Wick sebagai framework perlu:
 
 1. **Tidak perlu** `cmd/gate/` di tree — `wick build` resolve dari module cache (import path `github.com/yogasw/wick/cmd/gate`)
-2. `.env.example` — `GATE_BIN` entry (optional, untuk dev override)
+2. `.env.example` — tidak butuh entry gate (env var dihapus Stage 9; resolution otomatis)
 3. `.vscode/tasks.json` — tambah gate build ke `debug: prep` (kalau mau debug local)
 4. CI workflow — **tidak perlu** step gate; `wick build --installer` handle inline
 
@@ -1018,15 +1063,17 @@ bin/
 | D7 | Gate binary tetap stateless | Semua state di daemon. Gate bisa crash/respawn tanpa kehilangan pending |
 | D8 | Embed gate ke binary utama (rekomendasi) | User satu file, version selalu sync, tidak perlu installer logic baru |
 | D9 | Broadcast approval_request via Broadcaster yang sudah ada | Tidak perlu infrastruktur SSE baru, cukup tambah tipe event |
-| D10 | `GATE_BIN` env var override untuk dev | VSCode/go run tidak punya embed, perlu path eksplisit. Env var paling tidak invasif — tidak ubah kode path, tidak ubah interface |
+| D10 | ~~`GATE_BIN` env var override untuk dev~~ → DROPPED | Awalnya ada untuk skenario "dev binary tidak punya embed". Setelah installer mulai ship sidecar (D20), sibling lookup cover semua path penting; embed extract jadi backup untuk portable .exe / source build. Env var jadi noise — dihapus untuk konsistensi "no knobs" Stage 9 |
 | D11 | `debug: prep` task build gate otomatis | Developer tidak perlu ingat build gate manual sebelum debug — F5 langsung siap |
 | D12 | Drop `gate: sync-spec` task + `envFile`; operator set `GATE_SPEC` manual | Gate cuma baca env var (tidak ada home-dir discovery), jadi sebelumnya pakai task yang tulis path session terbaru ke `bin/.gate-debug.env` + envFile launch. Trade-off: 1 langkah manual vs ~30 baris tooling untuk save 5 detik per debug session. Pilih simpel — debug gate jarang, dan eksplisit lebih mudah di-troubleshoot kalau mismatch path |
 | D13 | Drop `wicklab-gate` launch entirely + tambah sibling-of-executable resolution | |
 | D14 | Rename `cmd/wick-gate` → `cmd/gate`, env vars `WICK_GATE_*` → `GATE_*`, output user-visible jadi `<app>-gate` (branded) | Brand neutrality di source; per-app brand di runtime — downstream user lihat `myapp-gate.exe` bukan `wick-gate.exe`. Embed asset internal tetap generic (`gate-<os>-<arch>`), branding via ldflag `gate.AppName` |
-| D15 | Hapus `GATE_SPEC` env var (target state) | Env var rawan tidak ter-set → gate error → fail-safe block semua. Compile-time path lebih reliable. Status saat ini: env var sudah di-rename, removal penuh = Stage 9 work |
+| D15 | Hapus `GATE_SPEC` env var | DONE Stage 9. Env var rawan tidak ter-set → gate error → fail-safe block semua. Compile-time path lebih reliable. Sekarang gate derive `~/.<app>/agents/gate/spec.json` dari `gate.AppName` ldflag |
 | D16 | `AppName` via `-ldflags` waktu build | Baked saat compile, tidak ada runtime guessing. Builder inject otomatis (`-X .../gate.AppName=<app>`) → downstream tidak perlu setup ldflag manual |
-| D17 | Path convention: `~/.<AppName>/agents/sessions/<id>/gate/spec.json` | Konsisten dengan storage layout wick yang sudah ada |
+| D17 | Path convention: shared `~/.<AppName>/agents/gate/{spec,gate.sock,commands}.json/jsonl` | Pre-Stage 9 per-session paths digabung jadi single shared per-app. UI session-detail Commands tab filter by workspace cwd prefix. Trade-off: per-session always-allow scope hilang (gantinya per-app); multi-session paralel berbagi rules + audit log |
 | D18 | Build gate inline di `internal/builder` (drop dari CI) | Lokal `wick build` & CI downstream produce hasil sama (1 main self-contained + 1 sidecar). Template release.yml jadi minus 1 step. Soft-skip pada downstream fork yang prune `cmd/gate` |
+| D19 | Stage 9: gate session-agnostic, daemon route by cwd | Gate binary tidak tau wick session. ApprovalRequest carries cwd; daemon scan active sessions (longest workspace-path prefix wins) untuk dapat sessionID buat SSE broadcast. Empty bucket kalau cwd di luar semua workspace — UI render under "unrouted" |
+| D20 | Installer ships gate sidecar (MSI + .deb + .app) | Sibling-of-executable jadi primary resolution path. Embedded extract demoted ke backup (portable .exe / source build). Trade: installer ukuran +~5MB per platform; benefit: gate visible di Programs folder, no per-session extract churn, lookup deterministic. Dengan ini D10 (`GATE_BIN` env var) jadi redundant → dihapus |
 
 ---
 
@@ -1171,55 +1218,74 @@ Tujuan: developer flow F5 di VSCode jalan tanpa langkah manual.
 
 **Exit criteria**: F5 wicklab + wicklab-gate jalan, dengan satu langkah manual yang explicit (set `$env:GATE_SPEC` di terminal sebelum F5 wicklab-gate).
 
-### Stage 9 — Spec Resolution Refactor
+### Stage 9 — Spec Resolution Refactor + Cleanup Pass
 
-Tujuan: hapus `GATE_SPEC` env var sebagai jalur komunikasi antara parent dan gate sidecar. Gate resolve path spec sendiri dari `AppName` compile-time constant — tidak ada info yang perlu di-inject runtime.
+Tujuan: hapus seluruh runtime knob (env vars) dan konsolidasi state per-app. Gate resolve semua path dari `AppName` compile-time constant; daemon route by cwd.
 
-**Keputusan (2026-05-10):** lihat D15–D17 di §11.
+**Keputusan (2026-05-10):** lihat D15–D20 di §11.
 
 ```
-[ ] S9.1 Hapus GATE_SPEC env var dari gate.LoadSpec()
-         Ganti: baca os.UserHomeDir() + construct path dari AppName
-         → internal/agents/gate/spec.go
-
-[ ] S9.2 Tambah compile-time var di cmd/gate/main.go
-         var AppName = "wick"  // default, di-override via -ldflags saat build
-         Pass ke gate.LoadSpec(AppName)
-         → cmd/gate/main.go
-         (Catatan: gate.AppName sudah ada di internal/agents/gate/embed.go untuk
-          sibling/PATH lookup — Stage 9 perlu mirror di main package atau reuse
-          via package-level access)
-
-[ ] S9.3 Implement path resolution di gate.LoadSpec(appName string)
-         path = filepath.Join(homeDir, "."+appName, "agents", "providers", ..., "spec.json")
-         (detail struktur sub-path TBD — update doc saat implementasi)
-         → internal/agents/gate/spec.go
-
+Core (S9.1–S9.7) — single shared spec, drop GATE_SPEC env var:
+[x] S9.1 Hapus GATE_SPEC env var dari gate.LoadSpec(); path derived dari
+         AppName ldflag → ~/.<app>/agents/gate/spec.json
+[x] S9.2 gate.AppName ldflag di package gate (di-share antara binary lookup +
+         shared paths). Default kosong → fallback "wick" di sharedGateDir
+[x] S9.3 gate.LoadSpec(appName) → ~/.<app>/agents/gate/spec.json. Missing
+         file = empty Spec, no error
 [x] S9.4 Builder inject AppName via ldflags
-         `-X github.com/yogasw/wick/internal/agents/gate.AppName=<app>`
-         applied di internal/builder/ldflags.go untuk semua wick build invocations
+         (`-X github.com/yogasw/wick/internal/agents/gate.AppName=<app>`)
          → internal/builder/ldflags.go
-         (Stage 9 follow-up perlu juga `-X main.AppName=...` ke ./cmd/gate
-          kalau pindah ke compile-time path resolution di main package)
+[x] S9.5 GATE_SPEC env var dihapus dari semua call sites:
+         pool/factory.go (drop ExtraEnv inject), claude_hook.go (drop
+         HookEnvVar const + LoadSpec env read), cmd/gate/main.go (drop env)
+[x] S9.6 Unit tests refactored: pakai t.Setenv("HOME", ...) +
+         WriteSharedSpec() daripada env var setup; integration_test build
+         gate dgn ldflag AppName supaya HOME isolation propagated
+[x] S9.7 Fail-safe: missing shared spec.json → empty Spec → fall through ke
+         socket dial → no daemon = exit 2 (verified via
+         TestGate_MissingSharedSpecIsEmpty)
 
-[ ] S9.5 Cleanup: hapus referensi GATE_SPEC env var
-         - WICK_GATE_SPEC sudah di-rename ke GATE_SPEC (rename pass selesai)
-         - Yang masih perlu untuk full removal:
-           - internal/agents/agent/claude/spawn.go (hapus env inject)
-           - internal/agents/pool/factory.go (hapus GATE_SPEC dari ExtraEnv)
-           - .env.example (hapus entry kalau ada)
-           - semua doc
+Daemon refactor (S9.8–S9.11) — single shared listener, cwd routing:
+[x] S9.8  ApprovalManager: single shared listener (Start/Stop, drop
+          StartSession/StopSession). RouteByCWD callback maps hook cwd →
+          session for SSE broadcast routing (longest workspace-path prefix)
+[x] S9.9  commands.jsonl shared global (~/.<app>/agents/gate/commands.jsonl).
+          UI session-detail Commands tab filters by workspace cwd prefix
+[x] S9.10 Resolve approve_always rewrites SHARED spec; RevokeAlways same;
+          AutoApproved() global; AutoApprovedFor(_) shim removed (caller pakai
+          AutoApproved())
+[x] S9.11 server.go boot syncSharedSpec — writes Rules from configsSvc on boot
+          + every Build invocation, preserves existing AutoApproved
 
-[ ] S9.6 Update unit test gate.LoadSpec()
-         Sebelum: setup os.Setenv("GATE_SPEC", tmpPath)  ← env var name sudah rename dari WICK_GATE_SPEC
-         Setelah: buat folder structure di t.TempDir() yang cocok dgn path convention
-         → internal/agents/gate/claude_hook_test.go (current test file)
-
-[ ] S9.7 Verifikasi fail-safe: spec.json tidak ada di resolved path → exit 2
-         Tambah test case: path valid tapi file missing → LoadSpec return error → main return 2
+Post-merge cleanup pass (S9.12–S9.17) — installer + dead code:
+[x] S9.12 Installer ship sidecar — MSI WXS GateExecutable component +
+          PackageMSI gateExePath param; .deb /usr/bin/<app>-gate +
+          PackageDeb gateBinPath param; .app Contents/MacOS/<App>-gate +
+          PackageApp gateBinPath param; builder.go wire `gateArtifact` ke
+          semua per-OS package functions
+[x] S9.13 Drop GATE_BIN env var — sibling-of-executable jadi resolution
+          path #1 (installer ships it), embed extract jadi backup, PATH
+          last-ditch. envOverride const + SourceEnvOverride label dropped
+[x] S9.14 Dead code di pool/factory.go — `gateAwareSpawner` + `extraEnv`
+          + nil-tuple return dari `attachGateConfig` (artefak env-var
+          injection era) semua dropped. Signature: `(Spawner, error)`
+[x] S9.15 Redundancy di server.go — `resolveGateBin` local helper dropped
+          (duplicate `agentgate.ResolveGateBinaryWithSource`); GateLoader
+          pakai `resolvedGateBin`. `gateAppName` fallback redundant
+          (sharedGateDir handles "" → "wick"). `os/exec` import dropped
+[x] S9.16 Misc surface — `requestApproval` test wrapper di cmd/gate/main.go
+          dropped (test pakai `requestApprovalWithLog(..., "")`).
+          `PendingFor(_)` arg unused, kept signature untuk JSON view-model
+[x] S9.17 UI copy — providers.go Note + approvals.go error + approvals.templ
+          banner: drop "Set GATE_BIN/WICK_GATE_BIN" mentions, ganti dgn
+          "Run `wick build` to produce the sibling sidecar and embedded
+          fallback"
 ```
 
-**Exit criteria**: gate sidecar jalan tanpa env var apapun. `go test ./...` hijau. Gate masih fail-safe block kalau spec tidak ditemukan.
+**Exit criteria**: gate sidecar jalan tanpa env var apapun. `go test ./...`
+hijau (52 pass di gate/pool/cmd/gate/tools-agents). Gate fail-safe block
+kalau shared spec / socket gak available. Installer ship sidecar; dev `go
+run` cuma butuh `wick build` sekali dan sibling-of-exe lookup picks it up.
 
 ---
 

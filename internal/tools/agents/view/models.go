@@ -157,7 +157,7 @@ type ProvidersVM struct {
 type GateStatusVM struct {
 	Enabled bool
 	Binary  string // absolute path (when enabled)
-	Source  string // "env_override" | "sibling" | "embed" | "path" — debug aid
+	Source  string // "sibling" | "embed" | "path" — debug aid
 	Reason  string // why disabled, when Enabled=false
 	Note    string // human-readable behavior summary; rendered as-is
 }

@@ -113,7 +113,7 @@ func gateStatusVM() view.GateStatusVM {
 	case !configEnabled:
 		vm.Note = "Gate is off in config. Each provider falls back to its own default permission handling — for claude headless that means Bash calls hang/block since there is no UI to prompt. Turn the gate back on if you want interactive approval."
 	default:
-		vm.Note = "Gate binary not resolved — every Bash command auto-blocks (fail-safe), except those matching a whitelist rule. Set GATE_BIN, place <app>-gate next to the parent binary, or rebuild so the embed step runs."
+		vm.Note = "Gate binary not resolved — every Bash command auto-blocks (fail-safe), except those matching a whitelist rule. Run `wick build` to produce both the sibling sidecar and the embedded fallback."
 	}
 	return vm
 }

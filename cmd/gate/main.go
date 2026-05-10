@@ -1,7 +1,7 @@
 // Command gate is the small binary claude's PreToolUse hook invokes
 // before every Bash tool call. It reads a JSON envelope from stdin,
 // decides allow/block via the gate matcher, logs the decision to
-// commands.jsonl, and exits with the claude-expected code:
+// the shared commands.jsonl, and exits with the claude-expected code:
 //
 //	exit 0 = allow
 //	exit 2 = block (claude cancels the tool call)
@@ -9,11 +9,11 @@
 // The binary ships per-app as `<app>-gate[.exe]` (e.g. `myapp-gate`
 // for a project initialized with `wick init myapp`).
 //
-// Configuration is loaded from the file path in $GATE_SPEC, which
-// the parent process writes per spawn (see gate.WriteSpawnArtifacts).
-// All decision state — rules, session commands.jsonl path, agent
-// name — flows through that spec, so the binary itself stays
-// stateless.
+// Configuration is loaded from the shared spec at
+// ~/.<app>/agents/gate/spec.json — the gate binary derives this path
+// from the compile-time `gate.AppName` (injected via -ldflags by
+// `wick build`). No runtime env var is consulted; this is the
+// post-Stage 9 model.
 //
 // Fail-safe: if anything goes wrong (spec missing, parse failure,
 // timeout reading stdin), we BLOCK + log. Better to refuse a real
@@ -32,15 +32,18 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/agents/storage"
 )
 
 // hookInput is the shape claude's PreToolUse hook sends on stdin.
-// We model only the fields we use; unknown fields are ignored.
+// We model only the fields we use; unknown fields are ignored. The
+// `cwd` field is what the daemon uses to route the approval back to
+// the right wick session — gate itself stays session-agnostic.
 type hookInput struct {
-	HookEventName string         `json:"hook_event_name"`
-	ToolName      string         `json:"tool_name"`
-	ToolInput     hookToolInput  `json:"tool_input"`
+	HookEventName string        `json:"hook_event_name"`
+	SessionID     string        `json:"session_id"` // claude session id (informational)
+	CWD           string        `json:"cwd"`
+	ToolName      string        `json:"tool_name"`
+	ToolInput     hookToolInput `json:"tool_input"`
 }
 
 type hookToolInput struct {
@@ -80,19 +83,17 @@ func main() {
 func run() int {
 	requestID := newRequestID()
 
-	spec, err := gate.LoadSpec()
+	spec, err := gate.LoadSpec(gate.AppName)
 	if err != nil {
-		// Spec missing → no SessionCommandsPath to write to. Stderr
-		// is the only channel the operator sees.
-		fmt.Fprintf(os.Stderr, "gate: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gate: load spec: %v\n", err)
 		return 2
 	}
 
-	logStage(spec, requestID, "received", "", "", "")
+	logStage(requestID, "received", "", "", "", "")
 
-	cmd, perr := readHookCommand(os.Stdin, stdinReadTimeout)
+	cmd, cwd, claudeSID, perr := readHookInput(os.Stdin, stdinReadTimeout)
 	if perr != nil {
-		logTerminal(spec, requestID, "", "blocked", "", "stdin parse: "+perr.Error())
+		logTerminal(requestID, "", "", "blocked", "", "stdin parse: "+perr.Error())
 		fmt.Fprintf(os.Stderr, "gate: %v\n", perr)
 		return 2
 	}
@@ -100,7 +101,7 @@ func run() int {
 	// Whitelist match — fastest happy path.
 	matcher := gate.NewMatcher(spec.Rules)
 	if allow, _ := matcher.Decide(cmd); allow {
-		logTerminal(spec, requestID, cmd, "allowed", "whitelist", "")
+		logTerminal(requestID, cmd, cwd, "allowed", "whitelist", "")
 		return 0
 	}
 
@@ -109,107 +110,89 @@ func run() int {
 	// be running.
 	key := gate.MatchKey("Bash", cmd)
 	if gate.IsAutoApproved(spec, key) {
-		logTerminal(spec, requestID, cmd, "allowed", "auto_approved", "")
+		logTerminal(requestID, cmd, cwd, "allowed", "auto_approved", "")
 		return 0
 	}
 
-	// Interactive approval — only attempt if a socket path was
-	// configured. Whitelist-only deployments (no daemon) just block.
-	if spec.SocketPath != "" {
-		logStage(spec, requestID, "socket_dial", cmd, "", spec.SocketPath)
-		decision, reason, err := requestApprovalWithLog(spec, cmd, key, requestID)
-		if err != nil {
-			logTerminal(spec, requestID, cmd, "blocked", "", "approval rpc: "+err.Error())
-			fmt.Fprintf(os.Stderr, "gate: blocked — approval rpc: %v\n", err)
-			return 2
-		}
-		if gate.IsApprove(decision) {
-			logTerminal(spec, requestID, cmd, "allowed", decision, reason)
-			return 0
-		}
-		logTerminal(spec, requestID, cmd, "blocked", decision, reason)
-		fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
+	// Interactive approval — dial the shared daemon socket.
+	socketPath := gate.SharedSocketPath(gate.AppName)
+	logStage(requestID, "socket_dial", cmd, cwd, "", socketPath)
+	decision, reason, err := requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, key, requestID)
+	if err != nil {
+		logTerminal(requestID, cmd, cwd, "blocked", "", "approval rpc: "+err.Error())
+		fmt.Fprintf(os.Stderr, "gate: blocked — approval rpc: %v\n", err)
 		return 2
 	}
-
-	// No socket → fail-safe block. Reason mirrors the matcher's
-	// rejection so the operator can see why a command failed.
-	_, matcherReason := matcher.Decide(cmd)
-	logTerminal(spec, requestID, cmd, "blocked", "", matcherReason)
-	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", matcherReason)
+	if gate.IsApprove(decision) {
+		logTerminal(requestID, cmd, cwd, "allowed", decision, reason)
+		return 0
+	}
+	logTerminal(requestID, cmd, cwd, "blocked", decision, reason)
+	fmt.Fprintf(os.Stderr, "gate: blocked — %s\n", reason)
 	return 2
 }
 
 // logStage writes one intermediate audit-trail entry. Used to track
 // progress through the decision flow before a terminal status is
 // known. reason can hold extra metadata (e.g. socket path on dial).
-func logStage(spec gate.Spec, requestID, stage, cmd, decision, reason string) {
+func logStage(requestID, stage, cmd, cwd, decision, reason string) {
 	entry := gate.Entry{
 		Timestamp: time.Now().UTC(),
 		Stage:     stage,
-		Agent:     spec.AgentName,
 		Tool:      "Bash",
 		Cmd:       cmd,
+		WorkDir:   cwd,
 		Decision:  decision,
 		Reason:    reason,
 		RequestID: requestID,
 	}
-	_ = storage.AppendJSONL(spec.Layout.SessionCommandsPath, "wick-cmd-v1", spec.SessionID, entry)
+	_ = gate.Append(gate.AppName, entry)
 }
 
 // logTerminal writes the final allowed/blocked entry. This is the
 // row the UI Commands tab displays as the user-visible decision.
-func logTerminal(spec gate.Spec, requestID, cmd, status, decision, reason string) {
+func logTerminal(requestID, cmd, cwd, status, decision, reason string) {
 	key := ""
 	if cmd != "" {
 		key = gate.MatchKey("Bash", cmd)
 	}
 	entry := gate.Entry{
 		Timestamp: time.Now().UTC(),
-		Agent:     spec.AgentName,
 		Tool:      "Bash",
 		Cmd:       cmd,
+		WorkDir:   cwd,
 		Status:    status,
 		Decision:  decision,
 		Reason:    reason,
 		RequestID: requestID,
 		MatchKey:  key,
 	}
-	_ = storage.AppendJSONL(spec.Layout.SessionCommandsPath, "wick-cmd-v1", spec.SessionID, entry)
+	_ = gate.Append(gate.AppName, entry)
 }
 
-// requestApproval dials the daemon's per-session unix socket, sends
-// one ApprovalRequest, and blocks for the reply. On any IO error the
-// caller fail-safes to block.
-//
-// Used only by tests now — production goes through requestApprovalWithLog
-// which adds per-stage audit entries to commands.jsonl.
-func requestApproval(spec gate.Spec, cmd, matchKey string) (decision, reason string, err error) {
-	return requestApprovalWithLog(spec, cmd, matchKey, "")
-}
-
-// requestApprovalWithLog is requestApproval + audit logging. Each
-// step (dial, send, recv) emits a `stage=...` entry so the operator
-// can pinpoint exactly where a stuck approval got stuck. requestID
-// ties all stages together; pass "" to skip logging (test path).
-func requestApprovalWithLog(spec gate.Spec, cmd, matchKey, requestID string) (decision, reason string, err error) {
-	conn, err := net.DialTimeout("unix", spec.SocketPath, socketDialTimeout)
+// requestApprovalWithLog dials the shared daemon socket, sends one
+// ApprovalRequest, and blocks for the reply. Each step (dial, send,
+// recv) emits a `stage=...` entry so the operator can pinpoint
+// exactly where a stuck approval got stuck. requestID ties all
+// stages together; pass "" to skip the per-stage audit logging
+// (used by tests). On any IO error the caller fail-safes to block.
+func requestApprovalWithLog(socketPath, cmd, cwd, claudeSID, matchKey, requestID string) (decision, reason string, err error) {
+	conn, err := net.DialTimeout("unix", socketPath, socketDialTimeout)
 	if err != nil {
 		if requestID != "" {
-			logStage(spec, requestID, "socket_error", cmd, "", "dial: "+err.Error())
+			logStage(requestID, "socket_error", cmd, cwd, "", "dial: "+err.Error())
 		}
-		return "", "", fmt.Errorf("dial %q: %w", spec.SocketPath, err)
+		return "", "", fmt.Errorf("dial %q: %w", socketPath, err)
 	}
 	defer conn.Close()
 
 	socketReqID := newRequestID()
 	req := gate.ApprovalRequest{
 		ID:        socketReqID,
-		SessionID: spec.SessionID,
-		AgentName: spec.AgentName,
+		SessionID: claudeSID,
 		Tool:      "Bash",
 		Cmd:       cmd,
-		WorkDir:   currentWorkDir(),
+		WorkDir:   cwd,
 		MatchKey:  matchKey,
 		Timestamp: time.Now().UnixMilli(),
 	}
@@ -217,24 +200,24 @@ func requestApprovalWithLog(spec gate.Spec, cmd, matchKey, requestID string) (de
 	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		if requestID != "" {
-			logStage(spec, requestID, "socket_error", cmd, "", "send: "+err.Error())
+			logStage(requestID, "socket_error", cmd, cwd, "", "send: "+err.Error())
 		}
 		return "", "", fmt.Errorf("send request: %w", err)
 	}
 	if requestID != "" {
-		logStage(spec, requestID, "socket_sent", cmd, "", "request_id="+socketReqID)
+		logStage(requestID, "socket_sent", cmd, cwd, "", "request_id="+socketReqID)
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(socketResponseTimeout))
 	var resp gate.ApprovalResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
 		if requestID != "" {
-			logStage(spec, requestID, "socket_error", cmd, "", "recv: "+err.Error())
+			logStage(requestID, "socket_error", cmd, cwd, "", "recv: "+err.Error())
 		}
 		return "", "", fmt.Errorf("read response: %w", err)
 	}
 	if requestID != "" {
-		logStage(spec, requestID, "socket_recv", cmd, resp.Decision, resp.Reason)
+		logStage(requestID, "socket_recv", cmd, cwd, resp.Decision, resp.Reason)
 	}
 	return resp.Decision, resp.Reason, nil
 }
@@ -245,28 +228,15 @@ func requestApprovalWithLog(spec gate.Spec, cmd, matchKey, requestID string) (de
 func newRequestID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// rand.Read effectively never fails on the platforms we
-		// target; if it ever does, fall back to a timestamp so
-		// fail-safe still works.
 		return fmt.Sprintf("ts-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
 }
 
-// currentWorkDir returns the cwd or an empty string. Best-effort
-// metadata for the UI to render — a misread cwd shouldn't fail
-// the request.
-func currentWorkDir() string {
-	if d, err := os.Getwd(); err == nil {
-		return d
-	}
-	return ""
-}
-
-// readHookCommand reads the entire stdin payload (claude writes one
-// JSON object then EOF), parses it, and returns the embedded command
-// string. Caps wall-time via timeout.
-func readHookCommand(r io.Reader, timeout time.Duration) (string, error) {
+// readHookInput reads the entire stdin payload (claude writes one
+// JSON object then EOF), parses it, and returns (cmd, cwd, claudeSID).
+// Caps wall-time via timeout.
+func readHookInput(r io.Reader, timeout time.Duration) (cmd, cwd, claudeSID string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -283,24 +253,23 @@ func readHookCommand(r io.Reader, timeout time.Duration) (string, error) {
 	var data []byte
 	select {
 	case <-ctx.Done():
-		return "", fmt.Errorf("stdin read timeout after %v", timeout)
+		return "", "", "", fmt.Errorf("stdin read timeout after %v", timeout)
 	case res := <-ch:
 		if res.err != nil {
-			return "", fmt.Errorf("stdin read: %w", res.err)
+			return "", "", "", fmt.Errorf("stdin read: %w", res.err)
 		}
 		data = res.data
 	}
 
 	if len(data) == 0 {
-		return "", fmt.Errorf("empty stdin")
+		return "", "", "", fmt.Errorf("empty stdin")
 	}
 	var in hookInput
 	if err := json.Unmarshal(data, &in); err != nil {
-		return "", fmt.Errorf("hook input parse: %w", err)
+		return "", "", "", fmt.Errorf("hook input parse: %w", err)
 	}
 	if in.ToolInput.Command == "" {
-		return "", fmt.Errorf("hook input missing tool_input.command (tool=%q)", in.ToolName)
+		return "", "", "", fmt.Errorf("hook input missing tool_input.command (tool=%q)", in.ToolName)
 	}
-	return in.ToolInput.Command, nil
+	return in.ToolInput.Command, in.CWD, in.SessionID, nil
 }
-

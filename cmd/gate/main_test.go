@@ -11,34 +11,40 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 )
 
-func TestReadHookCommandHappyPath(t *testing.T) {
-	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}`)
-	got, err := readHookCommand(in, time.Second)
+func TestReadHookInputHappyPath(t *testing.T) {
+	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"/tmp/x","session_id":"abc","tool_input":{"command":"ls -la"}}`)
+	cmd, cwd, sid, err := readHookInput(in, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "ls -la" {
-		t.Fatalf("got %q", got)
+	if cmd != "ls -la" {
+		t.Fatalf("cmd: %q", cmd)
+	}
+	if cwd != "/tmp/x" {
+		t.Fatalf("cwd: %q", cwd)
+	}
+	if sid != "abc" {
+		t.Fatalf("session_id: %q", sid)
 	}
 }
 
-func TestReadHookCommandEmpty(t *testing.T) {
+func TestReadHookInputEmpty(t *testing.T) {
 	in := strings.NewReader("")
-	if _, err := readHookCommand(in, time.Second); err == nil {
+	if _, _, _, err := readHookInput(in, time.Second); err == nil {
 		t.Fatal("empty stdin should error")
 	}
 }
 
-func TestReadHookCommandMalformed(t *testing.T) {
+func TestReadHookInputMalformed(t *testing.T) {
 	in := strings.NewReader("not json")
-	if _, err := readHookCommand(in, time.Second); err == nil {
+	if _, _, _, err := readHookInput(in, time.Second); err == nil {
 		t.Fatal("malformed json should error")
 	}
 }
 
-func TestReadHookCommandMissingCommandField(t *testing.T) {
+func TestReadHookInputMissingCommandField(t *testing.T) {
 	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`)
-	if _, err := readHookCommand(in, time.Second); err == nil {
+	if _, _, _, err := readHookInput(in, time.Second); err == nil {
 		t.Fatal("missing command field should error")
 	}
 }
@@ -51,11 +57,11 @@ func (b *blockingReader) Read(p []byte) (int, error) {
 	return 0, nil
 }
 
-func TestReadHookCommandTimeout(t *testing.T) {
+func TestReadHookInputTimeout(t *testing.T) {
 	r := &blockingReader{ch: make(chan struct{})}
 	defer close(r.ch)
 	start := time.Now()
-	_, err := readHookCommand(r, 50*time.Millisecond)
+	_, _, _, err := readHookInput(r, 50*time.Millisecond)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected timeout error")
@@ -69,9 +75,7 @@ func TestReadHookCommandTimeout(t *testing.T) {
 }
 
 // startFakeApprovalServer spins up a unix-socket listener that
-// responds to one ApprovalRequest with the given decision. Closes
-// itself after the single roundtrip — like the real daemon would,
-// but without any pending-state machinery.
+// responds to one ApprovalRequest with the given decision.
 func startFakeApprovalServer(t *testing.T, decision, reason string) string {
 	t.Helper()
 	sockPath := filepath.Join(t.TempDir(), "g.sock")
@@ -102,12 +106,7 @@ func startFakeApprovalServer(t *testing.T, decision, reason string) string {
 
 func TestRequestApprovalApprove(t *testing.T) {
 	sock := startFakeApprovalServer(t, gate.DecisionApproveOnce, "user clicked")
-	spec := gate.Spec{
-		SessionID:  "S1",
-		AgentName:  "main",
-		SocketPath: sock,
-	}
-	dec, _, err := requestApproval(spec, "git status", gate.MatchKey("Bash", "git status"))
+	dec, _, err := requestApprovalWithLog(sock, "git status", "/cwd", "claude-sid", gate.MatchKey("Bash", "git status"), "")
 	if err != nil {
 		t.Fatalf("requestApproval: %v", err)
 	}
@@ -118,8 +117,7 @@ func TestRequestApprovalApprove(t *testing.T) {
 
 func TestRequestApprovalBlock(t *testing.T) {
 	sock := startFakeApprovalServer(t, gate.DecisionBlock, "user said no")
-	spec := gate.Spec{SessionID: "S1", SocketPath: sock}
-	dec, reason, err := requestApproval(spec, "rm -rf /", gate.MatchKey("Bash", "rm -rf /"))
+	dec, reason, err := requestApprovalWithLog(sock, "rm -rf /", "/cwd", "", gate.MatchKey("Bash", "rm -rf /"), "")
 	if err != nil {
 		t.Fatalf("requestApproval: %v", err)
 	}
@@ -132,12 +130,8 @@ func TestRequestApprovalBlock(t *testing.T) {
 }
 
 func TestRequestApprovalNoServer(t *testing.T) {
-	// Socket file doesn't exist → fail-safe error path. requestApproval
-	// must surface the dial failure so run() can convert it to a block.
-	spec := gate.Spec{
-		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
-	}
-	if _, _, err := requestApproval(spec, "ls", gate.MatchKey("Bash", "ls")); err == nil {
+	missing := filepath.Join(t.TempDir(), "missing.sock")
+	if _, _, err := requestApprovalWithLog(missing, "ls", "/cwd", "", gate.MatchKey("Bash", "ls"), ""); err == nil {
 		t.Fatal("expected dial error when socket file missing")
 	}
 }
@@ -157,9 +151,6 @@ func TestNewRequestIDUnique(t *testing.T) {
 }
 
 func TestIsAutoApprovedShortCircuit(t *testing.T) {
-	// Confirm that gate.IsAutoApproved + gate.MatchKey agree — a
-	// command in AutoApproved must be detected by IsAutoApproved
-	// using a freshly-computed key.
 	cmd := "git push origin main"
 	key := gate.MatchKey("Bash", cmd)
 	spec := gate.Spec{AutoApproved: []string{key, "other-key"}}

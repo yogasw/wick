@@ -1,9 +1,7 @@
 package pool
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -28,11 +26,11 @@ type ClaudeFactory struct {
 	OnEvent   func(sessionID, agentName string, ev event.AgentEvent)
 	OnExit    func(sessionID, agentName string, reason provider.ExitReason)
 
-	// Gate (optional) attaches a static command whitelist to every spawn.
-	// When non-nil, Build writes a per-session settings.json + spec
-	// file to a temp dir, points the spawner at the settings file,
-	// and injects GATE_SPEC into ExtraEnv so the gate binary finds
-	// its config. nil = no gate (fail-open, only safe for tests).
+	// Gate (optional) attaches the gate sidecar to every spawn. When
+	// non-nil, Build writes a per-spawn settings.json pointing claude
+	// at the gate binary; the gate binary then loads its rules + auto-
+	// approved list from the shared spec at SharedSpecPath(AppName).
+	// nil = no gate (fail-open, only safe for tests).
 	Gate *GateConfig
 	// GateLoader (optional) is called on every Build to fetch the
 	// current gate config from the live config store. Takes precedence
@@ -54,40 +52,18 @@ type ClaudeFactory struct {
 }
 
 // GateConfig describes the gate plumbing: where the gate binary
-// lives + what rules it enforces. The factory turns this into one
-// {settings.json, spec.json} pair per spawn.
+// lives. Rules + auto-approved list now live in the shared spec
+// (see gate.WriteSharedSpec) — the daemon writes them at boot and
+// rewrites on revoke / always-allow, and the gate binary reads them
+// per invocation.
 type GateConfig struct {
 	// GateBinary is the absolute path to the gate binary.
 	// Required when Gate != nil.
 	GateBinary string
-	// Rules is the whitelist enforced for every spawn under this
-	// factory. Future work may take rules per-session.
-	Rules []gate.CommandRule
-	// TempDirRoot is where per-spawn gate artifacts (settings.json +
-	// spec.json) live. If empty, `<Layout.SessionDir(id)>/gate` is
-	// used.
+
+	// TempDirRoot is where the per-spawn settings.json lives. If
+	// empty, `<Layout.SessionDir(id)>/gate` is used.
 	TempDirRoot string
-
-	// SocketDir is the static (single-session-test) socket dir. The
-	// factory writes `<SocketDir>/gate.sock` into spec.SocketPath so
-	// the gate binary knows where to dial. Empty = no interactive
-	// approval (whitelist-only). Production wires SocketDirFor
-	// instead so each session gets its own socket path.
-	SocketDir string
-
-	// SocketDirFor (preferred over SocketDir for production) returns
-	// the socket dir for a specific session. Factory calls this once
-	// per Build, falling back to SocketDir when the func is nil.
-	// Daemon must listen on `<SocketDirFor(sid)>/gate.sock` before
-	// the spawn — pool's OnLifecycle "spawning" hook is the right
-	// trigger.
-	SocketDirFor func(sessionID string) string
-
-	// AutoApprovedFor returns the list of "always allow" matchKey
-	// hashes for a given session. Called once per Build to populate
-	// spec.AutoApproved so the gate binary can short-circuit without
-	// dialing the socket. nil = no auto-approves.
-	AutoApprovedFor func(sessionID string) []string
 }
 
 // Build returns a fresh agent + state machine + store wired for one
@@ -118,14 +94,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		activeGate = f.GateLoader()
 	}
 
-	var extraEnv []string
 	if activeGate != nil {
-		s, env, err := f.attachGateConfig(opt, spawner, activeGate)
+		s, err := f.attachGateConfig(opt, spawner, activeGate)
 		if err != nil {
 			return BuildResult{}, fmt.Errorf("attach gate: %w", err)
 		}
 		spawner = s
-		extraEnv = env
 	}
 
 	var onEvent func(event.AgentEvent)
@@ -208,7 +182,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		IdleTimeout:   opt.IdleTimeout,
 		KillAfterIdle: opt.KillAfterIdle,
 		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
-		Spawner:       gateAwareSpawner{inner: spawner, extraEnv: extraEnv},
+		Spawner:       spawner,
 		Store:         sto,
 		State:         st,
 		OnEvent:       onEvent,
@@ -217,76 +191,34 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }
 
-// attachGate writes the per-spawn settings.json + spec.json under
-// <gate-dir>/<sessionID>/ and returns:
+// attachGateConfig writes the per-spawn settings.json (claude's
+// `--settings` file pointing at the gate binary) and returns a
+// wrapped spawner.
 //
-//   - a wrapped Spawner that forces ClaudeSpawner.SettingsPath when
-//     the underlying spawner is a real claude.Spawner; for fake
-//     spawners the settings are still written (so tests can read
-//     them) but ignored
-//   - the env-var slice ([GATE_SPEC=<path>]) the spawner adds
-//     to its subprocess
-func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawner, cfg *GateConfig) (provider.Spawner, []string, error) {
+// Rules + AutoApproved are NOT written here anymore — they live in
+// the shared spec at gate.SharedSpecPath(AppName), populated by the
+// daemon at boot and rewritten on always-allow / revoke. The gate
+// binary reads the shared spec at every invocation.
+//
+// No env vars are injected — gate derives all paths from its
+// compile-time AppName (set via -ldflags by `wick build`).
+func (f *ClaudeFactory) attachGateConfig(opt FactoryOptions, base provider.Spawner, cfg *GateConfig) (provider.Spawner, error) {
 	root := cfg.TempDirRoot
 	if root == "" {
 		root = filepath.Join(f.Layout.SessionDir(opt.SessionID), "gate")
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return base, nil, err
-	}
-	sockDir := cfg.SocketDir
-	if cfg.SocketDirFor != nil {
-		sockDir = cfg.SocketDirFor(opt.SessionID)
-	}
-	socketPath := ""
-	if sockDir != "" {
-		// Socket file lives one level above the per-spawn artifact
-		// dir so multiple spawns under the same session share one
-		// listener (created by the daemon at session start).
-		socketPath = filepath.Join(sockDir, "gate.sock")
-	}
-	var autoApproved []string
-	if cfg.AutoApprovedFor != nil {
-		autoApproved = cfg.AutoApprovedFor(opt.SessionID)
-	}
-	spec := gate.Spec{
-		SessionID: opt.SessionID,
-		AgentName: opt.AgentName,
-		Layout: gate.SpecLayout{
-			SessionCommandsPath: f.Layout.SessionCommands(opt.SessionID),
-		},
-		Rules:        cfg.Rules,
-		SocketPath:   socketPath,
-		AutoApproved: autoApproved,
-	}
-	settingsPath, specPath, err := gate.WriteSpawnArtifacts(root, spec, cfg.GateBinary)
+	settingsPath, err := gate.WriteClaudeSettings(root, cfg.GateBinary)
 	if err != nil {
-		return base, nil, err
+		return base, err
 	}
 
 	// If the underlying spawner is real claude, push the settings
-	// path into a fresh copy. We can't mutate the existing struct
-	// directly (it's a value), so swap with a configured one.
+	// path into a fresh copy.
 	if cs, ok := base.(claude.Spawner); ok {
 		cs.SettingsPath = settingsPath
 		base = cs
 	}
-	return base, []string{
-		gate.HookEnvVar + "=" + specPath,
-	}, nil
-}
-
-// gateAwareSpawner wraps a Spawner so the gate's ExtraEnv lands in
-// every Spawn call without the underlying spawner having to know
-// about gate.
-type gateAwareSpawner struct {
-	inner    provider.Spawner
-	extraEnv []string
-}
-
-func (g gateAwareSpawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider.Process, error) {
-	opt.ExtraEnv = append(append([]string(nil), opt.ExtraEnv...), g.extraEnv...)
-	return g.inner.Spawn(ctx, opt)
+	return base, nil
 }
 
 // exitReasonString maps the typed ExitReason to the short label

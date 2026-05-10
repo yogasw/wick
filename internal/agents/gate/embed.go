@@ -26,12 +26,6 @@ var embeddedGateFS embed.FS
 // resolution, not at embed time.
 var AppName = ""
 
-// envOverride is the env-var name dev tooling sets to point at a
-// freshly-built gate binary outside the embed (e.g. wicklab + go run).
-// Resolution checks this first so VSCode F5 doesn't need a full
-// rebuild of the parent binary.
-const envOverride = "GATE_BIN"
-
 // errNoEmbeddedGate signals that the embed is empty — typically a
 // `go run` build that skipped the build step. Caller can fall back
 // to PATH lookup or surface the misconfiguration.
@@ -62,13 +56,11 @@ func brandedGateName() string {
 
 // Resolution source labels — exposed via ResolveGateBinaryWithSource
 // so the Providers page UI can show *how* the binary got picked,
-// useful when debugging why dev override silently shadowed the
-// embedded one.
+// useful when debugging why one source silently shadowed another.
 const (
-	SourceEnvOverride = "env_override"
-	SourceEmbed       = "embed"
-	SourceSibling     = "sibling"
-	SourcePath        = "path"
+	SourceSibling = "sibling"
+	SourceEmbed   = "embed"
+	SourcePath    = "path"
 )
 
 // ResolveGateBinary picks the gate binary for the current process.
@@ -82,40 +74,42 @@ func ResolveGateBinary(sessionDir string) (string, error) {
 // ResolveGateBinaryWithSource resolves the gate binary and returns
 // which step found it. Resolution order:
 //
-//  1. $GATE_BIN — dev override, no extraction needed
-//  2. embedded asset, extracted into sessionDir/gate/gate[.exe]
-//  3. sibling-of-executable — `<app>-gate[.exe]` next to the running
-//     binary. Covers the common dev / installer case where the
-//     parent ships a sidecar binary in the same folder (matches
-//     how `wick build` lays them out: both `bin/<app>[.exe]` +
-//     `bin/<app>-gate-<os>-<arch>[.exe]`, the latter copied next
-//     to the parent for installer packaging).
-//  4. `<app>-gate` on PATH — last-ditch fallback for source builds
-//     where neither override nor embed nor sibling are populated
+//  1. sibling-of-executable — `<app>-gate[.exe]` next to the running
+//     binary. This is the production path: `wick build` ships the
+//     sidecar in every installer (.msi / .deb / .app), so the
+//     installed app always finds it here without touching disk for
+//     an extract.
+//  2. embedded asset, extracted into sessionDir/gate/gate[.exe].
+//     Backup for portable .exe builds (no installer) and for source
+//     builds where someone ran `wick build` once but discarded the
+//     sibling artifact.
+//  3. `<app>-gate` on PATH — last-ditch fallback for unusual setups
+//     (e.g. user installed the gate via a separate package manager).
+//
+// No env-var override anymore: post-Stage 9 the resolution chain is
+// deterministic from disk + ldflag-baked AppName, no per-environment
+// configuration knobs needed.
 func ResolveGateBinaryWithSource(sessionDir string) (path, source string, err error) {
-	if p := strings.TrimSpace(os.Getenv(envOverride)); p != "" {
-		return p, SourceEnvOverride, nil
+	if p := siblingGateBinary(); p != "" {
+		return p, SourceSibling, nil
 	}
 	if p, err := extractEmbeddedGate(sessionDir); err == nil {
 		return p, SourceEmbed, nil
 	} else if !errors.Is(err, errNoEmbeddedGate) {
 		return "", "", err
 	}
-	if p := siblingGateBinary(); p != "" {
-		return p, SourceSibling, nil
-	}
 	lookupName := brandedGateName()
 	lookupName = strings.TrimSuffix(lookupName, ".exe")
 	if p, err := exec.LookPath(lookupName); err == nil {
 		return p, SourcePath, nil
 	}
-	return "", "", fmt.Errorf("gate binary %q not found: set %s, place %s next to the parent binary, or build the parent with the embed step", lookupName, envOverride, lookupName)
+	return "", "", fmt.Errorf("gate binary %q not found: build the app with `wick build` (sibling+embed both produced) or place %s on PATH", lookupName, lookupName)
 }
 
 // siblingGateBinary returns the absolute path to the gate binary
 // sitting in the same directory as the currently-running executable.
 // Empty string when the file isn't there or os.Executable lookup
-// fails — caller falls through to PATH lookup.
+// fails — caller falls through to embed/PATH lookup.
 func siblingGateBinary() string {
 	exe, err := os.Executable()
 	if err != nil {

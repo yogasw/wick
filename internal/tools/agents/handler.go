@@ -49,7 +49,7 @@ var (
 // Enabled=false means ResolveGateBinary returned an error — every
 // command will hit fail-safe block at the matcher / no-socket path,
 // except whitelist matches. Reason carries the error message so
-// the UI can show "set GATE_BIN" or similar guidance.
+// the UI can show actionable guidance (run `wick build`).
 type GateStatus struct {
 	Enabled bool
 	Binary  string // absolute path

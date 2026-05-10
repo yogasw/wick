@@ -7,24 +7,11 @@ import (
 	"testing"
 )
 
-// TestResolveGateBinary_EnvOverrideWins confirms GATE_BIN short-
-// circuits all other lookups — including missing files. The env var
-// is the user's explicit pointer; we trust it as-is and let the
-// spawn fail loudly later if it's wrong.
-func TestResolveGateBinary_EnvOverrideWins(t *testing.T) {
-	t.Setenv(envOverride, "/totally/made/up/path/gate")
-	got, err := ResolveGateBinary(t.TempDir())
-	if err != nil {
-		t.Fatalf("ResolveGateBinary: %v", err)
-	}
-	if got != "/totally/made/up/path/gate" {
-		t.Errorf("got %q, want env value", got)
-	}
-}
-
-// TestSiblingGateBinary_FoundNextToExecutable verifies the dev /
-// installer fallback: a gate sidecar file dropped next to the
-// running binary is picked up without env or embed.
+// TestSiblingGateBinary_FoundNextToExecutable verifies the
+// production resolution path: a gate sidecar file dropped next to
+// the running binary is picked up first (before embed extract).
+// `wick build` ships the sidecar in every installer, so this is
+// the path real installs take.
 //
 // We can't move the test binary, so we plant a file matching the
 // expected name beside it, look up via the helper, then clean up.
@@ -37,7 +24,6 @@ func TestSiblingGateBinary_FoundNextToExecutable(t *testing.T) {
 	name := brandedGateName()
 	planted := filepath.Join(filepath.Dir(exe), name)
 
-	// Skip if the file already exists — don't trample on a real install.
 	if _, err := os.Stat(planted); err == nil {
 		t.Skip("gate already next to test binary; skipping plant test")
 	}
@@ -54,10 +40,6 @@ func TestSiblingGateBinary_FoundNextToExecutable(t *testing.T) {
 }
 
 func TestSiblingGateBinary_AbsentReturnsEmpty(t *testing.T) {
-	// Without planting, the helper should return "". In rare CI
-	// setups the test binary's neighbour might already have a gate
-	// binary (e.g. dev box with PATH-installed gate); in that case
-	// the helper legitimately returns it — skip rather than fail.
 	exe, err := os.Executable()
 	if err != nil {
 		t.Skipf("os.Executable: %v", err)
@@ -70,6 +52,4 @@ func TestSiblingGateBinary_AbsentReturnsEmpty(t *testing.T) {
 	}
 }
 
-// suppress unused import warning when runtime no longer used in
-// this file directly.
 var _ = runtime.GOOS

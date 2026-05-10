@@ -24,7 +24,7 @@ type approvalReq struct {
 func notReadyApprovals(c *tool.Ctx) bool {
 	if globalApprovals == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{
-			"error": "agents gate disabled — set WICK_GATE_BIN or build with the embed step",
+			"error": "agents gate disabled — build the app with `wick build` to produce the sibling sidecar + embedded fallback",
 		})
 		return true
 	}
@@ -84,7 +84,7 @@ func approvalsSnapshot(c *tool.Ctx) {
 	out := map[string]any{
 		"pending":          globalApprovals.PendingFor(sessionID),
 		"session_approved": globalApprovals.SessionApprovedKeys(sessionID),
-		"always_approved":  globalApprovals.AutoApprovedFor(sessionID),
+		"always_approved":  globalApprovals.AutoApproved(),
 	}
 	c.JSON(http.StatusOK, out)
 }
