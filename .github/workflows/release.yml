@@ -148,6 +148,7 @@ jobs:
     outputs:
       summary: ${{ steps.ai_summary.outputs.summary }}
       title: ${{ steps.ai_summary.outputs.title }}
+      headline: ${{ steps.ai_summary.outputs.headline }}
 
     steps:
       - name: Call Gemini to generate release summary
@@ -167,7 +168,7 @@ jobs:
           printf "%s\n" "$COMMIT_LOG" > commit_log.txt
           COMMITS=$(cat commit_log.txt)
 
-          PROMPT=$(printf "Release version: %s\n\nPull Request: %s\n\nDescription:\n%s\n\nCommits:\n%s\n\nYou are an agent responsible for generating GitHub release summaries from pull request commits. Output ONLY valid Markdown compatible with VitePress (no MDX, no HTML tags, no custom components, no frontmatter). Use only these heading levels: ### Added, ### Fixed, ### Improved — include only categories present in the commits. Under each heading use bullet points starting with '- '. Do not add introductory sentences, version headings, or trailing notes. Describe each item specifically and concisely. Professional tone suitable for public changelogs." "$VERSION" "$PR_TITLE" "$PR_BODY" "$COMMITS")
+          PROMPT=$(printf "Release version: %s\n\nPull Request: %s\n\nDescription:\n%s\n\nCommits:\n%s\n\nYou are an agent responsible for generating GitHub release summaries from pull request commits. Output ONLY valid Markdown compatible with VitePress (no MDX, no HTML tags, no custom components, no frontmatter).\n\nThe FIRST line of your output MUST be a sentinel of the form:\n\nHEADLINE: <value>\n\nWhere <value> is either:\n- 1 to 3 words naming the headline theme of this release (e.g. 'AI Agents', 'Cross-Platform Builds', 'MCP & Connectors') — ONLY when one major theme clearly dominates the commits and PR description\n- empty (so the sentinel becomes literally 'HEADLINE:' with nothing after) for routine bug-fix / chore / small improvement releases that have no single dominant theme\n\nAfter the HEADLINE sentinel line, leave one blank line, then output the summary body.\n\nIn the summary body use only these heading levels: ### Added, ### Fixed, ### Improved — include only categories present in the commits. Under each heading use bullet points starting with '- '. Do not add introductory sentences, version headings, or trailing notes. Describe each item specifically and concisely. Professional tone suitable for public changelogs." "$VERSION" "$PR_TITLE" "$PR_BODY" "$COMMITS")
 
           PAYLOAD=$(jq -n --arg text "$PROMPT" '{"contents":[{"parts":[{"text":$text}]}]}')
           SUMMARY=""
@@ -193,7 +194,26 @@ jobs:
             exit 1
           fi
 
+          # Parse HEADLINE sentinel from first line, strip it from body.
+          # Tolerate Gemini wrapping output in a fenced code block (```markdown ... ```).
+          FIRST_LINE=$(printf '%s' "$SUMMARY" | sed -n '1p')
+          if printf '%s' "$FIRST_LINE" | grep -qE '^```'; then
+            # Drop opening fence + trailing fence
+            SUMMARY=$(printf '%s' "$SUMMARY" | sed -e '1d' -e '$d')
+            FIRST_LINE=$(printf '%s' "$SUMMARY" | sed -n '1p')
+          fi
+          HEADLINE=""
+          if printf '%s' "$FIRST_LINE" | grep -qE '^HEADLINE:'; then
+            HEADLINE=$(printf '%s' "$FIRST_LINE" | sed -E 's/^HEADLINE:[[:space:]]*//' | sed -E 's/[[:space:]]+$//')
+            # Strip the sentinel line + the blank line that should follow it.
+            SUMMARY=$(printf '%s' "$SUMMARY" | sed -e '1d' -e '/./,$!d')
+            echo "Parsed headline: '$HEADLINE'"
+          else
+            echo "::warning::Gemini output missing HEADLINE sentinel — proceeding with empty headline."
+          fi
+
           echo "title=$VERSION" >> $GITHUB_OUTPUT
+          echo "headline=$HEADLINE" >> $GITHUB_OUTPUT
           echo "summary<<EOF_SUMMARY" >> $GITHUB_OUTPUT
           echo "$SUMMARY" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
@@ -224,6 +244,7 @@ jobs:
       - name: Sync go.mod.tmpl and docs/changelog.md
         env:
           SUMMARY: ${{ needs.generate-summary.outputs.summary }}
+          HEADLINE: ${{ needs.generate-summary.outputs.headline }}
         run: |
           VERSION=${{ needs.prepare.outputs.version }}
           sed -i "s|github.com/yogasw/wick v.*|github.com/yogasw/wick v${VERSION}|" template/go.mod.tmpl
@@ -241,10 +262,16 @@ jobs:
               COMPARE_URL="https://github.com/${REPO}/releases/tag/v${VERSION}"
             fi
 
+            # Append " — <headline>" to the heading when Gemini named one.
+            HEADING_SUFFIX=""
+            if [ -n "$HEADLINE" ]; then
+              HEADING_SUFFIX=" — ${HEADLINE}"
+            fi
+
             head -n "$SEPARATOR_LINE" docs/changelog.md > "$docs_tempfile"
             {
               echo ""
-              echo "## [v${VERSION}](${COMPARE_URL})"
+              echo "## [v${VERSION}](${COMPARE_URL})${HEADING_SUFFIX}"
               echo ""
               echo "_Released on $(date +'%Y-%m-%d')_"
               echo ""
