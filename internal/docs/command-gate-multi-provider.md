@@ -7,7 +7,8 @@ Commits di branch `improve-gate2`:
 - `d5d467c` feat(gate): multi-provider capability detection (Priority 0)
 - `a53b648` feat(ui): per-provider Command Gate section in Providers card
 - `aa86220` fix(ui): theme-aware tooltip + register codex/gemini for capability lookup
-- (current) feat(gate): per-instance Hooks intent + master switch cascade + spawner refactor
+- `994e880` feat(gate): per-instance Hooks intent + master switch cascade + spawner refactor
+- (current) fix(gate): bypass dan gate mutually exclusive — revert regression dari 994e880 + UI bypass-lock state
 
 Doc ini supersede arsitektur lama yang Claude-only ([command-gate-architecture.md](command-gate-architecture.md)). Tujuan: gate jadi generic, per-provider hook contract di-translate sama adapter, capability dicek runtime jadi user gak nyalain gate di provider yang gak support hook.
 
@@ -331,11 +332,13 @@ Factory translate intent "bypass approval prompt" jadi flag CLI-specific:
 
 | Provider | Bypass flag | Behavior saat gate active |
 |---|---|---|
-| claude | `--permission-mode bypassPermissions` | **SKIP** — claude 2.1.138+ bypass = PreToolUse di-skip → gate mati |
+| claude | `--permission-mode bypassPermissions` | **SKIP** — claude 2.1.138+ fire hook tapi **ignore deny envelope** dgn flag set (verified 2026-05-11, regression dari `mkdir 125`). Pre-2.1.138 flag skip hook total. Either way: hidup berdampingan = gate sia-sia. |
 | codex | `--ask-for-approval=never` | **SKIP** — bypass mode kemungkinan skip PreToolUse juga (verify saat impl) |
 | gemini | TBD (`--yolo`?) | **SKIP** — defensive, sama pattern |
 
 Aturan universal: **gate active ⇒ JANGAN set bypass flag manapun**. Tiap Spawner sub-package punya field bypass sendiri (claude.Spawner.BypassPermissions, codex.Spawner.AskForApproval=never, dst), factory yang decide set atau gak.
+
+**Mutex inverse** (per [command-gate-claude-2.1-fix.md](command-gate-claude-2.1-fix.md)): kalau `Spawner.BypassPermissions=true` di-set eksplisit (channel non-interaktif), `applyHookConfig` HARUS strip workspace hook config dan return `false`. Bypass owner spawn outright — alert gate sia-sia karena ngga ada UI buat approve.
 
 ### Per-provider quirks (initial mapping)
 
@@ -497,6 +500,12 @@ detached dari request.
 Spawner per-provider implement `applyHookConfig(opt)` yang:
 
 ```go
+// Bypass takes precedence over gate: non-interactive channels don't have
+// a UI to answer prompts, alerts from gate would be unactionable.
+if s.BypassPermissions {
+    writer.Remove(opt.Workspace) // cleanup stale gate-on config
+    return false
+}
 enabled := opt.Instance != nil && opt.Instance.HookEnabled(provider.HookEventPreToolUse)
 if !enabled {
     writer.Remove(opt.Workspace) // cleanup stale config
@@ -506,11 +515,16 @@ writer.Write(opt.Workspace, opt.GateBinary)
 return true
 ```
 
-Saat returnnya true:
-- **claude**: tambah `--permission-mode bypassPermissions` (claude 2.1.138+ deny
-  via hook envelope, bukan via permission prompt)
+Saat returnnya true (gate active):
+- **claude**: JANGAN tambah `--permission-mode bypassPermissions`. Claude
+  2.1.138+ fire hook tapi ignore deny envelope dgn flag set — verified
+  2026-05-11. Gate hook = sole authority via `emitBlock` / `emitAllow`.
 - **codex**: skip `--ask-for-approval=never` (biar PreToolUse fire)
 - **gemini**: skip `--yolo` (sama)
+
+Saat `s.BypassPermissions=true` (gate paksa OFF di applyHookConfig):
+- **claude**: tambah `--permission-mode bypassPermissions`. Spawn unguarded
+  — sesuai intent caller non-interaktif.
 
 `Remove` penting — toggle OFF harus bersihin hook config workspace yang
 sebelumnya ON, biar provider gak still panggil gate binary stale.
@@ -604,6 +618,7 @@ Migration: replace semua `title="..."` di providers card ke `data-tooltip="..."`
 
 | State | Badge | Button |
 |---|---|---|
+| `agents.bypass_permissions=true` | `locked (bypass)` (abu) | tersembunyi |
 | master OFF | `locked` (abu) | tersembunyi |
 | master ON + probe inflight | `testing…` (biru pulse) | "Testing…" disabled |
 | master ON + intent ON + verified | `enabled ✓` (hijau) | Test + Disable |
@@ -611,8 +626,17 @@ Migration: replace semua `title="..."` di providers card ke `data-tooltip="..."`
 | master ON + intent OFF + probe pass | `ready` (abu) | Enable |
 | master ON + intent OFF | `disabled` (abu) | Enable |
 
-`hookCapabilitySection` templ helper take `masterOn bool` param dan render
-button trio cuma kalau masterOn=true.
+`hookCapabilitySection` templ helper take `gate GateStatusVM` param.
+Bypass-locked branch precedence > master OFF branch — same `Enabled=false`
+result tapi tooltip beda biar user tau alasannya.
+
+### Master switch card states
+
+`gateStatusCard` (di top Providers page) reflect `BypassLocked` via amber
+badge + disabled "Locked" button gantiin "Turn on/off" form. `Note` field
+spell out alasan ("Bypass permissions is on … Turn bypass off in agents
+settings to use the gate"). Toggle aksi POST tetap ada server-side, tapi
+handler `toggleGate` 409 saat bypass on (defensive untuk stale tab).
 
 ## File layout (perubahan minimal)
 
@@ -634,6 +658,9 @@ Daily tail log unchanged.
 | Provider gak support hook + GateEnabled=true | Spawn refuse, return error to caller | shouldn't happen (UI block toggle) tapi defensive |
 | Capability probe timeout 10s | `HookError=timeout`, toggle locked off | retry via Rescan |
 | Hook config write fail | Spawn error, abort | gak boleh spawn tanpa gate kalau user opt-in |
+| Bypass flag + per-instance Hook ON | Spawner Strip hook config, run unguarded | Bypass intent (Slack/HTTP no UI) trump per-instance gate. Mencegah claude 2.1.138+ regression dimana hook fire tapi deny ignored. Lihat command-gate-claude-2.1-fix.md regression 2026-05-11. |
+| User klik Enable per-provider sementara `agents.bypass_permissions=true` | HTTP handler return 409 + UI tampilin badge `locked (bypass)` | UI sembunyiin tombol Enable saat bypass on; 409 cuma kena kalau direct curl / stale tab. |
+| User klik master gate toggle sementara bypass on | HTTP handler return 409 + tombol "Locked" disabled | Sama defensive guard. Ubah bypass dulu di `agents` config. |
 
 ## Migration / rollout
 

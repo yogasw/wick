@@ -101,14 +101,20 @@ func providersPage(c *tool.Ctx) {
 func gateStatusVM() view.GateStatusVM {
 	s := GetGateStatus()
 	configEnabled := masterGateEnabled()
-	enabled := configEnabled && s.Binary != ""
+	bypass := bypassPermissionsEnabled()
+	// Bypass trumps the master switch — the spawner strips hook configs
+	// when bypass is on, so the gate cannot enforce regardless of intent.
+	enabled := configEnabled && s.Binary != "" && !bypass
 	vm := view.GateStatusVM{
-		Enabled: enabled,
-		Binary:  s.Binary,
-		Source:  s.Source,
-		Reason:  s.Reason,
+		Enabled:      enabled,
+		Binary:       s.Binary,
+		Source:       s.Source,
+		Reason:       s.Reason,
+		BypassLocked: bypass,
 	}
 	switch {
+	case bypass:
+		vm.Note = "Bypass permissions is on in agents config — the gate is locked off. Spawns run unguarded so non-interactive channels (Slack/HTTP) don't hang on permission prompts. Turn bypass off in agents settings to use the gate."
 	case enabled:
 		vm.Note = "Master switch is on. Per-provider hooks installed for providers you've explicitly enabled below — others fall through to their own permission flow."
 	case configEnabled && s.Binary == "":
@@ -145,6 +151,10 @@ func gateStatusVM() view.GateStatusVM {
 func toggleGate(c *tool.Ctx) {
 	if globalConfigs == nil {
 		c.Error(http.StatusServiceUnavailable, "configs service not wired")
+		return
+	}
+	if bypassPermissionsEnabled() {
+		c.Error(http.StatusConflict, "bypass permissions is on — disable it in agents settings before toggling the gate")
 		return
 	}
 	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
@@ -274,6 +284,17 @@ func masterGateEnabled() bool {
 	return b
 }
 
+// bypassPermissionsEnabled reads agents.bypass_permissions. Bypass and
+// gate are mutually exclusive: when this is true the spawner strips the
+// hook config and runs unguarded, so the gate UI must surface the lock
+// rather than offering enable buttons that wouldn't take effect.
+func bypassPermissionsEnabled() bool {
+	if globalConfigs == nil {
+		return false
+	}
+	return globalConfigs.GetOwned("agents", "bypass_permissions") == "true"
+}
+
 // autoRescanEnabled reads agents.auto_rescan from configs. Defaults
 // to true when the row is empty so first-boot users get the standard
 // "stale cache → background re-probe" behaviour without ceremony.
@@ -370,10 +391,16 @@ func enableProviderHook(c *tool.Ctx) {
 		return
 	}
 
-	// Defensive: refuse per-provider Enable while master switch is off.
-	// UI hides the button in that state, so reaching here means a direct
-	// curl / stale tab — surface the constraint as a 409 so the caller
-	// knows what's wrong.
+	// Defensive: refuse per-provider Enable while master switch is off
+	// or bypass mode is on. UI hides the button in either state, so
+	// reaching here means a direct curl / stale tab — surface the
+	// constraint as a 409 so the caller knows what's wrong.
+	if bypassPermissionsEnabled() {
+		c.JSON(http.StatusConflict, map[string]string{
+			"error": "bypass permissions is on — disable it in agents settings before enabling per-provider gates",
+		})
+		return
+	}
 	if !masterGateEnabled() {
 		c.JSON(http.StatusConflict, map[string]string{
 			"error": "master gate is off — turn the global Command Gate on before enabling individual providers",
