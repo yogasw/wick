@@ -73,6 +73,14 @@ type Config struct {
 }
 
 // ProviderStatus is the persisted shape of a Probe result.
+//
+// Hooks holds per-event capability info (currently just "PreToolUse"
+// for the command gate; future events like "SessionStart" or
+// "UserPromptSubmit" land as additional map keys without struct churn).
+// Persisting it here means the Providers page renders the gate-toggle
+// state from disk without re-spawning the provider on every render —
+// same TTL strategy as the version probe. Re-probe only fires when
+// Version changes or the user clicks Rescan.
 type ProviderStatus struct {
 	Path       string `json:"path"`
 	PathFound  bool   `json:"path_found"`
@@ -80,6 +88,24 @@ type ProviderStatus struct {
 	VersionErr string `json:"version_err,omitempty"`
 	ScannedAt  string `json:"scanned_at,omitempty"`
 	VersionAt  string `json:"version_at,omitempty"`
+
+	// Hooks captures the runtime capability check per hook event name.
+	// Keys are provider-agnostic event names ("PreToolUse",
+	// "SessionStart", ...). Empty map = never probed, UI surfaces
+	// "click Test to verify".
+	Hooks map[string]HookCapability `json:"hooks,omitempty"`
+}
+
+// HookCapability is the persisted snapshot of one hook-event probe.
+// Mirrors capability.Capability — kept here as a separate struct so
+// the userconfig package stays self-contained (no import of
+// internal/agents/capability, which would invert the dependency).
+type HookCapability struct {
+	Supported bool   `json:"supported,omitempty"`
+	Verified  bool   `json:"verified,omitempty"`
+	ProbedAt  string `json:"probed_at,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Scope     string `json:"scope,omitempty"` // "bash+edit+mcp" | "shell-only" | "untested"
 }
 
 // ProvidersConfig groups per-provider-type instance lists. One type
@@ -122,6 +148,23 @@ type ProviderInstance struct {
 	Disabled   bool     `json:"disabled,omitempty"`
 	ExtraArgs  []string `json:"extra_args,omitempty"`
 	Env        []string `json:"env,omitempty"`
+
+	// Hooks captures the user's intent per hook event: "do you want
+	// wick to route this hook through the gate?". Keys are event
+	// names (PreToolUse for the command gate today; future events
+	// like SessionStart land as additional keys without schema
+	// churn). Absent / Enabled=false means the provider's own
+	// permission flow applies — no hook config gets installed on
+	// spawn.
+	Hooks map[string]HookInstanceConfig `json:"hooks,omitempty"`
+}
+
+// HookInstanceConfig is the user's stored intent for one hook event
+// on one provider instance. Kept as a struct (not just a bool) so we
+// can grow per-event knobs (mode, allowlist, per-tool override)
+// without another schema migration.
+type HookInstanceConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 func defaults() Config {

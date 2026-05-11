@@ -9,8 +9,19 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
+
+	// Blank-import each provider sub-package so its init() fires when
+	// the agents UI module loads. Without this, capability.Lookup
+	// returns (zero, false) for codex/gemini and the Test button
+	// errors with "provider not registered" even though the adapter
+	// code exists. Mirrors the cmd/gate/main.go pattern.
+	_ "github.com/yogasw/wick/internal/agents/provider/claude"
+	_ "github.com/yogasw/wick/internal/agents/provider/codex"
+	_ "github.com/yogasw/wick/internal/agents/provider/gemini"
+
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -33,6 +44,11 @@ func providersPage(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("providers probe: %s", err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	// Annotate in-flight probes so the UI can disable buttons while
+	// a background check is running. Cheap map lookup per row.
+	for i := range statuses {
+		statuses[i].Probing = capability.IsProbing(string(statuses[i].Instance.Type))
 	}
 
 	const perPage = 10
@@ -77,47 +93,139 @@ func providersPage(c *tool.Ctx) {
 	}))
 }
 
-// gateStatusVM converts the boot-time GateStatus into the view-model
-// + behaviour note. The note text is the operator-facing payoff: a
-// one-sentence summary of *what gets blocked* given the current
-// state. We compute it here (not in handler.go) so the wording stays
-// next to the UI it shows on.
+// gateStatusVM converts the boot-time GateStatus + the live master
+// switch into the view-model rendered by gateStatusCard. The Note
+// field carries the human payoff: a one-sentence summary of what
+// happens given the current state. We compute it here so the wording
+// stays next to the UI it shows on.
 func gateStatusVM() view.GateStatusVM {
 	s := GetGateStatus()
-	// Live override from config: the boot snapshot reflects what wick
-	// actually wired up at startup, but the toggle button writes to
-	// the configs table — so the card needs to mirror the live cell so
-	// the operator can confirm their click landed. Wiring still
-	// requires a restart (banner says so on the bool flip).
-	configEnabled := true
-	if globalConfigs != nil {
-		if v := globalConfigs.GetOwned("agents", "gate_enabled"); v != "" {
-			if b, err := strconv.ParseBool(v); err == nil {
-				configEnabled = b
-			}
-		}
-	}
-	bootEnabled := s.Enabled
-	enabled := configEnabled && s.Binary != ""
+	configEnabled := masterGateEnabled()
+	bypass := bypassPermissionsEnabled()
+	// Bypass trumps the master switch — the spawner strips hook configs
+	// when bypass is on, so the gate cannot enforce regardless of intent.
+	enabled := configEnabled && s.Binary != "" && !bypass
 	vm := view.GateStatusVM{
-		Enabled: enabled,
-		Binary:  s.Binary,
-		Source:  s.Source,
-		Reason:  s.Reason,
+		Enabled:      enabled,
+		Binary:       s.Binary,
+		Source:       s.Source,
+		Reason:       s.Reason,
+		BypassLocked: bypass,
 	}
 	switch {
-	case enabled && bootEnabled:
-		vm.Note = "Every Bash command goes through the gate sidecar. Whitelist + 'always allow' bypass the modal; everything else asks the user via the web UI. Auto-block on 25s timeout."
-	case enabled && !bootEnabled:
-		vm.Note = "Config now says gate is on, but the running process started with it off. Restart wick to wire the gate up."
-	case !enabled && bootEnabled:
-		vm.Note = "Config now says gate is off, but the running process is still gating. Restart wick so providers fall back to their own default permission handling."
+	case bypass:
+		vm.Note = "Bypass permissions is on in agents config — the gate is locked off. Spawns run unguarded so non-interactive channels (Slack/HTTP) don't hang on permission prompts. Turn bypass off in agents settings to use the gate."
+	case enabled:
+		vm.Note = "Master switch is on. Per-provider hooks installed for providers you've explicitly enabled below — others fall through to their own permission flow."
+	case configEnabled && s.Binary == "":
+		vm.Note = "Gate is on in config but the gate binary did not resolve. Run `wick build` so the sibling sidecar or embedded fallback is available."
 	case !configEnabled:
-		vm.Note = "Gate is off in config. Each provider falls back to its own default permission handling — for claude headless that means Bash calls hang/block since there is no UI to prompt. Turn the gate back on if you want interactive approval."
+		vm.Note = "Gate is off. No provider has hook configs installed — every provider falls back to its own default permission handling. Turn this on, then enable individual providers below to start gating."
 	default:
-		vm.Note = "Gate binary not resolved — every Bash command auto-blocks (fail-safe), except those matching a whitelist rule. Run `wick build` to produce both the sibling sidecar and the embedded fallback."
+		vm.Note = "Gate binary not resolved — turn the master switch on after running `wick build`."
 	}
 	return vm
+}
+
+// toggleGate flips the agents.gate_enabled master switch AND
+// cascades the new value into every per-provider Hooks[PreToolUse]
+// flag. When turning ON, it also kicks off a background capability
+// probe per provider so the UI badge reflects verified state without
+// the user clicking Test on each card.
+//
+// Cascade semantic — single source of truth lives in the per-instance
+// flag; the master toggle is a fan-out command, not a separate gate.
+// Effect:
+//
+//   - OFF→ON: flip every instance's Hooks[PreToolUse].Enabled = true,
+//     then spawn one goroutine per provider that runs the capability
+//     probe and persists the result. Provider whose probe fails has
+//     its Enabled flipped back to false so the spawner won't install
+//     a hook that wouldn't be honored.
+//
+//   - ON→OFF: flip every instance's Hooks[PreToolUse].Enabled = false.
+//     Capability state stays so re-enabling later doesn't lose the
+//     last probe result. Spawners see Enabled=false → no hook install.
+//
+// Effect is immediate — next spawn reads the live per-instance flag.
+func toggleGate(c *tool.Ctx) {
+	if globalConfigs == nil {
+		c.Error(http.StatusServiceUnavailable, "configs service not wired")
+		return
+	}
+	if bypassPermissionsEnabled() {
+		c.Error(http.StatusConflict, "bypass permissions is on — disable it in agents settings before toggling the gate")
+		return
+	}
+	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
+	next := !before
+
+	if err := globalConfigs.SetOwned(c.Context(), "agents", "gate_enabled", strconv.FormatBool(next)); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("toggle gate: %s", err.Error())
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Cascade into every configured instance + auto-seed default rows
+	// where the user hasn't created an instance yet. Iterate over the
+	// supported types so a fresh install (no user-saved instances)
+	// still ends up with the default <type>/<type> entries materialised.
+	all, _ := provider.Load()
+	for _, ins := range all {
+		_ = provider.SetHookEnabled(ins.Type, ins.Name, provider.HookEventPreToolUse, next)
+	}
+
+	// Background probe per provider when turning ON. Fire-and-forget
+	// goroutines: the page redirects immediately; results show up on
+	// the next render as the disk-persisted capability state.
+	if next {
+		go runBackgroundProbeAll()
+	}
+
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
+// runBackgroundProbeAll spawns one capability probe per configured
+// instance, persists each result, and rolls back the Enabled flag for
+// providers whose probe failed. Runs detached from the request so
+// the user gets the page back immediately while probes finish in 5–30s
+// each. New hooks added later (SessionStart etc.) plug in here without
+// changing the toggle flow.
+func runBackgroundProbeAll() {
+	all, err := provider.Load()
+	if err != nil {
+		log.Warn().Err(err).Msg("agents.gate.toggle: load providers for probe")
+		return
+	}
+	gateBin := GetGateStatus().Binary
+	if gateBin == "" {
+		log.Warn().Msg("agents.gate.toggle: gate binary unresolved, skipping background probe")
+		return
+	}
+	for _, ins := range all {
+		ins := ins
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			res := capability.HookCapabilityCheck(ctx, capability.CheckInput{
+				ProviderName: string(ins.Type),
+				GateBinary:   gateBin + " --probe-deny --provider=" + string(ins.Type),
+			})
+			provider.MergeHookCapability(ins.Type, ins.Name, provider.HookEventPreToolUse, provider.HookCapability{
+				Supported: res.HookSupported,
+				Verified:  res.HookVerified,
+				ProbedAt:  res.HookProbedAt,
+				Error:     res.HookError,
+				Scope:     res.InterceptScope,
+			})
+			// Roll back intent if the probe failed — leaving Enabled=true
+			// for a broken provider would silently disable its tooling
+			// (hook installed but provider ignores the deny envelope).
+			if !res.HookVerified {
+				_ = provider.SetHookEnabled(ins.Type, ins.Name, provider.HookEventPreToolUse, false)
+			}
+		}()
+	}
 }
 
 // saveProviderInstance creates or updates one named runtime instance
@@ -165,6 +273,28 @@ func deleteProviderInstance(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// masterGateEnabled reads agents.gate_enabled from configs. Defaults
+// to false so a fresh install with no row stays in the safest state
+// (no hook installation until the operator opts in).
+func masterGateEnabled() bool {
+	if globalConfigs == nil {
+		return false
+	}
+	b, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
+	return b
+}
+
+// bypassPermissionsEnabled reads agents.bypass_permissions. Bypass and
+// gate are mutually exclusive: when this is true the spawner strips the
+// hook config and runs unguarded, so the gate UI must surface the lock
+// rather than offering enable buttons that wouldn't take effect.
+func bypassPermissionsEnabled() bool {
+	if globalConfigs == nil {
+		return false
+	}
+	return globalConfigs.GetOwned("agents", "bypass_permissions") == "true"
+}
+
 // autoRescanEnabled reads agents.auto_rescan from configs. Defaults
 // to true when the row is empty so first-boot users get the standard
 // "stale cache → background re-probe" behaviour without ceremony.
@@ -175,27 +305,6 @@ func autoRescanEnabled() bool {
 	return globalConfigs.GetOwned("agents", "auto_rescan") != "false"
 }
 
-// toggleGate flips agents.gate_enabled in the configs table. The
-// new value takes effect on the next server boot — running sessions
-// keep their existing gate plumbing because Spawner state is
-// captured at Build time and the Spec/SocketPath are baked in.
-//
-// We surface that boot-required note in the redirect target (?gate=
-// query) so the page can render a hint without us touching JS.
-func toggleGate(c *tool.Ctx) {
-	if globalConfigs == nil {
-		c.Error(http.StatusServiceUnavailable, "configs service not wired")
-		return
-	}
-	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
-	next := strconv.FormatBool(!before)
-	if err := globalConfigs.SetOwned(c.Context(), "agents", "gate_enabled", next); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("toggle gate: %s", err.Error())
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
-}
 
 // rescanAllProviders forces a fresh path-scan + version probe for
 // every configured instance, persisting results to the cache. Used
@@ -264,6 +373,163 @@ func probeProviderGate(c *tool.Ctx) {
 	gateBin := GetGateStatus().Binary
 	res := gate.ProbeGateSupport(ctx, claudeBin, gateBin)
 	c.JSON(http.StatusOK, res)
+}
+
+// enableProviderHook runs the capability probe for one hook event,
+// and IF the probe verifies, flips the user's per-instance enable
+// intent so subsequent spawns install the hook config. Single-click
+// "enable" UX: user clicks Enable, wick probes + persists in one go;
+// on failure the intent stays off and the error surfaces inline.
+//
+// Path: POST /agents/providers/{type}/{name}/hooks/{event}/enable
+func enableProviderHook(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t, name, event, ok := parseHookParams(c)
+	if !ok {
+		return
+	}
+
+	// Defensive: refuse per-provider Enable while master switch is off
+	// or bypass mode is on. UI hides the button in either state, so
+	// reaching here means a direct curl / stale tab — surface the
+	// constraint as a 409 so the caller knows what's wrong.
+	if bypassPermissionsEnabled() {
+		c.JSON(http.StatusConflict, map[string]string{
+			"error": "bypass permissions is on — disable it in agents settings before enabling per-provider gates",
+		})
+		return
+	}
+	if !masterGateEnabled() {
+		c.JSON(http.StatusConflict, map[string]string{
+			"error": "master gate is off — turn the global Command Gate on before enabling individual providers",
+		})
+		return
+	}
+
+	res, hookCap := runCapabilityProbe(c, t)
+
+	// Persist capability snapshot regardless of outcome — UI badge
+	// reflects the probe state even when the user can't enable yet.
+	provider.MergeHookCapability(t, name, event, hookCap)
+
+	// Only flip the user's intent when the probe verified. A failed
+	// probe leaves intent off so a half-broken setup doesn't silently
+	// gate every future spawn.
+	if res.HookVerified {
+		if err := provider.SetHookEnabled(t, name, event, true); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, map[string]any{
+		"enabled":   res.HookVerified, // true iff probe passed AND intent persisted
+		"verified":  res.HookVerified,
+		"supported": res.HookSupported,
+		"probed_at": res.HookProbedAt.Format(time.RFC3339),
+		"error":     res.HookError,
+		"scope":     res.InterceptScope,
+		"event":     event,
+	})
+}
+
+// disableProviderHook flips the user's per-instance enable intent off
+// for one hook event. Does NOT re-probe — capability state untouched.
+//
+// Path: POST /agents/providers/{type}/{name}/hooks/{event}/disable
+func disableProviderHook(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t, name, event, ok := parseHookParams(c)
+	if !ok {
+		return
+	}
+	if err := provider.SetHookEnabled(t, name, event, false); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"enabled": false, "event": event})
+}
+
+// parseHookParams extracts and defaults the {type, name, event} path
+// params shared by all hook-capability handlers. Sends a 400 to the
+// client and returns ok=false when required params are missing.
+func parseHookParams(c *tool.Ctx) (t provider.Type, name, event string, ok bool) {
+	t = provider.Type(c.PathValue("type"))
+	name = c.PathValue("name")
+	event = c.PathValue("event")
+	if event == "" {
+		event = provider.HookEventPreToolUse
+	}
+	if t == "" || name == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "type and name required"})
+		return "", "", "", false
+	}
+	return t, name, event, true
+}
+
+// runCapabilityProbe is the shared probe path used by both /check and
+// /enable. Returns the raw probe result plus a provider.HookCapability
+// ready to feed into MergeHookCapability.
+func runCapabilityProbe(c *tool.Ctx, t provider.Type) (capability.CheckResult, provider.HookCapability) {
+	gateBin := GetGateStatus().Binary
+	res := capability.CheckResult{}
+	if gateBin != "" {
+		ctx, cancel := context.WithTimeout(c.Context(), 60*time.Second)
+		defer cancel()
+		res = capability.HookCapabilityCheck(ctx, capability.CheckInput{
+			ProviderName: string(t),
+			GateBinary:   gateBin + " --probe-deny --provider=" + string(t),
+		})
+	} else {
+		res.HookError = "gate binary not resolved — run `wick build`"
+	}
+	return res, provider.HookCapability{
+		Supported: res.HookSupported,
+		Verified:  res.HookVerified,
+		ProbedAt:  res.HookProbedAt,
+		Error:     res.HookError,
+		Scope:     res.InterceptScope,
+	}
+}
+
+// checkProviderHook runs the capability probe for one hook event on
+// one provider instance. The handler is provider-agnostic — it looks
+// up the registered Writer + Prober for the named provider, spawns
+// the binary in a throwaway workspace with a force-deny hook, and
+// reports whether the deny envelope was honored.
+//
+// Path: POST /agents/providers/{type}/{name}/hooks/{event}/check
+//
+// The result is merged into the persisted ProviderStatus so the next
+// page render reflects the verified state without re-probing. Empty
+// event defaults to PreToolUse (the command gate). The merge keeps
+// version/path fields intact — see provider.MergeHookCapability.
+// Unlike /enable, this handler does NOT change the user's intent
+// flag — it's a pure "did we verify the deny?" probe.
+func checkProviderHook(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t, name, event, ok := parseHookParams(c)
+	if !ok {
+		return
+	}
+
+	res, hookCap := runCapabilityProbe(c, t)
+	provider.MergeHookCapability(t, name, event, hookCap)
+
+	c.JSON(http.StatusOK, map[string]any{
+		"supported": res.HookSupported,
+		"verified":  res.HookVerified,
+		"probed_at": res.HookProbedAt.Format(time.RFC3339),
+		"error":     res.HookError,
+		"scope":     res.InterceptScope,
+		"event":     event,
+	})
 }
 
 // rescanOneProvider re-probes a single instance. Used by the per-card

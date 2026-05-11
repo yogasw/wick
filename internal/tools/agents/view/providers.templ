@@ -18,9 +18,9 @@ templ ProvidersPage(vm ProvidersVM) {
 				<div class="flex items-center gap-2">
 					<form method="POST" action={ templ.SafeURL(vm.Base + "/providers/auto-rescan/toggle") }>
 						if vm.AutoRescan {
-							<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" title="Auto-rescan stale entries every 24h. Click to disable.">Auto-rescan: on</button>
+							<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" data-tooltip="Auto-rescan stale entries every 24h. Click to disable.">Auto-rescan: on</button>
 						} else {
-							<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" title="Auto-rescan disabled — refresh manually only. Click to enable.">Auto-rescan: off</button>
+							<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" data-tooltip="Auto-rescan disabled — refresh manually only. Click to enable.">Auto-rescan: off</button>
 						}
 					</form>
 					<form method="POST" action={ templ.SafeURL(vm.Base + "/providers/rescan") }>
@@ -38,12 +38,12 @@ templ ProvidersPage(vm ProvidersVM) {
 				@statCard("Queued", fmt.Sprintf("%d", vm.PoolQueueLen), "amber")
 				@statCard("Configured", fmt.Sprintf("%d", len(vm.Statuses)), "default")
 			</div>
-			<!-- Command Gate status -->
+			<!-- Command Gate master switch -->
 			@gateStatusCard(vm.Gate, vm.Base)
 			<!-- Provider cards -->
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 				for _, st := range vm.Statuses {
-					@providerCard(vm.Base, st)
+					@providerCard(vm.Base, st, vm.Gate)
 				}
 			</div>
 			<!-- Recent spawns -->
@@ -114,16 +114,19 @@ templ ProvidersPage(vm ProvidersVM) {
 	}
 }
 
-// gateStatusCard renders the "Command Gate" health card. Two
-// states: enabled (green dot, binary path + source label) or
-// disabled (amber dot, reason + behavior fallback). Either way the
-// Note field carries the user-facing payoff so operators don't
-// have to guess what's allowed and what's blocked right now.
+// gateStatusCard renders the global Command Gate master switch. ON
+// means per-provider Hooks intents take effect; OFF disables every
+// hook installation regardless of per-instance state. The Note field
+// carries the operator-facing behavior summary.
 templ gateStatusCard(g GateStatusVM, base string) {
 	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
 		<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3 flex items-center justify-between gap-3">
 			<div class="flex items-center gap-2">
-				if g.Enabled {
+				if g.BypassLocked {
+					<span class="inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Command Gate</h2>
+					<span class="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white-100">locked (bypass)</span>
+				} else if g.Enabled {
 					<span class="inline-flex h-2 w-2 rounded-full bg-green-500"></span>
 					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Command Gate</h2>
 					<span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100">enabled</span>
@@ -137,13 +140,17 @@ templ gateStatusCard(g GateStatusVM, base string) {
 				if g.Source != "" {
 					<span class="font-mono text-xs text-black-700 dark:text-black-600">resolved via { g.Source }</span>
 				}
-				<form method="POST" action={ templ.SafeURL(base + "/providers/gate/toggle") }>
-					if g.Enabled {
-						<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Turn off</button>
-					} else {
-						<button type="submit" class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Turn on</button>
-					}
-				</form>
+				if g.BypassLocked {
+					<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-700 dark:text-black-600 opacity-60 cursor-not-allowed" data-tooltip="Disabled because bypass permissions is on. Turn bypass off in agents settings first.">Locked</button>
+				} else {
+					<form method="POST" action={ templ.SafeURL(base + "/providers/gate/toggle") }>
+						if g.Enabled {
+							<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Turn off</button>
+						} else {
+							<button type="submit" class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Turn on</button>
+						}
+					</form>
+				}
 			</div>
 		</div>
 		<div class="px-5 py-3 space-y-2 text-xs">
@@ -163,7 +170,7 @@ templ gateStatusCard(g GateStatusVM, base string) {
 	</div>
 }
 
-templ providerCard(base string, st provider.Status) {
+templ providerCard(base string, st provider.Status, gate GateStatusVM) {
 	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-3">
 		<div class="flex items-start justify-between gap-3">
 			<div>
@@ -180,17 +187,8 @@ templ providerCard(base string, st provider.Status) {
 			</div>
 			<div class="flex items-center gap-2">
 				<form method="POST" action={ templ.SafeURL(base + "/providers/rescan/" + string(st.Instance.Type) + "/" + st.Instance.Name) } class="text-xs">
-					<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" title="Re-probe this provider's binary + version">Rescan</button>
+					<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" data-tooltip="Re-probe this provider's binary + version">Rescan</button>
 				</form>
-				if st.Instance.Type == "claude" {
-					<button
-						type="button"
-						class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
-						title="Spawn this claude with a force-deny hook and check whether the deny envelope was honored. Takes 5–30s."
-						data-probe-gate
-						data-probe-url={ base + "/providers/probe-gate/" + string(st.Instance.Type) + "/" + st.Instance.Name }
-					>Test gate</button>
-				}
 				<form method="POST" action={ templ.SafeURL(base + "/providers") } class="text-xs">
 					<input type="hidden" name="type" value={ string(st.Instance.Type) }/>
 					<input type="hidden" name="name" value={ st.Instance.Name }/>
@@ -247,6 +245,7 @@ templ providerCard(base string, st provider.Status) {
 				</div>
 			}
 		</dl>
+		@hookCapabilitySection(base, st, gate)
 		if st.Instance.Name != string(st.Instance.Type) {
 			<div class="pt-2 border-t border-white-300 dark:border-navy-600">
 				<button
@@ -256,6 +255,88 @@ templ providerCard(base string, st provider.Status) {
 					class="text-xs text-red-600 dark:text-red-400 hover:underline"
 				>Delete instance</button>
 			</div>
+		}
+	</div>
+}
+
+// hookCapabilitySection renders the per-instance Command Gate
+// controls: status badge from the persisted capability probe + an
+// Enable / Disable / Test button trio. Enable runs the probe and
+// flips the user's intent in one click. Disable just flips intent
+// off. Test re-runs the probe without touching intent.
+templ hookCapabilitySection(base string, st provider.Status, gate GateStatusVM) {
+	{{ hc, _ := st.Hooks[provider.HookEventPreToolUse] }}
+	{{ intent := st.Instance.HookEnabled(provider.HookEventPreToolUse) }}
+	{{ urlBase := base + "/providers/" + string(st.Instance.Type) + "/" + st.Instance.Name + "/hooks/" + provider.HookEventPreToolUse }}
+	{{ masterOn := gate.Enabled }}
+	<div class="pt-3 border-t border-white-300 dark:border-navy-600 space-y-2">
+		<div class="flex items-center justify-between gap-2">
+			<div class="flex items-center gap-2 flex-wrap">
+				<span class="text-xs font-semibold text-black-900 dark:text-white-100">Command Gate</span>
+				if gate.BypassLocked {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600" data-tooltip="Bypass permissions is on — every spawn runs unguarded, the gate cannot enforce. Turn bypass off in agents settings to use the gate.">locked (bypass)</span>
+				} else if !masterOn {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600" data-tooltip="Master switch is off — per-provider controls disabled. Turn the global gate on first.">locked</span>
+				} else if st.Probing {
+					<span class="rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white-100 animate-pulse" data-tooltip="Capability probe in flight — refresh in a few seconds to see the result">testing…</span>
+				} else if intent && hc.Verified {
+					<span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100" data-tooltip="Hook installed every spawn; verified to honor deny">enabled ✓</span>
+				} else if intent && !hc.Verified {
+					<span class="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white-100" data-tooltip="Intent on but last probe failed — re-run Test or Disable">enabled (unverified)</span>
+				} else if hc.Verified {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600" data-tooltip="Probe passed; not enabled yet">ready</span>
+				} else {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">disabled</span>
+				}
+				if hc.Scope != "" {
+					<span class="text-xs text-black-700 dark:text-black-600">scope: { hc.Scope }</span>
+				}
+			</div>
+			if masterOn {
+				<div class="flex items-center gap-1">
+					if st.Probing {
+						<button
+							type="button"
+							class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-700 dark:text-black-600 opacity-60 cursor-not-allowed"
+							data-tooltip="A probe is already running for this provider"
+							data-tooltip-pos="bottom"
+							disabled
+						>Testing…</button>
+					} else if intent {
+						<button
+							type="button"
+							class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
+							data-tooltip="Re-run the capability probe without changing the enable state"
+							data-tooltip-pos="bottom"
+							data-check-hook
+							data-check-url={ urlBase + "/check" }
+						>Test</button>
+						<button
+							type="button"
+							class="rounded-lg border border-red-400 dark:border-red-700 px-2 py-1 text-xs text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+							data-tooltip="Stop installing the gate hook on this provider's spawns"
+							data-tooltip-pos="bottom"
+							data-hook-action
+							data-action-url={ urlBase + "/disable" }
+						>Disable</button>
+					} else {
+						<button
+							type="button"
+							class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600"
+							data-tooltip="Probe this provider's deny envelope, and on success install the gate hook on every spawn. Takes 5–30s."
+							data-tooltip-pos="bottom"
+							data-hook-action
+							data-action-url={ urlBase + "/enable" }
+						>Enable</button>
+					}
+				</div>
+			}
+		</div>
+		if hc.Error != "" {
+			<p class="font-mono text-xs text-red-600 dark:text-red-400 break-all">{ hc.Error }</p>
+		}
+		if !hc.ProbedAt.IsZero() {
+			<p class="font-mono text-xs text-black-700 dark:text-black-600">last probed: { hc.ProbedAt.Local().Format("2006-01-02 15:04:05") }</p>
 		}
 	</div>
 }

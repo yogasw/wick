@@ -8,11 +8,11 @@ A **channel** is where a message comes from. Wick agents are reachable from thre
 
 | Channel | Connection | Session key | Source |
 |---|---|---|---|
-| **Slack** | Socket Mode (default) or HTTP Event API | `thread_ts` | [`channels/slack.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack.go) |
-| **Telegram** | Long polling | `tg-<chatID>` | [`channels/telegram.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go) |
+| **Slack** | Socket Mode (default) or HTTP Event API | `thread_ts` | [`channels/slack/slack.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go) |
+| **Telegram** | Long polling | `tg-<chatID>` | [`channels/telegram/telegram.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go) |
 | **Web UI** | Direct HTTP + SSE | UUID minted by wick | [`internal/tools/agents/`](https://github.com/yogasw/wick/blob/master/internal/tools/agents) |
 
-All three implement the same `Channel` interface ([channel.go:22](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L22)) — the pool sees them uniformly via a `SendFunc`.
+All three implement the same `Channel` interface ([channel.go:59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L59)) — the pool sees them uniformly via a `SendFunc`. Wiring is handled by `*Registry` (not `server.go` directly); `channels/setup/` composers do the one-call boot assembly.
 
 ```
 ┌──────────┐  ┌────────────┐  ┌────────┐
@@ -20,6 +20,9 @@ All three implement the same `Channel` interface ([channel.go:22](https://github
 └────┬─────┘  └─────┬──────┘  └───┬────┘
      │              │             │
      └──────────────┼─────────────┘
+                    ▼
+              Registry.Add (auto-wires deps via setter interfaces)
+                    │
                     ▼
               SendFunc (pool.Send)
                     │
@@ -32,11 +35,13 @@ All three implement the same `Channel` interface ([channel.go:22](https://github
             Provider subprocess
                     │
                     ▼
-                AgentEvent ─────► back to channel (reactions / chunks / SSE)
+                AgentEvent ─────► Registry.DispatchAgentEvent ─► channels
 ```
 
 ::: info Source
-Channel interface: [`channel.go:22`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L22).
+Channel interface + types: [`channels/channel.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go).
+Registry + fan-out: [`channels/registry.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/registry.go).
+Setup composers: [`channels/setup/setup.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/setup/setup.go).
 DB-backed config store: [`channels/store.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/store.go).
 Web UI handler: [`internal/tools/agents/handler.go`](https://github.com/yogasw/wick/blob/master/internal/tools/agents/handler.go).
 :::
@@ -49,10 +54,23 @@ Every channel:
 2. Runs **access control** (channel-specific).
 3. Intercepts **meta-commands** (see [below](#meta-commands)) before they reach the agent.
 4. Calls `sendFn(ctx, sessionID, agentName, source, role, text)` to dispatch into the pool.
-5. Subscribes to agent events via `OnAgentEvent` to stream the reply back.
-6. Subscribes to gate approval requests via `OnApprovalRequest` for interactive Bash approval inside the channel.
+5. Receives agent events via `OnAgentEvent` to stream the reply back.
+6. Receives gate approval requests via `OnApprovalRequest` for interactive Bash approval inside the channel.
 
-The `Channel` interface itself ([channel.go:22-26](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L22)) is just `Name() string`, `Start(ctx) error`, `Stop()`. The lifecycle hooks (`OnAgentEvent`, `OnApprovalRequest`, `OnApprovalResolved`) are channel-specific and wired by `server.go` at boot.
+The `Channel` interface itself ([channel.go:59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L59)) requires only `Name() string`, `Start(ctx) error`, `Stop()`, `IsConfigured() bool`. Everything else is opt-in via setter and receiver interfaces that `Registry.Add` wires automatically via type assertion:
+
+| Interface | What it gives the channel |
+|---|---|
+| `SendFuncSetter` | Pool dispatch closure |
+| `SessionCheckerSetter` | Probe whether a session already exists (used for first-turn context injection) |
+| `SessionStartHookSetter` | Callback fired once on brand-new session |
+| `ApproveFnSetter` | Gate approval resolver (channel name pre-bound by registry) |
+| `PublicURLSetter` | Base URL for `/dashboard` meta-command replies |
+| `AgentEventReceiver` | `OnAgentEvent` — stream agent output back to the user |
+| `ApprovalReceiver` | `OnApprovalRequest` / `OnApprovalResolved` — render gate modal in channel |
+| `HTTPHandlerProvider` | Expose a webhook path (Slack HTTP mode) |
+
+Channels declare exactly the interfaces they need; unused ones are simply not implemented.
 
 ## Slack
 
@@ -69,7 +87,7 @@ The `Channel` interface itself ([channel.go:22-26](https://github.com/yogasw/wic
 | `socket` | **Default.** No public URL needed. Wick opens a Socket Mode connection to Slack and receives events over a websocket. | `BotToken` (`xoxb-`) + `AppToken` (`xapp-`) |
 | `http` | Webhook style. Slack POSTs events to your public URL; you sign with the signing secret. | `BotToken` + `SigningSecret` + a publicly reachable wick |
 
-Both are implemented in [`slack.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack.go); pick via the `Mode` config dropdown.
+Both are implemented in [`slack/slack.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go); pick via the `Mode` config dropdown.
 
 ### Session binding
 
@@ -77,7 +95,7 @@ Slack threads = wick sessions. The first message in a thread auto-creates a sess
 
 ### Reaction lifecycle
 
-The agent's progress is mirrored on the user's message ([slack.go:34-39](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack.go#L34)):
+The agent's progress is mirrored on the user's message ([slack.go:34-39](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L34)):
 
 | Reaction | Stage |
 |---|---|
@@ -89,7 +107,7 @@ The agent's progress is mirrored on the user's message ([slack.go:34-39](https:/
 
 ### Chunked reply
 
-Slack hard-limits messages to 4000 chars. Wick chunks at **3800** to leave 200 chars headroom for continuation markers ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack.go#L32)). Each chunk is a separate threaded reply.
+Slack hard-limits messages to 4000 chars. Wick chunks at **3800** to leave 200 chars headroom for continuation markers ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply.
 
 ### Access control
 
@@ -105,7 +123,7 @@ Checked per-message. No restart needed — see [hot-reload](#hot-reload).
 
 ### Hot-reload
 
-The Slack listener watches its config row in the `agent_channels` table every 30 seconds ([slack.go: `Reload`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack.go)). A hash diff over `AccessMode + AllowedUsers + AllowedGroups + tokens` triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
+Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is `Add`ed to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); it fingerprints `Mode + BotToken + AppToken + SigningSecret + pubURL + AccessMode + AllowedUsers + AllowedGroups`. When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
 
 ### Workspace selection
 
@@ -127,29 +145,29 @@ A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](h
 2. Paste the token into `/tools/agents/channels/telegram` → `BotToken`.
 3. Optional: list allowed chat IDs in `AllowedIDs` (kvlist). Empty = open to all chats the bot is added to.
 
-The token is validated at config-save time. Invalid token → channel stays in **dormant mode** (no listener, no error log spam) and re-validates on the next save ([telegram.go:99-117](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go#L99)).
+The token is validated at config-save time. Invalid token → channel stays in **dormant mode** (no listener, no error log spam) and re-validates on the next save ([telegram.go:99-117](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L99)).
 
 ### Session binding
 
-One Telegram chat = one wick session, keyed `tg-<chatID>` ([telegram.go:242](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go#L242)). The session lives across messages in that chat.
+One Telegram chat = one wick session, keyed `tg-<chatID>` ([telegram.go:242](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L242)). The session lives across messages in that chat.
 
 ::: warning Default workspace fallback
-When the Telegram config has no `Workspace` set, it falls back to the literal `"main"` ([telegram.go:262-265](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go#L262)), not the built-in `default` workspace. So if you set up Telegram on a fresh install with the default workspace only, the agent will fail to spawn until you either (a) create a workspace named `main`, or (b) set `Workspace` to `default` in the channel config.
+When the Telegram config has no `Workspace` set, it falls back to the literal `"main"` ([telegram.go:262-265](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L262)), not the built-in `default` workspace. So if you set up Telegram on a fresh install with the default workspace only, the agent will fail to spawn until you either (a) create a workspace named `main`, or (b) set `Workspace` to `default` in the channel config.
 :::
 
 ### Connection: long polling
 
-Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 60-second timeout ([telegram.go:158-175](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go#L158)). No public URL needed.
+Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 60-second timeout ([telegram.go:158-175](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L158)). No public URL needed. Hot-reload works the same way as Slack — [`telegram/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/source.go) fingerprints `BotToken + AllowedIDs + Workspace`; `Registry.WatchConfigs` calls `Reload` on change.
 
 ### Approvals via inline keyboard
 
-Gate approval requests appear as an inline-keyboard message in the chat. Buttons: **Approve once**, **Allow this session**, **Always**, **Block**. Telegram limits `callback_data` to 64 bytes, so wick stores the full gate fields server-side and sends only a short token in the button ([telegram.go:55-59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go#L55)).
+Gate approval requests appear as an inline-keyboard message in the chat. Buttons: **Approve once**, **Allow this session**, **Always**, **Block**. Telegram limits `callback_data` to 64 bytes, so wick stores the full gate fields server-side and sends only a short token in the button ([telegram.go:55-59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L55)).
 
 When you tap a button, the original approval message is **edited in place** to show the outcome — no spam in the chat history.
 
 ### Chunked reply
 
-Telegram caps messages at 4096 chars. Wick buffers all output and posts the full reply chunked on `Done` ([telegram.go:64-67](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram.go#L64)). Streaming text deltas don't post intermediate updates (Telegram has no equivalent of Slack's reaction lifecycle).
+Telegram caps messages at 4096 chars. Wick buffers all output and posts the full reply chunked on `Done` ([telegram.go:64-67](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L64)). Streaming text deltas don't post intermediate updates (Telegram has no equivalent of Slack's reaction lifecycle).
 
 ## Web UI
 
@@ -222,15 +240,15 @@ Channel configs live in `agent_channels` ([store.go](https://github.com/yogasw/w
 
 ## Adding a new channel
 
-The recipe for a hypothetical Discord channel:
+The recipe for a hypothetical Discord channel. `server.go` never changes after the setup hook is in place.
 
 1. **Config struct** in `internal/agents/config/discord.go` with `wick:"..."` tags.
-2. **Channel implementation** in `internal/agents/channels/discord.go` — implement `Channel`, mirror Slack/Telegram for `OnAgentEvent` / `OnApprovalRequest` plumbing.
-3. **DB load** helper in `channels/store.go`: `LoadDiscordConfig(db)`.
-4. **Wire-up** in `server.go`: `EnsureChannel(db, "discord")` at boot, construct + `Start` if configured.
+2. **Channel subpackage** `internal/agents/channels/discord/` — implement `Channel` + opt-in interfaces (`AgentEventReceiver`, `ApprovalReceiver`, …). Mirror `slack/` or `telegram/` for the `Reload` + `ConfigSource` pattern.
+3. **DB store** in `channels/store.go`: add `LoadDiscord` to `DBStore`, extend the `TelegramConfigStore`-style interface in `channel.go`.
+4. **Setup composer** in `channels/setup/setup.go`: add `Discord(reg, store, sendFn)` function + extend `All()` with one line.
 5. **UI handler** in `internal/tools/agents/channels_handler.go` — form save/load.
 
-The `Channel` interface itself doesn't change. The hard parts are the platform-specific bits: how messages stream back, how access control works, how approvals are rendered.
+The `Channel` interface itself doesn't change. The hard parts are the platform-specific bits: how messages stream back, how access control works, how approvals are rendered. The `Registry` wires everything else automatically.
 
 ## See also
 

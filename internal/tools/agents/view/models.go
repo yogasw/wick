@@ -161,6 +161,13 @@ type GateStatusVM struct {
 	Source  string // "sibling" | "embed" | "path" — debug aid
 	Reason  string // why disabled, when Enabled=false
 	Note    string // human-readable behavior summary; rendered as-is
+
+	// BypassLocked is true when agents.bypass_permissions=true. In that
+	// state the gate is forced off (spawner strips the hook config) and
+	// the UI must hide the toggle / per-provider enable buttons so the
+	// operator can't trigger no-op actions. Mutually exclusive with
+	// Enabled — never both true at once.
+	BypassLocked bool
 }
 
 // ProviderSpawnDetailVM holds data for one spawn-log file timeline.

@@ -96,6 +96,19 @@ type Options struct {
 
 	OnEvent func(event.AgentEvent)
 	OnExit  func(reason ExitReason)
+
+	// Instance is the per-instance config the spawner should consult
+	// every spawn (hook intent, env, …). Forwarded into SpawnOptions
+	// so the spawn package is the only place that reads the registry.
+	Instance *Instance
+	// GateBinary is the absolute path to <app>-gate, resolved once by
+	// the factory and threaded through every spawn so the spawner can
+	// write hook configs without re-resolving.
+	GateBinary string
+	// ExtraEnv merges into the subprocess env on every spawn. Used by
+	// per-channel transports (Slack, HTTP) that need to inject auth
+	// tokens or routing keys.
+	ExtraEnv []string
 }
 
 // New builds an Agent from Options. Doesn't spawn — call Start.
@@ -133,8 +146,11 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace: a.cfg.Workspace,
-		ResumeID:  a.resumeID,
+		Workspace:  a.cfg.Workspace,
+		ResumeID:   a.resumeID,
+		ExtraEnv:   a.cfg.ExtraEnv,
+		Instance:   a.cfg.Instance,
+		GateBinary: a.cfg.GateBinary,
 	})
 	if err != nil {
 		cancel()

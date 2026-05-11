@@ -28,6 +28,7 @@ import (
 	"os/exec"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -38,13 +39,19 @@ import (
 // via the Binary field for non-standard installs.
 type Spawner struct {
 	Binary string // empty → "claude"
-	// BypassPermissions forces --permission-mode bypassPermissions.
-	// Set ONLY when there is no gate to fall back on — for non-
-	// interactive channels (Slack/HTTP) where operator can't approve
-	// in a UI. When the gate is active, leave this false: claude
-	// 2.1.138+ bypasses PreToolUse hooks entirely under
-	// bypassPermissions, so flipping it kills the gate's deny
-	// envelope and every command runs.
+	// BypassPermissions forces --permission-mode bypassPermissions and
+	// disables the gate hook entirely for this spawn. Set ONLY for non-
+	// interactive channels (Slack/HTTP) where no human can answer a
+	// permission prompt and the operator has accepted unguarded
+	// execution. Mutually exclusive with the per-instance gate hook:
+	// applyHookConfig refuses to install the hook when this is true,
+	// and the Spawn argv only adds the flag when gateActive=false.
+	//
+	// Why mutually exclusive: claude 2.1.138+ fires PreToolUse hooks
+	// under bypassPermissions but ignores their deny envelope — every
+	// blocked command runs anyway. Pre-2.1.138 behaviour (flag skips
+	// hooks) flipped to (flag overrides deny). Either way, combining
+	// them gives the user gate alerts they can't enforce.
 	BypassPermissions bool
 	// ExtraArgs is appended after the canonical headless flags, before
 	// any caller-supplied ResumeID. Useful for tests / debugging
@@ -75,6 +82,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if bin == "" {
 		bin = "claude"
 	}
+
+	// Install / remove the per-workspace hook config from the user's
+	// per-instance intent. We do this every Spawn (not just the first)
+	// so toggling Enabled in the UI takes effect on the next spawn
+	// without restart, and toggling OFF correctly cleans up the stale
+	// hook config from the previous run.
+	gateActive := s.applyHookConfig(opt)
+
 	args := []string{
 		"-p",
 		"--verbose",
@@ -88,11 +103,19 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if opt.Workspace != "" {
 		args = append(args, "--add-dir", opt.Workspace)
 	}
-	if s.BypassPermissions {
-		// Gate is active (hook written to workspace .claude/settings.local.json)
-		// or operator requested bypass for non-interactive channel. Skip
-		// Claude's own permission UI; the gate PreToolUse hook is the
-		// sole allow/block authority.
+	// bypassPermissions and gate are mutually exclusive:
+	//
+	//   - gateActive=true  → DO NOT pass bypassPermissions. Claude
+	//     2.1.138+ ignores the gate's deny envelope when this flag is
+	//     set (hook still fires, but the tool runs anyway — verified
+	//     against `mkdir 125` regression). The gate hook is the sole
+	//     authority; claude defers to it without any extra flag.
+	//   - s.BypassPermissions=true (and gate off) → pass the flag.
+	//     Used by non-interactive channels (Slack/HTTP) where no human
+	//     can answer a permission prompt. applyHookConfig already
+	//     refuses to install the hook in this mode, so they never
+	//     coexist on a live spawn.
+	if !gateActive && s.BypassPermissions {
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)
@@ -155,6 +178,61 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		Str("bin", bin).
 		Msg("agents.spawn: started")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+}
+
+// applyHookConfig installs or removes the per-workspace hook config
+// based on the per-instance user intent for the PreToolUse event.
+// Returns true when the hook was (or already is) installed for this
+// spawn — the caller uses that signal to flip --permission-mode
+// bypassPermissions so claude defers all gating to the hook.
+//
+// Failure to install is a hard error in spirit but a soft one in
+// practice: we log and return false so the spawn still proceeds
+// without the gate rather than refusing to start the provider. The
+// alternative (fail spawn) would block every session whenever the
+// gate binary moved or .claude/ became unwritable, which is worse UX
+// than degraded enforcement that's visible in logs.
+func (s Spawner) applyHookConfig(opt provider.SpawnOptions) bool {
+	if opt.Workspace == "" {
+		return false
+	}
+	writer, ok := capability.LookupHookConfigWriter("claude")
+	if !ok {
+		// Adapter not registered — should never happen since
+		// claude/capability_init.go registers in init(). Defensive
+		// branch so a bad import graph degrades gracefully.
+		return false
+	}
+	// Bypass mode owns the spawn outright: claude is told to skip every
+	// permission prompt, so a gate hook would just emit alerts that the
+	// user can't (and shouldn't need to) answer. Strip any stale hook
+	// config from a previous gate-on spawn and run unguarded.
+	if s.BypassPermissions {
+		if err := writer.Remove(opt.Workspace); err != nil {
+			log.Warn().Err(err).Str("workspace", opt.Workspace).Msg("agents.spawn: claude hook config remove failed (bypass mode)")
+		}
+		return false
+	}
+	// Hook install gated solely on the per-instance flag. The master
+	// switch (when present) materialises into per-instance flags at
+	// toggle time — spawner stays simple, single source of truth lives
+	// in Instance.Hooks.
+	enabled := opt.Instance != nil && opt.Instance.HookEnabled(provider.HookEventPreToolUse)
+	if !enabled {
+		if err := writer.Remove(opt.Workspace); err != nil {
+			log.Warn().Err(err).Str("workspace", opt.Workspace).Msg("agents.spawn: claude hook config remove failed")
+		}
+		return false
+	}
+	if opt.GateBinary == "" {
+		log.Warn().Str("workspace", opt.Workspace).Msg("agents.spawn: claude hook requested but gate binary path empty — running without gate")
+		return false
+	}
+	if err := writer.Write(opt.Workspace, opt.GateBinary); err != nil {
+		log.Warn().Err(err).Str("workspace", opt.Workspace).Msg("agents.spawn: claude hook config write failed")
+		return false
+	}
+	return true
 }
 
 // tee returns a wrapped ReadCloser that mirrors all bytes into
