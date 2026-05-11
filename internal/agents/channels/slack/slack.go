@@ -284,13 +284,41 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 	switch outer.Type {
 	case slackevents.CallbackEvent:
 		switch ev := outer.InnerEvent.Data.(type) {
+		case *slackevents.AppMentionEvent:
+			if ev.BotID != "" {
+				return
+			}
+			s.handleMessage(ctx, &slackevents.MessageEvent{
+				Type:            ev.Type,
+				User:            ev.User,
+				Text:            stripBotMention(ev.Text),
+				TimeStamp:       ev.TimeStamp,
+				ThreadTimeStamp: ev.ThreadTimeStamp,
+				Channel:         ev.Channel,
+				ChannelType:     "channel",
+			})
 		case *slackevents.MessageEvent:
 			if ev.BotID != "" || ev.SubType != "" {
+				return
+			}
+			// only handle DMs without mention requirement
+			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
 				return
 			}
 			s.handleMessage(ctx, ev)
 		}
 	}
+}
+
+// stripBotMention removes the leading <@BOTID> mention Slack prepends to app_mention text.
+func stripBotMention(text string) string {
+	if !strings.HasPrefix(text, "<@") {
+		return text
+	}
+	if idx := strings.Index(text, ">"); idx != -1 {
+		return strings.TrimSpace(text[idx+1:])
+	}
+	return text
 }
 
 // HTTPHandler returns the webhook handler. Verifies HMAC-SHA256 + handles
