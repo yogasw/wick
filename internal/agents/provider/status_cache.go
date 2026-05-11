@@ -276,6 +276,9 @@ func RescanAll(ctx context.Context) []Status {
 			defer wg.Done()
 			st := Probe(ctx, all[i])
 			persistFromStatus(all[i].Type, all[i].Name, st)
+			probeCacheMu.Lock()
+			probeCache[probeCacheKey(all[i].Type, all[i].Name)] = probeCacheEntry{status: st, at: time.Now()}
+			probeCacheMu.Unlock()
 			out[i] = st
 		}()
 	}

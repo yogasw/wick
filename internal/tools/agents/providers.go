@@ -640,6 +640,28 @@ func providerChoices(ctx context.Context) []view.ProviderChoiceVM {
 	return out
 }
 
+// providerChoicesCached reads provider status from the persistent cache
+// (no subprocess probe). Used by pages that only need the provider list
+// for a form dropdown — accuracy of version/path is not critical there.
+func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
+	statuses, err := provider.LoadCached(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]view.ProviderChoiceVM, 0, len(statuses))
+	for _, st := range statuses {
+		if st.Instance.Disabled {
+			continue
+		}
+		out = append(out, view.ProviderChoiceVM{
+			Type:    string(st.Instance.Type),
+			Name:    st.Instance.Name,
+			Version: st.Version,
+		})
+	}
+	return out
+}
+
 func supportedTypeKeys() []string {
 	out := make([]string, 0, len(provider.SupportedTypes()))
 	for _, t := range provider.SupportedTypes() {

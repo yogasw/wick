@@ -261,7 +261,7 @@ func sessionsPage(c *tool.Ctx) {
 		Workspaces:    globalMgr.Registry().Workspaces(),
 		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
 		PresetList:    globalMgr.Registry().PresetNames(),
-		Providers:     providerChoices(c.Context()),
+		Providers:     providerChoicesCached(c.Context()),
 		Lifecycle:     lc,
 		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
 		Page:          page,
