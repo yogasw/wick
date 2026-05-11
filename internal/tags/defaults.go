@@ -51,6 +51,17 @@ var (
 		SortOrder:   40,
 	}
 
+	// Connector groups LLM-facing wick connectors (built-in and
+	// custom). Tagging a connector row with this tag drops it into the
+	// "Connector" group on the home page so the admin sees every
+	// connector instance under one heading.
+	Connector = tool.DefaultTag{
+		Name:        "Connector",
+		Description: "LLM-callable connectors that wrap external APIs.",
+		IsGroup:     true,
+		SortOrder:   50,
+	}
+
 	// Job groups background jobs that run on a cron schedule or are
 	// triggered manually.
 	Job = tool.DefaultTag{

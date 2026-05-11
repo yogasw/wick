@@ -2,10 +2,55 @@ package view
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
 )
+
+// HasHealthCheck reports whether a connector module registered a
+// HealthCheck hook. The detail page renders the "Check Permissions"
+// button only when this is true so connectors without a hook do not
+// expose a no-op action.
+func HasHealthCheck(mod connector.Module) bool {
+	return mod.HealthCheck != nil
+}
+
+// strings_Join is a templ-friendly alias for strings.Join. Templ does
+// not import packages used only inside `{ ... }` expressions, so going
+// through a same-package helper keeps the template clean.
+func strings_Join(parts []string, sep string) string { return strings.Join(parts, sep) }
+
+// HealthBanner is the data the row detail page renders right above the
+// Operations section after a health-check round-trip. Kind picks the
+// styling; the three slices show op transitions and granular errors.
+type HealthBanner struct {
+	Kind         string // "ok" | "err" — empty means no banner
+	ErrorMessage string
+	NewlyLocked  []string
+	NewlyCleared []string
+}
+
+// HealthBannerFromQuery decodes the redirect query params runConnectorHealthCheck
+// stamps onto the detail-page URL. Returns a zero-value banner (no
+// render) when the page was opened without health-check params.
+func HealthBannerFromQuery(q url.Values) HealthBanner {
+	if msg := q.Get("health_err"); msg != "" {
+		return HealthBanner{Kind: "err", ErrorMessage: msg}
+	}
+	if q.Get("health_ok") == "" {
+		return HealthBanner{}
+	}
+	b := HealthBanner{Kind: "ok"}
+	if v := q.Get("health_locked"); v != "" {
+		b.NewlyLocked = strings.Split(v, ",")
+	}
+	if v := q.Get("health_cleared"); v != "" {
+		b.NewlyCleared = strings.Split(v, ",")
+	}
+	return b
+}
 
 // cfgInputClass is the shared Tailwind class string for all block-form
 // text-like inputs (text, email, url, number, date, etc.).

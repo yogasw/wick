@@ -619,7 +619,9 @@ func NewServer() *Server {
 	// Register connectors as items. One module = one card; the card
 	// links to the manager list page where users see N rows for that
 	// definition (one per credential set), each with a test panel and
-	// enable/disable/duplicate actions.
+	// enable/disable/duplicate actions. DefaultTags propagate so the
+	// generic seed loop below attaches them to the card's path, which
+	// is what the home page renders.
 	for _, cm := range connectors.All() {
 		m := cm.Meta
 		allItems = append(allItems, tool.Tool{
@@ -629,6 +631,7 @@ func NewServer() *Server {
 			Path:              "/manager/connectors/" + m.Key,
 			Category:          "connector",
 			DefaultVisibility: entity.VisibilityPrivate,
+			DefaultTags:       m.DefaultTags,
 		})
 	}
 

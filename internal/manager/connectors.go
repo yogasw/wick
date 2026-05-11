@@ -33,6 +33,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}", auth(h.toggleConnectorOperation))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.toggleOperationAdminOnly))
+	mux.Handle("POST /manager/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
 	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(h.connectorTestPage))
 	mux.Handle("POST /manager/connectors/{key}/{id}/test", auth(h.testConnectorOperation))
 	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(h.connectorHistoryPage))
@@ -135,10 +136,10 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	configs := h.connectors.RowConfigs(*row)
-	opStates, _ := h.connectors.OperationStates(ctx, row.ID, row.Key)
+	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
-	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user).Render(ctx, w)
+	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}).Render(ctx, w)
 }
 
 // connectorTestPage renders the standalone Postman-style test surface
@@ -432,6 +433,50 @@ func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
+
+// runConnectorHealthCheck invokes the connector module's HealthCheck
+// hook for one row and lets the service reconcile system_disabled flags
+// against the report. Returns a JSON summary so the row page can update
+// the banner + op rows inline without a full reload. The button in the
+// template fetches this endpoint with `Accept: application/json`.
+func (h *Handler) runConnectorHealthCheck(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	result, err := h.connectors.RunHealthCheck(ctx, row.ID)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+	states, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
+	opsOut := make(map[string]map[string]any, len(states))
+	for k, st := range states {
+		opsOut[k] = map[string]any{
+			"enabled":         st.Enabled,
+			"system_disabled": st.SystemDisabled,
+			"reason":          st.SystemDisabledReason,
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":            true,
+		"newly_locked":  result.NewlyLocked,
+		"newly_cleared": result.NewlyCleared,
+		"ops":           opsOut,
+	})
 }
 
 func (h *Handler) toggleOperationAdminOnly(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package view
 import (
 	"fmt"
 
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -11,7 +12,7 @@ import (
 // Identity (label + actions), credentials, and the operations table.
 // Test runs and run history live on dedicated sibling pages reached via
 // the per-operation action links — keeps this page focused on settings.
-templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]bool, editKey string, user *entity.User) {
+templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner) {
 	@Layout("Manager · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -57,9 +58,30 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 				</form>
 			</section>
 
+			if HasHealthCheck(mod) {
+				<div id="health-banner" class="mt-6 hidden"></div>
+			}
+
 			<!-- Credentials / configs -->
 			<section class="mt-8">
-				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
+				<div class="flex items-center justify-between gap-3">
+					<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
+					if HasHealthCheck(mod) {
+						<button
+							id="health-check-btn"
+							type="button"
+							data-health-url={ "/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/health-check" }
+							class="inline-flex items-center gap-2 rounded-lg border border-green-500 px-3 py-1.5 text-xs font-medium text-green-600 hover:bg-green-50 disabled:opacity-60 disabled:cursor-not-allowed dark:border-green-400 dark:text-green-400 dark:hover:bg-navy-600"
+							title="Probe upstream with the current credentials and toggle each operation on or off based on which permissions are granted. Some integrations take a few seconds."
+						>
+							<svg id="health-check-spinner" class="hidden h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+								<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"></circle>
+								<path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+							</svg>
+							<span id="health-check-label">Check Permissions</span>
+						</button>
+					}
+				</div>
 				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
 					Per-row values shared by every operation on this connector. Read in handler code via <code class="font-mono text-xs">c.Cfg(...)</code>.
 				</p>
@@ -109,7 +131,7 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 									<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Enabled</th>
 								</tr>
 							</thead>
-							<tbody>
+							<tbody id="ops-tbody">
 								for _, op := range mod.Operations {
 									@operationRow(mod.Meta.Key, row.ID, op, opStates[op.Key])
 								}
@@ -118,11 +140,116 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 					</div>
 				}
 			</section>
+
+			if HasHealthCheck(mod) {
+				@healthCheckScript()
+			}
 		</main>
 	}
 }
 
-templ operationRow(key, rowID string, op connector.Operation, enabled bool) {
+templ healthCheckScript() {
+	<script>
+	(function(){
+		var btn = document.getElementById('health-check-btn');
+		if(!btn) return;
+		var spinner = document.getElementById('health-check-spinner');
+		var label = document.getElementById('health-check-label');
+		var banner = document.getElementById('health-banner');
+		var url = btn.getAttribute('data-health-url');
+
+		function setLoading(on){
+			btn.disabled = on;
+			spinner.classList.toggle('hidden', !on);
+			label.textContent = on ? 'Checking…' : 'Check Permissions';
+		}
+
+		function showError(msg){
+			banner.className = 'mt-6 rounded-xl border border-neg-300 bg-neg-100 px-4 py-3 text-sm text-neg-400';
+			banner.innerHTML = '<strong>Permission check failed:</strong> ' + escapeHTML(msg);
+		}
+
+		function showOK(res){
+			var parts = ['<strong>Permission check complete.</strong>'];
+			if(res.newly_locked && res.newly_locked.length){
+				parts.push(' System-disabled: <code class="font-mono text-xs">' + escapeHTML(res.newly_locked.join(', ')) + '</code>.');
+			}
+			if(res.newly_cleared && res.newly_cleared.length){
+				parts.push(' Cleared: <code class="font-mono text-xs">' + escapeHTML(res.newly_cleared.join(', ')) + '</code>.');
+			}
+			if((!res.newly_locked || !res.newly_locked.length) && (!res.newly_cleared || !res.newly_cleared.length)){
+				parts.push(' No changes — every operation has the permissions it needs.');
+			}
+			banner.className = 'mt-6 rounded-xl border border-pos-300 bg-pos-100 px-4 py-3 text-sm text-pos-400';
+			banner.innerHTML = parts.join('');
+			applyOpStates(res.ops || {});
+		}
+
+		function applyOpStates(ops){
+			Object.keys(ops).forEach(function(opKey){
+				var cell = document.querySelector('[data-op-cell="' + cssEscape(opKey) + '"]');
+				if(!cell) return;
+				cell.innerHTML = renderOpCell(opKey, ops[opKey], cell.getAttribute('data-form-action'));
+			});
+		}
+
+		function renderOpCell(opKey, st, formAction){
+			if(st.system_disabled){
+				var reason = st.reason || '';
+				return '<div class="inline-flex flex-col items-end gap-1">' +
+					'<span class="inline-flex items-center gap-1 rounded-lg border border-neg-300 bg-neg-100 px-3 py-1.5 text-xs font-medium text-neg-400 cursor-not-allowed" title="' + escapeAttr('System-disabled — ' + reason + '. Re-run Check Permissions after fixing the upstream permission.') + '">🔒 System-disabled</span>' +
+					(reason ? '<span class="text-[10px] text-neg-400 max-w-[12rem] truncate" title="' + escapeAttr(reason) + '">' + escapeHTML(reason) + '</span>' : '') +
+					'</div>';
+			}
+			var action = formAction || '';
+			if(st.enabled){
+				return '<form method="POST" action="' + escapeAttr(action) + '">' +
+					'<input type="hidden" name="enabled" value="false"/>' +
+					'<button type="submit" class="rounded-lg border border-prog-300 px-3 py-1.5 text-xs font-medium text-prog-400 hover:bg-prog-100">Disable</button>' +
+					'</form>';
+			}
+			return '<form method="POST" action="' + escapeAttr(action) + '">' +
+				'<input type="hidden" name="enabled" value="true"/>' +
+				'<button type="submit" class="rounded-lg border border-pos-300 px-3 py-1.5 text-xs font-medium text-pos-400 hover:bg-pos-100">Enable</button>' +
+				'</form>';
+		}
+
+		function escapeHTML(s){
+			return String(s == null ? '' : s)
+				.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+				.replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+		}
+		function escapeAttr(s){ return escapeHTML(s); }
+		function cssEscape(s){ return String(s).replace(/[^a-zA-Z0-9_-]/g, '_'); }
+
+		btn.addEventListener('click', function(){
+			setLoading(true);
+			banner.classList.remove('hidden');
+			banner.className = 'mt-6 rounded-xl border border-prog-300 bg-prog-100 px-4 py-3 text-sm text-prog-400';
+			banner.textContent = 'Running permission check… some integrations take a few seconds.';
+			fetch(url, {
+				method: 'POST',
+				headers: {'Accept': 'application/json'},
+				credentials: 'same-origin',
+			}).then(function(r){
+				return r.json().then(function(body){ return {status:r.status, body:body}; });
+			}).then(function(res){
+				setLoading(false);
+				if(!res.body || res.body.ok === false){
+					showError((res.body && res.body.error) || ('HTTP ' + res.status));
+					return;
+				}
+				showOK(res.body);
+			}).catch(function(err){
+				setLoading(false);
+				showError(err && err.message ? err.message : 'Network error');
+			});
+		});
+	})();
+	</script>
+}
+
+templ operationRow(key, rowID string, op connector.Operation, st connectors.OpState) {
 	<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 align-top">
 		<td class="px-4 py-3">
 			<div class="flex items-center gap-2">
@@ -146,16 +273,34 @@ templ operationRow(key, rowID string, op connector.Operation, enabled bool) {
 				>History</a>
 			</div>
 		</td>
-		<td class="px-4 py-3 text-right">
-			<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + rowID + "/operations/" + op.Key) }>
-				if enabled {
-					<input type="hidden" name="enabled" value="false"/>
-					<button type="submit" class="rounded-lg border border-prog-300 px-3 py-1.5 text-xs font-medium text-prog-400 hover:bg-prog-100">Disable</button>
-				} else {
-					<input type="hidden" name="enabled" value="true"/>
-					<button type="submit" class="rounded-lg border border-pos-300 px-3 py-1.5 text-xs font-medium text-pos-400 hover:bg-pos-100">Enable</button>
-				}
-			</form>
+		<td
+			class="px-4 py-3 text-right"
+			data-op-cell={ op.Key }
+			data-form-action={ "/manager/connectors/" + key + "/" + rowID + "/operations/" + op.Key }
+		>
+			if st.SystemDisabled {
+				<div class="inline-flex flex-col items-end gap-1">
+					<span
+						class="inline-flex items-center gap-1 rounded-lg border border-neg-300 bg-neg-100 px-3 py-1.5 text-xs font-medium text-neg-400 cursor-not-allowed"
+						title={ "System-disabled — " + st.SystemDisabledReason + ". Re-run Check Permissions after fixing the upstream permission." }
+					>
+						🔒 System-disabled
+					</span>
+					if st.SystemDisabledReason != "" {
+						<span class="text-[10px] text-neg-400 max-w-[12rem] truncate" title={ st.SystemDisabledReason }>{ st.SystemDisabledReason }</span>
+					}
+				</div>
+			} else {
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/" + key + "/" + rowID + "/operations/" + op.Key) }>
+					if st.Enabled {
+						<input type="hidden" name="enabled" value="false"/>
+						<button type="submit" class="rounded-lg border border-prog-300 px-3 py-1.5 text-xs font-medium text-prog-400 hover:bg-prog-100">Disable</button>
+					} else {
+						<input type="hidden" name="enabled" value="true"/>
+						<button type="submit" class="rounded-lg border border-pos-300 px-3 py-1.5 text-xs font-medium text-pos-400 hover:bg-pos-100">Enable</button>
+					}
+				</form>
+			}
 		</td>
 	</tr>
 }

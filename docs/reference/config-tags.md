@@ -66,6 +66,7 @@ type Config struct {
 | `regen` | Shows a regenerate button in admin UI — key must have a registered generator |
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Pure presentation hint — value is still seeded / saved normally. |
+| `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
 
 ## Key derivation
 
