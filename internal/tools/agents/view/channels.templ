@@ -17,12 +17,14 @@ type ChannelVM struct {
 
 // ChannelListVM is the view model for the Channels index page.
 type ChannelListVM struct {
+	Layout   AgentsLayoutVM
 	Base     string
 	Channels []ChannelVM
 }
 
 // ChannelConfigVM is the view model for a single channel's config page.
 type ChannelConfigVM struct {
+	Layout      AgentsLayoutVM
 	Base        string
 	ChannelName string
 	ChannelSlug string
@@ -32,8 +34,8 @@ type ChannelConfigVM struct {
 
 // ChannelListPage shows available channels as cards.
 templ ChannelListPage(vm ChannelListVM) {
-	@AgentsLayout(vm.Base, "channels") {
-		<div class="max-w-2xl">
+	@AgentsLayout(vm.Layout) {
+		<div class="max-w-3xl">
 			<h1 class="text-xl font-semibold text-black-900 dark:text-white-100 mb-1">Channels</h1>
 			<p class="text-sm text-black-700 dark:text-black-600 mb-6">
 				Connect messaging platforms so agents can receive tasks and reply in threads.
@@ -72,8 +74,8 @@ templ channelCard(ch ChannelVM) {
 
 // ChannelConfigPage shows config fields for one channel.
 templ ChannelConfigPage(vm ChannelConfigVM) {
-	@AgentsLayout(vm.Base, "channels") {
-		<div class="max-w-2xl">
+	@AgentsLayout(vm.Layout) {
+		<div class="max-w-3xl">
 			<nav class="flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 mb-4">
 				<a href={ templ.SafeURL(vm.Base + "/channels") } class="hover:text-green-600 transition-colors">Channels</a>
 				<span>›</span>

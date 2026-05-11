@@ -88,6 +88,7 @@ func RegisterBuiltins() {
 			Category:          "AI",
 			DefaultVisibility: entity.VisibilityPrivate,
 			DefaultTags:       []tool.DefaultTag{tags.AI},
+			FullScreen:        true,
 		},
 		Configs:  agentsConfigs,
 		Register: agentstool.Register,

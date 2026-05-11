@@ -834,8 +834,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	httpSrv := http.Server{
 		Addr:         addr,
 		Handler:      h,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		ReadHeaderTimeout: 30 * time.Second,
+		// ReadTimeout and WriteTimeout unset — SSE connections stay open
+		// indefinitely and must not be cut by server-side timeouts.
 		// BaseContext propagates the caller's logger (tray injects
 		// serverLogger here) into every request context. Without this,
 		// r.Context() defaults to context.Background() and middleware's

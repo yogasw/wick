@@ -47,6 +47,11 @@ type Tool struct {
 	// skips linking so an admin who unlinks a tag won't see it return on
 	// the next restart.
 	DefaultTags []DefaultTag `json:"-"`
+	// FullScreen opts this tool into full-viewport layout: the ToolHeader
+	// title bar is hidden, the content area expands edge-to-edge (no
+	// max-w-container padding), and the tool owns its own internal
+	// navigation. All other tools keep the standard constrained layout.
+	FullScreen bool `json:"-"`
 }
 
 // DefaultTag is the spec used by Tool.DefaultTags to seed tags on startup.

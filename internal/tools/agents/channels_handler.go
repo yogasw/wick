@@ -62,7 +62,7 @@ func channelsPage(c *tool.Ctx) {
 			channels[i].Configured = m["bot_token"] != ""
 		}
 	}
-	c.HTML(view.ChannelListPage(view.ChannelListVM{Base: base, Channels: channels}))
+	c.HTML(view.ChannelListPage(view.ChannelListVM{Layout: sidebarVM(c, "channels", ""), Base: base, Channels: channels}))
 }
 
 // slackChannelPage renders the Slack channel config form.
@@ -72,6 +72,7 @@ func slackChannelPage(c *tool.Ctx) {
 	}
 	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "workspace")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
+		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
 		ChannelName: "Slack",
 		ChannelSlug: "slack",
@@ -87,6 +88,7 @@ func telegramChannelPage(c *tool.Ctx) {
 	}
 	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "workspace")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
+		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
 		ChannelName: "Telegram",
 		ChannelSlug: "telegram",

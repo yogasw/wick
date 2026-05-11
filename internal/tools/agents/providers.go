@@ -79,6 +79,7 @@ func providersPage(c *tool.Ctx) {
 	}
 
 	c.HTML(view.ProvidersPage(view.ProvidersVM{
+		Layout:        sidebarVM(c, "providers", ""),
 		Base:          c.Base(),
 		Statuses:      statuses,
 		Spawns:        spawns,
@@ -599,6 +600,7 @@ func providerSpawnDetail(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.ProviderSpawnDetail(view.ProviderSpawnDetailVM{
+		Layout: sidebarVM(c, "providers", ""),
 		Base:   c.Base(),
 		File:   meta,
 		Events: events,

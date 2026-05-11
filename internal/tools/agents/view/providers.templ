@@ -11,7 +11,7 @@ import (
 // cards, pool capacity, and recent spawn logs. Static — user reloads
 // to refresh.
 templ ProvidersPage(vm ProvidersVM) {
-	@AgentsLayout(vm.Base, "providers") {
+	@AgentsLayout(vm.Layout) {
 		<div class="space-y-6">
 			<div class="flex items-center justify-between gap-3">
 				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Providers</h1>
@@ -381,7 +381,7 @@ templ addProviderModal(vm ProvidersVM) {
 
 // ProviderSpawnDetail renders the event timeline of one spawn log file.
 templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
-	@AgentsLayout(vm.Base, "providers") {
+	@AgentsLayout(vm.Layout) {
 		<div class="space-y-6">
 			<div class="flex items-center justify-between">
 				<div>

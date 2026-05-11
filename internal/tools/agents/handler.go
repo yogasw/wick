@@ -115,6 +115,7 @@ func Register(r tool.Router) {
 
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
+	r.POST("/sessions/quick", createSessionQuick)
 	r.GET("/sessions/{id}", sessionDetail)
 	r.POST("/sessions/{id}/send", sendMessage)
 	r.POST("/sessions/{id}/kill", killAgent)
@@ -162,7 +163,89 @@ func Register(r tool.Router) {
 	r.GET("/channels/telegram", telegramChannelPage)
 	r.POST("/channels/telegram/{key}", makeChannelSaveHandler("telegram"))
 
+	r.GET("/settings", settingsPage)
+
 	r.GET("/stream", streamSSE)
+}
+
+func settingsPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	rows := globalConfigs.ListOwned("agents")
+	c.HTML(view.SettingsPage(view.SettingsVM{
+		Layout: sidebarVM(c, "settings", ""),
+		Base:   c.Base(),
+		Rows:   rows,
+	}))
+}
+
+// sidebarVM builds AgentsLayoutVM for the sidebar session list.
+// activeSessionID is set on session detail pages to highlight the current row.
+func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayoutVM {
+	const sidebarCap = 15
+	allIDs := globalMgr.Registry().SessionIDs()
+	ids := allIDs
+	if len(ids) > sidebarCap {
+		ids = ids[:sidebarCap]
+	}
+	lc := make(map[string]view.SessionLifecycleVM)
+	for _, e := range globalPool.ActiveSnapshot() {
+		entry := view.SessionLifecycleVM{Lifecycle: e.Lifecycle, PID: e.PID}
+		if !e.LastActive.IsZero() {
+			entry.LastActiveMs = e.LastActive.UnixMilli()
+		}
+		lc[e.SessionID] = entry
+	}
+	// Read labels concurrently — buffered channel = no goroutine leak.
+	type result struct{ id, label string }
+	ch := make(chan result, len(ids)) // buffered: goroutines never block
+	for _, id := range ids {
+		id := id
+		go func() { ch <- result{id, loadFirstUserMessage(globalLayout, id, 40)} }()
+	}
+	labels := make(map[string]string, len(ids))
+	for range ids {
+		r := <-ch
+		labels[r.id] = r.label
+	}
+	close(ch)
+	return view.AgentsLayoutVM{
+		Base:             c.Base(),
+		ActivePage:       activePage,
+		SidebarIDs:       ids,
+		SidebarSessions:  globalMgr.Registry().Sessions(),
+		SidebarLifecycle: lc,
+		SidebarLabels:    labels,
+		ActiveSessionID:  activeSessionID,
+		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
+	}
+}
+
+// createSessionQuick creates a session with defaults (no form) and redirects.
+func createSessionQuick(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	prov := "claude"
+	// Use first healthy provider if available
+	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+		prov = ps[0].Type
+	}
+	id := uuid.New().String()
+	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+		ID:     id,
+		Origin: session.OriginUI,
+	})
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := globalMgr.AddAgent(id, "main", prov); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
 
 // ── guards ────────────────────────────────────────────────────────────
@@ -211,6 +294,7 @@ func overviewPage(c *tool.Ctx) {
 		}
 	}
 	c.HTML(view.Overview(view.OverviewVM{
+		Layout:        sidebarVM(c, "overview", ""),
 		Base:          c.Base(),
 		Active:        globalPool.Active(),
 		QueueLen:      globalPool.QueueLen(),
@@ -254,10 +338,17 @@ func sessionsPage(c *tool.Ctx) {
 		}
 		lc[e.SessionID] = entry
 	}
+	pageIDs := ids[start:end]
+	pageLabels := make(map[string]string, len(pageIDs))
+	for _, id := range pageIDs {
+		pageLabels[id] = loadFirstUserMessage(globalLayout, id, 60)
+	}
 	c.HTML(view.SessionsList(view.SessionsListVM{
+		Layout:        sidebarVM(c, "sessions", ""),
 		Base:          c.Base(),
-		IDs:           ids[start:end],
+		IDs:           pageIDs,
 		Sessions:      globalMgr.Registry().Sessions(),
+		Labels:        pageLabels,
 		Workspaces:    globalMgr.Registry().Workspaces(),
 		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
 		PresetList:    globalMgr.Registry().PresetNames(),
@@ -337,6 +428,7 @@ func sessionDetail(c *tool.Ctx) {
 	}
 	gs := GetGateStatus()
 	vm := view.SessionDetailVM{
+		Layout:        sidebarVM(c, "sessions", id),
 		Base:          c.Base(),
 		Session:       sess,
 		Tab:           tab,
@@ -473,6 +565,7 @@ func workspacesPage(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.WorkspacesPage(view.WorkspacesVM{
+		Layout:        sidebarVM(c, "workspaces", ""),
 		Base:          c.Base(),
 		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
 		Workspaces:    globalMgr.Registry().Workspaces(),
@@ -556,8 +649,9 @@ func presetsPage(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.PresetsPage(view.PresetsVM{
-		Base:  c.Base(),
-		Names: globalMgr.Registry().PresetNames(),
+		Layout: sidebarVM(c, "presets", ""),
+		Base:   c.Base(),
+		Names:  globalMgr.Registry().PresetNames(),
 	}))
 }
 
@@ -572,9 +666,10 @@ func presetDetail(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.PresetEditor(view.PresetDetailVM{
-		Base: c.Base(),
-		Name: p.Name,
-		Body: p.Body,
+		Layout: sidebarVM(c, "presets", ""),
+		Base:   c.Base(),
+		Name:   p.Name,
+		Body:   p.Body,
 	}))
 }
 
@@ -652,6 +747,11 @@ func streamSSE(c *tool.Ctx) {
 	defer keepalive.Stop()
 
 	flush := func() { _ = rc.Flush() }
+
+	// Immediately confirm the connection is alive so the browser doesn't
+	// wait up to 15 s for the first keepalive tick.
+	fmt.Fprintf(w, ": connected\n\n")
+	flush()
 
 	for {
 		select {
