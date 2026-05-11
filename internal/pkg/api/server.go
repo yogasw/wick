@@ -455,11 +455,16 @@ func NewServer() *Server {
 		}
 	}
 
+	// PAT service is needed by the REST channel (per-request Bearer auth).
+	// Instantiated here so channelsetup.All can pass it in; the handler
+	// further below reuses the same instance.
+	tokensSvc := accesstoken.NewServiceFromDB(db)
+
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
 	// Adding a new channel = subpackage + composer in channels/setup; this
 	// line never changes.
-	channelsetup.All(channelReg, agentchannels.NewDBStore(db), sendFnFor)
+	channelsetup.All(channelReg, agentchannels.NewDBStore(db), sendFnFor, tokensSvc)
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
@@ -503,7 +508,7 @@ func NewServer() *Server {
 	}
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
-	tokensSvc := accesstoken.NewServiceFromDB(db)
+	// tokensSvc instantiated earlier so the REST channel can reuse it.
 	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
 
 	// ── OAuth 2.1 server (issues bearer tokens for MCP) ──────────

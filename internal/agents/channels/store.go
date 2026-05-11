@@ -96,13 +96,17 @@ func SetChannelConfigKey(db *gorm.DB, channelType, key, value string) error {
 	if err != nil {
 		return err
 	}
-	// enabled mirrors whether a bot_token is present — the UI reads this
-	// for the "Configured" badge. Any channel type that uses a different
-	// primary credential key (not "bot_token") must override this field
-	// after calling SetChannelConfigKey.
+	// enabled mirrors whether the primary credential is present. Default
+	// signal is a non-empty "bot_token"; channels with no per-instance
+	// token (e.g. REST, which authenticates via PAT per request) use an
+	// explicit "enabled" key in the JSON config instead.
+	enabled := m["bot_token"] != ""
+	if _, hasEnabled := m["enabled"]; hasEnabled {
+		enabled = m["enabled"] == "true"
+	}
 	return db.Model(&ch).Updates(map[string]interface{}{
 		"config":     string(data),
-		"enabled":    m["bot_token"] != "",
+		"enabled":    enabled,
 		"updated_at": time.Now(),
 	}).Error
 }
@@ -141,6 +145,18 @@ func LoadTelegramConfig(db *gorm.DB) (agentconfig.TelegramChannelConfig, error) 
 	}, nil
 }
 
+// LoadRestConfig reads the REST channel config from agent_channels.
+func LoadRestConfig(db *gorm.DB) (agentconfig.RestChannelConfig, error) {
+	m, err := GetChannelConfigMap(db, "rest")
+	if err != nil {
+		return agentconfig.RestChannelConfig{}, err
+	}
+	return agentconfig.RestChannelConfig{
+		Enabled:   m["enabled"],
+		Workspace: m["workspace"],
+	}, nil
+}
+
 // DBStore satisfies SlackConfigStore + TelegramConfigStore by delegating
 // to the package-level Load*Config helpers. Server wires one of these at
 // boot so per-channel ConfigSource implementations don't need to import
@@ -158,6 +174,11 @@ func (s DBStore) LoadSlack() (agentconfig.SlackChannelConfig, string, error) {
 // LoadTelegram satisfies TelegramConfigStore.
 func (s DBStore) LoadTelegram() (agentconfig.TelegramChannelConfig, error) {
 	return LoadTelegramConfig(s.db)
+}
+
+// LoadRest satisfies RestConfigStore.
+func (s DBStore) LoadRest() (agentconfig.RestChannelConfig, error) {
+	return LoadRestConfig(s.db)
 }
 
 // EnsureChannel satisfies ChannelEnsurer.

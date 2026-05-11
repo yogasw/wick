@@ -26,6 +26,12 @@ func SeedTelegramChannelConfig() []pkgentity.Config {
 	return pkgentity.StructToConfigs(DefaultTelegramChannelConfig())
 }
 
+// SeedRestChannelConfig returns UI field metadata for the REST (OpenAI-
+// compatible) channel form. Values come from agent_channels table.
+func SeedRestChannelConfig() []pkgentity.Config {
+	return pkgentity.StructToConfigs(DefaultRestChannelConfig())
+}
+
 // SeedWorkspaceConfig is the workspace counterpart.
 func SeedWorkspaceConfig() []pkgentity.Config {
 	return pkgentity.StructToConfigs(DefaultWorkspaceConfig())

@@ -133,6 +133,12 @@ type TelegramConfigStore interface {
 	LoadTelegram() (cfg agentconfig.TelegramChannelConfig, err error)
 }
 
+// RestConfigStore mirrors SlackConfigStore for the OpenAI-compatible REST
+// channel.
+type RestConfigStore interface {
+	LoadRest() (cfg agentconfig.RestChannelConfig, err error)
+}
+
 // ChannelEnsurer guarantees a default agent_channels row exists for the
 // given channel type. setup composers call it before loading config so
 // first-boot operators see the channel listed in the UI even when the

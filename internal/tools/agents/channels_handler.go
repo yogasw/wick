@@ -54,12 +54,23 @@ func channelsPage(c *tool.Ctx) {
 			Description: "Connect via Telegram Bot API. Agents reply in private chats and group threads.",
 			HRef:        base + "/channels/telegram",
 		},
+		{
+			Name:        "REST",
+			Slug:        "rest",
+			Icon:        "🌐",
+			Description: "OpenAI Chat Completions compatible HTTP endpoint. Use any OpenAI SDK with a Personal Access Token.",
+			HRef:        base + "/channels/rest",
+		},
 	}
 	// Populate Configured status from agent_channels table.
 	if globalDB != nil {
 		for i := range channels {
 			m, _ := agentchannels.GetChannelConfigMap(globalDB, channels[i].Slug)
-			channels[i].Configured = m["bot_token"] != ""
+			if channels[i].Slug == "rest" {
+				channels[i].Configured = m["enabled"] == "true"
+			} else {
+				channels[i].Configured = m["bot_token"] != ""
+			}
 		}
 	}
 	c.HTML(view.ChannelListPage(view.ChannelListVM{Layout: sidebarVM(c, "channels", ""), Base: base, Channels: channels}))
@@ -78,6 +89,35 @@ func slackChannelPage(c *tool.Ctx) {
 		ChannelSlug: "slack",
 		Rows:        rows,
 		ActionBase:  c.Base() + "/channels/slack",
+	}))
+}
+
+// restChannelPage renders the REST (OpenAI-compatible) channel config form
+// plus a docs panel with sample curl / SDK usage.
+func restChannelPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "workspace")
+
+	appURL := ""
+	if globalConfigs != nil {
+		appURL = strings.TrimRight(globalConfigs.AppURL(), "/")
+	}
+	endpoint := appURL + "/integrations/rest/v1/chat/completions"
+
+	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
+		Layout:      sidebarVM(c, "channels", ""),
+		Base:        c.Base(),
+		ChannelName: "REST (OpenAI-compatible)",
+		ChannelSlug: "rest",
+		Rows:        rows,
+		ActionBase:  c.Base() + "/channels/rest",
+		Docs: view.RestDocs(view.RestDocsVM{
+			Base:       appURL,
+			Endpoint:   endpoint,
+			SampleUser: "demo-user",
+		}),
 	}))
 }
 

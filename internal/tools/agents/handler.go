@@ -164,6 +164,8 @@ func Register(r tool.Router) {
 	r.POST("/channels/slack/{key}", makeChannelSaveHandler("slack"))
 	r.GET("/channels/telegram", telegramChannelPage)
 	r.POST("/channels/telegram/{key}", makeChannelSaveHandler("telegram"))
+	r.GET("/channels/rest", restChannelPage)
+	r.POST("/channels/rest/{key}", makeChannelSaveHandler("rest"))
 
 	r.GET("/settings", settingsPage)
 

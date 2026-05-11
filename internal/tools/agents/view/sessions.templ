@@ -10,7 +10,7 @@ import (
 // SessionsList renders the full "All chats" page with search.
 templ SessionsList(vm SessionsListVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="max-w-2xl mx-auto space-y-5" data-base={ vm.Base }>
+		<div class="max-w-5xl mx-auto space-y-5" data-base={ vm.Base }>
 			<!-- Header -->
 			<div class="flex items-center justify-between">
 				<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">All chats</h1>
@@ -285,7 +285,6 @@ templ SessionDetail(vm SessionDetailVM) {
 			@sessionDetailHeader(vm)
 			@sessionDetailTabs(vm)
 			@sessionDetailContent(vm)
-			@ApprovedCommandsPanel(vm.Base, vm.Session.ID)
 		</div>
 		@ApprovalModal(vm.Base)
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
@@ -345,6 +344,7 @@ templ sessionDetailTabs(vm SessionDetailVM) {
 	<div class="flex gap-1 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 w-fit">
 		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=conversation", "Conversation", vm.Tab == "conversation")
 		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=commands", "Commands", vm.Tab == "commands")
+		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=approvals", "Approvals", vm.Tab == "approvals")
 		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=raw", "Raw", vm.Tab == "raw")
 	</div>
 }
@@ -353,12 +353,14 @@ templ sessionDetailContent(vm SessionDetailVM) {
 	<div
 		class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 shadow-sm overflow-hidden flex flex-col"
 		data-chat-panel
-		style="height:calc(100dvh - 4rem - 200px); min-height:320px"
+		style="height:calc(100vh - 4rem - 200px); min-height:320px"
 	>
 		if vm.Tab == "conversation" {
 			@sessionConversationTab(vm)
 		} else if vm.Tab == "commands" {
 			@sessionCommandsTab(vm)
+		} else if vm.Tab == "approvals" {
+			@sessionApprovalsTab(vm)
 		} else {
 			@sessionRawTab()
 		}
@@ -505,6 +507,12 @@ templ sessionCommandsTab(vm SessionDetailVM) {
 				}
 			</div>
 		}
+	</div>
+}
+
+templ sessionApprovalsTab(vm SessionDetailVM) {
+	<div class="flex-1 overflow-y-auto p-5">
+		@ApprovedCommandsPanel(vm.Base, vm.Session.ID)
 	</div>
 }
 
