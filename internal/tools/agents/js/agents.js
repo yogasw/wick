@@ -841,15 +841,46 @@
       setTimeout(function () { el.classList.add("hidden"); }, 5000);
     }
 
-    // ── Test gate button (Providers page) ──────────────────────────────
-    // Single delegated click handler for every per-card "Test gate"
-    // button. Disables the button while the spawn runs (5–30s) and
-    // shows a one-line result inline so the operator gets feedback
-    // without leaving the page.
+    // ── Hook enable/disable button (Providers page) ───────────────────
+    // Universal handler for the Enable / Disable per-card buttons.
+    // POSTs to the data-action-url, disables the button while the
+    // request runs (Enable can take 5–30s because it includes a probe),
+    // and reloads the page on completion so the persisted badge + button
+    // trio reflect the new state from disk.
     document.addEventListener("click", function (e) {
-      var btn = e.target.closest("[data-probe-gate]");
+      var btn = e.target.closest("[data-hook-action]");
       if (!btn) return;
-      var url = btn.dataset.probeUrl;
+      var url = btn.dataset.actionUrl;
+      if (!url) return;
+      var origLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Working…";
+
+      fetch(url, { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res.error && !res.enabled) {
+            alert("Hook action failed: " + res.error);
+          }
+        })
+        .catch(function (err) {
+          alert("Request failed: " + err);
+        })
+        .finally(function () {
+          // Always reload — persisted state on disk is the source of truth.
+          window.location.reload();
+        });
+    });
+
+    // ── Hook capability check button (Providers page) ──────────────────
+    // Single delegated click handler for every per-card Command Gate
+    // Test button. Disables the button while the spawn runs (5–30s)
+    // and shows a one-line result inline; the persisted status reloads
+    // on next page render via the userconfig cache so the badge sticks.
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-check-hook]");
+      if (!btn) return;
+      var url = btn.dataset.checkUrl;
       if (!url) return;
       var card = btn.closest(".rounded-xl") || btn.parentElement;
       var origLabel = btn.textContent;
@@ -859,21 +890,22 @@
       fetch(url, { method: "POST" })
         .then(function (r) { return r.json(); })
         .then(function (res) {
-          var note = card.querySelector("[data-probe-result]");
+          var note = card.querySelector("[data-hook-result]");
           if (!note) {
             note = document.createElement("p");
-            note.dataset.probeResult = "";
+            note.dataset.hookResult = "";
             note.className = "text-xs mt-2 leading-relaxed";
             card.appendChild(note);
           }
-          var ms = res.duration_ms || 0;
-          if (res.supported) {
+          if (res.verified) {
             note.className = "text-xs mt-2 leading-relaxed text-green-600 dark:text-green-400";
-            note.textContent = "✓ gate honored — " + res.reason + " (" + ms + "ms)";
+            note.textContent = "✓ hook honored — provider respects deny envelope";
           } else {
             note.className = "text-xs mt-2 leading-relaxed text-red-600 dark:text-red-400";
-            note.textContent = "✗ gate NOT honored — " + res.reason + " (" + ms + "ms)";
+            note.textContent = "✗ hook NOT honored — " + (res.error || "unknown reason");
           }
+          // Reload the page so the persisted badge updates from disk.
+          setTimeout(function () { window.location.reload(); }, 1200);
         })
         .catch(function (err) {
           alert("probe failed: " + err);

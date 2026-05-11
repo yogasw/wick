@@ -81,6 +81,20 @@ func saveOne(t Type, name string, ps userconfig.ProviderStatus) {
 
 func statusFromPersisted(ins Instance, ps userconfig.ProviderStatus) Status {
 	scannedAt, _ := time.Parse(time.RFC3339Nano, ps.ScannedAt)
+	var hooks map[string]HookCapability
+	if len(ps.Hooks) > 0 {
+		hooks = make(map[string]HookCapability, len(ps.Hooks))
+		for k, hc := range ps.Hooks {
+			probedAt, _ := time.Parse(time.RFC3339Nano, hc.ProbedAt)
+			hooks[k] = HookCapability{
+				Supported: hc.Supported,
+				Verified:  hc.Verified,
+				ProbedAt:  probedAt,
+				Error:     hc.Error,
+				Scope:     hc.Scope,
+			}
+		}
+	}
 	return Status{
 		Instance:   ins,
 		ResolvedAt: scannedAt,
@@ -88,7 +102,32 @@ func statusFromPersisted(ins Instance, ps userconfig.ProviderStatus) Status {
 		PathFound:  ps.PathFound,
 		Version:    ps.Version,
 		VersionErr: ps.VersionErr,
+		Hooks:      hooks,
 	}
+}
+
+// hooksToPersisted converts the in-memory hook map to the userconfig
+// equivalent, formatting times as RFC3339Nano strings. Empty input
+// returns nil so the JSON omits the key (omitempty respected).
+func hooksToPersisted(hooks map[string]HookCapability) map[string]userconfig.HookCapability {
+	if len(hooks) == 0 {
+		return nil
+	}
+	out := make(map[string]userconfig.HookCapability, len(hooks))
+	for k, hc := range hooks {
+		probedAt := ""
+		if !hc.ProbedAt.IsZero() {
+			probedAt = hc.ProbedAt.UTC().Format(time.RFC3339Nano)
+		}
+		out[k] = userconfig.HookCapability{
+			Supported: hc.Supported,
+			Verified:  hc.Verified,
+			ProbedAt:  probedAt,
+			Error:     hc.Error,
+			Scope:     hc.Scope,
+		}
+	}
+	return out
 }
 
 // LoadCached returns Status per configured instance, served from the
@@ -155,6 +194,7 @@ func persistFromStatus(t Type, name string, st Status) {
 		VersionErr: st.VersionErr,
 		ScannedAt:  now,
 		VersionAt:  now,
+		Hooks:      hooksToPersisted(st.Hooks),
 	})
 }
 
@@ -174,6 +214,50 @@ func RescanOne(ctx context.Context, t Type, name string) Status {
 		Bool("found", st.PathFound).
 		Msg("agents.rescan: one")
 	return st
+}
+
+// MergeHookCapability writes the capability-probe result for one hook
+// event into the persisted status, leaving other hooks + version/path
+// fields untouched. Called by the HTTP handler that runs
+// HookCapabilityCheck so the next page render reflects the new
+// Verified state straight from disk — same TTL semantics as the
+// version probe (only re-runs on Rescan / Version change / explicit
+// Test).
+//
+// event: well-known hook event key (HookEventPreToolUse, …). Callers
+// supplying a free-form string is fine — the map accommodates any key
+// future versions decide to probe.
+func MergeHookCapability(t Type, name, event string, hc HookCapability) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	cfg, err := userconfig.Load(AppName)
+	if err != nil {
+		log.Warn().Err(err).Msg("agents.cache: load for merge capability failed")
+		return
+	}
+	if cfg.ProviderStatuses == nil {
+		cfg.ProviderStatuses = map[string]userconfig.ProviderStatus{}
+	}
+	key := cacheKey(t, name)
+	ps := cfg.ProviderStatuses[key]
+	if ps.Hooks == nil {
+		ps.Hooks = map[string]userconfig.HookCapability{}
+	}
+	probedAt := ""
+	if !hc.ProbedAt.IsZero() {
+		probedAt = hc.ProbedAt.UTC().Format(time.RFC3339Nano)
+	}
+	ps.Hooks[event] = userconfig.HookCapability{
+		Supported: hc.Supported,
+		Verified:  hc.Verified,
+		ProbedAt:  probedAt,
+		Error:     hc.Error,
+		Scope:     hc.Scope,
+	}
+	cfg.ProviderStatuses[key] = ps
+	if err := userconfig.Save(AppName, cfg); err != nil {
+		log.Warn().Err(err).Str("type", string(t)).Str("name", name).Msg("agents.cache: persist capability failed")
+	}
 }
 
 // RescanAll re-probes every configured instance in parallel and

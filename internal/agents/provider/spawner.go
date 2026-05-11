@@ -73,4 +73,17 @@ type SpawnOptions struct {
 	// ExtraEnv lets the gate (phase 3) inject hook config paths
 	// without coupling the agent package to gate internals.
 	ExtraEnv []string
+
+	// Instance is the resolved per-instance config the factory looked
+	// up before this spawn. Spawners read Instance.Hooks to decide
+	// which hook configs to install / remove on the workspace and
+	// whether to flip provider-specific bypass flags. nil = legacy
+	// test paths that don't drive hook plumbing.
+	Instance *Instance
+
+	// GateBinary is the absolute path to <app>-gate the spawner should
+	// reference when writing hook configs. Resolved once by the
+	// factory (sibling / embed / PATH) and forwarded so each provider
+	// sub-package doesn't have to repeat the resolution dance.
+	GateBinary string
 }

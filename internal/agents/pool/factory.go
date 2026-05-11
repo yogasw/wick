@@ -13,6 +13,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/claude"
+	codexpkg "github.com/yogasw/wick/internal/agents/provider/codex"
+	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
 )
@@ -91,6 +93,36 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	if f.BypassPermissionsLoader != nil {
 		bypassPerms = f.BypassPermissionsLoader()
 	}
+
+	// Normalize provider keys once — used by spawner dispatch, instance
+	// lookup, and spawn-log naming.
+	pTypeStr := opt.ProviderType
+	if pTypeStr == "" {
+		pTypeStr = string(provider.TypeClaude)
+	}
+	pType := provider.Type(pTypeStr)
+	pName := opt.ProviderName
+	if pName == "" {
+		pName = pTypeStr
+	}
+
+	// Per-instance config: spawner reads Instance.Hooks every spawn so
+	// UI toggles take effect on the next message without server restart.
+	resolvedIns, _ := provider.Find(pType, pName)
+
+	// GateBinary path resolved once per Build. Still consulted by the
+	// legacy whitelist refresh below and threaded into every spawn so
+	// the spawner can write workspace hook configs without coupling to
+	// factory internals.
+	gateBin := ""
+	activeGate := f.Gate
+	if f.GateLoader != nil {
+		activeGate = f.GateLoader()
+	}
+	if activeGate != nil {
+		gateBin = activeGate.GateBinary
+	}
+
 	spawner := f.Spawner
 	if spawner == nil {
 		bin, src := resolveProviderBinary(opt.ProviderType, opt.ProviderName)
@@ -101,27 +133,24 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			Str("binary", bin).
 			Str("source", src).
 			Msg("agents.spawn: resolve provider")
-		spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms}
-	}
-
-	// Resolve active gate config: dynamic loader takes precedence so
-	// UI changes take effect on the next spawn without server restart.
-	activeGate := f.Gate
-	if f.GateLoader != nil {
-		activeGate = f.GateLoader()
-	}
-
-	if activeGate != nil {
-		s, err := f.attachGateConfig(opt, spawner, activeGate)
-		if err != nil {
-			return BuildResult{}, fmt.Errorf("attach gate: %w", err)
+		switch pType {
+		case provider.TypeCodex:
+			spawner = codexpkg.Spawner{Binary: bin}
+		case provider.TypeGemini:
+			spawner = geminipkg.Spawner{Binary: bin, YoloMode: bypassPerms}
+		default:
+			spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms}
 		}
-		spawner = s
-		// Do NOT set BypassPermissions when the gate is active. claude
-		// 2.1.138+ skips PreToolUse hooks under bypassPermissions mode,
-		// which would silently disable the gate. The hook itself is
-		// what suppresses the permission prompt — when it emits a deny
-		// envelope, claude cancels the tool without asking the user.
+	}
+
+	// Legacy gate spec refresh: still rewrites the shared spec.json so
+	// AllowedCmds is current at next gate-binary invocation. attachGate
+	// no longer mutates the spawner — hook config now lives inside the
+	// spawner's applyHookConfig and is driven by Instance.Hooks intent.
+	if activeGate != nil {
+		if _, err := f.attachGateConfig(opt, spawner, activeGate); err != nil {
+			log.Warn().Err(err).Msg("agents.spawn: gate spec refresh failed")
+		}
 	}
 
 	var onEvent func(event.AgentEvent)
@@ -135,17 +164,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// captured here at Build time so both the synchronous start
 	// event and the async exit hook write to the same file.
 	var spawnLogPath string
-	pType := opt.ProviderType
-	if pType == "" {
-		pType = string(provider.TypeClaude)
-	}
-	pName := opt.ProviderName
-	if pName == "" {
-		pName = pType
-	}
 	spawnStart := time.Now().UTC()
 	if f.SpawnLogger != nil {
-		spawnLogPath = f.SpawnLogger.Path(pType, pName, opt.SessionID, spawnStart)
+		spawnLogPath = f.SpawnLogger.Path(pTypeStr, pName, opt.SessionID, spawnStart)
 		// Pre-start record: what we know before subprocess actually
 		// runs. PID + first message land in a follow-up `start`
 		// event written from OnStarted (after the pool drains the
@@ -153,7 +174,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		_ = f.SpawnLogger.Append(spawnLogPath, provider.SpawnEvent{
 			Type:         "start",
 			At:           spawnStart,
-			ProviderType: pType,
+			ProviderType: pTypeStr,
 			ProviderName: pName,
 			SessionID:    opt.SessionID,
 			AgentName:    opt.AgentName,
@@ -169,7 +190,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		_ = f.SpawnLogger.Append(spawnLogPath, provider.SpawnEvent{
 			Type:             "start",
 			At:               time.Now().UTC(),
-			ProviderType:     pType,
+			ProviderType:     pTypeStr,
 			ProviderName:     pName,
 			SessionID:        opt.SessionID,
 			AgentName:        opt.AgentName,
@@ -185,7 +206,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			_ = f.SpawnLogger.Append(spawnLogPath, provider.SpawnEvent{
 				Type:         "exit",
 				At:           time.Now().UTC(),
-				ProviderType: pType,
+				ProviderType: pTypeStr,
 				ProviderName: pName,
 				SessionID:    opt.SessionID,
 				AgentName:    opt.AgentName,
@@ -198,6 +219,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		}
 	}
 
+	insCopy := resolvedIns
 	a := provider.New(provider.Options{
 		Workspace:     opt.Workspace,
 		ResumeID:      opt.ResumeID,
@@ -209,6 +231,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		State:         st,
 		OnEvent:       onEvent,
 		OnExit:        onExit,
+		Instance:      &insCopy,
+		GateBinary:    gateBin,
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }
