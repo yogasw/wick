@@ -3,12 +3,15 @@ layout: home
 
 hero:
   name: "Wick"
-  text: "Build internal tools and AI agents in Go."
-  tagline: Scaffold a tool, job, or connector with one prompt — Claude writes real Go files in your repo. Ship the same binary as a Slack / Telegram / web AI agent with command-approval, multi-session pool, and zero copy-pasting.
+  text: "Build internal tools and AI agents in Go — or just download and run."
+  tagline: Prompt Claude to scaffold tools, jobs, and connectors as real Go files in your repo. Or skip the framework entirely — run Claude / Codex / Gemini as a Slack + Telegram + web agent host with a single binary. No copy-pasting. You own the code.
   image:
     src: /logo.svg
     alt: Wick
   actions:
+    - theme: brand
+      text: Run AI Agents (no Go needed)
+      link: /guide/agents-only
     - theme: brand
       text: Start with AI
       link: /guide/ai-quickstart
@@ -20,12 +23,18 @@ hero:
       link: /guide/getting-started
 
 features:
+  - icon: ⚡
+    title: Two Ways to Use Wick
+    details: |
+      <strong>Agent host only</strong> — download the binary (or pull the Docker image), point it at your Claude / Codex / Gemini install, and get a Slack + Telegram + web AI agent in minutes. No Go, no framework, no scaffolding needed.
+      <br><br>
+      <strong>Framework</strong> — run <code>wick init</code>, open Claude Code, and prompt your way to internal tools, background jobs, and LLM-facing connectors. All real Go files in your repo — <code>git diff</code> to review, <code>git revert</code> to undo.
   - icon: 💬
     title: AI Agents in Slack, Telegram, and the Web
     details: |
       Spawn Claude / Codex / Gemini as long-lived subprocesses — same agent reachable from Slack threads, Telegram chats, and the web UI at the same time.
       <br><br>
-      Multi-session pool with idle-kill + <code>--resume</code> revive · multi-instance providers (two PATs, side-by-side) · workspaces on disk · <a href="/wick/guide/command-gate">command gate</a> with 4-mode interactive approval · AskUser MCP tool · everything persisted under <code>~/.&lt;app&gt;/agents/</code>.
+      Multi-session pool with idle-kill + <code>--resume</code> revive · multi-instance providers (two PATs, side-by-side) · workspaces on disk · <a href="/wick/guide/command-gate">command gate</a> with 4-mode interactive approval · AskUser MCP tool · everything persisted under <code>~/.<app>/agents/</code>.
   - icon: 🤖
     title: AI Is the Primary User
     details: Wick is designed for AI agents, not humans. Every convention, file name, and pattern is optimized so Claude knows exactly what to create — no exploration, no guessing.
@@ -57,6 +66,53 @@ features:
 
 <div class="agents-spotlight">
 
+## Two use cases, one binary
+
+<div class="use-case-grid">
+
+### Run AI Agents — no framework needed
+
+Just want Claude / Codex / Gemini as a Slack bot, Telegram bot, or web assistant?
+
+**Download the binary. That's it.**
+
+```bash
+# Linux / macOS
+curl -L https://github.com/yogasw/wick/releases/latest/download/wick-linux-amd64 -o wick
+chmod +x wick && ./wick setup && ./wick server
+```
+
+```bash
+# Docker
+docker run -d -p 9425:9425 -v wick-data:/root/.wick ghcr.io/yogasw/wick:latest
+```
+
+→ [Agent host quickstart](/guide/agents-only)
+
+---
+
+### Build Internal Tools & Jobs — AI writes real Go files
+
+```bash
+go install github.com/yogasw/wick@v0.11.4
+wick init my-app
+cd my-app && wick dev
+```
+
+Open in Claude Code. Prompt what you need:
+
+```
+add a tool called "base64" that encodes and decodes text
+add a background job that syncs data from our API every 30 minutes
+add a connector for GitHub with list_repos, create_issue operations
+```
+
+Claude writes real Go files. You own everything.
+
+→ [Framework quickstart](/guide/ai-quickstart)
+
+</div>
+
 ## Why teams pick wick for AI agents
 
 Most "AI agent" platforms lock you into their runtime, expose chat-only, and hide the moving parts. Wick does the opposite:
@@ -71,6 +127,7 @@ Most "AI agent" platforms lock you into their runtime, expose chat-only, and hid
 
 Read [AI Agents](/guide/agents) for the headline tour, or jump to the deep-dives:
 
+- [Agent Host Only](/guide/agents-only) — download binary / Docker, no Go needed
 - [Workspaces](/guide/agents/workspaces) — folders on disk, managed vs custom path, the built-in `default`
 - [Providers](/guide/agents/providers) — multi-instance config, binary resolution chain, status cache
 - [Channels](/guide/agents/channels) — Slack (Socket + HTTP), Telegram (long-poll), Web (SSE), AskUser MCP
