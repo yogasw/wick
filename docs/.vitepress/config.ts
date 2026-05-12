@@ -29,7 +29,8 @@ export default withMermaid(defineConfig({
     logo: '/logo.svg',
 
     nav: [
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Agent Host', link: '/guide/agents-only' },
+      { text: 'Framework Guide', link: '/guide/getting-started' },
       { text: 'AI Quickstart', link: '/guide/ai-quickstart' },
       { text: 'Reference', link: '/reference/wick-yml' },
       {
@@ -73,6 +74,7 @@ export default withMermaid(defineConfig({
       {
         text: 'AI Agents',
         items: [
+          { text: 'Agent Host Only (no Go needed)', link: '/guide/agents-only' },
           { text: 'Overview', link: '/guide/agents' },
           { text: 'Workspaces', link: '/guide/agents/workspaces' },
           { text: 'Providers', link: '/guide/agents/providers' },
