@@ -448,21 +448,9 @@ func (t *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 		return
 	}
 
-	label := "✅ Approved"
-	switch decision {
-	case gate.DecisionBlock:
-		label = "🚫 Blocked"
-	case gate.DecisionApproveSession:
-		label = "✅ Approved for session"
-	case gate.DecisionApproveAll:
-		label = "✅ All commands allowed for session"
-	case gate.DecisionApproveAlways:
-		label = "✅ Always allowed"
-	}
-
-	edit := tgbotapi.NewEditMessageText(pa.chatID, pa.messageID, label)
-	if _, err := bot.Send(edit); err != nil {
-		log.Debug().Str("channel", "telegram").Err(err).Msg("edit approval message failed")
+	del := tgbotapi.NewDeleteMessage(pa.chatID, pa.messageID)
+	if _, err := bot.Request(del); err != nil {
+		log.Debug().Str("channel", "telegram").Err(err).Msg("delete approval message failed")
 	}
 }
 

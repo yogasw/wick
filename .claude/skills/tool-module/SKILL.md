@@ -167,6 +167,23 @@ Strict call direction: **handler → service → repo**. Never skip a layer, nev
 
    **Never import `net/http` or `*http.ServeMux` in a tool.** **Never hardcode `/tools/...`.** Use `r.Static(...)` for assets.
 
+   **Reverse-proxy / sub-router tools:** when a tool wraps an external handler that owns its own sub-routing (e.g. a WebSocket proxy or an embedded HTTP server), use `r.HandleRaw(prefix, fn)` instead of registering every sub-path individually. `prefix` is **relative** to the tool base and must end with `/`. The fn receives a `tool.ConfigReader` so the handler can gate on runtime config:
+
+   ```go
+   r.HandleRaw("/tty/", func(cfg tool.ConfigReader) http.Handler {
+       inner := externalSrv.Handler()
+       return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+           if cfg.GetOwned("mytool", "enabled") != "true" {
+               http.Error(w, "disabled", http.StatusForbidden)
+               return
+           }
+           inner.ServeHTTP(w, req)
+       })
+   })
+   ```
+
+   Use sparingly — only when the sub-handler genuinely owns its own routing. For normal tool endpoints, prefer `r.GET` / `r.POST`.
+
 8. **`js/mytool.js`** — wrap in an IIFE, wait for `DOMContentLoaded`. Compute on `input` / `change` events.
 
 9. **Register** in `internal/tools/registry.go` (core wick lab) or in the downstream `main.go`:

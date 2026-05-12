@@ -95,6 +95,12 @@ type Router interface {
 	DELETE(path string, h HandlerFunc)
 	PATCH(path string, h HandlerFunc)
 	Static(prefix string, fsys fs.FS)
+	// HandleRaw mounts a raw http.Handler at a subtree prefix relative
+	// to the tool's /tools/{Key} base. The prefix must end with "/".
+	// Use sparingly — only when the handler owns its own sub-routing
+	// (e.g. a reverse-proxy that serves many paths under one mount).
+	// fn receives the ConfigReader so callers can gate on runtime config.
+	HandleRaw(prefix string, fn func(cfg ConfigReader) http.Handler)
 	Meta() Tool
 }
 

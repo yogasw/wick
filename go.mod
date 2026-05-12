@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	fyne.io/systray v1.12.1
-	github.com/a-h/templ v0.3.1001
+	github.com/a-h/templ v0.3.1020
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb
 	github.com/caarlos0/env/v9 v9.0.0
 	github.com/glebarez/sqlite v1.11.0
@@ -42,6 +42,7 @@ require (
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
+	github.com/yogasw/web-tty v1.0.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	modernc.org/libc v1.22.5 // indirect

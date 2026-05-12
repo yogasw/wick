@@ -117,14 +117,11 @@ type claudeHookEntry struct {
 func ClaudeSettings(gateBin string) ([]byte, error) {
 	gateBin = strings.ReplaceAll(gateBin, "\\", "/")
 	hook := claudeHookEntry{Type: "command", Command: gateBin}
-	// Gate every file-system tool that can read/write outside the workspace.
-	matchers := []string{"Bash", "Read", "Write", "Edit", "Glob"}
-	groups := make([]claudeHookGroup, 0, len(matchers))
-	for _, m := range matchers {
-		groups = append(groups, claudeHookGroup{
-			Matcher: m,
-			Hooks:   []claudeHookEntry{hook},
-		})
+	// Catch-all matcher: every tool call (Bash, Read, Write, Edit, Glob,
+	// MCP tools, etc.) routes through the gate so the user can approve
+	// or deny before execution.
+	groups := []claudeHookGroup{
+		{Matcher: ".*", Hooks: []claudeHookEntry{hook}},
 	}
 	cfg := claudeHookConfig{
 		Hooks: claudeHooks{PreToolUse: groups},
@@ -174,6 +171,23 @@ func WriteWorkspaceHooks(workspace, gateBin string) error {
 	dst := filepath.Join(dir, "settings.local.json")
 	if err := os.WriteFile(dst, data, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	return nil
+}
+
+// HookWriter implements registry.WorkspaceHookWriter using WriteWorkspaceHooks
+// and os.Remove. Use this as the production adapter when wiring the Manager.
+type HookWriter struct{}
+
+func (HookWriter) Write(workspace, gateBin string) error {
+	return WriteWorkspaceHooks(workspace, gateBin)
+}
+
+func (HookWriter) Remove(workspace string) error {
+	path := filepath.Join(workspace, ".claude", "settings.local.json")
+	err := os.Remove(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

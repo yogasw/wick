@@ -354,14 +354,41 @@ func run() int {
 	return 0
 }
 
-// runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob).
-// Only enforces scope restriction — no command whitelist applies.
-// Within scope → allow. Outside scope → interactive approval or block.
+// runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob, MCP, etc.).
+// File tools enforce scope restriction; unknown/MCP tools always go to
+// interactive approval so the user sees every tool call.
 func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	path := pathFromInput(in)
 	tool := in.ToolName
 
-	// No path extracted or relative path — safe (CWD = workspace).
+	// Unknown tool (MCP or future tool) — no path to scope-check.
+	// Always ask the user rather than silently allowing.
+	knownFileTool := tool == "Read" || tool == "Write" || tool == "Edit" || tool == "Glob" || tool == "LS"
+	if !knownFileTool {
+		key := gate.MatchKey(tool, path)
+		if gate.IsAutoApproved(spec, key) {
+			logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "auto_approved", "")
+			emitAllow("auto_approved")
+			return 0
+		}
+		socketPath := gate.SharedSocketPath(gate.AppName())
+		decision, reason, err := requestApprovalWithLog(socketPath, tool, path, in.CWD, in.SessionID, key, requestID)
+		if err != nil {
+			logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "no_socket", err.Error())
+			emitAllow("no_socket")
+			return 0
+		}
+		if gate.IsApprove(decision) {
+			logTerminalEntry(requestID, tool, path, in.CWD, "allowed", decision, reason)
+			emitAllow(decision)
+			return 0
+		}
+		logTerminalEntry(requestID, tool, path, in.CWD, "blocked", decision, reason)
+		emitBlock(fmt.Sprintf("%s — %s", tool, reason))
+		return 0
+	}
+
+	// Known file tool: no path extracted or relative path — safe (CWD = workspace).
 	// Use filepath.IsAbs for cross-platform: Windows paths (C:\...) are
 	// absolute but don't start with "/", so HasPrefix alone misses them.
 	if path == "" || (!strings.HasPrefix(path, "/") && !filepath.IsAbs(path)) {

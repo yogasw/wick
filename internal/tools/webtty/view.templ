@@ -1,0 +1,65 @@
+package webtty
+
+templ IndexBody(basePath string, enabled bool) {
+	<main class="mx-auto w-full max-w-container px-6 pb-8">
+		if !enabled {
+			<div class="mt-8 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-8 shadow-md text-center">
+				<div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-white-200 dark:bg-navy-800">
+					<svg class="h-6 w-6 text-black-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+						<rect x="2" y="3" width="20" height="14" rx="2"></rect>
+						<path d="M8 21h8M12 17v4"></path>
+						<line x1="2" y1="3" x2="22" y2="21"></line>
+					</svg>
+				</div>
+				<p class="text-[0.9375rem] font-medium text-black-900 dark:text-white-100">Terminal Disabled</p>
+				<p class="mt-1 text-[0.875rem] text-black-800 dark:text-black-600">The web terminal has been disabled by an administrator.</p>
+			</div>
+		} else {
+			<div id="webtty-root" data-base={ basePath } class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md overflow-hidden">
+				<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 gap-3">
+					<div class="flex items-center gap-2">
+						<span id="webtty-status" class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[0.75rem] font-medium bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600 status-stopped">
+							<span class="h-1.5 w-1.5 rounded-full bg-current"></span>
+							Stopped
+						</span>
+					</div>
+					<div class="flex items-center gap-2">
+						<button
+							id="webtty-start"
+							type="button"
+							class="inline-flex items-center justify-center rounded-lg bg-green-500 px-4 py-2 text-[0.8125rem] font-medium text-white-100 transition-colors duration-150 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-prog-300"
+						>
+							<svg class="mr-1.5 h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+							Start
+						</button>
+						<button
+							id="webtty-stop"
+							type="button"
+							class="inline-flex items-center justify-center rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 transition-colors duration-150 hover:border-black-700 hover:bg-white-200 dark:hover:bg-navy-800 focus:outline-none focus:ring-2 focus:ring-prog-300"
+						>
+							<svg class="mr-1.5 h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"></rect></svg>
+							Stop
+						</button>
+					</div>
+				</div>
+				<div class="relative bg-black" style="height: 70vh;">
+					<iframe
+						id="webtty-frame"
+						src={ basePath + "/tty/" }
+						class="h-full w-full border-0"
+						style="display: none;"
+						title="Web Terminal"
+					></iframe>
+					<div id="webtty-placeholder" class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-black-700">
+						<svg class="h-10 w-10 opacity-30" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+							<rect x="2" y="3" width="20" height="14" rx="2"></rect>
+							<path d="M8 21h8M12 17v4M6 8l2 2-2 2"></path>
+						</svg>
+						<p class="text-[0.875rem] opacity-50">Click Start to open a terminal session</p>
+					</div>
+				</div>
+			</div>
+		}
+	</main>
+	<script src={ basePath + "/static/js/webtty.js" }></script>
+}

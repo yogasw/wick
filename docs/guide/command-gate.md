@@ -62,22 +62,35 @@ The master gate switch on the Providers page fans out — toggle ON sets every i
 
 | Provider | Scope |
 |---|---|
-| claude | Bash + Edit + MCP tools |
+| claude | All tools — Bash, Read, Write, Edit, Glob, MCP tools, and any future tools |
 | codex | Shell commands only |
 | gemini | Untested — adapter shipped, runtime unverified |
 
 Scope is shown as a badge on the Providers card so you know what the gate actually covers.
 
+## What gets intercepted (Claude)
+
+The gate uses a catch-all `.*` matcher, so **every tool call** routes through the gate:
+
+| Tool type | Gate behavior |
+|---|---|
+| **Bash** | Whitelist check → auto-approved check → ask user |
+| **Read / Write / Edit / Glob** | Scope check — if path is within the workspace `default_scope`, auto-allow; otherwise ask user |
+| **MCP tools** (e.g. `mcp__support-tools__wick_execute`) | Always ask user (no scope to check) |
+| **Unknown / future tools** | Always ask user |
+
+File tools within the workspace scope are auto-allowed without a popup, so normal agent file operations stay fast. Only out-of-scope file access and all MCP/shell calls prompt you.
+
 ## Approval modes
 
-When a command isn't auto-approved, the gate dials a Unix socket and the daemon broadcasts an SSE event. The web UI renders a modal with four choices:
+When a tool call isn't auto-approved, the gate dials a Unix socket and the daemon broadcasts an SSE event. The web UI renders a modal with four choices:
 
-| Mode | API value | Scope | Effect on future matching commands |
+| Button | API value | Scope | Effect on future matching calls |
 |---|---|---|---|
 | **Approve once** | `approve_once` | This request only | Modal again next time |
-| **Allow this session** | `approve_session` | While the session lives (in-memory) | Auto-approved silently |
-| **Always allow** | `approve_always` | Persistent (written to `spec.json`) | Auto-approved across restarts, all providers |
-| **Reject** | `block` | This request only | Modal again next time |
+| **Allow this session** | `approve_session` | While the session lives (in-memory) | Auto-approved silently for this session |
+| **Always allow** | `approve_always` | Persistent (written to `spec.json`) | Auto-approved across restarts, all sessions |
+| **Block** | `block` | This request only | Tool call cancelled; modal again next time |
 
 A countdown shows the remaining 25 seconds. If you don't answer, the daemon auto-blocks.
 

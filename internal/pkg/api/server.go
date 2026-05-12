@@ -334,6 +334,17 @@ func NewServer() *Server {
 			agentsBcast.PublishLifecycle(ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
 		},
 	})
+	// Wire the hook writer so Manager injects .claude/settings.local.json
+	// into every workspace on create or switch. The loader re-reads gate config
+	// on each call so UI toggles take effect immediately without a restart.
+	agentsMgr.HookWriter = agentgate.HookWriter{}
+	agentsMgr.GateBinLoader = func() string {
+		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
+			return ""
+		}
+		return resolvedGateBin
+	}
+
 	agentstool.SetManager(agentsMgr)
 	agentstool.SetPool(agentsPool)
 	agentstool.SetBroadcaster(agentsBcast)

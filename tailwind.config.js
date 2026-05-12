@@ -11,14 +11,40 @@ module.exports = {
   ],
 
   theme: {
+    extend: {},
     // ── Project design system tokens.
     // Source: .claude/skills/design-system/tokens.md
+    // NOTE: top-level `colors` replaces ALL Tailwind defaults. Custom tokens
+    // live here intentionally so the palette is fully controlled. Classes that
+    // use colors not listed here (red, amber, blue, …) must be added below or
+    // they will be purged. Add missing Tailwind defaults as needed rather than
+    // moving custom tokens into extend.colors (which would re-introduce the
+    // full 800-class default palette and bloat the CSS).
     colors: {
       transparent: 'transparent',
       current: 'currentColor',
 
+      // ── Tailwind defaults kept for compatibility ──────────────────────────
+      // red: used by Block button, error states
+      red: {
+        500: '#ef4444',
+        600: '#dc2626',
+        700: '#b91c1c',
+        800: '#991b1b',
+      },
+      // amber: used by gate-disabled banner, countdown pulse
+      amber: {
+        50:  '#fffbeb',
+        300: '#fcd34d',
+        500: '#f59e0b',
+        700: '#b45309',
+        800: '#92400e',
+        900: '#78350f',
+      },
+
       // Brand Green — buttons, sidebar, primary actions
       green: {
+        50:  '#f0fdf9',
         200: '#D1ECE5',
         300: '#A1D9CB',
         400: '#6EC5B2',
@@ -26,6 +52,7 @@ module.exports = {
         600: '#288372',
         700: '#24584E',
         800: '#1B312C',
+        900: '#0f2420',
       },
 
       // Brand Navy — login pages, marketing. Themed: values come from

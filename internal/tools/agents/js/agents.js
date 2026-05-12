@@ -929,9 +929,7 @@
         if (remaining <= 0) {
           el.textContent = "0s";
           stopApprovalCountdown();
-          // Daemon side will auto-block after 25s; we just dismiss
-          // visually so the user sees the timer hit zero rather than
-          // the modal vanishing silently mid-tick.
+          sendApprovalDecision("block");
           return;
         }
         el.textContent = remaining + "s";
@@ -945,13 +943,11 @@
       }
     }
 
-    document.addEventListener("click", function (e) {
-      var btn = e.target.closest("[data-approval-decision]");
-      if (!btn || !approvalCurrent) return;
-      var decision = btn.dataset.approvalDecision;
+    function sendApprovalDecision(decision, btn) {
+      if (!approvalCurrent) return;
       var b = resolveBase();
       if (!b || !sessionID) return;
-      btn.disabled = true;
+      if (btn) btn.disabled = true;
       fetch(b + "/sessions/" + encodeURIComponent(sessionID) + "/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -961,13 +957,24 @@
           match_key: approvalCurrent.match_key || "",
         }),
       }).then(function (r) {
-        // approval_resolved SSE will dismiss the modal across all
-        // tabs. Re-enable the button defensively in case the SSE is
-        // slow / dropped.
-        if (!r.ok) btn.disabled = false;
+        // approval_resolved SSE dismisses the modal. Re-enable button
+        // defensively in case SSE is slow / dropped.
+        if (!r.ok && btn) btn.disabled = false;
       }).catch(function () {
-        btn.disabled = false;
+        if (btn) btn.disabled = false;
       });
+    }
+
+    document.addEventListener("click", function (e) {
+      // Click on backdrop (outside dialog card) → block.
+      var modal = document.getElementById("approval-modal");
+      if (modal && !modal.classList.contains("hidden") && e.target === modal) {
+        sendApprovalDecision("block");
+        return;
+      }
+      var btn = e.target.closest("[data-approval-decision]");
+      if (!btn || !approvalCurrent) return;
+      sendApprovalDecision(btn.dataset.approvalDecision, btn);
     });
 
     // Rehydrate: on session-detail page load, ask the server whether

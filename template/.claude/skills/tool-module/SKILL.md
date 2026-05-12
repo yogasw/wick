@@ -123,6 +123,7 @@ Don't pass `struct{}{}` — the No-Config variants make intent explicit.
 8. **Names and descriptions matter.** `Meta.Name` is short and human. `Meta.Description` is one sentence — surfaces on the home grid and Ctrl+K palette.
 9. **No `@ui.Layout` / `@ui.Navbar` / page title in your templ.** The framework wraps every tool page in Layout + Navbar + setup banner + a shared ToolHeader (icon, `Meta.Name`, `Meta.Description`, admin-only Settings link). Your templ starts at `<main>` with no `<h1>` — the title comes from `Meta.Name`. Look at `tools/convert-text/view.templ`.
 10. **No `*http.ServeMux`, no hardcoded `/tools/...`** — use `r.GET/POST/...` + `r.Static("/static/", StaticFS)`, paths relative to the instance mount.
+11. **Reverse-proxy / sub-router tools:** when a tool wraps an external handler that owns its own sub-routing (WebSocket proxy, embedded HTTP server), use `r.HandleRaw(prefix, fn)`. `prefix` is relative to the tool base and must end with `/`. `fn` receives a `tool.ConfigReader` for runtime config gating. Use sparingly — prefer `r.GET`/`r.POST` for normal endpoints.
 
 ## Tools
 
