@@ -3,7 +3,7 @@ package view
 import "fmt"
 
 templ Overview(vm OverviewVM) {
-	@AgentsLayout(vm.Base, "overview") {
+	@AgentsLayout(vm.Layout) {
 		<div class="space-y-6">
 			<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Overview</h1>
 			<!-- Stats row -->
@@ -51,6 +51,7 @@ templ Overview(vm OverviewVM) {
 				})
 			</div>
 		</div>
+		<script src={ vm.Base + "/static/js/agents.js" }></script>
 	}
 }
 

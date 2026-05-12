@@ -27,6 +27,21 @@ templ ConfigsTable(rows []entity.Config, actionBase string, _ string, _ string) 
 }
 
 templ configsForm(simpleRows []entity.Config, kvRows []entity.Config, actionBase string) {
+	@configsFormFull(simpleRows, kvRows, nil, actionBase)
+}
+
+// ConfigsTableFull is the picker-aware entry point. Callers that need
+// picker fields render through here; ConfigsTable above stays unchanged
+// for the legacy two-section layout.
+templ ConfigsTableFull(rows []entity.Config, actionBase string) {
+	if len(rows) == 0 {
+		<p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
+	} else {
+		@configsFormFull(splitSimple(rows), splitKVList(rows), splitPicker(rows), actionBase)
+	}
+}
+
+templ configsFormFull(simpleRows []entity.Config, kvRows []entity.Config, pickerRowsList []entity.Config, actionBase string) {
 	<div class="mt-4 flex flex-col gap-3" data-configs-form data-action-base={ actionBase }>
 		if len(simpleRows) > 0 {
 			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
@@ -45,18 +60,22 @@ templ configsForm(simpleRows []entity.Config, kvRows []entity.Config, actionBase
 		for _, row := range kvRows {
 			@kvlistBlock(row, cfgKVCols(row), cfgKVRows(row))
 		}
+		for _, row := range pickerRowsList {
+			@pickerBlock(row, pickerRows(row))
+		}
 		@configsSaveScript()
+		@pickerScript()
 	</div>
 }
 
 // simpleField wraps the field div; textarea gets full-width.
 templ simpleField(row entity.Config) {
 	if row.Type == "textarea" {
-		<div class="col-span-full">
+		<div class="col-span-full" data-cfg-key={ row.Key } data-cfg-visible-when={ row.VisibleWhen }>
 			@simpleFieldInner(row)
 		</div>
 	} else {
-		<div>
+		<div data-cfg-key={ row.Key } data-cfg-visible-when={ row.VisibleWhen }>
 			@simpleFieldInner(row)
 		</div>
 	}
@@ -246,6 +265,8 @@ templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
 		data-kvlist-key={ row.Key }
 		data-kv-cols={ strings.Join(cols, "|") }
+		data-cfg-key={ row.Key }
+		data-cfg-visible-when={ row.VisibleWhen }
 		if len(row.ColOptions) > 0 {
 			data-col-opts={ colOptsJSON(row.ColOptions) }
 		}
@@ -336,6 +357,207 @@ templ kvDataRow(cols []string, colOpts map[string]string, entry map[string]strin
 			>×</button>
 		</div>
 	</div>
+}
+
+// pickerBlock renders a searchable picker: text input drives a lookup
+// against the channel's lookup endpoint and adds chips ({id,name}).
+// Value stored is JSON [{id,name},...] — identical shape to kvlist with
+// id|name cols, so allowedCfg parsers can read either.
+templ pickerBlock(row entity.Config, chips []map[string]string) {
+	<div
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
+		data-picker-key={ row.Key }
+		data-picker-source={ row.Options }
+		data-cfg-key={ row.Key }
+		data-cfg-visible-when={ row.VisibleWhen }
+	>
+		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			<div class="flex items-center gap-2">
+				<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
+				if row.Required && row.Value == "" {
+					<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
+				}
+				<span data-save-status class="ml-auto text-[10px] transition-all"></span>
+			</div>
+			if row.Description != "" {
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{ row.Description }</p>
+			}
+		</div>
+		<div class="p-5">
+			<div class="relative">
+				<input
+					type="text"
+					data-picker-input
+					placeholder="Search…"
+					autocomplete="off"
+					class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+				/>
+				<div
+					data-picker-results
+					class="absolute z-10 left-0 right-0 mt-1 hidden max-h-64 overflow-y-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg"
+				></div>
+			</div>
+			<div data-picker-chips class="mt-3 flex flex-wrap gap-2">
+				for _, chip := range chips {
+					<span
+						data-picker-chip
+						data-chip-id={ chip["id"] }
+						data-chip-name={ chip["name"] }
+						class="inline-flex items-center gap-1.5 rounded-full bg-green-100 dark:bg-navy-800 border border-green-300 dark:border-navy-600 px-3 py-1 text-xs font-mono text-green-700 dark:text-green-400"
+					>
+						{ chip["name"] }
+						<span class="text-[10px] text-black-700 dark:text-black-600">{ chip["id"] }</span>
+						<button
+							type="button"
+							data-picker-chip-remove
+							aria-label="Remove"
+							class="ml-1 text-black-700 dark:text-black-600 hover:text-neg-400 leading-none"
+						>×</button>
+					</span>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+templ pickerScript() {
+	<script>
+	(function(){
+		var chipCls='inline-flex items-center gap-1.5 rounded-full bg-green-100 dark:bg-navy-800 border border-green-300 dark:border-navy-600 px-3 py-1 text-xs font-mono text-green-700 dark:text-green-400';
+
+		function debounce(fn,ms){var t;return function(){var a=arguments,ctx=this;clearTimeout(t);t=setTimeout(function(){fn.apply(ctx,a);},ms);};}
+
+		function setStatus(el,state){
+			if(!el)return;
+			if(state==='saving'){el.textContent='saving…';el.style.color='#A0A0A0';}
+			else if(state==='saved'){el.textContent='✓ saved';el.style.color='#288C7A';setTimeout(function(){el.textContent='';},2000);}
+			else if(state==='error'){el.textContent='✗ failed';el.style.color='#EB5757';}
+		}
+
+		function readChips(section){
+			var out=[];
+			section.querySelectorAll('[data-picker-chip]').forEach(function(c){
+				out.push({id:c.getAttribute('data-chip-id'),name:c.getAttribute('data-chip-name')});
+			});
+			return out;
+		}
+
+		function savePicker(section,base){
+			var key=section.getAttribute('data-picker-key');
+			var statusEl=section.querySelector('[data-save-status]');
+			var chips=readChips(section);
+			setStatus(statusEl,'saving');
+			var fd=new FormData();fd.append('value',JSON.stringify(chips));
+			fetch(base+'/'+key,{method:'POST',body:fd,redirect:'follow'})
+				.then(function(r){if(!r.ok)throw new Error(key);setStatus(statusEl,'saved');
+					if(chips.length>0){var b=section.querySelector('[data-missing-badge]');if(b)b.remove();}
+				})
+				.catch(function(){setStatus(statusEl,'error');});
+		}
+
+		function addChip(section,item,base){
+			if(!item.id)return;
+			var existing=section.querySelector('[data-chip-id="'+item.id.replace(/"/g,'\\"')+'"]');
+			if(existing)return;
+			var chips=section.querySelector('[data-picker-chips]');
+			var span=document.createElement('span');
+			span.setAttribute('data-picker-chip','');
+			span.setAttribute('data-chip-id',item.id);
+			span.setAttribute('data-chip-name',item.name||item.id);
+			span.className=chipCls;
+			span.appendChild(document.createTextNode(item.name||item.id));
+			var sub=document.createElement('span');
+			sub.className='text-[10px] text-black-700 dark:text-black-600';
+			sub.textContent=item.id;
+			span.appendChild(sub);
+			var rm=document.createElement('button');
+			rm.type='button';
+			rm.setAttribute('data-picker-chip-remove','');
+			rm.setAttribute('aria-label','Remove');
+			rm.className='ml-1 text-black-700 dark:text-black-600 hover:text-neg-400 leading-none';
+			rm.textContent='×';
+			span.appendChild(rm);
+			chips.appendChild(span);
+			savePicker(section,base);
+		}
+
+		function renderResults(section,items,base){
+			var box=section.querySelector('[data-picker-results]');
+			box.innerHTML='';
+			if(!items||items.length===0){
+				box.classList.add('hidden');
+				return;
+			}
+			items.forEach(function(it){
+				var row=document.createElement('button');
+				row.type='button';
+				row.className='w-full text-left px-3 py-2 text-xs hover:bg-white-200 dark:hover:bg-navy-800 flex items-center justify-between gap-2';
+				var nm=document.createElement('span');
+				nm.className='font-mono text-black-900 dark:text-white-100 truncate';
+				nm.textContent=it.name||it.id;
+				var id=document.createElement('span');
+				id.className='font-mono text-[10px] text-black-700 dark:text-black-600 shrink-0';
+				id.textContent=it.id;
+				row.appendChild(nm);row.appendChild(id);
+				row.addEventListener('click',function(){
+					addChip(section,it,base);
+					section.querySelector('[data-picker-input]').value='';
+					box.classList.add('hidden');
+				});
+				box.appendChild(row);
+			});
+			box.classList.remove('hidden');
+		}
+
+		function showLoading(section){
+			var box=section.querySelector('[data-picker-results]');
+			box.innerHTML='<div class="px-3 py-2 text-xs text-black-700 dark:text-black-600 font-mono">Searching…</div>';
+			box.classList.remove('hidden');
+		}
+
+		function doLookup(section,query,base){
+			var source=section.getAttribute('data-picker-source');
+			var slug=base.split('/').filter(Boolean).pop();
+			var lookupBase=base.replace(/\/[^/]+$/,'/'+slug+'/lookup');
+			var url=lookupBase+'?source='+encodeURIComponent(source)+'&q='+encodeURIComponent(query);
+			showLoading(section);
+			fetch(url,{credentials:'same-origin'})
+				.then(function(r){return r.ok?r.json():[];})
+				.then(function(items){renderResults(section,items,base);})
+				.catch(function(){renderResults(section,[],base);});
+		}
+
+		function attachPicker(section){
+			var form=section.closest('[data-configs-form]');
+			if(!form)return;
+			var base=form.getAttribute('data-action-base');
+			var input=section.querySelector('[data-picker-input]');
+			var debouncedLookup=debounce(function(){
+				var q=input.value.trim();
+				if(q.length<1){renderResults(section,[],base);return;}
+				doLookup(section,q,base);
+			},250);
+			input.addEventListener('input',debouncedLookup);
+			input.addEventListener('focus',function(){
+				if(input.value.trim().length>=1)debouncedLookup();
+			});
+			document.addEventListener('click',function(e){
+				if(!section.contains(e.target)){
+					section.querySelector('[data-picker-results]').classList.add('hidden');
+				}
+			});
+			section.addEventListener('click',function(e){
+				var rm=e.target.closest('[data-picker-chip-remove]');
+				if(rm){
+					rm.closest('[data-picker-chip]').remove();
+					savePicker(section,base);
+				}
+			});
+		}
+
+		document.querySelectorAll('[data-picker-key]').forEach(attachPicker);
+	})();
+	</script>
 }
 
 templ configsSaveScript() {
@@ -500,6 +722,27 @@ templ configsSaveScript() {
 			if(form)saveKVBlock(section,form.getAttribute('data-action-base'));
 		}
 
+		function currentFieldValue(form, key){
+			// dropdown / text / checkbox carry data-field-key directly
+			var el=form.querySelector('[data-field-key="'+key.replace(/"/g,'\\"')+'"]');
+			if(!el)return '';
+			if(el.type==='checkbox')return el.checked?'true':'false';
+			return el.value||'';
+		}
+
+		function applyVisibility(form){
+			form.querySelectorAll('[data-cfg-visible-when]').forEach(function(el){
+				var rule=el.getAttribute('data-cfg-visible-when')||'';
+				if(rule===''){el.style.display='';return;}
+				var idx=rule.indexOf(':');
+				if(idx<0){el.style.display='';return;}
+				var key=rule.slice(0,idx).trim();
+				var want=rule.slice(idx+1).trim();
+				var have=currentFieldValue(form,key);
+				el.style.display=(have===want)?'':'none';
+			});
+		}
+
 		function attachAutoSave(form){
 			var base=form.getAttribute('data-action-base');
 			// Restore server-side value for dropdowns to override browser form-state cache.
@@ -515,9 +758,10 @@ templ configsSaveScript() {
 			// simple fields
 			form.querySelectorAll('[data-field-key]').forEach(function(el){
 				var immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';
-				var handler=function(){saveField(el,base);};
+				var handler=function(){saveField(el,base);applyVisibility(form);};
 				el.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));
 			});
+			applyVisibility(form);
 			// kvlist blocks — delegate on the rows container for both input
 			// (text fields) and change (select dropdowns).
 			form.querySelectorAll('[data-kvlist-key]').forEach(function(section){

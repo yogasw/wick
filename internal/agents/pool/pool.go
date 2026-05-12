@@ -213,6 +213,9 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		if entry.store != nil {
 			_ = entry.store.AppendUserTurn(role, source, text)
 		}
+		if role == "user" {
+			go p.setLabelIfEmpty(sessionID, text)
+		}
 		return entry.agent.Send(text)
 	}
 
@@ -221,6 +224,9 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// via the UI flow).
 	if err := p.ensureSession(ctx, sessionID, source, workspace); err != nil {
 		return err
+	}
+	if role == "user" {
+		go p.setLabelIfEmpty(sessionID, text)
 	}
 
 	// Buffer the message and either spawn (slot free) or queue (pool full).
@@ -270,6 +276,26 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	sess, err := session.Load(p.cfg.Layout, sessionID)
 	if err != nil {
 		return err
+	}
+	// Ensure the agent entry exists in agents.json before reading it.
+	// Channels like Slack auto-create sessions without going through the
+	// UI flow that would call AddAgent, so agents.json stays [] and
+	// CLISessionID is never written — breaking --resume on respawn.
+	hasEntry := false
+	for _, a := range sess.Agents {
+		if a.Name == agentName {
+			hasEntry = true
+			break
+		}
+	}
+	if !hasEntry {
+		if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, ""); err != nil {
+			return err
+		}
+		sess, err = session.Load(p.cfg.Layout, sessionID)
+		if err != nil {
+			return err
+		}
 	}
 	resumeID := ""
 	pType := ""
@@ -536,6 +562,21 @@ func (p *Pool) resolveCwd(sess session.Session) (string, error) {
 		return "", fmt.Errorf("ensure session fallback cwd %q: %w", fallback, err)
 	}
 	return fallback, nil
+}
+
+// setLabelIfEmpty writes the first user message as a sidebar label into
+// meta.Label. No-op when a label is already set.
+func (p *Pool) setLabelIfEmpty(sessionID, text string) {
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil || sess.Meta.Label != "" {
+		return
+	}
+	r := []rune(text)
+	if len(r) > 60 {
+		r = r[:60]
+	}
+	sess.Meta.Label = string(r)
+	_ = session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta)
 }
 
 // markStatus updates session meta.Status + LastActive.

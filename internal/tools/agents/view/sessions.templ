@@ -3,260 +3,619 @@ package view
 import (
 	"fmt"
 	"time"
+
+	"github.com/yogasw/wick/internal/agents/session"
 )
 
-// SessionsList renders the paginated sessions table with a create form.
+// SessionsList renders the full "All chats" page with search.
 templ SessionsList(vm SessionsListVM) {
-	@AgentsLayout(vm.Base, "sessions") {
-		<div class="space-y-6" data-base={ vm.Base }>
+	@AgentsLayout(vm.Layout) {
+		<div class="max-w-5xl mx-auto space-y-5" data-base={ vm.Base }>
+			<!-- Header -->
 			<div class="flex items-center justify-between">
-				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Sessions</h1>
+				<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">All chats</h1>
 				<button
 					onclick="document.getElementById('create-session-modal').classList.remove('hidden')"
-					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
-				>+ New Session</button>
+					class="inline-flex items-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+				>
+					<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M8 3v10M3 8h10" stroke-linecap="round"></path>
+					</svg>
+					New chat
+				</button>
 			</div>
-			<!-- Create session modal -->
-			<div id="create-session-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-				<div class="w-full max-w-md rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">
-					<h2 class="mb-4 text-base font-semibold text-black-900 dark:text-white-100">New Session</h2>
-					<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions") } class="space-y-4">
-						<div>
-							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Workspace (optional)</label>
-							<select name="workspace" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
-								<option value="">— no workspace —</option>
-								for _, name := range vm.WorkspaceList {
-									<option value={ name }>{ name }</option>
-								}
-							</select>
-						</div>
-						<div>
-							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Provider</label>
-							if len(vm.Providers) == 0 {
-								<p class="text-xs text-red-600 dark:text-red-400">No healthy providers found. Configure one in <a class="underline" href={ templ.SafeURL(vm.Base + "/providers") }>Providers</a>.</p>
-							} else {
-								<select name="provider" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none">
-									for _, p := range vm.Providers {
-										<option value={ p.Type }>{ p.Type }/{ p.Name } — { p.Version }</option>
-									}
-								</select>
-							}
-						</div>
-						<div class="flex justify-end gap-3 pt-2">
-							<button type="button" onclick="document.getElementById('create-session-modal').classList.add('hidden')" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">Cancel</button>
-							<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Create</button>
-						</div>
-					</form>
-				</div>
+			<!-- Search -->
+			<div class="relative">
+				<svg viewBox="0 0 16 16" class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-black-600 dark:text-black-700 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
+					<circle cx="6.5" cy="6.5" r="4.5"></circle>
+					<path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
+				</svg>
+				<input
+					type="text"
+					placeholder="Search chats..."
+					data-session-search
+					class="w-full rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 pl-9 pr-4 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+				/>
 			</div>
-			<!-- Sessions table -->
-			@SessionsTable(SessionsTableVM{
-				Base:          vm.Base,
-				IDs:           vm.IDs,
-				Sessions:      vm.Sessions,
-				Lifecycle:     vm.Lifecycle,
-				IdleTimeoutMs: vm.IdleTimeoutMs,
-				EmptyText:     "No sessions found.",
-				ShowPaging:    true,
-				Page:          vm.Page,
-				HasNext:       vm.HasNext,
-			})
+			<!-- Session list -->
+			@sessionCreateModal(vm)
+			@sessionsFullList(vm)
 		</div>
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
 	}
 }
 
-// SessionsTable is the reusable sessions list. The Sessions full page
-// renders it with paging; the Overview "Active Sessions" panel renders
-// it with EmptyText="No active sessions" and ShowPaging=false.
-templ SessionsTable(vm SessionsTableVM) {
-	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
-		if len(vm.IDs) == 0 {
-			<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">{ vm.EmptyText }</div>
-		} else {
-			<table class="w-full text-sm">
-				<thead>
-					<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-						<th class="px-5 py-3 text-left">Workspace</th>
-						<th class="px-5 py-3 text-left">Status</th>
-						<th class="px-5 py-3 text-left hidden md:table-cell">Origin</th>
-						<th class="px-5 py-3 text-left hidden lg:table-cell">Last Active</th>
-						<th class="px-5 py-3 text-right w-12"></th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, id := range vm.IDs {
-						if sess, ok := vm.Sessions[id]; ok {
-							<tr
-								data-row-link={ vm.Base + "/sessions/" + id }
-								class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-							>
-								<td class="px-5 py-3 text-black-800 dark:text-black-600">
-									if sess.Meta.Workspace != "" {
-										<span class="font-medium text-black-900 dark:text-white-100">{ sess.Meta.Workspace }</span>
-									} else {
-										<span class="text-black-600 dark:text-black-700">—</span>
-									}
-								</td>
-								<td class="px-5 py-3">
-									if lc, ok := vm.Lifecycle[id]; ok {
-										@lifecycleBadge(lc.Lifecycle, lc.PID, lc.LastActiveMs, vm.IdleTimeoutMs)
-									} else {
-										@lifecycleBadge(rowFallbackLifecycle(string(sess.Meta.Status)), 0, 0, vm.IdleTimeoutMs)
-									}
-								</td>
-								<td class="px-5 py-3 text-black-800 dark:text-black-600 hidden md:table-cell">{ string(sess.Meta.Origin) }</td>
-								<td class="px-5 py-3 text-black-700 dark:text-black-600 hidden lg:table-cell text-xs">{ relTime(sess.Meta.LastActive) }</td>
-								<td class="px-5 py-3 text-right">
-									@kebabMenu(kebabAction{Label: "Delete", Variant: "danger", DataAttr: "data-delete-session", DataVal: id})
-								</td>
-							</tr>
+templ sessionCreateModal(vm SessionsListVM) {
+	<div id="create-session-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+		<div class="w-full max-w-md rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-2xl mx-4">
+			<div class="flex items-center justify-between mb-5">
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">New Session</h2>
+				<button
+					type="button"
+					onclick="document.getElementById('create-session-modal').classList.add('hidden')"
+					class="rounded-lg p-1 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+				>
+					<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path>
+					</svg>
+				</button>
+			</div>
+			<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions") } class="space-y-4">
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Workspace <span class="font-normal text-black-600 dark:text-black-700">(optional)</span></label>
+					<select
+						name="workspace"
+						class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+					>
+						<option value="">— no workspace —</option>
+						for _, name := range vm.WorkspaceList {
+							<option value={ name }>{ name }</option>
 						}
-					}
-				</tbody>
-			</table>
-			if vm.ShowPaging && (vm.Page > 1 || vm.HasNext) {
-				<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
-					if vm.Page > 1 {
-						<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Provider</label>
+					if len(vm.Providers) == 0 {
+						<div class="rounded-lg border border-neg-300 dark:border-neg-700 bg-neg-50 dark:bg-neg-900/20 px-3 py-2.5">
+							<p class="text-xs text-neg-600 dark:text-neg-400">
+								No healthy providers found. Configure one in <a class="underline font-medium" href={ templ.SafeURL(vm.Base + "/providers") }>Providers</a>.
+							</p>
+						</div>
 					} else {
-						<span></span>
-					}
-					<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
-					if vm.HasNext {
-						<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
-					} else {
-						<span></span>
+						<select
+							name="provider"
+							class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+						>
+							for _, p := range vm.Providers {
+								<option value={ p.Type }>{ p.Type }/{ p.Name } — { p.Version }</option>
+							}
+						</select>
 					}
 				</div>
+				<div class="flex justify-end gap-3 pt-1">
+					<button
+						type="button"
+						onclick="document.getElementById('create-session-modal').classList.add('hidden')"
+						class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+					>Cancel</button>
+					<button
+						type="submit"
+						class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors disabled:opacity-50"
+					>Create</button>
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+// sessionsFullList renders the "All chats" list with search-filterable rows.
+templ sessionsFullList(vm SessionsListVM) {
+	if len(vm.IDs) == 0 {
+		<div class="flex flex-col items-center py-16 text-center">
+			<p class="text-sm text-black-700 dark:text-black-600">No sessions yet.</p>
+		</div>
+	} else {
+		<div data-session-list class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden divide-y divide-white-300 dark:divide-navy-600">
+			for _, id := range vm.IDs {
+				if sess, ok := vm.Sessions[id]; ok {
+					@sessionsFullRow(vm, id, sess)
+				}
 			}
+			<p data-search-empty class="hidden px-5 py-8 text-center text-sm text-black-600 dark:text-black-700">No chats match your search.</p>
+		</div>
+		if vm.Page > 1 || vm.HasNext {
+			@sessionPager(SessionsTableVM{Base: vm.Base, Page: vm.Page, HasNext: vm.HasNext})
+		}
+	}
+}
+
+templ sessionsFullRow(vm SessionsListVM, id string, sess session.Session) {
+	{{ label := vm.Labels[id] }}
+	<div
+		data-row-link={ vm.Base + "/sessions/" + id }
+		data-search-row
+		data-search-text={
+			func() string {
+				s := label
+				if sess.Meta.Workspace != "" {
+					s += " " + sess.Meta.Workspace
+				}
+				return s
+			}(),
+		}
+		class="flex items-center justify-between gap-4 px-5 py-3.5 cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+	>
+		<div class="flex-1 min-w-0">
+			<p class="truncate text-sm font-medium text-black-900 dark:text-white-100">
+				if label != "" {
+					{ label }
+				} else if sess.Meta.Workspace != "" {
+					{ sess.Meta.Workspace }
+				} else {
+					New session
+				}
+			</p>
+			<div class="flex items-center gap-2 mt-0.5">
+				if sess.Meta.Workspace != "" && label != "" {
+					<span class="text-xs text-black-700 dark:text-black-600">{ sess.Meta.Workspace }</span>
+					<span class="text-black-400 dark:text-black-700">·</span>
+				}
+				<span class="text-xs text-black-600 dark:text-black-700">{ relTime(sess.Meta.LastActive) }</span>
+				if lc, ok := vm.Lifecycle[id]; ok && lc.Lifecycle != "" && lc.Lifecycle != "killed" {
+					<span class={
+						"inline-block h-1.5 w-1.5 rounded-full",
+						templ.KV("bg-green-500", lc.Lifecycle == "working"),
+						templ.KV("bg-amber-400", lc.Lifecycle == "spawning"),
+						templ.KV("bg-blue-400", lc.Lifecycle == "idle"),
+					}></span>
+				}
+			</div>
+		</div>
+		<div data-row-action>
+			@kebabMenu(kebabAction{Label: "Delete", Variant: "danger", DataAttr: "data-delete-session", DataVal: id})
+		</div>
+	</div>
+}
+
+// SessionsTable is the reusable sessions card list. The Sessions full page
+// renders it with paging; the Overview "Active Sessions" panel renders
+// it without paging.
+templ SessionsTable(vm SessionsTableVM) {
+	if len(vm.IDs) == 0 {
+		@sessionEmptyState(vm.EmptyText)
+	} else {
+		<div class="space-y-2">
+			for _, id := range vm.IDs {
+				if sess, ok := vm.Sessions[id]; ok {
+					@sessionCard(vm, id, sess)
+				}
+			}
+		</div>
+		if vm.ShowPaging && (vm.Page > 1 || vm.HasNext) {
+			@sessionPager(vm)
+		}
+	}
+}
+
+templ sessionEmptyState(text string) {
+	<div class="flex flex-col items-center justify-center rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 py-16 text-center">
+		<div class="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white-200 dark:bg-navy-800">
+			<svg viewBox="0 0 24 24" class="h-6 w-6 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" stroke-linecap="round" stroke-linejoin="round"></path>
+			</svg>
+		</div>
+		<p class="text-sm font-medium text-black-800 dark:text-black-600">{ text }</p>
+	</div>
+}
+
+templ sessionCard(vm SessionsTableVM, id string, sess session.Session) {
+	<div
+		data-row-link={ vm.Base + "/sessions/" + id }
+		class="group cursor-pointer rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-5 py-4 shadow-sm hover:border-green-400 dark:hover:border-green-700 hover:shadow-md transition-all"
+	>
+		<div class="flex items-start justify-between gap-4">
+			<div class="min-w-0 flex-1">
+				<div class="flex flex-wrap items-center gap-2 mb-1.5">
+					if sess.Meta.Workspace != "" {
+						<span class="font-semibold text-sm text-black-900 dark:text-white-100">{ sess.Meta.Workspace }</span>
+					} else {
+						<span class="font-medium text-sm text-black-700 dark:text-black-600 italic">No workspace</span>
+					}
+					if lc, ok := vm.Lifecycle[id]; ok {
+						@lifecycleBadge(lc.Lifecycle, lc.PID, lc.LastActiveMs, vm.IdleTimeoutMs)
+					} else {
+						@lifecycleBadge(rowFallbackLifecycle(string(sess.Meta.Status)), 0, 0, vm.IdleTimeoutMs)
+					}
+				</div>
+				<div class="flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
+					<span class="font-mono truncate max-w-[160px]" title={ id }>{ id[:min(len(id), 12)] }…</span>
+					if sess.Meta.Origin != "" {
+						<span class="inline-flex items-center gap-1">
+							<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+								<circle cx="6" cy="6" r="4.5"></circle>
+								<path d="M6 3.5v2.5l1.5 1.5" stroke-linecap="round"></path>
+							</svg>
+							{ string(sess.Meta.Origin) }
+						</span>
+					}
+					<span class="inline-flex items-center gap-1 text-black-600 dark:text-black-700">
+						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M6 1.5v5l3 2" stroke-linecap="round" stroke-linejoin="round"></path>
+						</svg>
+						{ relTime(sess.Meta.LastActive) }
+					</span>
+				</div>
+			</div>
+			<div class="flex items-center gap-2 shrink-0" data-row-action>
+				@kebabMenu(kebabAction{Label: "Delete", Variant: "danger", DataAttr: "data-delete-session", DataVal: id})
+			</div>
+		</div>
+	</div>
+}
+
+templ sessionPager(vm SessionsTableVM) {
+	<div class="flex items-center justify-between pt-2">
+		if vm.Page > 1 {
+			<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page-1)) } class="inline-flex items-center gap-1 text-sm text-green-600 dark:text-green-400 hover:underline">
+				<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				Prev
+			</a>
+		} else {
+			<span></span>
+		}
+		<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
+		if vm.HasNext {
+			<a href={ templ.SafeURL(fmt.Sprintf("%s/sessions?page=%d", vm.Base, vm.Page+1)) } class="inline-flex items-center gap-1 text-sm text-green-600 dark:text-green-400 hover:underline">
+				Next
+				<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+			</a>
+		} else {
+			<span></span>
 		}
 	</div>
 }
 
+// ── Session Detail ─────────────────────────────────────────────────────────
+
 // SessionDetail renders the session detail page with tabs and composer.
 templ SessionDetail(vm SessionDetailVM) {
-	@AgentsLayout(vm.Base, "sessions") {
-		<div class="space-y-4" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+	@AgentsLayout(vm.Layout) {
+		<div class="flex flex-col gap-4" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
 			@GateDisabledBanner(vm.Gate)
-			<div class="flex flex-wrap items-start justify-between gap-3">
-				<div>
-					<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-xs text-black-700 dark:text-black-600 hover:underline">← Sessions</a>
-					<h1 class="mt-1 font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ vm.Session.ID }</h1>
-					<div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
-						if vm.Session.Meta.Workspace != "" {
-							<span>Workspace: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Meta.Workspace }</strong></span>
-						}
-						if len(vm.Session.Agents) > 0 {
-							<span>Agent: <strong class="text-black-900 dark:text-white-100">{ vm.Session.Agents[0].Name }</strong> ({ vm.Session.Agents[0].Provider })</span>
-						}
-						@lifecycleBadge(vm.Lifecycle, vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
-					</div>
-				</div>
-				<div class="flex gap-2">
-					<button
-						data-kill={ vm.Session.ID }
-						class="rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
-					>Kill</button>
-					<button
-						data-delete-session={ vm.Session.ID }
-						class="rounded-lg border border-red-300 dark:border-red-800 px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-					>Delete</button>
-				</div>
-			</div>
-			<!-- Tabs -->
-			<div class="flex gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 w-fit">
-				@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=conversation", "Conversation", vm.Tab == "conversation")
-				@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=commands", "Commands", vm.Tab == "commands")
-				@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=raw", "Raw", vm.Tab == "raw")
-			</div>
-			<!-- Tab content -->
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm flex flex-col" style="min-height:420px">
-				if vm.Tab == "conversation" {
-					<div class="flex-1 overflow-y-auto p-5 space-y-4" data-turns style="max-height:55vh">
-						if len(vm.Turns) == 0 {
-							<p class="text-center text-sm text-black-700 dark:text-black-600 py-10">No messages yet. Send one below.</p>
-						}
-						for _, t := range vm.Turns {
-							@conversationTurn(t)
-						}
-					</div>
-					<div class="border-t border-white-300 dark:border-navy-600 p-4 space-y-3">
-						@AskUserCard(vm.Base)
-						<form data-send-form class="flex gap-3 items-end">
-							<textarea
-								name="text"
-								rows="2"
-								placeholder="Send a message to the agent… (Ctrl+Enter to submit)"
-								class="flex-1 resize-none rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
-							></textarea>
-							<button
-								type="submit"
-								class="rounded-lg bg-green-500 px-5 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors disabled:opacity-50"
-							>Send</button>
-						</form>
-					</div>
-				} else if vm.Tab == "commands" {
-					<div class="flex-1 overflow-y-auto p-5" style="max-height:70vh">
-						if len(vm.CmdLines) == 0 {
-							<p class="text-center text-sm text-black-700 dark:text-black-600 py-10">No commands logged yet.</p>
-						} else {
-							<pre class="text-xs font-mono text-black-900 dark:text-white-100 whitespace-pre-wrap break-all">for _, line := range vm.CmdLines {
-								{ line + "\n" }
-							}</pre>
-						}
-					</div>
-				} else {
-					<div class="flex-1 p-5">
-						<p class="text-sm text-black-700 dark:text-black-600">Raw event log is stored at <code class="font-mono text-xs bg-white-200 dark:bg-navy-800 px-1 rounded">raw.jsonl</code> in the session directory when recording is enabled.</p>
-					</div>
-				}
-			</div>
-			@ApprovedCommandsPanel(vm.Base, vm.Session.ID)
+			@sessionDetailHeader(vm)
+			@sessionDetailTabs(vm)
+			@sessionDetailContent(vm)
 		</div>
 		@ApprovalModal(vm.Base)
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
 	}
 }
 
+templ sessionDetailHeader(vm SessionDetailVM) {
+	<div class="flex flex-wrap items-start justify-between gap-3">
+		<div class="min-w-0">
+			<a
+				href={ templ.SafeURL(vm.Base + "/sessions") }
+				class="inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-colors mb-1"
+			>
+				<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				Sessions
+			</a>
+			<div class="flex flex-wrap items-center gap-2">
+				<h1 class="font-mono text-sm font-semibold text-black-900 dark:text-white-100 break-all">{ vm.Session.ID }</h1>
+				@lifecycleBadge(vm.Lifecycle, vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
+			</div>
+			<div class="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
+				if vm.Session.Meta.Workspace != "" {
+					<span class="inline-flex items-center gap-1">
+						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="10" height="8" rx="1"></rect><path d="M4 3V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V3" stroke-linecap="round"></path></svg>
+						<strong class="font-medium text-black-900 dark:text-white-100">{ vm.Session.Meta.Workspace }</strong>
+					</span>
+				}
+				if len(vm.Session.Agents) > 0 {
+					<span class="inline-flex items-center gap-1">
+						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="4" r="2"></circle><path d="M2 10c0-2.21 1.79-4 4-4s4 1.79 4 4" stroke-linecap="round"></path></svg>
+						<strong class="font-medium text-black-900 dark:text-white-100">{ vm.Session.Agents[0].Name }</strong>
+						<span class="text-black-600 dark:text-black-700">({ vm.Session.Agents[0].Provider })</span>
+					</span>
+				}
+			</div>
+		</div>
+		<div class="flex gap-2 shrink-0">
+			<button
+				data-kill={ vm.Session.ID }
+				class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors"
+			>
+				<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M4 4l4 4M8 4L4 8" stroke-linecap="round"></path></svg>
+				Kill
+			</button>
+			<button
+				data-delete-session={ vm.Session.ID }
+				class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors"
+			>
+				<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M4 3V2h4v1M5 5.5v3M7 5.5v3M3 3l.5 7h5L9 3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				Delete
+			</button>
+		</div>
+	</div>
+}
+
+templ sessionDetailTabs(vm SessionDetailVM) {
+	<div class="flex gap-1 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 w-fit">
+		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=conversation", "Conversation", vm.Tab == "conversation")
+		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=commands", "Commands", vm.Tab == "commands")
+		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=approvals", "Approvals", vm.Tab == "approvals")
+		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=raw", "Raw", vm.Tab == "raw")
+	</div>
+}
+
+templ sessionDetailContent(vm SessionDetailVM) {
+	<div
+		class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 shadow-sm overflow-hidden flex flex-col"
+		data-chat-panel
+		style="height:calc(100vh - 4rem - 200px); min-height:320px"
+	>
+		if vm.Tab == "conversation" {
+			@sessionConversationTab(vm)
+		} else if vm.Tab == "commands" {
+			@sessionCommandsTab(vm)
+		} else if vm.Tab == "approvals" {
+			@sessionApprovalsTab(vm)
+		} else {
+			@sessionRawTab()
+		}
+	</div>
+}
+
+templ sessionConversationTab(vm SessionDetailVM) {
+	<div class="flex-1 overflow-y-auto px-4 py-5 space-y-5 scrollbar-thin" data-turns id="chat-turns">
+		if len(vm.Turns) == 0 {
+			@chatEmptyState()
+		}
+		for _, t := range vm.Turns {
+			@conversationTurn(t)
+		}
+		<div id="chat-bottom"></div>
+	</div>
+	<div class="shrink-0 px-4 pb-4 pt-2">
+		@AskUserCard(vm.Base)
+		@chatComposer(vm)
+	</div>
+}
+
+templ chatEmptyState() {
+	<div class="flex flex-col items-center justify-center h-full py-12 text-center">
+		<div class="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/20">
+			<svg viewBox="0 0 24 24" class="h-6 w-6 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" stroke-linecap="round" stroke-linejoin="round"></path>
+			</svg>
+		</div>
+		<p class="text-sm font-medium text-black-800 dark:text-black-600">No messages yet</p>
+		<p class="mt-1 text-xs text-black-600 dark:text-black-700">Send a message to start.</p>
+	</div>
+}
+
+templ chatComposer(vm SessionDetailVM) {
+	<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md">
+		<form data-send-form>
+			<textarea
+				name="text"
+				rows="1"
+				placeholder="Message the agent…"
+				class="w-full resize-none bg-transparent px-4 pt-3 pb-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:outline-none leading-relaxed"
+				style="max-height:160px; overflow-y:auto"
+				data-auto-resize
+			></textarea>
+			<div class="flex items-center justify-between px-3 pb-3 pt-1">
+				<div class="flex items-center gap-2">
+					if len(vm.Providers) > 0 {
+						<div class="relative" data-row-action="">
+							<button
+								type="button"
+								data-provider-menu-toggle
+								class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 px-2.5 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+							>
+								<svg viewBox="0 0 12 12" class="h-3 w-3 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="4.5" r="2"></circle><path d="M2 10c0-2.21 1.79-4 4-4s4 1.79 4 4" stroke-linecap="round"></path></svg>
+								<span data-active-provider-label>{ vm.ActiveProvider }</span>
+								<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+							</button>
+							<div data-provider-menu class="hidden absolute bottom-full left-0 mb-1 z-20 min-w-[140px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1">
+								for _, p := range vm.Providers {
+									<button
+										type="button"
+										data-provider-choice={ p.Type }
+										class="w-full text-left px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors flex items-center justify-between gap-2"
+									>
+										{ p.Type }
+										if p.Name != "" && p.Name != p.Type {
+											<span class="text-black-600 dark:text-black-700">{ p.Name }</span>
+										}
+									</button>
+								}
+							</div>
+						</div>
+					}
+					if len(vm.WorkspaceList) > 0 {
+						<div class="relative" data-row-action="">
+							<button
+								type="button"
+								data-workspace-menu-toggle
+								class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 px-2.5 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+							>
+								<svg viewBox="0 0 12 12" class="h-3 w-3 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="10" height="8" rx="1"></rect><path d="M4 3V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V3" stroke-linecap="round"></path></svg>
+								<span data-active-workspace-label>
+									if vm.ActiveWorkspace != "" {
+										{ vm.ActiveWorkspace }
+									} else {
+										default
+									}
+								</span>
+								<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+							</button>
+							<div data-workspace-menu class="hidden absolute bottom-full left-0 mb-1 z-20 min-w-[140px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1">
+								for _, ws := range vm.WorkspaceList {
+									<button
+										type="button"
+										data-workspace-choice={ ws }
+										class="w-full text-left px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+									>
+										{ ws }
+									</button>
+								}
+							</div>
+						</div>
+					}
+				</div>
+				<div class="flex items-center gap-2">
+					<span class="text-[10px] text-black-600 dark:text-black-700 hidden sm:block">Shift+Enter for newline</span>
+					<button
+						type="submit"
+						class="flex items-center justify-center h-8 w-8 rounded-xl bg-green-500 text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						title="Send (Enter)"
+					>
+						<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M13 8L3 3l2.5 5L3 13l10-5z" stroke-linecap="round" stroke-linejoin="round"></path>
+						</svg>
+					</button>
+				</div>
+			</div>
+		</form>
+	</div>
+}
+
+templ sessionCommandsTab(vm SessionDetailVM) {
+	<div class="flex-1 overflow-y-auto" style="max-height:70vh">
+		if len(vm.CmdLines) == 0 {
+			<div class="flex flex-col items-center justify-center py-16 text-center">
+				<div class="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white-200 dark:bg-navy-800">
+					<svg viewBox="0 0 24 24" class="h-6 w-6 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5">
+						<path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" stroke-linecap="round" stroke-linejoin="round"></path>
+					</svg>
+				</div>
+				<p class="text-sm text-black-700 dark:text-black-600">No commands logged yet.</p>
+			</div>
+		} else {
+			<div class="font-mono text-xs">
+				<div class="sticky top-0 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2 flex items-center justify-between">
+					<span class="text-black-700 dark:text-black-600 font-sans text-xs">{ fmt.Sprintf("%d command(s)", len(vm.CmdLines)) }</span>
+				</div>
+				for i, line := range vm.CmdLines {
+					<div class="flex items-start gap-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors group">
+						<span class="w-12 shrink-0 px-4 py-2 text-right text-black-600 dark:text-black-700 select-none border-r border-white-300 dark:border-navy-600 group-hover:text-black-700 dark:group-hover:text-black-600">{ fmt.Sprintf("%d", i+1) }</span>
+						<span class="flex-1 px-4 py-2 text-black-900 dark:text-white-100 whitespace-pre-wrap break-all">{ line }</span>
+					</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+templ sessionApprovalsTab(vm SessionDetailVM) {
+	<div class="flex-1 overflow-y-auto p-5">
+		@ApprovedCommandsPanel(vm.Base, vm.Session.ID)
+	</div>
+}
+
+templ sessionRawTab() {
+	<div class="flex-1 p-6">
+		<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+			<div class="flex items-start gap-3">
+				<div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white-300 dark:bg-navy-600">
+					<svg viewBox="0 0 16 16" class="h-4 w-4 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5">
+						<path d="M13 4H3a1 1 0 00-1 1v7a1 1 0 001 1h10a1 1 0 001-1V5a1 1 0 00-1-1z"></path>
+						<path d="M10 8H6M8 6v4" stroke-linecap="round"></path>
+					</svg>
+				</div>
+				<div>
+					<p class="text-sm font-medium text-black-900 dark:text-white-100">Raw event log</p>
+					<p class="mt-1 text-xs text-black-700 dark:text-black-600">
+						Stored at <code class="font-mono bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 rounded text-[11px]">raw.jsonl</code> in the session directory when recording is enabled.
+					</p>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
 templ sessionTab(href, label string, active bool) {
 	<a
 		href={ templ.SafeURL(href) }
 		class={
-			"rounded-md px-4 py-1.5 text-sm font-medium transition-colors",
+			"rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
 			templ.KV("bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 shadow-sm", active),
 			templ.KV("text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100", !active),
 		}
 	>{ label }</a>
 }
 
+// ── Conversation Turn ──────────────────────────────────────────────────────
+
 templ conversationTurn(t TurnVM) {
 	switch t.Role {
 		case "user":
-			<div class="flex justify-end">
-				<div class="max-w-[80%] rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap break-words">{ t.Text }</div>
-			</div>
+			@userTurn(t)
 		case "assistant":
-			<div class="flex justify-start">
-				<div class="max-w-[80%] rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5 text-sm text-black-900 dark:text-white-100 whitespace-pre-wrap break-words">
-					{ t.Text }
-					if t.Truncated {
-						<p class="mt-1 text-xs text-black-600 dark:text-black-700 italic">…truncated, see raw.jsonl for full output.</p>
-					}
-				</div>
-			</div>
+			@assistantTurn(t)
 		default:
-			<div class="flex justify-center">
-				<div class="rounded-full bg-white-300 dark:bg-navy-600 px-3 py-1 text-xs text-black-700 dark:text-black-600">{ t.Text }</div>
-			</div>
+			@systemTurn(t)
 	}
 }
 
+templ userTurn(t TurnVM) {
+	<div class="flex justify-end gap-2 group">
+		<div class="flex flex-col items-end gap-1 max-w-[80%]">
+			if !t.Time.IsZero() {
+				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
+			}
+			<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm">
+				{ t.Text }
+			</div>
+		</div>
+	</div>
+}
+
+templ assistantTurn(t TurnVM) {
+	<div class="flex justify-start gap-3 group">
+		<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">
+			<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="8" cy="6" r="2.5"></circle>
+				<path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path>
+			</svg>
+		</div>
+		<div class="flex flex-col gap-1 max-w-[80%] min-w-0">
+			if t.Agent != "" {
+				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ t.Agent }</span>
+			}
+			<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
+				<div class="prose-turn" data-md>{ t.Text }</div>
+				if t.Truncated {
+					<p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
+				}
+			</div>
+			if !t.Time.IsZero() {
+				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
+			}
+		</div>
+	</div>
+}
+
+templ systemTurn(t TurnVM) {
+	<div class="flex justify-center py-1">
+		<div class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600">
+			<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="6" cy="6" r="4.5"></circle>
+				<path d="M6 4v2l1 1" stroke-linecap="round"></path>
+			</svg>
+			{ t.Text }
+		</div>
+	</div>
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 // rowFallbackLifecycle maps the persisted session.Meta.Status (used
 // when the pool has no live entry for a row) onto a lifecycle the
-// badge renderer understands. Persisted "running" never reaches here
-// because the pool always has a live entry while running; we still
-// map it for completeness.
+// badge renderer understands.
 func rowFallbackLifecycle(status string) string {
 	switch status {
 	case "running":
@@ -283,4 +642,11 @@ func relTime(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

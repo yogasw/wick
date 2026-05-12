@@ -8,12 +8,25 @@ import (
 	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
+// AgentsLayoutVM carries sidebar data for the full-screen Claude-style shell.
+type AgentsLayoutVM struct {
+	Base             string
+	ActivePage       string
+	SidebarIDs       []string
+	SidebarSessions  map[string]session.Session
+	SidebarLifecycle map[string]SessionLifecycleVM
+	SidebarLabels    map[string]string // session id → first user message preview
+	ActiveSessionID  string
+	IdleTimeoutMs    int64
+}
+
 // OverviewVM holds data for the Overview page. SessionIDs is the
 // active-only subset (spawning/working/idle) — Killed sessions live
 // in /sessions, not on the Overview. Queued is the per-session FIFO
 // snapshot — operators can kill a queue entry that's been waiting
 // too long.
 type OverviewVM struct {
+	Layout        AgentsLayoutVM
 	Base          string
 	Active        int
 	QueueLen      int
@@ -38,9 +51,11 @@ type QueuedEntryVM struct {
 // means no live entry in the pool (badge falls back to "killed" /
 // no-agent).
 type SessionsListVM struct {
+	Layout        AgentsLayoutVM
 	Base          string
 	IDs           []string
 	Sessions      map[string]session.Session
+	Labels        map[string]string // id → first user message preview
 	Workspaces    map[string]workspace.Workspace
 	WorkspaceList []string
 	PresetList    []string
@@ -99,20 +114,26 @@ type TurnVM struct {
 // status badge: the server emits the snapshot at render time and JS
 // updates it from SSE events thereafter.
 type SessionDetailVM struct {
-	Base          string
-	Session       session.Session
-	Tab           string // "conversation" | "commands" | "raw"
-	Turns         []TurnVM
-	CmdLines      []string
-	Lifecycle     string
-	PID           int
-	LastActiveMs  int64
-	IdleTimeoutMs int64
-	Gate          GateStatusVM
+	Layout         AgentsLayoutVM
+	Base           string
+	Session        session.Session
+	Tab            string // "conversation" | "commands" | "raw"
+	Turns          []TurnVM
+	CmdLines       []string
+	Lifecycle      string
+	PID            int
+	LastActiveMs   int64
+	IdleTimeoutMs  int64
+	Gate           GateStatusVM
+	Providers       []ProviderChoiceVM
+	ActiveProvider  string
+	WorkspaceList   []string
+	ActiveWorkspace string
 }
 
 // WorkspacesVM holds data for the Workspaces page.
 type WorkspacesVM struct {
+	Layout        AgentsLayoutVM
 	Base          string
 	WorkspaceList []string
 	Workspaces    map[string]workspace.Workspace
@@ -121,21 +142,24 @@ type WorkspacesVM struct {
 
 // PresetsVM holds data for the Presets list page.
 type PresetsVM struct {
-	Base  string
-	Names []string
+	Layout AgentsLayoutVM
+	Base   string
+	Names  []string
 }
 
 // PresetDetailVM holds data for the Preset editor page.
 type PresetDetailVM struct {
-	Base string
-	Name string
-	Body string
+	Layout AgentsLayoutVM
+	Base   string
+	Name   string
+	Body   string
 }
 
 // ProvidersVM holds data for the Providers page — runtime instance
 // statuses, recent spawn log files, and live pool capacity. Spawns
 // is the current page slice; Page/HasNext drive the pager.
 type ProvidersVM struct {
+	Layout        AgentsLayoutVM
 	Base          string
 	Statuses      []provider.Status
 	Spawns        []provider.SpawnLogFile
@@ -172,6 +196,7 @@ type GateStatusVM struct {
 
 // ProviderSpawnDetailVM holds data for one spawn-log file timeline.
 type ProviderSpawnDetailVM struct {
+	Layout AgentsLayoutVM
 	Base   string
 	File   provider.SpawnLogFile
 	Events []provider.SpawnEvent

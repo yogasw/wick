@@ -120,6 +120,18 @@ func (r *Registry) Add(c Channel, src ConfigSource) {
 	r.mu.Unlock()
 }
 
+// ChannelByName returns the registered channel matching name, or nil.
+func (r *Registry) ChannelByName(name string) Channel {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.channels {
+		if c.Name() == name {
+			return c
+		}
+	}
+	return nil
+}
+
 // Channels returns a snapshot of the registered channels.
 func (r *Registry) Channels() []Channel {
 	r.mu.Lock()

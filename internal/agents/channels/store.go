@@ -96,15 +96,28 @@ func SetChannelConfigKey(db *gorm.DB, channelType, key, value string) error {
 	if err != nil {
 		return err
 	}
-	// enabled mirrors whether a bot_token is present — the UI reads this
-	// for the "Configured" badge. Any channel type that uses a different
-	// primary credential key (not "bot_token") must override this field
-	// after calling SetChannelConfigKey.
+	// enabled mirrors whether the primary credential is present. Default
+	// signal is a non-empty "bot_token"; channels with no per-instance
+	// token (e.g. REST, which authenticates via PAT per request) use an
+	// explicit "enabled" key in the JSON config instead.
+	enabled := m["bot_token"] != ""
+	if _, hasEnabled := m["enabled"]; hasEnabled {
+		enabled = m["enabled"] == "true"
+	}
 	return db.Model(&ch).Updates(map[string]interface{}{
 		"config":     string(data),
-		"enabled":    m["bot_token"] != "",
+		"enabled":    enabled,
 		"updated_at": time.Now(),
 	}).Error
+}
+
+// firstNonEmpty returns v when non-empty, otherwise fallback. Used to
+// supply per-list mode defaults on legacy rows that pre-date the new keys.
+func firstNonEmpty(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
 
 // LoadSlackConfig reads the Slack channel config from agent_channels.
@@ -115,14 +128,20 @@ func LoadSlackConfig(db *gorm.DB) (cfg agentconfig.SlackChannelConfig, pubURL st
 		return
 	}
 	cfg = agentconfig.SlackChannelConfig{
-		Mode:          m["mode"],
-		BotToken:      m["bot_token"],
-		AppToken:      m["app_token"],
-		SigningSecret: m["signing_secret"],
-		AccessMode:    m["access_mode"],
-		AllowedUsers:  m["allowed_users"],
-		AllowedGroups: m["allowed_groups"],
-		Workspace:     m["workspace"],
+		Mode:               m["mode"],
+		BotToken:           m["bot_token"],
+		AppToken:           m["app_token"],
+		SigningSecret:      m["signing_secret"],
+		UsersMode:          firstNonEmpty(m["users_mode"], "all"),
+		AllowedUsers:       m["allowed_users"],
+		GroupsMode:         firstNonEmpty(m["groups_mode"], "all"),
+		AllowedGroups:      m["allowed_groups"],
+		ChannelsMode:       firstNonEmpty(m["channels_mode"], "all"),
+		AllowedChannels:    m["allowed_channels"],
+		GateApprovers:      firstNonEmpty(m["gate_approvers"], "trigger_users"),
+		GateApproverUsers:  m["gate_approver_users"],
+		GateApproverGroups: m["gate_approver_groups"],
+		Workspace:          m["workspace"],
 	}
 	pubURL = m["public_url"]
 	return
@@ -138,6 +157,18 @@ func LoadTelegramConfig(db *gorm.DB) (agentconfig.TelegramChannelConfig, error) 
 		BotToken:   m["bot_token"],
 		AllowedIDs: m["allowed_ids"],
 		Workspace:  m["workspace"],
+	}, nil
+}
+
+// LoadRestConfig reads the REST channel config from agent_channels.
+func LoadRestConfig(db *gorm.DB) (agentconfig.RestChannelConfig, error) {
+	m, err := GetChannelConfigMap(db, "rest")
+	if err != nil {
+		return agentconfig.RestChannelConfig{}, err
+	}
+	return agentconfig.RestChannelConfig{
+		Enabled:   m["enabled"],
+		Workspace: m["workspace"],
 	}, nil
 }
 
@@ -158,6 +189,11 @@ func (s DBStore) LoadSlack() (agentconfig.SlackChannelConfig, string, error) {
 // LoadTelegram satisfies TelegramConfigStore.
 func (s DBStore) LoadTelegram() (agentconfig.TelegramChannelConfig, error) {
 	return LoadTelegramConfig(s.db)
+}
+
+// LoadRest satisfies RestConfigStore.
+func (s DBStore) LoadRest() (agentconfig.RestChannelConfig, error) {
+	return LoadRestConfig(s.db)
 }
 
 // EnsureChannel satisfies ChannelEnsurer.

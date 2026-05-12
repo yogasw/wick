@@ -54,15 +54,26 @@ func channelsPage(c *tool.Ctx) {
 			Description: "Connect via Telegram Bot API. Agents reply in private chats and group threads.",
 			HRef:        base + "/channels/telegram",
 		},
+		{
+			Name:        "REST",
+			Slug:        "rest",
+			Icon:        "🌐",
+			Description: "OpenAI Chat Completions compatible HTTP endpoint. Use any OpenAI SDK with a Personal Access Token.",
+			HRef:        base + "/channels/rest",
+		},
 	}
 	// Populate Configured status from agent_channels table.
 	if globalDB != nil {
 		for i := range channels {
 			m, _ := agentchannels.GetChannelConfigMap(globalDB, channels[i].Slug)
-			channels[i].Configured = m["bot_token"] != ""
+			if channels[i].Slug == "rest" {
+				channels[i].Configured = m["enabled"] == "true"
+			} else {
+				channels[i].Configured = m["bot_token"] != ""
+			}
 		}
 	}
-	c.HTML(view.ChannelListPage(view.ChannelListVM{Base: base, Channels: channels}))
+	c.HTML(view.ChannelListPage(view.ChannelListVM{Layout: sidebarVM(c, "channels", ""), Base: base, Channels: channels}))
 }
 
 // slackChannelPage renders the Slack channel config form.
@@ -72,11 +83,41 @@ func slackChannelPage(c *tool.Ctx) {
 	}
 	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "workspace")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
+		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
 		ChannelName: "Slack",
 		ChannelSlug: "slack",
 		Rows:        rows,
 		ActionBase:  c.Base() + "/channels/slack",
+	}))
+}
+
+// restChannelPage renders the REST (OpenAI-compatible) channel config form
+// plus a docs panel with sample curl / SDK usage.
+func restChannelPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "workspace")
+
+	appURL := ""
+	if globalConfigs != nil {
+		appURL = strings.TrimRight(globalConfigs.AppURL(), "/")
+	}
+	endpoint := appURL + "/integrations/rest/v1/chat/completions"
+
+	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
+		Layout:      sidebarVM(c, "channels", ""),
+		Base:        c.Base(),
+		ChannelName: "REST (OpenAI-compatible)",
+		ChannelSlug: "rest",
+		Rows:        rows,
+		ActionBase:  c.Base() + "/channels/rest",
+		Docs: view.RestDocs(view.RestDocsVM{
+			Base:       appURL,
+			Endpoint:   endpoint,
+			SampleUser: "demo-user",
+		}),
 	}))
 }
 
@@ -87,12 +128,81 @@ func telegramChannelPage(c *tool.Ctx) {
 	}
 	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "workspace")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
+		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
 		ChannelName: "Telegram",
 		ChannelSlug: "telegram",
 		Rows:        rows,
 		ActionBase:  c.Base() + "/channels/telegram",
 	}))
+}
+
+// channelLookupHandler routes a picker search to the named channel's
+// LookupProvider. URL: GET /channels/{slug}/lookup?source=<src>&q=<query>.
+// Returns JSON array of {id,name}.
+func channelLookupHandler(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalChannels == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel registry not ready"})
+		return
+	}
+	slug := c.PathValue("slug")
+	source := c.Query("source")
+	query := c.Query("q")
+	if slug == "" || source == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "slug and source required"})
+		return
+	}
+	ch := globalChannels.ChannelByName(slug)
+	if ch == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
+		return
+	}
+	lp, ok := ch.(agentchannels.LookupProvider)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, map[string]string{"error": "channel does not support lookup"})
+		return
+	}
+	items, err := lp.Lookup(source, query)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if items == nil {
+		items = []agentchannels.LookupItem{}
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+// channelHealthHandler runs the channel's self-test probes (auth, list,
+// search, write) so the operator can verify scopes/credentials from the
+// admin UI without booting the agent loop. Returns JSON array of checks.
+func channelHealthHandler(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalChannels == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel registry not ready"})
+		return
+	}
+	slug := c.PathValue("slug")
+	ch := globalChannels.ChannelByName(slug)
+	if ch == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
+		return
+	}
+	hc, ok := ch.(agentchannels.HealthChecker)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, map[string]string{"error": "channel does not support health check"})
+		return
+	}
+	checks := hc.HealthCheck()
+	if checks == nil {
+		checks = []agentchannels.HealthCheck{}
+	}
+	c.JSON(http.StatusOK, checks)
 }
 
 // makeChannelSaveHandler returns a POST handler for /channels/{channelType}/{key}

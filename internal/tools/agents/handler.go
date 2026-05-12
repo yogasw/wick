@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -42,6 +43,7 @@ var (
 	globalGateStatus GateStatus
 	globalConfigs    *configs.Service
 	globalDB         *gorm.DB
+	globalChannels   *agentchannels.Registry
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -97,6 +99,11 @@ func SetConfigs(c *configs.Service) { globalConfigs = c }
 // agent_channels rows. Without this, channel config endpoints 503.
 func SetDB(db *gorm.DB) { globalDB = db }
 
+// SetChannelRegistry wires the live channel registry so picker fields
+// can issue lookup queries against each channel's upstream (Slack API,
+// etc.). Without this, /channels/{slug}/lookup returns 503.
+func SetChannelRegistry(r *agentchannels.Registry) { globalChannels = r }
+
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
 func GetGateStatus() GateStatus { return globalGateStatus }
@@ -115,8 +122,11 @@ func Register(r tool.Router) {
 
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
+	r.POST("/sessions/quick", createSessionQuick)
 	r.GET("/sessions/{id}", sessionDetail)
 	r.POST("/sessions/{id}/send", sendMessage)
+	r.POST("/sessions/{id}/provider", switchProvider)
+	r.POST("/sessions/{id}/workspace", switchWorkspace)
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
@@ -161,8 +171,94 @@ func Register(r tool.Router) {
 	r.POST("/channels/slack/{key}", makeChannelSaveHandler("slack"))
 	r.GET("/channels/telegram", telegramChannelPage)
 	r.POST("/channels/telegram/{key}", makeChannelSaveHandler("telegram"))
+	r.GET("/channels/rest", restChannelPage)
+	r.POST("/channels/rest/{key}", makeChannelSaveHandler("rest"))
+	r.GET("/channels/{slug}/lookup", channelLookupHandler)
+	r.POST("/channels/test/{slug}", channelHealthHandler)
+
+	r.GET("/settings", settingsPage)
 
 	r.GET("/stream", streamSSE)
+}
+
+func settingsPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	rows := globalConfigs.ListOwned("agents")
+	c.HTML(view.SettingsPage(view.SettingsVM{
+		Layout: sidebarVM(c, "settings", ""),
+		Base:   c.Base(),
+		Rows:   rows,
+	}))
+}
+
+// sidebarVM builds AgentsLayoutVM for the sidebar session list.
+// activeSessionID is set on session detail pages to highlight the current row.
+func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayoutVM {
+	const sidebarCap = 15
+	allIDs := globalMgr.Registry().SessionIDs()
+	ids := allIDs
+	if len(ids) > sidebarCap {
+		ids = ids[:sidebarCap]
+	}
+	lc := make(map[string]view.SessionLifecycleVM)
+	for _, e := range globalPool.ActiveSnapshot() {
+		entry := view.SessionLifecycleVM{Lifecycle: e.Lifecycle, PID: e.PID}
+		if !e.LastActive.IsZero() {
+			entry.LastActiveMs = e.LastActive.UnixMilli()
+		}
+		lc[e.SessionID] = entry
+	}
+	// Read labels concurrently — buffered channel = no goroutine leak.
+	type result struct{ id, label string }
+	ch := make(chan result, len(ids)) // buffered: goroutines never block
+	for _, id := range ids {
+		id := id
+		go func() { ch <- result{id, loadFirstUserMessage(globalLayout, id, 40)} }()
+	}
+	labels := make(map[string]string, len(ids))
+	for range ids {
+		r := <-ch
+		labels[r.id] = r.label
+	}
+	close(ch)
+	return view.AgentsLayoutVM{
+		Base:             c.Base(),
+		ActivePage:       activePage,
+		SidebarIDs:       ids,
+		SidebarSessions:  globalMgr.Registry().Sessions(),
+		SidebarLifecycle: lc,
+		SidebarLabels:    labels,
+		ActiveSessionID:  activeSessionID,
+		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
+	}
+}
+
+// createSessionQuick creates a session with defaults (no form) and redirects.
+func createSessionQuick(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	prov := "claude"
+	// Use first healthy provider if available
+	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+		prov = ps[0].Type
+	}
+	id := uuid.New().String()
+	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+		ID:     id,
+		Origin: session.OriginUI,
+	})
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := globalMgr.AddAgent(id, "main", prov); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
 
 // ── guards ────────────────────────────────────────────────────────────
@@ -211,6 +307,7 @@ func overviewPage(c *tool.Ctx) {
 		}
 	}
 	c.HTML(view.Overview(view.OverviewVM{
+		Layout:        sidebarVM(c, "overview", ""),
 		Base:          c.Base(),
 		Active:        globalPool.Active(),
 		QueueLen:      globalPool.QueueLen(),
@@ -254,14 +351,21 @@ func sessionsPage(c *tool.Ctx) {
 		}
 		lc[e.SessionID] = entry
 	}
+	pageIDs := ids[start:end]
+	pageLabels := make(map[string]string, len(pageIDs))
+	for _, id := range pageIDs {
+		pageLabels[id] = loadFirstUserMessage(globalLayout, id, 60)
+	}
 	c.HTML(view.SessionsList(view.SessionsListVM{
+		Layout:        sidebarVM(c, "sessions", ""),
 		Base:          c.Base(),
-		IDs:           ids[start:end],
+		IDs:           pageIDs,
 		Sessions:      globalMgr.Registry().Sessions(),
+		Labels:        pageLabels,
 		Workspaces:    globalMgr.Registry().Workspaces(),
 		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
 		PresetList:    globalMgr.Registry().PresetNames(),
-		Providers:     providerChoices(c.Context()),
+		Providers:     providerChoicesCached(c.Context()),
 		Lifecycle:     lc,
 		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
 		Page:          page,
@@ -336,13 +440,22 @@ func sessionDetail(c *tool.Ctx) {
 		cmdLines = lines
 	}
 	gs := GetGateStatus()
+	activeProv := ""
+	if len(sess.Agents) > 0 {
+		activeProv = sess.Agents[0].Provider
+	}
 	vm := view.SessionDetailVM{
-		Base:          c.Base(),
-		Session:       sess,
-		Tab:           tab,
-		Turns:         turns,
-		CmdLines:      cmdLines,
-		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
+		Layout:          sidebarVM(c, "sessions", id),
+		Base:            c.Base(),
+		Session:         sess,
+		Tab:             tab,
+		Turns:           turns,
+		CmdLines:        cmdLines,
+		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
+		Providers:       providerChoicesCached(c.Context()),
+		ActiveProvider:  activeProv,
+		WorkspaceList:   globalMgr.Registry().WorkspaceNames(),
+		ActiveWorkspace: sess.Meta.Workspace,
 		Gate: view.GateStatusVM{
 			Enabled: gs.Enabled,
 			Binary:  gs.Binary,
@@ -362,6 +475,87 @@ func sessionDetail(c *tool.Ctx) {
 		break
 	}
 	c.HTML(view.SessionDetail(vm))
+}
+
+type switchProviderReq struct {
+	Provider string `json:"provider"`
+}
+
+// switchProvider creates a new session with the same workspace but a
+// different provider. Provider sessions cannot be resumed across CLI
+// implementations (ResumeID is provider-specific), so a fresh session
+// is always the right call. Returns the new session URL for redirect.
+func switchProvider(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var req switchProviderReq
+	if err := c.BindJSON(&req); err != nil || req.Provider == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "provider required"})
+		return
+	}
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	newID := uuid.New().String()
+	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+		ID:        newID,
+		Workspace: sess.Meta.Workspace,
+		Origin:    session.OriginUI,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := globalMgr.AddAgent(newID, "main", req.Provider); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{
+		"status":   "switched",
+		"provider": req.Provider,
+		"redirect": c.Base() + "/sessions/" + newID,
+	})
+}
+
+type switchWorkspaceReq struct {
+	Workspace string `json:"workspace"`
+}
+
+// switchWorkspace updates the session's workspace in-place and kills
+// any running subprocess so it respawns with the new folder on the
+// next message.
+func switchWorkspace(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var req switchWorkspaceReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "workspace required"})
+		return
+	}
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	if err := globalMgr.SwitchWorkspace(c.Context(), id, req.Workspace); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// Kill running subprocess so next Send respawns in the new workspace.
+	agentName := sess.Meta.ActiveAgent
+	if agentName == "" && len(sess.Agents) > 0 {
+		agentName = sess.Agents[0].Name
+	}
+	if agentName != "" {
+		_ = globalPool.Kill(id, agentName)
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "switched", "workspace": req.Workspace})
 }
 
 type sendReq struct {
@@ -473,6 +667,7 @@ func workspacesPage(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.WorkspacesPage(view.WorkspacesVM{
+		Layout:        sidebarVM(c, "workspaces", ""),
 		Base:          c.Base(),
 		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
 		Workspaces:    globalMgr.Registry().Workspaces(),
@@ -556,8 +751,9 @@ func presetsPage(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.PresetsPage(view.PresetsVM{
-		Base:  c.Base(),
-		Names: globalMgr.Registry().PresetNames(),
+		Layout: sidebarVM(c, "presets", ""),
+		Base:   c.Base(),
+		Names:  globalMgr.Registry().PresetNames(),
 	}))
 }
 
@@ -572,9 +768,10 @@ func presetDetail(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.PresetEditor(view.PresetDetailVM{
-		Base: c.Base(),
-		Name: p.Name,
-		Body: p.Body,
+		Layout: sidebarVM(c, "presets", ""),
+		Base:   c.Base(),
+		Name:   p.Name,
+		Body:   p.Body,
 	}))
 }
 
@@ -652,6 +849,11 @@ func streamSSE(c *tool.Ctx) {
 	defer keepalive.Stop()
 
 	flush := func() { _ = rc.Flush() }
+
+	// Immediately confirm the connection is alive so the browser doesn't
+	// wait up to 15 s for the first keepalive tick.
+	fmt.Fprintf(w, ": connected\n\n")
+	flush()
 
 	for {
 		select {

@@ -18,18 +18,13 @@ type answerReq struct {
 }
 
 func notReadyAskUser(c *tool.Ctx) bool {
-	if globalAskUsers == nil {
-		c.JSON(http.StatusServiceUnavailable, map[string]string{
-			"error": "ask_user disabled — agents UI not wired",
-		})
-		return true
-	}
-	return false
+	return globalAskUsers == nil
 }
 
 // answerAsk resolves one pending ask_user request.
 func answerAsk(c *tool.Ctx) {
 	if notReadyAskUser(c) {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "ask_user not enabled"})
 		return
 	}
 	var req answerReq
@@ -61,6 +56,7 @@ func answerAsk(c *tool.Ctx) {
 // the tab was closed still shows up.
 func asksSnapshot(c *tool.Ctx) {
 	if notReadyAskUser(c) {
+		c.JSON(http.StatusOK, map[string]any{"pending": []any{}})
 		return
 	}
 	sid := c.PathValue("id")

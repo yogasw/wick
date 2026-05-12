@@ -39,7 +39,10 @@ func (s *ConfigSource) Hash() string {
 	cfg, pubURL := s.load()
 	return cfg.Mode + "|" + cfg.BotToken + "|" + cfg.AppToken + "|" +
 		cfg.SigningSecret + "|" + pubURL + "|" +
-		cfg.AccessMode + "|" + cfg.AllowedUsers + "|" + cfg.AllowedGroups
+		cfg.UsersMode + "|" + cfg.AllowedUsers + "|" +
+		cfg.GroupsMode + "|" + cfg.AllowedGroups + "|" +
+		cfg.ChannelsMode + "|" + cfg.AllowedChannels + "|" +
+		cfg.GateApprovers + "|" + cfg.GateApproverUsers + "|" + cfg.GateApproverGroups
 }
 
 // Reload re-reads the config and applies it to the bound channel.

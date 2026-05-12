@@ -1,7 +1,7 @@
 package view
 
 templ PresetsPage(vm PresetsVM) {
-	@AgentsLayout(vm.Base, "presets") {
+	@AgentsLayout(vm.Layout) {
 		<div class="space-y-6">
 			<div class="flex items-center justify-between">
 				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Presets</h1>
@@ -67,7 +67,7 @@ templ PresetsPage(vm PresetsVM) {
 }
 
 templ PresetEditor(vm PresetDetailVM) {
-	@AgentsLayout(vm.Base, "presets") {
+	@AgentsLayout(vm.Layout) {
 		<div class="space-y-4">
 			<div class="flex items-center gap-3">
 				<a href={ templ.SafeURL(vm.Base + "/presets") } class="text-xs text-black-700 dark:text-black-600 hover:underline">← Presets</a>

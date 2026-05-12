@@ -17,23 +17,29 @@ type ChannelVM struct {
 
 // ChannelListVM is the view model for the Channels index page.
 type ChannelListVM struct {
+	Layout   AgentsLayoutVM
 	Base     string
 	Channels []ChannelVM
 }
 
 // ChannelConfigVM is the view model for a single channel's config page.
 type ChannelConfigVM struct {
+	Layout      AgentsLayoutVM
 	Base        string
 	ChannelName string
 	ChannelSlug string
 	Rows        []entity.Config
 	ActionBase  string
+	// Docs is an optional component rendered below the config table.
+	// Channels use it to surface usage notes, sample requests, or links
+	// to related pages (e.g. PAT management for REST).
+	Docs templ.Component
 }
 
 // ChannelListPage shows available channels as cards.
 templ ChannelListPage(vm ChannelListVM) {
-	@AgentsLayout(vm.Base, "channels") {
-		<div class="max-w-2xl">
+	@AgentsLayout(vm.Layout) {
+		<div class="max-w-3xl">
 			<h1 class="text-xl font-semibold text-black-900 dark:text-white-100 mb-1">Channels</h1>
 			<p class="text-sm text-black-700 dark:text-black-600 mb-6">
 				Connect messaging platforms so agents can receive tasks and reply in threads.
@@ -72,8 +78,8 @@ templ channelCard(ch ChannelVM) {
 
 // ChannelConfigPage shows config fields for one channel.
 templ ChannelConfigPage(vm ChannelConfigVM) {
-	@AgentsLayout(vm.Base, "channels") {
-		<div class="max-w-2xl">
+	@AgentsLayout(vm.Layout) {
+		<div class="max-w-3xl">
 			<nav class="flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 mb-4">
 				<a href={ templ.SafeURL(vm.Base + "/channels") } class="hover:text-green-600 transition-colors">Channels</a>
 				<span>›</span>
@@ -83,7 +89,157 @@ templ ChannelConfigPage(vm ChannelConfigVM) {
 			<p class="text-sm text-black-700 dark:text-black-600 mb-2">
 				Configure credentials and access control for the { vm.ChannelName } channel.
 			</p>
-			@managerview.ConfigsTable(vm.Rows, vm.ActionBase, "", "")
+			@integrationTestPanel(vm.Base + "/channels/test/" + vm.ChannelSlug)
+			@managerview.ConfigsTableFull(vm.Rows, vm.ActionBase)
+			if vm.Docs != nil {
+				<div class="mt-8">
+					@vm.Docs
+				</div>
+			}
 		</div>
 	}
+}
+
+// integrationTestPanel renders the "Test Integration" button + an empty
+// results container. JS attached at the bottom POSTs to testURL and fills
+// in per-check rows.
+templ integrationTestPanel(testURL string) {
+	<div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden" data-integration-test data-test-url={ testURL }>
+		<div class="flex items-center justify-between gap-3 px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			<div>
+				<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Integration health</h3>
+				<p class="text-xs text-black-700 dark:text-black-600">Verify credentials and required Slack scopes.</p>
+			</div>
+			<button
+				type="button"
+				data-test-run
+				class="rounded-lg bg-green-500 hover:bg-green-600 text-white-100 text-xs font-medium px-3 py-2 transition-colors"
+			>Test Integration</button>
+		</div>
+		<div data-test-results class="hidden p-5 flex flex-col gap-2"></div>
+		<script>
+		(function(){
+			var panel=document.currentScript.closest('[data-integration-test]');
+			var url=panel.getAttribute('data-test-url');
+			var btn=panel.querySelector('[data-test-run]');
+			var box=panel.querySelector('[data-test-results]');
+			function render(items,err){
+				box.innerHTML='';
+				box.classList.remove('hidden');
+				if(err){
+					var e=document.createElement('div');
+					e.className='text-xs text-neg-400 font-mono';
+					e.textContent='Request failed: '+err;
+					box.appendChild(e);
+					return;
+				}
+				if(!items||items.length===0){
+					box.innerHTML='<div class="text-xs text-pos-400 font-mono">✓ All checks passed</div>';
+					return;
+				}
+				items.forEach(function(it){
+					var row=document.createElement('div');
+					row.className='flex items-start gap-2 text-xs';
+					var icon=document.createElement('span');
+					icon.className='shrink-0 mt-0.5 font-mono '+(it.ok?'text-pos-400':'text-neg-400');
+					icon.textContent=it.ok?'✓':'✗';
+					var body=document.createElement('div');
+					body.className='flex-1 min-w-0';
+					var name=document.createElement('div');
+					name.className='font-mono text-black-900 dark:text-white-100';
+					name.textContent=it.name;
+					body.appendChild(name);
+					if(it.detail){
+						var d=document.createElement('div');
+						d.className='text-[11px] text-black-700 dark:text-black-600 break-words';
+						d.textContent=it.detail;
+						body.appendChild(d);
+					}
+					if(it.error){
+						var er=document.createElement('div');
+						er.className='text-[11px] text-neg-400 font-mono break-words';
+						er.textContent=it.error;
+						body.appendChild(er);
+					}
+					row.appendChild(icon);
+					row.appendChild(body);
+					box.appendChild(row);
+				});
+			}
+			btn.addEventListener('click',function(){
+				btn.disabled=true;
+				var orig=btn.textContent;
+				btn.textContent='Running…';
+				box.classList.remove('hidden');
+				box.innerHTML='<div class="text-xs text-black-700 dark:text-black-600">Running probes…</div>';
+				fetch(url,{method:'POST',credentials:'same-origin'})
+					.then(function(r){return r.json().then(function(b){return{ok:r.ok,body:b};});})
+					.then(function(res){
+						if(!res.ok){render(null,(res.body&&res.body.error)||'HTTP '+res.body);return;}
+						render(res.body,null);
+					})
+					.catch(function(e){render(null,e.message||String(e));})
+					.then(function(){btn.disabled=false;btn.textContent=orig;});
+			});
+		})();
+		</script>
+	</div>
+}
+
+// RestDocsVM is the view model for the REST channel's docs panel.
+type RestDocsVM struct {
+	Base       string // wick base (for /profile/tokens link)
+	Endpoint   string // full URL of the chat completions endpoint
+	SampleUser string // session key shown in samples
+}
+
+// RestDocs renders usage docs + a copyable curl sample for the REST channel.
+templ RestDocs(vm RestDocsVM) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-5">
+		<h2 class="text-base font-semibold text-black-900 dark:text-white-100 mb-1">How it works</h2>
+		<p class="text-sm text-black-700 dark:text-black-600 mb-4">
+			This channel exposes an OpenAI Chat Completions compatible endpoint. Point any OpenAI SDK at the base URL below and authenticate with a wick Personal Access Token.
+		</p>
+		<dl class="grid grid-cols-1 sm:grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm mb-5">
+			<dt class="text-black-700 dark:text-black-600">Endpoint</dt>
+			<dd class="font-mono text-xs text-black-900 dark:text-white-100 break-all">{ vm.Endpoint }</dd>
+			<dt class="text-black-700 dark:text-black-600">Method</dt>
+			<dd class="font-mono text-xs text-black-900 dark:text-white-100">POST</dd>
+			<dt class="text-black-700 dark:text-black-600">Auth</dt>
+			<dd class="text-xs text-black-900 dark:text-white-100">
+				<code class="font-mono">Authorization: Bearer wick_pat_…</code> —
+				<a href={ templ.SafeURL(vm.Base + "/profile/tokens") } class="text-green-600 hover:underline">manage tokens</a>
+			</dd>
+			<dt class="text-black-700 dark:text-black-600">Session</dt>
+			<dd class="text-xs text-black-900 dark:text-white-100">
+				Two modes — pick one:
+				<ul class="mt-1 space-y-1 list-disc pl-4">
+					<li><b>Stateless</b> (omit <code class="font-mono">session_id</code>): every request spawns a fresh wick session, you re-send the full <code class="font-mono">messages</code> array each turn.</li>
+					<li><b>Stateful</b> (<code class="font-mono">session_id</code> set): same <code class="font-mono">session_id</code> across requests reuses one wick session. Only the last user message is sent; wick keeps the history.</li>
+				</ul>
+				The <code class="font-mono">user</code> field is accepted for parity but used as an audit label only.
+			</dd>
+			<dt class="text-black-700 dark:text-black-600">Streaming</dt>
+			<dd class="text-xs text-black-900 dark:text-white-100">Not supported on this endpoint. Set <code class="font-mono">stream:false</code> (the default).</dd>
+			<dt class="text-black-700 dark:text-black-600">Approvals</dt>
+			<dd class="text-xs text-black-900 dark:text-white-100">Gate prompts are auto-blocked — REST clients cannot deliver interactive decisions. Use the web UI to approve sensitive commands.</dd>
+		</dl>
+
+		<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — stateless</h3>
+		<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "curl -X POST " + vm.Endpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"wick\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Hello, who are you?\" }\n    ]\n  }'" }</code></pre>
+
+		<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — stateful (reuse session)</h3>
+		<p class="text-xs text-black-700 dark:text-black-600 mb-2">Send the same <code class="font-mono">session_id</code> on each call. Only the last user message is sent — wick remembers prior turns.</p>
+		<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "# Turn 1\ncurl -X POST " + vm.Endpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"wick\",\n    \"session_id\": \"chat-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Remember the number 7.\" }\n    ]\n  }'\n\n# Turn 2 — same session_id, no history needed\ncurl -X POST " + vm.Endpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"wick\",\n    \"session_id\": \"chat-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"What number did I ask you to remember?\" }\n    ]\n  }'" }</code></pre>
+
+		<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">Python (OpenAI SDK) — stateless</h3>
+		<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "from openai import OpenAI\n\nclient = OpenAI(\n    base_url=\"" + vm.Base + "/integrations/rest/v1\",\n    api_key=\"wick_pat_REPLACE_ME\",\n)\n\n# Stateless — manage history yourself and resend it each call.\nhistory = [{\"role\": \"user\", \"content\": \"Hello\"}]\nresp = client.chat.completions.create(model=\"wick\", messages=history)\nprint(resp.choices[0].message.content)" }</code></pre>
+
+		<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">Python (OpenAI SDK) — stateful</h3>
+		<p class="text-xs text-black-700 dark:text-black-600 mb-2">Pass <code class="font-mono">session_id</code> via <code class="font-mono">extra_body</code> — the OpenAI SDK forwards it as a top-level field.</p>
+		<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "from openai import OpenAI\n\nclient = OpenAI(\n    base_url=\"" + vm.Base + "/integrations/rest/v1\",\n    api_key=\"wick_pat_REPLACE_ME\",\n)\n\nSESSION = \"chat-42\"\n\ndef ask(text):\n    return client.chat.completions.create(\n        model=\"wick\",\n        messages=[{\"role\": \"user\", \"content\": text}],\n        extra_body={\"session_id\": SESSION},\n    ).choices[0].message.content\n\nprint(ask(\"Remember the number 7.\"))\nprint(ask(\"What number did I ask you to remember?\"))" }</code></pre>
+
+		<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">Response shape</h3>
+		<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto"><code>{ "{\n  \"id\": \"wick-rest-…\",\n  \"object\": \"chat.completion\",\n  \"created\": 1715000000,\n  \"model\": \"wick\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": { \"role\": \"assistant\", \"content\": \"…\" },\n      \"finish_reason\": \"stop\"\n    }\n  ]\n}" }</code></pre>
+	</div>
 }

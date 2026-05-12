@@ -79,6 +79,7 @@ func providersPage(c *tool.Ctx) {
 	}
 
 	c.HTML(view.ProvidersPage(view.ProvidersVM{
+		Layout:        sidebarVM(c, "providers", ""),
 		Base:          c.Base(),
 		Statuses:      statuses,
 		Spawns:        spawns,
@@ -599,6 +600,7 @@ func providerSpawnDetail(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.ProviderSpawnDetail(view.ProviderSpawnDetailVM{
+		Layout: sidebarVM(c, "providers", ""),
 		Base:   c.Base(),
 		File:   meta,
 		Events: events,
@@ -629,6 +631,28 @@ func providerChoices(ctx context.Context) []view.ProviderChoiceVM {
 	out := make([]view.ProviderChoiceVM, 0, len(statuses))
 	for _, st := range statuses {
 		if st.Instance.Disabled || !st.PathFound || st.VersionErr != "" {
+			continue
+		}
+		out = append(out, view.ProviderChoiceVM{
+			Type:    string(st.Instance.Type),
+			Name:    st.Instance.Name,
+			Version: st.Version,
+		})
+	}
+	return out
+}
+
+// providerChoicesCached reads provider status from the persistent cache
+// (no subprocess probe). Used by pages that only need the provider list
+// for a form dropdown — accuracy of version/path is not critical there.
+func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
+	statuses, err := provider.LoadCached(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]view.ProviderChoiceVM, 0, len(statuses))
+	for _, st := range statuses {
+		if st.Instance.Disabled {
 			continue
 		}
 		out = append(out, view.ProviderChoiceVM{

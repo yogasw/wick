@@ -52,33 +52,65 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 func TestAllowed(t *testing.T) {
 	s := &Channel{}
 
-	// everyone
-	s.cfg.AccessMode = "everyone"
-	if !s.allowedCfg(s.cfg, "U123", nil) {
-		t.Error("everyone mode: should allow any user")
+	// default — all modes "all", any user / group / channel passes
+	s.cfg.UsersMode = "all"
+	s.cfg.GroupsMode = "all"
+	s.cfg.ChannelsMode = "all"
+	if !s.allowedCfg(s.cfg, "U123", nil, "C123") {
+		t.Error("all mode: should allow any user")
 	}
 
-	// users
-	s.cfg.AccessMode = "users"
-	s.cfg.AllowedUsers = "U001\nU002"
-	if !s.allowedCfg(s.cfg, "U001", nil) {
-		t.Error("users mode: U001 should be allowed")
+	// users whitelist
+	s.cfg.UsersMode = "whitelist"
+	s.cfg.AllowedUsers = `[{"id":"U001","name":"a"},{"id":"U002","name":"b"}]`
+	if !s.allowedCfg(s.cfg, "U001", nil, "C1") {
+		t.Error("users whitelist: U001 should be allowed")
 	}
-	if s.allowedCfg(s.cfg, "U999", nil) {
-		t.Error("users mode: U999 should be denied")
+	if s.allowedCfg(s.cfg, "U999", nil, "C1") {
+		t.Error("users whitelist: U999 should be denied")
 	}
 
-	// groups
-	s.cfg.AccessMode = "groups"
-	s.cfg.AllowedGroups = "G001\nG002"
-	if !s.allowedCfg(s.cfg, "Uany", []string{"G001"}) {
-		t.Error("groups mode: member of G001 should be allowed")
+	// groups whitelist (users back to all)
+	s.cfg.UsersMode = "all"
+	s.cfg.GroupsMode = "whitelist"
+	s.cfg.AllowedGroups = `[{"id":"G001","name":"g1"},{"id":"G002","name":"g2"}]`
+	if !s.allowedCfg(s.cfg, "Uany", []string{"G001"}, "C1") {
+		t.Error("groups whitelist: member of G001 should be allowed")
 	}
-	if s.allowedCfg(s.cfg, "Uany", []string{"G999"}) {
-		t.Error("groups mode: member of G999 should be denied")
+	if s.allowedCfg(s.cfg, "Uany", []string{"G999"}, "C1") {
+		t.Error("groups whitelist: member of G999 should be denied")
 	}
-	if s.allowedCfg(s.cfg, "Uany", nil) {
-		t.Error("groups mode: no groups should be denied")
+	if s.allowedCfg(s.cfg, "Uany", nil, "C1") {
+		t.Error("groups whitelist: no groups should be denied")
+	}
+
+	// users + groups whitelist (OR): pass via users
+	s.cfg.UsersMode = "whitelist"
+	s.cfg.AllowedUsers = `[{"id":"U001","name":"a"}]`
+	s.cfg.GroupsMode = "whitelist"
+	s.cfg.AllowedGroups = `[{"id":"G001","name":"g1"}]`
+	if !s.allowedCfg(s.cfg, "U001", nil, "C1") {
+		t.Error("OR semantic: U001 in users whitelist should pass even with no group")
+	}
+	// pass via groups
+	if !s.allowedCfg(s.cfg, "U999", []string{"G001"}, "C1") {
+		t.Error("OR semantic: member of G001 should pass even when not in users whitelist")
+	}
+	// neither matches
+	if s.allowedCfg(s.cfg, "U999", []string{"G999"}, "C1") {
+		t.Error("OR semantic: no match in users or groups should be denied")
+	}
+
+	// channels whitelist
+	s.cfg.UsersMode = "all"
+	s.cfg.GroupsMode = "all"
+	s.cfg.ChannelsMode = "whitelist"
+	s.cfg.AllowedChannels = `[{"id":"CABC","name":"#general"}]`
+	if !s.allowedCfg(s.cfg, "U1", nil, "CABC") {
+		t.Error("channels whitelist: CABC should be allowed")
+	}
+	if s.allowedCfg(s.cfg, "U1", nil, "CXYZ") {
+		t.Error("channels whitelist: CXYZ should be denied")
 	}
 }
 
