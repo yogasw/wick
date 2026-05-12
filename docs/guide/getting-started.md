@@ -18,7 +18,7 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 ## 2. Install Wick CLI
 
 ```bash
-go install github.com/yogasw/wick@v0.11.0
+go install github.com/yogasw/wick@v0.11.1
 ```
 
 Verify:
