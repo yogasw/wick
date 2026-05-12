@@ -65,7 +65,15 @@ jobs:
           go-version: '1.25'
           cache: false
 
+      - name: Cache wick CLI binary
+        id: cache-wick
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-${{ github.ref_name }}-linux-amd64
+
       - name: Install wick CLI
+        if: steps.cache-wick.outputs.cache-hit != 'true'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
 
       - name: Add Go bin to PATH
@@ -74,6 +82,13 @@ jobs:
       - name: Init project
         run: wick init wick --skip-setup
         working-directory: /tmp
+
+      - name: Upload wick CLI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wick-cli-linux
+          path: ~/go/bin/wick
+          retention-days: 1
 
       - name: Upload project scaffold
         uses: actions/upload-artifact@v4
@@ -97,16 +112,38 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
-      - name: Setup Go
+      - name: Download wick CLI binary
+        if: matrix.runner == 'ubuntu-latest'
+        uses: actions/download-artifact@v4
+        with:
+          name: wick-cli-linux
+          path: /usr/local/bin
+
+      - name: Make wick executable (linux)
+        if: matrix.runner == 'ubuntu-latest'
+        run: chmod +x /usr/local/bin/wick
+
+      - name: Setup Go (macOS only — needed for go install)
+        if: matrix.runner == 'macos-latest'
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
           cache: false
 
-      - name: Install wick CLI
+      - name: Cache wick CLI binary (macOS)
+        if: matrix.runner == 'macos-latest'
+        id: cache-wick-mac
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-${{ github.ref_name }}-darwin
+
+      - name: Install wick CLI (macOS)
+        if: matrix.runner == 'macos-latest' && steps.cache-wick-mac.outputs.cache-hit != 'true'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
 
-      - name: Add Go bin to PATH
+      - name: Add Go bin to PATH (macOS)
+        if: matrix.runner == 'macos-latest'
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Download project scaffold
@@ -115,8 +152,16 @@ jobs:
           name: wick-scaffold
           path: /tmp/wick
 
-      - name: Install wixl (windows cross-compile)
+      - name: Cache wixl (windows cross-compile)
         if: matrix.os == 'windows'
+        id: cache-wixl
+        uses: actions/cache@v4
+        with:
+          path: /usr/bin/wixl
+          key: wixl-apt-${{ runner.os }}
+
+      - name: Install wixl (windows cross-compile)
+        if: matrix.os == 'windows' && steps.cache-wixl.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
       - name: Setup
@@ -197,17 +242,14 @@ jobs:
       packages: write
 
     steps:
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Download wick CLI binary
+        uses: actions/download-artifact@v4
         with:
-          go-version: '1.25'
-          cache: false
+          name: wick-cli-linux
+          path: /usr/local/bin
 
-      - name: Install wick CLI
-        run: go install github.com/yogasw/wick@${{ github.ref_name }}
-
-      - name: Add Go bin to PATH
-        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Make wick executable
+        run: chmod +x /usr/local/bin/wick
 
       - name: Download project scaffold
         uses: actions/download-artifact@v4
