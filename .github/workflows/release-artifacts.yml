@@ -168,6 +168,10 @@ jobs:
         run: wick setup
         working-directory: /tmp/wick
 
+      - name: Add Go bin to PATH (ubuntu)
+        if: matrix.runner == 'ubuntu-latest'
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Build installer
         env:
           GOOS: ${{ matrix.os }}
