@@ -17,19 +17,16 @@ func TestClaudeSettings(t *testing.T) {
 	if err := json.Unmarshal(bytes, &got); err != nil {
 		t.Fatal(err)
 	}
-	// Expect one group per gated tool: Bash, Read, Write, Edit, Glob.
-	wantMatchers := []string{"Bash", "Read", "Write", "Edit", "Glob"}
-	if len(got.Hooks.PreToolUse) != len(wantMatchers) {
-		t.Fatalf("PreToolUse groups: got %d, want %d", len(got.Hooks.PreToolUse), len(wantMatchers))
+	// Expect a single catch-all group wired to the gate binary.
+	if len(got.Hooks.PreToolUse) != 1 {
+		t.Fatalf("PreToolUse groups: got %d, want 1", len(got.Hooks.PreToolUse))
 	}
-	for i, want := range wantMatchers {
-		g := got.Hooks.PreToolUse[i]
-		if g.Matcher != want {
-			t.Errorf("group[%d] matcher: got %q, want %q", i, g.Matcher, want)
-		}
-		if len(g.Hooks) != 1 || g.Hooks[0].Type != "command" || g.Hooks[0].Command != "/path/to/gate" {
-			t.Errorf("group[%d] hook entry: %+v", i, g.Hooks)
-		}
+	g := got.Hooks.PreToolUse[0]
+	if g.Matcher != ".*" {
+		t.Errorf("matcher: got %q, want %q", g.Matcher, ".*")
+	}
+	if len(g.Hooks) != 1 || g.Hooks[0].Type != "command" || g.Hooks[0].Command != "/path/to/gate" {
+		t.Errorf("hook entry: %+v", g.Hooks)
 	}
 }
 
