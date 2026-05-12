@@ -3,7 +3,6 @@ package tty
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -14,15 +13,16 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type Config struct {
-	Shell     string       // shell to run, default "bash"
-	GottyBin  string       // path to gotty binary, default "gotty"
-	GottyPort int          // gotty listen port, default 8081
-	GottyAddr string       // gotty listen addr, default "127.0.0.1"
-	Prefix    string       // URL prefix the handler is mounted at, e.g. "/tools/webtty/tty"
-	Logger    *slog.Logger // optional; defaults to slog.Default()
+	Shell     string // shell to run, default "bash"
+	GottyBin  string // path to gotty binary, default "gotty"
+	GottyPort int    // gotty listen port, default 8081
+	GottyAddr string // gotty listen addr, default "127.0.0.1"
+	Prefix    string // URL prefix the handler is mounted at, e.g. "/tools/webtty/tty"
 }
 
 type Server struct {
@@ -31,7 +31,7 @@ type Server struct {
 	cmd      *exec.Cmd
 	proxy    *httputil.ReverseProxy
 	upgrader websocket.Upgrader
-	log      *slog.Logger
+	log      zerolog.Logger
 }
 
 func New(cfg Config) *Server {
@@ -47,24 +47,32 @@ func New(cfg Config) *Server {
 	if cfg.GottyAddr == "" {
 		cfg.GottyAddr = "127.0.0.1"
 	}
-	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
-	}
+
+	logger := log.With().Str("component", "tty").Logger()
 
 	backendURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", cfg.GottyAddr, cfg.GottyPort))
+	logger.Info().
+		Str("gotty_bin", cfg.GottyBin).
+		Str("gotty_addr", cfg.GottyAddr).
+		Int("gotty_port", cfg.GottyPort).
+		Str("shell", cfg.Shell).
+		Str("prefix", cfg.Prefix).
+		Str("backend_url", backendURL.String()).
+		Msg("tty: server configured")
+
 	proxy := httputil.NewSingleHostReverseProxy(backendURL)
 	proxy.ModifyResponse = func(r *http.Response) error {
 		r.Header.Del("X-Frame-Options")
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		cfg.Logger.Error("proxy error", "path", r.URL.Path, "error", err)
+		logger.Error().Err(err).Str("path", r.URL.Path).Msg("tty: proxy error")
 		http.Error(w, "backend unavailable", http.StatusBadGateway)
 	}
 
 	return &Server{
 		cfg:   cfg,
-		log:   cfg.Logger,
+		log:   logger,
 		proxy: proxy,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
@@ -77,12 +85,11 @@ func (s *Server) start() error {
 	defer s.mu.Unlock()
 
 	if s.cmd != nil {
-		s.log.Info("tty: gotty already running")
+		s.log.Info().Int("pid", s.cmd.Process.Pid).Msg("tty: gotty already running")
 		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.GottyAddr, s.cfg.GottyPort)
-	s.log.Info("tty: starting gotty", "addr", addr, "shell", s.cfg.Shell)
 
 	args := []string{
 		"--permit-write",
@@ -90,24 +97,30 @@ func (s *Server) start() error {
 		"--address", s.cfg.GottyAddr,
 		"--reconnect",
 		"--reconnect-time", "3",
+		s.cfg.Shell,
 	}
-	if s.cfg.Prefix != "" {
-		// gotty --path tells it to embed the correct WebSocket URL in its JS
-		args = append(args, "--path", s.cfg.Prefix)
-	}
-	args = append(args, s.cfg.Shell)
+
+	s.log.Info().
+		Str("bin", s.cfg.GottyBin).
+		Str("addr", addr).
+		Str("shell", s.cfg.Shell).
+		Strs("args", args).
+		Msg("tty: spawning gotty")
 
 	cmd := exec.Command(s.cfg.GottyBin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		s.log.Error("tty: failed to start gotty", "error", err)
+		s.log.Error().Err(err).Str("bin", s.cfg.GottyBin).Msg("tty: failed to spawn gotty — is gotty in PATH?")
 		return fmt.Errorf("start gotty: %w", err)
 	}
 
 	s.cmd = cmd
-	s.log.Info("tty: gotty spawned", "pid", cmd.Process.Pid, "addr", addr)
+	s.log.Info().
+		Int("pid", cmd.Process.Pid).
+		Str("addr", addr).
+		Msg("tty: gotty spawned")
 	return nil
 }
 
@@ -119,11 +132,11 @@ func (s *Server) stop() {
 		return
 	}
 	pid := s.cmd.Process.Pid
-	s.log.Info("tty: stopping gotty", "pid", pid)
+	s.log.Info().Int("pid", pid).Msg("tty: killing gotty")
 	_ = s.cmd.Process.Kill()
 	_ = s.cmd.Wait()
 	s.cmd = nil
-	s.log.Info("tty: gotty stopped", "pid", pid)
+	s.log.Info().Int("pid", pid).Msg("tty: gotty stopped")
 }
 
 func (s *Server) isRunning() bool {
@@ -148,6 +161,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/", s.handleProxy)
 
+	s.log.Info().Str("prefix", s.cfg.Prefix).Msg("tty: handler mounted")
+
 	if s.cfg.Prefix != "" {
 		return http.StripPrefix(s.cfg.Prefix, mux)
 	}
@@ -155,7 +170,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
-	s.log.Info("tty: /start requested", "remote", r.RemoteAddr)
+	s.log.Info().Str("remote", r.RemoteAddr).Msg("tty: /start requested")
 
 	if err := s.start(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -163,41 +178,48 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	checkURL := fmt.Sprintf("http://%s:%d/", s.cfg.GottyAddr, s.cfg.GottyPort)
+	s.log.Info().Str("check_url", checkURL).Msg("tty: polling gotty readiness")
+
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 
+	attempts := 0
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Error("tty: gotty did not become ready in time")
+			s.log.Error().Int("attempts", attempts).Msg("tty: gotty did not become ready in time")
 			http.Error(w, "gotty startup timeout", http.StatusGatewayTimeout)
 			return
 		case <-time.After(120 * time.Millisecond):
+			attempts++
 			resp, err := http.Get(checkURL)
 			if err == nil {
 				resp.Body.Close()
-				s.log.Info("tty: gotty ready")
+				s.log.Info().Int("attempts", attempts).Msg("tty: gotty ready")
 				fmt.Fprint(w, "ok")
 				return
 			}
+			s.log.Debug().Err(err).Int("attempt", attempts).Msg("tty: gotty not ready yet")
 		}
 	}
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	s.log.Info("tty: /stop requested", "remote", r.RemoteAddr)
+	s.log.Info().Str("remote", r.RemoteAddr).Msg("tty: /stop requested")
 	s.stop()
 	fmt.Fprint(w, "ok")
 }
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
-	s.log.Info("tty: /kill requested", "remote", r.RemoteAddr)
+	s.log.Info().Str("remote", r.RemoteAddr).Msg("tty: /kill requested")
 	s.stop()
 	fmt.Fprint(w, "ok")
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if s.isRunning() {
+	running := s.isRunning()
+	s.log.Debug().Bool("running", running).Msg("tty: /status")
+	if running {
 		fmt.Fprint(w, "running")
 	} else {
 		fmt.Fprint(w, "stopped")
@@ -205,11 +227,21 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
+	isWS := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	s.log.Debug().
+		Str("method", r.Method).
+		Str("path", r.URL.Path).
+		Str("remote", r.RemoteAddr).
+		Bool("websocket", isWS).
+		Bool("gotty_running", s.isRunning()).
+		Msg("tty: proxy request")
+
 	if !s.isRunning() {
+		s.log.Warn().Str("path", r.URL.Path).Msg("tty: request arrived but gotty not running — call /start first")
 		http.Error(w, "terminal not running", http.StatusServiceUnavailable)
 		return
 	}
-	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+	if isWS {
 		s.proxyWebSocket(w, r)
 		return
 	}
@@ -233,11 +265,15 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		header["Sec-WebSocket-Protocol"] = reqProtos
 	}
 
-	s.log.Debug("tty: dialing ws backend", "target", targetURL, "protocols", reqProtos)
+	s.log.Info().
+		Str("target", targetURL).
+		Str("remote", r.RemoteAddr).
+		Strs("protocols", reqProtos).
+		Msg("tty: dialing ws backend")
 
 	backend, resp, err := websocket.DefaultDialer.Dial(targetURL, header)
 	if err != nil {
-		s.log.Error("tty: ws dial failed", "target", targetURL, "error", err)
+		s.log.Error().Err(err).Str("target", targetURL).Msg("tty: ws dial failed")
 		http.Error(w, "ws backend unavailable", http.StatusBadGateway)
 		return
 	}
@@ -252,12 +288,12 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	client, err := s.upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
-		s.log.Error("tty: ws upgrade failed", "error", err)
+		s.log.Error().Err(err).Msg("tty: ws upgrade failed")
 		return
 	}
 	defer client.Close()
 
-	s.log.Info("tty: ws session started", "remote", r.RemoteAddr)
+	s.log.Info().Str("remote", r.RemoteAddr).Msg("tty: ws session started")
 
 	done := make(chan struct{})
 	go func() {
@@ -265,11 +301,11 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		for {
 			mt, msg, err := client.ReadMessage()
 			if err != nil {
-				s.log.Debug("tty: client disconnected", "remote", r.RemoteAddr, "error", err)
+				s.log.Debug().Err(err).Str("remote", r.RemoteAddr).Msg("tty: client disconnected")
 				return
 			}
 			if err := backend.WriteMessage(mt, msg); err != nil {
-				s.log.Debug("tty: backend write error", "error", err)
+				s.log.Debug().Err(err).Msg("tty: backend write error")
 				return
 			}
 		}
@@ -278,16 +314,16 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		for {
 			mt, msg, err := backend.ReadMessage()
 			if err != nil {
-				s.log.Debug("tty: backend disconnected", "error", err)
+				s.log.Debug().Err(err).Msg("tty: backend disconnected")
 				return
 			}
 			if err := client.WriteMessage(mt, msg); err != nil {
-				s.log.Debug("tty: client write error", "remote", r.RemoteAddr, "error", err)
+				s.log.Debug().Err(err).Str("remote", r.RemoteAddr).Msg("tty: client write error")
 				return
 			}
 		}
 	}()
 
 	<-done
-	s.log.Info("tty: ws session ended", "remote", r.RemoteAddr)
+	s.log.Info().Str("remote", r.RemoteAddr).Msg("tty: ws session ended")
 }
