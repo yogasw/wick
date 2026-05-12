@@ -28,6 +28,7 @@ import (
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
 	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
@@ -43,6 +44,8 @@ import (
 	"github.com/yogasw/wick/internal/jobrunner"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
+	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
+	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
@@ -56,6 +59,7 @@ import (
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
+	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -82,11 +86,20 @@ func NewServer() *Server {
 	db := postgres.NewGORM(cfg.Database)
 	postgres.Migrate(db)
 
+	syncMgr := providersync.New(db)
+
+	// Restore all provider files from DB to filesystem on startup.
+	if err := syncMgr.RestoreAll(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("providersync: startup restore failed")
+	}
+
 	// Built-in maintenance jobs whose RunFunc captures *gorm.DB are
 	// registered here, after DB init, before validation + the jobs.All()
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
+	providerstoragesync.Register(syncMgr)
+	providerstorageretention.Register(syncMgr)
 
 	// Static built-in modules every wick app gets by default — agents
 	// tool plus the github / httprest connectors. cmd/lab additionally
@@ -353,6 +366,8 @@ func NewServer() *Server {
 	agentstool.SetConfigs(configsSvc)
 	agentstool.SetDB(db)
 	agentstool.SetChannelRegistry(channelReg)
+	agentstool.SetSyncManager(syncMgr)
+	providerstoragetool.SetSyncManager(syncMgr)
 	provider.AppName = appname.Resolve()
 	// Wire the auto-rescan toggle: provider package consults this
 	// before triggering background stale-version re-probes. Defaults

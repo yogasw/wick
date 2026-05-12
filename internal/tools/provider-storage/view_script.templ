@@ -1,0 +1,698 @@
+package providerstorage
+
+templ storageScript() {
+	<script>
+		const BASE = document.querySelector('main[data-base]').dataset.base;
+
+		function toast(msg, type) {
+			const c = document.getElementById('toast-container');
+			const el = document.createElement('div');
+			const colors = type === 'error'
+				? 'bg-red-500 text-white-100'
+				: type === 'warn'
+				? 'bg-yellow-500 text-white-100'
+				: 'bg-navy-800 dark:bg-white-200 text-white-100 dark:text-navy-900';
+			el.className = 'pointer-events-auto flex items-center gap-2 rounded-lg px-4 py-2.5 text-[0.8125rem] font-medium shadow-lg ' + colors + ' translate-y-2 opacity-0 transition-all duration-200';
+			el.textContent = msg;
+			c.appendChild(el);
+			requestAnimationFrame(() => { el.classList.remove('translate-y-2','opacity-0'); });
+			setTimeout(() => {
+				el.classList.add('translate-y-2','opacity-0');
+				setTimeout(() => el.remove(), 200);
+			}, 3000);
+		}
+
+		// ── Type combobox ─────────────────────────────────────────────────
+		const KNOWN_TYPES = ['claude', 'codex', 'gemini', 'wick'];
+		let typeDropdownVisible = false;
+
+		function positionTypeDropdown() {
+			const inp = document.getElementById('detect-provider');
+			const dd = document.getElementById('type-dropdown');
+			const r = inp.getBoundingClientRect();
+			dd.style.top = (r.bottom + 4) + 'px';
+			dd.style.left = r.left + 'px';
+			dd.style.width = r.width + 'px';
+		}
+
+		function renderTypeDropdown(filter) {
+			const list = document.getElementById('type-dropdown-list');
+			const items = filter ? KNOWN_TYPES.filter(t => t.startsWith(filter.toLowerCase())) : KNOWN_TYPES;
+			if (!items.length) { document.getElementById('type-dropdown').style.display = 'none'; return; }
+			list.innerHTML = items.map(t => `
+				<div onmousedown="pickType('${t}')" class="px-3 py-2 text-[0.8125rem] text-black-900 dark:text-white-100 cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800">${t}</div>
+			`).join('');
+			positionTypeDropdown();
+			document.getElementById('type-dropdown').style.display = 'block';
+		}
+
+		function filterTypeDropdown(val) { renderTypeDropdown(val); }
+		function showTypeDropdown() { renderTypeDropdown(document.getElementById('detect-provider').value); }
+		function hideTypeDropdown() { setTimeout(() => { document.getElementById('type-dropdown').style.display = 'none'; }, 150); }
+		function toggleTypeDropdown() {
+			const dd = document.getElementById('type-dropdown');
+			if (dd.style.display === 'none' || !dd.style.display) { document.getElementById('detect-provider').focus(); showTypeDropdown(); }
+			else { dd.style.display = 'none'; }
+		}
+		function pickType(val) {
+			document.getElementById('detect-provider').value = val;
+			document.getElementById('type-dropdown').style.display = 'none';
+		}
+
+		function switchTab(name) {
+			['files','settings'].forEach(t => {
+				document.getElementById('panel-' + t).style.display = t === name ? '' : 'none';
+				const btn = document.getElementById('tab-' + t);
+				if (t === name) {
+					btn.classList.add('border-green-500','text-green-600','dark:text-green-400');
+					btn.classList.remove('border-transparent','text-black-700','dark:text-black-500');
+				} else {
+					btn.classList.remove('border-green-500','text-green-600','dark:text-green-400');
+					btn.classList.add('border-transparent','text-black-700','dark:text-black-500');
+				}
+			});
+			if (name === 'settings') { loadSettings(); loadSources(); }
+		}
+
+		function loadFiles() {
+			const p = document.getElementById('filter-provider').value;
+			const i = document.getElementById('filter-instance').value;
+			const url = BASE + '/files' + (p || i ? '?provider=' + encodeURIComponent(p) + '&instance=' + encodeURIComponent(i) : '');
+			fetch(url).then(r => r.json()).then(rows => {
+				const providers = new Set(), instances = new Set();
+				rows.forEach(r => { providers.add(r.provider_type); instances.add(r.instance_name); });
+				populateFilter('filter-provider', providers, p);
+				populateFilter('filter-instance', instances, i);
+				const tbody = document.getElementById('files-tbody');
+				if (!rows.length) {
+					tbody.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-black-700 dark:text-black-500">No files stored.</td></tr>';
+					return;
+				}
+				tbody.innerHTML = rows.map(r => `
+					<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
+						<td class="px-3 py-2"><input type="checkbox" class="file-cb rounded border-white-400 dark:border-navy-600" value="${r.id}"/></td>
+						<td class="px-3 py-2 text-black-900 dark:text-white-100">${esc(r.provider_type)}</td>
+						<td class="px-3 py-2 text-black-900 dark:text-white-100">${esc(r.instance_name)}</td>
+						<td class="px-3 py-2 font-mono text-black-800 dark:text-black-500">${esc(r.rel_path)}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${fmtSize(r.size)}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${esc(r.synced_at)}</td>
+						<td class="px-3 py-2">
+							<input type="number" min="0" value="${r.retention_days}" onblur="saveRetention(${r.id},this.value)"
+								class="w-16 rounded border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 text-[0.75rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-prog-300"/>
+						</td>
+						<td class="px-3 py-2">
+							<div class="flex gap-1.5">
+								<button onclick="previewFile(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
+								<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
+							</div>
+						</td>
+					</tr>`).join('');
+			}).catch(e => {
+				document.getElementById('files-tbody').innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
+			});
+		}
+
+		function populateFilter(id, values, current) {
+			const sel = document.getElementById(id);
+			const first = sel.options[0];
+			sel.innerHTML = '';
+			sel.appendChild(first);
+			values.forEach(v => {
+				const o = document.createElement('option');
+				o.value = v; o.textContent = v;
+				if (v === current) o.selected = true;
+				sel.appendChild(o);
+			});
+		}
+
+		function toggleAll(cb) {
+			document.querySelectorAll('.file-cb').forEach(c => c.checked = cb.checked);
+		}
+
+		function expToggleAll(cb) {
+			document.querySelectorAll('.exp-file-cb').forEach(c => c.checked = cb.checked);
+		}
+
+		function restoreSelected() {
+			const mode = document.getElementById('view-explorer').style.display !== 'none' ? 'explorer' : 'list';
+			const sel = mode === 'explorer' ? '.exp-file-cb:checked' : '.file-cb:checked';
+			const vals = [...document.querySelectorAll(sel)].map(c => c.value);
+			// only numeric IDs — instance: prefix = folder/instance row, needs expand
+			const ids = vals.filter(v => /^\d+$/.test(v));
+			if (!ids.length) { toast('Select files (not folders/instances) to restore.', 'warn'); return; }
+			const body = new URLSearchParams();
+			ids.forEach(id => body.append('ids', id));
+			fetch(BASE + '/restore', {method:'POST', body}).then(r => r.json()).then(d => {
+				toast('Restored ' + d.restored + ' file(s).');
+				if (mode === 'explorer') {
+					if (expState.provider) loadChildren(expState.provider, expState.instance, expState.parentID);
+					else loadRoots();
+				} else loadFiles();
+			}).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function deleteSelected() {
+			const mode = document.getElementById('view-explorer').style.display !== 'none' ? 'explorer' : 'list';
+			const sel = mode === 'explorer' ? '.exp-file-cb:checked' : '.file-cb:checked';
+			const vals = [...document.querySelectorAll(sel)].map(c => c.value);
+			if (!vals.length) { toast('Select at least one file.', 'warn'); return; }
+			if (!confirm('Delete ' + vals.length + ' item(s) from storage?')) return;
+			const body = new URLSearchParams();
+			vals.forEach(v => {
+				if (v.startsWith('instance:')) {
+					const [, pt, ins] = v.split(':');
+					body.append('instance', pt + ':' + ins);
+				} else {
+					body.append('ids', v);
+				}
+			});
+			fetch(BASE + '/delete-selected', {method:'POST', body}).then(r => r.json()).then(d => {
+				toast('Deleted ' + d.deleted + ' file(s).');
+				if (mode === 'explorer') {
+					if (expState.provider) loadChildren(expState.provider, expState.instance, expState.parentID);
+					else loadRoots();
+				} else loadFiles();
+			}).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function saveRetention(id, val) {
+			const body = new URLSearchParams({days: val});
+			fetch(BASE + '/' + id + '/retention', {method:'POST', body}).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function previewFile(id, path) {
+			document.getElementById('preview-title').textContent = 'Preview: ' + path;
+			document.getElementById('preview-content').textContent = 'Loading…';
+			document.getElementById('preview-modal').style.display = '';
+			fetch(BASE + '/' + id + '/preview').then(r => r.json()).then(d => {
+				if (d.too_large) {
+					document.getElementById('preview-content').textContent = '[File too large to preview: ' + fmtSize(d.size) + ']';
+				} else if (d.binary) {
+					document.getElementById('preview-content').textContent = '[Binary file: ' + fmtSize(d.size) + ']';
+				} else {
+					document.getElementById('preview-content').textContent = d.content;
+				}
+			}).catch(e => {
+				document.getElementById('preview-content').textContent = 'Error: ' + e;
+			});
+		}
+
+		function closePreviewModal() { document.getElementById('preview-modal').style.display = 'none'; }
+
+		function openAddSourceModal() {
+			stagedItems = [];
+			explorerStack = [];
+			explorerRootEntries = [];
+			renderStagedList();
+			document.getElementById('detect-provider').value = '';
+			document.getElementById('detect-list-wrap').style.display = 'none';
+			document.getElementById('detect-list').innerHTML = '';
+			document.getElementById('detect-explorer-wrap').style.display = 'none';
+			document.getElementById('add-source-modal').style.display = '';
+		}
+		function closeAddSourceModal() { document.getElementById('add-source-modal').style.display = 'none'; }
+
+		function deleteFile(id) {
+			if (!confirm('Delete this file from storage?')) return;
+			fetch(BASE + '/' + id, {method:'DELETE'}).then(r => r.json()).then(() => { toast('File deleted.'); loadFiles(); }).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function openUploadModal() { document.getElementById('upload-modal').style.display = ''; }
+		function closeUploadModal() { document.getElementById('upload-modal').style.display = 'none'; }
+
+		function submitUpload(e) {
+			e.preventDefault();
+			const fd = new FormData(e.target);
+			fetch(BASE + '/upload', {method:'POST', body: fd}).then(r => r.json()).then(d => {
+				if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+				closeUploadModal();
+				e.target.reset();
+				toast('File uploaded.');
+				loadFiles();
+			}).catch(err => toast('Error: ' + err, 'error'));
+		}
+
+		function syncNow() {
+			fetch(BASE + '/sync', {method:'POST'}).then(r => r.json()).then(d => {
+				if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+				toast('Synced ' + d.synced + ' source(s).');
+				if (document.getElementById('view-explorer').style.display !== 'none') {
+					if (expState.provider) loadChildren(expState.provider, expState.instance, expState.parentID);
+					else loadRoots();
+				} else {
+					loadFiles();
+				}
+			}).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function fmtSize(n) {
+			if (n < 1024) return n + ' B';
+			if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+			return (n/1048576).toFixed(1) + ' MB';
+		}
+
+		function esc(s) {
+			return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+		}
+
+		function fmtTime(s) {
+			if (!s) return '—';
+			const d = new Date(s);
+			if (isNaN(d)) return s;
+			return d.toLocaleString(undefined, {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+		}
+
+		// ── Explorer mode ─────────────────────────────────────────────────
+		// State: null provider/instance = at roots level; parentID = current folder
+		let expState = { provider: null, instance: null, parentID: 0, stack: [] };
+		// stack entries: { label, provider, instance, parentID }
+
+		function setMode(m) {
+			const isExplorer = m === 'explorer';
+			document.getElementById('view-explorer').style.display = isExplorer ? '' : 'none';
+			document.getElementById('view-list').style.display = isExplorer ? 'none' : '';
+			const btnE = document.getElementById('btn-mode-explorer');
+			const btnL = document.getElementById('btn-mode-list');
+			if (isExplorer) {
+				btnE.className = 'rounded px-2.5 py-1 text-[0.75rem] font-medium bg-green-500 text-white-100';
+				btnL.className = 'rounded px-2.5 py-1 text-[0.75rem] font-medium text-black-700 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100';
+			} else {
+				btnL.className = 'rounded px-2.5 py-1 text-[0.75rem] font-medium bg-green-500 text-white-100';
+				btnE.className = 'rounded px-2.5 py-1 text-[0.75rem] font-medium text-black-700 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100';
+				loadFiles();
+			}
+		}
+
+		function loadRoots() {
+			fetch(BASE + '/roots').then(r => r.json()).then(roots => {
+				expState = { provider: null, instance: null, parentID: 0, stack: [] };
+				renderExpBreadcrumb();
+				document.getElementById('exp-check-all').style.visibility = 'hidden';
+				const tbody = document.getElementById('explorer-tbody');
+				if (!roots || !roots.length) {
+					tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-black-700 dark:text-black-500">No files stored yet.</td></tr>';
+					return;
+				}
+				tbody.innerHTML = roots.map(r => `
+					<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
+						<td class="px-3 py-2 w-8"><input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="instance:${esc(r.ProviderType)}:${esc(r.InstanceName)}"/></td>
+						<td class="px-3 py-2 font-mono text-black-900 dark:text-white-100 cursor-pointer" onclick="enterInstance('${esc(r.ProviderType)}','${esc(r.InstanceName)}')">
+							<span class="mr-1 select-none">📦</span>${esc(r.ProviderType)} / ${esc(r.InstanceName)}
+						</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${r.FileCount} file(s)</td>
+						<td class="px-3 py-2"></td>
+						<td class="px-3 py-2"></td>
+						<td class="px-3 py-2"></td>
+					</tr>`).join('');
+			}).catch(e => {
+				document.getElementById('explorer-tbody').innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
+			});
+		}
+
+		function enterInstance(provider, instance) {
+			expState = { provider, instance, parentID: 0, stack: [{ label: provider + '/' + instance, provider, instance, parentID: 0 }] };
+			renderExpBreadcrumb();
+			loadChildren(provider, instance, 0);
+		}
+
+		function loadChildren(provider, instance, parentID) {
+			expState.provider = provider;
+			expState.instance = instance;
+			expState.parentID = parentID;
+			const url = BASE + '/tree?provider=' + encodeURIComponent(provider) + '&instance=' + encodeURIComponent(instance) + '&parent_id=' + parentID;
+			fetch(url).then(r => r.json()).then(rows => {
+				document.getElementById('exp-check-all').checked = false;
+				document.getElementById('exp-check-all').style.visibility = '';
+				const tbody = document.getElementById('explorer-tbody');
+				if (!rows || !rows.length) {
+					tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-black-700 dark:text-black-500">Empty folder.</td></tr>';
+					return;
+				}
+				tbody.innerHTML = rows.map(r => {
+					const icon = r.is_dir ? '📁' : '📄';
+					const nameCell = r.is_dir
+						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDown(${r.id},'${esc(r.name)}')">${icon} ${esc(r.name)}</span>`
+						: `${icon} <span class="font-mono">${esc(r.name)}</span>`;
+					const actions = r.is_dir ? '' : `
+						<div class="flex gap-1.5">
+							<button onclick="previewFile(${r.id},'${esc(r.name)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
+							<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
+						</div>`;
+					const cbCell = `<input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="${r.id}"/>`;
+					const retCell = r.is_dir ? '' : `<input type="number" min="0" value="${r.retention_days}" onblur="saveRetention(${r.id},this.value)" class="w-16 rounded border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 text-[0.75rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-prog-300"/>`;
+					return `<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
+						<td class="px-3 py-2">${cbCell}</td>
+						<td class="px-3 py-2 text-black-900 dark:text-white-100">${nameCell}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${r.size ? fmtSize(r.size) : '—'}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${r.synced_at ? fmtTime(r.synced_at) : '—'}</td>
+						<td class="px-3 py-2">${retCell}</td>
+						<td class="px-3 py-2">${actions}</td>
+					</tr>`;
+				}).join('');
+			}).catch(e => {
+				document.getElementById('explorer-tbody').innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
+			});
+		}
+
+		function drillDown(id, name) {
+			expState.stack.push({ label: name, provider: expState.provider, instance: expState.instance, parentID: expState.parentID });
+			expState.parentID = id;
+			renderExpBreadcrumb();
+			loadChildren(expState.provider, expState.instance, id);
+		}
+
+		function renderExpBreadcrumb() {
+			const bc = document.getElementById('explorer-breadcrumb');
+			bc.innerHTML = '';
+			// root link
+			const root = document.createElement('button');
+			root.className = 'text-green-600 dark:text-green-400 hover:underline';
+			root.textContent = 'Storage';
+			root.onclick = loadRoots;
+			bc.appendChild(root);
+			expState.stack.forEach((s, i) => {
+				const sep = document.createElement('span');
+				sep.className = 'text-black-500 mx-0.5'; sep.textContent = '/';
+				bc.appendChild(sep);
+				const crumb = document.createElement('button');
+				const isLast = i === expState.stack.length - 1;
+				crumb.className = isLast ? 'text-black-900 dark:text-white-100 font-medium' : 'text-green-600 dark:text-green-400 hover:underline';
+				crumb.textContent = s.label;
+				if (!isLast) {
+					crumb.onclick = () => {
+						expState.stack = expState.stack.slice(0, i + 1);
+						expState.provider = s.provider;
+						expState.instance = s.instance;
+						expState.parentID = s.parentID;
+						renderExpBreadcrumb();
+						if (s.parentID === 0 && i === 0) loadChildren(s.provider, s.instance, 0);
+						else loadChildren(s.provider, s.instance, s.parentID);
+					};
+				}
+				bc.appendChild(crumb);
+			});
+		}
+
+		// init: start in explorer mode
+		loadRoots();
+		loadFiles();
+
+		// ── Settings tab ──────────────────────────────────────────────────
+
+		let stagedItems = [];
+		let existingPaths = new Set();
+
+		function loadSettings() {
+			fetch(BASE + '/settings').then(r => r.json()).then(d => {
+				if (d.sync_interval_seconds) document.getElementById('settings-sync-interval').value = d.sync_interval_seconds;
+			});
+		}
+
+		function saveGlobalSettings() {
+			const interval = parseInt(document.getElementById('settings-sync-interval').value, 10);
+			fetch(BASE + '/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sync_interval_seconds:interval})})
+				.then(r => r.json()).then(d => { if (d.error) { toast('Error: ' + d.error, 'error'); return; } toast('Settings saved.'); })
+				.catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function runDetect() {
+			const pt = document.getElementById('detect-provider').value.trim();
+			if (!pt) { toast('Enter a type first.', 'warn'); return; }
+			document.getElementById('detect-list-wrap').style.display = '';
+			document.getElementById('detect-list').textContent = 'Detecting…';
+			fetch(BASE + '/sources/detect?provider=' + encodeURIComponent(pt))
+				.then(r => r.json()).then(paths => {
+					explorerStack = [];
+					if (paths && paths.length) {
+						explorerRootEntries = paths.map(p => ({
+							name: p.label,
+							path: p.sync_path,
+							is_dir: p.mode === 'folder',
+							exists: p.exists,
+							mode: p.mode,
+						}));
+					} else {
+						fetch(BASE + '/sources/home').then(r => r.json()).then(h => {
+							explorerRootEntries = [{name: h.path, path: h.path, is_dir: true, mode: 'folder'}];
+							document.getElementById('detect-list').textContent = '';
+							renderExplorer();
+						});
+						return;
+					}
+					document.getElementById('detect-list').textContent = '';
+					renderExplorer();
+				}).catch(e => {
+					document.getElementById('detect-list').textContent = 'Error: ' + e;
+				});
+		}
+
+
+		const RETENTION_PRESETS = [
+			{label: 'Lifetime', days: 0},
+			{label: '7 days', days: 7},
+			{label: '30 days', days: 30},
+			{label: '90 days', days: 90},
+			{label: 'Custom…', days: -1},
+		];
+
+		function onRetentionPreset(i, sel) {
+			if (sel.value === '_custom') {
+				stagedItems[i].RetentionDays = 1;
+			} else {
+				stagedItems[i].RetentionDays = parseInt(sel.value, 10);
+			}
+			renderStagedList();
+		}
+
+		function mk(tag, cls, attrs) {
+			const el = document.createElement(tag);
+			if (cls) el.className = cls;
+			if (attrs) Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k, v));
+			return el;
+		}
+
+		function renderStagedList() {
+			const wrap = document.getElementById('exp-staged-wrap');
+			const list = document.getElementById('exp-staged-list');
+			if (!stagedItems.length) { wrap.style.display = 'none'; return; }
+			wrap.style.display = '';
+			list.innerHTML = '';
+
+			const inCls = 'w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300';
+
+			stagedItems.forEach((s, i) => {
+				const card = mk('div', 'rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden');
+
+				// ── header row ──
+				const header = mk('div', 'flex items-center gap-2 px-4 py-3 bg-white-200 dark:bg-navy-800 border-b border-white-300 dark:border-navy-600');
+
+				const modeIcon = mk('span', 'shrink-0 text-[1rem] select-none');
+				modeIcon.textContent = s.Mode === 'folder' ? '📁' : '📄';
+
+				const pathBlock = mk('div', 'flex-1 min-w-0');
+				const labelEl = mk('p', 'text-[0.8125rem] font-medium text-black-900 dark:text-white-100 truncate');
+				labelEl.textContent = s.Label || s.SyncPath.split(/[\\/]/).pop();
+				const pathEl = mk('p', 'font-mono text-[0.6875rem] text-black-700 dark:text-black-500 truncate');
+				pathEl.textContent = s.SyncPath;
+				pathBlock.append(labelEl, pathEl);
+
+				const modeBadge = mk('span', 'shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-400');
+				modeBadge.textContent = s.Mode;
+
+				const rmBtn = mk('button', 'shrink-0 rounded-lg p-1 text-black-700 dark:text-black-500 hover:bg-neg-50 hover:text-neg-400 dark:hover:bg-navy-700 transition-colors');
+				rmBtn.title = 'Remove';
+				rmBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+				rmBtn.onclick = () => removeStaged(i);
+
+				header.append(modeIcon, pathBlock, modeBadge, rmBtn);
+				card.appendChild(header);
+
+				// ── fields row ──
+				const fields = mk('div', 'grid grid-cols-2 gap-3 px-4 py-3');
+
+				// Label
+				const labelGroup = mk('div', '');
+				const labelLbl = mk('label', 'block text-[0.6875rem] font-medium text-black-800 dark:text-black-500 mb-1');
+				labelLbl.textContent = 'Label';
+				const labelInp = mk('input', inCls);
+				labelInp.type = 'text'; labelInp.value = s.Label;
+				labelInp.oninput = () => { stagedItems[i].Label = labelInp.value; labelEl.textContent = labelInp.value || s.SyncPath.split(/[\\/]/).pop(); };
+				labelGroup.append(labelLbl, labelInp);
+
+				// Retention
+				const retGroup = mk('div', '');
+				const retLbl = mk('label', 'block text-[0.6875rem] font-medium text-black-800 dark:text-black-500 mb-1');
+				retLbl.textContent = 'Retention';
+				const isCustom = !RETENTION_PRESETS.some(p => p.days >= 0 && p.days === s.RetentionDays);
+				const retSel = mk('select', inCls);
+				RETENTION_PRESETS.forEach(p => {
+					const o = document.createElement('option');
+					o.value = p.days === -1 ? '_custom' : String(p.days);
+					o.textContent = p.label;
+					o.selected = (p.days === -1 && isCustom) || (!isCustom && p.days === s.RetentionDays);
+					retSel.appendChild(o);
+				});
+				retSel.onchange = () => onRetentionPreset(i, retSel);
+				retGroup.append(retLbl, retSel);
+				if (isCustom) {
+					const custInp = mk('input', inCls + ' mt-1');
+					custInp.type = 'number'; custInp.min = '1'; custInp.value = s.RetentionDays;
+					custInp.placeholder = 'days';
+					custInp.oninput = () => { stagedItems[i].RetentionDays = parseInt(custInp.value) || 1; };
+					retGroup.appendChild(custInp);
+				}
+
+				fields.append(labelGroup, retGroup);
+				card.appendChild(fields);
+				list.appendChild(card);
+			});
+		}
+
+		// ── Explorer (cd-style) ───────────────────────────────────────────
+		let explorerStack = []; // [{path, label}] — empty = at root
+		let explorerRootEntries = []; // virtual root from detect
+
+		function renderExplorer() {
+			const wrap = document.getElementById('detect-explorer-wrap');
+			wrap.innerHTML = '';
+			wrap.style.display = '';
+
+			const atRoot = explorerStack.length === 0;
+			const cur = atRoot ? null : explorerStack[explorerStack.length - 1];
+
+			// breadcrumb
+			const bc = mk('div', 'flex items-center gap-1 mb-2 flex-wrap text-[0.75rem] font-mono');
+			const rootCrumb = mk('button', explorerStack.length ? 'text-green-600 dark:text-green-400 hover:underline' : 'text-black-900 dark:text-white-100 font-medium');
+			rootCrumb.textContent = 'Detected paths';
+			if (explorerStack.length) rootCrumb.onclick = () => { explorerStack = []; renderExplorer(); };
+			bc.appendChild(rootCrumb);
+			explorerStack.forEach((s, si) => {
+				const sep = mk('span', 'text-black-500'); sep.textContent = '/'; bc.appendChild(sep);
+				const crumb = mk('button', si === explorerStack.length - 1 ? 'text-black-900 dark:text-white-100 font-medium' : 'text-green-600 dark:text-green-400 hover:underline');
+				crumb.textContent = s.label;
+				if (si < explorerStack.length - 1) crumb.onclick = () => { explorerStack = explorerStack.slice(0, si + 1); renderExplorer(); };
+				bc.appendChild(crumb);
+			});
+			if (cur) {
+				const addCurBtn = mk('button', 'ml-auto shrink-0 rounded px-2 py-0.5 bg-green-500 text-white-100 hover:bg-green-600');
+				addCurBtn.textContent = '+ Add folder';
+				addCurBtn.onclick = () => { stageOne(cur.path, 'folder', cur.label); wrap.style.display = 'none'; };
+				bc.appendChild(addCurBtn);
+			}
+			wrap.appendChild(bc);
+
+			// list panel
+			const listEl = mk('div', 'rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 max-h-56 overflow-y-auto');
+			wrap.appendChild(listEl);
+
+			if (atRoot) {
+				renderEntries(listEl, explorerRootEntries);
+			} else {
+				const loading = mk('div', 'px-3 py-2 text-[0.75rem] text-black-700 dark:text-black-500');
+				loading.textContent = 'Loading…'; listEl.appendChild(loading);
+				fetch(BASE + '/sources/ls?path=' + encodeURIComponent(cur.path))
+					.then(r => r.json()).then(d => {
+						listEl.innerHTML = '';
+						if (d.error) { const e = mk('div', 'px-3 py-2 text-[0.75rem] text-red-500'); e.textContent = '⚠ ' + d.error; listEl.appendChild(e); return; }
+						renderEntries(listEl, d.entries || []);
+					}).catch(e => { listEl.textContent = '⚠ ' + e; });
+			}
+		}
+
+		function renderEntries(listEl, entries) {
+			if (!entries.length) { const e = mk('div', 'px-3 py-2 text-[0.75rem] text-black-600 dark:text-black-500'); e.textContent = '(empty)'; listEl.appendChild(e); return; }
+			entries.forEach(entry => {
+				const row = mk('div', 'flex items-center gap-2 px-3 py-1.5 border-b border-white-300 dark:border-navy-600 last:border-0 ' + (entry.is_dir ? 'cursor-pointer hover:bg-white-300 dark:hover:bg-navy-700' : 'hover:bg-white-300 dark:hover:bg-navy-700'));
+				const icon = mk('span', 'shrink-0 select-none text-[0.8125rem]');
+				icon.textContent = entry.is_dir ? '📁' : '📄';
+				const name = mk('span', 'font-mono text-[0.75rem] flex-1 min-w-0 truncate ' + (entry.is_dir ? 'text-black-900 dark:text-white-100' : 'text-black-700 dark:text-black-500'));
+				name.textContent = entry.name;
+				row.append(icon, name);
+
+				const addBtn = mk('button', 'shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] bg-green-500 text-white-100 hover:bg-green-600');
+				addBtn.textContent = '+ Add';
+				addBtn.onclick = e => {
+					e.stopPropagation();
+					stageOne(entry.path, entry.is_dir ? 'folder' : 'single', entry.name);
+					row.style.opacity = '0.4'; row.style.pointerEvents = 'none';
+				};
+				row.appendChild(addBtn);
+
+				if (entry.is_dir) {
+					row.onclick = () => { explorerStack.push({path: entry.path, label: entry.name}); renderExplorer(); };
+				}
+				listEl.appendChild(row);
+			});
+		}
+
+		function stageOne(path, mode, label) {
+			if (stagedItems.find(s => s.SyncPath === path)) return;
+			stagedItems.push({
+				ProviderType: document.getElementById('detect-provider').value,
+				InstanceName: '',
+				Label: label,
+				SyncPath: path,
+				Mode: mode,
+				RetentionDays: 0,
+				Enabled: true,
+			});
+			renderStagedList();
+		}
+
+		function removeStaged(i) {
+			stagedItems.splice(i, 1);
+			renderStagedList();
+		}
+
+		function saveAllStaged() {
+			if (!stagedItems.length) return;
+			const saves = stagedItems.map(s =>
+				fetch(BASE + '/sources', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(s)})
+					.then(r => r.json())
+			);
+			Promise.all(saves).then(results => {
+				const errs = results.filter(d => d.error);
+				if (errs.length) { toast('Some errors: ' + errs.map(d => d.error).join(', '), 'error'); }
+				else { toast('Sources saved.'); }
+				stagedItems = [];
+				renderStagedList();
+				closeAddSourceModal();
+				loadSources();
+			}).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function loadSources() {
+			fetch(BASE + '/sources').then(r => r.json()).then(rows => {
+				existingPaths = new Set((rows || []).map(s => s.SyncPath));
+				const tbody = document.getElementById('sources-tbody');
+				if (!rows || !rows.length) {
+					tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-black-700 dark:text-black-500">No sync sources configured.</td></tr>';
+					return;
+				}
+				tbody.innerHTML = rows.map(s => `
+					<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
+						<td class="px-3 py-2 text-black-900 dark:text-white-100 text-[0.75rem]">${esc(s.ProviderType)}/<span class="text-black-700 dark:text-black-500">${esc(s.InstanceName)}</span></td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${esc(s.Label)}</td>
+						<td class="px-3 py-2 font-mono text-[0.75rem] text-black-800 dark:text-black-500 max-w-xs truncate" title="${esc(s.SyncPath)}">${esc(s.SyncPath)}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${esc(s.Mode)}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${fmtTime(s.CreatedAt)}</td>
+						<td class="px-3 py-2">${s.Enabled ? '<span class="text-green-600 dark:text-green-400 text-[0.75rem]">on</span>' : '<span class="text-black-700 dark:text-black-500 text-[0.75rem]">off</span>'}</td>
+						<td class="px-3 py-2">
+							<button onclick="deleteSourceRow(${s.ID})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
+						</td>
+					</tr>`).join('');
+			}).catch(e => {
+				document.getElementById('sources-tbody').innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
+			});
+		}
+
+		function deleteSourceRow(id) {
+			if (!confirm('Delete this sync source?')) return;
+			fetch(BASE + '/sources/' + id, {method:'DELETE'}).then(r => r.json()).then(d => {
+				if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+				toast('Source deleted.');
+				loadSources();
+			}).catch(e => toast('Error: ' + e, 'error'));
+		}
+	</script>
+}
