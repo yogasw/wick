@@ -28,6 +28,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
+	"github.com/yogasw/wick/internal/tools/webtty"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
 
@@ -92,6 +93,21 @@ func RegisterBuiltins() {
 		},
 		Configs:  agentsConfigs,
 		Register: agentstool.Register,
+	})
+	registerOnce(tool.Module{
+		Meta: tool.Tool{
+			Key:               "webtty",
+			Name:              "Web Terminal",
+			Description:       "Browser-based terminal session. Requires gotty on PATH.",
+			Icon:              ">_",
+			Category:          "System",
+			DefaultVisibility: entity.VisibilityPrivate,
+			DefaultTags:       []tool.DefaultTag{tags.System},
+		},
+		Configs: pkgentity.StructToConfigs(webtty.Config{
+			Enabled: true,
+		}),
+		Register: webtty.Register,
 	})
 }
 

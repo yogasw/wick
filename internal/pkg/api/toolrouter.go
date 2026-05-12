@@ -41,6 +41,7 @@ type toolRouter struct {
 
 	routes  []routeEntry
 	statics []staticEntry
+	raws    []rawEntry
 }
 
 type routeEntry struct {
@@ -53,6 +54,11 @@ type routeEntry struct {
 type staticEntry struct {
 	prefix, owner string
 	fsys          fs.FS
+}
+
+type rawEntry struct {
+	prefix, owner string
+	fn            func(cfg tool.ConfigReader) http.Handler
 }
 
 func newToolRouter(cfg tool.ConfigReader) *toolRouter {
@@ -83,6 +89,14 @@ func (t *toolRouter) Static(prefix string, fsys fs.FS) {
 		prefix: t.resolve(prefix),
 		owner:  t.meta.Name,
 		fsys:   fsys,
+	})
+}
+
+func (t *toolRouter) HandleRaw(prefix string, fn func(cfg tool.ConfigReader) http.Handler) {
+	t.raws = append(t.raws, rawEntry{
+		prefix: t.resolve(prefix),
+		owner:  t.meta.Name,
+		fn:     fn,
 	})
 }
 
@@ -147,6 +161,14 @@ func (t *toolRouter) validate() error {
 			return fmt.Errorf("tool %q: Static called with empty prefix", s.owner)
 		}
 	}
+	for _, raw := range t.raws {
+		if strings.TrimSpace(raw.prefix) == "" {
+			return fmt.Errorf("tool %q: HandleRaw called with empty prefix", raw.owner)
+		}
+		if !strings.HasSuffix(raw.prefix, "/") {
+			return fmt.Errorf("tool %q: HandleRaw prefix %q must end with '/'", raw.owner, raw.prefix)
+		}
+	}
 	return nil
 }
 
@@ -170,5 +192,8 @@ func (t *toolRouter) mount(mux *http.ServeMux) {
 	}
 	for _, s := range t.statics {
 		mux.Handle("GET "+s.prefix, tool.StaticHandler(s.prefix, s.fsys))
+	}
+	for _, raw := range t.raws {
+		mux.Handle(raw.prefix, raw.fn(t.cfg))
 	}
 }
