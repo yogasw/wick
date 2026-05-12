@@ -59,6 +59,29 @@ jobs:
           fi
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Install wick CLI
+        run: go install github.com/yogasw/wick@${{ github.ref_name }}
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Init project
+        run: wick init wick --skip-setup
+        working-directory: /tmp
+
+      - name: Upload project scaffold
+        uses: actions/upload-artifact@v4
+        with:
+          name: wick-scaffold
+          path: /tmp/wick
+          retention-days: 1
+
   build-binaries:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     needs: prepare
@@ -74,22 +97,23 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version: '1.25'
+          cache: false
 
       - name: Install wick CLI
-        run: go install github.com/yogasw/wick@$(cat VERSION | xargs printf 'v%s')
+        run: go install github.com/yogasw/wick@${{ github.ref_name }}
 
       - name: Add Go bin to PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Download project scaffold
+        uses: actions/download-artifact@v4
+        with:
+          name: wick-scaffold
+          path: /tmp/wick
 
       - name: Install wixl (windows cross-compile)
         if: matrix.os == 'windows'
@@ -97,6 +121,7 @@ jobs:
 
       - name: Setup
         run: wick setup
+        working-directory: /tmp/wick
 
       - name: Build installer
         env:
@@ -105,10 +130,12 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo || '0' }}
           APP_VERSION: ${{ github.ref_name }}
         run: wick build --installer
+        working-directory: /tmp/wick
 
       - name: Resolve asset name
         id: meta
         shell: bash
+        working-directory: /tmp/wick
         run: |
           NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
           VERSION=${GITHUB_REF_NAME#v}
@@ -119,12 +146,12 @@ jobs:
           esac
           ASSET="${NAME}-${VERSION}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-          echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
+          echo "asset_path=/tmp/wick/bin/$ASSET" >> "$GITHUB_OUTPUT"
 
       - name: Checksum
         shell: bash
         run: |
-          cd bin
+          cd /tmp/wick/bin
           sha256sum "${{ steps.meta.outputs.asset }}" > "${{ steps.meta.outputs.asset }}.sha256"
 
       - uses: actions/upload-artifact@v4
@@ -149,6 +176,7 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+          pattern: wick-lab-*
 
       - name: Upload to GitHub Release
         env:
@@ -169,10 +197,23 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          ref: ${{ github.ref_name }}
+          go-version: '1.25'
+          cache: false
+
+      - name: Install wick CLI
+        run: go install github.com/yogasw/wick@${{ github.ref_name }}
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Download project scaffold
+        uses: actions/download-artifact@v4
+        with:
+          name: wick-scaffold
+          path: /tmp/wick
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -187,7 +228,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: /tmp/wick
           push: true
           platforms: ${{ needs.prepare.outputs.docker_platform }}
           tags: |

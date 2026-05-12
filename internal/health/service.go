@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-//go:generate mockery --with-expecter --case snake --name Repository
 type Repository interface {
 	CheckDatabase(ctx context.Context) error
 }
