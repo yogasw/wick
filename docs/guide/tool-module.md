@@ -84,6 +84,27 @@ func Register(r tool.Router) {
 
 All paths are **relative** to `/tools/{key}` — never hardcode the full path.
 
+### Mounting a sub-router or reverse proxy
+
+When a tool wraps an external handler that owns its own sub-routing (WebSocket proxy, embedded HTTP server), use `r.HandleRaw`:
+
+```go
+r.HandleRaw("/tty/", func(cfg tool.ConfigReader) http.Handler {
+    inner := externalSrv.Handler()
+    return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+        if cfg.GetOwned("mytool", "enabled") != "true" {
+            http.Error(w, "disabled", http.StatusForbidden)
+            return
+        }
+        inner.ServeHTTP(w, req)
+    })
+})
+```
+
+- `prefix` is relative to `/tools/{key}` and must end with `/`
+- `fn` receives a `tool.ConfigReader` — use `cfg.GetOwned(key, field)` to gate on runtime config
+- Use sparingly — prefer `r.GET`/`r.POST` for normal endpoints
+
 ## Handlers
 
 Handlers are plain top-level funcs that receive `*tool.Ctx`:
