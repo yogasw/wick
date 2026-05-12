@@ -38,10 +38,13 @@ const (
 
 	// reactions used for the agent lifecycle
 	reactionQueued  = "hourglass_flowing_sand" // ⏳
-	reactionRunning = "gear"                   // ⚙️
-	reactionDone    = "white_check_mark"       // ✅
 	reactionBlocked = "no_entry_sign"          // 🚫
 	reactionError   = "x"                      // ❌
+
+	// queueReactionDelay suppresses the ⏳ reaction when the pool dispatches
+	// fast enough that the operator wouldn't see it anyway. Only sessions
+	// that are still waiting after this delay get the queue indicator.
+	queueReactionDelay = 3 * time.Second
 )
 
 // turn holds the per-turn state for a Slack session (thread). A new turn
@@ -55,7 +58,14 @@ type turn struct {
 	channelID  string
 	msgTS      string // ts of the user message — used for reactions
 	buf        strings.Builder
-	hasStarted bool // true after first TextDelta (⚙️ already set)
+	hasStarted bool // true after first TextDelta (banner already set)
+	// queueTimer fires after queueReactionDelay if the pool hasn't accepted
+	// the message yet. Cancelled (and set to nil) on successful dispatch
+	// so a fast-path send never flashes the ⏳ reaction.
+	queueTimer *time.Timer
+	// queueShown is set when queueTimer actually fired and added ⏳, so
+	// downstream cleanup knows to remove it.
+	queueShown bool
 	// approval tracking
 	pendingApprovalID    string // gate request UUID while waiting for decision
 	pendingApprovalMsgTS string // ts of the Slack approval message (for update)
@@ -411,15 +421,35 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		threadTS = ev.TimeStamp
 	}
 
+	log.Info().Str("channel", "slack").
+		Str("slack_channel", ev.Channel).
+		Str("channel_type", ev.ChannelType).
+		Str("user", ev.User).
+		Str("thread_ts", threadTS).
+		Str("msg_ts", ev.TimeStamp).
+		Int("text_len", len(ev.Text)).
+		Msg("incoming message")
+
 	cfg := s.snapshot()
 	groupIDs, err := s.resolveUserGroups(ev.User)
 	if err != nil {
 		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).Msg("resolve groups failed; falling back to empty")
 	}
-	if !s.allowedCfg(cfg, ev.User, groupIDs) {
-		log.Debug().Str("channel", "slack").Str("user", ev.User).Msg("access denied, ignoring message")
+	if !s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel) {
+		log.Warn().Str("channel", "slack").
+			Str("user", ev.User).
+			Str("slack_channel", ev.Channel).
+			Str("channel_type", ev.ChannelType).
+			Strs("groups", groupIDs).
+			Msg("access denied, ignoring message")
+		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
 		return
 	}
+	log.Info().Str("channel", "slack").
+		Str("user", ev.User).
+		Str("slack_channel", ev.Channel).
+		Str("channel_type", ev.ChannelType).
+		Msg("access allowed")
 
 	meta := agentchannels.ParseMeta(ev.Text)
 	if meta.IsMeta {
@@ -437,18 +467,36 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	s.turns[threadTS] = t
 	s.mu.Unlock()
 
-	if old != nil && old.msgTS != "" {
-		s.cfgMu.Lock()
-		api := s.api
-		s.cfgMu.Unlock()
-		oldReaction := reactionQueued
-		if old.hasStarted {
-			oldReaction = reactionRunning
+	if old != nil {
+		if old.queueTimer != nil {
+			old.queueTimer.Stop()
 		}
-		_ = api.RemoveReaction(oldReaction, slackgo.ItemRef{Channel: old.channelID, Timestamp: old.msgTS})
+		if old.msgTS != "" && old.queueShown {
+			s.cfgMu.Lock()
+			api := s.api
+			s.cfgMu.Unlock()
+			_ = api.RemoveReaction(reactionQueued, slackgo.ItemRef{Channel: old.channelID, Timestamp: old.msgTS})
+		}
 	}
 
-	s.setReaction(reactionQueued, ev.Channel, ev.TimeStamp, "")
+	// Defer the ⏳ reaction: only show it when the pool is genuinely slow
+	// to dispatch (>3s). Fast-path turns never flash the queue emoji.
+	chID := ev.Channel
+	msgTS := ev.TimeStamp
+	t.queueTimer = time.AfterFunc(queueReactionDelay, func() {
+		s.mu.Lock()
+		cur := s.turns[threadTS]
+		// Only mark/show if this turn is still current.
+		stillCurrent := cur != nil && cur.msgTS == msgTS
+		if stillCurrent {
+			cur.queueShown = true
+		}
+		s.mu.Unlock()
+		if !stillCurrent {
+			return
+		}
+		s.setReaction(reactionQueued, chID, msgTS, "")
+	})
 
 	if !s.sessionOnDisk(threadTS) {
 		ctxText := s.buildSessionContext(ev, threadTS)
@@ -464,9 +512,48 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 
 	if err := s.sendFn(context.Background(), threadTS, "main", "slack", "user", ev.Text); err != nil {
 		log.Error().Str("channel", "slack").Str("session", threadTS).Err(err).Msg("pool send failed")
-		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, reactionQueued)
+		old := s.cancelQueueTimer(threadTS, ev.Channel, ev.TimeStamp)
+		_ = old
+		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
 		s.postReply(ev.Channel, threadTS, "Agent error: could not queue message. Check the dashboard for details.")
+		return
 	}
+	// Message accepted by the pool: cancel pending queue timer (and remove
+	// ⏳ if it had already fired), then surface the "thinking" banner so
+	// the operator sees a working signal even while the agent is still
+	// thinking. No "running" emoji — agent status lives in Wick's web UI
+	// and the assistant thread banner.
+	s.cancelQueueTimer(threadTS, ev.Channel, ev.TimeStamp)
+	s.setAssistantStatus(ev.Channel, threadTS, "is thinking…")
+}
+
+// cancelQueueTimer stops the pending queue-reaction timer for the named
+// turn. If the timer already fired and the ⏳ reaction was added, it is
+// removed too. Returns true when the reaction was visible at call time.
+func (s *Channel) cancelQueueTimer(threadTS, channelID, msgTS string) bool {
+	s.mu.Lock()
+	t := s.turns[threadTS]
+	var wasShown bool
+	if t != nil {
+		if t.queueTimer != nil {
+			t.queueTimer.Stop()
+			t.queueTimer = nil
+		}
+		wasShown = t.queueShown
+		t.queueShown = false
+	}
+	s.mu.Unlock()
+	if !wasShown {
+		return false
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return wasShown
+	}
+	_ = api.RemoveReaction(reactionQueued, slackgo.ItemRef{Channel: channelID, Timestamp: msgTS})
+	return wasShown
 }
 
 // NotifyState updates reaction + posts reply for the latest turn of sessionKey.
@@ -485,14 +572,16 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 
 	switch state {
 	case "running":
-		s.setReaction(reactionRunning, channelID, msgTS, reactionQueued)
+		// Reaction already cleared at dispatch; just refresh the banner.
+		s.setAssistantStatus(channelID, sessionKey, "is thinking…")
 	case "done":
-		s.setReaction(reactionDone, channelID, msgTS, reactionRunning)
+		s.setAssistantStatus(channelID, sessionKey, "")
 		if text != "" {
 			s.postChunked(channelID, sessionKey, text)
 		}
 	case "blocked":
-		s.setReaction(reactionBlocked, channelID, msgTS, reactionRunning)
+		s.setReaction(reactionBlocked, channelID, msgTS, "")
+		s.setAssistantStatus(channelID, sessionKey, "")
 		note := text
 		if note == "" {
 			note = "Agent turn completed with blocked commands. See the dashboard for details."
@@ -501,12 +590,35 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 		}
 		s.postChunked(channelID, sessionKey, note)
 	case "error":
-		s.setReaction(reactionError, channelID, msgTS, reactionRunning)
+		s.setReaction(reactionError, channelID, msgTS, "")
+		s.setAssistantStatus(channelID, sessionKey, "")
 		msg := "Agent error."
 		if text != "" {
 			msg = fmt.Sprintf("Agent error: %s", text)
 		}
 		s.postReply(channelID, sessionKey, msg+"\n\nSee the dashboard for details.")
+	}
+}
+
+// setAssistantStatus updates the Slack AI thread status banner via
+// assistant.threads.setStatus. status="" clears the banner. Errors are
+// logged at debug only — the workspace may not have Slack AI enabled
+// or the bot may lack the assistant:write/chat:write scope; reaction
+// emojis remain as the primary progress signal.
+func (s *Channel) setAssistantStatus(channelID, threadTS, status string) {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil || channelID == "" || threadTS == "" {
+		return
+	}
+	err := api.SetAssistantThreadsStatus(slackgo.AssistantThreadsSetStatusParameters{
+		ChannelID: channelID,
+		ThreadTS:  threadTS,
+		Status:    status,
+	})
+	if err != nil {
+		log.Info().Str("channel", "slack").Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("status", status).Err(err).Msg("assistant.threads.setStatus failed")
 	}
 }
 
@@ -705,8 +817,12 @@ func (s *Channel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) 
 	s.mu.Unlock()
 }
 
-// OnApprovalResolved satisfies channels.ApprovalReceiver.
+// OnApprovalResolved satisfies channels.ApprovalReceiver. Decision /
+// expiry / revoke all funnel here — in every case we delete the prompt
+// so the thread stays clean (no permanent "Approved" / "Blocked" /
+// "Expired" residue).
 func (s *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
+	_ = decision
 	s.mu.Lock()
 	t := s.turns[sessionID]
 	if t == nil || t.pendingApprovalID != requestID {
@@ -729,26 +845,9 @@ func (s *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 		return
 	}
 
-	label := "✅ Approved"
-	switch decision {
-	case gate.DecisionBlock:
-		label = "🚫 Blocked"
-	case gate.DecisionApproveSession:
-		label = "✅ Approved for session"
-	case gate.DecisionApproveAll:
-		label = "✅ All commands allowed for session"
-	case gate.DecisionApproveAlways:
-		label = "✅ Always allowed"
-	}
-	_, _, _, err := api.UpdateMessage(channelID, approvalMsgTS,
-		slackgo.MsgOptionBlocks(
-			slackgo.NewSectionBlock(
-				slackgo.NewTextBlockObject("mrkdwn", label, false, false),
-				nil, nil),
-		),
-	)
+	_, _, err := api.DeleteMessage(channelID, approvalMsgTS)
 	if err != nil {
-		log.Debug().Str("channel", "slack").Err(err).Msg("update approval message failed")
+		log.Debug().Str("channel", "slack").Err(err).Msg("delete approval message failed")
 	}
 }
 
@@ -766,6 +865,24 @@ func (s *Channel) handleInteraction(_ context.Context, cb slackgo.InteractionCal
 	}
 	decision, requestID, sessionID, matchKey := parts[0], parts[1], parts[2], parts[3]
 
+	cfg := s.snapshot()
+	if !s.approverAllowed(cfg, cb.User.ID) {
+		s.cfgMu.Lock()
+		api := s.api
+		s.cfgMu.Unlock()
+		if api != nil {
+			_, err := api.PostEphemeral(cb.Channel.ID, cb.User.ID,
+				slackgo.MsgOptionText("Not authorized to approve this action.", false),
+				slackgo.MsgOptionTS(sessionID),
+			)
+			if err != nil {
+				log.Debug().Str("channel", "slack").Err(err).Msg("post unauthorized ephemeral failed")
+			}
+		}
+		log.Info().Str("channel", "slack").Str("user", cb.User.ID).Msg("approval denied: not in approver set")
+		return
+	}
+
 	s.mu.Lock()
 	fn := s.approveFn
 	s.mu.Unlock()
@@ -777,6 +894,45 @@ func (s *Channel) handleInteraction(_ context.Context, cb slackgo.InteractionCal
 	}
 }
 
+// approverAllowed decides whether userID may resolve a gate button.
+//   - trigger_users (default): anyone who passes the normal access checks
+//     (users + groups whitelists); channel check is skipped because the
+//     approver may be clicking from a different surface than the trigger.
+//   - admins: workspace admins / owners (via users.info).
+//   - custom: GateApproverUsers list OR a user group in GateApproverGroups.
+func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID string) bool {
+	switch cfg.GateApprovers {
+	case "trigger_users", "":
+		groupIDs, _ := s.resolveUserGroups(userID)
+		return s.allowedCfg(cfg, userID, groupIDs, "")
+	case "admins":
+		s.cfgMu.Lock()
+		api := s.api
+		s.cfgMu.Unlock()
+		if api == nil {
+			return false
+		}
+		info, err := api.GetUserInfo(userID)
+		if err != nil {
+			log.Debug().Str("channel", "slack").Err(err).Msg("users.info failed during approver check")
+			return false
+		}
+		return info.IsAdmin || info.IsOwner || info.IsPrimaryOwner
+	case "custom":
+		if pickerHas(cfg.GateApproverUsers, userID) {
+			return true
+		}
+		groupIDs, _ := s.resolveUserGroups(userID)
+		for _, g := range groupIDs {
+			if pickerHas(cfg.GateApproverGroups, g) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
 func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string) {
 	s.cfgMu.Lock()
 	api := s.api
@@ -786,6 +942,9 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 		s.withBackoff(func() error {
 			return api.RemoveReaction(oldReaction, ref)
 		})
+	}
+	if newReaction == "" {
+		return
 	}
 	s.withBackoff(func() error {
 		return api.AddReaction(newReaction, ref)
@@ -865,25 +1024,77 @@ func isRateLimit(err error) bool {
 		strings.Contains(err.Error(), "ratelimited")
 }
 
-func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string) bool {
-	switch cfg.AccessMode {
-	case "everyone", "":
-		return true
-	case "users":
-		return s.inList(cfg.AllowedUsers, userID)
-	case "groups":
+// allowedCfg ANDs three per-list whitelist checks. Modes other than
+// "whitelist" (default "all") short-circuit that list to pass.
+// channelID may be empty for callers that don't have a channel context
+// (e.g. approver checks); the channels list is then skipped.
+// allowedCfg combines per-list checks. Semantics:
+//   - if BOTH users and groups whitelists are active → OR (match either)
+//   - if only ONE is active → it gates alone
+//   - if NEITHER is active → pass
+//   - channels whitelist is AND'd on top (independent dimension)
+func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string, channelID string) bool {
+	usersActive := cfg.UsersMode == "whitelist"
+	groupsActive := cfg.GroupsMode == "whitelist"
+
+	identityOK := true
+	switch {
+	case usersActive && groupsActive:
+		userMatch := pickerHas(cfg.AllowedUsers, userID)
+		groupMatch := false
 		for _, gid := range groupIDs {
-			if s.inList(cfg.AllowedGroups, gid) {
+			if pickerHas(cfg.AllowedGroups, gid) {
+				groupMatch = true
+				break
+			}
+		}
+		identityOK = userMatch || groupMatch
+	case usersActive:
+		identityOK = pickerHas(cfg.AllowedUsers, userID)
+	case groupsActive:
+		identityOK = false
+		for _, gid := range groupIDs {
+			if pickerHas(cfg.AllowedGroups, gid) {
+				identityOK = true
+				break
+			}
+		}
+	}
+
+	if !identityOK {
+		log.Debug().Str("channel", "slack").Str("reject", "identity").
+			Str("user", userID).Strs("groups", groupIDs).
+			Bool("users_active", usersActive).Bool("groups_active", groupsActive).
+			Msg("denied by identity whitelists")
+		return false
+	}
+	if channelID != "" && cfg.ChannelsMode == "whitelist" && !pickerHas(cfg.AllowedChannels, channelID) {
+		log.Debug().Str("channel", "slack").Str("reject", "channels").Str("slack_channel", channelID).Msg("denied by channels whitelist")
+		return false
+	}
+	return true
+}
+
+// pickerHas reports whether jsonList (a JSON array of {id,name} entries
+// as written by the picker widget) contains id. Empty / malformed lists
+// return false. A bare-string list (legacy kvlist) is also accepted by
+// falling back to substring scan over the raw bytes.
+func pickerHas(jsonList, id string) bool {
+	if jsonList == "" || id == "" {
+		return false
+	}
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(jsonList), &rows); err == nil {
+		for _, r := range rows {
+			if r.ID == id {
 				return true
 			}
 		}
 		return false
 	}
-	return false
-}
-
-func (s *Channel) inList(list, id string) bool {
-	for _, entry := range strings.FieldsFunc(list, func(r rune) bool {
+	for _, entry := range strings.FieldsFunc(jsonList, func(r rune) bool {
 		return r == '\n' || r == ',' || r == ' '
 	}) {
 		if strings.TrimSpace(entry) == id {

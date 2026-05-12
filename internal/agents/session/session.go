@@ -57,6 +57,9 @@ type Meta struct {
 	CreatedAt    time.Time `json:"created_at"`
 	LastActive   time.Time `json:"last_active"`
 	PendingInput []string  `json:"pending_input,omitempty"`
+	// Label is the first user message truncated to 60 runes, cached here
+	// so sidebar rendering never needs to open conversation.jsonl.
+	Label string `json:"label,omitempty"`
 }
 
 // Session is the in-memory view: ID + meta + agent registry. Mirrors

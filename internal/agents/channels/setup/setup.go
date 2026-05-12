@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
 )
@@ -33,12 +34,19 @@ type TelegramStore interface {
 	agentchannels.ChannelEnsurer
 }
 
+// RestStore mirrors SlackStore for the OpenAI-compatible REST channel.
+type RestStore interface {
+	agentchannels.RestConfigStore
+	agentchannels.ChannelEnsurer
+}
+
 // Store is the union of every per-channel store interface used by All.
 // DBStore satisfies it; tests can build a smaller fake by composing only
 // the per-channel interfaces they need (e.g. just SlackStore).
 type Store interface {
 	SlackStore
 	TelegramStore
+	RestStore
 }
 
 // SendFnFactory builds a per-channel SendFunc. Setup composers call it
@@ -50,9 +58,10 @@ type SendFnFactory func(channelName string) agentchannels.SendFunc
 // All registers every built-in channel on reg in one call. Adding a new
 // channel = write its subpackage + composer here + extend this function.
 // Server.go never changes after this hook is in place.
-func All(reg *agentchannels.Registry, store Store, sendFn SendFnFactory) {
+func All(reg *agentchannels.Registry, store Store, sendFn SendFnFactory, restAuth agentrest.Authenticator) {
 	Slack(reg, store, sendFn("slack"))
 	Telegram(reg, store, sendFn("telegram"))
+	Rest(reg, store, sendFn("rest"), restAuth)
 }
 
 // Slack constructs the Slack channel from the store, applies its setters,
@@ -77,6 +86,29 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 		log.Info().Msg("agents: slack channel configured, will start with server")
 	} else {
 		log.Info().Msg("agents: slack channel not configured, skipping (set BotToken + AppToken in Channels → Slack)")
+	}
+	return ch
+}
+
+// Rest constructs the OpenAI-compatible REST channel and registers it
+// with a hot-reload ConfigSource. auth resolves the per-request Bearer
+// (Personal Access Token) and is required — without it the channel
+// refuses to serve.
+func Rest(reg *agentchannels.Registry, store RestStore, sendFn agentchannels.SendFunc, auth agentrest.Authenticator) *agentrest.Channel {
+	if err := store.EnsureChannel("rest"); err != nil {
+		log.Warn().Err(err).Msg("agents: rest channel ensure failed")
+	}
+	cfg, err := store.LoadRest()
+	if err != nil {
+		log.Warn().Err(err).Msg("agents: failed to load rest config from agent_channels")
+	}
+	ch := agentrest.New(cfg, auth)
+	ch.SetSendFunc(sendFn)
+	reg.Add(ch, agentrest.NewConfigSource(store, ch))
+	if ch.IsConfigured() {
+		log.Info().Msg("agents: rest channel enabled, serving POST /integrations/rest/v1/chat/completions")
+	} else {
+		log.Info().Msg("agents: rest channel not enabled (toggle in Channels → REST)")
 	}
 	return ch
 }

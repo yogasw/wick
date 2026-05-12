@@ -30,6 +30,22 @@ func NewToolRenderer(hasConfigs bool) tool.RenderFunc {
 		user := login.GetUser(c.R.Context())
 		isAdmin := user != nil && user.IsAdmin()
 		meta := c.Meta()
+
+		if meta.FullScreen {
+			// Full-screen tools own their layout — wrap with Navbar only,
+			// skip ToolHeader and setup banner.
+			inner := templ.ComponentFunc(func(ctx context.Context, out io.Writer) error {
+				if err := ui.Navbar(user).Render(ctx, out); err != nil {
+					return err
+				}
+				return body.Render(ctx, out)
+			})
+			c.W.Header().Set("Content-Type", "text/html; charset=utf-8")
+			ctx := templ.WithChildren(c.R.Context(), inner)
+			_ = ui.Layout(meta.Name).Render(ctx, c.W)
+			return
+		}
+
 		banner := toolBanner(meta, c.Missing())
 		inner := templ.ComponentFunc(func(ctx context.Context, out io.Writer) error {
 			if err := ui.Navbar(user).Render(ctx, out); err != nil {

@@ -25,7 +25,7 @@ Before writing a single line, lock down the API contract. Connectors are LLM-fac
 | **One concrete sample response per operation** — both happy path and a typical error | Drives the typed return shape and the error parser. Upstream error envelopes differ wildly; pick the wrong field and run history shows blank errors. |
 | **Which ops mutate state** — and how reversible each one is | Decides `Op` vs `OpDestructive`. Destructive ops default off on every new row; missing the flag means the LLM can fire them silently. |
 | **Pagination, rate limit, retry quirks** | Decides whether the op needs a `cursor`/`page` input, and whether to surface limit headers as errors instead of swallowing them. |
-| **Default tags** — public to every approved user, or restricted by filter tag? | Default is group-only (every approved user sees it). Filter tags require an explicit ask — never add one on your own initiative. |
+| **Default tags** — public to every approved user, or restricted by filter tag? | Every new connector ships with `tags.Connector` (group-only) so it appears under the "Connector" group on the home page — set this in `Meta.DefaultTags`. Filter tags (`tags.System` etc.) require an explicit ask; never add one on your own initiative. |
 
 Paste the sample request/response into the conversation before coding. It is much easier to align on shape with a real payload in front of you than to reverse-engineer it from prose.
 
@@ -81,6 +81,7 @@ func Meta() connector.Meta {
         Name:        "GitHub",
         Description: "Read repos, issues, and pull requests on GitHub.",
         Icon:        "🐙",
+        DefaultTags: []tool.DefaultTag{tags.Connector},
     }
 }
 ```
@@ -91,6 +92,8 @@ func Meta() connector.Meta {
 | `Name` | Display name on the admin card and detail page |
 | `Description` | Shown to admins. The LLM never reads this — see per-`Operation` Description below |
 | `Icon` | Emoji or short string |
+| `DefaultTags` | Tags attached to every freshly seeded row. **Every connector should include `tags.Connector`** so the home page groups it under "Connector". Add module-specific tags on top of that (e.g. `tags.System` for built-in maintenance connectors). Admin unlinks survive restarts — boot only seeds when a row has zero tag links yet. |
+| `Fixed` | When `true`, only one row may exist for this Key. Useful for connectors backed by a single in-process resource. |
 
 ### `Configs` struct
 

@@ -43,7 +43,10 @@
 // can be auto-generated.
 package connector
 
-import "github.com/yogasw/wick/pkg/entity"
+import (
+	"github.com/yogasw/wick/pkg/entity"
+	"github.com/yogasw/wick/pkg/tool"
+)
 
 // Meta is the static metadata for a connector definition. Key must be
 // a unique slug across every connector; entity.Connector.Key references
@@ -66,6 +69,17 @@ type Meta struct {
 	//
 	// Default false = many instances allowed (existing behaviour).
 	Fixed bool
+	// DefaultTags is the list of tags wick auto-attaches to each newly
+	// seeded row for this connector at boot. Tags are reused across
+	// connectors via the central tags package; admins can add or remove
+	// links from the admin UI without redeploy. Existing rows are
+	// untouched on subsequent boots — admin unlinks survive restarts.
+	//
+	// Convention: every connector should set at least `tags.Connector`
+	// so the home page groups it under "Connector". Add module-specific
+	// tags (e.g. `tags.System` for built-in maintenance connectors) on
+	// top of that.
+	DefaultTags []tool.DefaultTag
 }
 
 // ExecuteFunc is the per-operation handler signature. It receives a
@@ -129,13 +143,39 @@ func OpDestructive[I any](key, name, description string, input I, exec ExecuteFu
 	return op
 }
 
+// OpHealth is one entry in the report returned by Module.HealthCheck.
+// OK=true means the configured credential has every upstream permission
+// the operation needs; OK=false means the op should be system-disabled
+// and Reason explains what is missing (e.g. "needs scope: chat:write").
+//
+// HealthCheck implementations should return one OpHealth per operation
+// the module exposes that can be permission-checked; ops omitted from
+// the report are left untouched (neither system-disabled nor cleared).
+type OpHealth struct {
+	Key    string
+	OK     bool
+	Reason string
+}
+
+// HealthCheckFunc verifies that the configured credentials carry the
+// upstream permissions every operation needs. The framework calls it
+// from the admin UI's "Check Permissions" button. Implementations
+// should make one cheap probe call (e.g. Slack's auth.test) and
+// project the granted permissions against each operation's requirements.
+type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
+
 // Module is the internal, fully-resolved registration record wick keeps
 // for every connector definition. It is produced by app.RegisterConnector
 // — the Meta, the configs reflected from the typed Creds struct, and
 // the list of operations the connector exposes. Downstream code does
 // not construct Module directly.
+//
+// HealthCheck is optional. When non-nil, the connector detail page
+// renders a "Check Permissions" button that invokes it and toggles
+// per-operation system_disabled flags based on the report.
 type Module struct {
-	Meta       Meta
-	Configs    []entity.Config
-	Operations []Operation
+	Meta        Meta
+	Configs     []entity.Config
+	Operations  []Operation
+	HealthCheck HealthCheckFunc
 }

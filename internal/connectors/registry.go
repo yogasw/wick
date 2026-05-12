@@ -23,9 +23,22 @@ import (
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
 	"github.com/yogasw/wick/internal/connectors/github"
 	"github.com/yogasw/wick/internal/connectors/httprest"
+	"github.com/yogasw/wick/internal/connectors/slack"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
+	"github.com/yogasw/wick/pkg/tool"
 )
+
+// withConnectorTag is a small helper that appends the shared Connector
+// group tag to a Meta's DefaultTags. Used by RegisterBuiltins and
+// RegisterLabSamples so every wick-shipped connector lands under the
+// "Connector" group on the home page without each module having to
+// import the tags package itself.
+func withConnectorTag(m connector.Meta, extra ...tool.DefaultTag) connector.Meta {
+	m.DefaultTags = append([]tool.DefaultTag{tags.Connector}, extra...)
+	return m
+}
 
 // extra holds connector definitions registered by downstream projects,
 // plus the modules added by RegisterBuiltins / RegisterLabSamples.
@@ -64,14 +77,20 @@ func Register(m connector.Module) {
 // only exist mid-boot.
 func RegisterBuiltins() {
 	registerOnce(connector.Module{
-		Meta:       github.Meta(),
+		Meta:       withConnectorTag(github.Meta()),
 		Configs:    entity.StructToConfigs(github.Configs{}),
 		Operations: github.Operations(),
 	})
 	registerOnce(connector.Module{
-		Meta:       httprest.Meta(),
+		Meta:       withConnectorTag(httprest.Meta()),
 		Configs:    entity.StructToConfigs(httprest.Configs{}),
 		Operations: httprest.Operations(),
+	})
+	registerOnce(connector.Module{
+		Meta:        withConnectorTag(slack.Meta()),
+		Configs:     entity.StructToConfigs(slack.Configs{}),
+		Operations:  slack.Operations(),
+		HealthCheck: slack.HealthCheck,
 	})
 }
 
@@ -80,7 +99,7 @@ func RegisterBuiltins() {
 // do not call this; they register their own connectors via main.go.
 func RegisterLabSamples() {
 	registerOnce(connector.Module{
-		Meta:       crudcrud.Meta(),
+		Meta:       withConnectorTag(crudcrud.Meta()),
 		Configs:    entity.StructToConfigs(crudcrud.Configs{}),
 		Operations: crudcrud.Operations(),
 	})

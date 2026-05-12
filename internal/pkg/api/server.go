@@ -341,6 +341,7 @@ func NewServer() *Server {
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
 	agentstool.SetConfigs(configsSvc)
 	agentstool.SetDB(db)
+	agentstool.SetChannelRegistry(channelReg)
 	provider.AppName = appname.Resolve()
 	// Wire the auto-rescan toggle: provider package consults this
 	// before triggering background stale-version re-probes. Defaults
@@ -410,16 +411,6 @@ func NewServer() *Server {
 		}
 		agentstool.SetApprovals(approvalMgr)
 		log.Info().Str("socket", approvalMgr.SocketPath()).Msg("agents: gate socket ready")
-		// Inject gate hook into ~/.claude/settings.json so headless
-		// `claude -p` sessions pick it up regardless of working directory.
-		// Project-scoped settings.local.json is unreliable in -p mode.
-		if resolvedGateBin != "" {
-			if hErr := agentgate.MergeUserHooks(resolvedGateBin); hErr != nil {
-				log.Warn().Err(hErr).Msg("agents: write user hooks failed")
-			} else {
-				log.Info().Msg("agents: gate hook written to ~/.claude/settings.json")
-			}
-		}
 	}
 	agentstool.SetGateStatus(gateStatus)
 
@@ -455,11 +446,16 @@ func NewServer() *Server {
 		}
 	}
 
+	// PAT service is needed by the REST channel (per-request Bearer auth).
+	// Instantiated here so channelsetup.All can pass it in; the handler
+	// further below reuses the same instance.
+	tokensSvc := accesstoken.NewServiceFromDB(db)
+
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
 	// Adding a new channel = subpackage + composer in channels/setup; this
 	// line never changes.
-	channelsetup.All(channelReg, agentchannels.NewDBStore(db), sendFnFor)
+	channelsetup.All(channelReg, agentchannels.NewDBStore(db), sendFnFor, tokensSvc)
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
@@ -503,7 +499,7 @@ func NewServer() *Server {
 	}
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
-	tokensSvc := accesstoken.NewServiceFromDB(db)
+	// tokensSvc instantiated earlier so the REST channel can reuse it.
 	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
 
 	// ── OAuth 2.1 server (issues bearer tokens for MCP) ──────────
@@ -613,7 +609,9 @@ func NewServer() *Server {
 	// Register connectors as items. One module = one card; the card
 	// links to the manager list page where users see N rows for that
 	// definition (one per credential set), each with a test panel and
-	// enable/disable/duplicate actions.
+	// enable/disable/duplicate actions. DefaultTags propagate so the
+	// generic seed loop below attaches them to the card's path, which
+	// is what the home page renders.
 	for _, cm := range connectors.All() {
 		m := cm.Meta
 		allItems = append(allItems, tool.Tool{
@@ -623,6 +621,7 @@ func NewServer() *Server {
 			Path:              "/manager/connectors/" + m.Key,
 			Category:          "connector",
 			DefaultVisibility: entity.VisibilityPrivate,
+			DefaultTags:       m.DefaultTags,
 		})
 	}
 
@@ -834,8 +833,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	httpSrv := http.Server{
 		Addr:         addr,
 		Handler:      h,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		ReadHeaderTimeout: 30 * time.Second,
+		// ReadTimeout and WriteTimeout unset — SSE connections stay open
+		// indefinitely and must not be cut by server-side timeouts.
 		// BaseContext propagates the caller's logger (tray injects
 		// serverLogger here) into every request context. Without this,
 		// r.Context() defaults to context.Background() and middleware's
@@ -850,9 +850,6 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		logger.Info().Msg("server is shutting down...")
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
-		}
-		if s.gateBin != "" {
-			_ = agentgate.RemoveUserHooks(s.gateBin)
 		}
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

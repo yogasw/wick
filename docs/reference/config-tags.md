@@ -53,6 +53,7 @@ type Config struct {
 | `date` | Date picker | HTML `type="date"` |
 | `datetime` | Date-time picker | HTML `type="datetime-local"` |
 | `kvlist=col1\|col2` | Editable table | Value stored as JSON array — see below |
+| `picker=<source>` | Searchable typeahead with chips | Value stored as JSON `[{id,name},...]`. Requires the parent module to implement a `LookupProvider`. See below. |
 
 ## Modifiers (any widget)
 
@@ -64,6 +65,8 @@ type Config struct {
 | `locked` | Read-only in admin UI — set once at boot, not editable post-deploy |
 | `regen` | Shows a regenerate button in admin UI — key must have a registered generator |
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
+| `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Pure presentation hint — value is still seeded / saved normally. |
+| `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
 
 ## Key derivation
 
@@ -115,3 +118,53 @@ if err := json.Unmarshal([]byte(c.Cfg("groups")), &rows); err == nil {
 - One column only → bare `kvlist` (defaults to a `value` column)
 - Free-form multi-line text → use `textarea` instead
 :::
+
+## picker — searchable typeahead widget
+
+Use `picker` when the legal values come from an **upstream directory** (a Slack workspace, a Discord guild, a customer table) and the operator should pick chips by name instead of pasting raw IDs.
+
+```go
+type Config struct {
+    AllowedUsers    string `wick:"picker=slack.users;desc=Allowed users."`
+    AllowedChannels string `wick:"picker=slack.channels;desc=Allowed channels."`
+}
+```
+
+**Value format** — identical to a 2-column `kvlist=id|name`:
+
+```json
+[{"id":"U123","name":"Yoga"},{"id":"U456","name":"Deva"}]
+```
+
+So any whitelist check is just `id`-membership, and the same parser reads either widget.
+
+**Lookup source** — the value after `=` is a registry key (e.g. `slack.users`). The parent module — typically a channel — must implement `LookupProvider`:
+
+```go
+type LookupProvider interface {
+    Lookup(source, query string) ([]LookupItem, error)
+}
+type LookupItem struct{ ID, Name string }
+```
+
+The admin UI debounces 250 ms per keystroke and fires `GET /channels/<slug>/lookup?source=<src>&q=<q>`. Implementations should cap results (~20) and cache aggressively — see [`slack/lookup.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/lookup.go) for a 60 s in-memory cache example.
+
+**Admin UI behaviour:** a search input with a debounced dropdown; click → chip. Chips have an `×` to remove. Like kvlist, changes auto-save with no Save button.
+
+::: tip When to use picker vs kvlist
+- IDs come from an upstream directory the user knows by name → `picker`
+- IDs are arbitrary / freeform / configured locally → `kvlist=id|name`
+:::
+
+## visible_when — conditional fields
+
+Hide a field from the admin form until another field equals a target value:
+
+```go
+type Config struct {
+    Mode    string `wick:"dropdown=all|whitelist;default=all"`
+    Allowed string `wick:"picker=slack.users;visible_when=mode:whitelist;desc=Allowed users."`
+}
+```
+
+The field still seeds and persists normally — `visible_when` only toggles the form row. Useful for cutting noise in config pages with many feature-flagged dependants.

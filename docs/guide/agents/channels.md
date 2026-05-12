@@ -69,6 +69,8 @@ The `Channel` interface itself ([channel.go:59](https://github.com/yogasw/wick/b
 | `AgentEventReceiver` | `OnAgentEvent` — stream agent output back to the user |
 | `ApprovalReceiver` | `OnApprovalRequest` / `OnApprovalResolved` — render gate modal in channel |
 | `HTTPHandlerProvider` | Expose a webhook path (Slack HTTP mode) |
+| `LookupProvider` | Back `picker` config fields with a live search against the upstream (Slack users, channels, …) |
+| `HealthChecker` | Power the **Test Integration** button on the channel config page — return per-probe pass/fail rows |
 
 Channels declare exactly the interfaces they need; unused ones are simply not implemented.
 
@@ -99,31 +101,86 @@ The agent's progress is mirrored on the user's message ([slack.go:34-39](https:/
 
 | Reaction | Stage |
 |---|---|
-| ⏳ `hourglass_flowing_sand` | Queued (no slot yet, FIFO waiting) |
-| ⚙️ `gear` | Running — first text delta arrived |
-| ✅ `white_check_mark` | Done — final reply posted |
+| ⏳ `hourglass_flowing_sand` | Queued (no slot yet) — only added when the pool hasn't dispatched within 3 seconds, so fast-path turns never flash it |
+| _(cleared)_ | Accepted by the pool — queue emoji removed; the assistant banner takes over |
 | 🚫 `no_entry_sign` | Blocked — gate or access control rejected |
 | ❌ `x` | Error — exception during the turn |
+
+The bot uses reactions only for states the operator can't see anywhere else. Queue state lives only on the message until the pool takes it; once accepted, the queue reaction is cleared and the assistant banner (`is thinking…`) carries progress. On a successful `done` the banner is cleared too — the reply itself is the signal. Blocked / error remain as reactions so the post-mortem state is visible at a glance.
+
+### Progress banner (assistant threads)
+
+When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
 
 ### Chunked reply
 
 Slack hard-limits messages to 4000 chars. Wick chunks at **3800** to leave 200 chars headroom for continuation markers ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply.
 
+### Approval prompt cleanup
+
+Gate approval prompts in Slack are interactive button messages. When the prompt is resolved — decision clicked, request expired, or revoked from elsewhere — wick **deletes** the prompt message entirely instead of leaving an "Approved" / "Blocked" residue ([slack.go `OnApprovalResolved`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go)). The thread stays clean; the decision is observable through reaction state + downstream agent output.
+
 ### Access control
 
-Three modes (config field `AccessMode`):
+Three independent per-resource whitelists, each with its own `*_mode` dropdown (`all` / `whitelist`):
 
-| Mode | Who can talk to the bot |
+| Field pair | What it gates |
 |---|---|
-| `everyone` | Any Slack user with access to the channel. |
-| `users` | Only user IDs in `AllowedUsers`. |
-| `groups` | Only members of the user groups in `AllowedGroups`. |
+| `UsersMode` + `AllowedUsers` | Who (Slack user IDs) may trigger the agent |
+| `GroupsMode` + `AllowedGroups` | Which user groups |
+| `ChannelsMode` + `AllowedChannels` | Which channels / DMs the bot accepts messages from |
 
-Checked per-message. No restart needed — see [hot-reload](#hot-reload).
+**Semantics** ([slack.go `allowedCfg`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go)):
+
+- If both `UsersMode` and `GroupsMode` = `whitelist` → **OR** (pass when either matches).
+- If only one is `whitelist` → that list gates alone.
+- If both are `all` → identity check is skipped.
+- `ChannelsMode` is always **AND** on top (different dimension: scope of *where*).
+
+The allow-list fields use the **picker** widget — searchable typeahead backed by Slack's API (see [pickers](#pickers) below) — so the operator picks chips by name instead of pasting raw IDs. The list field is hidden whenever its mode is `all` to keep the form compact.
+
+Approval gates have their own approver block:
+
+| `GateApprovers` | Who may resolve approval buttons |
+|---|---|
+| `trigger_users` _(default)_ | Anyone who passes the access whitelists. |
+| `admins` | Workspace admins / owners (probed via `users.info`). |
+| `custom` | Explicit `GateApproverUsers` + `GateApproverGroups` pickers. |
+
+Unauthorized clicks get an ephemeral "Not authorized" reply and the gate stays open. Checked per-click. No restart needed — see [hot-reload](#hot-reload).
+
+### Pickers
+
+The `picker` widget is a generic typeahead bound to a channel-specific lookup source. Slack registers three sources:
+
+| Source key | Backed by | Fallback |
+|---|---|---|
+| `slack.users` | [`assistant.search.context`](https://api.slack.com/methods/assistant.search.context) (messages → de-dupe by author) | `users.list` |
+| `slack.usergroups` | `usergroups.list` | — |
+| `slack.channels` | `assistant.search.context` (channels → parse permalink for ID) | `conversations.list` |
+
+The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(source, query)` to avoid hammering Slack's rate limits while the operator types.
+
+### Integration health check
+
+The Slack config page has a **Test Integration** button at the top. Clicking it runs the API calls the channel depends on (in parallel, ~5s budget) and reports only the ones that failed. Each failed row shows the scope hint so the operator can fix the Slack app manifest without guessing.
+
+Probes:
+
+- `auth.test`
+- `team.info` (scope: `team:read`)
+- `users.list` (scope: `users:read`)
+- `usergroups.list` (scope: `usergroups:read`)
+- `conversations.list` (scopes: `channels:read`, `groups:read`)
+- `chat.postMessage` _(dry-run against an invalid channel ID — distinguishes `missing_scope` from `channel_not_found`)_
+- `reactions.add` _(dry-run against an invalid timestamp)_
+- `assistant.search.context` (scope: `assistant:write` — optional, falls back to list APIs)
+
+When all probes pass the panel shows a single "✓ All checks passed" line.
 
 ### Hot-reload
 
-Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is `Add`ed to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); it fingerprints `Mode + BotToken + AppToken + SigningSecret + pubURL + AccessMode + AllowedUsers + AllowedGroups`. When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
+Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is `Add`ed to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); the fingerprint covers the credentials (`Mode`, `BotToken`, `AppToken`, `SigningSecret`, `pubURL`) plus every access-control field (`UsersMode`, `AllowedUsers`, `GroupsMode`, `AllowedGroups`, `ChannelsMode`, `AllowedChannels`) and the approver block (`GateApprovers`, `GateApproverUsers`, `GateApproverGroups`). When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
 
 ### Workspace selection
 

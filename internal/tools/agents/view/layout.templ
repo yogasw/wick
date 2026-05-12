@@ -1,31 +1,107 @@
 package view
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/yogasw/wick/internal/agents/session"
+)
 
-// AgentsLayout wraps every Agents page with a two-column shell:
-// a fixed left sidebar nav and a flex-1 main content area.
-// The framework's c.HTML already wraps this in the global page shell
-// (navbar + theme), so this component only adds the two-column layout.
-templ AgentsLayout(base, activePage string) {
+// AgentsLayout wraps every Agents page with a full-screen Claude-style shell:
+// sidebar left (nav + recent sessions) and flex-1 main content area.
+templ AgentsLayout(vm AgentsLayoutVM) {
 	@lifecycleStyles()
 	@tooltipStyles()
-	<div class="mx-auto flex w-full max-w-container gap-0 px-6 pb-8">
-		<aside class="w-44 shrink-0 pt-8 pr-4">
-			<nav class="flex flex-col gap-0.5">
-				@agentsNavLink(base+"/", "Overview", activePage == "overview")
-				@agentsNavLink(base+"/sessions", "Sessions", activePage == "sessions")
-				@agentsNavLink(base+"/workspaces", "Workspaces", activePage == "workspaces")
-				@agentsNavLink(base+"/presets", "Presets", activePage == "presets")
-				@agentsNavLink(base+"/providers", "Providers", activePage == "providers")
-				@agentsNavLink(base+"/channels", "Channels", activePage == "channels")
-				<div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
-				@agentsNavLink("/admin/tools/agents", "Settings", false)
+	<div class="flex w-full" style="height:calc(100vh - 4rem)">
+		<!-- Sidebar -->
+		<aside class="flex w-60 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+			<!-- Brand + New Session -->
+			<div class="flex items-center justify-between gap-2 px-3 py-3 border-b border-white-300 dark:border-navy-600">
+				<div class="flex items-center gap-2">
+					<div class="flex h-7 w-7 items-center justify-center rounded-lg bg-green-500 text-xs text-white-100 font-semibold select-none">✦</div>
+					<span class="text-sm font-semibold text-black-900 dark:text-white-100">Agents</span>
+				</div>
+				<!-- Quick new session button -->
+				<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions/quick") }>
+					<button
+						type="submit"
+						title="New Session"
+						class="flex h-7 w-7 items-center justify-center rounded-lg bg-green-500 text-white-100 hover:bg-green-600 transition-colors"
+					>
+						<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
+							<path d="M8 3v10M3 8h10" stroke-linecap="round"></path>
+						</svg>
+					</button>
+				</form>
+			</div>
+			<!-- Nav links (compact) -->
+			<nav class="flex flex-col gap-0.5 px-2 py-2 border-b border-white-300 dark:border-navy-600">
+				@agentsNavLink(vm.Base+"/", "Overview", vm.ActivePage == "overview")
+				@agentsNavLink(vm.Base+"/workspaces", "Workspaces", vm.ActivePage == "workspaces")
+				@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
+				@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+				@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 			</nav>
+			<!-- Recent sessions list (scrollable, fills remaining height) -->
+			<div class="flex flex-col flex-1 overflow-hidden">
+				<div class="flex items-center justify-between px-3 py-2.5">
+					<span class="text-[11px] font-semibold text-black-700 dark:text-black-600 uppercase tracking-wider">Recent</span>
+					<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-[11px] text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100 transition-colors">All chats</a>
+				</div>
+				<div class="flex-1 overflow-y-auto pb-2">
+					if len(vm.SidebarIDs) == 0 {
+						<p class="px-3 py-4 text-xs text-black-600 dark:text-black-700 text-center">No sessions yet</p>
+					}
+					for _, id := range vm.SidebarIDs {
+						if sess, ok := vm.SidebarSessions[id]; ok {
+							@sidebarSessionRow(vm.Base, id, sess, vm.SidebarLabels[id], vm.SidebarLifecycle[id], vm.ActiveSessionID == id)
+						}
+					}
+				</div>
+			</div>
+			<!-- Bottom: Settings -->
+			<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
+				@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
+			</div>
 		</aside>
-		<main class="min-w-0 flex-1 pt-8">
-			{ children... }
+		<!-- Main content -->
+		<main class="flex-1 min-w-0 overflow-y-auto bg-white-200 dark:bg-navy-800" data-main>
+			<div class="px-6 py-6">
+				{ children... }
+			</div>
 		</main>
 	</div>
+}
+
+templ sidebarSessionRow(base, id string, sess session.Session, label string, lc SessionLifecycleVM, active bool) {
+	<a
+		href={ templ.SafeURL(base + "/sessions/" + id) }
+		class={
+			"flex items-center gap-0 w-full px-3 py-2 transition-colors text-left",
+			templ.KV("bg-white-300 dark:bg-navy-600", active),
+			templ.KV("hover:bg-white-200 dark:hover:bg-navy-600/60", !active),
+		}
+	>
+		<span class={
+			"flex-1 min-w-0 truncate text-sm",
+			templ.KV("font-semibold text-black-900 dark:text-white-100", active),
+			templ.KV("font-normal text-black-800 dark:text-black-600", !active),
+		}>
+			if label != "" {
+				{ label }
+			} else if sess.Meta.Workspace != "" {
+				{ sess.Meta.Workspace }
+			} else {
+				New session
+			}
+		</span>
+		if lc.Lifecycle != "" && lc.Lifecycle != "killed" {
+			<span class={
+				"ml-2 h-1.5 w-1.5 shrink-0 rounded-full",
+				templ.KV("bg-green-500", lc.Lifecycle == "working"),
+				templ.KV("bg-amber-400", lc.Lifecycle == "spawning"),
+				templ.KV("bg-blue-400", lc.Lifecycle == "idle"),
+			}></span>
+		}
+	</a>
 }
 
 // kebabAction is one item inside a kebabMenu dropdown. Variant
@@ -187,6 +263,23 @@ templ lifecycleStyles() {
 			0%, 100% { opacity: 1; r: 2.5px; }
 			50%      { opacity: 0.5; r: 1.5px; }
 		}
+		/* Prose turn — markdown output spacing */
+		.prose-turn > * + * { margin-top: 0.25rem; }
+		.prose-turn p { margin: 0; }
+		.prose-turn pre { margin: 0.5rem 0; }
+		.prose-turn blockquote { margin: 0.25rem 0; }
+		/* Chat page: lock main scroll so only the chat panel scrolls */
+		[data-main]:has([data-chat-panel]) {
+			overflow: hidden;
+			display: flex;
+			flex-direction: column;
+		}
+		[data-main]:has([data-chat-panel]) > div {
+			flex: 1;
+			min-height: 0;
+			display: flex;
+			flex-direction: column;
+		}
 	</style>
 }
 
@@ -194,13 +287,57 @@ templ agentsNavLink(href, label string, active bool) {
 	<a
 		href={ templ.SafeURL(href) }
 		class={
-			"flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-			templ.KV("bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400", active),
-			templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100", !active),
+			"flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+			templ.KV("bg-green-500/10 dark:bg-green-500/15 text-green-700 dark:text-green-400", active),
+			templ.KV("text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100", !active),
 		}
 	>
+		@agentsNavIcon(label)
 		{ label }
 	</a>
+}
+
+templ agentsNavIcon(label string) {
+	switch label {
+		case "Overview":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<rect x="2" y="2" width="5" height="5" rx="1"></rect>
+				<rect x="9" y="2" width="5" height="5" rx="1"></rect>
+				<rect x="2" y="9" width="5" height="5" rx="1"></rect>
+				<rect x="9" y="9" width="5" height="5" rx="1"></rect>
+			</svg>
+		case "Sessions":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M14 10c0 2.21-2.686 4-6 4S2 12.21 2 10V6c0-2.21 2.686-4 6-4s6 1.79 6 4v4z"></path>
+				<path d="M14 6c0 2.21-2.686 4-6 4S2 8.21 2 6" stroke-linecap="round"></path>
+			</svg>
+		case "Workspaces":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M2 5a2 2 0 012-2h2.586a1 1 0 01.707.293L8.414 4.5A1 1 0 009.121 4.5H12a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"></path>
+			</svg>
+		case "Presets":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M3 4h10M3 8h10M3 12h6" stroke-linecap="round"></path>
+			</svg>
+		case "Providers":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="8" cy="8" r="5.5"></circle>
+				<circle cx="8" cy="8" r="2"></circle>
+				<path d="M8 2.5V4M8 12v1.5M2.5 8H4M12 8h1.5" stroke-linecap="round"></path>
+			</svg>
+		case "Channels":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M4 8a4 4 0 014-4 4 4 0 014 4M2 10a6 6 0 016-6 6 6 0 016 6" stroke-linecap="round"></path>
+				<circle cx="8" cy="10" r="1.5" fill="currentColor" stroke="none"></circle>
+			</svg>
+		case "Settings":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"></circle>
+				<path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.4 3.4l.7.7M11.9 11.9l.7.7M3.4 12.6l.7-.7M11.9 4.1l.7-.7" stroke-linecap="round"></path>
+			</svg>
+		default:
+			<span class="h-4 w-4 shrink-0"></span>
+	}
 }
 
 // statusBadge renders an inline coloured pill for an agent/session status.

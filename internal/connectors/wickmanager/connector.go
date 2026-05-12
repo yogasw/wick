@@ -27,7 +27,11 @@
 // matching gate helper is a security hole.
 package wickmanager
 
-import "github.com/yogasw/wick/pkg/connector"
+import (
+	"github.com/yogasw/wick/internal/tags"
+	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/tool"
+)
 
 // Key is the connector definition slug. Single instance is auto-seeded
 // on first boot by Service.Bootstrap (Meta.Fixed=true).
@@ -54,9 +58,16 @@ func Meta() connector.Meta {
 // Module returns the fully-wired connector.Module for the given deps.
 // Registers no global state — caller is responsible for handing the
 // result to connectors.Register before connectors.Service.Bootstrap.
+//
+// DefaultTags carry tags.System so the row is hidden from non-admin
+// users (Wick Manager exposes wick's own management plane and should
+// never reach end-users), plus tags.Connector so admins still see it
+// under the "Connector" group on the home page.
 func Module(deps Deps) connector.Module {
+	m := Meta()
+	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.System}
 	return connector.Module{
-		Meta:       Meta(),
+		Meta:       m,
 		Operations: Operations(deps),
 	}
 }

@@ -100,6 +100,41 @@ type ApprovalReceiver interface {
 	OnApprovalResolved(sessionID, requestID, decision string)
 }
 
+// LookupItem is one row returned by a picker lookup. ID is the stable
+// identifier stored in the config; Name is the human label shown to the
+// operator.
+type LookupItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// HealthCheck is one row of an integration self-test (e.g. "auth.test ok",
+// "users.list missing scope"). OK=true means the upstream call succeeded
+// with the result the operator expects; Detail is a short human-readable
+// note (scope hint, count, etc.).
+type HealthCheck struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// HealthChecker lets a channel expose a "Test Integration" probe that
+// runs from the admin UI. Implementations should cover the API calls
+// the channel relies on (auth, listing, search, write) so missing scopes
+// surface before runtime.
+type HealthChecker interface {
+	HealthCheck() []HealthCheck
+}
+
+// LookupProvider lets a channel back picker fields with a live search
+// against its upstream. Source is the registered key from the wick tag
+// (e.g. "slack.users"). Implementations should cap results and skip
+// deleted/bot entries.
+type LookupProvider interface {
+	Lookup(source, query string) ([]LookupItem, error)
+}
+
 // ── HTTP webhook + hot reload (opt-in) ────────────────────────────────
 
 // HTTPHandlerProvider exposes a webhook handler the registry mounts on
@@ -131,6 +166,12 @@ type SlackConfigStore interface {
 // TelegramConfigStore mirrors SlackConfigStore for Telegram.
 type TelegramConfigStore interface {
 	LoadTelegram() (cfg agentconfig.TelegramChannelConfig, err error)
+}
+
+// RestConfigStore mirrors SlackConfigStore for the OpenAI-compatible REST
+// channel.
+type RestConfigStore interface {
+	LoadRest() (cfg agentconfig.RestChannelConfig, err error)
 }
 
 // ChannelEnsurer guarantees a default agent_channels row exists for the

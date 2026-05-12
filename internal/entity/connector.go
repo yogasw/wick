@@ -177,5 +177,17 @@ type ConnectorOperation struct {
 	// MCP callers receive a 403-equivalent error before Execute runs.
 	// Default: false (all authenticated users may call the operation).
 	AdminOnly bool `gorm:"default:false"`
-	UpdatedAt time.Time
+	// SystemDisabled is set by the health-check mechanism when the
+	// configured credential lacks the upstream permissions an operation
+	// needs (e.g. missing OAuth scope). It is orthogonal to Enabled —
+	// effective availability is `Enabled AND NOT SystemDisabled`. The
+	// admin UI locks the manual Enable/Disable toggle while this is
+	// true; the only way to clear it is to fix the upstream permission
+	// and re-run the health check. Default: false.
+	SystemDisabled bool `gorm:"default:false"`
+	// SystemDisabledReason is the human-readable explanation surfaced
+	// alongside the lock — e.g. "needs scope: chat:write". Empty when
+	// SystemDisabled is false.
+	SystemDisabledReason string `gorm:"type:text"`
+	UpdatedAt            time.Time
 }

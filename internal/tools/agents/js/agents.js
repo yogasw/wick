@@ -1,22 +1,243 @@
 (function () {
   "use strict";
 
+  // ── Minimal markdown renderer ─────────────────────────────────────────
+  // No external deps — handles bold, italic, inline code, fenced code
+  // blocks, headers, bullet lists, numbered lists, blockquotes, and
+  // bare URLs. Enough for typical LLM output.
+  function renderMarkdown(text) {
+    if (!text) return "";
+    var lines = text.split("\n");
+    var out = [];
+    var inCode = false, codeLang = "", codeLines = [];
+    var inList = false, listOl = false;
+
+    function flushList() {
+      if (!inList) return;
+      var tag = listOl ? "ol" : "ul";
+      var cls = listOl
+        ? 'class="list-decimal list-inside space-y-0.5 my-1"'
+        : 'class="list-disc list-inside space-y-0.5 my-1"';
+      out.push("<" + tag + " " + cls + ">" + listItems.join("") + "</" + tag + ">");
+      inList = false; listOl = false; listItems = [];
+    }
+    var listItems = [];
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      // Fenced code block open/close
+      var fenceMatch = line.match(/^```(\w*)$/);
+      if (fenceMatch) {
+        if (!inCode) {
+          flushList();
+          inCode = true; codeLang = fenceMatch[1]; codeLines = [];
+        } else {
+          var langLabel = codeLang
+            ? '<span class="text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide">' + esc(codeLang) + '</span>'
+            : '';
+          out.push(
+            '<div class="my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600">' +
+            (codeLang ? '<div class="flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600">' + langLabel + '</div>' : '') +
+            '<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed"><code>' +
+            esc(codeLines.join("\n")) + '</code></pre></div>'
+          );
+          inCode = false; codeLang = ""; codeLines = [];
+        }
+        continue;
+      }
+      if (inCode) { codeLines.push(line); continue; }
+
+      // Blank line
+      if (line.trim() === "") { flushList(); out.push('<div class="h-2"></div>'); continue; }
+
+      // Headings
+      var h = line.match(/^(#{1,3})\s+(.+)$/);
+      if (h) {
+        flushList();
+        var lvl = h[1].length;
+        var cls = lvl === 1
+          ? "text-base font-semibold text-black-900 dark:text-white-100 mt-3 mb-1"
+          : lvl === 2
+            ? "text-sm font-semibold text-black-900 dark:text-white-100 mt-2 mb-1"
+            : "text-sm font-medium text-black-800 dark:text-black-600 mt-2 mb-0.5";
+        out.push('<p class="' + cls + '">' + inlineMarkdown(h[2]) + '</p>');
+        continue;
+      }
+
+      // Blockquote
+      var bq = line.match(/^>\s?(.*)$/);
+      if (bq) {
+        flushList();
+        out.push(
+          '<blockquote class="border-l-2 border-green-400 dark:border-green-700 pl-3 my-1 text-black-700 dark:text-black-600 italic">' +
+          inlineMarkdown(bq[1]) + '</blockquote>'
+        );
+        continue;
+      }
+
+      // Bullet list
+      var ul = line.match(/^[-*+]\s+(.+)$/);
+      if (ul) {
+        if (inList && listOl) flushList();
+        inList = true; listOl = false;
+        listItems.push('<li class="text-sm text-black-900 dark:text-white-100">' + inlineMarkdown(ul[1]) + '</li>');
+        continue;
+      }
+
+      // Numbered list
+      var ol = line.match(/^\d+\.\s+(.+)$/);
+      if (ol) {
+        if (inList && !listOl) flushList();
+        inList = true; listOl = true;
+        listItems.push('<li class="text-sm text-black-900 dark:text-white-100">' + inlineMarkdown(ol[1]) + '</li>');
+        continue;
+      }
+
+      flushList();
+      out.push('<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">' + inlineMarkdown(line) + '</p>');
+    }
+    flushList();
+    if (inCode && codeLines.length) {
+      out.push('<pre class="text-xs font-mono bg-white-200 dark:bg-navy-800 px-4 py-3 rounded-lg overflow-x-auto"><code>' + esc(codeLines.join("\n")) + '</code></pre>');
+    }
+    return out.join("");
+  }
+
+  function inlineMarkdown(s) {
+    s = esc(s);
+    // Bold + italic
+    s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    s = s.replace(/_(.+?)_/g, '<em>$1</em>');
+    // Inline code
+    s = s.replace(/`([^`]+)`/g, '<code class="font-mono text-xs bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 rounded text-black-900 dark:text-white-100">$1</code>');
+    // Links
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" class="text-green-600 dark:text-green-400 underline" target="_blank" rel="noopener">$1</a>');
+    // Bare URLs
+    s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="text-green-600 dark:text-green-400 underline break-all" target="_blank" rel="noopener">$2</a>');
+    return s;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Render all server-side [data-md] nodes on load
+  function renderExistingMarkdown() {
+    document.querySelectorAll("[data-md]").forEach(function (el) {
+      var raw = el.textContent;
+      el.innerHTML = renderMarkdown(raw);
+      el.removeAttribute("data-md");
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    renderExistingMarkdown();
+
+
+    // ── Session search (All chats page) ──────────────────────────────
+    var searchInput = document.querySelector("[data-session-search]");
+    if (searchInput) {
+      searchInput.addEventListener("input", function () {
+        var q = searchInput.value.trim().toLowerCase();
+        var rows = document.querySelectorAll("[data-search-row]");
+        var visible = 0;
+        rows.forEach(function (row) {
+          var text = (row.dataset.searchText || "").toLowerCase();
+          var show = !q || text.includes(q);
+          row.style.display = show ? "" : "none";
+          if (show) visible++;
+        });
+        var empty = document.querySelector("[data-search-empty]");
+        if (empty) empty.classList.toggle("hidden", visible > 0 || !q);
+      });
+      searchInput.focus();
+    }
+
     var root = document.querySelector("[data-session-id]");
     var base = root ? root.dataset.base : null;
     var sessionID = root ? root.dataset.sessionId : null;
 
-    // ── SSE (session detail page only) ────────────────────────────────
-    if (sessionID && base) {
-      var es = new EventSource(base + "/stream?session=" + encodeURIComponent(sessionID));
-      var pendingTurnEl = null;
+    // Scroll chat to bottom on page load
+    requestAnimationFrame(function() {
+      var bottom = document.getElementById("chat-bottom");
+      if (bottom) bottom.scrollIntoView({ block: "end" });
+    });
 
-      es.addEventListener("agent", function (e) {
-        var ev = JSON.parse(e.data);
+    // ── Auto-resize textarea ──────────────────────────────────────────
+    document.querySelectorAll("[data-auto-resize]").forEach(function (ta) {
+      function resize() {
+        ta.style.height = "auto";
+        ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+      }
+      ta.addEventListener("input", resize);
+      resize();
+    });
+
+    // ── SSE via SharedWorker (session detail page only) ───────────────
+    // SharedWorker holds EventSource connections across page navigations —
+    // navigating to another session reuses the worker's existing socket
+    // instead of tearing down and reconnecting.
+    if (sessionID && base) {
+      var pendingTurnEl = null;
+      var pendingRawText = "";
+      var typingIndicatorEl = null;
+
+      var ssePort = null;
+      if (typeof SharedWorker !== "undefined") {
+        var worker = new SharedWorker(base + "/static/js/sse-worker.js");
+        ssePort = worker.port;
+        ssePort.start();
+        ssePort.postMessage({ type: "subscribe", sessionID: sessionID, base: base });
+        window.addEventListener("pagehide", function () {
+          ssePort.postMessage({ type: "unsubscribe", sessionID: sessionID });
+        });
+        ssePort.onmessage = function (msg) {
+          var data = msg.data;
+          if (!data) return;
+          if (data.type === "event") handleAgentEvent(data.event);
+        };
+      } else {
+        // Fallback for browsers without SharedWorker support.
+        var es = new EventSource(base + "/stream?session=" + encodeURIComponent(sessionID));
+        es.addEventListener("agent", function (e) {
+          var ev; try { ev = JSON.parse(e.data); } catch(_) { return; }
+          handleAgentEvent(ev);
+        });
+      }
+
+      function showTypingIndicator() {
+        if (typingIndicatorEl) return;
+        var container = document.querySelector("[data-turns]");
+        if (!container) return;
+        typingIndicatorEl = document.createElement("div");
+        typingIndicatorEl.className = "flex justify-start gap-3 items-end";
+        typingIndicatorEl.innerHTML =
+          '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800">' +
+          '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg></div>' +
+          '<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">' +
+          '<div class="flex items-center gap-1">' +
+          '<span class="h-1.5 w-1.5 rounded-full bg-black-600 dark:bg-black-700 animate-bounce" style="animation-delay:0ms"></span>' +
+          '<span class="h-1.5 w-1.5 rounded-full bg-black-600 dark:bg-black-700 animate-bounce" style="animation-delay:150ms"></span>' +
+          '<span class="h-1.5 w-1.5 rounded-full bg-black-600 dark:bg-black-700 animate-bounce" style="animation-delay:300ms"></span>' +
+          '</div></div>';
+        var bottom = document.getElementById("chat-bottom");
+        if (bottom) container.insertBefore(typingIndicatorEl, bottom);
+        else container.appendChild(typingIndicatorEl);
+        scrollToBottom();
+      }
+
+      function hideTypingIndicator() {
+        if (typingIndicatorEl) { typingIndicatorEl.remove(); typingIndicatorEl = null; }
+      }
+
+      function handleAgentEvent(ev) {
         if (ev.type === "lifecycle") {
-          // Pool-driven transition (spawning / killed). PID arrives
-          // here for fresh spawns; idle / working transitions are
-          // inferred from substate events below.
           applyLifecycle(ev.lifecycle, ev.pid || 0);
           return;
         }
@@ -38,45 +259,60 @@
           return;
         }
         if (ev.type === "text_delta") {
+          hideTypingIndicator();
           appendDelta(ev.data);
         } else if (ev.type === "done") {
           finalizeAssistantTurn();
           applyLifecycle("idle", 0);
         } else if (ev.type === "session_start") {
+          showTypingIndicator();
           applyLifecycle("working", 0);
         } else if (ev.type === "error") {
+          hideTypingIndicator();
           finalizeAssistantTurn();
           applyLifecycle("idle", 0);
         } else if (
-          ev.type === "thinking" || ev.type === "tool_use" ||
-          ev.type === "tool_result" || ev.type === "text_delta"
+          ev.type === "thinking" || ev.type === "tool_use" || ev.type === "tool_result"
         ) {
+          showTypingIndicator();
           applyLifecycle("working", 0);
         }
-      });
+      }
 
-      es.addEventListener("error", function () {
-        // Browser will auto-reconnect; nothing to do here.
-      });
+      function scrollToBottom() {
+        var bottom = document.getElementById("chat-bottom");
+        if (bottom) { bottom.scrollIntoView({ behavior: "smooth", block: "end" }); return; }
+        var container = document.querySelector("[data-turns]");
+        if (container) container.scrollTop = container.scrollHeight;
+      }
 
       function appendDelta(text) {
         var container = document.querySelector("[data-turns]");
         if (!container) return;
+        pendingRawText += text;
         if (!pendingTurnEl) {
           pendingTurnEl = document.createElement("div");
-          pendingTurnEl.className = "flex justify-start";
-          var inner = document.createElement("div");
-          inner.className =
-            "max-w-[80%] rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5 text-sm text-black-900 dark:text-white-100 whitespace-pre-wrap break-words";
-          pendingTurnEl.appendChild(inner);
-          container.appendChild(pendingTurnEl);
+          pendingTurnEl.className = "flex justify-start gap-3 group";
+          pendingTurnEl.innerHTML =
+            '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">' +
+            '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg></div>' +
+            '<div class="flex flex-col gap-1 max-w-[80%] min-w-0">' +
+            '<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">' +
+            '<div data-stream-content></div>' +
+            '</div></div>';
+          // Insert before #chat-bottom sentinel
+          var bottom = document.getElementById("chat-bottom");
+          if (bottom) container.insertBefore(pendingTurnEl, bottom);
+          else container.appendChild(pendingTurnEl);
         }
-        pendingTurnEl.querySelector("div").textContent += text;
-        pendingTurnEl.scrollIntoView({ behavior: "smooth", block: "end" });
+        var content = pendingTurnEl.querySelector("[data-stream-content]");
+        if (content) content.innerHTML = renderMarkdown(pendingRawText);
+        scrollToBottom();
       }
 
       function finalizeAssistantTurn() {
         pendingTurnEl = null;
+        pendingRawText = "";
       }
     }
 
@@ -327,6 +563,28 @@
         textarea.disabled = true;
         if (btn) btn.disabled = true;
 
+        // Optimistically append user bubble before #chat-bottom sentinel
+        var container = document.querySelector("[data-turns]");
+        if (container) {
+          var wrap = document.createElement("div");
+          wrap.className = "flex justify-end gap-2 group";
+          var col = document.createElement("div");
+          col.className = "flex flex-col items-end gap-1 max-w-[80%]";
+          var bubble = document.createElement("div");
+          bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm";
+          bubble.textContent = text;
+          col.appendChild(bubble);
+          wrap.appendChild(col);
+          var bottom = document.getElementById("chat-bottom");
+          if (bottom) container.insertBefore(wrap, bottom);
+          else container.appendChild(wrap);
+          // Scroll after DOM paint
+          requestAnimationFrame(function() {
+            var b = document.getElementById("chat-bottom");
+            if (b) b.scrollIntoView({ behavior: "smooth", block: "end" });
+          });
+        }
+
         fetch(base + "/sessions/" + encodeURIComponent(sessionID) + "/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -334,20 +592,8 @@
         })
           .then(function (r) { return r.json(); })
           .then(function () {
-            // Append user turn immediately to the conversation
-            var container = document.querySelector("[data-turns]");
-            if (container) {
-              var wrap = document.createElement("div");
-              wrap.className = "flex justify-end";
-              var bubble = document.createElement("div");
-              bubble.className =
-                "max-w-[80%] rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap break-words";
-              bubble.textContent = text;
-              wrap.appendChild(bubble);
-              container.appendChild(wrap);
-              wrap.scrollIntoView({ behavior: "smooth", block: "end" });
-            }
             textarea.value = "";
+            textarea.style.height = "auto";
           })
           .catch(function (err) {
             console.error("send failed:", err);
@@ -359,12 +605,75 @@
           });
       });
 
-      // Ctrl+Enter submits
+      // Enter = send, Shift+Enter = newline
       sendForm.querySelector("textarea").addEventListener("keydown", function (e) {
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           sendForm.dispatchEvent(new Event("submit"));
         }
+      });
+    }
+
+    // ── Provider switcher (creates new session, redirects) ───────────
+    var providerMenuToggle = document.querySelector("[data-provider-menu-toggle]");
+    var providerMenu = document.querySelector("[data-provider-menu]");
+    if (providerMenuToggle && providerMenu) {
+      providerMenuToggle.addEventListener("click", function (e) {
+        e.stopPropagation();
+        providerMenu.classList.toggle("hidden");
+      });
+      document.addEventListener("click", function () {
+        providerMenu.classList.add("hidden");
+      });
+      providerMenu.querySelectorAll("[data-provider-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          providerMenu.classList.add("hidden");
+          var prov = btn.dataset.providerChoice;
+          var b = base || resolveBase();
+          if (!b || !sessionID) return;
+          btn.disabled = true;
+          fetch(b + "/sessions/" + encodeURIComponent(sessionID) + "/provider", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: prov }),
+          }).then(function (r) { return r.json(); }).then(function (res) {
+            if (res.redirect) window.location.href = res.redirect;
+          }).catch(function () { btn.disabled = false; });
+        });
+      });
+    }
+
+    // ── Workspace switcher (in-place, kills subprocess) ───────────────
+    var workspaceMenuToggle = document.querySelector("[data-workspace-menu-toggle]");
+    var workspaceMenu = document.querySelector("[data-workspace-menu]");
+    if (workspaceMenuToggle && workspaceMenu) {
+      workspaceMenuToggle.addEventListener("click", function (e) {
+        e.stopPropagation();
+        workspaceMenu.classList.toggle("hidden");
+      });
+      document.addEventListener("click", function () {
+        workspaceMenu.classList.add("hidden");
+      });
+      workspaceMenu.querySelectorAll("[data-workspace-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          workspaceMenu.classList.add("hidden");
+          var ws = btn.dataset.workspaceChoice;
+          var b = base || resolveBase();
+          if (!b || !sessionID) return;
+          btn.disabled = true;
+          fetch(b + "/sessions/" + encodeURIComponent(sessionID) + "/workspace", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace: ws }),
+          }).then(function (r) { return r.json(); }).then(function (res) {
+            if (res.status === "switched") {
+              var label = document.querySelector("[data-active-workspace-label]");
+              if (label) label.textContent = res.workspace || "default";
+            }
+          }).catch(function () {}).finally(function () { btn.disabled = false; });
+        });
       });
     }
 

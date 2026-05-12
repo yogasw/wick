@@ -45,6 +45,11 @@ type Config struct {
 	// "value" when label == value). The kvlist component renders a <select>
 	// instead of <input> for columns that have options set.
 	ColOptions map[string]string `gorm:"-" json:"-"`
+	// VisibleWhen is a "<otherField>:<value>" predicate sourced from the
+	// `wick:"visible_when=..."` tag. When set, the admin UI shows this row
+	// only while the named field's current value equals <value>. Not
+	// persisted — pure presentation hint.
+	VisibleWhen string `gorm:"-" json:"-"`
 }
 
 func (Config) TableName() string { return "configs" }

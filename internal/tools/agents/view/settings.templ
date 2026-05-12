@@ -1,0 +1,30 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	managerview "github.com/yogasw/wick/internal/manager/view"
+)
+
+// SettingsVM is the view model for the embedded settings page.
+type SettingsVM struct {
+	Layout AgentsLayoutVM
+	Base   string
+	Rows   []entity.Config
+}
+
+// SettingsPage renders agents settings inside AgentsLayout, reusing
+// the manager ConfigsTable component. POSTs go to the existing
+// /manager/tools/agents/configs/{key} endpoint.
+templ SettingsPage(vm SettingsVM) {
+	@AgentsLayout(vm.Layout) {
+		<div class="max-w-3xl space-y-6">
+			<div>
+				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Settings</h1>
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+					Configure agents runtime options. Changes take effect immediately.
+				</p>
+			</div>
+			@managerview.ConfigsTable(vm.Rows, "/manager/tools/agents/configs", "", "")
+		</div>
+	}
+}

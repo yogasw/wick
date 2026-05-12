@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/tool"
 )
 
 // ErrFixedInstanceViolation is returned by Service.Create / Duplicate
@@ -107,6 +108,25 @@ type Service struct {
 	// metrics records connector run telemetry. Defaults to Noop when
 	// not wired — safe to call unconditionally.
 	metrics metrics.Recorder
+
+	// tags is the central tag service used to seed Meta.DefaultTags onto
+	// freshly created connector rows. nil disables tag seeding (tests
+	// that don't care about the home-page grouping can leave it unset).
+	tags tagSeeder
+}
+
+// tagSeeder is the slice of the tags service Bootstrap needs. Keeping
+// it as an interface avoids an import cycle and makes the test double
+// trivial.
+type tagSeeder interface {
+	EnsureToolDefaultTags(ctx context.Context, toolPath string, defaults []tool.DefaultTag) error
+}
+
+// SetTags wires the tags service used to attach Meta.DefaultTags onto
+// every connector row at boot. Call before Bootstrap. nil disables tag
+// seeding.
+func (s *Service) SetTags(t tagSeeder) {
+	s.tags = t
 }
 
 // SetEnc wires the encrypted-fields cipher in after construction. Call
@@ -208,6 +228,12 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 			if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(row.ID), m.Configs...); err != nil {
 				return fmt.Errorf("ensure configs for %q: %w", row.ID, err)
 			}
+			if s.tags != nil && len(m.Meta.DefaultTags) > 0 {
+				path := "/connectors/" + row.ID
+				if err := s.tags.EnsureToolDefaultTags(ctx, path, m.Meta.DefaultTags); err != nil {
+					return fmt.Errorf("ensure tags for %q: %w", row.ID, err)
+				}
+			}
 		}
 	}
 	return nil
@@ -286,6 +312,10 @@ func (s *Service) Get(ctx context.Context, id string) (*entity.Connector, error)
 // filter or visibility. Used by the admin manager and the retention
 // dashboard. UI-layer code is responsible for tag-filtering for
 // non-admin views.
+func (s *Service) ListByKey(ctx context.Context, key string) ([]entity.Connector, error) {
+	return s.repo.ListByKey(ctx, key)
+}
+
 func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 	return s.repo.List(ctx)
 }
@@ -458,28 +488,142 @@ func (s *Service) SetOperationAdminOnly(ctx context.Context, connectorID, opKey 
 // Map key is OperationKey. Returned map is empty when the connector's
 // Key has no registered module.
 func (s *Service) OperationStates(ctx context.Context, connectorID, key string) (map[string]bool, error) {
+	full, err := s.OperationStatesFull(ctx, connectorID, key)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(full))
+	for k, st := range full {
+		out[k] = st.Enabled && !st.SystemDisabled
+	}
+	return out, nil
+}
+
+// OpState bundles the effective state of one operation on one connector
+// row: the admin-controlled Enabled flag, the health-check-controlled
+// SystemDisabled flag, and the reason surfaced alongside the lock when
+// SystemDisabled is true. Effective availability is
+// `Enabled AND NOT SystemDisabled`.
+type OpState struct {
+	Enabled              bool
+	SystemDisabled       bool
+	SystemDisabledReason string
+}
+
+// OperationStatesFull returns the full per-operation state map for a
+// connector row, folding stored rows + system-disabled flag + the
+// Destructive-default rule. Missing rows mean "use the default" — on
+// for non-destructive, off for destructive.
+func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key string) (map[string]OpState, error) {
 	mod, ok := s.Module(key)
 	if !ok {
-		return map[string]bool{}, nil
+		return map[string]OpState{}, nil
 	}
 	rows, err := s.repo.ListOperations(ctx, connectorID)
 	if err != nil {
 		return nil, err
 	}
-	stored := make(map[string]bool, len(rows))
+	stored := make(map[string]entity.ConnectorOperation, len(rows))
 	for _, r := range rows {
-		stored[r.OperationKey] = r.Enabled
+		stored[r.OperationKey] = r
 	}
-	out := make(map[string]bool, len(mod.Operations))
+	out := make(map[string]OpState, len(mod.Operations))
 	for _, op := range mod.Operations {
-		if v, ok := stored[op.Key]; ok {
-			out[op.Key] = v
-			continue
+		st := OpState{Enabled: !op.Destructive}
+		if row, ok := stored[op.Key]; ok {
+			st.Enabled = row.Enabled
+			st.SystemDisabled = row.SystemDisabled
+			st.SystemDisabledReason = row.SystemDisabledReason
 		}
-		out[op.Key] = !op.Destructive
+		out[op.Key] = st
 	}
 	return out, nil
 }
+
+// HealthCheckResult bundles the outcome of a health-check run for one
+// connector row. Per-op transitions describe what changed in the DB so
+// the UI can surface a useful summary toast ("3 ops disabled, 1 cleared").
+type HealthCheckResult struct {
+	Ops          []connector.OpHealth
+	NewlyLocked  []string // ops that became system-disabled this run
+	NewlyCleared []string // ops whose system-disabled flag was cleared this run
+}
+
+// RunHealthCheck invokes the module's HealthCheck hook and reconciles
+// the per-operation system_disabled flags against the report. Ops the
+// hook reports OK have their lock cleared (if previously set); ops it
+// reports failing get system-disabled with the reported reason.
+// Returns ErrNoHealthCheck when the module did not register a hook.
+//
+// The hook itself runs against a Ctx populated from the row's stored
+// configs — encrypted credentials are decrypted on read, identical to
+// Execute. The caller's permission to act on this row is the manager
+// handler's job; this method is unauthenticated by design (it is a
+// background-style operation, not user input).
+func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*HealthCheckResult, error) {
+	c, err := s.repo.Get(ctx, connectorID)
+	if err != nil {
+		return nil, fmt.Errorf("connector not found: %w", err)
+	}
+	mod, ok := s.Module(c.Key)
+	if !ok {
+		return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
+	}
+	if mod.HealthCheck == nil {
+		return nil, ErrNoHealthCheck
+	}
+
+	cfg := s.LoadConfigs(*c)
+	// Decrypt any wick_enc_ tokens in the credential map before handing
+	// them to the hook — the hook calls upstream APIs the same way an
+	// Execute would. Health-check has no per-user context (it runs from
+	// the admin row page), so decrypt under the empty-user master key.
+	if s.enc != nil && !s.enc.Disabled() {
+		decoded, _, derr := unmaskMap(s.enc, cfg, "")
+		if derr == nil {
+			cfg = decoded
+		}
+	}
+
+	cctx := connector.NewCtx(ctx, c.ID, cfg, nil, s.httpClient, nil, nil)
+	report, err := mod.HealthCheck(cctx)
+	if err != nil {
+		return nil, fmt.Errorf("health check: %w", err)
+	}
+
+	prev, err := s.OperationStatesFull(ctx, c.ID, c.Key)
+	if err != nil {
+		return nil, fmt.Errorf("load op states: %w", err)
+	}
+
+	result := &HealthCheckResult{Ops: report}
+	for _, h := range report {
+		was := prev[h.Key].SystemDisabled
+		if h.OK {
+			if was {
+				if err := s.repo.ClearSystemDisabled(ctx, c.ID, h.Key); err != nil {
+					return nil, fmt.Errorf("clear system_disabled for %q: %w", h.Key, err)
+				}
+				result.NewlyCleared = append(result.NewlyCleared, h.Key)
+			}
+			continue
+		}
+		if err := s.repo.SetSystemDisabled(ctx, c.ID, h.Key, h.Reason); err != nil {
+			return nil, fmt.Errorf("set system_disabled for %q: %w", h.Key, err)
+		}
+		if !was {
+			result.NewlyLocked = append(result.NewlyLocked, h.Key)
+		}
+	}
+	return result, nil
+}
+
+// ErrNoHealthCheck is returned by RunHealthCheck when the target
+// connector's module did not register a HealthCheck hook. The manager
+// handler treats this as a 404-ish — admins should not see the button
+// on that connector at all.
+var ErrNoHealthCheck = errors.New("connector does not implement HealthCheck")
+
 
 // ── Execution ───────────────────────────────────────────────────────
 
@@ -563,12 +707,21 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("unknown operation %q on connector %q", p.OperationKey, c.Key)
 	}
 
-	states, err := s.OperationStates(ctx, c.ID, c.Key)
+	states, err := s.OperationStatesFull(ctx, c.ID, c.Key)
 	if err != nil {
 		return nil, fmt.Errorf("load op states: %w", err)
 	}
-	if enabled, ok := states[p.OperationKey]; ok && !enabled {
-		return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
+	if st, ok := states[p.OperationKey]; ok {
+		if st.SystemDisabled {
+			reason := st.SystemDisabledReason
+			if reason == "" {
+				reason = "permission check failed"
+			}
+			return nil, fmt.Errorf("operation %q is system-disabled: %s", p.OperationKey, reason)
+		}
+		if !st.Enabled {
+			return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
+		}
 	}
 
 	if !p.IsAdmin {

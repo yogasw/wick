@@ -281,6 +281,41 @@ func (r *Repo) SetOperation(ctx context.Context, connectorID, opKey string, enab
 	return r.db.WithContext(ctx).Save(&row).Error
 }
 
+// SetSystemDisabled marks an operation as disabled by the health-check
+// system with a human-readable reason. The manual Enabled flag is left
+// untouched — effective availability becomes `Enabled AND NOT SystemDisabled`.
+// Upserts a new row when none exists yet.
+func (r *Repo) SetSystemDisabled(ctx context.Context, connectorID, opKey, reason string) error {
+	return r.db.WithContext(ctx).
+		Where(entity.ConnectorOperation{ConnectorID: connectorID, OperationKey: opKey}).
+		Assign(map[string]any{
+			"system_disabled":         true,
+			"system_disabled_reason":  reason,
+			"updated_at":              time.Now(),
+		}).
+		FirstOrCreate(&entity.ConnectorOperation{
+			ConnectorID:          connectorID,
+			OperationKey:         opKey,
+			Enabled:              true,
+			SystemDisabled:       true,
+			SystemDisabledReason: reason,
+		}).Error
+}
+
+// ClearSystemDisabled removes the health-check lock from an operation
+// (e.g. after a successful re-check). Leaves Enabled untouched, so an
+// op that was manually disabled stays disabled; one the system locked
+// will become available for manual toggling again.
+func (r *Repo) ClearSystemDisabled(ctx context.Context, connectorID, opKey string) error {
+	return r.db.WithContext(ctx).Model(&entity.ConnectorOperation{}).
+		Where("connector_id = ? AND operation_key = ?", connectorID, opKey).
+		Updates(map[string]any{
+			"system_disabled":        false,
+			"system_disabled_reason": "",
+			"updated_at":             time.Now(),
+		}).Error
+}
+
 // SetOperationAdminOnly upserts the admin_only flag for a (connector, op)
 // pair without touching the Enabled state. Inserts a new row with
 // Enabled=true (safe default) when no row exists yet.
