@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -56,6 +57,16 @@ func (rw *responseWriter) WriteHeader(code int) {
 // and reach the real http.Flusher / deadline setter on the underlying conn.
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
+}
+
+// Hijack delegates to the underlying ResponseWriter so WebSocket upgraders
+// (gorilla/websocket) that type-assert http.Hijacker directly still work.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
+	}
+	return h.Hijack()
 }
 
 func logSeverity(statusCode int) zerolog.Level {
