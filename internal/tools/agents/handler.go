@@ -15,13 +15,14 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	"github.com/yogasw/wick/internal/agents/askuser"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/workspace"
@@ -44,6 +45,7 @@ var (
 	globalConfigs    *configs.Service
 	globalDB         *gorm.DB
 	globalChannels   *agentchannels.Registry
+	globalSyncMgr    *providersync.Manager
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -103,6 +105,9 @@ func SetDB(db *gorm.DB) { globalDB = db }
 // can issue lookup queries against each channel's upstream (Slack API,
 // etc.). Without this, /channels/{slug}/lookup returns 503.
 func SetChannelRegistry(r *agentchannels.Registry) { globalChannels = r }
+
+// SetSyncManager wires the provider storage sync manager.
+func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
 
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
@@ -165,6 +170,14 @@ func Register(r tool.Router) {
 	r.POST("/providers/{type}/{name}/hooks/{event}/enable", enableProviderHook)
 	r.POST("/providers/{type}/{name}/hooks/{event}/disable", disableProviderHook)
 	r.POST("/providers/auto-rescan/toggle", toggleAutoRescan)
+
+	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
+	r.GET("/providers/storage", storagePage)
+	r.POST("/providers/storage/restore", storageRestoreSelected)
+	r.POST("/providers/storage/upload", storageUpload)
+	r.GET("/providers/storage/{id}/preview", storagePreview)
+	r.POST("/providers/storage/{id}/retention", storageSetRetention)
+	r.DELETE("/providers/storage/{id}", storageDelete)
 
 	r.GET("/channels", channelsPage)
 	r.GET("/channels/slack", slackChannelPage)

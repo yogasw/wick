@@ -38,12 +38,18 @@
     el.classList.add('status-' + state);
   }
 
+  function setPlaceholder(visible) {
+    const el = document.getElementById('webtty-placeholder');
+    if (el) el.style.display = visible ? '' : 'none';
+  }
+
   function startSession() {
     retries = 0;
     fetch(base + '/tty/start', { method: 'POST' })
       .then(function (r) {
         if (!r.ok) throw new Error('start failed: ' + r.status);
         setStatus('running', 'Running');
+        setPlaceholder(false);
         if (iframe) {
           iframe.style.display = '';
           iframe.src = iframe.src; // reload
@@ -58,6 +64,7 @@
     fetch(base + '/tty/stop', { method: 'POST' })
       .then(function () {
         setStatus('stopped', 'Stopped');
+        setPlaceholder(true);
         if (iframe) iframe.style.display = 'none';
       })
       .catch(function (e) {

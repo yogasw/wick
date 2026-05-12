@@ -1,0 +1,195 @@
+name: Release Artifacts
+
+# Variables (Settings → Secrets and variables → Actions → Variables):
+#
+#   BUILD_BINARIES   = true/false   enable binary builds (default: true)
+#   BUILD_TARGETS    = comma-separated os/arch to build
+#                      valid: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64
+#                      default: darwin/amd64,darwin/arm64,windows/amd64
+#                      example: linux/amd64,windows/amd64
+#   BUILD_DOCKER     = true/false   enable docker build+push (default: true)
+#   DOCKER_PLATFORM  = linux/arm64 or linux/amd64 (default: linux/arm64)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      build_binaries: ${{ steps.cfg.outputs.build_binaries }}
+      build_docker: ${{ steps.cfg.outputs.build_docker }}
+      docker_platform: ${{ steps.cfg.outputs.docker_platform }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Resolve config
+        id: cfg
+        run: |
+          BUILD_BINARIES="${{ vars.BUILD_BINARIES }}"
+          BUILD_DOCKER="${{ vars.BUILD_DOCKER }}"
+          DOCKER_PLATFORM="${{ vars.DOCKER_PLATFORM }}"
+          echo "build_binaries=${BUILD_BINARIES:-true}" >> "$GITHUB_OUTPUT"
+          echo "build_docker=${BUILD_DOCKER:-true}" >> "$GITHUB_OUTPUT"
+          echo "docker_platform=${DOCKER_PLATFORM:-linux/arm64}" >> "$GITHUB_OUTPUT"
+
+      - name: Build matrix
+        id: matrix
+        shell: bash
+        env:
+          TARGETS: ${{ vars.BUILD_TARGETS }}
+        run: |
+          ALL='[
+            {"os":"linux",   "arch":"amd64", "runner":"ubuntu-latest"},
+            {"os":"linux",   "arch":"arm64", "runner":"ubuntu-latest"},
+            {"os":"darwin",  "arch":"amd64", "runner":"macos-latest", "cgo":"1"},
+            {"os":"darwin",  "arch":"arm64", "runner":"macos-latest"},
+            {"os":"windows", "arch":"amd64", "runner":"ubuntu-latest"}
+          ]'
+          if [ -z "$TARGETS" ]; then
+            TARGETS="darwin/amd64,darwin/arm64,windows/amd64"
+          fi
+          if [ "$TARGETS" = "all" ]; then
+            MATRIX=$(echo "$ALL" | jq -c .)
+          else
+            PATTERN=$(echo "$TARGETS" | tr -d ' ' | tr ',' '|')
+            MATRIX=$(echo "$ALL" | jq -c --arg p "$PATTERN" 'map(select((.os+"/"+.arch) | test($p)))')
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  build-binaries:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.build_binaries == 'true'
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install wick CLI
+        run: go install github.com/yogasw/wick@$(cat VERSION | xargs printf 'v%s')
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install wixl (windows cross-compile)
+        if: matrix.os == 'windows'
+        run: sudo apt-get update && sudo apt-get install -y wixl
+
+      - name: Setup
+        run: wick setup
+
+      - name: Build installer
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo || '0' }}
+          APP_VERSION: ${{ github.ref_name }}
+        run: wick build --installer
+
+      - name: Resolve asset name
+        id: meta
+        shell: bash
+        run: |
+          NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
+          VERSION=${GITHUB_REF_NAME#v}
+          case "${{ matrix.os }}" in
+            windows) EXT="msi" ;;
+            darwin)  EXT="dmg" ;;
+            linux)   EXT="deb" ;;
+          esac
+          ASSET="${NAME}-${VERSION}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Checksum
+        shell: bash
+        run: |
+          cd bin
+          sha256sum "${{ steps.meta.outputs.asset }}" > "${{ steps.meta.outputs.asset }}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wick-lab-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ${{ steps.meta.outputs.asset_path }}
+            ${{ steps.meta.outputs.asset_path }}.sha256
+          retention-days: 7
+
+  attach-to-release:
+    name: Attach Binaries to Release
+    needs: [prepare, build-binaries]
+    if: needs.prepare.outputs.build_binaries == 'true'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" artifacts/* \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+  build-docker:
+    name: Build and Push Docker Image
+    needs: prepare
+    if: needs.prepare.outputs.build_docker == 'true'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ needs.prepare.outputs.docker_platform }}
+          tags: |
+            ghcr.io/yogasw/wick:latest
+            ghcr.io/yogasw/wick:${{ github.ref_name }}
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

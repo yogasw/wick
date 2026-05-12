@@ -28,6 +28,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
+	providerstorage "github.com/yogasw/wick/internal/tools/provider-storage"
 	"github.com/yogasw/wick/internal/tools/webtty"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
@@ -93,6 +94,18 @@ func RegisterBuiltins() {
 		},
 		Configs:  agentsConfigs,
 		Register: agentstool.Register,
+	})
+	registerOnce(tool.Module{
+		Meta: tool.Tool{
+			Key:               "provider-storage",
+			Name:              "Provider Storage",
+			Description:       "Browse, restore, upload, and manage credential files synced from AI provider instances.",
+			Icon:              "🗄",
+			Category:          "System",
+			DefaultVisibility: entity.VisibilityPrivate,
+			DefaultTags:       []tool.DefaultTag{tags.System},
+		},
+		Register: providerstorage.Register,
 	})
 	registerOnce(tool.Module{
 		Meta: tool.Tool{

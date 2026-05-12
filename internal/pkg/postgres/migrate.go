@@ -47,9 +47,18 @@ func Migrate(db *gorm.DB) {
 		&entity.OAuthAuthorizationCode{},
 		&entity.OAuthToken{},
 		&entity.AgentChannel{},
+		&entity.ProviderStorage{},
+		&entity.ProviderStorageSource{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())
+	}
+
+	// Backfill name for rows predating adjacency-list migration.
+	db.Exec(`UPDATE provider_storage SET name = REPLACE(rel_path, RTRIM(rel_path, REPLACE(rel_path, '/', '')), '') WHERE name = '' AND rel_path != ''`)
+	// Create adjacency-list unique index — not managed by AutoMigrate.
+	if res := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_tree ON provider_storage (provider_type, instance_name, parent_id, name)`); res.Error != nil {
+		log.Fatal().Msgf("create idx_storage_tree: %s", res.Error.Error())
 	}
 
 	// Remove stale per-field Slack/Telegram rows from configs table.

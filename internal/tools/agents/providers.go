@@ -250,12 +250,58 @@ func saveProviderInstance(c *tool.Ctx) {
 		Env:       splitLines(c.Form("env")),
 		Disabled:  c.Form("disabled") == "on" || c.Form("disabled") == "true",
 	}
+	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" {
+		ins.Storage = &provider.StorageConfig{
+			Mode:            mode,
+			SyncPath:        strings.TrimSpace(c.Form("storage_path")),
+			IntervalSeconds: parseIntForm(c.Form("storage_interval")),
+		}
+	}
 	if err := provider.Save(ins); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("save provider %s/%s: %s", t, name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
+// syncProviderStorage triggers an immediate backup of one instance's
+// credential files to the DB.
+//
+// POST /providers/{type}/{name}/sync
+func syncProviderStorage(c *tool.Ctx) {
+	if globalSyncMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if ins.Storage == nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "storage not configured for this instance"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
+	defer cancel()
+	if err := globalSyncMgr.SyncOne(ctx, ins); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("manual sync %s/%s: %s", t, name, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "synced"})
+}
+
+func parseIntForm(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // deleteProviderInstance removes a named instance. Removing the last

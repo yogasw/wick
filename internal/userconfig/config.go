@@ -157,6 +157,23 @@ type ProviderInstance struct {
 	// permission flow applies — no hook config gets installed on
 	// spawn.
 	Hooks map[string]HookInstanceConfig `json:"hooks,omitempty"`
+
+	// Storage configures credential/config file syncing for this
+	// instance. nil = sync disabled.
+	Storage *StorageConfig `json:"storage,omitempty"`
+}
+
+// StorageConfig defines how a provider instance syncs its credential
+// files to the DB.
+//
+// Mode "folder" syncs all files under SyncPath recursively.
+// Mode "single" syncs only the file at SyncPath.
+// IntervalSeconds controls how often the background ticker runs; 0 disables
+// background sync (startup-only).
+type StorageConfig struct {
+	Mode            string `json:"mode"`             // "folder" | "single"
+	SyncPath        string `json:"sync_path"`        // abs path to file or folder
+	IntervalSeconds int    `json:"interval_seconds"` // 0 = startup only
 }
 
 // HookInstanceConfig is the user's stored intent for one hook event
