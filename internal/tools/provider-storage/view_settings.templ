@@ -1,0 +1,47 @@
+package providerstorage
+
+templ storageSettingsPanel() {
+	<div id="panel-settings" style="display:none">
+		<!-- Global settings -->
+		<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md p-5 mb-5">
+			<div class="flex flex-col gap-2">
+				<div>
+					<p class="text-[0.8125rem] font-medium text-black-900 dark:text-white-100">Sync to DB interval (s)</p>
+					<p class="text-[0.75rem] text-black-600 dark:text-black-500 mt-0.5">Files are synced from disk → DB on this interval. On restore, DB content is written back to disk at startup.</p>
+				</div>
+				<div class="flex items-center gap-2">
+					<input type="number" id="settings-sync-interval" min="1" value="5" class="w-24 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					<button onclick="saveGlobalSettings()" class="inline-flex items-center rounded-lg bg-green-500 px-3 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300">Save</button>
+				</div>
+			</div>
+		</div>
+		<!-- Configured Sources -->
+		<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md p-5">
+			<div class="flex items-center justify-between mb-3">
+				<h3 class="text-[0.875rem] font-semibold text-black-900 dark:text-white-100">Configured Sources</h3>
+				<button onclick="openAddSourceModal()" class="inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-3 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300">
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"></path></svg>
+					Add Source
+				</button>
+			</div>
+			<div class="overflow-x-auto">
+				<table class="w-full text-[0.8125rem]">
+					<thead>
+						<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Type / Instance</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Label</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Path</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Mode</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Added</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">On</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500"></th>
+						</tr>
+					</thead>
+					<tbody id="sources-tbody">
+						<tr><td colspan="7" class="px-3 py-6 text-center text-black-700 dark:text-black-500">Loading…</td></tr>
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}

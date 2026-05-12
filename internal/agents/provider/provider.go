@@ -61,6 +61,17 @@ type Instance struct {
 	// Spawn to decide whether to install / remove the per-workspace
 	// hook config.
 	Hooks map[string]HookInstanceConfig
+
+	// Storage configures credential-file syncing for this instance.
+	// nil = sync disabled.
+	Storage *StorageConfig
+}
+
+// StorageConfig mirrors userconfig.StorageConfig in-memory.
+type StorageConfig struct {
+	Mode            string // "folder" | "single"
+	SyncPath        string
+	IntervalSeconds int
 }
 
 // HookInstanceConfig mirrors userconfig.HookInstanceConfig in-memory.
@@ -515,6 +526,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				Env:       raw.Env,
 				Disabled:  raw.Disabled,
 				Hooks:     hooksFromUser(raw.Hooks),
+				Storage:   storageFromUser(raw.Storage),
 			})
 		}
 	}
@@ -553,6 +565,7 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		ExtraArgs:  ins.ExtraArgs,
 		Env:        ins.Env,
 		Hooks:      hooksToUser(ins.Hooks),
+		Storage:    storageToUser(ins.Storage),
 	}
 }
 
@@ -568,6 +581,28 @@ func hooksFromUser(in map[string]userconfig.HookInstanceConfig) map[string]HookI
 		out[k] = HookInstanceConfig{Enabled: v.Enabled}
 	}
 	return out
+}
+
+func storageFromUser(in *userconfig.StorageConfig) *StorageConfig {
+	if in == nil {
+		return nil
+	}
+	return &StorageConfig{
+		Mode:            in.Mode,
+		SyncPath:        in.SyncPath,
+		IntervalSeconds: in.IntervalSeconds,
+	}
+}
+
+func storageToUser(in *StorageConfig) *userconfig.StorageConfig {
+	if in == nil {
+		return nil
+	}
+	return &userconfig.StorageConfig{
+		Mode:            in.Mode,
+		SyncPath:        in.SyncPath,
+		IntervalSeconds: in.IntervalSeconds,
+	}
 }
 
 func hooksToUser(in map[string]HookInstanceConfig) map[string]userconfig.HookInstanceConfig {

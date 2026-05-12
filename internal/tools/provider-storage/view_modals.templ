@@ -1,0 +1,95 @@
+package providerstorage
+
+templ storageModals() {
+	<!-- Upload Modal -->
+	<div id="upload-modal" style="display:none" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-md rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl">
+			<h3 class="mb-4 text-[0.9375rem] font-semibold text-black-900 dark:text-white-100">Upload File</h3>
+			<form id="upload-form" onsubmit="submitUpload(event)">
+				<div class="space-y-3">
+					<div>
+						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Provider Type</label>
+						<input type="text" name="provider_type" required placeholder="e.g. claude" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					</div>
+					<div>
+						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Instance Name</label>
+						<input type="text" name="instance_name" required placeholder="e.g. default" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					</div>
+					<div>
+						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Relative Path</label>
+						<input type="text" name="rel_path" required placeholder="e.g. .credentials" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					</div>
+					<div>
+						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">File</label>
+						<input type="file" name="file" required class="w-full text-[0.8125rem] text-black-900 dark:text-white-100"/>
+					</div>
+				</div>
+				<div class="mt-5 flex justify-end gap-2">
+					<button type="button" onclick="closeUploadModal()" class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-1.5 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
+					<button type="submit" class="rounded-lg bg-green-500 px-4 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600">Upload</button>
+				</div>
+			</form>
+		</div>
+	</div>
+	<!-- Add Source Modal -->
+	<div id="add-source-modal" style="display:none" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-2xl rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
+			<div class="flex items-center justify-between">
+				<h3 class="text-[0.9375rem] font-semibold text-black-900 dark:text-white-100">Add Sync Source</h3>
+				<button onclick="closeAddSourceModal()" class="text-black-700 hover:text-black-900 dark:hover:text-white-100">
+					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+				</button>
+			</div>
+			<!-- Type input + Detect -->
+			<div class="flex items-end gap-3">
+				<div class="flex-1 relative">
+					<label class="block text-[0.75rem] font-medium text-black-800 dark:text-black-500 mb-1">Type</label>
+					<div class="relative">
+						<input id="detect-provider" type="text" placeholder="e.g. claude, codex, wick" autocomplete="off"
+							oninput="filterTypeDropdown(this.value)" onfocus="showTypeDropdown()" onblur="hideTypeDropdown()"
+							class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 pr-8 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+						<svg onclick="toggleTypeDropdown()" class="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-black-600 dark:text-black-500 cursor-pointer" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+					</div>
+					<div id="type-dropdown" style="display:none;position:fixed" class="z-[9998] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg overflow-hidden">
+						<div id="type-dropdown-list"></div>
+					</div>
+				</div>
+				<button onclick="runDetect()" class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 shrink-0">
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+					Detect
+				</button>
+			</div>
+			<!-- Detected paths checklist -->
+			<div id="detect-list-wrap" style="display:none" class="flex flex-col gap-1">
+				<p class="text-[0.75rem] text-black-700 dark:text-black-500 mb-1">Detected paths — click to browse, or Add directly:</p>
+				<div id="detect-list" class="space-y-1"></div>
+				<div id="detect-explorer-wrap" style="display:none" class="mt-2"></div>
+			</div>
+			<!-- Staged list -->
+			<div id="exp-staged-wrap" style="display:none">
+				<p class="text-[0.75rem] font-medium text-black-800 dark:text-black-500 mb-1">Staged to save:</p>
+				<div id="exp-staged-list" class="space-y-1"></div>
+			</div>
+			<!-- Footer -->
+			<div class="flex justify-end gap-2 pt-1">
+				<button onclick="closeAddSourceModal()" class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-1.5 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
+				<button onclick="saveAllStaged()" class="inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-4 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600">
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+					Save All
+				</button>
+			</div>
+		</div>
+	</div>
+	<!-- Preview Modal -->
+	<div id="preview-modal" style="display:none" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-2xl rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl">
+			<div class="flex items-center justify-between mb-4">
+				<h3 id="preview-title" class="text-[0.9375rem] font-semibold text-black-900 dark:text-white-100">Preview</h3>
+				<button onclick="closePreviewModal()" class="text-black-700 hover:text-black-900 dark:hover:text-white-100">
+					<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+				</button>
+			</div>
+			<pre id="preview-content" class="max-h-96 overflow-auto rounded-lg bg-white-200 dark:bg-navy-800 p-3 text-[0.75rem] text-black-900 dark:text-white-100 whitespace-pre-wrap break-all"></pre>
+		</div>
+	</div>
+}

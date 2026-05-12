@@ -9,6 +9,9 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
+	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
+	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
+	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -31,6 +34,9 @@ func NewServer() *Server {
 	// runs in internal/pkg/api/server.go so the web process also sees
 	// the row in /admin/jobs.
 	connectorrunspurge.Register(db)
+	syncMgr := providersync.New(db)
+	providerstoragesync.Register(syncMgr)
+	providerstorageretention.Register(syncMgr)
 
 	// Static built-in modules — same idempotent calls the web server
 	// makes. The worker only needs the tool/job rows so configs.Bootstrap
