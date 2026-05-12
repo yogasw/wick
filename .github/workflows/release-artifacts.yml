@@ -71,6 +71,8 @@ jobs:
         with:
           path: ~/go/bin/wick
           key: wick-cli-${{ github.ref_name }}-linux-amd64
+          restore-keys: |
+            wick-cli-
 
       - name: Install wick CLI
         if: steps.cache-wick.outputs.cache-hit != 'true'
@@ -83,11 +85,22 @@ jobs:
         run: wick init wick --skip-setup
         working-directory: /tmp
 
+      - name: Run setup (installs templ + tailwind)
+        run: wick setup
+        working-directory: /tmp/wick
+
       - name: Upload wick CLI binary
         uses: actions/upload-artifact@v4
         with:
           name: wick-cli-linux
           path: ~/go/bin/wick
+          retention-days: 1
+
+      - name: Upload templ binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: templ-linux
+          path: ~/go/bin/templ
           retention-days: 1
 
       - name: Upload project scaffold
@@ -112,18 +125,34 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
-      - name: Download wick CLI binary
+      # --- download shared artifacts (all runners) ---
+      - name: Download project scaffold
+        uses: actions/download-artifact@v4
+        with:
+          name: wick-scaffold
+          path: /tmp/wick
+
+      # --- linux / windows runners: use pre-built binaries from prepare job ---
+      - name: Download wick CLI binary (linux)
         if: matrix.runner == 'ubuntu-latest'
         uses: actions/download-artifact@v4
         with:
           name: wick-cli-linux
           path: /usr/local/bin
 
-      - name: Make wick executable (linux)
+      - name: Download templ binary (linux)
         if: matrix.runner == 'ubuntu-latest'
-        run: chmod +x /usr/local/bin/wick
+        uses: actions/download-artifact@v4
+        with:
+          name: templ-linux
+          path: /usr/local/bin
 
-      - name: Setup Go (macOS only — needed for go install)
+      - name: Make binaries executable (linux)
+        if: matrix.runner == 'ubuntu-latest'
+        run: chmod +x /usr/local/bin/wick /usr/local/bin/templ
+
+      # --- macOS runner: cache wick + templ, install on miss ---
+      - name: Setup Go (macOS)
         if: matrix.runner == 'macos-latest'
         uses: actions/setup-go@v5
         with:
@@ -137,21 +166,35 @@ jobs:
         with:
           path: ~/go/bin/wick
           key: wick-cli-${{ github.ref_name }}-darwin
+          restore-keys: |
+            wick-cli-darwin-
 
-      - name: Install wick CLI (macOS)
+      - name: Cache templ binary (macOS)
+        if: matrix.runner == 'macos-latest'
+        id: cache-templ-mac
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-darwin-${{ github.ref_name }}
+          restore-keys: |
+            templ-darwin-
+
+      - name: Install wick CLI (macOS, cache miss)
         if: matrix.runner == 'macos-latest' && steps.cache-wick-mac.outputs.cache-hit != 'true'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
+
+      - name: Install templ (macOS, cache miss)
+        if: matrix.runner == 'macos-latest' && steps.cache-templ-mac.outputs.cache-hit != 'true'
+        working-directory: /tmp/wick
+        run: |
+          TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
 
       - name: Add Go bin to PATH (macOS)
         if: matrix.runner == 'macos-latest'
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Download project scaffold
-        uses: actions/download-artifact@v4
-        with:
-          name: wick-scaffold
-          path: /tmp/wick
-
+      # --- wixl for windows cross-compile ---
       - name: Cache wixl (windows cross-compile)
         if: matrix.os == 'windows'
         id: cache-wixl
@@ -164,13 +207,10 @@ jobs:
         if: matrix.os == 'windows' && steps.cache-wixl.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
+      # templ already in PATH → wick setup skips go install templ
       - name: Setup
         run: wick setup
         working-directory: /tmp/wick
-
-      - name: Add Go bin to PATH (ubuntu)
-        if: matrix.runner == 'ubuntu-latest'
-        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build installer
         env:
