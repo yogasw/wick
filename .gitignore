@@ -54,3 +54,4 @@ web/public/css/app.css
 # Build output binaries
 lab-server
 wick
+ci-timing.txt

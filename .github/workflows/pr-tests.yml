@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Go
+        id: go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -33,7 +34,15 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Cache templ binary
+        id: cache-templ
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+
       - name: Install templ (version pinned to go.mod)
+        if: steps.cache-templ.outputs.cache-hit != 'true'
         run: |
           TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
           echo "Using templ $TEMPL_VERSION"
