@@ -214,7 +214,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			_ = entry.store.AppendUserTurn(role, source, text)
 		}
 		if role == "user" {
-			go p.setLabelIfEmpty(sessionID, text)
+			p.setLabelIfEmpty(sessionID, text)
 		}
 		return entry.agent.Send(text)
 	}
@@ -225,8 +225,9 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if err := p.ensureSession(ctx, sessionID, source, workspace); err != nil {
 		return err
 	}
+	// Set label before buf.Append so concurrent disk writes don't clobber PendingInput.
 	if role == "user" {
-		go p.setLabelIfEmpty(sessionID, text)
+		p.setLabelIfEmpty(sessionID, text)
 	}
 
 	// Buffer the message and either spawn (slot free) or queue (pool full).
