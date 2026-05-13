@@ -184,7 +184,24 @@ jobs:
         if: matrix.os == 'windows' && steps.cache-wixl.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
-      # wick setup: install templ + tailwind + go mod tidy (if_missing skips if already in PATH)
+      - name: Cache templ binary
+        id: cache-templ
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-${{ runner.os }}-${{ hashFiles('/tmp/wick/go.sum') }}
+          restore-keys: |
+            templ-${{ runner.os }}-
+
+      - name: Install templ (cache miss)
+        if: steps.cache-templ.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: /tmp/wick
+        run: |
+          TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
+
+      # wick setup: tailwind + go mod tidy only (templ already in PATH via cache/install above)
       - name: Setup
         run: wick setup
         working-directory: /tmp/wick
