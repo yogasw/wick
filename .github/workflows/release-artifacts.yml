@@ -92,13 +92,6 @@ jobs:
           path: ~/go/bin/wick
           retention-days: 1
 
-      - name: Upload templ binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: templ-linux
-          path: ~/go/bin/templ
-          retention-days: 1
-
       - name: Upload project scaffold
         uses: actions/upload-artifact@v4
         with:
@@ -128,28 +121,31 @@ jobs:
           name: wick-scaffold
           path: /tmp/wick
 
-      # --- linux / windows runners: use pre-built binaries from prepare job ---
-      - name: Download wick CLI binary (linux)
+      # --- ubuntu runner: wick from artifact, Go+templ via setup ---
+      - name: Download wick CLI binary
         if: matrix.runner == 'ubuntu-latest'
         uses: actions/download-artifact@v4
         with:
           name: wick-cli-linux
           path: /usr/local/bin
 
-      - name: Download templ binary (linux)
-        if: matrix.runner == 'ubuntu-latest' && matrix.os == 'linux'
-        uses: actions/download-artifact@v4
-        with:
-          name: templ-linux
-          path: /usr/local/bin
-
-      - name: Make binaries executable (linux)
+      - name: Make wick executable
         if: matrix.runner == 'ubuntu-latest'
-        run: |
-          chmod +x /usr/local/bin/wick
-          [ -f /usr/local/bin/templ ] && chmod +x /usr/local/bin/templ || true
+        run: chmod +x /usr/local/bin/wick
 
-      # --- macOS runner: cache wick + templ, install on miss ---
+      - name: Setup Go (ubuntu)
+        if: matrix.runner == 'ubuntu-latest'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: /tmp/wick/go.sum
+
+      - name: Add Go bin to PATH (ubuntu)
+        if: matrix.runner == 'ubuntu-latest'
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # --- macOS runner: wick + templ cached across releases ---
       - name: Setup Go (macOS)
         if: matrix.runner == 'macos-latest'
         uses: actions/setup-go@v5
@@ -167,45 +163,16 @@ jobs:
           restore-keys: |
             wick-cli-darwin-
 
-      - name: Cache templ binary (macOS)
-        if: matrix.runner == 'macos-latest'
-        id: cache-templ-mac
-        uses: actions/cache@v4
-        with:
-          path: ~/go/bin/templ
-          key: templ-darwin-${{ github.ref_name }}
-          restore-keys: |
-            templ-darwin-
-
       - name: Install wick CLI (macOS, cache miss)
         if: matrix.runner == 'macos-latest' && steps.cache-wick-mac.outputs.cache-hit != 'true'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
-
-      - name: Install templ (macOS, cache miss)
-        if: matrix.runner == 'macos-latest' && steps.cache-templ-mac.outputs.cache-hit != 'true'
-        working-directory: /tmp/wick
-        run: |
-          TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
-          go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
 
       - name: Add Go bin to PATH (macOS)
         if: matrix.runner == 'macos-latest'
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      # --- windows cross-compile: needs Go for wick setup + wixl for installer ---
-      - name: Setup Go (windows)
-        if: matrix.os == 'windows'
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-          cache-dependency-path: /tmp/wick/go.sum
-
-      - name: Add Go bin to PATH (windows)
-        if: matrix.os == 'windows'
-        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Cache wixl (windows cross-compile)
+      # --- wixl for windows cross-compile (runs on ubuntu runner) ---
+      - name: Cache wixl
         if: matrix.os == 'windows'
         id: cache-wixl
         uses: actions/cache@v4
@@ -213,11 +180,11 @@ jobs:
           path: /usr/bin/wixl
           key: wixl-apt-${{ runner.os }}
 
-      - name: Install wixl (windows cross-compile)
+      - name: Install wixl
         if: matrix.os == 'windows' && steps.cache-wixl.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
-      # templ already in PATH → wick setup skips go install templ
+      # wick setup: install templ + tailwind + go mod tidy (if_missing skips if already in PATH)
       - name: Setup
         run: wick setup
         working-directory: /tmp/wick
