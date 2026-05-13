@@ -94,7 +94,7 @@ docker run -d -p 9425:9425 -v wick-data:/root/.wick ghcr.io/yogasw/wick:latest
 ### Build Internal Tools & Jobs — AI writes real Go files
 
 ```bash
-go install github.com/yogasw/wick@v0.11.14
+go install github.com/yogasw/wick@v0.11.15
 wick init my-app
 cd my-app && wick dev
 ```
