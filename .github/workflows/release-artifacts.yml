@@ -82,12 +82,8 @@ jobs:
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Init project
-        run: wick init wick --skip-setup
+        run: wick init wick
         working-directory: /tmp
-
-      - name: Run setup (installs templ + tailwind)
-        run: wick setup
-        working-directory: /tmp/wick
 
       - name: Upload wick CLI binary
         uses: actions/upload-artifact@v4
