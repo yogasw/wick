@@ -32,9 +32,7 @@ tasks:
           dest: "{{.TAILWIND_BIN}}"
           url: "https://github.com/tailwindlabs/tailwindcss/releases/download/v{{.TAILWIND_VERSION}}/tailwindcss-{{.TAILWIND_OS}}"
           cache: true
-      - if_missing:
-          cmd: templ
-        run: |
+      - run: |
           TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
           echo "Using templ $TEMPL_VERSION (matches go.mod)"
           go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}

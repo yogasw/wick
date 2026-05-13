@@ -5,7 +5,6 @@ RUN apk add --no-cache git bash
 COPY . .
 RUN go install github.com/yogasw/wick@latest
 RUN wick setup
-RUN chmod +x bin/tailwindcss
 # --headless drops the systray UI (container has no display) and
 # --target picks up the docker buildx target platform so multi-arch
 # images (linux/amd64, linux/arm64) build without extra config.
