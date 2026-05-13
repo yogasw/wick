@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // gateModulePath is the import path of the gate command in the wick
@@ -78,7 +79,12 @@ func buildGateBinary(cfg Config) (binArtifact string, err error) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir %s: %w", binDir, err)
 	}
-	binArtifact = filepath.Join(binDir, fmt.Sprintf("%s-gate-%s-%s%s", cfg.AppName, cfg.GOOS, cfg.GOARCH, embedExt))
+	mainBin := cfg.Output
+	if mainBin == "" {
+		mainBin = filepath.Join(binDir, cfg.AppName+"-"+cfg.GOOS+"-"+cfg.GOARCH+embedExt)
+	}
+	stem := strings.TrimSuffix(filepath.Base(mainBin), filepath.Ext(mainBin))
+	binArtifact = filepath.Join(binDir, stem+"-gate"+embedExt)
 	if err := copyFile(embedOut, binArtifact); err != nil {
 		return "", fmt.Errorf("copy gate to bin: %w", err)
 	}
