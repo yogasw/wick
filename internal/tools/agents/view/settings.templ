@@ -10,7 +10,7 @@ type SettingsVM struct {
 	Layout AgentsLayoutVM
 	Base   string
 	Rows   []entity.Config
-	// SystemPromptCurrent is the live value of `system_prompt_append`.
+	// SystemPromptCurrent is the live value of `system_prompt`.
 	SystemPromptCurrent string
 	// SystemPromptDefault is the baseline shipped with wick. Rendered as
 	// the target of the Reset button.
@@ -18,13 +18,13 @@ type SettingsVM struct {
 }
 
 // SettingsPage renders agents settings inside AgentsLayout. The
-// system_prompt_append row is broken out into its own panel so the
-// textarea can render full-height and carry a Reset-to-default button.
+// system_prompt row is broken out into its own panel so the textarea
+// can render full-height and carry a Reset-to-default button.
 // Remaining rows fall back to the generic ConfigsTable. POSTs target
 // /manager/tools/agents/configs/{key}.
 templ SettingsPage(vm SettingsVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="max-w-3xl space-y-6">
+		<div class="space-y-6">
 			<div>
 				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Settings</h1>
 				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
@@ -38,10 +38,10 @@ templ SettingsPage(vm SettingsVM) {
 }
 
 // systemPromptPanel renders the dedicated editor for the global
-// system-prompt-append fragment. The textarea autosaves through the
-// same `/manager/tools/agents/configs/system_prompt_append` endpoint
-// the generic table uses; the Reset button stuffs the embedded default
-// into the textarea and triggers the same save path.
+// system-prompt fragment. The textarea autosaves through the same
+// `/manager/tools/agents/configs/system_prompt` endpoint the generic
+// table uses; the Reset button stuffs the embedded default into the
+// textarea and triggers the same save path.
 templ systemPromptPanel(current, defaultText string) {
 	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
 		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">

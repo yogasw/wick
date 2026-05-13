@@ -39,7 +39,7 @@ type ChannelConfigVM struct {
 // ChannelListPage shows available channels as cards.
 templ ChannelListPage(vm ChannelListVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="max-w-3xl">
+		<div>
 			<h1 class="text-xl font-semibold text-black-900 dark:text-white-100 mb-1">Channels</h1>
 			<p class="text-sm text-black-700 dark:text-black-600 mb-6">
 				Connect messaging platforms so agents can receive tasks and reply in threads.
@@ -54,7 +54,10 @@ templ ChannelListPage(vm ChannelListVM) {
 }
 
 templ channelCard(ch ChannelVM) {
-	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+	<a
+		href={ templ.SafeURL(ch.HRef) }
+		class="block rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden hover:border-green-500 hover:shadow-md transition-all"
+	>
 		<div class="flex items-center gap-4 px-5 py-4">
 			<span class="text-2xl shrink-0">{ ch.Icon }</span>
 			<div class="min-w-0 flex-1">
@@ -68,18 +71,15 @@ templ channelCard(ch ChannelVM) {
 				</div>
 				<p class="text-xs text-black-700 dark:text-black-600 truncate">{ ch.Description }</p>
 			</div>
-			<a
-				href={ templ.SafeURL(ch.HRef) }
-				class="shrink-0 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-500 hover:text-green-600 transition-colors"
-			>Configure</a>
+			<span class="shrink-0 text-black-700 dark:text-black-600 text-lg leading-none">›</span>
 		</div>
-	</div>
+	</a>
 }
 
 // ChannelConfigPage shows config fields for one channel.
 templ ChannelConfigPage(vm ChannelConfigVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="max-w-3xl">
+		<div>
 			<nav class="flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 mb-4">
 				<a href={ templ.SafeURL(vm.Base + "/channels") } class="hover:text-green-600 transition-colors">Channels</a>
 				<span>›</span>
