@@ -16,6 +16,12 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
+// DefaultName is the built-in preset every fresh install gets. It is
+// the fallback when a session is created without a workspace (or when
+// the workspace has no DefaultPreset), and it cannot be deleted —
+// removing it would leave sessions with no preset to load.
+const DefaultName = "default"
+
 // Preset is the in-memory shape returned by Load.
 type Preset struct {
 	Name string `json:"name"`
@@ -74,6 +80,9 @@ func Delete(layout config.Layout, name string) error {
 	if err := storage.ValidatePresetName(name); err != nil {
 		return err
 	}
+	if name == DefaultName {
+		return fmt.Errorf("preset %q is built-in and cannot be deleted", name)
+	}
 	return os.RemoveAll(layout.PresetDir(name))
 }
 
@@ -82,7 +91,7 @@ func Delete(layout config.Layout, name string) error {
 // installs aren't missing the preset that projects/sessions fall back
 // to.
 func EnsureDefault(layout config.Layout) error {
-	path := layout.PresetFile("default")
+	path := layout.PresetFile(DefaultName)
 	if storage.PathExists(path) {
 		return nil
 	}

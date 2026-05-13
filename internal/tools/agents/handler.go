@@ -199,10 +199,23 @@ func settingsPage(c *tool.Ctx) {
 		return
 	}
 	rows := globalConfigs.ListOwned("agents")
+	// Split system_prompt_append out — rendered in its own panel with a
+	// Reset button. The rest fall through to the generic ConfigsTable.
+	current := ""
+	rest := rows[:0:len(rows)]
+	for _, r := range rows {
+		if r.Key == "system_prompt" {
+			current = r.Value
+			continue
+		}
+		rest = append(rest, r)
+	}
 	c.HTML(view.SettingsPage(view.SettingsVM{
-		Layout: sidebarVM(c, "settings", ""),
-		Base:   c.Base(),
-		Rows:   rows,
+		Layout:              sidebarVM(c, "settings", ""),
+		Base:                c.Base(),
+		Rows:                rest,
+		SystemPromptCurrent: current,
+		SystemPromptDefault: agentconfig.DefaultSystemPrompt(),
 	}))
 }
 
@@ -838,6 +851,10 @@ func deletePreset(c *tool.Ctx) {
 		return
 	}
 	name := c.PathValue("name")
+	if name == preset.DefaultName {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "preset \"default\" is built-in and cannot be deleted"})
+		return
+	}
 	if err := globalMgr.DeletePreset(name); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete preset %s: %s", name, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})

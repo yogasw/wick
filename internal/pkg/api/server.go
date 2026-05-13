@@ -308,6 +308,9 @@ func NewServer() *Server {
 	agentsFactory.BypassPermissionsLoader = func() bool {
 		return configsSvc.GetOwned("agents", "bypass_permissions") == "true"
 	}
+	agentsFactory.SystemPromptLoader = func() string {
+		return configsSvc.GetOwned("agents", "system_prompt")
+	}
 
 	// syncSharedSpec rewrites the shared spec.json on every spawn so
 	// allowed_cmds edits take effect without a server restart.

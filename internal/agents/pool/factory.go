@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -50,6 +51,13 @@ type ClaudeFactory struct {
 	// enabling the full command gate.
 	BypassPermissionsLoader func() bool
 
+	// SystemPromptLoader (optional) returns a global system prompt
+	// fragment appended to the loaded preset body on every spawn.
+	// Empty string = no append. Lets operators set org-wide rules
+	// (prompt-injection defenses, shared conventions) without editing
+	// every preset. Preset stays the primary; this only adds to it.
+	SystemPromptLoader func() string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -94,6 +102,14 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	if opt.PresetName != "" {
 		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
 			presetContent = p.Body
+		}
+	}
+	if f.SystemPromptLoader != nil {
+		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
+			if presetContent != "" {
+				presetContent += "\n\n"
+			}
+			presetContent += extra
 		}
 	}
 
