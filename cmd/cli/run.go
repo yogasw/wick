@@ -215,7 +215,7 @@ func handleIfMissing(ifMissing any, v map[string]any, vars map[string]string) er
 	if run, ok := v["run"]; ok {
 		cmd := interpolate(fmt.Sprint(run), vars)
 		fmt.Printf("> %s\n", cmd)
-		return execCmd(cmd)
+		return execShell(cmd)
 	}
 
 	return fmt.Errorf("if_missing requires either 'download' or 'run'")
