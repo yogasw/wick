@@ -36,6 +36,7 @@ type Pool struct {
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
 	closed       bool
+	stopCh       chan struct{} // closed by Stop to unwind background loops
 
 	// wg tracks tryGrantQueue background spawns + onAgentExit work so
 	// Stop can wait for all post-exit disk writes (markStatus, queue
@@ -170,11 +171,45 @@ func New(cfg PoolConfig) *Pool {
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 120 * time.Second
 	}
-	return &Pool{
+	p := &Pool{
 		cfg:          cfg,
 		active:       map[string]*runEntry{},
 		spawningKeys: map[string]struct{}{},
 		buffers:      map[string]*Buffer{},
+		stopCh:       make(chan struct{}),
+	}
+	if cfg.PreemptIdle {
+		p.wg.Add(1)
+		go p.preemptLoop()
+	}
+	return p
+}
+
+// preemptLoop periodically re-tries preemption while the queue is
+// non-empty. Send() fires preempt once at enqueue time, but the active
+// session may still have been Working then — by the time it transitions
+// to Idle there's no signal back into the pool. The loop closes that
+// gap: every second it checks if a queued session is still waiting and
+// any active session has gone idle, and if so kicks the longest-idle
+// victim. Cheap (one mutex peek per tick) and only runs when the
+// operator opted in via PreemptIdle.
+func (p *Pool) preemptLoop() {
+	defer p.wg.Done()
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-t.C:
+			p.mu.Lock()
+			busy := p.closed || len(p.queue) == 0 || len(p.spawningKeys) > 0
+			p.mu.Unlock()
+			if busy {
+				continue
+			}
+			p.preemptIdleSlot()
+		}
 	}
 }
 
@@ -247,6 +282,11 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if err := buf.Append(text); err != nil {
 		return err
 	}
+	// Persist the user turn to conversation.jsonl immediately so a page
+	// refresh while the session is buffered (queued or mid-spawn) still
+	// shows the messages — they previously only lived in PendingInput.
+	// We build a transient Store because no entry.store exists yet.
+	p.persistBufferedTurn(sessionID, agentName, role, source, text)
 
 	p.mu.Lock()
 	// If this session is already mid-spawn, the in-flight spawn's Drain
@@ -266,13 +306,37 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		p.mu.Unlock()
 		return err
 	}
-	// Full — queue the request and update session status.
-	p.queue = append(p.queue, queueEntry{sessionID, agentName, time.Now()})
+	// Full — queue the request (dedup: one slot per session+agent; the
+	// buffer carries any extra messages) and update session status.
+	already := false
+	for _, q := range p.queue {
+		if q.sessionID == sessionID && q.agentName == agentName {
+			already = true
+			break
+		}
+	}
+	if !already {
+		p.queue = append(p.queue, queueEntry{sessionID, agentName, time.Now()})
+	}
 	p.mu.Unlock()
 	if p.cfg.PreemptIdle {
 		p.preemptIdleSlot()
 	}
 	return p.markStatus(sessionID, session.StatusQueued)
+}
+
+// persistBufferedTurn writes one user/system message to the session's
+// conversation.jsonl from outside an active runEntry. The buffered path
+// (subprocess not yet alive) used to skip this, which made messages
+// disappear from the UI after a page refresh — they only lived in
+// meta.PendingInput, which the conversation view doesn't read.
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string) {
+	sto := store.New(store.Options{
+		Layout:    p.cfg.Layout,
+		SessionID: sessionID,
+		AgentName: agentName,
+	})
+	_ = sto.AppendUserTurn(role, source, text)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
@@ -437,9 +501,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		})
 	}
 	if combined != "" {
-		if entry.store != nil {
-			_ = entry.store.AppendUserTurn("user", source, combined)
-		}
+		// User turns were already persisted to conversation.jsonl by
+		// persistBufferedTurn on each Send; combined is just the CLI input.
 		if err := a.Send(combined); err != nil {
 			return err
 		}
@@ -651,12 +714,16 @@ func (p *Pool) markStatus(sessionID string, status session.Status) error {
 // and by tests to flush goroutines before TempDir cleanup.
 func (p *Pool) Stop() {
 	p.mu.Lock()
+	alreadyClosed := p.closed
 	p.closed = true
 	entries := make([]*runEntry, 0, len(p.active))
 	for _, e := range p.active {
 		entries = append(entries, e)
 	}
 	p.mu.Unlock()
+	if !alreadyClosed && p.stopCh != nil {
+		close(p.stopCh)
+	}
 	for _, e := range entries {
 		_ = e.agent.Stop()
 	}

@@ -93,15 +93,38 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 				New session
 			}
 		</span>
-		if lc.Lifecycle != "" && lc.Lifecycle != "killed" {
-			<span class={
-				"ml-2 h-1.5 w-1.5 shrink-0 rounded-full",
-				templ.KV("bg-green-500", lc.Lifecycle == "working"),
-				templ.KV("bg-amber-400", lc.Lifecycle == "spawning"),
-				templ.KV("bg-blue-400", lc.Lifecycle == "idle"),
-			}></span>
-		}
+		@statusDot(effectiveStatus(lc.Lifecycle, string(sess.Meta.Status)))
 	</a>
+}
+
+// effectiveStatus collapses the pool's in-memory lifecycle and the
+// session's on-disk Status into one label the UI dot/badge can render.
+// Lifecycle wins when present (it's the live view); falls back to
+// Status="queued" so sessions waiting for a slot still show a colour
+// instead of going invisible. Empty result = no dot.
+func effectiveStatus(lifecycle, status string) string {
+	if lifecycle != "" && lifecycle != "killed" {
+		return lifecycle
+	}
+	if status == "queued" {
+		return "queued"
+	}
+	return ""
+}
+
+// statusDot is the 1.5×1.5px coloured circle shared by sidebar rows
+// and session cards. Empty status renders nothing so the caller need
+// not branch.
+templ statusDot(status string) {
+	if status != "" {
+		<span class={
+			"ml-2 h-1.5 w-1.5 shrink-0 rounded-full",
+			templ.KV("bg-green-500", status == "working"),
+			templ.KV("bg-amber-400", status == "spawning"),
+			templ.KV("bg-blue-400", status == "idle"),
+			templ.KV("bg-orange-500 animate-pulse", status == "queued"),
+		}></span>
+	}
 }
 
 // kebabAction is one item inside a kebabMenu dropdown. Variant
@@ -385,6 +408,7 @@ templ lifecycleBadge(lifecycle string, pid int, lastActiveMs int64, idleTimeoutM
 			templ.KV("border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300", lifecycle == "spawning"),
 			templ.KV("border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300", lifecycle == "working"),
 			templ.KV("border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300", lifecycle == "idle"),
+			templ.KV("border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300", lifecycle == "queued"),
 			templ.KV("border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300", lifecycle == "killed"),
 			templ.KV("border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-700 dark:text-black-600", lifecycle == ""),
 		}
@@ -452,6 +476,8 @@ func lifecycleLabel(l string) string {
 		return "working"
 	case "idle":
 		return "idle"
+	case "queued":
+		return "queued"
 	case "killed":
 		return "killed"
 	}
@@ -466,6 +492,8 @@ func lifecycleTooltip(l string, pid int) string {
 		return fmt.Sprintf("processing turn (pid %d)", pid)
 	case "idle":
 		return fmt.Sprintf("alive but no turn — auto-kill on idle timeout (pid %d)", pid)
+	case "queued":
+		return "waiting for a pool slot — runs as soon as one frees"
 	case "killed":
 		return "subprocess no longer alive"
 	}
