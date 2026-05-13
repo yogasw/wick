@@ -333,10 +333,12 @@ func NewServer() *Server {
 			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}
 	}
+	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent:    maxConc,
 		IdleTimeout:      time.Duration(idleSec) * time.Second,
 		KillAfterIdle:    time.Duration(killAfterIdleSec) * time.Second,
+		PreemptIdle:      preemptIdle,
 		Layout:           agentsLayout,
 		Factory:          agentsFactory,
 		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,

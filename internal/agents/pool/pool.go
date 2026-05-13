@@ -54,6 +54,11 @@ type PoolConfig struct {
 	MaxConcurrent    int
 	IdleTimeout      time.Duration
 	KillAfterIdle    time.Duration
+	// PreemptIdle, when true, lets a queued send kick out the longest-idle
+	// active subprocess (Lifecycle == Idle) so the new session doesn't have
+	// to wait for the idle TTL. The preempted session keeps its CLI session
+	// ID in agents.json and resumes via --resume on its next message.
+	PreemptIdle      bool
 	Layout           config.Layout
 	Factory          AgentFactory
 	DefaultWorkspace string
@@ -264,7 +269,49 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// Full — queue the request and update session status.
 	p.queue = append(p.queue, queueEntry{sessionID, agentName, time.Now()})
 	p.mu.Unlock()
+	if p.cfg.PreemptIdle {
+		p.preemptIdleSlot()
+	}
 	return p.markStatus(sessionID, session.StatusQueued)
+}
+
+// preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
+// oldest LastActive) and asynchronously Stops its agent so the slot is
+// reclaimed for a queued session. Returns true if a victim was kicked.
+//
+// No-op when nothing matches: every active agent mid-turn, a spawn is
+// already in flight (slot lands soon anyway), or the pool is closed.
+// Caller must NOT hold p.mu. The Stop is best-effort and idempotent —
+// concurrent preempts that pick the same victim simply double-call Stop.
+//
+// The victim keeps its CLI session ID on disk; its next inbound message
+// triggers a respawn with --resume so the conversation continues.
+func (p *Pool) preemptIdleSlot() bool {
+	p.mu.Lock()
+	if p.closed || len(p.spawningKeys) > 0 {
+		p.mu.Unlock()
+		return false
+	}
+	var victim *runEntry
+	var oldest time.Time
+	for _, e := range p.active {
+		if e.state == nil || e.state.Lifecycle() != state.LifecycleIdle {
+			continue
+		}
+		t := e.state.LastActive()
+		if victim == nil || t.Before(oldest) {
+			victim = e
+			oldest = t
+		}
+	}
+	p.mu.Unlock()
+	if victim == nil {
+		return false
+	}
+	log.Debug().Str("session", victim.sessID).Str("agent", victim.agentNm).
+		Msg("pool: preempting idle slot for queued session")
+	go func() { _ = victim.agent.Stop() }()
+	return true
 }
 
 // spawn allocates a slot, builds an agent via the factory, drains the
