@@ -6,7 +6,7 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `skill`, `doctor`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `all`, `skill`, `doctor`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
 Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `all`, `mcp serve / install / uninstall`) — see [Built apps](#built-apps) below.
@@ -130,6 +130,16 @@ wick worker
 ```
 
 Runs the same worker process as `./myapp worker` but straight from source. Useful for running server and worker in separate terminals during development.
+
+---
+
+### `wick all`
+
+Start the HTTP server and the cron scheduler in one process. Equivalent to `go run . all`. See [`<app> all`](#app-all) for the trade-off table — same command, just running straight from source.
+
+```bash
+wick all
+```
 
 ---
 

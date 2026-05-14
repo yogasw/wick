@@ -24,6 +24,7 @@ func Execute(tpl, designSystem embed.FS) {
 	root.AddCommand(runCmd())
 	root.AddCommand(serverCmd())
 	root.AddCommand(workerCmd())
+	root.AddCommand(allCmd())
 	root.AddCommand(upgradeCmd())
 	root.AddCommand(mcpCmd())
 	root.AddCommand(doctorCmd())
