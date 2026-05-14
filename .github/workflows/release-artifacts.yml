@@ -45,7 +45,7 @@ jobs:
             {"os":"linux",   "arch":"amd64", "runner":"ubuntu-latest"},
             {"os":"linux",   "arch":"arm64", "runner":"ubuntu-latest"},
             {"os":"darwin",  "arch":"amd64", "runner":"macos-latest", "cgo":"1"},
-            {"os":"darwin",  "arch":"arm64", "runner":"macos-latest"},
+            {"os":"darwin",  "arch":"arm64", "runner":"macos-latest", "cgo":"1"},
             {"os":"windows", "arch":"amd64", "runner":"ubuntu-latest"}
           ]'
           if [ -z "$TARGETS" ]; then
@@ -214,7 +214,10 @@ jobs:
   attach-to-release:
     name: Attach Binaries to Release
     needs: [prepare, build-binaries]
-    if: needs.prepare.outputs.build_binaries == 'true'
+    if: |
+      always() && needs.prepare.outputs.build_binaries == 'true'
+        && needs.build-binaries.result != 'cancelled'
+        && needs.build-binaries.result != 'skipped'
     runs-on: ubuntu-latest
 
     permissions:
@@ -226,6 +229,16 @@ jobs:
           path: artifacts
           merge-multiple: true
           pattern: wick-lab-*
+
+      - name: Verify at least one artifact exists
+        shell: bash
+        run: |
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "::error::No artifacts uploaded — every build failed. Not attaching to release."
+            exit 1
+          fi
+          echo "Found artifacts:"
+          ls -1 artifacts
 
       - name: Upload to GitHub Release
         env:
