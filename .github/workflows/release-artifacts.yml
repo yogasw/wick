@@ -1,14 +1,27 @@
 name: Release Artifacts
 
-# Variables (Settings → Secrets and variables → Actions → Variables):
+# Repo Variables (Settings → Secrets and variables → Actions → Variables)
 #
-#   BUILD_BINARIES   = true/false   enable binary builds (default: true)
-#   BUILD_TARGETS    = comma-separated os/arch to build
-#                      valid: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64
-#                      default: darwin/amd64,darwin/arm64,windows/amd64
-#                      example: linux/amd64,windows/amd64
-#   BUILD_DOCKER     = true/false   enable docker build+push (default: true)
-#   DOCKER_PLATFORM  = linux/arm64 or linux/amd64 (default: linux/arm64)
+#   BUILD_BINARIES   true/false   master switch (default: true)
+#                    false → every binary target is disabled
+#   BUILD_TARGETS    comma-separated <os>/<arch> to build
+#                    valid: linux/amd64, linux/arm64, darwin/amd64,
+#                           darwin/arm64, windows/amd64, windows/arm64
+#                    default: darwin/amd64,darwin/arm64,windows/amd64
+#                    special: "all" → build everything
+#                    example: linux/amd64,windows/amd64
+#
+#   BUILD_DOCKER     true/false   (default: true)
+#   DOCKER_PLATFORM  linux/<arch> (default: linux/arm64)
+#
+# Targets NOT in BUILD_TARGETS still spawn a job — the first step writes
+# a DISABLED notice to the run summary and the rest are skipped — so
+# disabled targets stay visible in Actions history.
+#
+# Self-updater: enabled by default (wick is a public repo). Anonymous
+# GitHub API is used to check for updates. To raise the rate limit or
+# support a private releases repo, set repo Secret
+# RELEASE_GITHUB_DOWNLOAD_PAT (fine-grained PAT, Contents=Read).
 
 on:
   push:
@@ -19,46 +32,7 @@ jobs:
   prepare:
     name: Prepare
     runs-on: ubuntu-latest
-    outputs:
-      build_binaries: ${{ steps.cfg.outputs.build_binaries }}
-      build_docker: ${{ steps.cfg.outputs.build_docker }}
-      docker_platform: ${{ steps.cfg.outputs.docker_platform }}
-      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - name: Resolve config
-        id: cfg
-        run: |
-          BUILD_BINARIES="${{ vars.BUILD_BINARIES }}"
-          BUILD_DOCKER="${{ vars.BUILD_DOCKER }}"
-          DOCKER_PLATFORM="${{ vars.DOCKER_PLATFORM }}"
-          echo "build_binaries=${BUILD_BINARIES:-true}" >> "$GITHUB_OUTPUT"
-          echo "build_docker=${BUILD_DOCKER:-true}" >> "$GITHUB_OUTPUT"
-          echo "docker_platform=${DOCKER_PLATFORM:-linux/arm64}" >> "$GITHUB_OUTPUT"
-
-      - name: Build matrix
-        id: matrix
-        shell: bash
-        env:
-          TARGETS: ${{ vars.BUILD_TARGETS }}
-        run: |
-          ALL='[
-            {"os":"linux",   "arch":"amd64", "runner":"ubuntu-latest"},
-            {"os":"linux",   "arch":"arm64", "runner":"ubuntu-latest"},
-            {"os":"darwin",  "arch":"amd64", "runner":"macos-latest", "cgo":"1"},
-            {"os":"darwin",  "arch":"arm64", "runner":"macos-latest", "cgo":"1"},
-            {"os":"windows", "arch":"amd64", "runner":"ubuntu-latest"}
-          ]'
-          if [ -z "$TARGETS" ]; then
-            TARGETS="darwin/amd64,darwin/arm64,windows/amd64"
-          fi
-          if [ "$TARGETS" = "all" ]; then
-            MATRIX=$(echo "$ALL" | jq -c .)
-          else
-            PATTERN=$(echo "$TARGETS" | tr -d ' ' | tr ',' '|')
-            MATRIX=$(echo "$ALL" | jq -c --arg p "$PATTERN" 'map(select((.os+"/"+.arch) | test($p)))')
-          fi
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -100,7 +74,6 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
     needs: prepare
-    if: needs.prepare.outputs.build_binaries == 'true'
     runs-on: ${{ matrix.runner }}
 
     permissions:
@@ -109,29 +82,99 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+        include:
+          - { os: linux,   arch: amd64, runner: ubuntu-latest }
+          - { os: linux,   arch: arm64, runner: ubuntu-latest }
+          - { os: darwin,  arch: amd64, runner: macos-latest, cgo: "1" }
+          - { os: darwin,  arch: arm64, runner: macos-latest, cgo: "1" }
+          - { os: windows, arch: amd64, runner: ubuntu-latest }
+          - { os: windows, arch: arm64, runner: ubuntu-latest }
 
     steps:
+      - name: Check target enabled
+        id: gate
+        shell: bash
+        env:
+          BUILD_BINARIES: ${{ vars.BUILD_BINARIES }}
+          TARGETS: ${{ vars.BUILD_TARGETS }}
+        run: |
+          TARGET="${{ matrix.os }}/${{ matrix.arch }}"
+          # Defaults when vars are unset.
+          : "${BUILD_BINARIES:=true}"
+          : "${TARGETS:=darwin/amd64,darwin/arm64,windows/amd64}"
+
+          # Master switch first — short-circuit to disabled with its own message.
+          if [ "$BUILD_BINARIES" = "false" ]; then
+            {
+              echo "## ⏭️ DISABLED — $TARGET (BUILD_BINARIES=false)"
+              echo ""
+              echo "Binary builds are turned off by the master switch."
+              echo ""
+              echo "Settings → Secrets and variables → Actions → Variables → BUILD_BINARIES"
+              echo ""
+              echo "| Name | Value |"
+              echo "|------|-------|"
+              echo "| \`BUILD_BINARIES\` | \`true\` |"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=DISABLED::Binary builds turned off (BUILD_BINARIES=false)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$TARGETS" = "all" ]; then
+            MATCH=true
+          else
+            # Comma-separated exact match. Strip spaces, wrap in commas to
+            # avoid partial matches (e.g. amd64 hitting arm64).
+            CLEAN=",$(echo "$TARGETS" | tr -d ' '),"
+            case "$CLEAN" in
+              *",$TARGET,"*) MATCH=true ;;
+              *)             MATCH=false ;;
+            esac
+          fi
+          if [ "$MATCH" != "true" ]; then
+            {
+              echo "## ⏭️ DISABLED — $TARGET"
+              echo ""
+              echo "This target is not in \`BUILD_TARGETS\` (currently: \`$TARGETS\`)."
+              echo ""
+              echo "To release it, add \`$TARGET\` to repo variable \`BUILD_TARGETS\`:"
+              echo ""
+              echo "Settings → Secrets and variables → Actions → Variables → BUILD_TARGETS"
+              echo ""
+              echo "| Name | Value |"
+              echo "|------|-------|"
+              echo "| \`BUILD_TARGETS\` | \`$TARGETS,$TARGET\` |"
+              echo ""
+              echo "Or set to \`all\` to build everything."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=DISABLED::$TARGET not in BUILD_TARGETS ($TARGETS) — add it to enable."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=ENABLED::$TARGET will be built and attached to release."
+          fi
+
       - name: Download wick CLI binary
-        if: matrix.runner == 'ubuntu-latest'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'ubuntu-latest'
         uses: actions/download-artifact@v4
         with:
           name: wick-cli-linux
           path: /usr/local/bin
 
       - name: Make wick executable (linux)
-        if: matrix.runner == 'ubuntu-latest'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'ubuntu-latest'
         run: chmod +x /usr/local/bin/wick
 
       - name: Setup Go (macOS only — needed for go install)
-        if: matrix.runner == 'macos-latest'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
           cache: false
 
       - name: Cache wick CLI binary (macOS)
-        if: matrix.runner == 'macos-latest'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
         id: cache-wick-mac
         uses: actions/cache@v4
         with:
@@ -139,21 +182,22 @@ jobs:
           key: wick-cli-${{ github.ref_name }}-darwin
 
       - name: Install wick CLI (macOS)
-        if: matrix.runner == 'macos-latest' && steps.cache-wick-mac.outputs.cache-hit != 'true'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest' && steps.cache-wick-mac.outputs.cache-hit != 'true'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
 
       - name: Add Go bin to PATH (macOS)
-        if: matrix.runner == 'macos-latest'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Download project scaffold
+        if: steps.gate.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
           name: wick-scaffold
           path: /tmp/wick
 
       - name: Cache wixl (windows cross-compile)
-        if: matrix.os == 'windows'
+        if: steps.gate.outputs.enabled == 'true' && matrix.os == 'windows'
         id: cache-wixl
         uses: actions/cache@v4
         with:
@@ -161,27 +205,36 @@ jobs:
           key: wixl-apt-${{ runner.os }}
 
       - name: Install wixl (windows cross-compile)
-        if: matrix.os == 'windows' && steps.cache-wixl.outputs.cache-hit != 'true'
+        if: steps.gate.outputs.enabled == 'true' && matrix.os == 'windows' && steps.cache-wixl.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y wixl
 
       - name: Setup
+        if: steps.gate.outputs.enabled == 'true'
         run: wick setup
         working-directory: /tmp/wick
 
       - name: Add Go bin to PATH (ubuntu)
-        if: matrix.runner == 'ubuntu-latest'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'ubuntu-latest'
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build installer
+        if: steps.gate.outputs.enabled == 'true'
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: ${{ matrix.cgo || '0' }}
           APP_VERSION: ${{ github.ref_name }}
+          # Self-updater config baked into binary.
+          # Public repo → PAT empty is fine (anonymous GitHub API, 60 req/h).
+          # Set repo secret RELEASE_GITHUB_DOWNLOAD_PAT for 5000 req/h or a
+          # private releases repo.
+          RELEASE_GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_GITHUB_PAT: ${{ secrets.RELEASE_GITHUB_DOWNLOAD_PAT }}
         run: wick build --installer
         working-directory: /tmp/wick
 
       - name: Resolve asset name
+        if: steps.gate.outputs.enabled == 'true'
         id: meta
         shell: bash
         working-directory: /tmp/wick
@@ -198,12 +251,15 @@ jobs:
           echo "asset_path=/tmp/wick/bin/$ASSET" >> "$GITHUB_OUTPUT"
 
       - name: Checksum
+        if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
           cd /tmp/wick/bin
           sha256sum "${{ steps.meta.outputs.asset }}" > "${{ steps.meta.outputs.asset }}.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: wick-lab-${{ matrix.os }}-${{ matrix.arch }}
           path: |
@@ -215,7 +271,7 @@ jobs:
     name: Attach Binaries to Release
     needs: [prepare, build-binaries]
     if: |
-      always() && needs.prepare.outputs.build_binaries == 'true'
+      always()
         && needs.build-binaries.result != 'cancelled'
         && needs.build-binaries.result != 'skipped'
     runs-on: ubuntu-latest
@@ -234,7 +290,7 @@ jobs:
         shell: bash
         run: |
           if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
-            echo "::error::No artifacts uploaded — every build failed. Not attaching to release."
+            echo "::error::No artifacts produced — every enabled build failed, or every target is disabled."
             exit 1
           fi
           echo "Found artifacts:"
@@ -251,7 +307,6 @@ jobs:
   build-docker:
     name: Build and Push Docker Image
     needs: prepare
-    if: needs.prepare.outputs.build_docker == 'true'
     runs-on: ubuntu-latest
 
     permissions:
@@ -259,25 +314,56 @@ jobs:
       packages: write
 
     steps:
+      - name: Check docker enabled
+        id: gate
+        shell: bash
+        env:
+          VAR_VALUE: ${{ vars.BUILD_DOCKER }}
+        run: |
+          ENABLED="${VAR_VALUE:-true}"
+          if [ "$ENABLED" != "true" ]; then
+            {
+              echo "## ⏭️ DISABLED — Docker image"
+              echo ""
+              echo "Docker build is disabled. To enable, set repo variable \`BUILD_DOCKER=true\`:"
+              echo ""
+              echo "Settings → Secrets and variables → Actions → Variables → New repository variable"
+              echo ""
+              echo "| Name | Value |"
+              echo "|------|-------|"
+              echo "| \`BUILD_DOCKER\` | \`true\` |"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=DISABLED::Docker build is disabled — set BUILD_DOCKER=true to enable."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=ENABLED::Docker image will be built and pushed."
+          fi
+
       - name: Download wick CLI binary
+        if: steps.gate.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
           name: wick-cli-linux
           path: /usr/local/bin
 
       - name: Make wick executable
+        if: steps.gate.outputs.enabled == 'true'
         run: chmod +x /usr/local/bin/wick
 
       - name: Download project scaffold
+        if: steps.gate.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
           name: wick-scaffold
           path: /tmp/wick
 
       - name: Set up Docker Buildx
+        if: steps.gate.outputs.enabled == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
+        if: steps.gate.outputs.enabled == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -285,11 +371,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        if: steps.gate.outputs.enabled == 'true'
         uses: docker/build-push-action@v6
         with:
           context: /tmp/wick
           push: true
-          platforms: ${{ needs.prepare.outputs.docker_platform }}
+          platforms: ${{ vars.DOCKER_PLATFORM || 'linux/arm64' }}
           tags: |
             ghcr.io/yogasw/wick:latest
             ghcr.io/yogasw/wick:${{ github.ref_name }}
