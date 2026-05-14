@@ -4,6 +4,10 @@ Status: **proposed** — belum ada kode. Doc ini kontrak desain sebelum
 implementasi.
 Update terakhir: 2026-05-14.
 
+> **Pas implement, baca DUA file:**
+> - **`workflow-design.md` (ini)** — developer contract, spec lengkap
+> - **`workflow-mockup.html`** — visual reference (UI layout, canvas, run timeline, anatomy diagrams)
+>
 > User-facing docs: belum ada. Setelah implement, tulis
 > `docs/guide/workflows.md` yang ngajarin admin cara bikin workflow.
 > Doc ini sumber kebenaran developer, bukan panduan user.
@@ -11,6 +15,132 @@ Update terakhir: 2026-05-14.
 Workflow gantiin konsep "routine" sebelumnya. Routine = workflow dengan
 1 node body. Schema YAML routine lama auto-translate ke workflow saat
 load.
+
+---
+
+## Implementation roadmap
+
+12 phase berurutan. Tiap phase = vertical slice (tested, mergeable PR).
+Jangan skip — phase N+1 butuh phase N. Tiap phase **WAJIB include unit
++ integration test** sesuai §14.
+
+**Phase 1 — Foundation** *(folder + types, no execution)*
+- [ ] `internal/agents/workflow/` package skeleton
+- [ ] Domain types per §8: `Workflow`, `Graph`, `Edge`, `Node`, `Trigger`, `RunState`
+- [ ] YAML schema parser + validator (cycle detect Kahn's, edge ref resolution, case label rules, default mandatory)
+- [ ] File CRUD via Service interface (List/Load/Create/Update/Delete/Toggle)
+- [ ] Atomic write tmp+rename
+- [ ] Unit test: parser dgn 10+ valid + 10+ invalid YAML fixtures
+
+**Phase 2 — Engine core** *(execution, simple linear flow only)*
+- [ ] DAG walker algo per §6 (edge-first resolution, classify/branch case filter, fan-out detect)
+- [ ] State persistence: `runs/<id>/state.json` + `events.jsonl` atomic write per node completion
+- [ ] Built-in executors: `shell`, `http`, `branch`, `end`, `transform`
+- [ ] Resume from crash (load state.json, re-exec current node)
+- [ ] Output ref template render (`{{.Event.X}}`, `{{.Node.X.Y}}`, `{{.Env.X}}`, `{{.Secret.X}}`)
+- [ ] Unit test per executor + integration test linear flow
+
+**Phase 3 — Parallel + merge** *(DAG topology)*
+- [ ] `parallel` node executor (fan-out goroutines, on_failure per-branch policy)
+- [ ] `merge` node executor (wait-for-all per §6 readiness rule, strategy: object/array/first/last)
+- [ ] Fan-out via multiple edges (no explicit parallel node)
+- [ ] Integration test: diamond topology, partial failure, merge strategies
+
+**Phase 4 — Trigger router**
+- [ ] Cron path: register sebagai `jobs.Module` Key `workflow:<slug>:cron-<idx>`, reuse existing scheduler
+- [ ] Manual trigger: UI button → enqueue
+- [ ] Webhook handler: mount `/hooks/<slug>/<path>`, HMAC verify, path templating
+- [ ] Per-trigger `entry_node` override
+- [ ] Per-workflow FIFO queue + dedup (LRU + file fallback)
+- [ ] Integration test: multi-trigger workflow, all paths
+
+**Phase 5 — Channel integration** *(symmetric trigger + action)*
+- [ ] Channel interface extension: `TriggerSpecs()`, `Actions()`, `Send()`, `Subscribe()`
+- [ ] Channel registry router (`OnAnyMessage` hook fire trigger router)
+- [ ] `type: channel` action node executor
+- [ ] Slack channel concrete impl per §7 (start dgn `send_message`, `reply_thread`, `send_dm`; interactive `post_message_with_button`, `open_modal` di Phase 11)
+- [ ] Implicit reply-to-source synthetic node injection
+- [ ] Channel event subtypes: `message` first (interactive subtypes `action`/`submission` di Phase 11)
+- [ ] Integration test: Slack message trigger → reply
+
+**Phase 6 — Connector integration** *(reuse existing)*
+- [ ] `type: connector` node executor — in-process call `Operation.Execute()`
+- [ ] Resolve `module + op` ke connector row + operation
+- [ ] Args binding terhadap `Input` struct + validation
+- [ ] Audit ke existing `connector_runs` table
+- [ ] Destructive flag surfaced via AI guard (Phase 10)
+- [ ] Integration test: workflow invokes existing connector (e.g. crudcrud)
+
+**Phase 7 — Provider + AI nodes** *(classify, agent, sessions)*
+- [ ] Provider interface extension: `Capabilities()`, `StructuredCall()`, `ListSkills()`
+- [ ] Per-provider impl (Claude Code first): `--output-format json` parser, skill listing
+- [ ] `type: classify` executor dgn 6-layer reliability (structured_output, normalize, exact, fuzzy, retry, confidence_threshold)
+- [ ] `type: agent` executor (provider, skills, session field)
+- [ ] Session map per §5 Session management: `new` (default), `root` (lazy spawn), `persistent` (cross-run)
+- [ ] Crash recovery (PID check, heartbeat, respawn)
+- [ ] Integration test: classify dgn mock provider responses, agent dgn skill invocation
+
+**Phase 8 — Datasets**
+- [ ] `wick_datasets_rows` table migration (Postgres)
+- [ ] Dataset Service interface per §12: Create/UpdateSchema/Query/Insert/Upsert/Delete/Count/Get/Exists
+- [ ] Schema validation (strict/lax/extensible), JSONB shape enforcement
+- [ ] Partial GIN index management per declared `indexed: true` columns
+- [ ] Node executors: `dataset_query`/`dataset_get`/`dataset_exists`/`dataset_insert`/`dataset_upsert`/`dataset_delete`/`dataset_count`
+- [ ] File-based versioning (`history/v<N>.yaml`), version pin enforcement
+- [ ] Adoption flow (orphan rows detect → schema infer)
+- [ ] Migration job (atomic batch + rollback)
+- [ ] Integration test: dedup workflow + sharing antar workflow
+
+**Phase 9 — Environment & secrets**
+- [ ] `env:` schema parser di workflow.yaml (reuse config-tags vocab)
+- [ ] `env.yaml` values loader + writer (atomic)
+- [ ] Secret encryption integration (existing `wick_enc_` layer)
+- [ ] Validator: required field check, type validation, kvlist/picker JSON shape
+- [ ] Env reference resolver (`{{.Env.X}}` non-secret only, `{{.Secret.X}}` decrypt runtime)
+- [ ] MCP ops: `workflow_get_env_schema`, `workflow_get_env_values`, `workflow_set_env_values`
+- [ ] Integration test: workflow with secret → secret never logged
+
+**Phase 10 — AI guard + governance**
+- [ ] Guard config struct (entity.Config reflected)
+- [ ] Default rules (destructive shell, prompt injection, network allowlist, dst per §17)
+- [ ] Guard runner: spawn ephemeral agent, review folder, parse JSON verdict
+- [ ] Mode: warn / block / off
+- [ ] Override flow dgn audit log
+- [ ] `wick_workflow_state` table (approved version + hash + governance)
+- [ ] Auto-extend on cosmetic diff, stale on material
+- [ ] Integration test: workflow with destructive command → guard blocks
+
+**Phase 11 — Interactive + error trigger** *(advanced channel + on_error)*
+- [ ] Slack interactive Actions: `post_message_with_button`, `open_modal`, `react`, `update_message`
+- [ ] Channel event subtypes: `action`, `submission` (Slack interactive events)
+- [ ] Multi-trigger workflow w/ per-trigger entry_node (test ticket-flow per §3 UC4)
+- [ ] `type: error` trigger
+- [ ] `on_error:` workflow binding di workflow.yaml
+- [ ] Loop protection (max 3 nested error workflows)
+- [ ] Integration test: workflow fail → error-handler workflow fires
+
+**Phase 12 — UI + MCP surface + Test framework**
+- [ ] Tab Workflows di `internal/tools/agents/` (list, detail, edit, runs)
+- [ ] Canvas editor (Drawflow integration) per §10 — node palette, edges editor, inspector
+- [ ] Test panel: per-node + full-flow + coverage map
+- [ ] Test framework engine per §14:
+  - `EngineContext.Mode` test/production
+  - MockRegistry + service wrapping
+  - CaptureLog untuk assertions
+  - Determinism (frozen clock + seeded random)
+  - Assertion DSL parser
+- [ ] CLI: `wick workflow test <slug> --filter --integration --watch --coverage --record`
+- [ ] MCP ops: full set per §9 (introspection + write + canvas + action + test)
+- [ ] Datasets UI tab (table view, schema editor, query console)
+- [ ] AI-first flow integration test: AI compose workflow + tests via MCP → run → request_review
+
+**Phase 13 — Polish + observability**
+- [ ] fsnotify watcher di `<BaseDir>/workflows/` + `<BaseDir>/datasets/`
+- [ ] Daily cleanup job (run retention per §4 5a)
+- [ ] Cost tracking aggregation (per-node + workflow rollup)
+- [ ] Audit log queryable (filter by workflow, user, op, date range)
+- [ ] Bootstrap & hot-reload per §15
+- [ ] Implicit-reply detection edge case handling
 
 ---
 
