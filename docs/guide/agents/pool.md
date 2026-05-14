@@ -108,11 +108,15 @@ When a message arrives ([pool.go: `Send`](https://github.com/yogasw/wick/blob/ma
 
 2. Ensure session exists on disk (channels pass thread_ts; auto-create if missing)
 3. Append text to in-memory Buffer + persist to meta.PendingInput
+   AND append the user turn to conversation.jsonl so a page refresh
+   while the session is queued/spawning still shows the messages.
 
 4. mu.Lock — check capacity
    ├─ already mid-spawn? → return (in-flight spawn will drain buffer)
    ├─ active+spawning < max? → mark spawning, release lock, spawn()
-   └─ pool full → enqueue, mark session status=queued, return
+   └─ pool full → enqueue (dedup: skip if same sess+agent already queued),
+                  mark session status=queued, fire one-shot PreemptIdleSlot,
+                  return
 
 5. spawn():
    - load session.Meta → resolve workspace cwd (workspace.ResolvePath, fallback chain)
@@ -122,7 +126,8 @@ When a message arrives ([pool.go: `Send`](https://github.com/yogasw/wick/blob/ma
    - markStatus(running)
    - a.Start(ctx) → fires CLI subprocess
    - OnStarted(pid, binary, argv, firstUserMessage) → completes spawn-log start event
-   - if drained text non-empty → store.AppendUserTurn + a.Send(combined)
+   - if drained text non-empty → a.Send(combined)
+     (user turns were already persisted in step 3 — no double-write)
 ```
 
 The "spawning" set ([pool.go:35](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L35)) is what prevents two concurrent `Send` calls from each seeing "slot free" and both calling `spawn` at once. In-flight spawns count against the cap.
@@ -138,6 +143,19 @@ Persistence model ([buffer.go](https://github.com/yogasw/wick/blob/master/intern
 | `NewBuffer` | Reads `meta.PendingInput` into `lines[]` so a wick restart resumes. |
 
 When the slot is granted, the entire buffer is **drained as one combined input** (joined by `\n`) and sent as a single message to the spawned agent. So a queued session that received three messages while waiting gets all three delivered in one turn. See agents-design.md §5.1.1 for the rationale.
+
+Each user message is also written to `conversation.jsonl` at Send time (not at drain time), so the UI's conversation tab shows the messages even before the subprocess spawns. Without that, refreshing the page while queued would render "No messages yet" — the messages would live only in `meta.PendingInput`, which the conversation view doesn't read.
+
+### Preemption
+
+When the pool is full and a queued session has been waiting, `PreemptIdleSlot` finds the longest-idle active session (Lifecycle == Idle, oldest LastActive) and stops it so the slot frees up. The victim keeps its `CLISessionID` on disk and resumes via `--resume` on its next message.
+
+Preemption fires from two places:
+
+| Trigger | When | Notes |
+|---|---|---|
+| `Send` (one-shot) | At the moment a session enqueues | Skipped if no active session is currently Idle. |
+| `preemptLoop` (1 s ticker) | Background, while `len(queue) > 0` | Closes the gap where every active was Working at enqueue time but later went Idle — without the retry, the queue would wait out the full idle TTL. Only runs when `PreemptIdle = true`. |
 
 ## Exit flow
 

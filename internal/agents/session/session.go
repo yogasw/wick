@@ -60,6 +60,10 @@ type Meta struct {
 	// Label is the first user message truncated to 60 runes, cached here
 	// so sidebar rendering never needs to open conversation.jsonl.
 	Label string `json:"label,omitempty"`
+	// Preset is the name of the preset active for this session.
+	// Factory reads the preset content from presets/<name>/agent.md on
+	// every spawn so edits to the preset take effect on next respawn.
+	Preset string `json:"preset,omitempty"`
 }
 
 // Session is the in-memory view: ID + meta + agent registry. Mirrors
@@ -79,12 +83,9 @@ type CreateOptions struct {
 	Workspace string
 	Origin    Origin
 	ChannelID string
-	// PresetSnapshot is the preset body copied into the session's
-	// agent.md at creation time. Empty = caller will populate later
-	// (e.g. when first agent is added). The design says we always
-	// snapshot at session creation so re-opening a session never drifts
-	// because someone edited the preset since.
-	PresetSnapshot string
+	// Preset is the preset name to associate with this session.
+	// Stored in meta.json; factory loads content from presets/<name>/agent.md on spawn.
+	Preset string
 }
 
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
@@ -115,6 +116,7 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		Workspace:  opt.Workspace,
 		Origin:     opt.Origin,
 		ChannelID:  opt.ChannelID,
+		Preset:     opt.Preset,
 		Status:     StatusIdle,
 		CreatedAt:  now,
 		LastActive: now,
@@ -126,12 +128,6 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 	if err := storage.WriteJSON(layout.SessionAgents(opt.ID), []AgentEntry{}); err != nil {
 		_ = os.RemoveAll(dir)
 		return Session{}, err
-	}
-	if opt.PresetSnapshot != "" {
-		if err := os.WriteFile(layout.SessionAgentMD(opt.ID), []byte(opt.PresetSnapshot), 0o644); err != nil {
-			_ = os.RemoveAll(dir)
-			return Session{}, err
-		}
 	}
 	return Session{ID: opt.ID, Meta: meta, Agents: []AgentEntry{}}, nil
 }

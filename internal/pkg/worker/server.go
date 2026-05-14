@@ -91,17 +91,30 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	logger.Info().Msgf("worker: bootstrapped %d job(s)", len(allJobs))
 
+	return RunScheduler(ctx, s.jobsSvc)
+}
+
+// RunScheduler ticks every 60s and dispatches RunCron for jobs whose
+// cron expression matches the current minute. Blocks until ctx is
+// cancelled. Caller must have already bootstrapped jobs on jobsSvc.
+//
+// Exposed so a single-node entrypoint (server + worker in one process)
+// can share one *manager.Service with the HTTP layer instead of running
+// two competing schedulers — see cmd/lab/all.go.
+func RunScheduler(ctx context.Context, jobsSvc *manager.Service) error {
+	logger := zerolog.Ctx(ctx)
+
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	logger.Info().Msg("worker: scheduler started (checking every 60s)")
 
-	s.tick(ctx)
+	tick(ctx, jobsSvc)
 
 	for {
 		select {
 		case <-ticker.C:
-			s.tick(ctx)
+			tick(ctx, jobsSvc)
 		case <-ctx.Done():
 			logger.Info().Msg("worker: shutting down")
 			return nil
@@ -109,9 +122,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Server) tick(ctx context.Context) {
+func tick(ctx context.Context, jobsSvc *manager.Service) {
 	logger := zerolog.Ctx(ctx)
-	enabled, err := s.jobsSvc.ListEnabledJobs(ctx)
+	enabled, err := jobsSvc.ListEnabledJobs(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("worker: list enabled jobs")
 		return
@@ -125,7 +138,7 @@ func (s *Server) tick(ctx context.Context) {
 		if !cronMatchesNow(j.Schedule, now) {
 			continue
 		}
-		runID, err := s.jobsSvc.RunCron(ctx, j.Key)
+		runID, err := jobsSvc.RunCron(ctx, j.Key)
 		if err != nil {
 			logger.Warn().Str("job", j.Key).Err(err).Msg("worker: skip run")
 			continue

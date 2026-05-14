@@ -13,16 +13,20 @@ type GeneralConfig struct {
 	KillAfterIdleSec  int    `wick:"number;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PublicURL         string `wick:"url;desc=Public base URL of this wick instance. Used for the dashboard meta-command."`
 	AutoRescan        bool   `wick:"checkbox;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
+	PreemptIdle       bool   `wick:"checkbox;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
+	SystemPrompt string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
 // table has no row for a given key.
 func DefaultGeneralConfig() GeneralConfig {
 	return GeneralConfig{
-		Enabled:         false,
-		MaxConcurrent:   2,
-		IdleTimeoutSec:  120,
-		DefaultProvider: "claude",
-		AutoRescan:      true,
+		Enabled:            false,
+		MaxConcurrent:      2,
+		IdleTimeoutSec:     120,
+		DefaultProvider:    "claude",
+		AutoRescan:         true,
+		PreemptIdle:        true,
+		SystemPrompt:    DefaultSystemPrompt(),
 	}
 }

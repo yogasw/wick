@@ -169,5 +169,38 @@ module.exports = {
     },
   },
 
-  plugins: [],
+  plugins: [
+    function({ addComponents }) {
+      addComponents({
+        '.toggle-track': {
+          position: 'relative',
+          display: 'inline-block',
+          width: '36px',
+          height: '20px',
+          borderRadius: '9999px',
+          backgroundColor: '#A0A0A0',
+          transition: 'background-color 200ms',
+          cursor: 'pointer',
+          flexShrink: '0',
+        },
+        '.toggle-track.is-on': {
+          backgroundColor: '#27B199',
+        },
+        '.toggle-knob': {
+          position: 'absolute',
+          top: '2px',
+          left: '2px',
+          width: '16px',
+          height: '16px',
+          borderRadius: '9999px',
+          backgroundColor: '#ffffff',
+          boxShadow: '0 1px 3px 0 rgba(0,0,0,0.2)',
+          transition: 'transform 200ms',
+        },
+        '.toggle-track.is-on .toggle-knob': {
+          transform: 'translateX(16px)',
+        },
+      });
+    },
+  ],
 }

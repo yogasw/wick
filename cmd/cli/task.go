@@ -107,3 +107,13 @@ func workerCmd() *cobra.Command {
 		},
 	}
 }
+
+func allCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "all",
+		Short: "Run HTTP server + cron in one process (go run . all)",
+		RunE: func(c *cobra.Command, args []string) error {
+			return execCmd("go run . all")
+		},
+	}
+}

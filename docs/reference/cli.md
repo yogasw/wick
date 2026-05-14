@@ -6,10 +6,10 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `skill`, `doctor`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `all`, `skill`, `doctor`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
-Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `mcp serve / install / uninstall`) — see [Built apps](#built-apps) below.
+Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `all`, `mcp serve / install / uninstall`) — see [Built apps](#built-apps) below.
 
 Run `wick --help` to print the current list.
 
@@ -133,6 +133,16 @@ Runs the same worker process as `./myapp worker` but straight from source. Usefu
 
 ---
 
+### `wick all`
+
+Start the HTTP server and the cron scheduler in one process. Equivalent to `go run . all`. See [`<app> all`](#app-all) for the trade-off table — same command, just running straight from source.
+
+```bash
+wick all
+```
+
+---
+
 ### `wick doctor [binary]`
 
 Run a sequence of environment checks and print a summary. Each line reports `✓` (ok), `✗` (missing / broken), or `!` (warning). Exit code `0` when all required checks pass, `1` otherwise.
@@ -157,7 +167,7 @@ $ wick upgrade
 current: v0.1.13
 latest:  v0.4.2
 upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.11.15
+> go get github.com/yogasw/wick@v0.12.0
 > go mod tidy
 > <dev task from wick.yml>
 ```
@@ -168,7 +178,7 @@ Steps:
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
 3. If already on latest, exit without prompting.
 4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.11.15`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+5. Run `go get github.com/yogasw/wick@v0.12.0`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 
@@ -258,6 +268,26 @@ Start the HTTP server only. Useful for running on a server, in Docker, or alongs
 ### `<app> worker`
 
 Start the background job worker only. Pair with `server` in a separate process / container when you want to scale them independently.
+
+### `<app> all`
+
+Run the HTTP server **and** the cron scheduler in the same process, sharing one `manager.Service`. Use this for single-node deployments where `server` and `worker` can't share a volume (single-container Docker, simple VPS, etc.) — without a shared filesystem a separate worker pod can't see provider-storage files restored on the API pod, so jobs that touch those files silently no-op.
+
+```bash
+./bin/myapp all
+./bin/myapp all --port 9000
+```
+
+Trade-offs vs. running `server` + `worker` as separate processes:
+
+| Aspect | `all` (single-node) | `server` + `worker` (multi-pod) |
+|---|---|---|
+| Filesystem | One pod, no volume sharing needed | Needs shared volume (or per-pod restore) |
+| Scaling | Vertical only (one process) | Horizontal (scale worker independently) |
+| Cron double-fire | Impossible (one `manager.Service`) | Possible if you accidentally run two workers |
+| Failure isolation | HTTP crash kills cron too | Independent |
+
+The scheduler goroutine auto-respawns with exponential backoff (2s → 30s cap) if it exits unexpectedly. Clean shutdown via `SIGTERM` / Ctrl+C stops both.
 
 ### `<app> mcp serve`
 

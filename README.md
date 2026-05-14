@@ -19,11 +19,11 @@ chmod +x wick
 ```
 
 ```bash
-# Docker
+# Docker — single-container: HTTP + cron in one process
 docker run -d \
   -p 9425:9425 \
   -v wick-data:/root/.wick \
-  ghcr.io/yogasw/wick:latest
+  ghcr.io/yogasw/wick:latest all
 ```
 
 The binary supports two modes — pick one:
@@ -116,6 +116,7 @@ You write business logic. Wick handles everything else:
 | `wick dev` | Generate templ + CSS, start server |
 | `wick server` | Start HTTP server only |
 | `wick worker` | Start background job worker |
+| `wick all` | HTTP + cron in one process (single-node deploys) |
 | `wick build` | Compile binary with version metadata |
 | `wick test` | Run `go test ./...` with coverage |
 | `wick skill sync` | Refresh bundled AI skills after upgrade |

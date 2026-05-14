@@ -105,6 +105,9 @@ type Options struct {
 	// the factory and threaded through every spawn so the spawner can
 	// write hook configs without re-resolving.
 	GateBinary string
+	// Preset is the system prompt content forwarded to the spawner as
+	// --append-system-prompt (or equivalent). Stripped from spawn logs.
+	Preset string
 	// ExtraEnv merges into the subprocess env on every spawn. Used by
 	// per-channel transports (Slack, HTTP) that need to inject auth
 	// tokens or routing keys.
@@ -151,6 +154,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		ExtraEnv:   a.cfg.ExtraEnv,
 		Instance:   a.cfg.Instance,
 		GateBinary: a.cfg.GateBinary,
+		Preset:     a.cfg.Preset,
 	})
 	if err != nil {
 		cancel()

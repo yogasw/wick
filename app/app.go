@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/rs/zerolog/log"
@@ -393,6 +394,54 @@ func Run() {
 		},
 	}
 
+	allCmd := &cobra.Command{
+		Use:   "all",
+		Short: "Run web server and cron scheduler in one process (single-node)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			userconfig.ResolveDBPath(BuildAppName, "")
+			userconfig.ResolvePort(0)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
+
+			srv := api.NewServer()
+
+			schedCtx := log.With().Str("component", "worker").Logger().WithContext(ctx)
+			// Auto-respawn loop. RunScheduler should only return when
+			// schedCtx is cancelled; any other return is treated as a
+			// crash and restarted with backoff so a transient DB blip
+			// doesn't silently disable cron until the next deploy.
+			go func() {
+				const (
+					backoffStart = 2 * time.Second
+					backoffMax   = 30 * time.Second
+				)
+				backoff := backoffStart
+				for {
+					if err := worker.RunScheduler(schedCtx, srv.JobsSvc()); err != nil {
+						log.Error().Err(err).Msg("worker scheduler exited with error — respawning")
+					} else if schedCtx.Err() != nil {
+						return
+					} else {
+						log.Warn().Msg("worker scheduler exited without error — respawning")
+					}
+					select {
+					case <-schedCtx.Done():
+						return
+					case <-time.After(backoff):
+					}
+					backoff *= 2
+					if backoff > backoffMax {
+						backoff = backoffMax
+					}
+				}
+			}()
+
+			return srv.Run(ctx, port)
+		},
+	}
+	allCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
+
 	mcpCmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "MCP server commands",
@@ -419,7 +468,7 @@ func Run() {
 		},
 	}
 
-	root.AddCommand(serverCmd, workerCmd, mcpCmd, trayCmd, uninstallCmd())
+	root.AddCommand(serverCmd, workerCmd, allCmd, mcpCmd, trayCmd, uninstallCmd())
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())

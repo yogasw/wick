@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/preset"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/claude"
 	codexpkg "github.com/yogasw/wick/internal/agents/provider/codex"
@@ -48,6 +50,13 @@ type ClaudeFactory struct {
 	// (Slack, HTTP) where the operator wants to skip prompts without
 	// enabling the full command gate.
 	BypassPermissionsLoader func() bool
+
+	// SystemPromptLoader (optional) returns a global system prompt
+	// fragment appended to the loaded preset body on every spawn.
+	// Empty string = no append. Lets operators set org-wide rules
+	// (prompt-injection defenses, shared conventions) without editing
+	// every preset. Preset stays the primary; this only adds to it.
+	SystemPromptLoader func() string
 
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
@@ -88,6 +97,21 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		AgentName: opt.AgentName,
 		RecordRaw: f.RecordRaw,
 	})
+
+	var presetContent string
+	if opt.PresetName != "" {
+		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
+			presetContent = p.Body
+		}
+	}
+	if f.SystemPromptLoader != nil {
+		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
+			if presetContent != "" {
+				presetContent += "\n\n"
+			}
+			presetContent += extra
+		}
+	}
 
 	bypassPerms := false
 	if f.BypassPermissionsLoader != nil {
@@ -233,6 +257,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		OnExit:        onExit,
 		Instance:      &insCopy,
 		GateBinary:    gateBin,
+		Preset:        presetContent,
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }
