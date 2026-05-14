@@ -161,14 +161,7 @@ templ sessionsFullRow(vm SessionsListVM, id string, sess session.Session) {
 					<span class="text-black-400 dark:text-black-700">·</span>
 				}
 				<span class="text-xs text-black-600 dark:text-black-700">{ relTime(sess.Meta.LastActive) }</span>
-				if lc, ok := vm.Lifecycle[id]; ok && lc.Lifecycle != "" && lc.Lifecycle != "killed" {
-					<span class={
-						"inline-block h-1.5 w-1.5 rounded-full",
-						templ.KV("bg-green-500", lc.Lifecycle == "working"),
-						templ.KV("bg-amber-400", lc.Lifecycle == "spawning"),
-						templ.KV("bg-blue-400", lc.Lifecycle == "idle"),
-					}></span>
-				}
+				@statusDot(effectiveStatus(vm.Lifecycle[id].Lifecycle, string(sess.Meta.Status)))
 			</div>
 		</div>
 		<div data-row-action>
@@ -303,7 +296,7 @@ templ sessionDetailHeader(vm SessionDetailVM) {
 			</a>
 			<div class="flex flex-wrap items-center gap-2">
 				<h1 class="font-mono text-sm font-semibold text-black-900 dark:text-white-100 break-all">{ vm.Session.ID }</h1>
-				@lifecycleBadge(vm.Lifecycle, vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
+				@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
 			</div>
 			<div class="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
 				if vm.Session.Meta.Workspace != "" {

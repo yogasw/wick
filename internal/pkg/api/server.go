@@ -308,6 +308,9 @@ func NewServer() *Server {
 	agentsFactory.BypassPermissionsLoader = func() bool {
 		return configsSvc.GetOwned("agents", "bypass_permissions") == "true"
 	}
+	agentsFactory.SystemPromptLoader = func() string {
+		return configsSvc.GetOwned("agents", "system_prompt")
+	}
 
 	// syncSharedSpec rewrites the shared spec.json on every spawn so
 	// allowed_cmds edits take effect without a server restart.
@@ -333,10 +336,12 @@ func NewServer() *Server {
 			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}
 	}
+	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent:    maxConc,
 		IdleTimeout:      time.Duration(idleSec) * time.Second,
 		KillAfterIdle:    time.Duration(killAfterIdleSec) * time.Second,
+		PreemptIdle:      preemptIdle,
 		Layout:           agentsLayout,
 		Factory:          agentsFactory,
 		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,

@@ -4,7 +4,6 @@
 package providerstorage
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -20,14 +19,11 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
-	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
 var globalSyncMgr *providersync.Manager
-var globalConfigs *configs.Service
-
 // SetSyncManager injects the shared Manager instance.
 func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
 
@@ -41,7 +37,7 @@ func Register(r tool.Router) {
 	r.POST("/{id}/retention", setRetention)
 	r.DELETE("/{id}", deleteFile)
 	r.POST("/upload", uploadFile)
-	r.POST("/sync", syncNow)
+	r.POST("/sync-now", syncNow)
 	// Sync sources (Settings tab)
 	r.GET("/sources", listSources)
 	r.POST("/sources", saveSource)
@@ -51,8 +47,7 @@ func Register(r tool.Router) {
 	r.GET("/sources/home", homeDirHandler)
 	r.GET("/sources/detect", detectPaths)
 	r.GET("/sources/presets", listPresets)
-	r.GET("/settings", getSettings)
-	r.POST("/settings", saveSettings)
+	r.POST("/restore-now", restoreNow)
 	// Adjacency-list explorer
 	r.GET("/tree", treeChildren)
 	r.GET("/roots", listRoots)
@@ -77,13 +72,13 @@ func listFiles(c *tool.Ctx) {
 	instanceFilter := c.Query("instance")
 
 	type fileRow struct {
-		ID           uint   `json:"id"`
-		ProviderType string `json:"provider_type"`
-		InstanceName string `json:"instance_name"`
-		RelPath      string `json:"rel_path"`
-		Size         int    `json:"size"`
-		SyncedAt     string `json:"synced_at"`
-		RetentionDays int   `json:"retention_days"`
+		ID            uint   `json:"id"`
+		ProviderType  string `json:"provider_type"`
+		InstanceName  string `json:"instance_name"`
+		RelPath       string `json:"rel_path"`
+		Size          int    `json:"size"`
+		SyncedAt      string `json:"synced_at"`
+		RetentionDays int    `json:"retention_days"`
 	}
 
 	out := make([]fileRow, 0, len(rows))
@@ -581,36 +576,12 @@ func listRoots(c *tool.Ctx) {
 
 // ── Global Settings ───────────────────────────────────────────────────
 
-const defaultSyncIntervalSeconds = 5
-
-func getSettings(c *tool.Ctx) {
-	syncInterval := defaultSyncIntervalSeconds
-	if globalConfigs != nil {
-		if v := globalConfigs.GetOwned("provider-storage", "sync_interval_seconds"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				syncInterval = n
-			}
-		}
-	}
-	c.JSON(http.StatusOK, map[string]any{"sync_interval_seconds": syncInterval})
-}
-
-func saveSettings(c *tool.Ctx) {
-	if globalConfigs == nil {
-		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "configs not initialised"})
+func restoreNow(c *tool.Ctx) {
+	if globalSyncMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
 		return
 	}
-	var body struct {
-		SyncIntervalSeconds int `json:"sync_interval_seconds"`
-	}
-	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if body.SyncIntervalSeconds <= 0 {
-		body.SyncIntervalSeconds = defaultSyncIntervalSeconds
-	}
-	if err := globalConfigs.SetOwned(context.Background(), "provider-storage", "sync_interval_seconds", strconv.Itoa(body.SyncIntervalSeconds)); err != nil {
+	if err := globalSyncMgr.RestoreAll(c.Context()); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

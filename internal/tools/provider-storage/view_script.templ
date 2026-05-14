@@ -233,7 +233,7 @@ templ storageScript() {
 		}
 
 		function syncNow() {
-			fetch(BASE + '/sync', {method:'POST'}).then(r => r.json()).then(d => {
+			fetch(BASE + '/sync-now', {method:'POST'}).then(r => r.json()).then(d => {
 				if (d.error) { toast('Error: ' + d.error, 'error'); return; }
 				toast('Synced ' + d.synced + ' source(s).');
 				if (document.getElementById('view-explorer').style.display !== 'none') {
@@ -413,6 +413,26 @@ templ storageScript() {
 			fetch(BASE + '/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sync_interval_seconds:interval})})
 				.then(r => r.json()).then(d => { if (d.error) { toast('Error: ' + d.error, 'error'); return; } toast('Settings saved.'); })
 				.catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function triggerSyncNow() {
+			const msg = document.getElementById('settings-trigger-msg');
+			msg.textContent = 'Syncing…'; msg.classList.remove('hidden');
+			fetch(BASE + '/sync-now', {method:'POST'}).then(r => r.json()).then(d => {
+				if (d.error) { msg.textContent = 'Error: ' + d.error; return; }
+				msg.textContent = 'Synced ' + (d.synced || 0) + ' source(s).';
+				setTimeout(() => msg.classList.add('hidden'), 3000);
+			}).catch(e => { msg.textContent = 'Error: ' + e; });
+		}
+
+		function triggerRestoreNow() {
+			const msg = document.getElementById('settings-trigger-msg');
+			msg.textContent = 'Restoring…'; msg.classList.remove('hidden');
+			fetch(BASE + '/restore-now', {method:'POST'}).then(r => r.json()).then(d => {
+				if (d.error) { msg.textContent = 'Error: ' + d.error; return; }
+				msg.textContent = 'Restore complete.';
+				setTimeout(() => msg.classList.add('hidden'), 3000);
+			}).catch(e => { msg.textContent = 'Error: ' + e; });
 		}
 
 		function runDetect() {

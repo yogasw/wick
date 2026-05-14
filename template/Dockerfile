@@ -62,10 +62,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the Claude Code CLI so the running container can invoke AI-assisted
-# operations without a separate sidecar or host dependency.
-RUN curl -fsSL https://claude.ai/install.sh | bash
-
 # Copy cross-compiled binaries from the build stage.
 #   app      — the main wick application server
 #   app-gate — sidecar reverse-proxy / auth gateway (may be absent in forks)
@@ -87,6 +83,12 @@ USER app
 
 # Default working directory for runtime file operations (projects, configs, etc.)
 WORKDIR /home/app
+
+ENV PATH="/home/app/.local/bin:${PATH}"
+
+# Install the Claude Code CLI so the running container can invoke AI-assisted
+# operations without a separate sidecar or host dependency.
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # gotty default port. Expose if you need browser terminal access.
 EXPOSE 9425

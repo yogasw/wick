@@ -86,4 +86,9 @@ type SpawnOptions struct {
 	// factory (sibling / embed / PATH) and forwarded so each provider
 	// sub-package doesn't have to repeat the resolution dance.
 	GateBinary string
+
+	// Preset is the system prompt content injected via --append-system-prompt
+	// when non-empty. Each provider spawner decides how to pass it to the
+	// underlying CLI. The value is never written to spawn logs — Argv() strips it.
+	Preset string
 }

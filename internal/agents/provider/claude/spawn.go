@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/capability"
@@ -119,6 +120,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)
+	if opt.Preset != "" {
+		args = append(args, "--append-system-prompt", opt.Preset)
+	}
 	if opt.ResumeID != "" {
 		args = append(args, "--resume", opt.ResumeID)
 	}
@@ -286,9 +290,31 @@ func (p *process) Argv() []string {
 	if p.cmd == nil || len(p.cmd.Args) <= 1 {
 		return nil
 	}
-	out := make([]string, len(p.cmd.Args)-1)
-	copy(out, p.cmd.Args[1:])
+	return maskSensitiveArgs(p.cmd.Args[1:])
+}
+
+// maskSensitiveArgs truncates the value of --append-system-prompt to the
+// first 5 words followed by "…" so logs show a readable preview without
+// exposing the full preset content.
+func maskSensitiveArgs(argv []string) []string {
+	out := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		if argv[i] == "--append-system-prompt" && i+1 < len(argv) {
+			out = append(out, argv[i], truncate5Words(argv[i+1]))
+			i++
+			continue
+		}
+		out = append(out, argv[i])
+	}
 	return out
+}
+
+func truncate5Words(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) <= 5 {
+		return s
+	}
+	return strings.Join(fields[:5], " ") + "…"
 }
 
 func (p *process) Kill() error {

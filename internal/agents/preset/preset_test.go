@@ -80,6 +80,19 @@ func TestEnsureDefault(t *testing.T) {
 	}
 }
 
+func TestDeleteDefaultBlocked(t *testing.T) {
+	layout := newLayout(t)
+	if err := EnsureDefault(layout); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(layout, DefaultName); err == nil {
+		t.Fatal("deleting default preset should error")
+	}
+	if _, err := Load(layout, DefaultName); err != nil {
+		t.Fatalf("default still present after blocked delete: %v", err)
+	}
+}
+
 func TestInvalidName(t *testing.T) {
 	layout := newLayout(t)
 	if err := Create(layout, "../escape", "x"); err == nil {

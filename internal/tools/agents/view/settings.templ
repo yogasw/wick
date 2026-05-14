@@ -10,14 +10,21 @@ type SettingsVM struct {
 	Layout AgentsLayoutVM
 	Base   string
 	Rows   []entity.Config
+	// SystemPromptCurrent is the live value of `system_prompt`.
+	SystemPromptCurrent string
+	// SystemPromptDefault is the baseline shipped with wick. Rendered as
+	// the target of the Reset button.
+	SystemPromptDefault string
 }
 
-// SettingsPage renders agents settings inside AgentsLayout, reusing
-// the manager ConfigsTable component. POSTs go to the existing
-// /manager/tools/agents/configs/{key} endpoint.
+// SettingsPage renders agents settings inside AgentsLayout. The
+// system_prompt row is broken out into its own panel so the textarea
+// can render full-height and carry a Reset-to-default button.
+// Remaining rows fall back to the generic ConfigsTable. POSTs target
+// /manager/tools/agents/configs/{key}.
 templ SettingsPage(vm SettingsVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="max-w-3xl space-y-6">
+		<div class="space-y-6">
 			<div>
 				<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Settings</h1>
 				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
@@ -25,6 +32,76 @@ templ SettingsPage(vm SettingsVM) {
 				</p>
 			</div>
 			@managerview.ConfigsTable(vm.Rows, "/manager/tools/agents/configs", "", "")
+			@systemPromptPanel(vm.SystemPromptCurrent, vm.SystemPromptDefault)
 		</div>
 	}
+}
+
+// systemPromptPanel renders the dedicated editor for the global
+// system-prompt fragment. The textarea autosaves through the same
+// `/manager/tools/agents/configs/system_prompt` endpoint the generic
+// table uses; the Reset button stuffs the embedded default into the
+// textarea and triggers the same save path.
+templ systemPromptPanel(current, defaultText string) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			<div class="flex items-center gap-2">
+				<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">system_prompt</span>
+				<span data-sysprompt-status class="ml-auto text-[10px] transition-all"></span>
+			</div>
+			<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+				Global interaction rules appended to every preset's system prompt on spawn. Adds to the preset — never replaces it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow.
+			</p>
+		</div>
+		<div class="p-5 space-y-3">
+			<textarea
+				id="sysprompt-textarea"
+				data-sysprompt-input
+				rows="14"
+				class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs font-mono text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none resize-y"
+			>{ current }</textarea>
+			<div class="flex items-center justify-between gap-3">
+				<p class="text-[11px] text-black-700 dark:text-black-600">Autosaves while you type.</p>
+				<button
+					type="button"
+					data-sysprompt-reset
+					class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+				>Reset to default</button>
+			</div>
+		</div>
+		<textarea data-sysprompt-default class="hidden" aria-hidden="true">{ defaultText }</textarea>
+		<script>
+		(function(){
+			var ta=document.querySelector('[data-sysprompt-input]');
+			var btn=document.querySelector('[data-sysprompt-reset]');
+			var status=document.querySelector('[data-sysprompt-status]');
+			var defNode=document.querySelector('[data-sysprompt-default]');
+			if(!ta||!btn||!defNode)return;
+			var defaultText=defNode.value||'';
+			var endpoint='/manager/tools/agents/configs/system_prompt';
+
+			function setStatus(state){
+				if(!status)return;
+				if(state==='saving'){status.textContent='saving…';status.style.color='#A0A0A0';}
+				else if(state==='saved'){status.textContent='✓ saved';status.style.color='#288C7A';setTimeout(function(){status.textContent='';},2000);}
+				else if(state==='error'){status.textContent='✗ failed';status.style.color='#EB5757';}
+			}
+			function save(val){
+				setStatus('saving');
+				var fd=new FormData();fd.append('value',val);
+				fetch(endpoint,{method:'POST',body:fd,redirect:'follow'})
+					.then(function(r){if(!r.ok)throw new Error(r.status);setStatus('saved');})
+					.catch(function(){setStatus('error');});
+			}
+			var t;
+			ta.addEventListener('input',function(){clearTimeout(t);t=setTimeout(function(){save(ta.value);},800);});
+			btn.addEventListener('click',function(){
+				if(ta.value===defaultText){return;}
+				if(ta.value.trim()!==''&&!confirm('Replace current rules with the default?'))return;
+				ta.value=defaultText;
+				save(defaultText);
+			});
+		})();
+		</script>
+	</div>
 }

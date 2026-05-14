@@ -277,6 +277,101 @@ func contains(s, sub string) bool {
 	return false
 }
 
+func TestPreemptIdleGrantsQueuedSession(t *testing.T) {
+	// max=1 with PreemptIdle on. A finishes its turn (Done) → lifecycle Idle
+	// but subprocess stays alive. B Send arrives — preempt should kick A
+	// out without waiting for the idle TTL. IdleTimeout deliberately long
+	// (5s) so passing the 1s waitFor below proves the slot was preempted,
+	// not freed by the TTL.
+	sp := &scriptedSpawner{Lines: [][]string{
+		{
+			`{"type":"system","subtype":"init","session_id":"a"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"hi"}`,
+		},
+		{
+			`{"type":"system","subtype":"init","session_id":"b"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+		},
+	}}
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+	p := New(PoolConfig{
+		MaxConcurrent: 1,
+		IdleTimeout:   5 * time.Second,
+		PreemptIdle:   true,
+		Layout:        layout,
+		Factory:       factory,
+	})
+	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
+
+	setupSession(t, layout, "A")
+	setupSession(t, layout, "B")
+
+	if err := p.Send(context.Background(), "A", "default", "ui", "user", "first"); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for A's Done event to apply → lifecycle Idle.
+	waitFor(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, e := range p.active {
+			if e.sessID == "A" && e.state != nil && e.state.Lifecycle().String() == "idle" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+
+	if err := p.Send(context.Background(), "B", "default", "ui", "user", "second"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, 1*time.Second)
+}
+
+func TestPreemptDisabledRespectsIdleTTL(t *testing.T) {
+	// Same setup as above but PreemptIdle off. B should NOT be spawned
+	// within 1s — only when A's idle TTL fires would the slot free.
+	sp := &scriptedSpawner{Lines: [][]string{
+		{
+			`{"type":"system","subtype":"init","session_id":"a"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"hi"}`,
+		},
+		{`{"type":"system","subtype":"init","session_id":"b"}`},
+	}}
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+	p := New(PoolConfig{
+		MaxConcurrent: 1,
+		IdleTimeout:   5 * time.Second,
+		PreemptIdle:   false,
+		Layout:        layout,
+		Factory:       factory,
+	})
+	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
+
+	setupSession(t, layout, "A")
+	setupSession(t, layout, "B")
+	_ = p.Send(context.Background(), "A", "default", "ui", "user", "first")
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 1 }, 2*time.Second)
+	_ = p.Send(context.Background(), "B", "default", "ui", "user", "second")
+
+	time.Sleep(800 * time.Millisecond)
+	if got := sp.callsSnapshot(); got >= 2 {
+		t.Fatalf("preempt disabled but B spawned anyway: calls=%d", got)
+	}
+}
+
 func TestStopShutsDownActives(t *testing.T) {
 	sp := &scriptedSpawner{Lines: [][]string{{}}}
 	p, layout := newPool(t, 1, sp)

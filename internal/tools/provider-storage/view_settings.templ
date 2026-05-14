@@ -2,19 +2,21 @@ package providerstorage
 
 templ storageSettingsPanel() {
 	<div id="panel-settings" style="display:none">
-		<!-- Global settings -->
-		<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md p-5 mb-5">
-			<div class="flex flex-col gap-2">
-				<div>
-					<p class="text-[0.8125rem] font-medium text-black-900 dark:text-white-100">Sync to DB interval (s)</p>
-					<p class="text-[0.75rem] text-black-600 dark:text-black-500 mt-0.5">Files are synced from disk → DB on this interval. On restore, DB content is written back to disk at startup.</p>
-				</div>
-				<div class="flex items-center gap-2">
-					<input type="number" id="settings-sync-interval" min="1" value="5" class="w-24 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
-					<button onclick="saveGlobalSettings()" class="inline-flex items-center rounded-lg bg-green-500 px-3 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-prog-300">Save</button>
-				</div>
+		<!-- Manual triggers -->
+		<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm mb-5 px-4 py-3 flex items-center justify-between">
+			<p class="text-xs text-black-700 dark:text-black-600">Trigger sync disk → DB or restore DB → disk now.</p>
+			<div class="flex items-center gap-2 shrink-0">
+				<button onclick="triggerSyncNow()" class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+					Sync Now
+				</button>
+				<button onclick="triggerRestoreNow()" class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+					Restore Now
+				</button>
 			</div>
 		</div>
+		<div id="settings-trigger-msg" class="hidden mb-5 px-4 py-2 text-xs text-black-800 dark:text-black-500 bg-white-200 dark:bg-navy-800 rounded-xl"></div>
 		<!-- Configured Sources -->
 		<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md p-5">
 			<div class="flex items-center justify-between mb-3">

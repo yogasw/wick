@@ -35,7 +35,7 @@ After boot, head to `/tools/agents`.
 | **Overview** | Pool stats (active / max / queue), running list, recent sessions. |
 | **Sessions** | List, open, delete sessions. Detail tabs: Conversation, Commands (gate audit), Raw events. Composer at the bottom posts a new message. |
 | **Workspaces** | Create / delete workspaces. New = empty managed folder unless pointed at a custom path. |
-| **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. |
+| **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no workspace (or the workspace has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default workspace). Web UI is always-on. |
 
@@ -101,6 +101,8 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `BypassPermissions` | `false` | Pass `--permission-mode bypassPermissions` to Claude. Turn on if Claude is prompting for permission in Slack / HTTP sessions and you don't have a gate. |
 | `PublicURL` | _(empty)_ | Base URL of this wick instance. Used to build `/dashboard` meta-command links. |
 | `AutoRescan` | `true` | Re-probe provider binaries when cached version is older than 24h. Off = manual Rescan only. |
+| `PreemptIdle` | `true` | When the pool is full and a new session is queued, kill the longest-idle active subprocess to free its slot instead of waiting out the idle TTL. Killed sessions resume via `--resume` on their next message. A 1 s background loop keeps retrying preemption while the queue is non-empty so a session that goes idle after a queued send still releases its slot promptly. |
+| `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/config/system_prompt_default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/config/system_prompt_default.md). |
 
 ## Diagnostics
 

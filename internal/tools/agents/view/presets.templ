@@ -26,10 +26,11 @@ templ PresetsPage(vm PresetsVM) {
 							/>
 						</div>
 						<div>
-							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Instructions (agent.md body)</label>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">System prompt</label>
 							<textarea
 								name="body"
 								rows="8"
+								maxlength="10000"
 								placeholder="You are a code reviewer. Focus on clarity, performance, and correctness…"
 								class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none resize-y"
 							></textarea>
@@ -79,10 +80,11 @@ templ PresetEditor(vm PresetDetailVM) {
 			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-5">
 				<form data-preset-form action={ templ.SafeURL(vm.Base + "/presets/" + vm.Name) } class="space-y-4">
 					<div>
-						<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Instructions (agent.md body)</label>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">System prompt</label>
 						<textarea
 							name="body"
 							rows="20"
+							maxlength="10000"
 							class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none resize-y"
 						>{ vm.Body }</textarea>
 					</div>

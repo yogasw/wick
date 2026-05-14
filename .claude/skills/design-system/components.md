@@ -514,3 +514,81 @@ val := c.Cfg("endpoints")  // val is raw JSON — useless as a plain string
 var rows []map[string]string
 _ = json.Unmarshal([]byte(c.Cfg("endpoints")), &rows)
 ```
+
+---
+
+## Toggle Switch
+
+Custom toggle switch registered as Tailwind plugin components (`.toggle-track` / `.toggle-knob`) in `tailwind.config.js`. JS-driven state via `aria-checked` + `is-on` class.
+
+### Usage (templ)
+
+```html
+<div id="my-toggle" role="switch" aria-checked="false"
+     onclick="toggleSwitch(this)"
+     class="toggle-track">
+  <span class="toggle-knob"></span>
+</div>
+```
+
+### JS helpers (global, in view_script.templ)
+
+```js
+// Toggle on click
+function toggleSwitch(el) {
+    const on = el.getAttribute('aria-checked') !== 'true';
+    setSwitchValue(el, on);
+}
+
+// Set state programmatically (e.g. from API response)
+function setSwitchValue(el, on) {
+    el.setAttribute('aria-checked', on ? 'true' : 'false');
+    el.classList.toggle('is-on', on);
+}
+
+// Read state
+const on = el.getAttribute('aria-checked') === 'true';
+```
+
+### Tokens
+
+| State | Color |
+|---|---|
+| Off | `#A0A0A0` (neutral grey) |
+| On | `#27B199` (`green-500`) |
+| Knob | `#ffffff` (always white) |
+
+### Tailwind plugin (tailwind.config.js)
+
+```js
+function({ addComponents }) {
+  addComponents({
+    '.toggle-track': {
+      position: 'relative', display: 'inline-block',
+      width: '36px', height: '20px', borderRadius: '9999px',
+      backgroundColor: '#A0A0A0', transition: 'background-color 200ms',
+      cursor: 'pointer', flexShrink: '0',
+    },
+    '.toggle-track.is-on': { backgroundColor: '#27B199' },
+    '.toggle-knob': {
+      position: 'absolute', top: '2px', left: '2px',
+      width: '16px', height: '16px', borderRadius: '9999px',
+      backgroundColor: '#ffffff', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.2)',
+      transition: 'transform 200ms',
+    },
+    '.toggle-track.is-on .toggle-knob': { transform: 'translateX(16px)' },
+  });
+}
+```
+
+### Common mistakes
+
+```html
+<!-- WRONG: using Tailwind peer trick — peer-checked:* classes not guaranteed in purged CSS -->
+<label><input type="checkbox" class="sr-only peer"/><div class="peer-checked:bg-green-500 ..."></div></label>
+
+<!-- RIGHT: use .toggle-track + JS setSwitchValue() -->
+<div class="toggle-track" role="switch" aria-checked="false" onclick="toggleSwitch(this)">
+  <span class="toggle-knob"></span>
+</div>
+```
