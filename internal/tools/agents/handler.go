@@ -202,6 +202,8 @@ func Register(r tool.Router) {
 	r.POST("/workflows/edit/{slug}/discard", discardWorkflowDraft)
 	r.POST("/workflows/edit/{slug}/toggle", toggleWorkflow)
 	r.POST("/workflows/edit/{slug}/run", runWorkflowNow)
+	r.POST("/workflows/edit/{slug}/exec-node", execNodeStep)
+	r.GET("/workflows/edit/{slug}/runs/{runID}/state", workflowRunStateAPI)
 	r.POST("/workflows/edit/{slug}/delete", deleteWorkflow)
 	r.GET("/workflows/edit/{slug}/runs/{runID}", workflowRunDetail)
 	r.GET("/workflows/api/registry", workflowRegistryAPI)

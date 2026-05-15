@@ -5,12 +5,29 @@ package workflow
 // applied via the wrap div.
 templ EditorCanvas(vm EditorVM) {
 	<div class="flex-1 relative bg-white-200 dark:bg-navy-800" id="wf-canvas-wrap">
-		<div class="wf-canvas-controls">
+		// Zoom + auto-layout controls — bottom-left so they don't fight
+		// the top-right Add-node button and the bottom-centre Execute
+		// pill for screen real estate.
+		<div class="wf-canvas-controls wf-canvas-controls-bl">
 			<button type="button" id="wf-zoom-in" title="Zoom in">+</button>
 			<button type="button" id="wf-zoom-out" title="Zoom out">−</button>
 			<button type="button" id="wf-zoom-reset" title="Reset view">⤢</button>
 			<button type="button" id="wf-layout" title="Auto-format (layered L→R)">⇒</button>
 		</div>
+		// Add-node trigger top-right — opens the palette drawer
+		// (which now lives as a left slide-in modal). Pattern mirrors
+		// n8n's floating + button.
+		<button type="button" id="wf-palette-open" class="wf-canvas-add" title="Add node">
+			<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+		</button>
 		<div id="wf-canvas"></div>
+		// Floating "Execute workflow" pill at the canvas bottom — n8n
+		// pattern: keeps the run trigger reachable from anywhere in the
+		// graph without scrolling up to the toolbar. Mirrors the toolbar
+		// Run Now form's submit handler (no duplicate logic).
+		<button type="button" id="wf-execute-pill" class="wf-execute-pill" title="Run the full workflow (Ctrl+Enter)">
+			<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>
+			Execute workflow
+		</button>
 	</div>
 }

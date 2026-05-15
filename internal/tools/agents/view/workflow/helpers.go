@@ -21,7 +21,7 @@ func runStatusClass(status string) string {
 	case "success":
 		return "text-emerald-700 font-semibold"
 	case "failed":
-		return "text-rose-700 font-semibold"
+		return "text-red-700 font-semibold"
 	case "running":
 		return "text-amber-700 font-semibold"
 	}

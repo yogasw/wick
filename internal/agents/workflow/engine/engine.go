@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -22,6 +23,11 @@ import (
 // Engine walks a workflow graph and dispatches each node to its
 // Executor. Caller wires concrete executors via Register; the engine
 // stays decoupled from individual node impls.
+//
+// OnEvent is an optional broadcast hook fired after every event hits
+// the StateStore. The UI subscribes via SSE to paint per-node
+// progress without polling state.json. Set via SetEventHook so
+// existing callers stay source-compatible.
 type Engine struct {
 	Layout     config.Layout
 	Service    service.Service
@@ -29,6 +35,7 @@ type Engine struct {
 	Executors  map[workflow.NodeType]workflow.Executor
 	Now        func() time.Time
 	IDGen      func() string
+	OnEvent    func(slug, runID string, ev workflow.RunEvent)
 }
 
 // New builds a bare engine — no executors registered. Caller must
@@ -49,9 +56,33 @@ func (e *Engine) Register(t workflow.NodeType, ex workflow.Executor) {
 	e.Executors[t] = ex
 }
 
+// SetEventHook installs the broadcast callback. Fires after each
+// StateStore.AppendEvent so callers see persistent + ephemeral
+// payloads in lockstep.
+func (e *Engine) SetEventHook(fn func(slug, runID string, ev workflow.RunEvent)) {
+	e.OnEvent = fn
+}
+
+// emit persists the event then fires the broadcast hook. Centralised
+// so every event call site picks up SSE for free.
+func (e *Engine) emit(slug, runID string, ev workflow.RunEvent) {
+	_ = e.StateStore.AppendEvent(slug, runID, ev)
+	if e.OnEvent != nil {
+		e.OnEvent(slug, runID, ev)
+	}
+}
+
 // Run starts a fresh run. Blocking; returns the final state.
+//
+// Caller may pre-assign a run ID via evt.Payload["run_id"] so the
+// HTTP handler can return the ID to the browser before Run starts
+// — letting the client SSE-subscribe in time to catch the first
+// events. Falls back to IDGen when the payload doesn't supply one.
 func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Event) (workflow.RunState, error) {
-	runID := e.IDGen()
+	runID, _ := evt.Payload["run_id"].(string)
+	if runID == "" {
+		runID = e.IDGen()
+	}
 	entry := pickEntry(w, evt)
 	st := workflow.RunState{
 		RunID:      runID,
@@ -79,8 +110,12 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		RunID:       runID,
 		NodeOutputs: map[string]workflow.NodeOutput{},
 	}
-	if err := e.StateStore.AppendEvent(w.Slug, runID, workflow.RunEvent{Event: workflow.EventWorkflowStarted, Data: map[string]any{"trigger": evt.Type}}); err != nil {
+	startEv := workflow.RunEvent{Event: workflow.EventWorkflowStarted, Data: map[string]any{"trigger": evt.Type}}
+	if err := e.StateStore.AppendEvent(w.Slug, runID, startEv); err != nil {
 		return st, err
+	}
+	if e.OnEvent != nil {
+		e.OnEvent(w.Slug, runID, startEv)
 	}
 	if err := e.StateStore.Save(w.Slug, runID, st); err != nil {
 		return st, err
@@ -99,10 +134,10 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		if st.Error == nil {
 			st.Error = &workflow.NodeError{Message: err.Error()}
 		}
-		_ = e.StateStore.AppendEvent(w.Slug, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
+		e.emit(w.Slug, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
 	} else {
 		st.Status = workflow.StatusSuccess
-		_ = e.StateStore.AppendEvent(w.Slug, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
+		e.emit(w.Slug, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
 	}
 	end := e.Now()
 	st.EndedAt = &end
@@ -140,25 +175,28 @@ func (e *Engine) walk(ctx context.Context, w workflow.Workflow, start string, rc
 				queue = append(queue, head)
 				continue
 			}
+			started := e.Now()
 			out, err := runMerge(n, rc)
 			if err != nil {
 				return e.failNode(w.Slug, st, n, err)
 			}
-			e.recordSuccess(w.Slug, st, rc, n, out)
+			e.recordSuccess(w.Slug, st, rc, n, out, e.Now().Sub(started).Milliseconds())
 			queue = append(queue, e.nextNodes(w, n, out)...)
 			continue
 		}
 
 		if n.Type == workflow.NodeParallel {
+			started := e.Now()
 			out, err := e.runParallel(ctx, w, n, rc)
 			if err != nil {
 				return e.failNode(w.Slug, st, n, err)
 			}
-			e.recordSuccess(w.Slug, st, rc, n, out)
+			e.recordSuccess(w.Slug, st, rc, n, out, e.Now().Sub(started).Milliseconds())
 			queue = append(queue, e.nextNodes(w, n, out)...)
 			continue
 		}
 
+		started := e.Now()
 		out, err := e.runOne(ctx, n, rc)
 		if err != nil {
 			handled := e.applyOnFailure(ctx, w, st, n, err, rc)
@@ -167,7 +205,7 @@ func (e *Engine) walk(ctx context.Context, w workflow.Workflow, start string, rc
 			}
 			return handled
 		}
-		e.recordSuccess(w.Slug, st, rc, n, out)
+		e.recordSuccess(w.Slug, st, rc, n, out, e.Now().Sub(started).Milliseconds())
 		queue = append(queue, e.nextNodes(w, n, out)...)
 	}
 	return nil
@@ -190,7 +228,7 @@ func (e *Engine) runOne(ctx context.Context, n workflow.Node, rc *workflow.RunCo
 	}
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		_ = e.StateStore.AppendEvent(rc.Workflow.Slug, rc.RunID, workflow.RunEvent{Event: workflow.EventNodeStarted, Node: n.ID})
+		e.emit(rc.Workflow.Slug, rc.RunID, workflow.RunEvent{Event: workflow.EventNodeStarted, Node: n.ID, Data: map[string]any{"type": string(n.Type)}})
 		out, err := exec.Execute(ctx, n, rc)
 		if err == nil {
 			return out, nil
@@ -207,16 +245,20 @@ func (e *Engine) runOne(ctx context.Context, n workflow.Node, rc *workflow.RunCo
 	return workflow.NodeOutput{}, lastErr
 }
 
-func (e *Engine) recordSuccess(slug string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput) {
+func (e *Engine) recordSuccess(slug string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput, latencyMs int64) {
 	rc.NodeOutputs[n.ID] = out
 	rc.Outputs[n.ID] = nodeOutputAsMap(out)
 	st.Completed = append(st.Completed, n.ID)
 	st.Outputs = rc.Outputs
 	st.UpdatedAt = e.Now()
-	_ = e.StateStore.AppendEvent(slug, st.RunID, workflow.RunEvent{
+	e.emit(slug, st.RunID, workflow.RunEvent{
 		Event: workflow.EventNodeCompleted,
 		Node:  n.ID,
-		Data:  map[string]any{"verdict": out.Verdict},
+		Data: map[string]any{
+			"verdict":    out.Verdict,
+			"latency_ms": latencyMs,
+			"output":     truncateForEvent(nodeOutputAsMap(out)),
+		},
 	})
 	_ = e.StateStore.Save(slug, st.RunID, *st)
 }
@@ -225,7 +267,7 @@ func (e *Engine) failNode(slug string, st *workflow.RunState, n workflow.Node, e
 	st.Failed = append(st.Failed, n.ID)
 	st.Error = &workflow.NodeError{Node: n.ID, Type: string(n.Type), Message: err.Error()}
 	st.UpdatedAt = e.Now()
-	_ = e.StateStore.AppendEvent(slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
+	e.emit(slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
 	_ = e.StateStore.Save(slug, st.RunID, *st)
 	return &workflow.ExecError{Node: n.ID, Type: n.Type, Wrapped: err}
 }
@@ -240,14 +282,14 @@ func (e *Engine) applyOnFailure(ctx context.Context, w workflow.Workflow, st *wo
 		return e.failNode(w.Slug, st, n, err)
 	case workflow.FailSkip:
 		st.Skipped = append(st.Skipped, n.ID)
-		_ = e.StateStore.AppendEvent(w.Slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeSkipped, Node: n.ID, Data: map[string]any{"reason": err.Error()}})
+		e.emit(w.Slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeSkipped, Node: n.ID, Data: map[string]any{"reason": err.Error()}})
 		return nil
 	case workflow.FailFallback:
 		if n.Fallback == "" {
 			return e.failNode(w.Slug, st, n, fmt.Errorf("on_failure=fallback but fallback is empty: %w", err))
 		}
 		st.Failed = append(st.Failed, n.ID)
-		_ = e.StateStore.AppendEvent(w.Slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error(), "fallback": n.Fallback}})
+		e.emit(w.Slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error(), "fallback": n.Fallback}})
 		_ = e.StateStore.Save(w.Slug, st.RunID, *st)
 		st.Current = append(st.Current, n.Fallback)
 		return nil
@@ -466,6 +508,28 @@ func extractSecrets(schema []workflow.EnvField, vals map[string]string) map[stri
 		}
 	}
 	return out
+}
+
+// truncateForEvent caps any payload bound for an SSE/event-store
+// event so a single noisy node can't blow up subscriber buffers.
+// JSON-encodes the value, slices to maxEventPayload bytes, and
+// re-unmarshals when it fits or returns a string preview otherwise.
+const maxEventPayload = 4096
+
+func truncateForEvent(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	if len(b) <= maxEventPayload {
+		return v
+	}
+	preview := string(b[:maxEventPayload])
+	return map[string]any{
+		"_truncated": true,
+		"_size":      len(b),
+		"preview":    preview,
+	}
 }
 
 // SortedKeys is a small util for stable test output (kept here so we

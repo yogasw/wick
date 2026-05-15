@@ -311,10 +311,38 @@
   };
   let selectedID = null;
 
-  editor.on('nodeSelected', (id) => { selectedID = id; showInspectorFor(id); });
-  editor.on('nodeUnselected', () => { selectedID = null; hideInspector(); });
+  // Single click on a node only tracks selection — it does NOT open
+  // the modal. Modal opens on double-click or right-click (matches
+  // n8n's interaction model: clicking nodes to move/connect them
+  // shouldn't pop a heavy debug shell every time).
+  editor.on('nodeSelected', (id) => { selectedID = id; });
+  editor.on('nodeUnselected', () => { selectedID = null; });
   editor.on('nodeRemoved', () => { selectedID = null; hideInspector(); refreshOutputRefs(); });
   editor.on('connectionCreated', () => refreshOutputRefs());
+
+  // Open inspector on double-click. Drawflow doesn't expose a
+  // dblclick event but every node lives at #node-<numeric-id>, so we
+  // delegate on the canvas wrapper and pull the id off the closest
+  // .drawflow-node ancestor.
+  canvasEl.addEventListener('dblclick', (e) => {
+    const nodeEl = e.target.closest('.drawflow-node');
+    if (!nodeEl) return;
+    const id = nodeEl.id.replace(/^node-/, '');
+    if (!id) return;
+    selectedID = id;
+    showInspectorFor(id);
+  });
+  // Right-click on a node also opens the inspector. Suppress the
+  // native browser context menu so the gesture stays clean.
+  canvasEl.addEventListener('contextmenu', (e) => {
+    const nodeEl = e.target.closest('.drawflow-node');
+    if (!nodeEl) return;
+    e.preventDefault();
+    const id = nodeEl.id.replace(/^node-/, '');
+    if (!id) return;
+    selectedID = id;
+    showInspectorFor(id);
+  });
 
   Object.values(f).forEach((el) => {
     if (!el || el === f.cases || el === f.refs) return;
@@ -911,13 +939,27 @@
   function showInspectorFor(id) {
     insEmpty.classList.add('hidden');
     insNode.classList.remove('hidden');
+    // Open the modal overlay — n8n debug shell. Closes via ESC, the
+    // X button, or clicking on the backdrop.
+    const modal = document.getElementById('wf-inspector');
+    if (modal) modal.classList.remove('hidden');
     const node = editor.getNodeFromId(id);
     if (!node) return;
     const d = node.data || {};
     const kind = d.type || 'shell';
     f.id.textContent = d.id || node.name;
-    f.type.textContent = kind;
+    // ins-type is a hidden input now (used by save), ins-type-head is
+    // the visible chip in the modal header.
+    if (f.type) f.type.value = kind;
+    const headType = document.getElementById('ins-type-head');
+    if (headType) headType.textContent = kind;
+    const headLabel = document.getElementById('ins-label-head');
+    if (headLabel) headLabel.textContent = node.name || d.id || kind;
     f.label.value = node.name || '';
+    // Hydrate the Input pane from the parent's last node output (if a
+    // run has happened) so the operator sees the upstream payload
+    // without having to mock it.
+    hydrateInputPane(node);
     Object.values(panels).forEach((p) => p.classList.add('hidden'));
     const inner = d.data || {};
     if (kind === 'classify' || kind === 'agent') {
@@ -959,6 +1001,45 @@
   function hideInspector() {
     insEmpty.classList.remove('hidden');
     insNode.classList.add('hidden');
+    const modal = document.getElementById('wf-inspector');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  // hydrateInputPane fills the left "INPUT" column from the parent
+  // node's last output (run history). If there's no parent or no
+  // history, shows the empty state with the "Execute previous nodes"
+  // affordance. `lastRunOutputs` is populated by handleRunEvent — it
+  // stays empty until the user actually runs the workflow.
+  function hydrateInputPane(node) {
+    const inputEmpty = document.getElementById('ins-input-empty');
+    const inputData = document.getElementById('ins-input-data');
+    if (!inputEmpty || !inputData) return;
+    const parentID = findParentNodeID(node);
+    const parentOutput = parentID && lastRunOutputs[parentID];
+    if (!parentID || !parentOutput) {
+      inputEmpty.classList.remove('hidden');
+      inputData.classList.add('hidden');
+      return;
+    }
+    inputEmpty.classList.add('hidden');
+    inputData.classList.remove('hidden');
+    const jsonEl = document.getElementById('ins-input-json');
+    const schemaEl = document.getElementById('ins-input-schema');
+    if (jsonEl) jsonEl.textContent = JSON.stringify(parentOutput, null, 2);
+    if (schemaEl) schemaEl.textContent = inferSchema(parentOutput);
+  }
+
+  function findParentNodeID(node) {
+    if (!node || !node.inputs) return null;
+    const slots = Object.values(node.inputs);
+    for (const slot of slots) {
+      const conns = (slot && slot.connections) || [];
+      for (const c of conns) {
+        const live = editor.drawflow.drawflow.Home.data[c.node];
+        if (live && live.data && live.data.id) return live.data.id;
+      }
+    }
+    return null;
   }
 
   function updateNodeData(id) {
@@ -1082,5 +1163,392 @@
   document.getElementById('wf-history-btn')?.addEventListener('click', () => {
     const runsTab = document.querySelector('[data-bottom-tab="runs"]');
     if (runsTab) runsTab.click();
+  });
+
+  // ── Run progress: flush-then-run + SSE per-node painting ─────
+  // The server-side handler returns 202 {run_id} immediately after
+  // enqueue (engine reads run_id from the Event payload so the
+  // browser can subscribe in time to catch the first node_started
+  // event). Flow on submit:
+  //   1) cancel any pending autosave + flush save synchronously
+  //   2) POST /run with Accept: application/json, expect 202 {run_id}
+  //   3) open EventSource on /stream?session=wf:<slug>, paint events
+  //   4) close stream on workflow_completed | workflow_failed
+  const runForm = document.getElementById('wf-run-form');
+  const runBtn = document.getElementById('wf-run-btn');
+  const logsList = document.getElementById('wf-logs-list');
+  const logsEmpty = document.getElementById('wf-logs-empty');
+  const logsCounter = document.getElementById('wf-logs-counter');
+  let runEventSource = null;
+  let currentRunID = null;
+  let runStarted = 0;
+  let logsByNode = {};
+  // lastRunOutputs caches { node_id: output_map } from node_completed
+  // events. The inspector's INPUT pane reads from this to render the
+  // parent's last output as the upstream payload preview.
+  const lastRunOutputs = {};
+  let logCount = 0;
+
+  function setNodeBadge(domID, state, latencyMs) {
+    const el = document.getElementById('node-' + domID);
+    if (!el) return;
+    el.classList.remove('wf-node-running', 'wf-node-success', 'wf-node-failed', 'wf-node-skipped');
+    el.classList.add('wf-node-' + state);
+    let badge = el.querySelector('.wf-status-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'wf-status-badge';
+      el.appendChild(badge);
+    }
+    if (state === 'running') badge.textContent = '⟳';
+    else if (state === 'success') badge.textContent = '✓';
+    else if (state === 'failed') badge.textContent = '✕';
+    else if (state === 'skipped') badge.textContent = '○';
+    badge.dataset.state = state;
+    if (typeof latencyMs === 'number') {
+      let lat = el.querySelector('.wf-latency');
+      if (!lat) {
+        lat = document.createElement('div');
+        lat.className = 'wf-latency';
+        el.appendChild(lat);
+      }
+      lat.textContent = latencyMs + 'ms';
+    }
+  }
+
+  function clearNodeBadges() {
+    document.querySelectorAll('.drawflow-node').forEach((el) => {
+      el.classList.remove('wf-node-running', 'wf-node-success', 'wf-node-failed', 'wf-node-skipped');
+      el.querySelector('.wf-status-badge')?.remove();
+      el.querySelector('.wf-latency')?.remove();
+    });
+  }
+
+  // Resolve workflow node id (data.id) → Drawflow numeric DOM id.
+  function domIDFromNodeID(nodeID) {
+    if (!nodeID) return null;
+    const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+    if (!live) return null;
+    for (const k in live) {
+      if (live[k].data && live[k].data.id === nodeID) return k;
+      if (String(k) === nodeID) return k;
+    }
+    return null;
+  }
+
+  function pushLogEntry(ev) {
+    if (!logsList) return;
+    if (logsEmpty) logsEmpty.classList.add('hidden');
+    const nodeID = ev.node || '(workflow)';
+    const wrap = document.createElement('div');
+    wrap.className = 'wf-log-row';
+    wrap.dataset.nodeId = nodeID;
+    const head = document.createElement('div');
+    head.className = 'wf-log-head';
+    const status = ev.event.replace('node_', '').replace('workflow_', '');
+    const latency = ev.data && typeof ev.data.latency_ms === 'number' ? ` · ${ev.data.latency_ms}ms` : '';
+    head.innerHTML = `<span class="wf-log-status wf-log-status-${status}">${status}</span> <span class="wf-log-node">${escapeHTML(nodeID)}</span><span class="wf-log-latency">${latency}</span>`;
+    wrap.appendChild(head);
+    if (ev.data && Object.keys(ev.data).length > 0) {
+      const body = document.createElement('pre');
+      body.className = 'wf-log-body hidden';
+      body.textContent = JSON.stringify(ev.data, null, 2);
+      head.style.cursor = 'pointer';
+      head.addEventListener('click', () => body.classList.toggle('hidden'));
+      wrap.appendChild(body);
+    }
+    logsList.appendChild(wrap);
+    logsByNode[nodeID] = wrap;
+    logCount++;
+    if (logsCounter) logsCounter.textContent = `(${logCount})`;
+    logsList.scrollTop = logsList.scrollHeight;
+  }
+
+  function openBottomLogs() {
+    const tab = document.querySelector('[data-bottom-tab="logs"]');
+    if (tab) tab.click();
+  }
+
+  function startRunStream(runID) {
+    if (runEventSource) {
+      try { runEventSource.close(); } catch (_) {}
+    }
+    const url = `${baseURL.replace(/\/workflows$/, '')}/stream?session=wf:${slug}`;
+    runEventSource = new EventSource(url);
+    runEventSource.addEventListener('agent', (e) => {
+      let payload;
+      try { payload = JSON.parse(e.data); } catch (_) { return; }
+      if (!payload || payload.type === undefined) return;
+      if (!payload.type.startsWith('wf_')) return;
+      let ev;
+      try { ev = JSON.parse(payload.data); } catch (_) { return; }
+      if (!ev || ev.run_id !== runID) return;
+      handleRunEvent(ev);
+    });
+    runEventSource.onerror = () => {
+      // EventSource auto-reconnects; rely on it. Surface a status only
+      // if we never received the workflow_completed event before close.
+      if (currentRunID === runID && runBtn?.dataset.state === 'running') {
+        setStatus('warn', '⚠ SSE reconnecting…');
+      }
+    };
+  }
+
+  function handleRunEvent(ev) {
+    pushLogEntry(ev);
+    const domID = domIDFromNodeID(ev.node);
+    if (ev.event === 'node_started' && domID) setNodeBadge(domID, 'running');
+    if (ev.event === 'node_completed' && domID) {
+      setNodeBadge(domID, 'success', ev.data && ev.data.latency_ms);
+      // Cache the output so the inspector's INPUT pane can render
+      // the upstream payload preview when the user selects a child
+      // node after the run completes.
+      if (ev.node && ev.data && ev.data.output) lastRunOutputs[ev.node] = ev.data.output;
+      // If the user is currently inspecting a node that just finished,
+      // refresh the input pane to reflect the new parent output.
+      if (selectedID) {
+        const node = editor.getNodeFromId(selectedID);
+        if (node) hydrateInputPane(node);
+      }
+    }
+    if (ev.event === 'node_failed' && domID) setNodeBadge(domID, 'failed');
+    if (ev.event === 'node_skipped' && domID) setNodeBadge(domID, 'skipped');
+    if (ev.event === 'workflow_completed' || ev.event === 'workflow_failed') finishRun(ev.event === 'workflow_completed');
+  }
+
+  function finishRun(ok) {
+    if (runEventSource) { try { runEventSource.close(); } catch (_) {} runEventSource = null; }
+    if (runBtn) {
+      runBtn.dataset.state = 'idle';
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Now';
+    }
+    const ms = Date.now() - runStarted;
+    setStatus(ok ? 'ok' : 'error', ok ? `✓ Run completed in ${ms}ms` : `✕ Run failed (${ms}ms)`);
+  }
+
+  async function flushAutosave() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      await autoSave();
+    }
+  }
+
+  runForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (runBtn) {
+      runBtn.dataset.state = 'running';
+      runBtn.disabled = true;
+      runBtn.textContent = '⟳ Running…';
+    }
+    setStatus('saving', '⟳ Saving + running…');
+    clearNodeBadges();
+    logsByNode = {};
+    logCount = 0;
+    if (logsList) logsList.innerHTML = '';
+    if (logsCounter) logsCounter.textContent = '(0)';
+    if (logsEmpty) logsEmpty.classList.add('hidden');
+    openBottomLogs();
+    runStarted = Date.now();
+    await flushAutosave();
+    try {
+      const resp = await fetch(`${baseURL}/edit/${slug}/run`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+      });
+      let data = null;
+      try { data = await resp.json(); } catch (_) {}
+      if (!resp.ok || !data || !data.ok) {
+        const msg = (data && data.error) || `HTTP ${resp.status}`;
+        setStatus('error', `✕ Run rejected: ${msg}`);
+        if (runBtn) { runBtn.disabled = false; runBtn.dataset.state = 'idle'; runBtn.textContent = 'Run Now'; }
+        return;
+      }
+      currentRunID = data.run_id;
+      setStatus('saving', `⟳ Running ${currentRunID.slice(0, 8)}…`);
+      startRunStream(currentRunID);
+    } catch (err) {
+      setStatus('error', `✕ Run failed: ${err.message || err}`);
+      if (runBtn) { runBtn.disabled = false; runBtn.dataset.state = 'idle'; runBtn.textContent = 'Run Now'; }
+    }
+  });
+
+  // ── Execute step (single-node iteration) ─────────────────────
+  const execBtn = document.getElementById('ins-exec-btn');
+  const execInput = document.getElementById('ins-exec-input');
+  const execStatus = document.getElementById('ins-exec-status');
+  const execOutput = document.getElementById('ins-exec-output');
+  const execJSON = document.getElementById('ins-exec-json');
+  const execSchema = document.getElementById('ins-exec-schema');
+  const execLatency = document.getElementById('ins-exec-latency');
+
+  document.querySelectorAll('[data-exec-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.execTab;
+      document.querySelectorAll('[data-exec-tab]').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('bg-green-500/15', on);
+        b.classList.toggle('text-green-700', on);
+        b.classList.toggle('font-medium', on);
+      });
+      if (execJSON) execJSON.classList.toggle('hidden', key !== 'json');
+      if (execSchema) execSchema.classList.toggle('hidden', key !== 'schema');
+    });
+  });
+
+  function inferSchema(v, depth) {
+    depth = depth || 0;
+    if (depth > 6) return '...';
+    if (v === null) return 'null';
+    if (Array.isArray(v)) {
+      if (v.length === 0) return 'array<unknown>';
+      return 'array<' + inferSchema(v[0], depth + 1) + '>';
+    }
+    if (typeof v === 'object') {
+      return '{\n' + Object.entries(v).map(([k, val]) => `  ${'  '.repeat(depth)}${k}: ${inferSchema(val, depth + 1)}`).join(',\n') + '\n' + '  '.repeat(depth) + '}';
+    }
+    return typeof v;
+  }
+
+  execBtn?.addEventListener('click', async () => {
+    if (!selectedID) return;
+    const live = editor.drawflow.drawflow.Home.data[selectedID];
+    if (!live) return;
+    let input = {};
+    const raw = (execInput?.value || '').trim();
+    if (raw) {
+      try { input = JSON.parse(raw); }
+      catch (err) {
+        if (execStatus) execStatus.textContent = '✕ Mock input is not valid JSON';
+        return;
+      }
+    }
+    if (execStatus) execStatus.textContent = '⟳ Executing…';
+    execBtn.disabled = true;
+    try {
+      const resp = await fetch(`${baseURL}/edit/${slug}/exec-node`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node: live, input: input }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        if (execStatus) execStatus.textContent = '✕ ' + (data.error || `HTTP ${resp.status}`);
+        if (execOutput) execOutput.classList.remove('hidden');
+        if (execJSON) execJSON.textContent = JSON.stringify(data, null, 2);
+        return;
+      }
+      if (execStatus) execStatus.textContent = '✓ Step completed';
+      if (execLatency) execLatency.textContent = `${data.latency_ms || 0}ms`;
+      document.getElementById('ins-output-empty')?.classList.add('hidden');
+      if (execOutput) execOutput.classList.remove('hidden');
+      if (execJSON) execJSON.textContent = JSON.stringify(data.output || {}, null, 2);
+      if (execSchema) execSchema.textContent = inferSchema(data.output || {});
+    } catch (err) {
+      if (execStatus) execStatus.textContent = '✕ ' + (err.message || err);
+    } finally {
+      execBtn.disabled = false;
+    }
+  });
+
+  // ── Inspector modal: close / ESC / tabs / shortcuts ───────────
+  const inspectorModal = document.getElementById('wf-inspector');
+  document.getElementById('ins-close')?.addEventListener('click', hideInspector);
+  document.querySelector('.wf-inspector-backdrop')?.addEventListener('click', hideInspector);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && inspectorModal && !inspectorModal.classList.contains('hidden')) {
+      hideInspector();
+    }
+  });
+
+  // Parameters / Settings tab switch inside the modal centre column.
+  document.querySelectorAll('[data-param-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.paramTab;
+      document.querySelectorAll('[data-param-tab]').forEach((b) => b.classList.toggle('is-on', b === btn));
+      document.querySelectorAll('[data-param-panel]').forEach((p) => p.classList.toggle('hidden', p.dataset.paramPanel !== key));
+    });
+  });
+
+  // Input pane JSON / Schema toggle.
+  document.querySelectorAll('[data-input-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.inputView;
+      document.querySelectorAll('[data-input-view]').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('bg-rose-500/20', on);
+        b.classList.toggle('text-rose-300', on);
+        b.classList.toggle('font-medium', on);
+      });
+      document.getElementById('ins-input-json')?.classList.toggle('hidden', key !== 'json');
+      document.getElementById('ins-input-schema')?.classList.toggle('hidden', key !== 'schema');
+    });
+  });
+
+  // Output-pane buttons in the empty state — "Execute step" mirrors
+  // the header button (single-node exec); "set mock data" jumps to
+  // the Settings tab so the user can paste a JSON payload.
+  document.getElementById('ins-output-exec')?.addEventListener('click', () => execBtn?.click());
+  document.getElementById('ins-output-mock')?.addEventListener('click', () => {
+    const settingsTab = document.querySelector('[data-param-tab="settings"]');
+    if (settingsTab) settingsTab.click();
+    document.getElementById('ins-exec-input')?.focus();
+  });
+  // "Execute previous nodes" — runs the full workflow so the parent's
+  // output becomes available for the input pane.
+  document.getElementById('ins-input-from-parent')?.addEventListener('click', () => {
+    document.getElementById('wf-run-btn')?.click();
+  });
+
+  // Floating "Execute workflow" pill at canvas bottom — same as
+  // toolbar Run Now. Visually clones the n8n pattern.
+  document.getElementById('wf-execute-pill')?.addEventListener('click', () => {
+    document.getElementById('wf-run-btn')?.click();
+  });
+
+  // ── Palette drawer: open / close / search filter ─────────────
+  const paletteDrawer = document.getElementById('wf-palette');
+  function openPalette() {
+    paletteDrawer?.classList.remove('hidden');
+    document.getElementById('wf-palette-search')?.focus();
+  }
+  function closePalette() {
+    paletteDrawer?.classList.add('hidden');
+  }
+  document.getElementById('wf-palette-open')?.addEventListener('click', openPalette);
+  document.querySelectorAll('[data-palette-close]').forEach((el) => {
+    el.addEventListener('click', closePalette);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && paletteDrawer && !paletteDrawer.classList.contains('hidden')) {
+      closePalette();
+    }
+  });
+  // After dragging a palette item to the canvas the drawer should
+  // get out of the way. Drawflow fires nodeCreated synchronously
+  // after the drop handler, so close in that hook.
+  editor.on('nodeCreated', () => closePalette());
+
+  // Live filter — match palette items by text content. Section
+  // headings hide when every item underneath is filtered out so the
+  // list stays tidy.
+  const paletteSearch = document.getElementById('wf-palette-search');
+  paletteSearch?.addEventListener('input', () => {
+    const q = paletteSearch.value.trim().toLowerCase();
+    const sections = paletteDrawer.querySelectorAll('[data-palette-section]');
+    sections.forEach((sec) => {
+      const group = sec.nextElementSibling; // the items container
+      if (!group) return;
+      let visible = 0;
+      group.querySelectorAll('.wf-palette-item').forEach((row) => {
+        const text = row.textContent.toLowerCase();
+        const match = q === '' || text.includes(q);
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      sec.style.display = visible === 0 ? 'none' : '';
+      group.style.display = visible === 0 ? 'none' : '';
+    });
   });
 })();

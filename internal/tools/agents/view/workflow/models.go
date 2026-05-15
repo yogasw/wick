@@ -68,7 +68,7 @@ func DefaultPalette() []PaletteSection {
 				{Type: "trigger-cron", Label: "cron", Dot: "bg-indigo-500"},
 				{Type: "trigger-channel", Label: "channel", Dot: "bg-indigo-500"},
 				{Type: "trigger-webhook", Label: "webhook", Dot: "bg-indigo-500"},
-				{Type: "trigger-error", Label: "error", Dot: "bg-rose-500", Hint: "on fail"},
+				{Type: "trigger-error", Label: "error", Dot: "bg-red-500", Hint: "on fail"},
 			},
 		},
 		{
@@ -91,7 +91,7 @@ func DefaultPalette() []PaletteSection {
 		{
 			Title: "Logic",
 			Items: []PaletteItem{
-				{Type: "branch", Label: "branch", Dot: "bg-rose-500"},
+				{Type: "branch", Label: "branch", Dot: "bg-red-500"},
 				{Type: "parallel", Label: "parallel", Dot: "bg-lime-500"},
 				{Type: "end", Label: "end", Dot: "bg-slate-700"},
 			},

@@ -7,13 +7,24 @@ package workflow
 templ EditorBottom(vm EditorVM) {
 	<div class="shrink-0 border-t border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700" id="wf-bottom">
 		<div class="flex items-center border-b border-white-300 dark:border-navy-600 text-sm">
-			<button type="button" data-bottom-tab="yaml" class="px-4 py-2 border-b-2 border-green-500 text-green-700 dark:text-green-400 font-medium">YAML preview</button>
+			<button type="button" data-bottom-tab="logs" class="px-4 py-2 border-b-2 border-green-500 text-green-700 dark:text-green-400 font-medium">
+				Logs <span id="wf-logs-counter" class="ml-1 text-xs text-black-600 dark:text-black-700">(0)</span>
+			</button>
+			<button type="button" data-bottom-tab="yaml" class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">YAML preview</button>
 			<button type="button" data-bottom-tab="runs" class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Runs ({ runsLabel(len(vm.Runs)) })</button>
 			<button type="button" data-bottom-tab="guard" class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Guard</button>
-			<button type="button" id="wf-bottom-toggle" class="ml-auto px-3 py-2 text-xs text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100" data-collapsed="true">▴ expand</button>
+			<span id="wf-run-cancel-host" class="ml-auto"></span>
+			<button type="button" id="wf-bottom-toggle" class="px-3 py-2 text-xs text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100" data-collapsed="true">▴ expand</button>
 		</div>
 		<div id="wf-bottom-body" class="hidden">
-			<div data-bottom-panel="yaml">
+			// Logs is the default — empty state until a run kicks off,
+			// SSE events fill it in as nodes complete. Each row expands
+			// to show input/output JSON + latency.
+			<div data-bottom-panel="logs" class="p-3 max-h-72 overflow-y-auto text-xs">
+				<div id="wf-logs-list" class="space-y-1"></div>
+				<p id="wf-logs-empty" class="text-black-600 dark:text-black-700 italic">No run yet. Click Run Now to execute the workflow.</p>
+			</div>
+			<div data-bottom-panel="yaml" class="hidden">
 				<pre id="wf-yaml" class="p-4 font-mono text-xs text-white-100 bg-navy-800 dark:bg-black-900 overflow-x-auto leading-relaxed max-h-48">{ vm.YAML }</pre>
 			</div>
 			<div data-bottom-panel="runs" class="hidden p-4 max-h-48 overflow-y-auto">
@@ -44,10 +55,10 @@ templ bottomGuard(rep *guardReportLike) {
 	if rep == nil || rep.OK {
 		<p class="text-sm text-green-700 dark:text-green-400">No guard violations.</p>
 	} else {
-		<ul class="space-y-1 text-sm text-rose-800 dark:text-rose-300">
+		<ul class="space-y-1 text-sm text-red-800 dark:text-red-300">
 			for _, v := range rep.Violations {
 				<li>
-					<span class="font-mono text-xs bg-rose-100 dark:bg-rose-900/30 px-1.5 py-0.5 rounded">{ v.Rule }</span>
+					<span class="font-mono text-xs bg-red-50 dark:bg-red-900/30 px-1.5 py-0.5 rounded">{ v.Rule }</span>
 					<span class="ml-2">{ v.Message }</span>
 					<span class="text-xs text-black-700 dark:text-black-600"> ({ v.Severity })</span>
 				</li>

@@ -1,17 +1,30 @@
 package workflow
 
-// EditorPalette renders the left sidebar drag-source list. Theme
-// tokens match the agents tab — white/navy surfaces, black text.
+// EditorPalette renders the palette as a left-side slide-in drawer.
+// Opens when the user clicks the "+" pill in the top-right canvas
+// controls — keeps the main canvas full-width by default and only
+// surfaces palette items on demand (n8n's "Add node" pattern). The
+// drawer closes via the X button, ESC, or clicking outside.
 templ EditorPalette(sections []PaletteSection) {
-	<aside class="w-48 shrink-0 border-r border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 text-sm overflow-y-auto">
-		for _, section := range sections {
-			<div class="text-[11px] uppercase tracking-wider text-black-700 dark:text-black-600 font-semibold mb-2 mt-1">{ section.Title }</div>
-			<div class="space-y-1 mb-4">
-				for _, item := range section.Items {
-					@paletteRow(item)
+	<aside class="wf-palette-drawer hidden" id="wf-palette">
+		<div class="wf-palette-backdrop" data-palette-close></div>
+		<div class="wf-palette-shell">
+			<div class="wf-palette-header">
+				<div class="text-sm font-semibold text-black-900 dark:text-white-100">Add node</div>
+				<button type="button" class="wf-palette-close" data-palette-close aria-label="Close palette">×</button>
+			</div>
+			<input type="text" id="wf-palette-search" placeholder="Search nodes…" class="wf-palette-search"/>
+			<div class="wf-palette-list">
+				for _, section := range sections {
+					<div class="text-[11px] uppercase tracking-wider text-black-700 dark:text-black-600 font-semibold mb-2 mt-2" data-palette-section>{ section.Title }</div>
+					<div class="space-y-1 mb-4">
+						for _, item := range section.Items {
+							@paletteRow(item)
+						}
+					</div>
 				}
 			</div>
-		}
+		</div>
 	</aside>
 }
 

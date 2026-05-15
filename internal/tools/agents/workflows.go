@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
@@ -15,6 +17,39 @@ import (
 	wfview "github.com/yogasw/wick/internal/tools/agents/view/workflow"
 	"github.com/yogasw/wick/pkg/tool"
 )
+
+// WorkflowSSESession returns the broadcaster session key used for
+// workflow run events. The editor JS subscribes to /stream?session=<key>
+// to receive per-node progress without polling.
+func WorkflowSSESession(slug string) string { return "wf:" + slug }
+
+// WorkflowEventHook builds an engine.OnEvent callback that fans
+// workflow run events out to the SSE broadcaster. Marshals the
+// RunEvent as JSON in the SSE payload Data field; Type prefixes
+// "wf_" so the editor JS can dispatch on it without colliding with
+// agent stream events.
+func WorkflowEventHook(b *Broadcaster) func(slug, runID string, ev wf.RunEvent) {
+	if b == nil {
+		return nil
+	}
+	return func(slug, runID string, ev wf.RunEvent) {
+		payload := map[string]any{
+			"slug":   slug,
+			"run_id": runID,
+			"event":  ev.Event,
+			"node":   ev.Node,
+			"case":   ev.Case,
+			"data":   ev.Data,
+			"ts":     time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		body, _ := json.Marshal(payload)
+		b.fanout(WorkflowSSESession(slug), Event{
+			SessionID: WorkflowSSESession(slug),
+			Type:      "wf_" + ev.Event,
+			Data:      string(body),
+		})
+	}
+}
 
 // globalWorkflowMgr is the wired workflow stack. Server.go calls
 // SetWorkflowManager once at boot; nil = every workflows handler 503s.
@@ -338,7 +373,7 @@ func runWorkflowNow(c *tool.Ctx) {
 	// canvas can be in an unfinished state — only the actions that
 	// would actually invoke the graph (Run Now, Publish) require Ok.
 	if r := parse.Validate(w); !r.Ok() {
-		c.Error(http.StatusBadRequest, "cannot run — fix validation errors:\n"+r.Error())
+		runResponse(c, http.StatusBadRequest, "", "cannot run — fix validation errors:\n"+r.Error())
 		return
 	}
 	// Defensive HotReload — covers the case where boot saw an empty
@@ -346,14 +381,48 @@ func runWorkflowNow(c *tool.Ctx) {
 	_ = setup.HotReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, slug)
 	report := globalWorkflowMgr.Guard.Review(c.Context(), w)
 	if err := globalWorkflowMgr.Guard.Apply(report, nil); err != nil {
-		c.Error(http.StatusForbidden, err.Error())
+		runResponse(c, http.StatusForbidden, "", err.Error())
 		return
 	}
-	if err := globalWorkflowMgr.MCP.RunNow(c.Context(), slug, wf.Event{Type: string(wf.TriggerManual)}); err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
+	// Pre-assign the run ID so the response can return it before
+	// the engine wakes up. The engine reads `run_id` from the event
+	// payload (falls back to its own IDGen when absent), so the
+	// browser can subscribe to the SSE stream in time to catch the
+	// very first node_started event.
+	runID := uuid.NewString()
+	evt := wf.Event{
+		Type:    string(wf.TriggerManual),
+		At:      time.Now().UTC(),
+		Payload: map[string]any{"run_id": runID, "source": "ui"},
+	}
+	if err := globalWorkflowMgr.MCP.RunNow(c.Context(), slug, evt); err != nil {
+		runResponse(c, http.StatusInternalServerError, "", err.Error())
 		return
 	}
-	c.Redirect(c.Base()+"/workflows/edit/"+slug, http.StatusSeeOther)
+	runResponse(c, http.StatusAccepted, runID, "")
+}
+
+// runResponse returns JSON when the client wants async behavior
+// (fetch from the Run Now button) or redirects for plain form posts
+// so the no-JS fallback keeps working. status 202 + run_id is the
+// success shape; non-empty errMsg yields {error}.
+func runResponse(c *tool.Ctx, status int, runID, errMsg string) {
+	if strings.Contains(c.R.Header.Get("Accept"), "application/json") {
+		body := map[string]any{"ok": status < 400 && errMsg == ""}
+		if runID != "" {
+			body["run_id"] = runID
+		}
+		if errMsg != "" {
+			body["error"] = errMsg
+		}
+		c.JSON(status, body)
+		return
+	}
+	if status >= 400 {
+		c.Error(status, errMsg)
+		return
+	}
+	c.Redirect(c.Base()+"/workflows/edit/"+c.PathValue("slug"), http.StatusSeeOther)
 }
 
 // workflowRegistryAPI returns JSON catalog the editor uses to hydrate
@@ -429,6 +498,151 @@ func deleteWorkflow(c *tool.Ctx) {
 		return
 	}
 	c.Redirect(c.Base()+"/workflows", http.StatusSeeOther)
+}
+
+// execNodeStep runs a single node in isolation — n8n's "Execute step"
+// pattern. Body is `{node, input}` where node is the Drawflow node JSON
+// (so the user can iterate the inspector without saving the whole
+// graph) and input is the parent's output (or user-supplied mock).
+// Output streams back synchronously; nothing persists to runs/.
+func execNodeStep(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	var body struct {
+		Node  map[string]any `json:"node"`
+		Input map[string]any `json:"input"`
+	}
+	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if body.Node == nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "node is required"})
+		return
+	}
+	// Re-use the drawflow → workflow codec to materialise a Node value
+	// from the single node JSON. We wrap it in a minimal Workflow so
+	// the codec's existing parsing path stays exact (one node, no edges).
+	w, err := singleNodeWorkflow(slug, body.Node)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if len(w.Graph.Nodes) == 0 {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "node decode produced no nodes"})
+		return
+	}
+	n := w.Graph.Nodes[0]
+	exec, ok := globalWorkflowMgr.Engine.Executors[n.Type]
+	if !ok {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "no executor for node type " + string(n.Type)})
+		return
+	}
+	envVals, _ := globalWorkflowMgr.Service.LoadEnvValues(slug)
+	// Seed the run context with parent input under both `input` and the
+	// expected parent node ID so templates like `{{.Node.parentID.field}}`
+	// resolve. Caller can pass the input via a `_parent` key to control
+	// which alias the template engine sees.
+	parentID := ""
+	if p, ok := body.Node["_parent_id"].(string); ok {
+		parentID = p
+	}
+	outputs := map[string]any{}
+	nodeOutputs := map[string]wf.NodeOutput{}
+	if parentID != "" {
+		outputs[parentID] = body.Input
+		nodeOutputs[parentID] = wf.NodeOutput{Result: body.Input}
+	}
+	outputs["input"] = body.Input
+	rc := &wf.RunContext{
+		Workflow:    w,
+		Event:       wf.Event{Type: string(wf.TriggerManual), At: time.Now().UTC(), Payload: body.Input},
+		Outputs:     outputs,
+		EnvValues:   envVals,
+		RunID:       "step-" + uuid.NewString(),
+		NodeOutputs: nodeOutputs,
+	}
+	startedAt := time.Now()
+	out, runErr := exec.Execute(c.Context(), n, rc)
+	latency := time.Since(startedAt).Milliseconds()
+	resp := map[string]any{
+		"ok":         runErr == nil,
+		"latency_ms": latency,
+		"output":     nodeOutputToJSON(out),
+	}
+	if runErr != nil {
+		resp["error"] = runErr.Error()
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// nodeOutputToJSON flattens a NodeOutput into the same map shape
+// recordSuccess writes to RunContext.Outputs so the bottom-panel
+// "Output" tab renders consistently with full-run output.
+func nodeOutputToJSON(o wf.NodeOutput) map[string]any {
+	m := map[string]any{}
+	if o.Verdict != "" {
+		m["verdict"] = o.Verdict
+	}
+	if o.Confidence != 0 {
+		m["confidence"] = o.Confidence
+	}
+	if o.Reasoning != "" {
+		m["reasoning"] = o.Reasoning
+	}
+	if o.Result != nil {
+		m["result"] = o.Result
+	}
+	for k, v := range o.Fields {
+		m[k] = v
+	}
+	return m
+}
+
+// singleNodeWorkflow takes one drawflow node JSON and round-trips it
+// through the codec to build a one-node Workflow value. Wrapping a
+// "Drawflow doc with just this node" reuses the existing converter
+// (drawflowJSONToWorkflow) so node spec → Node fidelity stays in
+// lockstep with full-graph save.
+func singleNodeWorkflow(slug string, node map[string]any) (wf.Workflow, error) {
+	df := map[string]any{
+		"drawflow": map[string]any{
+			"Home": map[string]any{
+				"data": map[string]any{
+					"1": node,
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(df)
+	if err != nil {
+		return wf.Workflow{}, err
+	}
+	return drawflowJSONToWorkflow(slug, string(raw))
+}
+
+// workflowRunStateAPI returns the latest persisted state.json for a
+// run. Editor JS uses this when the user re-opens a run that was
+// triggered before page load — SSE events catch live runs, this
+// catches up cold-start.
+func workflowRunStateAPI(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	runID := c.PathValue("runID")
+	st, err := globalWorkflowMgr.StateStore.Load(slug, runID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+	events, _ := globalWorkflowMgr.StateStore.ListEvents(slug, runID)
+	c.JSON(http.StatusOK, map[string]any{
+		"state":  st,
+		"events": events,
+	})
 }
 
 // ── Run detail ────────────────────────────────────────────────────

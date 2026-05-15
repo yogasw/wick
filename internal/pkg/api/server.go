@@ -405,6 +405,11 @@ func NewServer() *Server {
 	} else {
 		log.Warn().Err(perr).Msg("workflow: provider adapter init failed")
 	}
+	// Bridge engine run events → SSE broadcaster so the editor can paint
+	// per-node progress without polling state.json. The broadcaster
+	// session key is "wf:<slug>"; client opens
+	// /stream?session=wf:<slug>.
+	wfMgr.Engine.SetEventHook(agentstool.WorkflowEventHook(agentsBcast))
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}

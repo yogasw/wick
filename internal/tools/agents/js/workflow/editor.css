@@ -150,6 +150,116 @@
   flex-direction: column;
   gap: 6px;
 }
+/* Bottom-left variant — zoom + auto-layout. Keeps top-right free for
+   the Add-node trigger and bottom-centre free for the Execute pill. */
+.wf-canvas-controls-bl {
+  right: auto;
+  top: auto;
+  left: 12px;
+  bottom: 12px;
+  flex-direction: column-reverse;
+}
+
+/* Top-right Add-node trigger — opens the palette drawer. */
+.wf-canvas-add {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 10;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4a5568;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+  transition: background 0.15s, transform 0.1s;
+}
+.wf-canvas-add:hover { background: #f1efeb; transform: scale(1.05); }
+.dark .wf-canvas-add { background: #1e2942; border-color: #2c3a5a; color: #c9d1de; }
+.dark .wf-canvas-add:hover { background: #131c2f; }
+
+/* ── Palette drawer (right slide-in) ──────────────────────────── */
+.wf-palette-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.wf-palette-drawer.hidden { display: none; }
+.wf-palette-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 11, 19, 0.35);
+  pointer-events: auto;
+}
+.wf-palette-shell {
+  position: relative;
+  width: 300px;
+  background: #f5f3ee;
+  border-left: 1px solid #e0dccf;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.15);
+  animation: wf-palette-slide-in 0.18s ease-out;
+}
+.dark .wf-palette-shell {
+  background: #1a2238;
+  border-left-color: #2c3a5a;
+}
+@keyframes wf-palette-slide-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.wf-palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e0dccf;
+}
+.dark .wf-palette-header { border-bottom-color: #2c3a5a; }
+.wf-palette-close {
+  background: transparent;
+  border: 0;
+  font-size: 20px;
+  line-height: 1;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.wf-palette-close:hover { color: #1f2937; }
+.dark .wf-palette-close { color: #94a3b8; }
+.dark .wf-palette-close:hover { color: #f1f5f9; }
+.wf-palette-search {
+  margin: 10px 12px 4px;
+  padding: 6px 10px;
+  border: 1px solid #e0dccf;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  color: #1f2937;
+  outline: none;
+}
+.wf-palette-search:focus { border-color: #10b981; }
+.dark .wf-palette-search {
+  background: #0f172a;
+  border-color: #2c3a5a;
+  color: #f1f5f9;
+}
+.wf-palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px 16px;
+}
 .wf-canvas-controls button {
   background: #ffffff;
   border: 1px solid #e0dccf; /* white-300 */
@@ -205,3 +315,342 @@
 .yaml-num  { color: #f0abfc; }
 .yaml-cmt  { color: #6b7280; font-style: italic; }
 .yaml-bool { color: #f0abfc; }
+
+/* ── Run progress: per-node status overlay ─────────────────────── */
+/* Pulsing outline mirrors n8n's "node is running" affordance. */
+.drawflow .drawflow-node.wf-node-running {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+  animation: wf-pulse 1.4s ease-in-out infinite;
+}
+.drawflow .drawflow-node.wf-node-success {
+  outline: 2px solid #10b981;
+  outline-offset: 2px;
+}
+.drawflow .drawflow-node.wf-node-failed {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+.drawflow .drawflow-node.wf-node-skipped {
+  outline: 2px dashed #9ca3af;
+  outline-offset: 2px;
+  opacity: 0.7;
+}
+@keyframes wf-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+}
+.drawflow .drawflow-node .wf-status-badge {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #1f2937;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  z-index: 3;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.drawflow .drawflow-node .wf-status-badge[data-state="running"] { background: #f59e0b; }
+.drawflow .drawflow-node .wf-status-badge[data-state="success"] { background: #10b981; }
+.drawflow .drawflow-node .wf-status-badge[data-state="failed"]  { background: #ef4444; }
+.drawflow .drawflow-node .wf-status-badge[data-state="skipped"] { background: #6b7280; }
+.drawflow .drawflow-node .wf-latency {
+  position: absolute;
+  bottom: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-family: monospace;
+  color: #6b7280;
+  background: rgba(255,255,255,0.85);
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.dark .drawflow .drawflow-node .wf-latency {
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.85);
+}
+
+/* ── Inspector modal overlay (n8n-style 3-col debug) ───────────
+ * Theme-aware: light defaults; `.dark` ancestor flips palette.
+ * Tracks the project's broader light/dark mode toggle so the modal
+ * doesn't look foreign against the rest of the editor. */
+.wf-inspector-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.wf-inspector-modal.hidden { display: none; }
+.wf-inspector-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(40, 50, 70, 0.35);
+  backdrop-filter: blur(2px);
+}
+.dark .wf-inspector-backdrop { background: rgba(8, 11, 19, 0.6); }
+.wf-inspector-shell {
+  position: relative;
+  flex: 1;
+  margin: 24px;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.15);
+  color: #1f2937;
+}
+.dark .wf-inspector-shell {
+  background: #0f172a;
+  border-color: #1f2937;
+  color: #f1f5f9;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+}
+.wf-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0dccf;
+  background: #f7f5f0;
+  color: inherit;
+  font-size: 14px;
+}
+.dark .wf-inspector-header {
+  background: #0b1220;
+  border-bottom-color: #1f2937;
+}
+.wf-inspector-icon {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  border-radius: 50%;
+  background: #e0dccf;
+  font-size: 12px;
+  color: #d97706;
+}
+.dark .wf-inspector-icon { background: #1f2937; color: #f59e0b; }
+.wf-inspector-close {
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.wf-inspector-close:hover { color: #111827; }
+.dark .wf-inspector-close { color: #94a3b8; }
+.dark .wf-inspector-close:hover { color: #f1f5f9; }
+.wf-inspector-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  min-height: 0;
+}
+.wf-inspector-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #e0dccf;
+  background: #ffffff;
+}
+.dark .wf-inspector-col {
+  border-right-color: #1f2937;
+  background: #0f172a;
+}
+.wf-inspector-col:last-child { border-right: 0; }
+.wf-inspector-col-head {
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #6b7280;
+  border-bottom: 1px solid #e0dccf;
+  background: #f7f5f0;
+}
+.dark .wf-inspector-col-head {
+  color: #94a3b8;
+  border-bottom-color: #1f2937;
+  background: #0b1220;
+}
+.wf-inspector-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #6b7280;
+  text-align: center;
+}
+.dark .wf-inspector-empty { color: #94a3b8; }
+.wf-inspector-empty .text-white-100 { color: inherit !important; }
+.wf-inspector-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e0dccf;
+  background: #f7f5f0;
+}
+.dark .wf-inspector-tabs {
+  border-bottom-color: #1f2937;
+  background: #0b1220;
+}
+.wf-inspector-tab {
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.dark .wf-inspector-tab { color: #94a3b8; }
+.wf-inspector-tab.is-on {
+  color: #b91c1c;
+  border-bottom-color: #ef4444;
+}
+.dark .wf-inspector-tab.is-on { color: #fca5a5; }
+.wf-inspector-exec-btn {
+  background: #ef4444;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.wf-inspector-exec-btn:hover { background: #dc2626; }
+.wf-inspector-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  font-size: 13px;
+  color: inherit;
+}
+/* .wf-input mirrors theme-aware text input styling. Sits underneath
+   the Tailwind `wf-input` rule so author markup can layer extra
+   utility classes on top without losing the theme contrast. */
+.wf-input {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #d6d3c9;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #1f2937;
+  outline: none;
+}
+.wf-input:focus { border-color: #ef4444; }
+.dark .wf-input {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+/* ── Floating Execute workflow pill ──────────────────────────── */
+.wf-execute-pill {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ef4444;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(239, 68, 68, 0.35);
+  transition: background 0.15s, transform 0.1s;
+}
+.wf-execute-pill:hover { background: #dc2626; }
+.wf-execute-pill:active { transform: translateX(-50%) translateY(1px); }
+.wf-execute-pill[data-state="running"] {
+  background: #f59e0b;
+  cursor: progress;
+}
+
+/* ── Bottom logs panel rows ─────────────────────────────────────
+ * Theme-aware: light defaults; `.dark` ancestor flips palette so
+ * the panel stays readable against either canvas background. */
+.wf-log-row {
+  border: 1px solid #e0dccf;
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #ffffff;
+  color: #1f2937;
+}
+.dark .wf-log-row {
+  border-color: rgba(156, 163, 175, 0.25);
+  background: rgba(255,255,255,0.04);
+  color: #f1f5f9;
+}
+.wf-log-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: monospace;
+}
+.wf-log-status {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.wf-log-status-started    { background: #f59e0b22; color: #b45309; }
+.wf-log-status-completed  { background: #10b98122; color: #047857; }
+.wf-log-status-failed     { background: #ef444422; color: #b91c1c; }
+.wf-log-status-skipped    { background: #6b728022; color: #4b5563; }
+.dark .wf-log-status-started   { color: #fbbf24; }
+.dark .wf-log-status-completed { color: #34d399; }
+.dark .wf-log-status-failed    { color: #f87171; }
+.dark .wf-log-status-skipped   { color: #9ca3af; }
+.wf-log-node {
+  flex: 0 0 auto;
+  color: #0369a1;
+}
+.dark .wf-log-node { color: #38bdf8; }
+.wf-log-latency {
+  margin-left: auto;
+  color: #6b7280;
+  font-size: 10px;
+}
+.dark .wf-log-latency { color: #94a3b8; }
+.wf-log-body {
+  margin-top: 4px;
+  background: #f7f5f0;
+  color: #1f2937;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.dark .wf-log-body { background: #0f172a; color: #f1f5f9; }
