@@ -105,12 +105,27 @@
   height: 14px !important;
   margin: 0 !important;
 }
+/* Generous invisible hit target — the visible circle is only 14px so
+ * grabbing it to drag-to-connect was finicky. A ::before overlay
+ * spreads the clickable area to ~30px while leaving the visible
+ * circle the same size. */
+.drawflow .drawflow-node .input::before,
+.drawflow .drawflow-node .output::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  right: -8px;
+  bottom: -8px;
+  border-radius: 50%;
+}
 .drawflow .drawflow-node .input {
   top: -7px !important;
   left: 50% !important;
   right: auto !important;
   bottom: auto !important;
   margin-left: -7px !important;
+  z-index: 2 !important;
 }
 .drawflow .drawflow-node .output {
   top: auto !important;
@@ -118,6 +133,11 @@
   right: auto !important;
   left: 50% !important;
   margin-left: -7px !important;
+  /* Output beats input when ports overlap (e.g. two nodes stacked
+   * tightly in a T→B layout). The drag-to-connect flow only fires
+   * from output, so giving it the higher z keeps that gesture
+   * reachable. */
+  z-index: 3 !important;
 }
 
 /* Floating zoom controls top-right. */

@@ -539,6 +539,70 @@
   window.addEventListener('mouseup', () => { mouseIsDown = false; }, true);
   window.addEventListener('blur', () => { mouseIsDown = false; });
 
+  // Reverse drag-to-connect — Drawflow only fires drawConnection from
+  // an output. Users also expect to drag from an input back to a
+  // source output, so we render a dashed ghost line and, on drop over
+  // an output, call addConnection with the args flipped.
+  let revDrag = null; // { input, path, svg, x0, y0 }
+  const canvasParent = canvasEl.parentElement;
+  const portCenter = (el) => {
+    const r = el.getBoundingClientRect();
+    const p = canvasParent.getBoundingClientRect();
+    return [r.left + r.width / 2 - p.left, r.top + r.height / 2 - p.top];
+  };
+  const portChannel = (el) => Array.from(el.classList).find((c) => /^(input|output)_\d+$/.test(c));
+
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target || e.target.classList[0] !== 'input') return;
+    const [x0, y0] = portCenter(e.target);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6;';
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('stroke', '#9aa3b2');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('stroke-dasharray', '4 4');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
+    canvasParent.appendChild(svg);
+    revDrag = { input: e.target, path, svg, x0, y0 };
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  document.addEventListener('mousemove', (e) => {
+    if (!revDrag) return;
+    const p = canvasParent.getBoundingClientRect();
+    const cx = e.clientX - p.left;
+    const cy = e.clientY - p.top;
+    const offset = Math.max(Math.abs(cy - revDrag.y0) / 2, 40);
+    revDrag.path.setAttribute(
+      'd',
+      ` M ${revDrag.x0} ${revDrag.y0} C ${revDrag.x0} ${revDrag.y0 - offset} ${cx} ${cy + offset} ${cx} ${cy}`,
+    );
+  }, true);
+
+  document.addEventListener('mouseup', (e) => {
+    if (!revDrag) return;
+    const { input, svg } = revDrag;
+    revDrag = null;
+    svg.remove();
+    const dropOut = document.elementFromPoint(e.clientX, e.clientY)?.closest('.output');
+    if (!dropOut) return;
+    const srcNode = dropOut.closest('.drawflow-node');
+    const dstNode = input.closest('.drawflow-node');
+    if (!srcNode || !dstNode || srcNode === dstNode) return;
+    try {
+      editor.addConnection(
+        srcNode.id.slice(5),
+        dstNode.id.slice(5),
+        portChannel(dropOut) || 'output_1',
+        portChannel(input) || 'input_1',
+      );
+    } catch (err) {
+      console.warn('[wf] reverse connect failed', err);
+    }
+  }, true);
+
   // Alignment guide layer — two absolutely-positioned lines that
   // appear when a moved node locks onto another node's X or Y axis.
   // Hidden by default; updateAlignGuides toggles + repositions them.
