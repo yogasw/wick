@@ -18,6 +18,11 @@ type AgentsLayoutVM struct {
 	SidebarLabels    map[string]string // session id → first user message preview
 	ActiveSessionID  string
 	IdleTimeoutMs    int64
+	// FullBleed=true skips the layout's default px-6 py-6 padding
+	// wrapper so the page can paint edge-to-edge. The workflow
+	// editor needs the full viewport for its canvas; padded pages
+	// (sessions, presets, …) leave this false.
+	FullBleed bool
 }
 
 // OverviewVM holds data for the Overview page. SessionIDs is the

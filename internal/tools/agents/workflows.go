@@ -107,8 +107,15 @@ func workflowEditor(c *tool.Ctx) {
 	validation := parse.Validate(w)
 	validationJSON, _ := json.Marshal(validationPayload(validation))
 
+	// The editor owns the full viewport (toolbar + canvas + bottom
+	// panel) and paints its own borders, so opt out of the layout's
+	// default px-6 py-6 padding wrapper — otherwise the canvas
+	// inherits the gutter and the toolbar sits inside a card instead
+	// of butting against the sidebar.
+	layoutVM := sidebarVM(c, "workflows", "")
+	layoutVM.FullBleed = true
 	c.HTML(wfview.Editor(wfview.EditorVM{
-		Layout:         sidebarVM(c, "workflows", ""),
+		Layout:         layoutVM,
 		Base:           c.Base(),
 		Slug:           slug,
 		Workflow:       w,

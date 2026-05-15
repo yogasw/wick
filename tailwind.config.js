@@ -41,6 +41,13 @@ module.exports = {
         800: '#92400e',
         900: '#78350f',
       },
+      // blue: used by workflow Publish button + draft-approved badge
+      blue: {
+        400: '#60a5fa',
+        500: '#3b82f6',
+        600: '#2563eb',
+        700: '#1d4ed8',
+      },
 
       // Brand Green — buttons, sidebar, primary actions
       green: {

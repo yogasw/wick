@@ -1053,4 +1053,34 @@
   function escapeHTML(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+
+  // ── Toolbar dropdowns ─────────────────────────────────────────
+  // Publish + 3-dot menus open on click and close on outside click.
+  // Single delegated outside-click listener keeps the wiring lean
+  // even though there are two menus.
+  function bindMenu(btnId, menuId) {
+    const btn = document.getElementById(btnId);
+    const menu = document.getElementById(menuId);
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Close any other open menu first.
+      document.querySelectorAll('#wf-toolbar-actions [id$="-menu"]').forEach((m) => {
+        if (m !== menu) m.classList.add('hidden');
+      });
+      menu.classList.toggle('hidden');
+    });
+  }
+  bindMenu('wf-publish-menu-btn', 'wf-publish-menu');
+  bindMenu('wf-more-btn', 'wf-more-menu');
+  document.addEventListener('click', () => {
+    document.querySelectorAll('#wf-toolbar-actions [id$="-menu"]').forEach((m) => m.classList.add('hidden'));
+  });
+
+  // History button toggles the bottom panel "Runs" tab so the user
+  // can scan past executions without leaving the editor.
+  document.getElementById('wf-history-btn')?.addEventListener('click', () => {
+    const runsTab = document.querySelector('[data-bottom-tab="runs"]');
+    if (runsTab) runsTab.click();
+  });
 })();
