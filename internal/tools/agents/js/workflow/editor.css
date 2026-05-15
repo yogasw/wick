@@ -185,39 +185,39 @@
 
 /* ── Palette drawer (right slide-in) ──────────────────────────── */
 .wf-palette-drawer {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 45;
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
   pointer-events: none;
+  overflow: hidden;
 }
-.wf-palette-drawer.hidden { display: none; }
-.wf-palette-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(8, 11, 19, 0.35);
-  pointer-events: auto;
-}
+/* Override Tailwind's `hidden` (display:none) — we slide via transform
+   instead of toggling display so the canvas never reflows. */
+.wf-palette-drawer.hidden { display: flex; }
 .wf-palette-shell {
   position: relative;
   width: 300px;
   background: #f5f3ee;
-  border-left: 1px solid #e0dccf;
+  border: 1px solid #e0dccf;
+  border-radius: 12px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   pointer-events: auto;
   box-shadow: -8px 0 20px rgba(0, 0, 0, 0.15);
-  animation: wf-palette-slide-in 0.18s ease-out;
+  transform: translateX(0);
+  transition: transform 0.18s ease-out;
+}
+.wf-palette-drawer.hidden .wf-palette-shell {
+  transform: translateX(calc(100% + 12px));
+  pointer-events: none;
 }
 .dark .wf-palette-shell {
   background: #1a2238;
-  border-left-color: #2c3a5a;
-}
-@keyframes wf-palette-slide-in {
-  from { transform: translateX(100%); }
-  to   { transform: translateX(0); }
+  border-color: #2c3a5a;
 }
 .wf-palette-header {
   display: flex;

@@ -10,7 +10,7 @@ templ Editor(vm EditorVM) {
 		@Shell(vm.Base)
 		<div class="flex flex-col bg-white-100 dark:bg-navy-700" data-wf-base={ vm.Base + "/workflows" } style="height:calc(100vh - 4rem)">
 			@EditorToolbar(vm)
-			<div class="flex flex-1 min-h-0">
+			<div class="flex flex-1 min-h-0 relative">
 				@EditorPalette(DefaultPalette())
 				@EditorCanvas(vm)
 				@EditorInspector(vm)
