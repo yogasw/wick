@@ -330,8 +330,9 @@ func (e *Engine) runOne(ctx context.Context, n workflow.Node, rc *workflow.RunCo
 			Event: workflow.EventNodeStarted,
 			Node:  n.ID,
 			Data: map[string]any{
-				"type":  string(n.Type),
-				"input": truncateForEvent(parentOutputs(rc, n)),
+				"type":   string(n.Type),
+				"input":  truncateForEvent(parentOutputs(rc, n)),
+				"config": truncateForEvent(nodeConfigForEvent(n)),
 			},
 		})
 		out, err := exec.Execute(ctx, n, rc)
@@ -552,6 +553,47 @@ func indexNodes(g workflow.Graph) map[string]workflow.Node {
 		m[n.ID] = n
 	}
 	return m
+}
+
+// nodeConfigForEvent returns a compact view of the node's static
+// configuration (module/op/args, channel/op/args, command, sql, …)
+// for the node_started log line. Operators debugging a failed run
+// want to see "what was this node configured to do" alongside the
+// upstream input — the YAML preview tab has the full picture but
+// the log line is what gets copied into bug reports.
+//
+// Returns nil when there's nothing meaningful to surface so the
+// "config" field gets omitted from the event payload entirely.
+func nodeConfigForEvent(n workflow.Node) map[string]any {
+	cfg := map[string]any{}
+	if n.Module != "" {
+		cfg["module"] = n.Module
+	}
+	if n.Op != "" {
+		cfg["op"] = n.Op
+	}
+	if n.ChannelName != "" {
+		cfg["channel"] = n.ChannelName
+	}
+	if len(n.Args) > 0 {
+		cfg["args"] = n.Args
+	}
+	if len(n.Command) > 0 {
+		cfg["command"] = n.Command
+	}
+	if n.URL != "" {
+		cfg["url"] = n.URL
+	}
+	if n.Method != "" {
+		cfg["method"] = n.Method
+	}
+	if n.Prompt != "" {
+		cfg["prompt"] = n.Prompt
+	}
+	if len(cfg) == 0 {
+		return nil
+	}
+	return cfg
 }
 
 // parentOutputs returns the map of upstream NodeOutputs that feed

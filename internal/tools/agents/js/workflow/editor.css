@@ -1,7 +1,16 @@
 /* workflow editor.css — wick-flavored Drawflow overrides.
  * Theme palette matches the agents tab: white-{100..400} / navy-{600..800} /
  * black-{500..900} / green-{500..700}. No slate-* colors.
- */
+ *
+ * Source-order rule: Tailwind utilities always win over rules in this
+ * file. The `.hidden { display: none !important }` line below ensures
+ * Tailwind's `hidden` utility actually hides elements regardless of
+ * any `display: flex` / `display: grid` we put on the same element
+ * (e.g. .wf-inspector-empty, .wf-palette-list). When you need a
+ * "stays in DOM but visually closed" state (e.g. palette drawer
+ * slide-out via transform), use a custom class like
+ * `.wf-palette-drawer-closed`, NOT the Tailwind `hidden` utility. */
+.hidden { display: none !important; }
 
 /* Canvas drop zone. Light mode = white-200 bg + white-400 grid dots.
  * Dark mode handled via .dark scope set on <html>. */
@@ -194,9 +203,9 @@
   pointer-events: none;
   overflow: hidden;
 }
-/* Override Tailwind's `hidden` (display:none) — we slide via transform
-   instead of toggling display so the canvas never reflows. */
-.wf-palette-drawer.hidden { display: flex; }
+/* Use a custom "-closed" class instead of Tailwind's `hidden` so the
+   drawer can stay in DOM (display: flex) and slide via transform.
+   Toggling `hidden` would set display:none and reflow the canvas. */
 .wf-palette-shell {
   position: relative;
   width: 300px;
@@ -211,7 +220,7 @@
   transform: translateX(0);
   transition: transform 0.18s ease-out;
 }
-.wf-palette-drawer.hidden .wf-palette-shell {
+.wf-palette-drawer-closed .wf-palette-shell {
   transform: translateX(calc(100% + 12px));
   pointer-events: none;
 }
@@ -725,6 +734,20 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.wf-log-copy {
+  margin-left: auto;
+  font-size: 10px;
+  color: #047857;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.wf-log-copy:hover {
+  background: rgba(16, 185, 129, 0.12);
+}
+.dark .wf-log-copy { color: #34d399; }
 .wf-log-status-started    { background: #f59e0b22; color: #b45309; }
 .wf-log-status-completed  { background: #10b98122; color: #047857; }
 .wf-log-status-failed     { background: #ef444422; color: #b91c1c; }

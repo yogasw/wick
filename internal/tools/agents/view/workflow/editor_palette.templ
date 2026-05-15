@@ -11,7 +11,7 @@ import "encoding/json"
 // Mirrors n8n's two-step "Slack → Send message" pattern so the level-1
 // list stays short regardless of how many integrations are registered.
 templ EditorPalette(sections []PaletteSection) {
-	<aside class="wf-palette-drawer hidden" id="wf-palette">
+	<aside class="wf-palette-drawer wf-palette-drawer-closed" id="wf-palette">
 		<div class="wf-palette-shell">
 			<div class="wf-palette-header">
 				<button type="button" class="wf-palette-back hidden" data-palette-back aria-label="Back to all nodes">←</button>

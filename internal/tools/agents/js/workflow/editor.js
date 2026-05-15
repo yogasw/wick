@@ -983,8 +983,11 @@
     f.label.value = node.name || '';
     // Hydrate the Input pane from the parent's last node output (if a
     // run has happened) so the operator sees the upstream payload
-    // without having to mock it.
+    // without having to mock it. OUTPUT pane is filled from the
+    // node's own last output (replay cache, live SSE, or last Execute
+    // step result) for the same reason.
     hydrateInputPane(node);
+    hydrateOutputPane(node);
     Object.values(panels).forEach((p) => p.classList.add('hidden'));
     const inner = d.data || {};
     if (kind === 'classify' || kind === 'agent') {
@@ -1028,6 +1031,40 @@
     insNode.classList.add('hidden');
     const modal = document.getElementById('wf-inspector');
     if (modal) modal.classList.add('hidden');
+  }
+
+  // hydrateOutputPane fills the right "OUTPUT" column from the node's
+  // own last output. Populated whenever a replay loaded historical
+  // events, when the live SSE stream emitted node_completed, or when
+  // the user clicked Execute step on this node. Trigger nodes get
+  // their output from the run's source event (cached during replay).
+  function hydrateOutputPane(node) {
+    const empty = document.getElementById('ins-output-empty');
+    const out = document.getElementById('ins-exec-output');
+    const json = document.getElementById('ins-exec-json');
+    const schema = document.getElementById('ins-exec-schema');
+    const status = document.getElementById('ins-exec-status');
+    const latency = document.getElementById('ins-exec-latency');
+    if (!empty || !out) return;
+    if (!node || !node.data) {
+      empty.classList.remove('hidden');
+      out.classList.add('hidden');
+      return;
+    }
+    const id = node.data.id || node.name;
+    const cached = lastRunOutputs[id];
+    if (!cached) {
+      empty.classList.remove('hidden');
+      out.classList.add('hidden');
+      if (status) status.textContent = '';
+      if (latency) latency.textContent = '';
+      return;
+    }
+    empty.classList.add('hidden');
+    out.classList.remove('hidden');
+    if (json) json.textContent = JSON.stringify(cached, null, 2);
+    if (schema) schema.textContent = inferSchema(cached);
+    if (status) status.textContent = '✓ Last recorded output';
   }
 
   // hydrateInputPane fills the left "INPUT" column from the parent
@@ -1294,6 +1331,19 @@
       body.textContent = JSON.stringify(ev.data, null, 2);
       head.style.cursor = 'pointer';
       head.addEventListener('click', () => body.classList.toggle('hidden'));
+      // Copy button on the head so the user can grab the event payload
+      // without selecting text. Stops propagation so it doesn't also
+      // toggle the body open/closed.
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'wf-log-copy';
+      copyBtn.textContent = 'copy';
+      copyBtn.title = 'Copy this event\'s data as JSON';
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copyToClipboard(JSON.stringify(ev, null, 2), copyBtn);
+      });
+      head.appendChild(copyBtn);
       wrap.appendChild(body);
     }
     logsList.appendChild(wrap);
@@ -1301,6 +1351,33 @@
     logCount++;
     if (logsCounter) logsCounter.textContent = `(${logCount})`;
     logsList.scrollTop = logsList.scrollHeight;
+  }
+
+  // copyToClipboard writes text to the system clipboard, flashing the
+  // origin button's label on success/failure so the user gets visual
+  // feedback. Uses the modern Clipboard API and falls back to a
+  // hidden textarea + document.execCommand for older browsers.
+  async function copyToClipboard(text, btn) {
+    const origLabel = btn ? btn.textContent : '';
+    let ok = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        ta.remove();
+      }
+    } catch (_) { ok = false; }
+    if (!btn) return;
+    btn.textContent = ok ? 'copied!' : 'failed';
+    setTimeout(() => { btn.textContent = origLabel; }, 1200);
   }
 
   function openBottomLogs() {
@@ -1344,10 +1421,14 @@
       // node after the run completes.
       if (ev.node && ev.data && ev.data.output) lastRunOutputs[ev.node] = ev.data.output;
       // If the user is currently inspecting a node that just finished,
-      // refresh the input pane to reflect the new parent output.
+      // refresh the input + output panes so the modal reflects the new
+      // data without requiring a re-click.
       if (selectedID) {
         const node = editor.getNodeFromId(selectedID);
-        if (node) hydrateInputPane(node);
+        if (node) {
+          hydrateInputPane(node);
+          hydrateOutputPane(node);
+        }
       }
     }
     if (ev.event === 'node_failed' && domID) setNodeBadge(domID, 'failed');
@@ -1756,13 +1837,18 @@
     filterPalette('');
   }
 
+  // Palette open/close toggles a custom `wf-palette-drawer-closed`
+  // class — NOT Tailwind's `hidden`. Tailwind hidden sets display:none
+  // which would unmount the drawer from layout and reflow the canvas
+  // on every toggle; we want the drawer to stay mounted and slide via
+  // CSS transform.
   function openPalette() {
-    paletteDrawer?.classList.remove('hidden');
+    paletteDrawer?.classList.remove('wf-palette-drawer-closed');
     showLevel1();
     paletteSearch?.focus();
   }
   function closePalette() {
-    paletteDrawer?.classList.add('hidden');
+    paletteDrawer?.classList.add('wf-palette-drawer-closed');
     // Reset to level-1 so the next open starts fresh — otherwise the
     // user re-opens the drawer mid-drill and gets a confusing context.
     showLevel1();
@@ -1777,7 +1863,7 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !paletteDrawer) return;
-    if (paletteDrawer.classList.contains('hidden')) return;
+    if (paletteDrawer.classList.contains('wf-palette-drawer-closed')) return;
     // ESC backs out of level-2 first, closes the drawer at level-1.
     if (paletteBack && !paletteBack.classList.contains('hidden')) {
       showLevel1();
@@ -1895,6 +1981,109 @@
       });
     },
   });
+  // ── Replay a historical run inside the editor ─────────────────────
+  // Picks a run from the Runs panel, fetches its state.json + events
+  // from the server, and applies them locally as if the run just
+  // executed: node status badges paint, log entries populate, and the
+  // outputs cache primes so the inspector's INPUT pane shows the same
+  // upstream payload the node received. Lets the operator debug a
+  // failed run side-by-side with the live graph without leaving the
+  // editor.
+  async function replayRun(runID) {
+    if (!runID) return;
+    const url = `${baseURL}/edit/${slug}/runs/${encodeURIComponent(runID)}/state`;
+    try {
+      const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!resp.ok) {
+        const text = await resp.text();
+        showToast('error', 'Failed to load run', text || `HTTP ${resp.status}`);
+        return;
+      }
+      const payload = await resp.json();
+      const events = Array.isArray(payload.events) ? payload.events : [];
+      // Reset live editor state so the replay paints from scratch —
+      // otherwise old badges from a previous live run or replay would
+      // overlay the historical one.
+      clearNodeBadges();
+      logsList.innerHTML = '';
+      logsByNode = {};
+      logCount = 0;
+      if (logsCounter) logsCounter.textContent = '(0)';
+      if (logsEmpty) logsEmpty.classList.add('hidden');
+      for (const k in lastRunOutputs) delete lastRunOutputs[k];
+      currentRunID = runID;
+      // Replay events in order. handleRunEvent already knows how to
+      // paint badges + cache outputs, so we just feed it back.
+      events.forEach((ev) => handleRunEvent(ev));
+      // Trigger nodes don't emit node_completed (they're the workflow
+      // origin), but operators still want to inspect the event payload
+      // that fired the run. Cache the run's trigger event under every
+      // canvas trigger node id so clicking one populates the OUTPUT
+      // pane with the real payload (channel_id, user, text, …) instead
+      // of "No output data".
+      const triggerEvent = payload.state && payload.state.event;
+      if (triggerEvent) {
+        const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+        if (live) {
+          for (const k in live) {
+            const n = live[k];
+            if (!n || !n.data || n.data.type !== 'trigger') continue;
+            lastRunOutputs[n.data.id || n.name] = triggerEvent;
+          }
+        }
+      }
+      // If the inspector is currently showing a node, refresh its
+      // INPUT + OUTPUT panes so the panel reflects the replay.
+      if (selectedID) {
+        const sel = editor.getNodeFromId(selectedID);
+        if (sel) {
+          hydrateInputPane(sel);
+          hydrateOutputPane(sel);
+        }
+      }
+      openBottomLogs();
+      showToast('ok', 'Replaying run', `${events.length} event${events.length === 1 ? '' : 's'} loaded into the editor.`);
+    } catch (err) {
+      showToast('error', 'Failed to load run', String(err));
+    }
+  }
+
+  async function exportRun(runID) {
+    if (!runID) return;
+    const url = `${baseURL}/edit/${slug}/runs/${encodeURIComponent(runID)}/state`;
+    try {
+      const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!resp.ok) {
+        showToast('error', 'Failed to export run', `HTTP ${resp.status}`);
+        return;
+      }
+      const text = await resp.text();
+      await copyToClipboard(text, null);
+      showToast('ok', 'Run JSON copied', `${(text.length / 1024).toFixed(1)} KB on the clipboard.`);
+    } catch (err) {
+      showToast('error', 'Failed to export run', String(err));
+    }
+  }
+
+  document.querySelectorAll('[data-run-replay]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      replayRun(btn.dataset.runReplay);
+    });
+  });
+  document.querySelectorAll('[data-run-export]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exportRun(btn.dataset.runExport);
+    });
+  });
+  document.querySelectorAll('[data-run-copy-id]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      copyToClipboard(btn.dataset.runCopyId, btn);
+    });
+  });
+
   bindBackgroundForm(document.querySelector(`form[action$="/edit/${slug}/discard"]`), {
     confirmText: 'Rollback to last published version? All draft changes will be lost.',
     okTitle: 'Draft discarded',
