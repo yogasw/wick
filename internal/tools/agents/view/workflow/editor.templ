@@ -25,6 +25,6 @@ templ Editor(vm EditorVM) {
 // (templ blocks raw <script> bodies, so we round-trip through a div
 // dataset) and loads editor.js.
 templ editorBootstrap(vm EditorVM) {
-	<div id="wf-graph-data" class="hidden" data-graph={ vm.GraphJSON }></div>
+	<div id="wf-graph-data" class="hidden" data-graph={ vm.GraphJSON } data-validation={ vm.ValidationJSON }></div>
 	<script src={ vm.Base + "/static/js/workflow/editor.js" } defer></script>
 }

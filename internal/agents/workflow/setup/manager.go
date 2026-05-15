@@ -32,6 +32,7 @@ type Manager struct {
 	StateStore *state.FileStore
 	Engine     *engine.Engine
 	Router     *trigger.Router
+	Cron       *trigger.CronScheduler
 	Canvas     *canvas.Canvas
 	Channels   *channel.Registry
 	Connectors *connector.Registry
@@ -50,12 +51,17 @@ func New(layout config.Layout) *Manager {
 	ss := state.New(layout)
 	eng := engine.New(layout, svc, ss)
 	router := trigger.NewRouter(eng, svc)
+	cron := trigger.NewCronScheduler(router)
 	can := canvas.New(svc)
 	chReg := channel.NewRegistry()
 	conReg := connector.NewRegistry(nil, nil)
 	provReg := provider.NewRegistry()
 	dsSvc := dataset.NewMem()
-	g := guard.New(guard.Config{Mode: guard.ModeWarn})
+	// Guard default = off. Admin enables per-install via the agents
+	// settings page (mode = warn|block). Keep the package alive so the
+	// rule surface stays available — only the Apply gate is skipped
+	// when mode = off.
+	g := guard.New(guard.Config{Mode: guard.ModeOff})
 	c := cost.New()
 
 	// Wire executors so the engine can dispatch every node type once
@@ -86,6 +92,7 @@ func New(layout config.Layout) *Manager {
 		StateStore: ss,
 		Engine:     eng,
 		Router:     router,
+		Cron:       cron,
 		Canvas:     can,
 		Channels:   chReg,
 		Connectors: conReg,
@@ -117,26 +124,36 @@ func (m *Manager) WithGuardConfig(cfg guard.Config) *Manager {
 	return m
 }
 
-// Start ensures layout, bootstraps router with current workflows.
-// Idempotent — safe to call from main.go on every boot.
+// Start ensures layout, bootstraps router with current workflows, and
+// kicks off the cron scheduler. Idempotent — safe to call from main.go
+// on every boot.
 func (m *Manager) Start(ctx context.Context) error {
 	if err := m.Layout.EnsureLayout(); err != nil {
 		return err
 	}
-	return Bootstrap(ctx, m.Service, m.Router)
+	if err := Bootstrap(ctx, m.Service, m.Router, m.Cron); err != nil {
+		return err
+	}
+	if m.Cron != nil {
+		m.Cron.Start(ctx)
+	}
+	return nil
 }
 
 // Stop drains the router workers cleanly.
 func (m *Manager) Stop() {
+	if m.Cron != nil {
+		m.Cron.Stop()
+	}
 	if m.Router != nil {
 		m.Router.Stop()
 	}
 }
 
 // Bootstrap wires every workflow folder found at startup into the
-// router. Called once from server startup after Service + Router are
-// constructed.
-func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router) error {
+// router + cron scheduler. Called once from server startup after
+// Service + Router are constructed.
+func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler) error {
 	slugs, err := svc.List()
 	if err != nil {
 		return err
@@ -147,19 +164,28 @@ func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router)
 			continue
 		}
 		router.Register(ctx, w)
+		if cron != nil {
+			cron.Sync(slug, w)
+		}
 	}
 	return nil
 }
 
 // HotReload reloads + re-registers (or unregisters) one slug. Used by
 // fsnotify watcher in production.
-func HotReload(ctx context.Context, svc service.Service, router *trigger.Router, slug string) error {
+func HotReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, slug string) error {
 	w, err := svc.Load(slug)
 	if err != nil {
 		router.Unregister(slug)
+		if cron != nil {
+			cron.Unsync(slug)
+		}
 		return nil
 	}
 	router.Register(ctx, w)
+	if cron != nil {
+		cron.Sync(slug, w)
+	}
 	return nil
 }
 

@@ -68,12 +68,56 @@
 .drawflow .drawflow-node.node-end .node-head       { background: #16a34a; } /* green-500 */
 .drawflow .drawflow-node.node-transform .node-head { background: #84cc16; }
 
-/* Connections. */
-.drawflow .connection .main-path { stroke: #9aa3b2; stroke-width: 2; }
-.dark .drawflow .connection .main-path { stroke: #5b6478; }
+/* Connections. Arrow head sits at the midpoint of the curve (the
+ * editor.js createCurvature override emits an M+C+C path with a
+ * vertex at the midpoint so <marker-mid> can attach). End-tip arrows
+ * piled on top of each other when multiple edges fanned into the same
+ * input port; mid-curve arrows scale to any fan-in width. */
+.drawflow .connection .main-path {
+  stroke: #9aa3b2;
+  stroke-width: 2;
+  marker-mid: url(#wf-arrow);
+  fill: none;
+}
+.dark .drawflow .connection .main-path {
+  stroke: #5b6478;
+  marker-mid: url(#wf-arrow-dark);
+}
+
 .drawflow .input, .drawflow .output {
   width: 14px; height: 14px;
   border-color: #9aa3b2;
+}
+
+/* Top→bottom flow: input port centered on TOP edge, output port on
+ * BOTTOM edge. Drawflow's stock CSS pins ports with position:relative
+ * (so they flow inline beside the node head); we switch them to
+ * absolute and pin to the top/bottom edge instead. Drawflow uses each
+ * port's getBoundingClientRect() to compute path endpoints, so the
+ * connections follow the new visual position automatically. */
+.drawflow .drawflow-node {
+  overflow: visible !important;
+}
+.drawflow .drawflow-node .input,
+.drawflow .drawflow-node .output {
+  position: absolute !important;
+  width: 14px !important;
+  height: 14px !important;
+  margin: 0 !important;
+}
+.drawflow .drawflow-node .input {
+  top: -7px !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  margin-left: -7px !important;
+}
+.drawflow .drawflow-node .output {
+  top: auto !important;
+  bottom: -7px !important;
+  right: auto !important;
+  left: 50% !important;
+  margin-left: -7px !important;
 }
 
 /* Floating zoom controls top-right. */
@@ -104,6 +148,31 @@
   color: #c9d1de;
 }
 .dark .wf-canvas-controls button:hover { background: #131c2f; }
+
+/* Validation error badge — a small red dot in the node's top-right
+ * corner. Hover shows the violation messages via title. Save stays
+ * non-blocking; this is just a visual heads-up. */
+.drawflow .drawflow-node.wf-node-error {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+.drawflow .drawflow-node .wf-error-badge {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  z-index: 2;
+  cursor: help;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
 
 /* Palette drag affordance. */
 .wf-palette-item { cursor: grab; user-select: none; transition: transform 0.15s, border-color 0.15s; }

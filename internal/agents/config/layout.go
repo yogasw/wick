@@ -35,6 +35,13 @@ func (l Layout) WorkflowDir(slug string) string {
 func (l Layout) WorkflowFile(slug string) string {
 	return filepath.Join(l.WorkflowDir(slug), "workflow.yaml")
 }
+
+// WorkflowDraftFile is the in-progress copy edited by the canvas. Save
+// from the UI always writes here, never to workflow.yaml. Publish
+// promotes this file to workflow.yaml and deletes the draft.
+func (l Layout) WorkflowDraftFile(slug string) string {
+	return filepath.Join(l.WorkflowDir(slug), "workflow.draft.yaml")
+}
 func (l Layout) WorkflowRunsDir(slug string) string {
 	return filepath.Join(l.WorkflowDir(slug), "runs")
 }

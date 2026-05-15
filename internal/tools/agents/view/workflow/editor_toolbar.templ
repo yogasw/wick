@@ -25,8 +25,15 @@ templ EditorToolbar(vm EditorVM) {
 					{ fmt.Sprintf("approved v%d", vm.Workflow.Version) }
 				</span>
 			}
+			if vm.HasDraft {
+				<span class="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300" title="Unpublished edits exist in workflow.draft.yaml">
+					<span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+					draft
+				</span>
+			}
 		</div>
-		<div class="flex gap-2 text-sm">
+		<div class="flex gap-2 text-sm" id="wf-toolbar-actions">
+			<span id="wf-save-status" class="self-center text-xs text-black-600 dark:text-black-600 italic" data-state="idle"></span>
 			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/toggle") } class="inline">
 				<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 					if vm.Workflow.Enabled {
@@ -36,13 +43,21 @@ templ EditorToolbar(vm EditorVM) {
 					}
 				</button>
 			</form>
-			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/run") } class="inline">
+			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/run") } class="inline" title="Live test current draft (or published if no draft)">
 				<button type="submit" class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-amber-600 active:bg-amber-700 transition-colors">Run Now</button>
 			</form>
 			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/save") } class="inline" id="save-form">
 				<input type="hidden" name="body" id="save-body"/>
-				<button type="submit" class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors">Save</button>
+				<button type="submit" class="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors" title="Save to workflow.draft.yaml (not published)">Save</button>
 			</form>
+			if vm.HasDraft {
+				<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/discard") } onsubmit="return confirm('Rollback to last published version? All draft changes will be lost.')" class="inline">
+					<button type="submit" class="rounded-lg border border-amber-400 dark:border-amber-600 px-3 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors" title="Rollback draft — restore last published workflow.yaml">Rollback</button>
+				</form>
+				<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/publish") } class="inline">
+					<button type="submit" class="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-blue-600 active:bg-blue-700 transition-colors" title="Promote draft to live workflow.yaml">Publish</button>
+				</form>
+			}
 			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.Slug + "/delete") } onsubmit="return confirm('Delete this workflow?')" class="inline">
 				<button type="submit" class="rounded-lg border border-rose-400 dark:border-rose-700 px-3 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors">Delete</button>
 			</form>

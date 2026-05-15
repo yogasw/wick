@@ -57,6 +57,8 @@ import (
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
+	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
@@ -382,6 +384,16 @@ func NewServer() *Server {
 	// these means `type: classify`/`type: connector` nodes fail at
 	// runtime with "not registered".
 	wfsetup.RegisterLiveConnectors(wfMgr.Connectors)
+	// Channels are owned by the base channelReg — workflow registry just
+	// wraps it and filters to channels that opt into the workflow surface
+	// (Slack today; Telegram/REST nyusul). No duplicate registration.
+	wfsetup.RegisterLiveChannels(wfMgr.Channels, channelReg)
+	// Workflow guard mode — admin-configurable via agents settings.
+	// off (default) skips Guard.Review entirely; warn surfaces
+	// violations without blocking; block rejects Publish/Run.
+	if mode := configsSvc.GetOwned("agents", "workflow_guard_mode"); mode != "" {
+		wfMgr.WithGuardConfig(wfguard.Config{Mode: mode})
+	}
 	// connectorsSvc is constructed further down (line ~517) — the
 	// creds adapter is wired after that block so RowCreds can resolve
 	// rows from the live connectors service. Search for
@@ -752,6 +764,14 @@ func NewServer() *Server {
 	// whichever channels implement HTTPHandlerProvider.
 	for path, h := range channelReg.HTTPHandlers() {
 		r.Handle(path, h)
+	}
+
+	// Workflow webhook triggers — public path /hooks/<...>. The handler
+	// inspects path + body, dispatches matching workflow triggers via
+	// the router. Each trigger spec can carry HMAC `secret_ref` for
+	// integrity check; otherwise plain POST.
+	if wfMgr != nil && wfMgr.Router != nil {
+		r.Handle("/hooks/", wftrigger.NewWebhookHandler(wfMgr.Router))
 	}
 
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,

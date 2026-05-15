@@ -25,8 +25,10 @@ type EditorVM struct {
 	Base        string
 	Slug        string
 	Workflow    wf.Workflow
+	HasDraft    bool
 	YAML        string
 	GraphJSON   string // serialized for Drawflow editor.import()
+	ValidationJSON string // serialized validation report for initial paint
 	Approved    bool
 	GuardReport *guard.Report
 	NodeTypes   []mcp.NodeTypeInfo

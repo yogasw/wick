@@ -33,6 +33,18 @@ type Service interface {
 	Delete(slug string) error
 	Toggle(slug string, enabled bool) error
 
+	// Draft/Publish lifecycle.
+	// LoadDraft returns the draft if present, else the published workflow.
+	// HasDraft reports whether workflow.draft.yaml exists.
+	// SaveDraft writes the canvas state to workflow.draft.yaml.
+	// Publish promotes the draft to workflow.yaml and removes the draft.
+	// DiscardDraft removes workflow.draft.yaml (revert to published).
+	LoadDraft(slug string) (workflow.Workflow, error)
+	HasDraft(slug string) bool
+	SaveDraft(slug string, w workflow.Workflow) error
+	Publish(slug string) (workflow.Workflow, error)
+	DiscardDraft(slug string) error
+
 	ListFiles(slug string) ([]string, error)
 	ReadFile(slug, relPath string) ([]byte, error)
 	WriteFile(slug, relPath string, data []byte) error
@@ -284,6 +296,108 @@ func (s *FileService) writeWorkflowYAML(slug string, w workflow.Workflow) error 
 		return err
 	}
 	return WriteAtomic(s.Layout.WorkflowFile(slug), data)
+}
+
+// ── Draft / Publish lifecycle ────────────────────────────────────────
+
+// HasDraft reports whether a workflow.draft.yaml file exists.
+func (s *FileService) HasDraft(slug string) bool {
+	if err := parse.ValidateSlug(slug); err != nil {
+		return false
+	}
+	_, err := os.Stat(s.Layout.WorkflowDraftFile(slug))
+	return err == nil
+}
+
+// LoadDraft loads the draft file if present, otherwise falls back to
+// the published workflow. Editor always opens this so the user sees
+// their in-progress edits across refreshes.
+func (s *FileService) LoadDraft(slug string) (workflow.Workflow, error) {
+	if err := parse.ValidateSlug(slug); err != nil {
+		return workflow.Workflow{}, err
+	}
+	draftPath := s.Layout.WorkflowDraftFile(slug)
+	if data, err := os.ReadFile(draftPath); err == nil {
+		w, perr := parse.Parse(slug, data)
+		if perr != nil {
+			return workflow.Workflow{}, perr
+		}
+		return w, nil
+	}
+	return s.Load(slug)
+}
+
+// SaveDraft writes the workflow to workflow.draft.yaml. Never touches
+// workflow.yaml — Publish is the only path that promotes a draft to
+// live. Carries forward the published ID + CreatedAt when draft is
+// blank on those fields.
+func (s *FileService) SaveDraft(slug string, w workflow.Workflow) error {
+	if err := parse.ValidateSlug(slug); err != nil {
+		return err
+	}
+	if !storage.PathExists(s.Layout.WorkflowDir(slug)) {
+		return fmt.Errorf("%w: %s", ErrNotFound, slug)
+	}
+	w.Slug = slug
+	if w.ID == "" {
+		if prev, err := s.Load(slug); err == nil && prev.ID != "" {
+			w.ID = prev.ID
+		} else {
+			w.ID = uuid.NewString()
+		}
+	}
+	if w.CreatedAt.IsZero() {
+		if prev, err := s.Load(slug); err == nil && !prev.CreatedAt.IsZero() {
+			w.CreatedAt = prev.CreatedAt
+		} else {
+			w.CreatedAt = time.Now().UTC()
+		}
+	}
+	data, err := parse.Marshal(w)
+	if err != nil {
+		return err
+	}
+	return WriteAtomic(s.Layout.WorkflowDraftFile(slug), data)
+}
+
+// Publish promotes the draft to workflow.yaml and removes the draft.
+// Returns the published workflow. No-op (returns current published)
+// when no draft exists.
+func (s *FileService) Publish(slug string) (workflow.Workflow, error) {
+	if err := parse.ValidateSlug(slug); err != nil {
+		return workflow.Workflow{}, err
+	}
+	draftPath := s.Layout.WorkflowDraftFile(slug)
+	data, err := os.ReadFile(draftPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return s.Load(slug)
+		}
+		return workflow.Workflow{}, err
+	}
+	w, err := parse.Parse(slug, data)
+	if err != nil {
+		return workflow.Workflow{}, fmt.Errorf("draft parse: %w", err)
+	}
+	if err := WriteAtomic(s.Layout.WorkflowFile(slug), data); err != nil {
+		return workflow.Workflow{}, err
+	}
+	if err := os.Remove(draftPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return w, err
+	}
+	return w, nil
+}
+
+// DiscardDraft removes the draft file. No-op if no draft.
+func (s *FileService) DiscardDraft(slug string) error {
+	if err := parse.ValidateSlug(slug); err != nil {
+		return err
+	}
+	err := os.Remove(s.Layout.WorkflowDraftFile(slug))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func (s *FileService) safePath(slug, relPath string) (string, error) {

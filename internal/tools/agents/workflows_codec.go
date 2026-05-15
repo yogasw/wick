@@ -315,13 +315,32 @@ func canvasPositions(w wf.Workflow) map[string][2]float64 {
 	}
 	positions, _ := w.Canvas["positions"].(map[string]any)
 	for k, v := range positions {
-		if m, ok := v.(map[string]any); ok {
-			x, _ := m["x"].(float64)
-			y, _ := m["y"].(float64)
-			out[k] = [2]float64{x, y}
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
 		}
+		// YAML decoder yields int/int64 for whole numbers and float64
+		// for decimals; JSON yields float64 always. Accept both so
+		// positions roundtrip cleanly regardless of source format.
+		out[k] = [2]float64{numToFloat(m["x"]), numToFloat(m["y"])}
 	}
 	return out
+}
+
+func numToFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int32:
+		return float64(n)
+	}
+	return 0
 }
 
 // drawflowJSONToWorkflow parses Drawflow's editor.export() body into

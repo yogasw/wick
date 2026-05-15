@@ -198,10 +198,13 @@ func Register(r tool.Router) {
 	// flag a conflict with /static/{path}.
 	r.GET("/workflows/edit/{slug}", workflowEditor)
 	r.POST("/workflows/edit/{slug}/save", saveWorkflow)
+	r.POST("/workflows/edit/{slug}/publish", publishWorkflow)
+	r.POST("/workflows/edit/{slug}/discard", discardWorkflowDraft)
 	r.POST("/workflows/edit/{slug}/toggle", toggleWorkflow)
 	r.POST("/workflows/edit/{slug}/run", runWorkflowNow)
 	r.POST("/workflows/edit/{slug}/delete", deleteWorkflow)
 	r.GET("/workflows/edit/{slug}/runs/{runID}", workflowRunDetail)
+	r.GET("/workflows/api/registry", workflowRegistryAPI)
 
 	r.GET("/stream", streamSSE)
 }

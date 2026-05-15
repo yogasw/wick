@@ -32,13 +32,12 @@ templ EditorInspector(vm EditorVM) {
 			</div>
 
 			<div id="ins-preset-panel" class="hidden">
-				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Preset</label>
-				<select id="ins-preset" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100">
+				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Provider</label>
+				<select id="ins-provider" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100 mb-2">
 					<option value="">(default)</option>
-					<option value="classifier-cheap">classifier-cheap</option>
-					<option value="classifier">classifier</option>
-					<option value="support-responder">support-responder</option>
 				</select>
+				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Preset</label>
+				<input id="ins-preset" type="text" placeholder="(default)" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100"/>
 			</div>
 
 			<div id="ins-command-panel" class="hidden">
@@ -61,16 +60,25 @@ templ EditorInspector(vm EditorVM) {
 
 			<div id="ins-channel-panel" class="hidden">
 				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Channel</label>
-				<input id="ins-channel" type="text" placeholder="slack" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100"/>
+				<select id="ins-channel" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100">
+					<option value="">(select channel)</option>
+				</select>
 				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Op</label>
-				<input id="ins-op" type="text" placeholder="reply_thread" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100"/>
+				<select id="ins-op" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100">
+					<option value="">(select op)</option>
+				</select>
+				<div id="ins-channel-empty" class="hidden mt-2 text-xs text-amber-600 dark:text-amber-400">No channel registered. Configure one in Channels tab first.</div>
 			</div>
 
 			<div id="ins-connector-panel" class="hidden">
 				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Module</label>
-				<input id="ins-module" type="text" placeholder="linear" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100"/>
+				<select id="ins-module" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100">
+					<option value="">(select module)</option>
+				</select>
 				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Op</label>
-				<input id="ins-conn-op" type="text" placeholder="create_issue" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100"/>
+				<select id="ins-conn-op" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100">
+					<option value="">(select op)</option>
+				</select>
 			</div>
 
 			<div class="mt-4 p-3 bg-green-500/10 dark:bg-green-500/15 border border-green-500/30 dark:border-green-500/20 rounded-lg text-xs text-green-800 dark:text-green-300">

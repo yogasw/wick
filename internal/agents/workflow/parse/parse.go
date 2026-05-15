@@ -145,7 +145,14 @@ func Validate(w workflow.Workflow) *Result {
 	seen := map[string]int{}
 	nodesByID := map[string]workflow.Node{}
 	for i, n := range w.Graph.Nodes {
-		path := fmt.Sprintf("graph.nodes[%d]", i)
+		// Use the node ID in the path so the UI can index errors per
+		// node element. Fall back to numeric index when the ID itself
+		// is missing/invalid (otherwise the bracketed string would be
+		// empty and the canvas badge has nothing to attach to).
+		path := fmt.Sprintf("graph.nodes[%s]", n.ID)
+		if n.ID == "" {
+			path = fmt.Sprintf("graph.nodes[%d]", i)
+		}
 		if err := ValidateNodeID(n.ID); err != nil {
 			r.Errors = append(r.Errors, Error{Path: path + ".id", Message: err.(Error).Message})
 			continue
