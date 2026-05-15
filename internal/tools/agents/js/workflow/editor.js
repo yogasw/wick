@@ -228,9 +228,78 @@
     fillSelect(f.connOp, ops, '(select op)');
   }
 
+  // Args form — once an op is picked, render one <input> per
+  // declared input (key + required flag from the registry). Values
+  // round-trip through the node's `args` map. JSON expressions stay
+  // valid because we just pass strings; the engine renders templates
+  // before invoking the connector/channel.
+  const connArgsEl = document.getElementById('ins-conn-args');
+  const chanArgsEl = document.getElementById('ins-channel-args');
+  function renderArgsForm(container, inputs, args) {
+    container.innerHTML = '';
+    if (!inputs || !inputs.length) {
+      container.innerHTML = '<div class="text-xs italic text-black-600 dark:text-black-700">No args required.</div>';
+      return;
+    }
+    inputs.forEach((spec) => {
+      const wrap = document.createElement('div');
+      const label = document.createElement('label');
+      label.className = 'block text-xs font-medium text-black-800 dark:text-black-600 mb-1';
+      label.textContent = spec.key + (spec.required ? ' *' : '');
+      if (spec.description) label.title = spec.description;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.dataset.argKey = spec.key;
+      input.value = (args && args[spec.key] != null) ? String(args[spec.key]) : '';
+      input.placeholder = spec.description || '';
+      input.className = 'w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100';
+      input.addEventListener('input', () => { if (selectedID) updateNodeData(selectedID); });
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      container.appendChild(wrap);
+    });
+  }
+  function collectArgs(container) {
+    const out = {};
+    container.querySelectorAll('input[data-arg-key]').forEach((el) => {
+      const k = el.dataset.argKey;
+      const v = el.value;
+      if (v !== '') out[k] = v;
+    });
+    return out;
+  }
+  function refreshConnArgs(currentArgs) {
+    if (!connArgsEl) return;
+    const mod = registry.connectors.find((m) => m.module === f.module?.value);
+    const op = mod?.ops.find((o) => o.id === f.connOp?.value);
+    renderArgsForm(connArgsEl, op?.input || [], currentArgs || {});
+  }
+  function refreshChannelArgs(currentArgs) {
+    if (!chanArgsEl) return;
+    const ch = registry.channels.find((c) => c.name === f.channel?.value);
+    const op = ch?.ops.find((o) => o.id === f.op?.value);
+    // Channels don't ship structured input specs yet — fall back to
+    // a free-text JSON box when the registry has nothing to render.
+    if (!op?.input || !op.input.length) {
+      chanArgsEl.innerHTML = '';
+      const ta = document.createElement('textarea');
+      ta.id = 'ins-channel-args-json';
+      ta.rows = 3;
+      ta.placeholder = '{"key":"value"}';
+      ta.value = currentArgs ? JSON.stringify(currentArgs, null, 2) : '';
+      ta.className = 'w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 font-mono text-xs';
+      ta.addEventListener('input', () => { if (selectedID) updateNodeData(selectedID); });
+      chanArgsEl.appendChild(ta);
+      return;
+    }
+    renderArgsForm(chanArgsEl, op.input, currentArgs || {});
+  }
+
   // Cascade refresh when parent picker changes.
-  f.channel?.addEventListener('change', () => { hydrateChannelOps(); if (selectedID) updateNodeData(selectedID); });
-  f.module?.addEventListener('change', () => { hydrateConnectorOps(); if (selectedID) updateNodeData(selectedID); });
+  f.channel?.addEventListener('change', () => { hydrateChannelOps(); refreshChannelArgs(); if (selectedID) updateNodeData(selectedID); });
+  f.module?.addEventListener('change', () => { hydrateConnectorOps(); refreshConnArgs(); if (selectedID) updateNodeData(selectedID); });
+  f.op?.addEventListener('change', () => { refreshChannelArgs(); if (selectedID) updateNodeData(selectedID); });
+  f.connOp?.addEventListener('change', () => { refreshConnArgs(); if (selectedID) updateNodeData(selectedID); });
   const panels = {
     prompt: document.getElementById('ins-prompt-panel'),
     cases: document.getElementById('ins-cases-panel'),
@@ -876,12 +945,14 @@
       f.channel.value = inner.channel || '';
       hydrateChannelOps();
       f.op.value = inner.op || '';
+      refreshChannelArgs(inner.args);
     }
     if (kind === 'connector') {
       panels.connector.classList.remove('hidden');
       f.module.value = inner.module || '';
       hydrateConnectorOps();
       f.connOp.value = inner.op || '';
+      refreshConnArgs(inner.args);
     }
     refreshOutputRefs();
   }
@@ -917,10 +988,20 @@
     if (kind === 'channel') {
       inner.channel = f.channel.value;
       inner.op = f.op.value;
+      // Channels with structured input specs use the per-key inputs;
+      // those without fall back to a single JSON textarea.
+      const jsonTA = document.getElementById('ins-channel-args-json');
+      if (jsonTA) {
+        try { inner.args = jsonTA.value.trim() ? JSON.parse(jsonTA.value) : {}; }
+        catch (_) { /* leave previous args until JSON parses */ }
+      } else if (chanArgsEl) {
+        inner.args = collectArgs(chanArgsEl);
+      }
     }
     if (kind === 'connector') {
       inner.module = f.module.value;
       inner.op = f.connOp.value;
+      if (connArgsEl) inner.args = collectArgs(connArgsEl);
     }
     editor.updateNodeDataFromId(id, { id: d.id, type: kind, data: inner });
     refreshOutputRefs();

@@ -123,11 +123,20 @@ func (r *Registry) Describe() []Info {
 	for _, m := range r.modules {
 		ops := make([]OpInfo, 0, len(m.Operations))
 		for _, op := range m.Operations {
+			inputs := make([]OpInput, 0, len(op.Input))
+			for _, in := range op.Input {
+				inputs = append(inputs, OpInput{
+					Key:         in.Key,
+					Description: in.Description,
+					Required:    in.Required,
+				})
+			}
 			ops = append(ops, OpInfo{
 				Key:         op.Key,
 				Name:        op.Name,
 				Description: op.Description,
 				Destructive: op.Destructive,
+				Input:       inputs,
 			})
 		}
 		out = append(out, Info{
@@ -150,8 +159,19 @@ type Info struct {
 
 // OpInfo is one op's introspection shape.
 type OpInfo struct {
+	Key         string    `json:"key"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Destructive bool      `json:"destructive,omitempty"`
+	Input       []OpInput `json:"input,omitempty"`
+}
+
+// OpInput is one named argument the op expects. The workflow editor
+// renders these as form fields under the connector node's Args panel
+// so users see exactly which keys the op needs (and which are
+// required) without reading the connector source.
+type OpInput struct {
 	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Destructive bool   `json:"destructive,omitempty"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
 }

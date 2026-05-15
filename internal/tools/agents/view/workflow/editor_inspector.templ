@@ -68,6 +68,8 @@ templ EditorInspector(vm EditorVM) {
 					<option value="">(select op)</option>
 				</select>
 				<div id="ins-channel-empty" class="hidden mt-2 text-xs text-amber-600 dark:text-amber-400">No channel registered. Configure one in Channels tab first.</div>
+				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Args</label>
+				<div id="ins-channel-args" class="space-y-2"></div>
 			</div>
 
 			<div id="ins-connector-panel" class="hidden">
@@ -79,6 +81,8 @@ templ EditorInspector(vm EditorVM) {
 				<select id="ins-conn-op" class="w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100">
 					<option value="">(select op)</option>
 				</select>
+				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Args</label>
+				<div id="ins-conn-args" class="space-y-2"></div>
 			</div>
 
 			<div class="mt-4 p-3 bg-green-500/10 dark:bg-green-500/15 border border-green-500/30 dark:border-green-500/20 rounded-lg text-xs text-green-800 dark:text-green-300">

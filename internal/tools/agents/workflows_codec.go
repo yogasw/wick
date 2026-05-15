@@ -110,9 +110,15 @@ func nodeDataFromWorkflow(n wf.Node) map[string]any {
 	case wf.NodeChannel:
 		data["channel"] = n.ChannelName
 		data["op"] = n.Op
+		if n.Args != nil {
+			data["args"] = n.Args
+		}
 	case wf.NodeConnector:
 		data["module"] = n.Module
 		data["op"] = n.Op
+		if n.Args != nil {
+			data["args"] = n.Args
+		}
 	case wf.NodeBranch:
 		data["expr"] = n.Expr
 	case wf.NodeTransform:
@@ -519,9 +525,11 @@ func workflowNodeFromDrawflow(dn drawflowNode) wf.Node {
 	case wf.NodeChannel:
 		wn.ChannelName, _ = inner["channel"].(string)
 		wn.Op, _ = inner["op"].(string)
+		wn.Args, _ = inner["args"].(map[string]any)
 	case wf.NodeConnector:
 		wn.Module, _ = inner["module"].(string)
 		wn.Op, _ = inner["op"].(string)
+		wn.Args, _ = inner["args"].(map[string]any)
 	case wf.NodeBranch:
 		wn.Expr, _ = inner["expr"].(string)
 	case wf.NodeTransform:

@@ -358,11 +358,20 @@ func workflowRegistryAPI(c *tool.Ctx) {
 	for _, info := range globalWorkflowMgr.MCP.ConnectorsList() {
 		ops := []map[string]any{}
 		for _, op := range info.Operations {
+			inputs := make([]map[string]any, 0, len(op.Input))
+			for _, in := range op.Input {
+				inputs = append(inputs, map[string]any{
+					"key":         in.Key,
+					"description": in.Description,
+					"required":    in.Required,
+				})
+			}
 			ops = append(ops, map[string]any{
 				"id":          op.Key,
 				"name":        op.Name,
 				"description": op.Description,
 				"destructive": op.Destructive,
+				"input":       inputs,
 			})
 		}
 		connectors = append(connectors, map[string]any{
