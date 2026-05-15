@@ -315,10 +315,20 @@ func pickGraphEntry(w wf.Workflow) string {
 func triggerHint(tr wf.Trigger) string {
 	switch tr.Type {
 	case wf.TriggerChannel:
-		if tr.Target != "" {
-			return tr.ChannelName + " · " + tr.Target
+		parts := []string{}
+		if tr.ChannelName != "" {
+			parts = append(parts, tr.ChannelName)
 		}
-		return tr.ChannelName
+		if tr.Event != "" {
+			parts = append(parts, tr.Event)
+		}
+		if tr.Target != "" {
+			parts = append(parts, tr.Target)
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return strings.Join(parts, " · ")
 	case wf.TriggerCron:
 		return tr.Schedule
 	case wf.TriggerWebhook:
