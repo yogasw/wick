@@ -222,10 +222,31 @@
 .wf-palette-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid #e0dccf;
 }
+.wf-palette-header > [data-palette-title] {
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.wf-palette-back {
+  background: transparent;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.wf-palette-back:hover { color: #1f2937; }
+.dark .wf-palette-back { color: #94a3b8; }
+.dark .wf-palette-back:hover { color: #f1f5f9; }
+.wf-palette-back.hidden { display: none; }
+.wf-palette-drill { user-select: none; }
 .dark .wf-palette-header { border-bottom-color: #2c3a5a; }
 .wf-palette-close {
   background: transparent;

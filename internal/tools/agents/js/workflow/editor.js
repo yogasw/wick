@@ -115,9 +115,19 @@
   }
 
   // ── Palette → canvas drop ──────────────────────────────────────
-  document.querySelectorAll('.wf-palette-item').forEach((el) => {
+  // Two-level palette: each draggable row carries `data-node-type` plus
+  // an optional `data-node-defaults` JSON blob. The defaults blob is how
+  // level-2 op rows (e.g. Slack → send_message) ferry their
+  // pre-configured data (channel+op or module+op) into the drop handler
+  // without a server round-trip. Drill rows have no `data-node-type` —
+  // they're click-only.
+  document.querySelectorAll('.wf-palette-item[data-node-type]').forEach((el) => {
     el.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('node-type', el.dataset.nodeType);
+      const defaults = el.dataset.nodeDefaults || '';
+      if (defaults) {
+        e.dataTransfer.setData('node-defaults', defaults);
+      }
       e.dataTransfer.effectAllowed = 'copy';
     });
   });
@@ -131,7 +141,13 @@
     if (!type) return;
     const rect = canvasEl.getBoundingClientRect();
     const pos = canvasToFlow(e.clientX - rect.left, e.clientY - rect.top);
-    addNodeOfType(type, pos.x, pos.y);
+    let defaults = null;
+    const raw = e.dataTransfer.getData('node-defaults');
+    if (raw) {
+      try { defaults = JSON.parse(raw); }
+      catch (err) { console.warn('[wf] node-defaults parse', err); }
+    }
+    addNodeOfType(type, pos.x, pos.y, defaults);
   });
 
   // ── Inspector ──────────────────────────────────────────────────
@@ -883,12 +899,21 @@
     return { x: (x - cx) / zoom, y: (y - cy) / zoom };
   }
 
-  function addNodeOfType(type, x, y) {
+  function addNodeOfType(type, x, y, defaults) {
     const id = uniqueID(type);
     const meta = nodeMeta(type);
-    const html = nodeHTML(meta.head, id, meta.hint);
+    // Merge palette-supplied defaults (e.g. {channel:"slack",op:"send_message"})
+    // over the generic kind defaults so level-2 drops land already wired.
+    const data = Object.assign({}, meta.defaults, defaults || {});
+    let hint = meta.hint;
+    if (defaults) {
+      if (defaults.channel && defaults.op) hint = `${defaults.channel} · ${defaults.op}`;
+      else if (defaults.module && defaults.op) hint = `${defaults.module} · ${defaults.op}`;
+      else if (defaults.channel && defaults.event) hint = `${defaults.channel} · ${defaults.event}`;
+    }
+    const html = nodeHTML(meta.head, id, hint);
     editor.addNode(id, meta.inputs, meta.outputs, x, y, 'node-' + meta.cssType, {
-      id, type: meta.kind, data: meta.defaults,
+      id, type: meta.kind, data,
     }, html);
     refreshOutputRefs();
   }
@@ -1701,21 +1726,62 @@
     runBtn?.click();
   });
 
-  // ── Palette drawer: open / close / search filter ─────────────
+  // ── Palette drawer: open / close / drill / search filter ─────
   const paletteDrawer = document.getElementById('wf-palette');
+  const paletteTitle = paletteDrawer?.querySelector('[data-palette-title]');
+  const paletteBack = paletteDrawer?.querySelector('[data-palette-back]');
+  const paletteLevel1 = paletteDrawer?.querySelector('[data-palette-level="1"]');
+  const paletteLevel2s = paletteDrawer?.querySelectorAll('[data-palette-level="2"]') || [];
+  const paletteSearch = document.getElementById('wf-palette-search');
+
+  function showLevel1() {
+    if (!paletteDrawer) return;
+    paletteLevel1?.classList.remove('hidden');
+    paletteLevel2s.forEach((el) => el.classList.add('hidden'));
+    paletteBack?.classList.add('hidden');
+    if (paletteTitle) paletteTitle.textContent = 'Add node';
+    if (paletteSearch) { paletteSearch.value = ''; }
+    filterPalette('');
+  }
+  function showLevel2(group) {
+    if (!paletteDrawer) return;
+    const panel = paletteDrawer.querySelector(`[data-palette-level="2"][data-palette-group="${CSS.escape(group)}"]`);
+    if (!panel) return;
+    paletteLevel1?.classList.add('hidden');
+    paletteLevel2s.forEach((el) => el.classList.add('hidden'));
+    panel.classList.remove('hidden');
+    paletteBack?.classList.remove('hidden');
+    if (paletteTitle) paletteTitle.textContent = panel.dataset.paletteTitleText || 'Add node';
+    if (paletteSearch) { paletteSearch.value = ''; }
+    filterPalette('');
+  }
+
   function openPalette() {
     paletteDrawer?.classList.remove('hidden');
-    document.getElementById('wf-palette-search')?.focus();
+    showLevel1();
+    paletteSearch?.focus();
   }
   function closePalette() {
     paletteDrawer?.classList.add('hidden');
+    // Reset to level-1 so the next open starts fresh — otherwise the
+    // user re-opens the drawer mid-drill and gets a confusing context.
+    showLevel1();
   }
   document.getElementById('wf-palette-open')?.addEventListener('click', openPalette);
   document.querySelectorAll('[data-palette-close]').forEach((el) => {
     el.addEventListener('click', closePalette);
   });
+  paletteBack?.addEventListener('click', showLevel1);
+  paletteDrawer?.querySelectorAll('[data-palette-drill]').forEach((el) => {
+    el.addEventListener('click', () => showLevel2(el.dataset.paletteDrill));
+  });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && paletteDrawer && !paletteDrawer.classList.contains('hidden')) {
+    if (e.key !== 'Escape' || !paletteDrawer) return;
+    if (paletteDrawer.classList.contains('hidden')) return;
+    // ESC backs out of level-2 first, closes the drawer at level-1.
+    if (paletteBack && !paletteBack.classList.contains('hidden')) {
+      showLevel1();
+    } else {
       closePalette();
     }
   });
@@ -1726,23 +1792,25 @@
 
   // Live filter — match palette items by text content. Section
   // headings hide when every item underneath is filtered out so the
-  // list stays tidy.
-  const paletteSearch = document.getElementById('wf-palette-search');
-  paletteSearch?.addEventListener('input', () => {
-    const q = paletteSearch.value.trim().toLowerCase();
-    const sections = paletteDrawer.querySelectorAll('[data-palette-section]');
+  // list stays tidy. Runs against whichever level is currently visible.
+  function filterPalette(q) {
+    const query = q.trim().toLowerCase();
+    const activeList = paletteDrawer?.querySelector('[data-palette-level]:not(.hidden)');
+    if (!activeList) return;
+    const sections = activeList.querySelectorAll('[data-palette-section]');
     sections.forEach((sec) => {
-      const group = sec.nextElementSibling; // the items container
+      const group = sec.nextElementSibling;
       if (!group) return;
       let visible = 0;
       group.querySelectorAll('.wf-palette-item').forEach((row) => {
         const text = row.textContent.toLowerCase();
-        const match = q === '' || text.includes(q);
+        const match = query === '' || text.includes(query);
         row.style.display = match ? '' : 'none';
         if (match) visible++;
       });
       sec.style.display = visible === 0 ? 'none' : '';
       group.style.display = visible === 0 ? 'none' : '';
     });
-  });
+  }
+  paletteSearch?.addEventListener('input', () => filterPalette(paletteSearch.value));
 })();

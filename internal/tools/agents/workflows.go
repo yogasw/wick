@@ -265,6 +265,7 @@ func workflowEditor(c *tool.Ctx) {
 		Approved:       approved,
 		GuardReport:    &report,
 		NodeTypes:      globalWorkflowMgr.MCP.NodeTypes(),
+		Palette:        wfview.BuildPalette(globalWorkflowMgr.MCP.ChannelsList(), globalWorkflowMgr.MCP.ConnectorsList()),
 		Runs:           runs,
 		RunsPage:       page,
 		RunsHasMore:    hasMore,
