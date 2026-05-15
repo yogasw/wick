@@ -14,7 +14,6 @@
 # Dependency directories
 vendor/
 .env
-engine
 docker-compose.yaml
 
 .idea
