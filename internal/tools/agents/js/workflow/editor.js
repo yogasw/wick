@@ -251,7 +251,7 @@
   // before invoking the connector/channel.
   const connArgsEl = document.getElementById('ins-conn-args');
   const chanArgsEl = document.getElementById('ins-channel-args');
-  function renderArgsForm(container, inputs, args) {
+  function renderArgsForm(container, inputs, args, modes) {
     container.innerHTML = '';
     if (!inputs || !inputs.length) {
       container.innerHTML = '<div class="text-xs italic text-black-600 dark:text-black-700">No args required.</div>';
@@ -259,21 +259,157 @@
     }
     inputs.forEach((spec) => {
       const wrap = document.createElement('div');
+      wrap.className = 'mb-2';
+
+      // Header row: arg label on the left + Fixed | Expression
+      // toggle pill on the right. Pill is the n8n-style mode switch:
+      //   Fixed      → input value is literal text, no template scan,
+      //                no preview, drop-target inserts the ref but
+      //                immediately flips the field to Expression
+      //   Expression → value is treated as a Go template, preview
+      //                renders live against the INPUT pane data
+      // Mode persists per arg key under `__arg_modes` on the node so
+      // the next inspector open restores it. Auto-detected on first
+      // load: a value containing `{{` opens in Expression, plain text
+      // opens in Fixed.
+      const head = document.createElement('div');
+      head.className = 'flex items-center justify-between mb-1';
       const label = document.createElement('label');
-      label.className = 'block text-xs font-medium text-black-800 dark:text-black-600 mb-1';
+      label.className = 'text-xs font-medium text-black-800 dark:text-black-600';
       label.textContent = spec.key + (spec.required ? ' *' : '');
       if (spec.description) label.title = spec.description;
+      head.appendChild(label);
+
+      const initialValue = (args && args[spec.key] != null) ? String(args[spec.key]) : '';
+      // Default = Fixed (literal). Operator must explicitly switch to
+      // Expression to enable template rendering. Mirrors n8n's safer
+      // default: drag-drop and `{{ }}` literals don't accidentally get
+      // evaluated as code paths.
+      const initialMode = (modes && modes[spec.key]) || 'fixed';
+
+      const toggle = document.createElement('div');
+      toggle.className = 'wf-arg-mode';
+      const fixedBtn = document.createElement('button');
+      fixedBtn.type = 'button';
+      fixedBtn.dataset.argMode = 'fixed';
+      fixedBtn.textContent = 'Fixed';
+      const exprBtn = document.createElement('button');
+      exprBtn.type = 'button';
+      exprBtn.dataset.argMode = 'expression';
+      exprBtn.textContent = 'Expression';
+      toggle.appendChild(fixedBtn);
+      toggle.appendChild(exprBtn);
+      head.appendChild(toggle);
+
       const input = document.createElement('input');
       input.type = 'text';
       input.dataset.argKey = spec.key;
-      input.value = (args && args[spec.key] != null) ? String(args[spec.key]) : '';
+      input.dataset.argInput = '1';
+      input.value = initialValue;
       input.placeholder = spec.description || '';
       input.className = 'w-full bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg p-2 text-xs text-black-900 dark:text-white-100';
-      input.addEventListener('input', () => { if (selectedID) updateNodeData(selectedID); });
-      wrap.appendChild(label);
+      input.addEventListener('input', () => {
+        if (selectedID) updateNodeData(selectedID);
+        updatePreview(input);
+      });
+      attachTemplateDropTarget(input, () => setArgMode(input, 'expression'));
+
+      const preview = document.createElement('div');
+      preview.dataset.argPreview = '1';
+      preview.className = 'wf-arg-preview';
+
+      wrap.appendChild(head);
       wrap.appendChild(input);
+      wrap.appendChild(preview);
       container.appendChild(wrap);
+
+      fixedBtn.addEventListener('click', () => setArgMode(input, 'fixed'));
+      exprBtn.addEventListener('click', () => setArgMode(input, 'expression'));
+
+      // Apply initial mode (sets dataset + button state + preview vis).
+      setArgMode(input, initialMode);
     });
+  }
+
+  // setArgMode flips an arg input between fixed and expression modes
+  // and updates the wrap's UI accordingly. Persists the choice to the
+  // node's data block so reopening the inspector keeps the mode.
+  function setArgMode(input, mode) {
+    if (!input) return;
+    input.dataset.argMode = mode;
+    const wrap = input.parentElement;
+    if (wrap) {
+      wrap.querySelectorAll('[data-arg-mode]').forEach((btn) => {
+        btn.classList.toggle('is-on', btn.dataset.argMode === mode);
+      });
+    }
+    updatePreview(input);
+    if (selectedID) updateNodeData(selectedID);
+  }
+
+  // collectArgModes mirrors collectArgs but for the per-arg mode
+  // toggle. Used by updateNodeData to round-trip the mode map under
+  // `__arg_modes` so future re-renders restore the right toggle.
+  function collectArgModes(container) {
+    const out = {};
+    container.querySelectorAll('input[data-arg-key]').forEach((el) => {
+      const k = el.dataset.argKey;
+      const m = el.dataset.argMode;
+      if (m) out[k] = m;
+    });
+    return out;
+  }
+
+  // attachTemplateDropTarget wires an input/textarea as a drop target
+  // for the INPUT pane's draggable JSON leaves. On drop, inserts the
+  // template ref (`{{.Event.Payload.text}}` style) at the current
+  // cursor position. onTemplateDrop fires after the value is updated
+  // so callers can flip the arg into Expression mode automatically.
+  function attachTemplateDropTarget(el, onTemplateDrop) {
+    el.addEventListener('dragover', (e) => {
+      const tpl = e.dataTransfer.types.includes('text/plain');
+      if (tpl) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        el.classList.add('wf-arg-input-drop');
+      }
+    });
+    el.addEventListener('dragleave', () => el.classList.remove('wf-arg-input-drop'));
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      el.classList.remove('wf-arg-input-drop');
+      const text = e.dataTransfer.getData('text/plain');
+      if (!text) return;
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? el.value.length;
+      el.value = el.value.slice(0, start) + text + el.value.slice(end);
+      const caret = start + text.length;
+      try { el.setSelectionRange(caret, caret); } catch (_) {}
+      el.focus();
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      if (typeof onTemplateDrop === 'function') onTemplateDrop();
+    });
+  }
+
+  // updatePreview rewrites the preview span beneath an arg input. In
+  // Fixed mode the preview stays hidden — the value is whatever the
+  // user typed, nothing to render. In Expression mode the value is
+  // run through renderTemplatePreview against the current INPUT data
+  // and `lastRunOutputs`. Empty inputs hide the preview either way.
+  function updatePreview(input) {
+    const wrap = input.parentElement;
+    const preview = wrap && wrap.querySelector('[data-arg-preview]');
+    if (!preview) return;
+    const tpl = input.value || '';
+    const mode = input.dataset.argMode || 'fixed';
+    if (tpl === '' || mode !== 'expression') {
+      preview.textContent = '';
+      preview.classList.remove('wf-arg-preview-active');
+      return;
+    }
+    const out = renderTemplatePreview(tpl);
+    preview.textContent = '→ ' + out;
+    preview.classList.add('wf-arg-preview-active');
   }
   function collectArgs(container) {
     const out = {};
@@ -284,18 +420,16 @@
     });
     return out;
   }
-  function refreshConnArgs(currentArgs) {
+  function refreshConnArgs(currentArgs, modes) {
     if (!connArgsEl) return;
     const mod = registry.connectors.find((m) => m.module === f.module?.value);
     const op = mod?.ops.find((o) => o.id === f.connOp?.value);
-    renderArgsForm(connArgsEl, op?.input || [], currentArgs || {});
+    renderArgsForm(connArgsEl, op?.input || [], currentArgs || {}, modes || {});
   }
-  function refreshChannelArgs(currentArgs) {
+  function refreshChannelArgs(currentArgs, modes) {
     if (!chanArgsEl) return;
     const ch = registry.channels.find((c) => c.name === f.channel?.value);
     const op = ch?.ops.find((o) => o.id === f.op?.value);
-    // Channels don't ship structured input specs yet — fall back to
-    // a free-text JSON box when the registry has nothing to render.
     if (!op?.input || !op.input.length) {
       chanArgsEl.innerHTML = '';
       const ta = document.createElement('textarea');
@@ -308,7 +442,7 @@
       chanArgsEl.appendChild(ta);
       return;
     }
-    renderArgsForm(chanArgsEl, op.input, currentArgs || {});
+    renderArgsForm(chanArgsEl, op.input, currentArgs || {}, modes || {});
   }
 
   // Cascade refresh when parent picker changes.
@@ -1015,14 +1149,14 @@
       f.channel.value = inner.channel || '';
       hydrateChannelOps();
       f.op.value = inner.op || '';
-      refreshChannelArgs(inner.args);
+      refreshChannelArgs(inner.args, inner.__arg_modes);
     }
     if (kind === 'connector') {
       panels.connector.classList.remove('hidden');
       f.module.value = inner.module || '';
       hydrateConnectorOps();
       f.connOp.value = inner.op || '';
-      refreshConnArgs(inner.args);
+      refreshConnArgs(inner.args, inner.__arg_modes);
     }
     refreshOutputRefs();
   }
@@ -1081,14 +1215,209 @@
     if (!parentID || !parentOutput) {
       inputEmpty.classList.remove('hidden');
       inputData.classList.add('hidden');
+      lastInputPrefix = null;
+      lastInputData = null;
       return;
     }
     inputEmpty.classList.add('hidden');
     inputData.classList.remove('hidden');
     const jsonEl = document.getElementById('ins-input-json');
     const schemaEl = document.getElementById('ins-input-schema');
-    if (jsonEl) jsonEl.textContent = JSON.stringify(parentOutput, null, 2);
+    // Detect prefix: when the parent is a trigger, its cached output
+    // is the workflow.Event object — drags should produce
+    // `{{.Event.<path>}}`. For regular nodes use `{{.Node.<id>.<path>}}`.
+    const prefix = inputPrefixForParent(parentID);
+    lastInputPrefix = prefix;
+    lastInputData = parentOutput;
+    if (jsonEl) renderInteractiveJSON(jsonEl, parentOutput, prefix);
     if (schemaEl) schemaEl.textContent = inferSchema(parentOutput);
+    // Refresh inline preview on every visible arg field.
+    refreshArgPreviews();
+  }
+
+  // inputPrefixForParent returns the template-path prefix for drags
+  // out of the INPUT pane based on what kind of node fed the data.
+  // Trigger nodes don't emit node_completed; their cached "output" is
+  // the raw workflow.Event so paths root at `.Event.…`. Every other
+  // node's output lives under `.Node.<id>.…`.
+  function inputPrefixForParent(parentID) {
+    if (!parentID) return '.Event';
+    const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+    if (!live) return '.Node.' + parentID;
+    for (const k in live) {
+      const n = live[k];
+      if (!n || !n.data) continue;
+      if ((n.data.id || n.name) !== parentID) continue;
+      if (n.data.type === 'trigger') return '.Event';
+      return '.Node.' + parentID;
+    }
+    return '.Node.' + parentID;
+  }
+
+  // canonicalEventKey maps a json key on the Event envelope to its
+  // Go field name so emitted templates work with text/template's
+  // case-sensitive field access. The JSON tag is lowercase (type,
+  // subtype, channel, at, payload) but the Go struct uses Pascal
+  // case — `{{.Event.payload.x}}` fails with "can't evaluate field
+  // payload in type workflow.Event". Children of Payload are keys
+  // in a map[string]any, so map-style access keeps the JSON case.
+  function canonicalEventKey(key) {
+    switch (key) {
+      case 'type':    return 'Type';
+      case 'subtype': return 'Subtype';
+      case 'channel': return 'Channel';
+      case 'at':      return 'At';
+      case 'payload': return 'Payload';
+      default:        return key;
+    }
+  }
+
+  // renderInteractiveJSON walks `obj` and writes a JSON pretty-print
+  // into `host` where each leaf value is wrapped in a draggable
+  // <span data-path="…"> carrying the full template path. Drops land
+  // in any [data-arg-input] field and insert `{{<path>}}` at the
+  // cursor — the n8n drag-from-INPUT UX.
+  function renderInteractiveJSON(host, obj, prefix) {
+    host.innerHTML = '';
+    writeJSONNode(host, obj, prefix, 0);
+  }
+
+  function writeJSONNode(host, v, path, depth) {
+    const pad = '  '.repeat(depth);
+    if (v === null) { host.appendChild(leafSpan(path, 'null', 'null')); return; }
+    if (Array.isArray(v)) {
+      host.appendChild(textSpan('[\n'));
+      v.forEach((item, i) => {
+        host.appendChild(textSpan(pad + '  '));
+        writeJSONNode(host, item, path + '.' + i, depth + 1);
+        host.appendChild(textSpan(i < v.length - 1 ? ',\n' : '\n'));
+      });
+      host.appendChild(textSpan(pad + ']'));
+      return;
+    }
+    if (typeof v === 'object') {
+      const keys = Object.keys(v);
+      host.appendChild(textSpan('{\n'));
+      keys.forEach((k, i) => {
+        // Root-level Event keys are rendered AND emit using canonical
+        // Go field names (Payload, Type, …) so the display matches
+        // the template path exactly — operators won't see "payload"
+        // in the JSON pane and wonder why the drop puts "Payload" in
+        // the field. Past the root, every level is a map[string]any
+        // so JSON case is the right access path.
+        const isEventRoot = path === '.Event' && depth === 0;
+        const displayKey = isEventRoot ? canonicalEventKey(k) : k;
+        const childPath = path + '.' + displayKey;
+        host.appendChild(textSpan(pad + '  '));
+        const keySpan = leafSpan(childPath, '"' + displayKey + '"', 'key');
+        host.appendChild(keySpan);
+        host.appendChild(textSpan(': '));
+        writeJSONNode(host, v[k], childPath, depth + 1);
+        host.appendChild(textSpan(i < keys.length - 1 ? ',\n' : '\n'));
+      });
+      host.appendChild(textSpan(pad + '}'));
+      return;
+    }
+    let display;
+    if (typeof v === 'string') display = '"' + v + '"';
+    else display = String(v);
+    host.appendChild(leafSpan(path, display, typeof v));
+  }
+
+  function textSpan(s) {
+    return document.createTextNode(s);
+  }
+
+  function leafSpan(path, display, kind) {
+    const span = document.createElement('span');
+    span.className = 'wf-json-leaf wf-json-' + kind;
+    span.textContent = display;
+    span.draggable = true;
+    span.dataset.tplPath = '{{' + path + '}}';
+    span.title = `Drag to an arg field — inserts ${span.dataset.tplPath}`;
+    span.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', span.dataset.tplPath);
+      e.dataTransfer.effectAllowed = 'copyMove';
+    });
+    span.addEventListener('click', () => {
+      copyToClipboard(span.dataset.tplPath, null);
+      span.classList.add('wf-json-leaf-flash');
+      setTimeout(() => span.classList.remove('wf-json-leaf-flash'), 400);
+    });
+    return span;
+  }
+
+  // lastInputPrefix + lastInputData track the current INPUT pane data
+  // so refreshArgPreviews can render template results live as the
+  // operator types `{{ }}` references into arg fields.
+  let lastInputPrefix = null;
+  let lastInputData = null;
+
+  // refreshArgPreviews walks every visible arg input that has a
+  // sibling `[data-arg-preview]` element and rewrites the preview
+  // text with the rendered template, evaluated against
+  // `lastInputData` plus the trigger event so the operator sees the
+  // exact value that will land at runtime — without firing Execute
+  // step.
+  function refreshArgPreviews() {
+    document.querySelectorAll('[data-arg-preview]').forEach((el) => {
+      const input = el.previousElementSibling;
+      if (!input || (input.tagName !== 'INPUT' && input.tagName !== 'TEXTAREA')) {
+        el.textContent = '';
+        return;
+      }
+      const tpl = input.value || '';
+      const out = renderTemplatePreview(tpl);
+      el.textContent = out;
+    });
+  }
+
+  // renderTemplatePreview is a lightweight Go-template-ish evaluator
+  // for the common shapes wick uses: `{{.A.B.C}}`. Walks
+  // `lastInputData` rooted at `lastInputPrefix` for `.Event.…` refs,
+  // and `lastRunOutputs[<id>]` for `.Node.<id>.…` refs. Doesn't
+  // implement pipes, conditionals, or fancy stdlib funcs — those
+  // still fire server-side at Execute step time. The preview is
+  // diagnostic, not authoritative.
+  function renderTemplatePreview(tpl) {
+    if (typeof tpl !== 'string' || tpl === '') return '';
+    return tpl.replace(/{{\s*([^}]+?)\s*}}/g, (_, raw) => {
+      const path = raw.trim();
+      const val = resolveTemplatePath(path);
+      if (val === undefined) return '⟨unresolved⟩';
+      if (typeof val === 'object') return JSON.stringify(val);
+      return String(val);
+    });
+  }
+
+  function resolveTemplatePath(path) {
+    if (!path.startsWith('.')) return undefined;
+    const parts = path.slice(1).split('.');
+    let root;
+    let lowercaseRoot = false;
+    if (parts[0] === 'Event') {
+      // Resolve against the cached input data when it's actually the
+      // event envelope (parent === trigger). The JSON representation
+      // of workflow.Event uses lowercase tags (payload, type, …) so
+      // the preview walker has to lowercase the immediate root-level
+      // segment even though the canonical template path is Capital.
+      root = lastInputData;
+      parts.shift();
+      lowercaseRoot = true;
+    } else if (parts[0] === 'Node') {
+      const id = parts[1];
+      root = lastRunOutputs[id];
+      parts.splice(0, 2);
+    } else {
+      return undefined;
+    }
+    let cur = root;
+    for (let i = 0; i < parts.length; i++) {
+      if (cur === null || cur === undefined) return undefined;
+      const key = (lowercaseRoot && i === 0) ? parts[i].toLowerCase() : parts[i];
+      cur = cur[key];
+    }
+    return cur;
   }
 
   function findParentNodeID(node) {
@@ -1131,20 +1460,22 @@
     if (kind === 'channel') {
       inner.channel = f.channel.value;
       inner.op = f.op.value;
-      // Channels with structured input specs use the per-key inputs;
-      // those without fall back to a single JSON textarea.
       const jsonTA = document.getElementById('ins-channel-args-json');
       if (jsonTA) {
         try { inner.args = jsonTA.value.trim() ? JSON.parse(jsonTA.value) : {}; }
         catch (_) { /* leave previous args until JSON parses */ }
       } else if (chanArgsEl) {
         inner.args = collectArgs(chanArgsEl);
+        inner.__arg_modes = collectArgModes(chanArgsEl);
       }
     }
     if (kind === 'connector') {
       inner.module = f.module.value;
       inner.op = f.connOp.value;
-      if (connArgsEl) inner.args = collectArgs(connArgsEl);
+      if (connArgsEl) {
+        inner.args = collectArgs(connArgsEl);
+        inner.__arg_modes = collectArgModes(connArgsEl);
+      }
     }
     editor.updateNodeDataFromId(id, { id: d.id, type: kind, data: inner });
     refreshOutputRefs();
@@ -1719,6 +2050,7 @@
     const live = editor.drawflow.drawflow.Home.data[selectedID];
     if (!live) return;
     let input = {};
+    let event = null;
     const raw = (execInput?.value || '').trim();
     if (raw) {
       try { input = JSON.parse(raw); }
@@ -1726,14 +2058,28 @@
         if (execStatus) execStatus.textContent = '✕ Mock input is not valid JSON';
         return;
       }
+    } else if (lastInputData) {
+      // Auto-seed the step's run context from whatever's cached in the
+      // INPUT pane: a trigger parent caches the full workflow.Event so
+      // we send it as `event` to restore Type/Subtype/Channel; a
+      // regular parent caches a NodeOutput so we send it as `input`.
+      const looksLikeEvent = lastInputData && typeof lastInputData === 'object' && 'payload' in lastInputData;
+      if (looksLikeEvent) {
+        event = lastInputData;
+        input = lastInputData.payload || {};
+      } else {
+        input = lastInputData;
+      }
     }
     if (execStatus) execStatus.textContent = '⟳ Executing…';
     execBtn.disabled = true;
     try {
+      const body = { node: live, input: input };
+      if (event) body.event = event;
       const resp = await fetch(`${baseURL}/edit/${slug}/exec-node`, {
         method: 'POST',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ node: live, input: input }),
+        body: JSON.stringify(body),
       });
       const data = await resp.json();
       if (!resp.ok || !data.ok) {

@@ -113,11 +113,17 @@ func nodeDataFromWorkflow(n wf.Node) map[string]any {
 		if n.Args != nil {
 			data["args"] = n.Args
 		}
+		if len(n.ArgModes) > 0 {
+			data["__arg_modes"] = n.ArgModes
+		}
 	case wf.NodeConnector:
 		data["module"] = n.Module
 		data["op"] = n.Op
 		if n.Args != nil {
 			data["args"] = n.Args
+		}
+		if len(n.ArgModes) > 0 {
+			data["__arg_modes"] = n.ArgModes
 		}
 	case wf.NodeBranch:
 		data["expr"] = n.Expr
@@ -647,10 +653,12 @@ func workflowNodeFromDrawflow(dn drawflowNode) wf.Node {
 		wn.ChannelName, _ = inner["channel"].(string)
 		wn.Op, _ = inner["op"].(string)
 		wn.Args, _ = inner["args"].(map[string]any)
+		wn.ArgModes = stringMapFromAny(inner["__arg_modes"])
 	case wf.NodeConnector:
 		wn.Module, _ = inner["module"].(string)
 		wn.Op, _ = inner["op"].(string)
 		wn.Args, _ = inner["args"].(map[string]any)
+		wn.ArgModes = stringMapFromAny(inner["__arg_modes"])
 	case wf.NodeBranch:
 		wn.Expr, _ = inner["expr"].(string)
 	case wf.NodeTransform:
@@ -702,6 +710,36 @@ func stringSliceFromAny(v any) []string {
 	}
 	if s, ok := v.([]string); ok {
 		return s
+	}
+	return nil
+}
+
+// stringMapFromAny coerces a canvas/data block value into the
+// map[string]string shape wf.Node.ArgModes expects. Editors emit it
+// as map[string]any (every JSON-derived map keys to any); YAML round
+// trip from a hand-edited workflow can also yield the same. Returns
+// nil when the source is empty so YAML omitempty kicks in.
+func stringMapFromAny(v any) map[string]string {
+	if v == nil {
+		return nil
+	}
+	if m, ok := v.(map[string]any); ok {
+		out := make(map[string]string, len(m))
+		for k, x := range m {
+			if s, ok := x.(string); ok && s != "" {
+				out[k] = s
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	if m, ok := v.(map[string]string); ok {
+		if len(m) == 0 {
+			return nil
+		}
+		return m
 	}
 	return nil
 }

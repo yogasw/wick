@@ -7,7 +7,6 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
 
@@ -42,11 +41,10 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 		return workflow.NodeOutput{}, fmt.Errorf("connector %s has no op %q", n.Module, n.Op)
 	}
 
-	rendered, err := template.RenderInto(n.Args, rc.RenderCtx())
+	argsMap, err := renderArgsWithModes(n.Args, n.ArgModes, rc)
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("render args: %w", err)
 	}
-	argsMap, _ := rendered.(map[string]any)
 	inputs := stringifyArgs(argsMap)
 	if err := validateRequiredInputs(op, inputs); err != nil {
 		return workflow.NodeOutput{}, err

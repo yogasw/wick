@@ -434,6 +434,16 @@ Jawab: bug | question | feature | other</textarea>
           <code class="text-indigo-700">{{.Event.Payload.user}}</code><br>
           <code class="text-indigo-700">{{.Node.classify-intent.verdict}}</code>
         </div>
+
+        <div class="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-900">
+          <strong>Per-arg Fixed | Expression toggle</strong><br>
+          Inspector args punya pill toggle: <strong>Fixed</strong> (default, literal) vs <strong>Expression</strong> (Go template). Drop draggable dari INPUT pane → auto-flip ke Expression. Mode tersimpan di <code>arg_modes</code> YAML.
+        </div>
+
+        <div class="mt-2 p-3 bg-cyan-50 border border-cyan-200 rounded text-xs text-cyan-900">
+          <strong>Replay debug (no-fire)</strong><br>
+          <code>↻ Replay in editor</code> di tiap Runs row → state + events di-load ke editor, badge node + Logs + INPUT/OUTPUT cache. Trigger event juga ke-cache jadi drag-drop bisa langsung dari payload Slack history.
+        </div>
       </aside>
     </div>
 
@@ -2257,12 +2267,16 @@ workflow_simulate(slug, event, mocks)</pre>
         <p class="text-sm text-slate-300">Worker crash → next start baca state.current, lanjut dari sana. Run ID sama.</p>
       </div>
       <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
-        <div class="text-amber-400 text-xs font-bold uppercase mb-1">Replay</div>
-        <p class="text-sm text-slate-300">Run selesai → bikin run baru dgn event yg sama. Skip dedup, audit log catat origin.</p>
+        <div class="text-emerald-400 text-xs font-bold uppercase mb-1">Inline Replay</div>
+        <p class="text-sm text-slate-300">Klik <code>↻ Replay in editor</code> di Runs panel → state + events loaded ke editor (badge node, Logs, INPUT/OUTPUT cache). Tidak fire run baru. Buat debug step-by-step.</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
+        <div class="text-amber-400 text-xs font-bold uppercase mb-1">Manual Replay</div>
+        <p class="text-sm text-slate-300">Run selesai → fire run baru dgn event yg sama via <code>?prefill=&lt;runID&gt;</code>. Skip dedup, audit log catat origin.</p>
       </div>
       <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
         <div class="text-rose-400 text-xs font-bold uppercase mb-1">Re-run from node</div>
-        <p class="text-sm text-slate-300">Debug: state restore sampai node X, lanjut dari sana dgn output baru.</p>
+        <p class="text-sm text-slate-300">Debug: state restore sampai node X, lanjut dari sana dgn output baru. <em>Belum impl.</em></p>
       </div>
     </div>
 

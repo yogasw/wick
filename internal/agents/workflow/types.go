@@ -165,6 +165,14 @@ type Node struct {
 	ChannelName string         `yaml:"channel,omitempty"`
 	Op          string         `yaml:"op,omitempty"`
 	Args        map[string]any `yaml:"args,omitempty"`
+	// ArgModes records each arg's editor mode: "fixed" = literal value
+	// (executor skips template render), "expression" = Go template (the
+	// default behaviour kept for backward compat when ArgModes has no
+	// entry for a key). Persisted so the inspector restores the toggle
+	// state and so safer-by-default semantics survive a publish round
+	// trip. Defaults to template render when an arg key is missing
+	// here, matching pre-ArgModes workflows.
+	ArgModes map[string]string `yaml:"arg_modes,omitempty"`
 
 	// connector — uses row_id for instance (dataset_* nodes own `row:`)
 	Module string `yaml:"module,omitempty"`

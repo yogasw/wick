@@ -1077,6 +1077,45 @@ Error event `.Event.Payload` shape:
 
 Plus `{{.Node.<id>.<field>}}` buat output dari node lain.
 
+### Fixed vs Expression mode (per-arg)
+
+Tiap arg di node yang punya structured input (connector + channel
+action) bisa di-toggle **Fixed** atau **Expression** lewat inspector
+pill UI. Default = **Fixed** (literal, ngak render template).
+
+Storage di YAML:
+
+```yaml
+nodes:
+  - id: send-reply
+    type: connector
+    module: slack
+    op: send_message
+    args:
+      channel: "{{.Event.Payload.channel_id}}"   # template
+      text: "Hello world"                         # literal
+    arg_modes:
+      channel: expression
+      text: fixed
+```
+
+Engine behavior ([nodes/args.go renderArgsWithModes](../agents/workflow/nodes/args.go)):
+
+- `arg_modes[key] == "fixed"` → value passed as literal, no template
+  render. Safe against accidental `{{...}}` substring in user-typed
+  text.
+- `arg_modes[key] == "expression"` atau missing → render via Go
+  template. Backward compatible — workflows tanpa `arg_modes` block
+  jalan persis kayak sebelumnya.
+
+Drag-drop dari INPUT pane → drop ke arg field → auto-flip ke
+Expression mode + insert `{{.Event.Payload.<key>}}` di posisi cursor.
+
+Template path normalization: legacy `{{.Event.payload.x}}` (huruf
+kecil dari JSON tag) di-rewrite jadi `{{.Event.Payload.x}}` saat
+render — ngak break workflow YAML lama yang typed lowercase, tapi
+canonical form yang baru pakai Capital sesuai Go field name.
+
 ---
 
 ## 5. Node catalog
@@ -4645,29 +4684,43 @@ Recommend **DB** karena query freq tinggi (list page selalu join state).
 
 ## 21. Replay
 
-### Per-run replay
+### Inline replay (in-editor debug)
 
-Tombol Replay di run detail → bikin event sintetis dari row, enqueue
-ulang. Berguna buat debug, audit, test.
+Tombol **↻ Replay in editor** di tiap row Runs panel — fetch state +
+events lewat `/runs/<id>/state`, paint node badge di canvas, populate
+Logs tab dengan tiap event, plus cache outputs:
 
-Replay nge-skip dedup (event_id stamp baru `replay-<uuid>`), tetep lewat
-whitelist + queue + guard. Audit log catat replay + original run ID.
+- Trigger node → cache full `state.event` jadi "output" trigger
+- Setiap node `node_completed` → cache `data.output`
 
-UI nampilin Replay sebagai `?prefill=<runID>` link ke manual runner
-(pola yg sama dgn replay UI lain — memory `replay-navigate-not-autoexecute`).
+Hasilnya: setelah Replay, klik node manapun → INPUT pane nampilin
+parent output, OUTPUT pane nampilin output node tsb (dari run history).
+Tidak fire run baru — purely reload state. Workflow ngak berubah.
 
-### Per-node replay (debug)
+Plus: tombol **Export JSON** di tiap row → copy full state+events ke
+clipboard buat paste ke bug report / chat.
+
+### Re-run via manual trigger
+
+Untuk fire run baru dengan event yang sama (test fix, audit, regression
+check): pakai `?prefill=<runID>` link ke manual runner — UI replay nav,
+not auto-execute (memory `replay-navigate-not-autoexecute`). Replay
+skip dedup (event_id stamp baru `replay-<uuid>`), tetep lewat whitelist +
+queue + guard.
+
+### Per-node replay (debug, future)
 
 Klik node di run timeline → "Re-run from here" → bikin run baru yg state
 di-restore sampai node tersebut, lalu lanjut dari node tsb. Berguna pas
-debug "node X kasih output beda dari ekspektasi".
+debug "node X kasih output beda dari ekspektasi". **Belum diimplementasi.**
 
 ### Resume vs Replay
 
 - **Resume** — workflow paused atau crash. Lanjut dari state terakhir.
   Run ID sama.
-- **Replay** — workflow selesai (success/fail). Run baru dgn event yg
-  sama.
+- **Inline Replay** — workflow selesai (success/fail). State reload ke
+  editor, tidak fire run baru. Run ID + state tetap.
+- **Manual Replay** — fire run baru dgn event yg sama. Run ID baru.
 
 ---
 

@@ -22,6 +22,7 @@ func Render(tmpl string, ctx workflow.RenderCtx) (string, error) {
 	if tmpl == "" {
 		return "", nil
 	}
+	tmpl = normalizeEventPaths(tmpl)
 	t := gotemplate.New("node").Funcs(BuiltinFuncs).Option("missingkey=error")
 	parsed, err := t.Parse(tmpl)
 	if err != nil {
@@ -32,6 +33,40 @@ func Render(tmpl string, ctx workflow.RenderCtx) (string, error) {
 		return "", fmt.Errorf("template execute: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// eventFieldAliases maps the JSON-tag lowercase form of the
+// workflow.Event top-level fields back to their Go field names. The
+// editor's INPUT pane renders JSON (lowercase keys) and earlier
+// drag-emit shipped templates like `{{.Event.payload.x}}`, which Go
+// text/template rejects because struct field lookup is case-sensitive
+// against the Go name (`Payload`). normalizeEventPaths rewrites any
+// `.Event.<lower>` segment to `.Event.<Capital>` so both the legacy
+// stored templates and the new drag-emit canonical form evaluate.
+//
+// Only the immediate next segment after `.Event.` is rewritten —
+// deeper paths (`.Event.Payload.channel_id`) are map-key lookups and
+// keep their JSON case.
+var eventFieldAliases = map[string]string{
+	"type":    "Type",
+	"subtype": "Subtype",
+	"channel": "Channel",
+	"at":      "At",
+	"payload": "Payload",
+}
+
+func normalizeEventPaths(tmpl string) string {
+	if !strings.Contains(tmpl, ".Event.") {
+		return tmpl
+	}
+	out := tmpl
+	for lower, canon := range eventFieldAliases {
+		if lower == canon {
+			continue
+		}
+		out = strings.ReplaceAll(out, ".Event."+lower, ".Event."+canon)
+	}
+	return out
 }
 
 // RenderInto recursively renders string values inside maps/slices.

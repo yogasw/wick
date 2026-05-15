@@ -845,6 +845,84 @@
   background: rgba(255,255,255,0.02);
 }
 
+/* ── Interactive INPUT JSON + arg preview ────────────────────────
+ * Each JSON leaf in the inspector's INPUT pane is a draggable span
+ * carrying a `{{<template-path>}}` payload. Drop on any arg input
+ * inserts the ref; click copies it to the clipboard.
+ *
+ * Arg preview is the small rendered-value line below each arg
+ * field — fed by lastInputData / lastRunOutputs so the operator sees
+ * what `{{.Event.Payload.text}}` will resolve to without firing the
+ * node. Diagnostic only; the real render still runs server-side. */
+.wf-json-leaf {
+  display: inline;
+  cursor: grab;
+  border-radius: 3px;
+  padding: 0 2px;
+  transition: background 0.12s;
+}
+.wf-json-leaf:hover {
+  background: rgba(16, 185, 129, 0.18);
+}
+.wf-json-leaf:active { cursor: grabbing; }
+.wf-json-leaf-flash { background: rgba(16, 185, 129, 0.4); }
+.wf-json-key    { color: #0e7490; }   /* cyan-700 */
+.wf-json-string { color: #92400e; }   /* amber-800 */
+.wf-json-number { color: #6d28d9; }   /* violet-700 */
+.wf-json-boolean,
+.wf-json-null   { color: #6d28d9; }
+.dark .wf-json-key    { color: #67e8f9; }
+.dark .wf-json-string { color: #fcd34d; }
+.dark .wf-json-number,
+.dark .wf-json-boolean,
+.dark .wf-json-null   { color: #c4b5fd; }
+
+.wf-arg-input-drop {
+  outline: 2px dashed #10b981;
+  outline-offset: 1px;
+}
+.wf-arg-mode {
+  display: inline-flex;
+  border: 1px solid #e0dccf;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 10px;
+  background: #f5f3ee;
+}
+.wf-arg-mode button {
+  padding: 2px 8px;
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.wf-arg-mode button.is-on {
+  background: #10b981;
+  color: #fff;
+  font-weight: 600;
+}
+.dark .wf-arg-mode {
+  background: #1a2238;
+  border-color: #2c3a5a;
+}
+.dark .wf-arg-mode button { color: #94a3b8; }
+.dark .wf-arg-mode button.is-on { background: #10b981; color: #f0fdf4; }
+.wf-arg-preview {
+  display: none;
+  margin-top: 3px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 10px;
+  color: #047857;
+  padding: 2px 6px;
+  background: rgba(16, 185, 129, 0.08);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.wf-arg-preview-active { display: block; }
+.dark .wf-arg-preview { color: #34d399; background: rgba(16, 185, 129, 0.1); }
+
 /* ── Toast notifications ─────────────────────────────────────────
  * Background-friendly status messages for Publish, Discard, and any
  * other action that previously reloaded the page. Stacks at the

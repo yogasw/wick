@@ -6,7 +6,6 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
 
 // ChannelExecutor dispatches `type: channel` action nodes through the
@@ -37,13 +36,9 @@ func (e *ChannelExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 	if !ok {
 		return workflow.NodeOutput{}, fmt.Errorf("channel action %q not registered", key)
 	}
-	rendered, err := template.RenderInto(n.Args, rc.RenderCtx())
+	args, err := renderArgsWithModes(n.Args, n.ArgModes, rc)
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("render args: %w", err)
-	}
-	args, _ := rendered.(map[string]any)
-	if args == nil {
-		args = map[string]any{}
 	}
 	result, err := desc.Execute(ctx, args)
 	if err != nil {

@@ -667,6 +667,13 @@ func execNodeStep(c *tool.Ctx) {
 	var body struct {
 		Node  map[string]any `json:"node"`
 		Input map[string]any `json:"input"`
+		// Event is an optional full envelope override — when present
+		// (the editor sends it after a Replay so the step sees the
+		// same Event the original run had), it replaces the manual
+		// fallback below so templates like `{{.Event.Channel}}` or
+		// `{{.Event.Subtype}}` resolve to the historical values
+		// instead of "manual" / "".
+		Event map[string]any `json:"event"`
 	}
 	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
@@ -712,7 +719,7 @@ func execNodeStep(c *tool.Ctx) {
 	outputs["input"] = body.Input
 	rc := &wf.RunContext{
 		Workflow:    w,
-		Event:       wf.Event{Type: string(wf.TriggerManual), At: time.Now().UTC(), Payload: body.Input},
+		Event:       eventFromExecBody(body.Event, body.Input),
 		Outputs:     outputs,
 		EnvValues:   envVals,
 		RunID:       "step-" + uuid.NewString(),
@@ -730,6 +737,40 @@ func execNodeStep(c *tool.Ctx) {
 		resp["error"] = runErr.Error()
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// eventFromExecBody builds the RunContext.Event for an Execute step
+// invocation. When the editor sent an `event` blob (Replay → Execute
+// pattern — same Event the historical run saw), unpack it into a
+// typed wf.Event so templates referencing `.Event.Channel`,
+// `.Event.Subtype`, etc. resolve. Otherwise fall back to a synthetic
+// manual event whose Payload mirrors `body.Input`, preserving the
+// pre-existing UX where a bare Execute step uses the mock map as
+// `.Event.Payload`.
+func eventFromExecBody(evt map[string]any, input map[string]any) wf.Event {
+	if len(evt) == 0 {
+		return wf.Event{Type: string(wf.TriggerManual), At: time.Now().UTC(), Payload: input}
+	}
+	out := wf.Event{}
+	if v, ok := evt["type"].(string); ok {
+		out.Type = v
+	}
+	if out.Type == "" {
+		out.Type = string(wf.TriggerManual)
+	}
+	if v, ok := evt["subtype"].(string); ok {
+		out.Subtype = v
+	}
+	if v, ok := evt["channel"].(string); ok {
+		out.Channel = v
+	}
+	if v, ok := evt["payload"].(map[string]any); ok {
+		out.Payload = v
+	} else if input != nil {
+		out.Payload = input
+	}
+	out.At = time.Now().UTC()
+	return out
 }
 
 // nodeOutputToJSON flattens a NodeOutput into the same map shape
