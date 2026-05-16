@@ -199,6 +199,8 @@ func Register(r tool.Router) {
 	// Workflows tab — visual DAG editor (mockup §3).
 	r.GET("/workflows", workflowsPage)
 	r.POST("/workflows", createWorkflow)
+	r.POST("/workflows/import", importWorkflow)
+	r.GET("/workflows/edit/{id}/download", downloadWorkflowYAML)
 	// ID-bound routes live under /edit/ so Go 1.22's mux doesn't
 	// flag a conflict with /static/{path}. The ID is the folder name
 	// (UUID for canvas-created workflows) — stable across name renames.

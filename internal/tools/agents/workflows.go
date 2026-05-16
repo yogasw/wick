@@ -253,6 +253,100 @@ func createWorkflow(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/workflows/edit/"+w.ID, http.StatusSeeOther)
 }
 
+// importWorkflow handles POST /workflows/import — receives a YAML file
+// upload, parses + validates it, creates the workflow folder, and
+// redirects to the editor. The YAML must be a valid workflow.yaml;
+// the workflow ID (folder name) is always a fresh UUID to avoid
+// collisions with existing workflows.
+func importWorkflow(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	f, header, err := c.R.FormFile("file")
+	if err != nil {
+		c.Error(http.StatusBadRequest, "file is required: "+err.Error())
+		return
+	}
+	defer f.Close()
+
+	if header.Size > 512*1024 {
+		c.Error(http.StatusBadRequest, "file too large (max 512 KB)")
+		return
+	}
+
+	data := make([]byte, header.Size)
+	if _, err := f.Read(data); err != nil {
+		c.Error(http.StatusBadRequest, "read file: "+err.Error())
+		return
+	}
+
+	// Parse with a placeholder ID — Create will assign a real UUID.
+	w, err := parse.Parse("_import_", data)
+	if err != nil {
+		c.Error(http.StatusBadRequest, "invalid workflow YAML: "+err.Error())
+		return
+	}
+
+	// Validate graph structure before writing to disk.
+	if r := parse.Validate(w); !r.Ok() {
+		c.Error(http.StatusBadRequest, "validation failed: "+r.Error())
+		return
+	}
+
+	// Always assign a new UUID so imports never collide.
+	w.ID = ""
+	w.CreatedAt = time.Time{}
+
+	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name})
+	if err != nil {
+		c.Error(http.StatusInternalServerError, "create workflow: "+err.Error())
+		return
+	}
+
+	// Overwrite the scaffolded workflow.yaml with the imported content.
+	w.ID = created.ID
+	if err := globalWorkflowMgr.Service.SaveDraft(created.ID, w); err != nil {
+		c.Error(http.StatusInternalServerError, "save imported workflow: "+err.Error())
+		return
+	}
+
+	_ = setup.HotReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, created.ID)
+	c.Redirect(c.Base()+"/workflows/edit/"+created.ID, http.StatusSeeOther)
+}
+
+// downloadWorkflowYAML serves the published workflow.yaml as a file download.
+func downloadWorkflowYAML(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	w, err := globalWorkflowMgr.Service.Load(id)
+	if err != nil {
+		c.NotFound()
+		return
+	}
+	data, err := parse.Marshal(w)
+	if err != nil {
+		c.Error(http.StatusInternalServerError, "marshal YAML: "+err.Error())
+		return
+	}
+	filename := id + ".workflow.yaml"
+	if w.Name != "" {
+		// Use the display name for a friendlier filename.
+		safe := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return '-'
+		}, w.Name)
+		filename = safe + ".workflow.yaml"
+	}
+	c.W.Header().Set("Content-Type", "application/x-yaml")
+	c.W.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.W.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	_, _ = c.W.Write(data)
+}
+
 // ── Editor + CRUD ──────────────────────────────────────────────────
 
 func workflowEditor(c *tool.Ctx) {
