@@ -1195,3 +1195,52 @@ func deleteTestCase(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
+
+// ── Executions panel ────────────────────────────────────────────────
+
+// executionsPanel returns the full Executions panel as an HTML fragment.
+// Called by the JS tab switcher on first click and on manual refresh.
+func executionsPanel(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	slug := c.PathValue("id")
+	page := 1
+	if v := strings.TrimSpace(c.Query("page")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	runs, hasMore, _ := globalWorkflowMgr.MCP.GetRunSummaries(slug, page, 50)
+	vm := wfview.ExecutionsVM{
+		Base:        c.Base(),
+		Slug:        slug,
+		Runs:        runs,
+		RunsHasMore: hasMore,
+	}
+	c.W.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = wfview.ExecutionsPanel(vm).Render(c.R.Context(), c.W)
+}
+
+// executionDetail returns a single run's detail fragment.
+// Injected into the right pane when user clicks a run row.
+func executionDetail(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	slug := c.PathValue("id")
+	runID := c.PathValue("runID")
+	st, err := globalWorkflowMgr.StateStore.Load(slug, runID)
+	if err != nil {
+		c.NotFound()
+		return
+	}
+	events, _ := globalWorkflowMgr.StateStore.ListEvents(slug, runID)
+	detail := wfview.ExecutionDetailVM{
+		RunID:  runID,
+		State:  st,
+		Events: events,
+	}
+	c.W.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = wfview.ExecutionDetail(c.Base(), slug, detail).Render(c.R.Context(), c.W)
+}

@@ -175,21 +175,28 @@ n8n style: ketika klik output port tanpa drop, popup search nodes muncul untuk p
 - [ ] **Click hasil**: spawn node di lokasi popup + auto-connect dari source port
 - [ ] **Keyboard**: arrow keys + Enter (no mouse needed)
 
-### P1 — Executions panel ala n8n
+### P1 — Executions panel ala n8n ✅ **shipped 2026-05-16**
 
-Tab "Executions" di toolbar (sebelah Editor). List semua run dengan auto-refresh, filter, dan canvas view per-run (highlight nodes yang fail/skipped). Saat ini run history cuma cell di bottom panel.
+Tab "Executions" di toolbar (sebelah Editor). List semua run dengan auto-refresh, filter, dan detail view per-run.
 
-- [ ] **Top-level tabs**: `Editor | Executions | Evaluations` di header (next to breadcrumb)
-- [ ] **Executions sidebar**: 
+- [x] **Top-level tabs**: `Editor | Executions` di header (next to breadcrumb) — lazy-loaded on first click
+- [x] **Executions sidebar**: 
   - List runs descending by timestamp
-  - Each row: timestamp, status badge (Succeeded/Failed/Running), duration, run ID
-  - Auto-refresh checkbox + filter button (status, time range)
-  - Active count: `N/total active`
-- [ ] **Right pane**: 
-  - Header: timestamp, status with ms duration, run ID, thumbs up/down (rating)
-  - Add tag button (tag runs for grouping)
-  - **Canvas view (read-only)**: nodes colored by status (green success, red failed, grey skipped). Click node → bottom panel shows input/output for THAT run.
-- [ ] **Storage**: re-use existing `runs/<id>/` folder + StateStore.ListRuns. Loki mirror (lihat P0) berguna kalau file dihapus.
+  - Each row: timestamp, status icon (✓/✗/⟳/○), duration, short run ID
+  - Auto-refresh checkbox (5s interval) + manual refresh button
+- [x] **Right pane**: 
+  - Header: status, full run ID, duration, link ke run detail page
+  - Node status list (completed ✓ / failed ✗ / skipped ○) dengan output count hint
+  - Click node row → output JSON panel collapsible (hidden by default)
+  - Events timeline (semua events.jsonl entries, color-coded per event type)
+- [x] **Storage**: re-use existing `runs/<id>/` folder + `StateStore.ListRuns` + sharded index
+
+**Deferred dari spec asli:**
+- Canvas read-only view per-run (node coloring on Drawflow) — komplex, deferred ke P2
+- Rating (👍/👎) + tag per run — deferred ke P2
+- Filter by status/time range — deferred ke P2
+
+**Files:** `executions.templ`, `workflows.go` (`executionsPanel`, `executionDetail`), `handler.go`, `editor.templ`, `editor_toolbar.templ`, `editor.js`, `editor.css`
 
 ### P1 — Copy to editor (restore run snapshot)
 

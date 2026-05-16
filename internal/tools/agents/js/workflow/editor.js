@@ -3480,10 +3480,6 @@
   });
 
   // ── Workflow name click-to-edit ────────────────────────────────────
-  // Heading is the default surface so the URL bar / toolbar reads like
-  // text. Click swaps to an input; Enter or blur posts JSON to /rename
-  // and swaps back. Esc cancels with no save. POST stays out-of-band so
-  // the canvas isn't re-rendered for a metadata-only change.
   const nameDisplay = document.getElementById('wf-name-display');
   const nameInput = document.getElementById('wf-name-input');
   if (nameDisplay && nameInput) {
@@ -3503,10 +3499,7 @@
     const commit = async () => {
       const next = nameInput.value.trim();
       const prev = nameDisplay.textContent.trim();
-      if (!next || next === prev) {
-        exitEdit('');
-        return;
-      }
+      if (!next || next === prev) { exitEdit(''); return; }
       try {
         const form = new URLSearchParams();
         form.set('name', next);
@@ -3515,12 +3508,7 @@
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
           body: form.toString(),
         });
-        if (!resp.ok) {
-          const body = await resp.text();
-          alert('Rename failed: ' + body);
-          exitEdit('');
-          return;
-        }
+        if (!resp.ok) { alert('Rename failed: ' + await resp.text()); exitEdit(''); return; }
         exitEdit(next);
       } catch (err) {
         alert('Rename failed: ' + err.message);
@@ -3534,4 +3522,109 @@
     });
     nameInput.addEventListener('blur', commit);
   }
+
+  // ── Executions panel ──────────────────────────────────────────────
+  // Top-level tab switching: Editor ↔ Executions (lazy-loaded).
+  const viewEditorBtn     = document.getElementById('wf-view-editor');
+  const viewExecutionsBtn = document.getElementById('wf-view-executions');
+  const viewEditorBody    = document.getElementById('wf-view-editor-body');
+  const viewEditorBottom  = document.getElementById('wf-editor-bottom-wrap');
+  const viewExBody        = document.getElementById('wf-view-executions-body');
+  const exContent         = document.getElementById('wf-executions-content');
+  let exAutoTimer         = null;
+
+  const TAB_ON  = ['bg-white-100','dark:bg-navy-700','text-black-900','dark:text-white-100'];
+  const TAB_OFF = ['text-black-600','dark:text-black-500'];
+
+  function activateTab(onBtn, offBtn) {
+    TAB_ON.forEach(c => { onBtn?.classList.add(c); offBtn?.classList.remove(c); });
+    TAB_OFF.forEach(c => { offBtn?.classList.add(c); onBtn?.classList.remove(c); });
+  }
+
+  function showEditorView() {
+    viewEditorBody?.classList.remove('hidden');
+    viewEditorBottom?.classList.remove('hidden');
+    viewExBody?.classList.add('hidden');
+    activateTab(viewEditorBtn, viewExecutionsBtn);
+    clearInterval(exAutoTimer);
+  }
+
+  function showExecutionsView() {
+    viewEditorBody?.classList.add('hidden');
+    viewEditorBottom?.classList.add('hidden');
+    viewExBody?.classList.remove('hidden');
+    activateTab(viewExecutionsBtn, viewEditorBtn);
+    loadExPanel();
+  }
+
+  function loadExPanel(url) {
+    const target = url || viewExecutionsBtn?.dataset.exUrl;
+    if (!target || !exContent) return;
+    exContent.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;font-size:12px;color:#9ca3af;font-style:italic;">Loading…</div>';
+    fetch(target)
+      .then(r => r.text())
+      .then(html => { exContent.innerHTML = html; bindExEvents(); startExAutoRefresh(); })
+      .catch(err => { exContent.innerHTML = `<p class="p-6 text-xs text-red-600">${err.message}</p>`; });
+  }
+
+  function startExAutoRefresh() {
+    clearInterval(exAutoTimer);
+    if (!document.getElementById('wf-ex-autorefresh')?.checked) return;
+    exAutoTimer = setInterval(() => {
+      if (!document.getElementById('wf-ex-autorefresh')?.checked) { clearInterval(exAutoTimer); return; }
+      fetch(viewExecutionsBtn?.dataset.exUrl || '')
+        .then(r => r.text())
+        .then(html => { if (exContent) { exContent.innerHTML = html; bindExEvents(); } })
+        .catch(() => {});
+    }, 5000);
+  }
+
+  function bindExEvents() {
+    // Row click → load run detail in right pane.
+    exContent?.querySelectorAll('[data-ex-load]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        exContent.querySelectorAll('.wf-ex-row').forEach(r => r.classList.remove('border-l-green-500','border-l-4'));
+        btn.classList.add('border-l-green-500','border-l-4');
+        const det = document.getElementById('wf-ex-detail');
+        if (!det) return;
+        det.innerHTML = '<div class="flex items-center justify-center h-full italic text-xs text-black-600 dark:text-black-700">Loading…</div>';
+        fetch(btn.dataset.exLoad)
+          .then(r => r.text())
+          .then(html => { det.innerHTML = html; bindDetailEvents(det); })
+          .catch(err => { det.innerHTML = `<p class="p-4 text-xs text-red-600">${err.message}</p>`; });
+      });
+    });
+    // Refresh button.
+    document.getElementById('wf-ex-refresh')?.addEventListener('click', () => loadExPanel());
+    // Auto-refresh toggle.
+    document.getElementById('wf-ex-autorefresh')?.addEventListener('change', startExAutoRefresh);
+    // Load more.
+    document.getElementById('wf-ex-load-more')?.addEventListener('click', e => {
+      loadExPanel(e.currentTarget.dataset.exMore);
+    });
+  }
+
+  function bindDetailEvents(container) {
+    // Node row click → show output in the collapsible output panel.
+    container.querySelectorAll('.wf-ex-node-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const panel = container.querySelector('#wf-ex-output');
+        const label = container.querySelector('#wf-ex-output-label');
+        const pre   = container.querySelector('#wf-ex-output-json');
+        if (!panel || !pre) return;
+        const out = row.dataset.output;
+        if (label) label.textContent = `Output — ${row.dataset.nodeId}`;
+        try { pre.textContent = out ? JSON.stringify(JSON.parse(out), null, 2) : '(no output data)'; }
+        catch (_) { pre.textContent = out || '(no output data)'; }
+        panel.classList.remove('hidden');
+      });
+    });
+    container.querySelector('#wf-ex-output-close')?.addEventListener('click', () => {
+      container.querySelector('#wf-ex-output')?.classList.add('hidden');
+    });
+  }
+
+  viewEditorBtn?.addEventListener('click', showEditorView);
+  viewExecutionsBtn?.addEventListener('click', showExecutionsView);
+
 })();

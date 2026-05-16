@@ -82,4 +82,4 @@ Update terakhir: 2026-05-16.
 | [Skill: node-builder](workflow/skill-node-builder.md) | 🟡 template | Claude Code skill spec untuk AI bantu bikin node/workflow baru (template; skill belum dibuat) |
 | [Mockup HTML](workflow/mockup.html) | 🟢 reference | Visual reference — canvas + run timeline + inspector + anatomy |
 | [Audit TODO](workflow/audit-todo.md) | 🟡 working | Gap audit doc-vs-code (2026-05-15) |
-| [Editor roadmap](workflow/editor-roadmap.md) | 🟡 working | Canvas editor roadmap |
+| [Editor roadmap](workflow/editor-roadmap.md) | 🟡 working | Executions panel ✅ shipped; P0 items done; P1 Copy-to-editor + canvas read-only masih pending |

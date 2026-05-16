@@ -10,12 +10,19 @@ templ Editor(vm EditorVM) {
 		@Shell(vm.Base)
 		<div class="flex flex-col bg-white-100 dark:bg-navy-700" data-wf-base={ vm.Base + "/workflows" } style="height:calc(100vh - 4rem)">
 			@EditorToolbar(vm)
-			<div class="flex flex-1 min-h-0 relative">
+			<!-- Editor view (canvas + inspector + bottom panel) -->
+			<div class="flex flex-1 min-h-0 relative" id="wf-view-editor-body">
 				@EditorPalette(vm.Palette)
 				@EditorCanvas(vm)
 				@EditorInspector(vm)
 			</div>
-			@EditorBottom(vm)
+			<div id="wf-editor-bottom-wrap">
+				@EditorBottom(vm)
+			</div>
+			<!-- Executions view — hidden until tab clicked, loaded on demand -->
+			<div class="flex-1 min-h-0 hidden overflow-hidden" id="wf-view-executions-body">
+				<div id="wf-executions-content" class="h-full w-full"></div>
+			</div>
 			<div id="wf-toast-host" class="wf-toast-host" aria-live="polite"></div>
 			@editorBootstrap(vm)
 		</div>
