@@ -18,9 +18,9 @@ type ProviderStorage struct {
 	ID            uint      `gorm:"primaryKey;autoIncrement"`
 	ProviderType  string    `gorm:"type:varchar(32);not null;uniqueIndex:idx_provider_path"`
 	InstanceName  string    `gorm:"type:varchar(128);not null;uniqueIndex:idx_provider_path"`
-	RelPath       string    `gorm:"type:varchar(512);not null;uniqueIndex:idx_provider_path"` // relative to SyncPath
-	ParentID      uint      `gorm:"default:0;index"`                                          // 0 = root (RootParentID)
-	Name          string    `gorm:"type:varchar(512)"`                                        // basename only
+	RelPath       string    `gorm:"type:varchar(1024);not null;uniqueIndex:idx_provider_path"` // absolute filesystem path
+	ParentID      uint      `gorm:"default:0;index"`                                           // 0 = root (RootParentID)
+	Name          string    `gorm:"type:varchar(512)"`                                         // basename only
 	IsDir         bool      `gorm:"default:false"`
 	Content       []byte
 	ContentHash   string    `gorm:"type:varchar(64);not null"` // SHA-256 hex; "" for dirs
