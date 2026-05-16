@@ -280,8 +280,9 @@ func importWorkflow(c *tool.Ctx) {
 		return
 	}
 
-	// Parse with a placeholder ID — Create will assign a real UUID.
-	w, err := parse.Parse("_import_", data)
+	// Parse with a throwaway UUID — Create will assign the real one.
+	// Must be a valid slug ([a-z0-9-]) so parse.ValidateSlug passes.
+	w, err := parse.Parse(uuid.NewString(), data)
 	if err != nil {
 		c.Error(http.StatusBadRequest, "invalid workflow YAML: "+err.Error())
 		return
