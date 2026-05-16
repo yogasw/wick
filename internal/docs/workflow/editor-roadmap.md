@@ -191,7 +191,7 @@ Tab "Executions" di toolbar (sebelah Editor). List semua run dengan auto-refresh
   - **Canvas view (read-only)**: nodes colored by status (green success, red failed, grey skipped). Click node → bottom panel shows input/output for THAT run.
 - [ ] **Storage**: re-use existing `runs/<id>/` folder + StateStore.ListRuns. Loki mirror (lihat P0) berguna kalau file dihapus.
 
-### P1 — Copy to editor (restore run snapshot)
+### P1 — Copy to editor (restore run snapshot) ✅ **shipped 2026-05-16**
 
 Tombol "Copy to editor" di Executions pane: ambil graph version yang dipakai run itu + state per-node, push ke editor draft sebagai snapshot baru. Workflow buat debug regresi setelah edit yang nge-break sesuatu.
 

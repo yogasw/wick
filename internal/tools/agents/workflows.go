@@ -1195,3 +1195,67 @@ func deleteTestCase(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
+
+// ── Copy run to editor ──────────────────────────────────────────────
+
+// copyRunToEditor restores the current published workflow as a new
+// draft and tags it with the source run ID so the editor can show
+// a "copied from run X" banner. The run's node outputs are written
+// to runs/<runID>/mocks.json so Execute Step can pre-fill inputs
+// from that run's actual data.
+//
+// Response JSON:
+//
+//	{ok, hadDraft, runID, slug}
+//
+// hadDraft=true means the caller should have confirmed before calling
+// (the JS does a pre-check and shows wickConfirm when needed).
+func copyRunToEditor(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	slug := c.PathValue("id")
+	runID := c.PathValue("runID")
+
+	// Load the run state to verify it exists + grab outputs.
+	st, err := globalWorkflowMgr.StateStore.Load(slug, runID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]any{"error": "run not found"})
+		return
+	}
+
+	// Load the published workflow (source of truth for the graph).
+	svc := globalWorkflowMgr.Service
+	w, err := svc.Load(slug)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": "load workflow: " + err.Error()})
+		return
+	}
+
+	hadDraft := svc.HasDraft(slug)
+
+	// Write the published graph as the new draft.
+	if err := svc.SaveDraft(slug, w); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": "save draft: " + err.Error()})
+		return
+	}
+
+	// Persist node outputs from the run as mocks so Execute Step can
+	// pre-fill inputs. Stored as runs/<runID>/mocks.json (cheap write,
+	// scoped to that run).
+	if len(st.Outputs) > 0 {
+		if mockData, merr := json.Marshal(st.Outputs); merr == nil {
+			_ = svc.WriteFile(slug, "runs/"+runID+"/mocks.json", mockData)
+		}
+	}
+
+	// Hot-reload so the router picks up the draft immediately.
+	_ = setup.HotReload(context.Background(), svc, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, slug)
+
+	c.JSON(http.StatusOK, map[string]any{
+		"ok":       true,
+		"hadDraft": hadDraft,
+		"runID":    runID,
+		"slug":     slug,
+	})
+}

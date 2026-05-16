@@ -3466,6 +3466,57 @@
     });
   });
 
+  // ── Copy to editor ────────────────────────────────────────────────
+  // Restores the published workflow graph as a new draft, tagged with
+  // the source run ID. The run's node outputs are saved as mocks so
+  // Execute Step can pre-fill inputs from that run's actual data.
+  //
+  // Works from both the bottom-panel Runs tab and the run detail page.
+  // Uses event delegation so it also picks up rows added via hot-swap.
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-run-copy-to-editor]');
+    if (!btn) return;
+    e.stopPropagation();
+
+    const url = btn.dataset.copyUrl;
+    if (!url) return;
+
+    // If there's already an unsaved draft, warn the user.
+    const hasDraftBadge = document.querySelector('.wf-draft-badge, [data-has-draft]');
+    const hasDraft = hasDraftBadge !== null || document.getElementById('save-status')?.dataset.hasDraft === 'true';
+
+    if (hasDraft) {
+      const ok = await wickConfirm(
+        'This will replace your current unsaved draft with the workflow graph from this run. Continue?',
+        { title: 'Replace draft?', ok: 'Replace draft', danger: true }
+      );
+      if (!ok) return;
+    }
+
+    const label = btn.textContent.trim();
+    btn.textContent = 'Copying…';
+    btn.disabled = true;
+
+    try {
+      const resp = await fetch(url, { method: 'POST', headers: { 'Accept': 'application/json' } });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        await wickAlert(data.error || `Copy failed (HTTP ${resp.status})`);
+        return;
+      }
+      // Reload the editor so the new draft is shown on the canvas.
+      // Show a brief success toast before reload.
+      const runShort = (btn.dataset.runCopyToEditor || '').slice(0, 8);
+      showToast('ok', 'Draft restored', `From run ${runShort} — reloading editor…`);
+      setTimeout(() => window.location.reload(), 900);
+    } catch (err) {
+      await wickAlert('Copy failed: ' + err.message);
+    } finally {
+      btn.textContent = label;
+      btn.disabled = false;
+    }
+  });
+
   bindBackgroundForm(document.querySelector(`form[action$="/edit/${slug}/discard"]`), {
     confirmText: 'Rollback to last published version? All draft changes will be lost.',
     okTitle: 'Draft discarded',

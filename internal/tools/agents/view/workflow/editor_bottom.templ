@@ -136,6 +136,13 @@ templ bottomRuns(base, slug string, runs []mcp.RunSummary, page int, hasMore boo
 						</div>
 						<div class="mt-2 flex gap-3 text-xs">
 							<button type="button" data-run-replay={ r.ID } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 font-medium" title="Load this run's events + node outputs into the editor for debugging">↻ Replay in editor</button>
+							<button
+								type="button"
+								data-run-copy-to-editor={ r.ID }
+								data-copy-url={ base + "/workflows/edit/" + slug + "/runs/" + r.ID + "/copy-to-editor" }
+								class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium"
+								title="Restore this run's workflow graph as the current draft"
+							>⤴ Copy to editor</button>
 							<button type="button" data-run-export={ r.ID } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300" title="Copy full run state (events + outputs) as JSON">Export JSON</button>
 							<a href={ templ.SafeURL(base + "/workflows/edit/" + slug + "/runs/" + r.ID) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Open run detail →</a>
 						</div>
