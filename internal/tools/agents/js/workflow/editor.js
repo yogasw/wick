@@ -2266,6 +2266,30 @@
     });
   }
 
+  // badgeFiringTrigger paints a success badge on the trigger node that
+  // started the run. Engine sends `trigger_id` (exact match) and
+  // `trigger_type` (fallback for legacy workflows with no IDs) on the
+  // workflow_started event. Without one of these, multi-trigger
+  // canvases can't tell which row fired — single-trigger canvases
+  // still light up because the type matches the only candidate.
+  function badgeFiringTrigger(data) {
+    if (!data) return;
+    const wantID = data.trigger_id || '';
+    const wantType = data.trigger_type || data.trigger || '';
+    const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+    if (!live) return;
+    let matchKey = null;
+    for (const k in live) {
+      const n = live[k];
+      if (!n || !n.data || n.data.type !== 'trigger') continue;
+      const nid = n.data.id || n.name;
+      if (wantID && nid === wantID) { matchKey = k; break; }
+      const kind = (n.data.data && n.data.data.triggerKind) || '';
+      if (!wantID && wantType && kind === wantType) { matchKey = k; }
+    }
+    if (matchKey) setNodeBadge(matchKey, 'success');
+  }
+
   // Resolve workflow node id (data.id) → Drawflow numeric DOM id.
   function domIDFromNodeID(nodeID) {
     if (!nodeID) return null;
@@ -2378,6 +2402,14 @@
 
   function handleRunEvent(ev) {
     pushLogEntry(ev);
+    // Trigger nodes never emit node_started/node_completed because the
+    // engine begins walking at the entry node — without this branch the
+    // canvas would show no indicator of which trigger row fired the run.
+    // Engine attaches trigger_id (and trigger_type as a fallback for
+    // legacy single-trigger workflows) to the workflow_started event;
+    // resolve to a Drawflow DOM id and stamp a success badge so the
+    // user sees the same green check that other nodes get.
+    if (ev.event === 'workflow_started') badgeFiringTrigger(ev.data);
     const domID = domIDFromNodeID(ev.node);
     if (ev.event === 'node_started' && domID) setNodeBadge(domID, 'running');
     if (ev.event === 'node_completed' && domID) {

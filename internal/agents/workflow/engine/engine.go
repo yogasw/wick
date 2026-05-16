@@ -143,7 +143,7 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		lg = lg.Str("request_id", reqID)
 	}
 	ctx = lg.Logger().WithContext(ctx)
-	entry := pickEntry(w, evt)
+	entry, firedTrigger := pickEntry(w, evt)
 	st := workflow.RunState{
 		RunID:      runID,
 		WorkflowID: w.ID,
@@ -176,9 +176,18 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	if _, ok := evt.Payload["run_id"].(string); !ok {
 		idSource = "generated"
 	}
+	startData := map[string]any{"trigger": evt.Type, "id_source": idSource}
+	if firedTrigger != nil {
+		if firedTrigger.ID != "" {
+			startData["trigger_id"] = firedTrigger.ID
+		}
+		startData["trigger_type"] = string(firedTrigger.Type)
+	} else if tid, _ := evt.Payload["trigger_id"].(string); tid != "" {
+		startData["trigger_id"] = tid
+	}
 	startEv := workflow.RunEvent{
 		Event: workflow.EventWorkflowStarted,
-		Data:  map[string]any{"trigger": evt.Type, "id_source": idSource},
+		Data:  startData,
 	}
 	if err := e.StateStore.AppendEvent(w.Slug, runID, startEv); err != nil {
 		return st, err
@@ -661,13 +670,34 @@ func copyNodeOutputs(in map[string]workflow.NodeOutput) map[string]workflow.Node
 	return out
 }
 
-func pickEntry(w workflow.Workflow, evt workflow.Event) string {
-	for _, tr := range w.Triggers {
-		if tr.EntryNode != "" && string(tr.Type) == evt.Type {
-			return tr.EntryNode
+// pickEntry resolves the entry node for a run and returns the trigger
+// that fired (when one can be identified). A nil second return means
+// the run fell back to graph.entry — no matching trigger row was
+// found, which happens for direct graph runs and legacy events.
+//
+// Resolution order: (1) match by trigger_id in the event payload —
+// the UI Execute picker forwards this, so multi-trigger workflows
+// pick the exact row the user clicked; (2) match by trigger type
+// when an entry_node is set on the trigger; (3) graph.entry fallback.
+func pickEntry(w workflow.Workflow, evt workflow.Event) (string, *workflow.Trigger) {
+	if tid, _ := evt.Payload["trigger_id"].(string); tid != "" {
+		for i := range w.Triggers {
+			if w.Triggers[i].ID == tid {
+				tr := &w.Triggers[i]
+				if tr.EntryNode != "" {
+					return tr.EntryNode, tr
+				}
+				return w.Graph.Entry, tr
+			}
 		}
 	}
-	return w.Graph.Entry
+	for i := range w.Triggers {
+		tr := &w.Triggers[i]
+		if tr.EntryNode != "" && string(tr.Type) == evt.Type {
+			return tr.EntryNode, tr
+		}
+	}
+	return w.Graph.Entry, nil
 }
 
 // extractSecrets returns the subset of envVals declared as `widget:
