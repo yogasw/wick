@@ -66,8 +66,21 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Payload: payload,
 	}
 
-	if sig := r.Header.Get("X-Wick-Sig"); sig != "" && h.SecretLookup != nil {
-		payload["x_wick_sig"] = sig
+	// HMAC verification: if the matching trigger carries a secret_ref
+	// and the request provides X-Wick-Sig, validate before dispatch.
+	// Reject outright when a secret_ref is configured but no sig header
+	// is present — prevents unsigned calls from triggering guarded workflows.
+	if secretRef, ok := h.Router.WebhookSecretFor(r.URL.Path); ok && h.SecretLookup != nil {
+		secret, err := h.SecretLookup(secretRef)
+		if err != nil {
+			http.Error(w, "secret lookup failed", http.StatusInternalServerError)
+			return
+		}
+		sig := r.Header.Get("X-Wick-Sig")
+		if sig == "" || !VerifyHMAC(body, secret, sig) {
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	matched := h.Router.Dispatch(context.Background(), evt)

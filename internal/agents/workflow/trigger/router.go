@@ -589,6 +589,28 @@ func (r *Router) Stop() {
 	r.wg.Wait()
 }
 
+// WebhookSecretFor returns the SecretRef of the first webhook trigger
+// whose path pattern matches reqPath, and whether one was found.
+// Used by WebhookHandler to verify HMAC before dispatching.
+func (r *Router) WebhookSecretFor(reqPath string) (secretRef string, found bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, w := range r.defs {
+		if !w.Enabled {
+			continue
+		}
+		for _, tr := range w.Triggers {
+			if tr.Type != workflow.TriggerWebhook || tr.SecretRef == "" {
+				continue
+			}
+			if tr.Path == "" || PathMatches(tr.Path, reqPath) {
+				return tr.SecretRef, true
+			}
+		}
+	}
+	return "", false
+}
+
 func firstChannelDedupTTL(w workflow.Workflow) int {
 	for _, tr := range w.Triggers {
 		if tr.Type == workflow.TriggerChannel && tr.DedupTTLSec > 0 {

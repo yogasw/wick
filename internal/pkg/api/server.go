@@ -833,7 +833,7 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr}
 }
 
 type Server struct {
@@ -845,6 +845,7 @@ type Server struct {
 	db         *gorm.DB
 	gateBin    string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc    *manager.Service
+	wfMgr      *wfsetup.Manager
 }
 
 // JobsSvc returns the manager.Service the API server owns. Exposed so
@@ -860,6 +861,9 @@ func (s *Server) JobsSvc() *manager.Service { return s.jobsSvc }
 func (s *Server) startChannels(ctx context.Context) {
 	s.channelReg.StartAll(ctx)
 	go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+	if s.wfMgr != nil {
+		go wfsetup.WatchWorkflows(ctx, s.wfMgr.Layout.WorkflowsDir(), s.wfMgr.Service, s.wfMgr.Router, s.wfMgr.Cron)
+	}
 }
 
 // appNameHandler injects the configurable app name into every request
