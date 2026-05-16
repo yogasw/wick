@@ -317,9 +317,9 @@ func NewServer() *Server {
 	// AutoApproved entries are preserved from disk.
 	syncSharedSpec := func() error {
 		rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
-		spec, _ := agentgate.LoadSpec(agentgate.AppName())
+		spec, _ := agentgate.LoadSpec(appname.Resolve())
 		spec.Rules = rules
-		return agentgate.WriteSharedSpec(agentgate.AppName(), spec)
+		return agentgate.WriteSharedSpec(appname.Resolve(), spec)
 	}
 	// gateSocketOK is set to true only after approvalMgr.Start() succeeds.
 	// GateLoader checks this so a failed socket bind doesn't let spawns
@@ -339,7 +339,7 @@ func NewServer() *Server {
 		log.Debug().Int("rules", 0).Msg("agents: gate active for spawn")
 		return &agentpool.GateConfig{
 			GateBinary:   resolvedGateBin,
-			AppName:      agentgate.AppName(),
+			AppName:      appname.Resolve(),
 			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}
 	}
@@ -402,7 +402,7 @@ func NewServer() *Server {
 	// RouteByCWD maps the gate binary's working directory to the wick
 	// session that owns that workspace so SSE events land in the right tab.
 	approvalMgr, amErr := gate.NewApprovalManager(gate.ApprovalManagerOptions{
-		AppName: agentgate.AppName(),
+		AppName: appname.Resolve(),
 		// Route by active pool sessions only — multiple sessions can share the
 		// same workspace name, so iterating the registry (which includes idle
 		// sessions) is non-deterministic and picks the wrong session. The active
@@ -442,7 +442,7 @@ func NewServer() *Server {
 		// Write initial spec.json so the gate binary finds the whitelist
 		// rules on the very first spawn before any agent has started.
 		initialRules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
-		if wsErr := gate.WriteSharedSpec(agentgate.AppName(), gate.Spec{
+		if wsErr := gate.WriteSharedSpec(appname.Resolve(), gate.Spec{
 			Rules:        initialRules,
 			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}); wsErr != nil {
