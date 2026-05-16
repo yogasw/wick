@@ -8,7 +8,7 @@ import "github.com/yogasw/wick/internal/tools/agents/view"
 templ Editor(vm EditorVM) {
 	@view.AgentsLayout(vm.Layout) {
 		@Shell(vm.Base)
-		<div class="flex flex-col bg-white-100 dark:bg-navy-700" data-wf-base={ vm.Base + "/workflows" } style="height:calc(100vh - 4rem)">
+		<div class="flex flex-col bg-white-100 dark:bg-navy-700" data-wf-base={ vm.Base + "/workflows" } style="height:100vh">
 			@EditorToolbar(vm)
 			<!-- Editor view (canvas + inspector + bottom panel) -->
 			<div class="flex flex-1 min-h-0 relative" id="wf-view-editor-body">

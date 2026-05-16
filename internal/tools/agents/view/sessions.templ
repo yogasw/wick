@@ -287,13 +287,6 @@ templ SessionDetail(vm SessionDetailVM) {
 templ sessionDetailHeader(vm SessionDetailVM) {
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
-			<a
-				href={ templ.SafeURL(vm.Base + "/sessions") }
-				class="inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-colors mb-1"
-			>
-				<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-				Sessions
-			</a>
 			<div class="flex flex-wrap items-center gap-2">
 				<h1 class="font-mono text-sm font-semibold text-black-900 dark:text-white-100 break-all">{ vm.Session.ID }</h1>
 				@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
@@ -346,7 +339,7 @@ templ sessionDetailContent(vm SessionDetailVM) {
 	<div
 		class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 shadow-sm overflow-hidden flex flex-col"
 		data-chat-panel
-		style="height:calc(100vh - 4rem - 200px); min-height:320px"
+		style="height:calc(100vh - 200px); min-height:320px"
 	>
 		if vm.Tab == "conversation" {
 			@sessionConversationTab(vm)

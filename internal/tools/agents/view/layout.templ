@@ -3,6 +3,8 @@ package view
 import (
 	"fmt"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
 // AgentsLayout wraps every Agents page with a full-screen Claude-style shell:
@@ -11,31 +13,42 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	@lifecycleStyles()
 	@tooltipStyles()
 	@scrollbarStyles()
-	<div class="flex w-full" style="height:calc(100vh - 4rem)">
+	{{ user := login.GetUser(ctx) }}
+	<div class="flex w-full h-screen">
 		<!-- Sidebar -->
 		<aside class="flex w-60 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
-			<!-- Brand + New Session -->
-			<div class="flex items-center justify-between gap-2 px-3 py-3 border-b border-white-300 dark:border-navy-600">
-				<div class="flex items-center gap-2">
-					<div class="flex h-7 w-7 items-center justify-center rounded-lg bg-green-500 text-xs text-white-100 font-semibold select-none">✦</div>
-					<span class="text-sm font-semibold text-black-900 dark:text-white-100">Agents</span>
-				</div>
-				<!-- Quick new session button -->
-				<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions/quick") }>
-					<button
-						type="submit"
-						title="New Session"
-						class="flex h-7 w-7 items-center justify-center rounded-lg bg-green-500 text-white-100 hover:bg-green-600 transition-colors"
-					>
-						<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
-							<path d="M8 3v10M3 8h10" stroke-linecap="round"></path>
-						</svg>
-					</button>
-				</form>
+			<!-- Header: brand + workspace + profile (single row, replaces global navbar) -->
+			<div data-agents-top-widgets class="flex items-center gap-2 px-3 py-2.5 border-b border-white-300 dark:border-navy-600">
+				<a href="/" class="flex flex-1 min-w-0 items-center gap-2 hover:opacity-80 transition-opacity" title={ ui.AppNameFromContext(ctx) }>
+					<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green-500 text-xs text-white-100 font-semibold select-none">✦</div>
+					<div class="flex min-w-0 flex-col leading-tight">
+						<span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{ ui.AppNameFromContext(ctx) }</span>
+						<span class="truncate text-[10px] font-medium text-black-600 dark:text-black-700 uppercase tracking-wider">Agents</span>
+					</div>
+				</a>
+				@ui.UserMenu(user)
 			</div>
-			<!-- Nav links (compact) -->
+			<!-- Hidden palette trigger so palette.js paletteEnabled() detects it
+			     (Ctrl+K shortcut requires a button[onclick="openPalette()"] in DOM) -->
+			<button type="button" onclick="openPalette()" class="hidden" aria-hidden="true" tabindex="-1">Search</button>
+			<!-- Nav links (compact) — New session at top as a nav row, ChatGPT-style -->
 			<nav class="flex flex-col gap-0.5 px-2 py-2 border-b border-white-300 dark:border-navy-600">
-				@agentsNavLink(vm.Base+"/", "Overview", vm.ActivePage == "overview")
+				<a
+					href={ templ.SafeURL(vm.Base + "/") }
+					title="New session"
+					class={
+						"flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+						templ.KV("bg-green-500/10 dark:bg-green-500/15 text-green-700 dark:text-green-400", vm.ActivePage == "new"),
+						templ.KV("text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100", vm.ActivePage != "new"),
+					}
+				>
+					<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+						<path d="M11 3.5l1.5 1.5-6.5 6.5H4.5v-1.5L11 3.5z" stroke-linejoin="round"></path>
+						<path d="M9.5 5l2 2" stroke-linecap="round"></path>
+					</svg>
+					<span>New session</span>
+				</a>
+				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/workspaces", "Workspaces", vm.ActivePage == "workspaces")
 				@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
@@ -59,10 +72,17 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					}
 				</div>
 			</div>
-			<!-- Bottom: Settings -->
+			<!-- Bottom: Settings + user/theme widgets (moved from global navbar) -->
 			<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
 				@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
 			</div>
+			<!-- Constrain top-widget dropdowns to sidebar width so menus don't overflow -->
+			<style>
+				[data-agents-top-widgets] details > div:not(summary),
+				[data-agents-top-widgets] [data-theme-menu] {
+					max-width: calc(15rem - 1rem);
+				}
+			</style>
 		</aside>
 		<!-- Main content -->
 		<main class="flex-1 min-w-0 overflow-y-auto bg-white-200 dark:bg-navy-800" data-main>
@@ -410,9 +430,9 @@ templ agentsNavIcon(label string) {
 				<circle cx="8" cy="10" r="1.5" fill="currentColor" stroke="none"></circle>
 			</svg>
 		case "Settings":
-			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
-				<circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"></circle>
-				<path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.4 3.4l.7.7M11.9 11.9l.7.7M3.4 12.6l.7-.7M11.9 4.1l.7-.7" stroke-linecap="round"></path>
+			<svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>
+				<path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
 			</svg>
 		default:
 			<span class="h-4 w-4 shrink-0"></span>

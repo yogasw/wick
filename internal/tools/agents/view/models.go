@@ -136,6 +136,22 @@ type SessionDetailVM struct {
 	ActiveWorkspace string
 }
 
+// NewSessionComposeVM feeds the ChatGPT-style compose page that
+// gathers provider/preset/workspace + first message before any
+// session is persisted. The session is created server-side only when
+// the form posts back with a non-empty message.
+type NewSessionComposeVM struct {
+	Layout          AgentsLayoutVM
+	Base            string
+	Providers       []ProviderChoiceVM
+	Presets         []string
+	Workspaces      []string
+	DefaultProvider string
+	DefaultPreset   string
+	Message         string // round-tripped on validation error
+	Error           string
+}
+
 // WorkspacesVM holds data for the Workspaces page.
 type WorkspacesVM struct {
 	Layout        AgentsLayoutVM

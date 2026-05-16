@@ -126,7 +126,9 @@ func Register(r tool.Router) {
 	r.Static("/static/", StaticFS)
 	r.Static("/static/nodes/", wfnodes.StaticFS)
 
-	r.GET("/", overviewPage)
+	r.GET("/", newSessionCompose)
+	r.POST("/", startNewSession)
+	r.GET("/overview", overviewPage)
 
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
@@ -327,6 +329,94 @@ func notReady(c *tool.Ctx) bool {
 		return true
 	}
 	return false
+}
+
+// newSessionCompose renders the compose page: provider/preset/workspace
+// pickers + a textarea for the first message. No session is persisted
+// here — that only happens in startNewSession when the form posts back
+// with a non-empty message.
+func newSessionCompose(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	renderCompose(c, "", "")
+}
+
+// startNewSession is the compose form's POST target. It creates the
+// session, attaches the agent with the chosen provider, and queues the
+// first message in one go — matching ChatGPT/Claude's "session exists
+// only after first send" UX.
+func startNewSession(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	text := strings.TrimSpace(c.Form("message"))
+	if text == "" {
+		renderCompose(c, "", "Type a message to start the session.")
+		return
+	}
+	prov := c.Form("provider")
+	if prov == "" {
+		prov = "claude"
+		if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+			prov = ps[0].Type
+		}
+	}
+	ws := c.Form("workspace")
+	presetName := c.Form("preset")
+	if presetName == "" {
+		presetName = "default"
+		if ws != "" {
+			if wsData, werr := workspace.Load(globalLayout, ws); werr == nil && wsData.Meta.DefaultPreset != "" {
+				presetName = wsData.Meta.DefaultPreset
+			}
+		}
+	}
+	id := uuid.New().String()
+	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+		ID:        id,
+		Workspace: ws,
+		Origin:    session.OriginUI,
+		Preset:    presetName,
+	}); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose create session: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	if err := globalMgr.AddAgent(id, "main", prov); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose add agent: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	if err := globalPool.Send(context.Background(), id, "main", "ui", "user", text); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
+}
+
+// renderCompose is the shared body of newSessionCompose / startNewSession's
+// validation branches. message and errMsg are round-tripped so a failed
+// submit keeps the user's text and surfaces the reason inline.
+func renderCompose(c *tool.Ctx, message, errMsg string) {
+	providers := providerChoicesCached(c.Context())
+	defaultProv := ""
+	if len(providers) > 0 {
+		defaultProv = providers[0].Type
+	}
+	layout := sidebarVM(c, "new", "")
+	layout.FullBleed = true
+	c.HTML(view.NewSessionCompose(view.NewSessionComposeVM{
+		Layout:          layout,
+		Base:            c.Base(),
+		Providers:       providers,
+		Presets:         globalMgr.Registry().PresetNames(),
+		Workspaces:      globalMgr.Registry().WorkspaceNames(),
+		DefaultProvider: defaultProv,
+		Message:         message,
+		Error:           errMsg,
+	}))
 }
 
 // ── Overview ──────────────────────────────────────────────────────────
