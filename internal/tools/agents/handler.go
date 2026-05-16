@@ -207,6 +207,7 @@ func Register(r tool.Router) {
 	r.POST("/workflows/edit/{slug}/delete", deleteWorkflow)
 	r.GET("/workflows/edit/{slug}/runs/{runID}", workflowRunDetail)
 	r.GET("/workflows/api/registry", workflowRegistryAPI)
+	r.GET("/workflows/api/lookup", workflowLookupAPI)
 
 	r.GET("/stream", streamSSE)
 }

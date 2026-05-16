@@ -845,6 +845,123 @@
   background: rgba(255,255,255,0.02);
 }
 
+/* ── Picker widget (searchable typeahead with chips) ─────────────
+ * Lookup URL set on .wf-picker via data-picker-lookup-url. Hidden
+ * input carries JSON [{id,name}, …] payload + fires input event on
+ * every chip mutation so DOM-polling consumers catch the change. */
+.wf-picker { position: relative; }
+.wf-picker-input-wrap { position: relative; }
+.wf-picker-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  margin-top: 4px;
+  max-height: 256px;
+  overflow-y: auto;
+  border: 1px solid #e0dccf;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+.dark .wf-picker-results {
+  background: #1a2238;
+  border-color: #2c3a5a;
+}
+.wf-picker-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.wf-picker-result-row:hover {
+  background: rgba(16, 185, 129, 0.08);
+}
+.wf-picker-result-name {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  color: #1f2937;
+}
+.dark .wf-picker-result-name { color: #f1f5f9; }
+.wf-picker-result-id {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 10px;
+  color: #6b7280;
+}
+.wf-picker-status {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+.wf-picker-status-loading {
+  color: #6b7280;
+}
+.wf-picker-status-loading::before {
+  content: "⟳ ";
+  display: inline-block;
+  animation: wf-picker-spin 0.9s linear infinite;
+}
+@keyframes wf-picker-spin {
+  to { transform: rotate(360deg); }
+}
+.wf-picker-status-empty {
+  color: #6b7280;
+  font-style: italic;
+}
+.wf-picker-status-error {
+  color: #b91c1c;
+}
+.dark .wf-picker-status-loading,
+.dark .wf-picker-status-empty {
+  color: #9ca3af;
+}
+.dark .wf-picker-status-error {
+  color: #fca5a5;
+}
+.wf-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.wf-picker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+}
+.dark .wf-picker-chip {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+.wf-picker-chip-id {
+  font-size: 9px;
+  color: #6b7280;
+}
+.dark .wf-picker-chip-id { color: #9ca3af; }
+.wf-picker-chip-remove {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+
 /* ── Workflow arg field wrapper ──────────────────────────────────
  * .wf-arg-field is the scope class the ArgField templ stamps on
  * each rendered arg row. The admin widgets (fieldtype.Text /

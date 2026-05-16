@@ -264,13 +264,30 @@
   // Adding a new widget type lives entirely in
   // internal/manager/view/type/<widget>.templ + the ArgField switch —
   // no JS edit required.
-  function hydrateArgsForm(container, html, args, modes) {
+  function hydrateArgsForm(container, html, args, modes, lookupModule) {
     if (!container) return;
     if (!html) {
       container.innerHTML = '<div class="text-xs italic text-black-600 dark:text-black-700">No args required.</div>';
       return;
     }
     container.innerHTML = html;
+    // Picker widgets need a lookup URL stamped after inject — the
+    // server-rendered HTML doesn't know whether it's serving the
+    // workflow editor or admin. Workflow callers pass the channel /
+    // module name; the picker JS appends ?source=&q= on top.
+    if (lookupModule) {
+      const lookupURL = `${baseURL}/api/lookup?module=${encodeURIComponent(lookupModule)}`;
+      container.querySelectorAll('.wf-picker').forEach((w) => {
+        w.dataset.pickerLookupUrl = lookupURL;
+      });
+    }
+    // Browsers don't execute <script> tags added via innerHTML.
+    // Server-rendered widgets (picker, kvlist, …) embed their
+    // behavior as inline <script>; re-create each one with
+    // createElement so the browser actually runs them. Runs AFTER
+    // the lookup URL stamp so the picker init reads the correct URL.
+    reExecInlineScripts(container);
+    wireVisibleWhen(container);
     container.querySelectorAll('.wf-arg-field').forEach((wrap) => {
       const key = wrap.dataset.fieldKey;
       const editable = argEditable(wrap);
@@ -306,8 +323,57 @@
   // checkbox widget also emits a sibling hidden "false" input; the
   // selector skips hidden inputs so we always land on the visible
   // editable.
+  //
+  // Picker is the exception: its value lives on a hidden input
+  // because the picker UI itself is a chip+search composite. Special-
+  // case so collectArgs / preview / visible_when still find it.
   function argEditable(wrap) {
+    const picker = wrap.querySelector('.wf-picker > input[type="hidden"][data-field-key]');
+    if (picker) return picker;
     return wrap.querySelector('input:not([type="hidden"]), select, textarea');
+  }
+
+  // reExecInlineScripts re-creates every <script> tag inside the
+  // container so the browser actually executes it. The HTML5 spec
+  // says <script> tags inserted via innerHTML run NOTHING — they
+  // exist in the DOM but their JS body is dead. Server-rendered
+  // widgets (picker, kvlist, …) bundle inline init JS that wires
+  // search / chips / autocomplete; without this re-exec they stay
+  // visible but completely inert.
+  function reExecInlineScripts(container) {
+    container.querySelectorAll('script').forEach((oldScript) => {
+      const newScript = document.createElement('script');
+      for (const a of oldScript.attributes) newScript.setAttribute(a.name, a.value);
+      newScript.text = oldScript.text;
+      oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
+  }
+
+  // wireVisibleWhen wires the conditional-field pattern: a wrapper
+  // with `data-cfg-visible-when="otherKey:value"` only shows while
+  // the dependency wrapper's editable equals the named value. Fires
+  // initial evaluation + listens to the dependency for live toggle.
+  function wireVisibleWhen(container) {
+    container.querySelectorAll('[data-cfg-visible-when]').forEach((wrap) => {
+      const spec = wrap.dataset.cfgVisibleWhen;
+      if (!spec) return;
+      const sep = spec.indexOf(':');
+      if (sep < 0) return;
+      const depKey = spec.slice(0, sep);
+      const expected = spec.slice(sep + 1);
+      const depWrap = container.querySelector(`.wf-arg-field[data-field-key="${CSS.escape(depKey)}"]`);
+      const depEditable = depWrap && argEditable(depWrap);
+      if (!depEditable) return;
+      const evaluate = () => {
+        let cur;
+        if (depEditable.type === 'checkbox') cur = depEditable.checked ? 'true' : 'false';
+        else cur = depEditable.value;
+        wrap.classList.toggle('hidden', cur !== expected);
+      };
+      evaluate();
+      depEditable.addEventListener('input', evaluate);
+      depEditable.addEventListener('change', evaluate);
+    });
   }
 
   // setArgFieldMode flips the wrap's Fixed/Expression state, updates
@@ -418,7 +484,7 @@
     if (!connArgsEl) return;
     const mod = registry.connectors.find((m) => m.module === f.module?.value);
     const op = mod?.ops.find((o) => o.id === f.connOp?.value);
-    hydrateArgsForm(connArgsEl, op?.args_html || '', currentArgs || {}, modes || {});
+    hydrateArgsForm(connArgsEl, op?.args_html || '', currentArgs || {}, modes || {}, mod?.module || '');
   }
   function refreshChannelArgs(currentArgs, modes) {
     if (!chanArgsEl) return;
@@ -475,6 +541,7 @@
     url: document.getElementById('ins-url-panel'),
     channel: document.getElementById('ins-channel-panel'),
     connector: document.getElementById('ins-connector-panel'),
+    trigger: document.getElementById('ins-trigger-panel'),
   };
   let selectedID = null;
 
@@ -1175,7 +1242,85 @@
       f.connOp.value = inner.op || '';
       refreshConnArgs(inner.args, inner.__arg_modes);
     }
+    if (kind === 'trigger') {
+      panels.trigger.classList.remove('hidden');
+      hydrateTriggerPanel(inner);
+    }
     refreshOutputRefs();
+  }
+
+  // hydrateTriggerPanel fills the trigger node inspector: channel +
+  // event dropdown, optional match-filter form rendered from
+  // EventDescriptor.MatchSchema. Channels are sourced from the live
+  // registry — only channels that registered at least one event show
+  // up. Toggle .match_enabled gates whether router applies filter at
+  // dispatch time.
+  function hydrateTriggerPanel(inner) {
+    const chSel = document.getElementById('ins-trig-channel');
+    const evSel = document.getElementById('ins-trig-event');
+    const desc = document.getElementById('ins-trig-event-desc');
+    const matchWrap = document.getElementById('ins-trig-match-wrap');
+    const matchEnabled = document.getElementById('ins-trig-match-enabled');
+    const matchPanel = document.getElementById('ins-trig-match');
+    if (!chSel || !evSel) return;
+
+    // Populate channel dropdown from registry (only channels with at
+    // least one registered event).
+    chSel.innerHTML = '<option value="">(select channel)</option>';
+    (registry.channels || []).forEach((ch) => {
+      if (!ch.events || !ch.events.length) return;
+      const opt = document.createElement('option');
+      opt.value = ch.name;
+      opt.textContent = ch.name;
+      chSel.appendChild(opt);
+    });
+    chSel.value = inner.channel || '';
+
+    function populateEvents(channelName, selectedEvent) {
+      evSel.innerHTML = '<option value="">(select event)</option>';
+      const ch = (registry.channels || []).find((c) => c.name === channelName);
+      (ch?.events || []).forEach((ev) => {
+        const opt = document.createElement('option');
+        opt.value = ev.id;
+        opt.textContent = ev.name || ev.id;
+        opt.dataset.description = ev.description || '';
+        opt.dataset.matchHtml = ev.match_html || '';
+        evSel.appendChild(opt);
+      });
+      evSel.value = selectedEvent || '';
+      applyEventChoice();
+    }
+
+    function applyEventChoice() {
+      const selected = evSel.selectedOptions[0];
+      if (desc) desc.textContent = selected?.dataset.description || '';
+      const html = selected?.dataset.matchHtml || '';
+      if (!html) {
+        matchWrap.classList.add('hidden');
+        return;
+      }
+      matchWrap.classList.remove('hidden');
+      const enabled = !!inner.match_enabled;
+      matchEnabled.checked = enabled;
+      matchPanel.innerHTML = html;
+      matchPanel.classList.toggle('hidden', !enabled);
+      hydrateArgsForm(matchPanel, html, inner.match || {}, inner.__match_modes || {}, chSel.value);
+    }
+
+    chSel.onchange = () => {
+      populateEvents(chSel.value, '');
+      if (selectedID) updateNodeData(selectedID);
+    };
+    evSel.onchange = () => {
+      applyEventChoice();
+      if (selectedID) updateNodeData(selectedID);
+    };
+    matchEnabled.onchange = () => {
+      matchPanel.classList.toggle('hidden', !matchEnabled.checked);
+      if (selectedID) updateNodeData(selectedID);
+    };
+
+    populateEvents(inner.channel || '', inner.event || '');
   }
   function hideInspector() {
     insEmpty.classList.remove('hidden');
@@ -1492,6 +1637,30 @@
       if (connArgsEl) {
         inner.args = collectArgs(connArgsEl);
         inner.__arg_modes = collectArgModes(connArgsEl);
+      }
+    }
+    if (kind === 'trigger') {
+      const chSel = document.getElementById('ins-trig-channel');
+      const evSel = document.getElementById('ins-trig-event');
+      const matchEnabled = document.getElementById('ins-trig-match-enabled');
+      const matchPanel = document.getElementById('ins-trig-match');
+      const channelName = chSel?.value || '';
+      const eventName = evSel?.value || '';
+      if (channelName) {
+        inner.channel = channelName;
+        inner.triggerKind = 'channel';
+      } else {
+        inner.channel = '';
+      }
+      inner.event = eventName;
+      const enabled = !!(matchEnabled && matchEnabled.checked);
+      inner.match_enabled = enabled;
+      if (enabled && matchPanel) {
+        inner.match = collectArgs(matchPanel);
+        inner.__match_modes = collectArgModes(matchPanel);
+      } else {
+        inner.match = {};
+        inner.__match_modes = {};
       }
     }
     editor.updateNodeDataFromId(id, { id: d.id, type: kind, data: inner });

@@ -134,6 +134,30 @@ templ EditorInspector(vm EditorVM) {
 							<div id="ins-conn-args" class="space-y-2"></div>
 						</div>
 
+						// Trigger node panel — channel/event picker + filter form.
+						// Inspector hydrates from the live integration registry so
+						// each event's MatchSchema-rendered form drops in via
+						// innerHTML. Operator toggles match_enabled to gate the
+						// filter; values save to Trigger.Match through the codec.
+						<div id="ins-trigger-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Channel</label>
+							<select id="ins-trig-channel" class="wf-input">
+								<option value="">(select channel)</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Event</label>
+							<select id="ins-trig-event" class="wf-input">
+								<option value="">(select event)</option>
+							</select>
+							<div id="ins-trig-event-desc" class="mt-1 text-[11px] text-black-700 dark:text-black-600"></div>
+							<div id="ins-trig-match-wrap" class="hidden mt-3">
+								<label class="inline-flex items-center gap-2 cursor-pointer mb-2">
+									<input id="ins-trig-match-enabled" type="checkbox" class="w-4 h-4 accent-green-500 cursor-pointer rounded"/>
+									<span class="text-xs font-medium text-black-800 dark:text-black-600">Filter events (whitelist)</span>
+								</label>
+								<div id="ins-trig-match" class="hidden"></div>
+							</div>
+						</div>
+
 						<div class="mt-4 p-3 bg-green-500/10 dark:bg-green-500/15 border border-green-500/30 dark:border-green-500/20 rounded-lg text-xs text-green-800 dark:text-green-300">
 							<strong>Output refs available:</strong>
 							<div id="ins-refs" class="mt-1 space-y-0.5 font-mono text-green-700 dark:text-green-400"></div>

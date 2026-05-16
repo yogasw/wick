@@ -164,6 +164,31 @@ func workflowToDrawflowJSON(w wf.Workflow) (string, error) {
 		if p, ok := positions[id]; ok {
 			x, y = p[0], p[1]
 		}
+		// Lift every channel-trigger field the inspector reads back —
+		// channel, event, target, plus the match form state (filter
+		// toggle + spec + per-key Fixed/Expression modes). Without
+		// this the form blanks on every reload.
+		innerData := map[string]any{
+			"triggerKind": string(tr.Type),
+		}
+		if tr.ChannelName != "" {
+			innerData["channel"] = tr.ChannelName
+		}
+		if tr.Event != "" {
+			innerData["event"] = tr.Event
+		}
+		if tr.Target != "" {
+			innerData["target"] = tr.Target
+		}
+		if len(tr.Match) > 0 {
+			innerData["match"] = tr.Match
+		}
+		if tr.MatchEnabled {
+			innerData["match_enabled"] = true
+		}
+		if len(tr.MatchModes) > 0 {
+			innerData["__match_modes"] = tr.MatchModes
+		}
 		nodes[strconv.Itoa(nextID)] = drawflowNode{
 			ID:    nextID,
 			Name:  id,
@@ -172,9 +197,7 @@ func workflowToDrawflowJSON(w wf.Workflow) (string, error) {
 			Data: map[string]any{
 				"id":   id,
 				"type": "trigger",
-				"data": map[string]any{
-					"triggerKind": string(tr.Type),
-				},
+				"data": innerData,
 			},
 			PosX:    x,
 			PosY:    y,
@@ -535,6 +558,13 @@ func drawflowJSONToWorkflow(slug, body string) (wf.Workflow, error) {
 				if v, ok := inner["event"].(string); ok {
 					tr.Event = v
 				}
+				if v, ok := inner["match"].(map[string]any); ok && len(v) > 0 {
+					tr.Match = v
+				}
+				if v, ok := inner["match_enabled"].(bool); ok {
+					tr.MatchEnabled = v
+				}
+				tr.MatchModes = stringMapFromAny(inner["__match_modes"])
 				break
 			}
 		}

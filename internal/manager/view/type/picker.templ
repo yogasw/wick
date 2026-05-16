@@ -1,0 +1,180 @@
+package fieldtype
+
+import "github.com/yogasw/wick/internal/entity"
+
+// Picker renders a searchable typeahead with chip results. Operator
+// types a query, the widget calls a lookup endpoint, picks one or
+// more entries from the dropdown, chips appear below.
+//
+// The lookup URL is read from `data-picker-lookup-url` on the wrap.
+// Set this via row.Options ("admin: <slug>" style is owned by the
+// admin configs.templ; fieldtype assumes the caller wrap stamps the
+// URL via JS or via a sibling templ wrapper). For workflow context
+// the caller sets `data-picker-lookup-url="/workflows/api/lookup?module=slack"`.
+//
+// Value is stored in the hidden <input name="value"> as
+// `[{"id":"…","name":"…"}, …]` JSON. The widget fires an `input`
+// event on that hidden input on every chip add/remove so DOM-polling
+// consumers (workflow editor.js delegated listener) catch the change
+// without per-widget wiring.
+templ Picker(row entity.Config) {
+	<div
+		class="wf-picker"
+		data-picker-source={ row.Options }
+		data-picker-key={ row.Key }
+	>
+		<input
+			type="hidden"
+			data-field-key={ row.Key }
+			name="value"
+			value={ row.Value }
+		/>
+		<div class="wf-picker-input-wrap">
+			<input
+				type="text"
+				data-picker-input
+				placeholder="Search…"
+				autocomplete="off"
+				class={ FieldClass }
+			/>
+			<div data-picker-results class="wf-picker-results hidden"></div>
+		</div>
+		<div data-picker-chips class="wf-picker-chips"></div>
+		@pickerWidgetScript()
+	</div>
+}
+
+// pickerWidgetScript wires the picker instance — debounce on type,
+// fetch lookup, render dropdown, add/remove chips, sync the hidden
+// value input. Idempotent: every script element re-runs only against
+// its own enclosing .wf-picker via `document.currentScript`, so
+// multiple pickers on a page never cross-talk.
+//
+// The lookup URL is read from `data-picker-lookup-url` on the
+// .wf-picker root (set by the caller wrap — admin or workflow). The
+// source key is read from `data-picker-source`. Query parameter is
+// appended as `&q=…` so admin's existing /channels/<slug>/lookup
+// endpoint accepts the same shape without change.
+templ pickerWidgetScript() {
+	<script>
+	(function() {
+		var w = document.currentScript.closest('.wf-picker');
+		if (!w || w.dataset.pickerWired === '1') return;
+		w.dataset.pickerWired = '1';
+
+		var hidden = w.querySelector('input[type="hidden"][data-field-key]');
+		var input = w.querySelector('[data-picker-input]');
+		var results = w.querySelector('[data-picker-results]');
+		var chips = w.querySelector('[data-picker-chips]');
+		var source = w.getAttribute('data-picker-source') || '';
+		var lookupURL = w.getAttribute('data-picker-lookup-url') || '';
+
+		function readValue() {
+			try { return JSON.parse(hidden.value || '[]') || []; }
+			catch (_) { return []; }
+		}
+		function writeValue(arr) {
+			hidden.value = JSON.stringify(arr);
+			hidden.dispatchEvent(new Event('input', { bubbles: true }));
+			hidden.dispatchEvent(new Event('change', { bubbles: true }));
+		}
+		function renderChips() {
+			var arr = readValue();
+			chips.innerHTML = '';
+			arr.forEach(function(item) {
+				var span = document.createElement('span');
+				span.className = 'wf-picker-chip';
+				span.dataset.chipId = item.id;
+				span.textContent = (item.name || item.id);
+				var sub = document.createElement('span');
+				sub.className = 'wf-picker-chip-id';
+				sub.textContent = item.id;
+				span.appendChild(sub);
+				var rm = document.createElement('button');
+				rm.type = 'button';
+				rm.className = 'wf-picker-chip-remove';
+				rm.textContent = '×';
+				rm.addEventListener('click', function() {
+					var next = readValue().filter(function(it) { return it.id !== item.id; });
+					writeValue(next);
+					renderChips();
+				});
+				span.appendChild(rm);
+				chips.appendChild(span);
+			});
+		}
+		function addChip(item) {
+			if (!item || !item.id) return;
+			var arr = readValue();
+			if (arr.some(function(it) { return it.id === item.id; })) return;
+			arr.push({ id: item.id, name: item.name || item.id });
+			writeValue(arr);
+			renderChips();
+		}
+		function showStatus(msg, kind) {
+			results.innerHTML = '<div class="wf-picker-status wf-picker-status-' + kind + '">' + msg + '</div>';
+			results.classList.remove('hidden');
+		}
+		function showResults(items) {
+			if (!items || items.length === 0) {
+				showStatus('No results', 'empty');
+				return;
+			}
+			results.innerHTML = '';
+			items.forEach(function(it) {
+				var row = document.createElement('button');
+				row.type = 'button';
+				row.className = 'wf-picker-result-row';
+				var nm = document.createElement('span');
+				nm.className = 'wf-picker-result-name';
+				nm.textContent = it.name || it.id;
+				var id = document.createElement('span');
+				id.className = 'wf-picker-result-id';
+				id.textContent = it.id;
+				row.appendChild(nm);
+				row.appendChild(id);
+				row.addEventListener('click', function() {
+					addChip(it);
+					input.value = '';
+					results.classList.add('hidden');
+				});
+				results.appendChild(row);
+			});
+			results.classList.remove('hidden');
+		}
+		var t, reqSeq = 0;
+		function debouncedLookup() {
+			clearTimeout(t);
+			t = setTimeout(function() {
+				if (!lookupURL) {
+					showStatus('Lookup not wired', 'error');
+					return;
+				}
+				var q = input.value.trim();
+				var sep = lookupURL.indexOf('?') >= 0 ? '&' : '?';
+				var url = lookupURL + sep + 'source=' + encodeURIComponent(source) + '&q=' + encodeURIComponent(q);
+				// Sequence guard — late-arriving responses from earlier
+				// keystrokes shouldn't overwrite the latest result.
+				var seq = ++reqSeq;
+				showStatus('Searching…', 'loading');
+				fetch(url, { credentials: 'same-origin' })
+					.then(function(r) { return r.ok ? r.json() : []; })
+					.then(function(items) {
+						if (seq !== reqSeq) return;
+						showResults(items);
+					})
+					.catch(function() {
+						if (seq !== reqSeq) return;
+						showStatus('Lookup failed', 'error');
+					});
+			}, 250);
+		}
+		input.addEventListener('input', debouncedLookup);
+		input.addEventListener('focus', debouncedLookup);
+		document.addEventListener('click', function(e) {
+			if (!w.contains(e.target)) results.classList.add('hidden');
+		});
+		renderChips();
+	})();
+	</script>
+}

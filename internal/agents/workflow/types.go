@@ -311,9 +311,17 @@ type Trigger struct {
 	Event       string         `yaml:"event,omitempty"`
 	Target      string         `yaml:"target,omitempty"`
 	Match       map[string]any `yaml:"match,omitempty"`
-	Whitelist   *Whitelist     `yaml:"whitelist,omitempty"`
-	DedupTTLSec int            `yaml:"dedup_ttl_sec,omitempty"`
-	ReplySource *bool          `yaml:"reply_source,omitempty"`
+	// MatchEnabled gates whether the router applies Match at dispatch
+	// time. false (default) = dump-all (every event of this type fires
+	// the workflow); true = router skips runs where Match values don't
+	// pair with the event payload. Backward compat for workflows that
+	// stored match: without an explicit toggle is to treat a populated
+	// Match map as enabled — see router.go for the resolution rule.
+	MatchEnabled bool              `yaml:"match_enabled,omitempty"`
+	MatchModes   map[string]string `yaml:"match_modes,omitempty"`
+	Whitelist    *Whitelist        `yaml:"whitelist,omitempty"`
+	DedupTTLSec  int               `yaml:"dedup_ttl_sec,omitempty"`
+	ReplySource  *bool             `yaml:"reply_source,omitempty"`
 
 	// webhook
 	Path      string `yaml:"path,omitempty"`

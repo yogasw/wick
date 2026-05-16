@@ -23,7 +23,11 @@ import (
 // fieldtype package owns the widget HTML; this template owns the
 // workflow chrome.
 templ ArgField(row entity.Config) {
-	<div class="wf-arg-field" data-field-key={ row.Key }>
+	<div
+		class="wf-arg-field"
+		data-field-key={ row.Key }
+		data-cfg-visible-when={ row.VisibleWhen }
+	>
 		<div class="wf-arg-field-head">
 			<label class="wf-arg-field-label">
 				{ row.Key }
@@ -57,6 +61,8 @@ templ ArgField(row entity.Config) {
 				@fieldtype.Datetime(row)
 			case "kvlist":
 				@fieldtype.KVList(row)
+			case "picker":
+				@fieldtype.Picker(row)
 			default:
 				if row.IsSecret {
 					@fieldtype.Secret(row)

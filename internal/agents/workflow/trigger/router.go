@@ -24,6 +24,7 @@ package trigger
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -226,9 +227,11 @@ func MatchTrigger(tr workflow.Trigger, evt workflow.Event) bool {
 }
 
 // triggerPassesRouterChecks runs the small, payload-light checks the
-// router still owns: webhook path/method, error source/severity, and
-// channel target. Match-map filtering lives in the workflow graph,
-// never here.
+// router owns: webhook path/method, error source/severity, channel
+// target, and — when match_enabled is set — the per-event Match
+// filter map. Filter eval uses generic key-equality with picker
+// (JSON array of {id,name}) membership; events that need fancier
+// semantics fall back to dump-all and filter inside the graph.
 func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 	switch tr.Type {
 	case workflow.TriggerChannel:
@@ -240,6 +243,9 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 			if tr.Target != gotChannel {
 				return false
 			}
+		}
+		if tr.MatchEnabled && !matchEventPayload(tr.Match, evt.Payload) {
+			return false
 		}
 		return true
 	case workflow.TriggerWebhook:
@@ -270,6 +276,84 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 		return true
 	}
 	return true
+}
+
+// matchEventPayload evaluates the trigger's Match map against the
+// incoming event payload. Generic semantics (no per-event registry
+// lookup) so the router stays channel-agnostic:
+//
+//   - empty / missing spec value → key is skipped (not a filter)
+//   - string spec → payload[key] equals spec
+//   - JSON array `[{"id":..},..]` (picker output) → payload[key] is
+//     a member of the id list
+//
+// Events that need fancier semantics (regex, set difference, custom
+// transform) fall back to dump-all and filter inside the graph with
+// a branch / transform node.
+func matchEventPayload(spec map[string]any, payload map[string]any) bool {
+	for k, raw := range spec {
+		if !matchOne(raw, payload[k]) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchOne(specVal, gotVal any) bool {
+	// Empty spec = no filter on this key.
+	switch s := specVal.(type) {
+	case nil:
+		return true
+	case string:
+		if strings.TrimSpace(s) == "" {
+			return true
+		}
+		// Picker output rides through as a JSON string when the canvas
+		// serializes inner.match — parse it back to []map[string]any
+		// before treating as plain string equality.
+		if isJSONArray(s) {
+			var arr []map[string]any
+			if err := json.Unmarshal([]byte(s), &arr); err == nil && len(arr) > 0 {
+				return idMembership(arr, gotVal)
+			}
+		}
+		got, _ := gotVal.(string)
+		return s == got
+	case []any:
+		if len(s) == 0 {
+			return true
+		}
+		arr := make([]map[string]any, 0, len(s))
+		for _, it := range s {
+			if m, ok := it.(map[string]any); ok {
+				arr = append(arr, m)
+			}
+		}
+		if len(arr) == 0 {
+			return true
+		}
+		return idMembership(arr, gotVal)
+	case bool:
+		got, _ := gotVal.(bool)
+		return s == got
+	}
+	return false
+}
+
+func idMembership(arr []map[string]any, gotVal any) bool {
+	got, _ := gotVal.(string)
+	for _, m := range arr {
+		id, _ := m["id"].(string)
+		if id == got {
+			return true
+		}
+	}
+	return false
+}
+
+func isJSONArray(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "[")
 }
 
 // triggerRouteKeys returns the index keys a trigger subscribes to.

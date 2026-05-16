@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
@@ -614,10 +615,24 @@ func workflowRegistryAPI(c *tool.Ctx) {
 				"destructive": a.Destructive,
 			})
 		}
+		// Per-event match form — each EventDescriptor declares
+		// MatchSchema, the API renders it to HTML via ArgForm so the
+		// trigger inspector can innerHTML-inject without rebuilding
+		// the widget layer in JS.
+		events := []map[string]any{}
+		for _, ev := range globalWorkflowMgr.Integration.EventsByChannel(info.Name) {
+			events = append(events, map[string]any{
+				"id":          ev.Event,
+				"name":        ev.Name,
+				"description": ev.Description,
+				"match_html":  renderArgFormHTML(c.Context(), ev.MatchSchema),
+			})
+		}
 		channels = append(channels, map[string]any{
 			"name":             info.Name,
 			"supports_session": info.SupportsSession,
 			"ops":              ops,
+			"events":           events,
 		})
 	}
 	connectors := []map[string]any{}
@@ -668,6 +683,52 @@ func workflowRegistryAPI(c *tool.Ctx) {
 		"connectors": connectors,
 		"providers":  providers,
 	})
+}
+
+// workflowLookupAPI serves the trigger inspector + connector args
+// picker widgets. Mirrors /channels/{slug}/lookup but keyed by the
+// channel/connector "module" name rather than the admin slug so the
+// workflow editor's URL pattern stays under /workflows/api/. Source
+// (e.g. "slack.channels") is the same lookup key the channel's
+// LookupProvider already understands.
+//
+// URL: GET /workflows/api/lookup?module=slack&source=slack.channels&q=...
+//
+// Returns JSON array of {id, name}.
+func workflowLookupAPI(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	module := c.Query("module")
+	source := c.Query("source")
+	query := c.Query("q")
+	if module == "" || source == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "module and source required"})
+		return
+	}
+	if globalChannels == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel registry not ready"})
+		return
+	}
+	ch := globalChannels.ChannelByName(module)
+	if ch == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "module not registered: " + module})
+		return
+	}
+	lp, ok := ch.(agentchannels.LookupProvider)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, map[string]string{"error": "module does not support lookup"})
+		return
+	}
+	items, err := lp.Lookup(source, query)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if items == nil {
+		items = []agentchannels.LookupItem{}
+	}
+	c.JSON(http.StatusOK, items)
 }
 
 func deleteWorkflow(c *tool.Ctx) {

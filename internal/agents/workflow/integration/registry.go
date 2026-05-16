@@ -24,6 +24,8 @@ import (
 	"context"
 	"sort"
 	"sync"
+
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // EventDescriptor declares one inbound event class a channel can fire
@@ -39,17 +41,44 @@ import (
 // Channels emit events as map[string]any using the keys declared on
 // PayloadType so the editor and the engine see a stable shape.
 //
-// No per-descriptor match logic — the router dispatches every event to
-// every workflow subscribed to (Channel, Event). Workflows filter
-// inside the graph (branch / transform / shell nodes) which keeps the
-// engine channel-agnostic and lets operators express arbitrary filter
-// logic without inventing yet another match DSL.
+// MatchSchema declares per-event filter fields the trigger inspector
+// renders as a form (channel id whitelist, user filter, text contains,
+// etc.). Each event owns its own schema since match keys are
+// channel-specific. The router reads stored values from Trigger.Match
+// and skips the run when a non-empty field doesn't match the event
+// payload.
+//
+// Build via entity.StructToConfigs(MyMatchStruct{}). Empty schema =
+// no filter UI for this event = the trigger always fires (dump-all).
+//
+// Match evaluation is per-descriptor — supply a MatchFunc when the
+// default key-equality semantics don't fit (regex, set membership,
+// custom transforms). When MatchFunc is nil, the router falls back
+// to a generic "for each spec key, payload[key] must equal spec
+// value (unless spec is empty)" comparison.
+type MatchFunc func(spec map[string]any, payload map[string]any) bool
+
+// EventDescriptor declares one inbound event class a channel can fire
+// as a workflow trigger. The (Channel, Event) pair is the canonical
+// key — e.g. ("slack", "message"), ("slack", "block_action"),
+// ("telegram", "callback_query").
+//
+// PayloadType is a zero-value sample struct used for two purposes:
+//   - schema generation for the editor's payload picker
+//   - documenting the keys downstream nodes can reference via
+//     `{{.Event.Payload.<key>}}` template expansion
+//
+// MatchSchema declares the trigger filter form. Operators set values
+// in the inspector → stored under Trigger.Match → router applies them
+// at dispatch time.
 type EventDescriptor struct {
-	Channel     string // "slack" | "telegram" | …
-	Event       string // "message" | "block_action" | …
-	Name        string // UI label: "Slack: New message"
-	Description string // one-liner shown in palette
-	PayloadType any    // zero-value sample for schema gen
+	Channel     string          // "slack" | "telegram" | …
+	Event       string          // "message" | "block_action" | …
+	Name        string          // UI label: "Slack: New message"
+	Description string          // one-liner shown in palette
+	PayloadType any             // zero-value sample for schema gen
+	MatchSchema []entity.Config // filter form schema (per event)
+	Match       MatchFunc       // optional custom matcher; nil = key-equality
 }
 
 // Key returns the canonical "<channel>.<event>" identifier the workflow
