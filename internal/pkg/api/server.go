@@ -321,11 +321,18 @@ func NewServer() *Server {
 		spec.Rules = rules
 		return agentgate.WriteSharedSpec(agentgate.AppName(), spec)
 	}
+	// gateSocketOK is set to true only after approvalMgr.Start() succeeds.
+	// GateLoader checks this so a failed socket bind doesn't let spawns
+	// write hooks that would later fail-open on every tool call.
+	var gateSocketOK bool
 	agentsFactory.GateLoader = func() *agentpool.GateConfig {
 		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
 			return nil
 		}
 		if resolvedGateBin == "" {
+			return nil
+		}
+		if !gateSocketOK {
 			return nil
 		}
 		_ = syncSharedSpec()
@@ -431,6 +438,7 @@ func NewServer() *Server {
 		gateStatus.Enabled = false
 		gateStatus.Reason = "listener start: " + err.Error()
 	} else {
+		gateSocketOK = true
 		// Write initial spec.json so the gate binary finds the whitelist
 		// rules on the very first spawn before any agent has started.
 		initialRules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))

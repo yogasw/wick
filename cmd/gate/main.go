@@ -388,13 +388,22 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 		return 0
 	}
 
-	// Known file tool: no path extracted or relative path — safe (CWD = workspace).
+	// Known file tool: no path extracted — nothing to scope-check, allow.
+	if path == "" {
+		logTerminalEntry(requestID, tool, "", in.CWD, "allowed", "no_path", "")
+		emitAllow("no_path")
+		return 0
+	}
+	// Relative path: resolve against CWD before scope check so traversal
+	// sequences like "../../etc/passwd" are caught by PathWithinScope.
 	// Use filepath.IsAbs for cross-platform: Windows paths (C:\...) are
 	// absolute but don't start with "/", so HasPrefix alone misses them.
-	if path == "" || (!strings.HasPrefix(path, "/") && !filepath.IsAbs(path)) {
-		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "relative_path", "")
-		emitAllow("relative_path")
-		return 0
+	if !strings.HasPrefix(path, "/") && !filepath.IsAbs(path) {
+		if in.CWD != "" {
+			path = filepath.Clean(filepath.Join(in.CWD, path))
+		}
+		// If CWD is empty the path stays relative; scope check below
+		// treats it as within-scope (safe default when workspace unknown).
 	}
 
 	// Within default scope → allow immediately.
