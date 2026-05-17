@@ -135,9 +135,7 @@ func (s *Channel) sendHandler() http.Handler {
 		}
 
 		// Resolve channel: target_user_id opens a real DM using sender's token.
-		// This is the key difference from channel_id — conversations.open is
-		// called with the sender's xoxp token so the DM appears in both users'
-		// inboxes (not in the bot↔target DM).
+		// conversations.open with xoxp token creates a DM in both users' inboxes.
 		channelID := body.ChannelID
 		if body.TargetUserID != "" {
 			client := xoxpClient
@@ -149,9 +147,17 @@ func (s *Channel) sendHandler() http.Handler {
 				ReturnIM: true,
 			})
 			if err != nil {
+				// Return structured error so Claude can decide to fallback
+				// (e.g. post to original channel thread instead).
+				// missing_scope means the token needs im:write user scope.
+				errMsg := err.Error()
+				hint := ""
+				if strings.Contains(errMsg, "missing_scope") {
+					hint = "; the user token is missing im:write scope — add it in Slack app OAuth & Permissions → User Token Scopes, then reinstall"
+				}
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadGateway)
-				fmt.Fprintf(w, `{"error":"open DM failed: %s"}`, err.Error())
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprintf(w, `{"error":"open_dm_failed","detail":%q,"hint":%q}`, errMsg, hint)
 				return
 			}
 			channelID = ch.ID
