@@ -98,12 +98,10 @@ func (s *Channel) sendHandler() http.Handler {
 		connTokFn := s.connectorToken
 		s.cfgMu.Unlock()
 
-		// Auto-inject sender_user_id from the registered token map.
-		// If the caller didn't specify a sender but there's exactly one
-		// registered user token that matches — use it automatically.
-		if body.SenderUserID == "" && connTokFn != nil && body.TargetUserID != "" {
-			// The session context always includes the mentioning user's ID
-			// via X-Wick-Session-User header; fall back to scanning all tokens.
+		// Auto-inject sender_user_id from the session header when the requesting
+		// user has a registered connector token. Applies to both DM and channel
+		// sends — the condition must NOT gate on target_user_id being set.
+		if body.SenderUserID == "" && connTokFn != nil {
 			if sessionUser := r.Header.Get("X-Wick-Session-User"); sessionUser != "" {
 				if tok := s.resolveUserToken(r.Context(), sessionUser, connTokFn); tok != "" {
 					body.SenderUserID = sessionUser
@@ -192,17 +190,10 @@ func (s *Channel) sendHandler() http.Handler {
 		}
 
 		// Send with xoxp client (real sender identity) when available.
+		// With a user token the message naturally appears as the token owner —
+		// do NOT add MsgOptionUsername/IconURL; those are bot-token overrides
+		// and cause errors or are silently ignored with xoxp tokens.
 		if xoxpClient != nil {
-			if u, err := xoxpClient.GetUserInfoContext(r.Context(), body.SenderUserID); err == nil {
-				name := u.Profile.DisplayName
-				if name == "" {
-					name = u.Profile.RealName
-				}
-				opts = append(opts,
-					slackgo.MsgOptionUsername(name),
-					slackgo.MsgOptionIconURL(u.Profile.Image72),
-				)
-			}
 			_, ts, err := xoxpClient.PostMessageContext(r.Context(), channelID, opts...)
 			if err == nil {
 				writeOK(w, ts)
