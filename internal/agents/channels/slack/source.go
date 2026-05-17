@@ -46,8 +46,21 @@ func (s *ConfigSource) Hash() string {
 }
 
 // Reload re-reads the config and applies it to the bound channel.
+// Also refreshes OAuth ClientID/ClientSecret so a credential change
+// in the channel settings page takes effect without a restart.
 func (s *ConfigSource) Reload(ctx context.Context) error {
 	cfg, pubURL := s.load()
 	s.ch.Reload(ctx, cfg, pubURL)
+
+	// Preserve the existing OnTokenSaved callback; only update the
+	// credential fields that live in the channel config.
+	if cfg.ClientID != "" || cfg.ClientSecret != "" {
+		s.ch.cfgMu.Lock()
+		existing := s.ch.oauthCfg
+		s.ch.cfgMu.Unlock()
+		existing.ClientID = cfg.ClientID
+		existing.ClientSecret = cfg.ClientSecret
+		s.ch.SetOAuthConfig(existing)
+	}
 	return nil
 }

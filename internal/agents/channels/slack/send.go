@@ -212,6 +212,10 @@ func (s *Channel) sendHandler() http.Handler {
 // resolveUserToken returns the xoxp token for senderUserID, checking the
 // in-process cache first and invoking fn on a miss. Returns "" when no
 // token is found or fn is nil.
+//
+// On a slow-path miss where fn also returns no token, a background
+// RefreshTokenMap is triggered so the next request benefits from an
+// updated connector row (e.g. when an admin just added a user token).
 func (s *Channel) resolveUserToken(ctx context.Context, senderUserID string, fn ConnectorTokenFn) string {
 	if fn == nil {
 		return ""
@@ -228,6 +232,14 @@ func (s *Channel) resolveUserToken(ctx context.Context, senderUserID string, fn 
 	token, found := fn(ctx, senderUserID)
 	if !found {
 		token = "" // normalise
+		// Trigger async map refresh so the next request benefits from any
+		// connector rows added since startup. Debounced inside RefreshTokenMap.
+		s.cfgMu.Lock()
+		refreshFn := s.tokenRefreshFn
+		s.cfgMu.Unlock()
+		if refreshFn != nil {
+			go s.RefreshTokenMap(context.Background())
+		}
 	}
 	s.userTokenMu.Lock()
 	if s.userTokenCache == nil {

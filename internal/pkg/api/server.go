@@ -610,17 +610,48 @@ func NewServer() *Server {
 	}
 
 	// Wire Slack user-token lookup via the connectors service.
-	// Pre-builds a userID→token map at startup by calling auth.test once per
-	// Slack connector row configured in user_token mode — no auth.test calls
-	// during live requests.
+	// SetTokenRefreshFn + RefreshTokenMap seeds the initial userID→token cache
+	// by calling auth.test once per Slack connector row configured in
+	// user_token mode. A background ticker keeps the cache fresh every 5
+	// minutes so new connector rows are picked up without a restart.
 	for _, ch := range channelReg.Channels() {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
-			userTokenMap := buildSlackUserTokenMap(context.Background(), connectorsSvc)
-			log.Info().Int("users", len(userTokenMap)).Msg("slack: user token map built from connectors")
-			slackCh.SetConnectorTokenFn(func(_ context.Context, slackUserID string) (string, bool) {
-				token, ok := userTokenMap[slackUserID]
-				return token, ok
+			// Wire the refresh function so RefreshTokenMap can rebuild the map
+			// from connector rows without a server restart.
+			slackCh.SetTokenRefreshFn(func(ctx context.Context) map[string]string {
+				return buildSlackUserTokenMap(ctx, connectorsSvc)
 			})
+
+			// Seed the initial cache synchronously (same behaviour as before,
+			// but now stored in userTokenCache instead of a closed-over map).
+			slackCh.RefreshTokenMap(context.Background())
+
+			// ConnectorTokenFn is called on every cache miss. Returning false
+			// signals resolveUserToken to trigger a background RefreshTokenMap
+			// so subsequent requests will find the token in cache.
+			slackCh.SetConnectorTokenFn(func(_ context.Context, _ string) (string, bool) {
+				return "", false
+			})
+
+			// Background ticker: refresh every 5 minutes.
+			go func(ch *slackch.Channel) {
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				for range ticker.C {
+					ch.RefreshTokenMap(context.Background())
+				}
+			}(slackCh)
+
+			// Wire OAuth config so the /oauth/start + /oauth/callback routes work.
+			slackCh.SetOAuthConfig(slackch.OAuthConfig{
+				ClientID:     configsSvc.GetOwned("agents", "slack_client_id"),
+				ClientSecret: configsSvc.GetOwned("agents", "slack_client_secret"),
+				RedirectURI:  strings.TrimRight(configsSvc.AppURL(), "/") + "/integrations/slack/oauth/callback",
+				OnTokenSaved: func(ctx context.Context, slackUserID, displayName, xoxpToken string) error {
+					return slackOAuthSaveToken(ctx, connectorsSvc, slackCh, slackUserID, displayName, xoxpToken)
+				},
+			})
+
 			break
 		}
 	}
@@ -933,6 +964,60 @@ func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[st
 			Msg("slack: user token registered")
 	}
 	return out
+}
+
+// slackOAuthSaveToken persists an xoxp token obtained via the Slack OAuth
+// flow. It scans existing connector rows for the Slack key to find a row
+// already holding a user_token for the same Slack user ID; if found, it
+// updates that row in place. If not found, it creates a new connector row.
+// After saving, it triggers a RefreshTokenMap on the channel so the
+// in-memory cache reflects the new token immediately.
+func slackOAuthSaveToken(ctx context.Context, svc *connectors.Service, ch *slackch.Channel, slackUserID, displayName, xoxpToken string) error {
+	rows, err := svc.ListByKey(ctx, "slack")
+	if err != nil {
+		return fmt.Errorf("slack oauth save: list connectors: %w", err)
+	}
+
+	// Look for an existing user_token row for this Slack user.
+	for _, row := range rows {
+		cfgs := svc.LoadConfigs(row)
+		if strings.TrimSpace(cfgs["auth_mode"]) != "user_token" {
+			continue
+		}
+		existingTok := strings.TrimSpace(cfgs["user_token"])
+		if existingTok == "" {
+			continue
+		}
+		uid, err := slackch.AuthTestWithToken(ctx, existingTok)
+		if err != nil {
+			// Token may be revoked; skip and continue scanning.
+			continue
+		}
+		if uid == slackUserID {
+			// Update the existing row with the fresh token.
+			if err := svc.Update(ctx, row.ID, row.Label, map[string]string{"user_token": xoxpToken}, row.Disabled); err != nil {
+				return fmt.Errorf("slack oauth save: update connector row %s: %w", row.ID, err)
+			}
+			log.Info().Str("user_id", slackUserID).Str("connector_id", row.ID).
+				Msg("slack oauth: updated existing connector row with new token")
+			ch.RefreshTokenMap(ctx)
+			return nil
+		}
+	}
+
+	// No existing row found — create a new connector row.
+	label := "Slack – @" + displayName
+	newRow, err := svc.Create(ctx, "slack", label, map[string]string{
+		"auth_mode":  "user_token",
+		"user_token": xoxpToken,
+	}, "oauth")
+	if err != nil {
+		return fmt.Errorf("slack oauth save: create connector row: %w", err)
+	}
+	log.Info().Str("user_id", slackUserID).Str("connector_id", newRow.ID).
+		Msg("slack oauth: created new connector row")
+	ch.RefreshTokenMap(ctx)
+	return nil
 }
 
 // hostAllowlistHandler rejects requests whose Host header doesn't match

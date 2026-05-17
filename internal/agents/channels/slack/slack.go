@@ -7,6 +7,7 @@ package slack
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -92,8 +93,8 @@ type Channel struct {
 	pubURL         string
 	api            *slackgo.Client
 	socket         *socketmode.Client
-	botUserID      string            // Slack user ID of the bot itself (U...), resolved via auth.test
-	connectorToken ConnectorTokenFn  // optional; nil = no user-token DM support
+	botUserID      string           // Slack user ID of the bot itself (U...), resolved via auth.test
+	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
 
 	mu    sync.Mutex
 	turns map[string]*turn
@@ -102,6 +103,16 @@ type Channel struct {
 	// Avoids repeated connectorToken lookups on every send call.
 	userTokenMu    sync.RWMutex
 	userTokenCache map[string]string
+
+	// tokenRefreshFn rebuilds the full userID→token map from connector rows.
+	// Wired at startup via SetTokenRefreshFn; triggered on-demand when a
+	// lookup misses and on a 5-minute background ticker.
+	tokenRefreshFn   func(ctx context.Context) map[string]string
+	tokenRefreshedAt time.Time
+	tokenRefreshMu   sync.Mutex
+
+	// oauthCfg holds Slack OAuth app credentials for the user OAuth flow.
+	oauthCfg OAuthConfig
 
 	approveFn      agentchannels.ApproveFn
 	sessions       agentchannels.SessionChecker
@@ -116,15 +127,28 @@ type Channel struct {
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
+
+	// oauthSecret is a per-process random secret used to sign OAuth state tokens.
+	oauthSecret []byte
+	// oauthPending stores pending OAuth state tokens with their expiry times.
+	oauthPending sync.Map // map[string]time.Time
 }
 
 // New builds a Slack Channel from the operator-supplied config alone.
 // All other dependencies are wired by *agentchannels.Registry via the
 // corresponding Set* setters before Start.
 func New(cfg agentconfig.SlackChannelConfig) *Channel {
+	secret := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, secret); err != nil {
+		// Fall back to a deterministic seed — OAuth state will still work,
+		// just with weaker randomness. This path is unreachable in practice.
+		log.Warn().Err(err).Msg("slack: failed to generate oauth secret; using fallback")
+		secret = []byte("wick-slack-oauth-fallback-secret!")
+	}
 	ch := &Channel{
 		turns:          make(map[string]*turn),
 		userTokenCache: make(map[string]string),
+		oauthSecret:    secret,
 	}
 	ch.applyConfig(cfg, "")
 	return ch
@@ -165,14 +189,56 @@ func (s *Channel) SetSessionStartHook(fn agentchannels.SessionStartHook) {
 	s.onSessionStart = fn
 }
 
+// SetTokenRefreshFn wires a function that rebuilds the full userID→token map.
+// Called at startup and triggered on-demand when a lookup misses.
+func (s *Channel) SetTokenRefreshFn(fn func(ctx context.Context) map[string]string) {
+	s.cfgMu.Lock()
+	s.tokenRefreshFn = fn
+	s.cfgMu.Unlock()
+}
+
+// RefreshTokenMap rebuilds the userID→token map from connector rows.
+// Debounced: skips if called within 60s of last refresh.
+func (s *Channel) RefreshTokenMap(ctx context.Context) {
+	s.tokenRefreshMu.Lock()
+	defer s.tokenRefreshMu.Unlock()
+	if time.Since(s.tokenRefreshedAt) < 60*time.Second {
+		return
+	}
+	s.cfgMu.Lock()
+	fn := s.tokenRefreshFn
+	s.cfgMu.Unlock()
+	if fn == nil {
+		return
+	}
+	newMap := fn(ctx)
+	s.userTokenMu.Lock()
+	s.userTokenCache = newMap
+	s.userTokenMu.Unlock()
+	s.tokenRefreshedAt = time.Now()
+	log.Info().Int("users", len(newMap)).Msg("slack: user token map refreshed")
+}
+
+// SetOAuthConfig wires the Slack OAuth app credentials for the user OAuth flow.
+// Safe to call after New; nil OnTokenSaved disables the flow gracefully.
+func (s *Channel) SetOAuthConfig(cfg OAuthConfig) {
+	s.cfgMu.Lock()
+	s.oauthCfg = cfg
+	s.cfgMu.Unlock()
+}
+
 // HTTPHandlers satisfies channels.MultiHTTPHandlerProvider.
-// Returns two routes:
-//   - POST /integrations/slack/events — inbound Slack webhook (existing)
-//   - POST /integrations/slack/send   — local agent proxy, no external auth
+// Returns four routes:
+//   - POST /integrations/slack/events         — inbound Slack webhook
+//   - POST /integrations/slack/send           — local agent proxy, no external auth
+//   - GET  /integrations/slack/oauth/start    — redirect to Slack OAuth consent page
+//   - GET  /integrations/slack/oauth/callback — exchange code, save token
 func (s *Channel) HTTPHandlers() map[string]http.Handler {
 	return map[string]http.Handler{
-		"POST /integrations/slack/events": s.HTTPHandler(),
-		"POST /integrations/slack/send":   s.sendHandler(),
+		"POST /integrations/slack/events":        s.HTTPHandler(),
+		"POST /integrations/slack/send":          s.sendHandler(),
+		"GET /integrations/slack/oauth/start":    s.oauthStartHandler(),
+		"GET /integrations/slack/oauth/callback": s.oauthCallbackHandler(),
 	}
 }
 
