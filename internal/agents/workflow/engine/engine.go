@@ -380,7 +380,7 @@ func (e *Engine) recordSuccess(ctx context.Context, slug string, st *workflow.Ru
 			"output":     truncateForEvent(nodeOutputAsMap(out)),
 		},
 	})
-	_ = e.StateStore.Save(slug, st.RunID, *st)
+	e.saveState(ctx, slug, st)
 }
 
 func (e *Engine) failNode(ctx context.Context, slug string, st *workflow.RunState, n workflow.Node, err error) error {
@@ -388,7 +388,7 @@ func (e *Engine) failNode(ctx context.Context, slug string, st *workflow.RunStat
 	st.Error = &workflow.NodeError{Node: n.ID, Type: string(n.Type), Message: err.Error()}
 	st.UpdatedAt = e.Now()
 	e.emit(ctx, slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
-	_ = e.StateStore.Save(slug, st.RunID, *st)
+	e.saveState(ctx, slug, st)
 	return &workflow.ExecError{Node: n.ID, Type: n.Type, Wrapped: err}
 }
 
@@ -410,11 +410,25 @@ func (e *Engine) applyOnFailure(ctx context.Context, w workflow.Workflow, st *wo
 		}
 		st.Failed = append(st.Failed, n.ID)
 		e.emit(ctx, w.ID, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error(), "fallback": n.Fallback}})
-		_ = e.StateStore.Save(w.ID, st.RunID, *st)
+		e.saveState(ctx, w.ID, st)
 		st.Current = append(st.Current, n.Fallback)
 		return nil
 	}
 	return e.failNode(ctx, w.ID, st, n, err)
+}
+
+// saveState persists the run state and logs a warning if the write fails.
+// Callers previously discarded the error with _ = — this surfaces it so
+// operators can diagnose disk-full or permission issues without the engine
+// silently continuing with stale state on disk.
+func (e *Engine) saveState(ctx context.Context, slug string, st *workflow.RunState) {
+	if err := e.StateStore.Save(slug, st.RunID, *st); err != nil {
+		zerolog.Ctx(ctx).Warn().
+			Str("slug", slug).
+			Str("run_id", st.RunID).
+			Err(err).
+			Msg("engine: failed to persist run state — state on disk may be stale")
+	}
 }
 
 func (e *Engine) nextNodes(w workflow.Workflow, n workflow.Node, out workflow.NodeOutput) []string {
