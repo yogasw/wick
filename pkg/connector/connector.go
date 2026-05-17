@@ -44,6 +44,8 @@
 package connector
 
 import (
+	"context"
+
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -164,6 +166,31 @@ type OpHealth struct {
 // project the granted permissions against each operation's requirements.
 type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 
+// OAuthMeta describes how a connector participates in the OAuth 2.0 flow.
+// The generic manager handler uses AuthorizeURL and Scopes to build the
+// consent redirect; GetUserIdentity is called after the token exchange to
+// resolve who the token belongs to.
+//
+// Set Module.OAuth to a non-nil pointer to opt in. The manager UI will
+// render an "OAuth App" section on the connector list page and a "Connect"
+// button on user-token rows automatically.
+type OAuthMeta struct {
+	// AuthorizeURL is the OAuth consent redirect URL
+	// (e.g. https://slack.com/oauth/v2/authorize).
+	AuthorizeURL string
+	// Scopes is the space- or comma-separated list of requested scopes
+	// (sent as the user_scope param for Slack, scope for standard OAuth2).
+	Scopes string
+	// DisplayName is shown on the Connect button (e.g. "Slack", "Google").
+	DisplayName string
+	// Icon is an SVG string or emoji rendered next to the Connect button.
+	Icon string
+	// GetUserIdentity exchanges a fresh access token for a unique user ID
+	// and human-readable display name. Called after the code→token exchange
+	// to route the token to the correct connector row.
+	GetUserIdentity func(ctx context.Context, accessToken string) (userID, displayName string, err error)
+}
+
 // Module is the internal, fully-resolved registration record wick keeps
 // for every connector definition. It is produced by app.RegisterConnector
 // — the Meta, the configs reflected from the typed Creds struct, and
@@ -173,9 +200,15 @@ type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 // HealthCheck is optional. When non-nil, the connector detail page
 // renders a "Check Permissions" button that invokes it and toggles
 // per-operation system_disabled flags based on the report.
+//
+// OAuth is non-nil when this connector supports user OAuth. The manager UI
+// shows an "OAuth App" section on the list page and a "Connect" button on
+// detail pages automatically — no per-connector handler wiring needed.
 type Module struct {
 	Meta        Meta
 	Configs     []entity.Config
 	Operations  []Operation
 	HealthCheck HealthCheckFunc
+	// OAuth is non-nil when this connector supports user OAuth.
+	OAuth *OAuthMeta
 }

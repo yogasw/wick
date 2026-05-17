@@ -157,13 +157,14 @@ func NewServer() *Server {
 	if err := configsSvc.Bootstrap(context.Background(), extraConfigs...); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
 	}
-	// Seed connector_oauth rows so the manager page can read/write Slack
-	// OAuth app credentials without declaring them inside any tool module.
-	if err := configsSvc.EnsureOwned(context.Background(), "connector_oauth",
-		entity.Config{Key: "slack_client_id", Description: "Slack OAuth app Client ID"},
-		entity.Config{Key: "slack_client_secret", IsSecret: true, Description: "Slack OAuth app Client Secret"},
+	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
+	// The manager reads/writes these at owner="connector_oauth:slack" so they
+	// are namespaced per-connector and don't collide with other connectors.
+	if err := configsSvc.EnsureOwned(context.Background(), "connector_oauth:slack",
+		entity.Config{Key: "client_id", Description: "Slack OAuth app Client ID"},
+		entity.Config{Key: "client_secret", IsSecret: true, Description: "Slack OAuth app Client Secret"},
 	); err != nil {
-		log.Warn().Err(err).Msg("configs: seed connector_oauth rows failed")
+		log.Warn().Err(err).Msg("configs: seed connector_oauth:slack rows failed")
 	}
 	// Seed from env on first boot only — once the row exists in the DB
 	// the admin UI is the only way to change it.
@@ -622,6 +623,10 @@ func NewServer() *Server {
 	// by calling auth.test once per Slack connector row configured in
 	// user_token mode. A background ticker keeps the cache fresh every 5
 	// minutes so new connector rows are picked up without a restart.
+	//
+	// Note: OAuth flow (start/callback) has moved to the generic connector
+	// manager at /manager/connectors/{key}/oauth/*. The Slack channel only
+	// needs token-refresh wiring for the send-proxy feature.
 	for _, ch := range channelReg.Channels() {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
@@ -649,21 +654,6 @@ func NewServer() *Server {
 					ch.RefreshTokenMap(context.Background())
 				}
 			}(slackCh)
-
-			// Wire OAuth redirect URI + OnTokenSaved callback.
-			// CredentialsLookup reads client_id/client_secret lazily at request time
-			// from the connector_oauth owner so admin changes take effect immediately
-			// without a restart.
-			slackCh.SetOAuthConfig(slackch.OAuthConfig{
-				CredentialsLookup: func() (string, string) {
-					return configsSvc.GetOwned("connector_oauth", "slack_client_id"),
-						configsSvc.GetOwned("connector_oauth", "slack_client_secret")
-				},
-				RedirectURI: strings.TrimRight(configsSvc.AppURL(), "/") + "/integrations/slack/oauth/callback",
-				OnTokenSaved: func(ctx context.Context, slackUserID, displayName, xoxpToken, connectorRowID string) error {
-					return slackOAuthSaveToken(ctx, connectorsSvc, slackCh, slackUserID, displayName, xoxpToken, connectorRowID)
-				},
-			})
 
 			break
 		}
@@ -979,73 +969,6 @@ func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[st
 	return out
 }
 
-// slackOAuthSaveToken persists an xoxp token obtained via the Slack OAuth
-// flow. It scans existing connector rows for the Slack key to find a row
-// already holding a user_token for the same Slack user ID; if found, it
-// updates that row in place. If not found, it creates a new connector row.
-// After saving, it triggers a RefreshTokenMap on the channel so the
-// in-memory cache reflects the new token immediately.
-// slackOAuthSaveToken persists an xoxp token from the Slack OAuth flow.
-// When connectorRowID is non-empty, it updates that specific row directly
-// (triggered from the "Connect with Slack" button on the connector detail page).
-// Otherwise it scans for an existing row for this user or creates a new one.
-func slackOAuthSaveToken(ctx context.Context, svc *connectors.Service, ch *slackch.Channel, slackUserID, displayName, xoxpToken, connectorRowID string) error {
-	// Fast path: connector_id known — update that row directly.
-	if connectorRowID != "" {
-		rows, err := svc.ListByKey(ctx, "slack")
-		if err != nil {
-			return fmt.Errorf("slack oauth save: list connectors: %w", err)
-		}
-		for _, row := range rows {
-			if row.ID == connectorRowID {
-				if err := svc.Update(ctx, row.ID, row.Label, map[string]string{
-					"auth_mode":  "user_token",
-					"user_token": xoxpToken,
-				}, row.Disabled); err != nil {
-					return fmt.Errorf("slack oauth save: update row %s: %w", row.ID, err)
-				}
-				log.Info().Str("user_id", slackUserID).Str("connector_id", row.ID).
-					Msg("slack oauth: updated connector row (from detail page button)")
-				ch.RefreshTokenMap(ctx)
-				return nil
-			}
-		}
-	}
-
-	// Slow path: scan for existing user_token row for this user.
-	rows, err := svc.ListByKey(ctx, "slack")
-	if err != nil {
-		return fmt.Errorf("slack oauth save: list connectors: %w", err)
-	}
-	for _, row := range rows {
-		cfgs := svc.LoadConfigs(row)
-		if strings.TrimSpace(cfgs["auth_mode"]) != "user_token" {
-			continue
-		}
-		if uid, err := slackch.AuthTestWithToken(ctx, strings.TrimSpace(cfgs["user_token"])); err == nil && uid == slackUserID {
-			if err := svc.Update(ctx, row.ID, row.Label, map[string]string{"user_token": xoxpToken}, row.Disabled); err != nil {
-				return fmt.Errorf("slack oauth save: update row %s: %w", row.ID, err)
-			}
-			log.Info().Str("user_id", slackUserID).Str("connector_id", row.ID).
-				Msg("slack oauth: updated existing connector row")
-			ch.RefreshTokenMap(ctx)
-			return nil
-		}
-	}
-
-	// No existing row — create new.
-	newRow, err := svc.Create(ctx, "slack", "Slack – @"+displayName, map[string]string{
-		"auth_mode":  "user_token",
-		"user_token": xoxpToken,
-	}, "oauth")
-	if err != nil {
-		return fmt.Errorf("slack oauth save: create connector row: %w", err)
-	}
-	log.Info().Str("user_id", slackUserID).Str("connector_id", newRow.ID).
-		Msg("slack oauth: created new connector row")
-	ch.RefreshTokenMap(ctx)
-	return nil
-}
 
 // hostAllowlistHandler rejects requests whose Host header doesn't match
 // the host of the configured app_url. The /health endpoint is exempt

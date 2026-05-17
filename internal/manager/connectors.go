@@ -62,15 +62,16 @@ func (h *Handler) connectorListPage(w http.ResponseWriter, r *http.Request) {
 	tagsByRow := h.resolveRowTags(ctx, rows)
 
 	var oauthCfg view.ConnectorOAuthAppConfig
-	if key == "slack" && user != nil && user.IsAdmin() {
+	if mod.OAuth != nil && user != nil && user.IsAdmin() {
 		oauthCfg.Enabled = true
-		oauthCfg.ClientID = h.configs.GetOwned("connector_oauth", "slack_client_id")
-		secret := h.configs.GetOwned("connector_oauth", "slack_client_secret")
+		oauthCfg.DisplayName = mod.OAuth.DisplayName
+		oauthCfg.ClientID = h.configs.GetOwned("connector_oauth:"+key, "client_id")
+		secret := h.configs.GetOwned("connector_oauth:"+key, "client_secret")
 		if secret != "" {
 			oauthCfg.ClientSecret = "••••••••"
 		}
 		if oauthCfg.ClientID != "" {
-			oauthCfg.OAuthURL = "/integrations/slack/oauth/start"
+			oauthCfg.OAuthURL = "/manager/connectors/" + key + "/oauth/start"
 		}
 	}
 
@@ -95,13 +96,13 @@ func (h *Handler) saveConnectorOAuthApp(w http.ResponseWriter, r *http.Request) 
 	clientID := strings.TrimSpace(r.FormValue("client_id"))
 	clientSecret := strings.TrimSpace(r.FormValue("client_secret"))
 
-	if err := h.configs.SetOwned(ctx, "connector_oauth", key+"_client_id", clientID); err != nil {
+	if err := h.configs.SetOwned(ctx, "connector_oauth:"+key, "client_id", clientID); err != nil {
 		http.Error(w, "save client_id: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// client_secret: empty value means "leave unchanged" (handled inside setOwned
 	// for IsSecret rows), so no special case needed here.
-	if err := h.configs.SetOwned(ctx, "connector_oauth", key+"_client_secret", clientSecret); err != nil {
+	if err := h.configs.SetOwned(ctx, "connector_oauth:"+key, "client_secret", clientSecret); err != nil {
 		http.Error(w, "save client_secret: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -185,14 +186,14 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
-	// Compute oauthURL for Slack user_token rows: non-empty when the
-	// connector_oauth owner has slack_client_id configured, enabling the
-	// "Connect with Slack" button.
+	// Compute oauthURL for connectors supporting OAuth: non-empty when
+	// Module.OAuth is set and client_id is configured, enabling the
+	// "Connect" button on the detail page.
 	oauthURL := ""
-	if key == "slack" {
-		clientID := h.configs.GetOwned("connector_oauth", "slack_client_id")
+	if mod.OAuth != nil {
+		clientID := h.configs.GetOwned("connector_oauth:"+key, "client_id")
 		if clientID != "" {
-			oauthURL = "/integrations/slack/oauth/start?connector_id=" + id
+			oauthURL = "/manager/connectors/" + key + "/oauth/start?connector_id=" + id
 		}
 	}
 
