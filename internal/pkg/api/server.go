@@ -610,37 +610,16 @@ func NewServer() *Server {
 	}
 
 	// Wire Slack user-token lookup via the connectors service.
-	// Iterates registered channels and type-asserts to *slackch.Channel;
-	// if found, attaches a ConnectorTokenFn that scans Slack connector rows
-	// configured in user_token auth mode and matches by auth.test UserID.
+	// Pre-builds a userID→token map at startup by calling auth.test once per
+	// Slack connector row configured in user_token mode — no auth.test calls
+	// during live requests.
 	for _, ch := range channelReg.Channels() {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
-			slackCh.SetConnectorTokenFn(func(ctx context.Context, slackUserID string) (string, bool) {
-				rows, err := connectorsSvc.ListByKey(ctx, "slack")
-				if err != nil {
-					log.Warn().Err(err).Msg("slack connector token lookup: ListByKey failed")
-					return "", false
-				}
-				for _, row := range rows {
-					cfgs := connectorsSvc.LoadConfigs(row)
-					if cfgs["auth_mode"] != "user_token" {
-						continue
-					}
-					token := cfgs["user_token"]
-					if token == "" {
-						continue
-					}
-					resp, err := slackch.AuthTestWithToken(ctx, token)
-					if err != nil {
-						log.Debug().Err(err).Str("connector", row.ID).
-							Msg("slack connector token lookup: auth.test failed")
-						continue
-					}
-					if resp == slackUserID {
-						return token, true
-					}
-				}
-				return "", false
+			userTokenMap := buildSlackUserTokenMap(context.Background(), connectorsSvc)
+			log.Info().Int("users", len(userTokenMap)).Msg("slack: user token map built from connectors")
+			slackCh.SetConnectorTokenFn(func(_ context.Context, slackUserID string) (string, bool) {
+				token, ok := userTokenMap[slackUserID]
+				return token, ok
 			})
 			break
 		}
@@ -921,6 +900,39 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 		ctx = ui.WithAppDescription(ctx, s.configsSvc.AppDescription())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// buildSlackUserTokenMap scans Slack connector rows configured in user_token
+// mode, calls auth.test once per token to resolve the Slack user ID, and
+// returns a map[slackUserID]xoxpToken. Called once at startup so live
+// requests never pay an auth.test round-trip.
+func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[string]string {
+	out := map[string]string{}
+	rows, err := svc.ListByKey(ctx, "slack")
+	if err != nil {
+		log.Warn().Err(err).Msg("buildSlackUserTokenMap: ListByKey failed")
+		return out
+	}
+	for _, row := range rows {
+		cfgs := svc.LoadConfigs(row)
+		if strings.TrimSpace(cfgs["auth_mode"]) != "user_token" {
+			continue
+		}
+		token := strings.TrimSpace(cfgs["user_token"])
+		if token == "" {
+			continue
+		}
+		userID, err := slackch.AuthTestWithToken(ctx, token)
+		if err != nil {
+			log.Warn().Err(err).Str("connector_id", row.ID).
+				Msg("buildSlackUserTokenMap: auth.test failed for row")
+			continue
+		}
+		out[userID] = token
+		log.Info().Str("user_id", userID).Str("connector_id", row.ID).
+			Msg("slack: user token registered")
+	}
+	return out
 }
 
 // hostAllowlistHandler rejects requests whose Host header doesn't match

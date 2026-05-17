@@ -123,7 +123,8 @@ type Channel struct {
 // corresponding Set* setters before Start.
 func New(cfg agentconfig.SlackChannelConfig) *Channel {
 	ch := &Channel{
-		turns: make(map[string]*turn),
+		turns:          make(map[string]*turn),
+		userTokenCache: make(map[string]string),
 	}
 	ch.applyConfig(cfg, "")
 	return ch
