@@ -12,7 +12,11 @@ import (
 // Identity (label + actions), credentials, and the operations table.
 // Test runs and run history live on dedicated sibling pages reached via
 // the per-operation action links — keeps this page focused on settings.
-templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner) {
+// ConnectorDetailPage renders the per-row admin surface.
+// oauthURL is non-empty when the connector key is "slack" AND the channel
+// config has client_id set — the handler computes this so the template
+// stays free of config-service access.
+templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner, oauthURL string) {
 	@Layout("Manager · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -86,8 +90,8 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 					Per-row values shared by every operation on this connector. Read in handler code via <code class="font-mono text-xs">c.Cfg(...)</code>.
 				</p>
 				@ConfigsTable(configs, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/configs", editKey, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID)
-			if mod.Meta.Key == "slack" && slackOAuthReady(configs) {
-				@slackConnectButton(row.ID, slackConnectedUser(configs))
+			if oauthURL != "" && slackOAuthReady(configs) {
+				@slackConnectButton(oauthURL, slackConnectedUser(configs))
 			}
 			</section>
 
@@ -308,47 +312,21 @@ templ operationRow(key, rowID string, op connector.Operation, st connectors.OpSt
 	</tr>
 }
 
-// slackOAuthReady returns true when this connector row has auth_mode=user_token
-// AND client_id is filled — meaning the "Connect with Slack" button can work.
-func slackOAuthReady(configs []entity.Config) bool {
-	authMode := ""
-	clientID := ""
-	for _, c := range configs {
-		switch c.Key {
-		case "auth_mode":
-			authMode = c.Value
-		case "client_id":
-			clientID = c.Value
-		}
-	}
-	return authMode == "user_token" && clientID != ""
-}
-
-// slackConnectedUser returns the current connected Slack username if user_token
-// is set, otherwise empty string.
-func slackConnectedUser(configs []entity.Config) string {
-	for _, c := range configs {
-		if c.Key == "connected_user" {
-			return c.Value
-		}
-	}
-	return ""
-}
-
 // slackConnectButton renders the "Connect with Slack" OAuth button.
-templ slackConnectButton(rowID string, connectedUser string) {
+// oauthURL is the full OAuth start URL including the connector_id param.
+templ slackConnectButton(oauthURL string, connectedUser string) {
 	<div class="mt-4 rounded-lg border border-white-400 dark:border-navy-600 bg-white-50 dark:bg-navy-800 p-4">
 		<div class="flex items-center justify-between">
 			<div>
 				<p class="text-sm font-medium text-black-900 dark:text-white-100">Slack Account</p>
 				if connectedUser != "" {
-					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connected as <strong>@{ connectedUser }</strong></p>
+					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connected as <strong>{ "@" + connectedUser }</strong></p>
 				} else {
 					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connect your Slack account to enable sending messages as you.</p>
 				}
 			</div>
 			<a
-				href={ templ.SafeURL("/integrations/slack/oauth/start?connector_id=" + rowID) }
+				href={ templ.SafeURL(oauthURL) }
 				class="inline-flex items-center gap-2 rounded-lg bg-[#4A154B] px-4 py-2 text-sm font-medium text-white hover:bg-[#3d1040] transition-colors"
 			>
 				<svg width="16" height="16" viewBox="0 0 54 54" fill="none" xmlns="http://www.w3.org/2000/svg">

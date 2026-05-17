@@ -35,12 +35,12 @@ import (
 )
 
 // OAuthConfig holds the Slack OAuth flow dependencies.
+// ClientID and ClientSecret are global Slack app credentials stored in the
+// channel config (Agents → Channels → Slack), shared across all connector rows.
 type OAuthConfig struct {
-	RedirectURI string
-	// CredentialsFor returns the client_id and client_secret for a given
-	// connector row ID. Server.go wires this to read from the connector row
-	// configs — keeping credentials in the connector, not the channel config.
-	CredentialsFor func(ctx context.Context, connectorRowID string) (clientID, clientSecret string, err error)
+	ClientID     string
+	ClientSecret string
+	RedirectURI  string
 	// OnTokenSaved is called after a successful OAuth exchange.
 	// connectorRowID is the row that was updated (from the start URL param).
 	OnTokenSaved func(ctx context.Context, slackUserID, displayName, xoxpToken, connectorRowID string) error
@@ -62,23 +62,15 @@ func (s *Channel) oauthStartHandler() http.Handler {
 		cfg := s.oauthCfg
 		s.cfgMu.Unlock()
 
-		if cfg.CredentialsFor == nil {
-			http.Error(w, "Slack OAuth not configured", http.StatusServiceUnavailable)
+		if cfg.ClientID == "" {
+			http.Error(w, "Slack OAuth not configured — set Client ID in Agents → Channels → Slack settings", http.StatusServiceUnavailable)
 			return
 		}
 
-		// connector_id is required — credentials are read from the connector row.
+		// connector_id is optional — passed from the "Connect with Slack" button
+		// on a specific connector row. Stored in state so the callback can update
+		// that row directly instead of scanning or creating a new one.
 		connectorRowID := r.URL.Query().Get("connector_id")
-		if connectorRowID == "" {
-			http.Error(w, "connector_id is required", http.StatusBadRequest)
-			return
-		}
-
-		clientID, _, err := cfg.CredentialsFor(r.Context(), connectorRowID)
-		if err != nil || clientID == "" {
-			http.Error(w, "connector row missing client_id — set it in the connector credentials first", http.StatusBadRequest)
-			return
-		}
 
 		state, err := s.generateOAuthState()
 		if err != nil {
@@ -93,7 +85,7 @@ func (s *Channel) oauthStartHandler() http.Handler {
 		})
 
 		params := url.Values{}
-		params.Set("client_id", clientID)
+		params.Set("client_id", cfg.ClientID)
 		params.Set("user_scope", "chat:write,im:write,channels:read,users:read,chat:write.customize")
 		params.Set("redirect_uri", cfg.RedirectURI)
 		params.Set("state", state)
@@ -148,19 +140,13 @@ func (s *Channel) oauthCallbackHandler() http.Handler {
 		cfg := s.oauthCfg
 		s.cfgMu.Unlock()
 
-		if cfg.CredentialsFor == nil {
+		if cfg.ClientID == "" || cfg.ClientSecret == "" {
 			http.Error(w, "Slack OAuth not configured", http.StatusServiceUnavailable)
 			return
 		}
 
-		clientID, clientSecret, err := cfg.CredentialsFor(r.Context(), entry.connectorRowID)
-		if err != nil || clientID == "" || clientSecret == "" {
-			http.Error(w, "connector credentials not found", http.StatusBadRequest)
-			return
-		}
-
 		// Exchange code for token via Slack API.
-		resp, err := slackgo.GetOAuthV2ResponseContext(r.Context(), http.DefaultClient, clientID, clientSecret, code, cfg.RedirectURI)
+		resp, err := slackgo.GetOAuthV2ResponseContext(r.Context(), http.DefaultClient, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI)
 		if err != nil {
 			log.Error().Err(err).Msg("slack oauth: token exchange failed")
 			http.Error(w, "token exchange failed: "+err.Error(), http.StatusBadGateway)

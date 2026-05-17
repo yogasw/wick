@@ -28,6 +28,9 @@ type SlackChannelConfig struct {
 	GateApproverGroups string `wick:"picker=slack.usergroups;hidden;key=gate_approver_groups;visible_when=gate_approvers:custom;desc=Custom approver user groups."`
 
 	Workspace string `wick:"dropdown;hidden;key=workspace;desc=Workspace to use for sessions from this Slack channel. Leave empty to use the global default."`
+
+	ClientID     string `wick:"key=client_id;hidden;desc=Slack app Client ID. Required for the Connect with Slack OAuth button on connector rows. Find at api.slack.com/apps → Basic Information."`
+	ClientSecret string `wick:"secret;hidden;key=client_secret;desc=Slack app Client Secret. Required for OAuth. Find at api.slack.com/apps → Basic Information."`
 }
 
 // DefaultSlackChannelConfig returns the empty Slack defaults. Slack stays off

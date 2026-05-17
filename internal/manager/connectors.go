@@ -139,7 +139,17 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
-	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}).Render(ctx, w)
+	// Compute oauthURL for Slack user_token rows: non-empty when the channel
+	// has client_id configured, enabling the "Connect with Slack" button.
+	oauthURL := ""
+	if key == "slack" {
+		clientID := h.configs.GetOwned("agents", "client_id")
+		if clientID != "" {
+			oauthURL = "/integrations/slack/oauth/start?connector_id=" + id
+		}
+	}
+
+	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, oauthURL).Render(ctx, w)
 }
 
 // connectorTestPage renders the standalone Postman-style test surface

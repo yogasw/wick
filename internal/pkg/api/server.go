@@ -642,24 +642,11 @@ func NewServer() *Server {
 				}
 			}(slackCh)
 
-			// Wire OAuth config — credentials are read from the specific connector
-			// row, not from channel config. This makes the pattern reusable for
-			// other connectors (Google, GitHub, etc.) in the future.
+			// Wire OAuth redirect URI + OnTokenSaved callback.
+			// ClientID/ClientSecret are read from the channel config via applyConfig
+			// (they update s.oauthCfg automatically on every Reload).
 			slackCh.SetOAuthConfig(slackch.OAuthConfig{
 				RedirectURI: strings.TrimRight(configsSvc.AppURL(), "/") + "/integrations/slack/oauth/callback",
-				CredentialsFor: func(ctx context.Context, connectorRowID string) (clientID, clientSecret string, err error) {
-					rows, listErr := connectorsSvc.ListByKey(ctx, "slack")
-					if listErr != nil {
-						return "", "", listErr
-					}
-					for _, row := range rows {
-						if row.ID == connectorRowID {
-							cfgs := connectorsSvc.LoadConfigs(row)
-							return strings.TrimSpace(cfgs["client_id"]), strings.TrimSpace(cfgs["client_secret"]), nil
-						}
-					}
-					return "", "", fmt.Errorf("connector row %s not found", connectorRowID)
-				},
 				OnTokenSaved: func(ctx context.Context, slackUserID, displayName, xoxpToken, connectorRowID string) error {
 					return slackOAuthSaveToken(ctx, connectorsSvc, slackCh, slackUserID, displayName, xoxpToken, connectorRowID)
 				},
