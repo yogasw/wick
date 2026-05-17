@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -358,11 +359,18 @@ func (e *Engine) runOne(ctx context.Context, n workflow.Node, rc *workflow.RunCo
 			select {
 			case <-ctx.Done():
 				return workflow.NodeOutput{}, ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(retryJitter(backoff)):
 			}
 		}
 	}
 	return workflow.NodeOutput{}, lastErr
+}
+
+// retryJitter adds a random jitter of up to 50% of backoff so that
+// concurrent retrying workflows don't thunderherd the same endpoint.
+// The returned value is always in [backoff, backoff*1.5].
+func retryJitter(backoff time.Duration) time.Duration {
+	return backoff + time.Duration(rand.Int63n(int64(backoff/2+1)))
 }
 
 func (e *Engine) recordSuccess(ctx context.Context, slug string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput, latencyMs int64) {
