@@ -30,6 +30,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
@@ -576,6 +578,10 @@ func (r *Router) fireErrorWorkflow(ctx context.Context, w workflow.Workflow, st 
 }
 
 // Stop unregisters all and waits for workers to drain.
+// StopTimeout is the deadline given to in-flight workers during Stop.
+// Overridable in tests.
+var StopTimeout = 30 * time.Second
+
 func (r *Router) Stop() {
 	r.mu.Lock()
 	slugs := make([]string, 0, len(r.workers))
@@ -586,7 +592,16 @@ func (r *Router) Stop() {
 	for _, s := range slugs {
 		r.Unregister(s)
 	}
-	r.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(StopTimeout):
+		log.Warn().Dur("timeout", StopTimeout).Msg("router stop: timed out waiting for in-flight workers to drain")
+	}
 }
 
 // WebhookSecretFor returns the SecretRef of the first webhook trigger
