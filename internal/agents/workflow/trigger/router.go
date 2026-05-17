@@ -37,6 +37,12 @@ import (
 
 // Router matches incoming events to registered workflows, applies
 // dedup, and enqueues per workflow.
+// webhookEntry holds the secretRef for one webhook path pattern.
+type webhookEntry struct {
+	slug      string
+	secretRef string
+}
+
 type Router struct {
 	mu      sync.RWMutex
 	engine  *engine.Engine
@@ -50,8 +56,12 @@ type Router struct {
 	// Built/torn-down by Register/Unregister; never read without
 	// holding mu.
 	index map[string][]triggerRef
-	wg    sync.WaitGroup
-	clock func() time.Time
+	// webhookIndex maps a webhook path pattern → webhookEntry for O(1)
+	// secret lookup per incoming webhook request. Built/torn-down
+	// alongside the main index in reindexLocked/removeFromIndexLocked.
+	webhookIndex map[string]webhookEntry
+	wg           sync.WaitGroup
+	clock        func() time.Time
 }
 
 // triggerRef pins one trigger inside a registered workflow. TriggerIdx
@@ -66,14 +76,15 @@ type triggerRef struct {
 // NewRouter wires a Router to an Engine + Service.
 func NewRouter(e *engine.Engine, svc service.Service) *Router {
 	return &Router{
-		engine:  e,
-		service: svc,
-		defs:    map[string]workflow.Workflow{},
-		queues:  map[string]*Queue{},
-		dedups:  map[string]*Dedup{},
-		workers: map[string]context.CancelFunc{},
-		index:   map[string][]triggerRef{},
-		clock:   func() time.Time { return time.Now() },
+		engine:       e,
+		service:      svc,
+		defs:         map[string]workflow.Workflow{},
+		queues:       map[string]*Queue{},
+		dedups:       map[string]*Dedup{},
+		workers:      map[string]context.CancelFunc{},
+		index:        map[string][]triggerRef{},
+		webhookIndex: map[string]webhookEntry{},
+		clock:        func() time.Time { return time.Now() },
 	}
 }
 
@@ -433,6 +444,13 @@ func (r *Router) reindexLocked(w workflow.Workflow) {
 		for _, key := range triggerRouteKeys(tr) {
 			r.index[key] = append(r.index[key], triggerRef{Slug: w.ID, TriggerIdx: i})
 		}
+		if tr.Type == workflow.TriggerWebhook && tr.SecretRef != "" {
+			path := tr.Path
+			if path == "" {
+				path = "*"
+			}
+			r.webhookIndex[path] = webhookEntry{slug: w.ID, secretRef: tr.SecretRef}
+		}
 	}
 }
 
@@ -450,6 +468,11 @@ func (r *Router) removeFromIndexLocked(slug string) {
 			delete(r.index, key)
 		} else {
 			r.index[key] = filtered
+		}
+	}
+	for path, entry := range r.webhookIndex {
+		if entry.slug == slug {
+			delete(r.webhookIndex, path)
 		}
 	}
 }
@@ -589,24 +612,17 @@ func (r *Router) Stop() {
 	r.wg.Wait()
 }
 
-// WebhookSecretFor returns the SecretRef of the first webhook trigger
-// whose path pattern matches reqPath, and whether one was found.
+// WebhookSecretFor returns the SecretRef for the incoming reqPath.
+// Lookup is O(1) via webhookIndex: exact match first, then wildcard "*".
 // Used by WebhookHandler to verify HMAC before dispatching.
 func (r *Router) WebhookSecretFor(reqPath string) (secretRef string, found bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, w := range r.defs {
-		if !w.Enabled {
-			continue
-		}
-		for _, tr := range w.Triggers {
-			if tr.Type != workflow.TriggerWebhook || tr.SecretRef == "" {
-				continue
-			}
-			if tr.Path == "" || PathMatches(tr.Path, reqPath) {
-				return tr.SecretRef, true
-			}
-		}
+	if entry, ok := r.webhookIndex[reqPath]; ok {
+		return entry.secretRef, true
+	}
+	if entry, ok := r.webhookIndex["*"]; ok {
+		return entry.secretRef, true
 	}
 	return "", false
 }
