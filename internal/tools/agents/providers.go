@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/mcpconfig"
 
 	// Blank-import each provider sub-package so its init() fires when
 	// the agents UI module loads. Without this, capability.Lookup
@@ -78,6 +81,10 @@ func providersPage(c *tool.Ctx) {
 		}
 	}
 
+	mcpVM := buildMCPStatusVM()
+	// Auto-install into detected clients that don't have wick yet.
+	go autoInstallMCP(mcpVM.AppName)
+
 	c.HTML(view.ProvidersPage(view.ProvidersVM{
 		Layout:        sidebarVM(c, "providers", ""),
 		Base:          c.Base(),
@@ -91,6 +98,7 @@ func providersPage(c *tool.Ctx) {
 		SupportedKeys: supportedTypeKeys(),
 		Gate:          gateStatusVM(),
 		AutoRescan:    autoRescanEnabled(),
+		MCP:           mcpVM,
 	}))
 }
 
@@ -293,6 +301,184 @@ func syncProviderStorage(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "synced"})
+}
+
+// buildMCPStatusVM collects per-client install status for the MCP Wick card.
+func buildMCPStatusVM() view.MCPStatusVM {
+	cwd, _ := os.Getwd()
+	name := appname.Resolve()
+	blocklist := mcpBlocklist()
+	clients := mcpconfig.AllClients(cwd)
+	rows := make([]view.MCPClientStatusVM, 0, len(clients))
+	for _, c := range clients {
+		if !isDirPresent(c.Path) {
+			continue
+		}
+		_, installed := mcpconfig.IsInstalled(c, name)
+		rows = append(rows, view.MCPClientStatusVM{
+			ID:          c.ID,
+			Label:       c.Label,
+			Detected:    true,
+			Installed:   installed,
+			Blocklisted: blocklist[c.ID],
+			ConfigPath:  c.Path,
+		})
+	}
+	return view.MCPStatusVM{AppName: name, Clients: rows}
+}
+
+// mcpBlocklist returns the set of client IDs the user has manually
+// uninstalled. Read from agents.mcp_uninstalled_clients (comma-separated).
+func mcpBlocklist() map[string]bool {
+	if globalConfigs == nil {
+		return nil
+	}
+	raw := globalConfigs.GetOwned("agents", "mcp_uninstalled_clients")
+	if raw == "" {
+		return nil
+	}
+	m := make(map[string]bool)
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			m[id] = true
+		}
+	}
+	return m
+}
+
+// mcpAddBlocklist appends a client ID to the persistent blocklist.
+func mcpAddBlocklist(ctx context.Context, clientID string) {
+	if globalConfigs == nil {
+		return
+	}
+	raw := globalConfigs.GetOwned("agents", "mcp_uninstalled_clients")
+	ids := make(map[string]bool)
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids[id] = true
+		}
+	}
+	ids[clientID] = true
+	parts := make([]string, 0, len(ids))
+	for id := range ids {
+		parts = append(parts, id)
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_uninstalled_clients", strings.Join(parts, ","))
+}
+
+// mcpRemoveBlocklist removes a client ID from the persistent blocklist
+// (called when user manually installs a previously-uninstalled client).
+func mcpRemoveBlocklist(ctx context.Context, clientID string) {
+	if globalConfigs == nil {
+		return
+	}
+	raw := globalConfigs.GetOwned("agents", "mcp_uninstalled_clients")
+	var parts []string
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" && id != clientID {
+			parts = append(parts, id)
+		}
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_uninstalled_clients", strings.Join(parts, ","))
+}
+
+// isDirPresent returns true when the file's parent directory exists —
+// same heuristic mcpconfig.Detected uses internally.
+func isDirPresent(path string) bool {
+	dir := path[:max(strings.LastIndexAny(path, `/\`), 0)]
+	if dir == "" {
+		return false
+	}
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
+}
+
+// autoInstallMCP installs wick into every detected client that doesn't
+// have it yet, skipping blocklisted (manually-uninstalled) clients.
+// Only runs once per app lifetime — guarded by agents.mcp_auto_installed.
+func autoInstallMCP(name string) {
+	if globalConfigs == nil {
+		return
+	}
+	if globalConfigs.GetOwned("agents", "mcp_auto_installed") == "true" {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	entry, err := mcpconfig.SelfEntry()
+	if err != nil {
+		log.Warn().Err(err).Msg("mcp auto-install: SelfEntry failed")
+		return
+	}
+	blocklist := mcpBlocklist()
+	ctx := context.Background()
+	for _, c := range mcpconfig.Detected(cwd) {
+		if blocklist[c.ID] {
+			continue
+		}
+		_, installed := mcpconfig.IsInstalled(c, name)
+		if installed {
+			continue
+		}
+		if err := mcpconfig.Install(c, name, entry); err != nil {
+			log.Warn().Err(err).Msgf("mcp auto-install: %s", c.ID)
+		} else {
+			log.Info().Msgf("mcp auto-install: installed %q into %s", name, c.Label)
+		}
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_auto_installed", "true")
+}
+
+// mcpInstallClient installs wick MCP entry into one client by ID and
+// removes it from the blocklist so future auto-installs can reach it.
+// POST /providers/mcp/{clientID}/install
+func mcpInstallClient(c *tool.Ctx) {
+	clientID := c.PathValue("clientID")
+	cwd, _ := os.Getwd()
+	cl, ok := mcpconfig.Find(cwd, clientID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "unknown client " + clientID})
+		return
+	}
+	name := appname.Resolve()
+	entry, err := mcpconfig.SelfEntry()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := mcpconfig.Install(cl, name, entry); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("mcp install %s: %s", clientID, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	mcpRemoveBlocklist(c.Context(), clientID)
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
+// mcpUninstallClient removes wick MCP entry from one client by ID and
+// adds it to the blocklist so auto-install never re-installs it.
+// POST /providers/mcp/{clientID}/uninstall
+func mcpUninstallClient(c *tool.Ctx) {
+	clientID := c.PathValue("clientID")
+	cwd, _ := os.Getwd()
+	cl, ok := mcpconfig.Find(cwd, clientID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "unknown client " + clientID})
+		return
+	}
+	name := appname.Resolve()
+	if err := mcpconfig.Uninstall(cl, name); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("mcp uninstall %s: %s", clientID, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	mcpAddBlocklist(c.Context(), clientID)
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
 func parseIntForm(s string) int {

@@ -192,6 +192,24 @@ type ProvidersVM struct {
 	SupportedKeys []string
 	Gate          GateStatusVM
 	AutoRescan    bool
+	MCP           MCPStatusVM
+}
+
+// MCPClientStatusVM is one row in the MCP Wick card — one per detected
+// MCP client (Claude Desktop, Cursor, Gemini CLI, etc.).
+type MCPClientStatusVM struct {
+	ID          string // "claude", "cursor", "gemini", "codex", "claude-code"
+	Label       string // "Claude Desktop", "Cursor", …
+	Detected    bool   // client config dir exists on this host
+	Installed   bool   // wick entry present in client's mcpServers
+	Blocklisted bool   // user manually uninstalled — skip auto-install
+	ConfigPath  string // absolute path to config file (for tooltip)
+}
+
+// MCPStatusVM is the aggregate for the MCP Wick card on the Providers page.
+type MCPStatusVM struct {
+	AppName string
+	Clients []MCPClientStatusVM
 }
 
 // GateStatusVM is the small "is the command gate alive?" card on

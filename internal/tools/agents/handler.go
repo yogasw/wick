@@ -176,6 +176,9 @@ func Register(r tool.Router) {
 	r.POST("/providers/{type}/{name}/hooks/{event}/disable", disableProviderHook)
 	r.POST("/providers/auto-rescan/toggle", toggleAutoRescan)
 
+	r.POST("/providers/mcp/{clientID}/install", mcpInstallClient)
+	r.POST("/providers/mcp/{clientID}/uninstall", mcpUninstallClient)
+
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
 	r.POST("/providers/storage/restore", storageRestoreSelected)

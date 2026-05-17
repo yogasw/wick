@@ -11,6 +11,7 @@
     var out = [];
     var inCode = false, codeLang = "", codeLines = [];
     var inList = false, listOl = false;
+    var inTable = false, tableHeader = false;
 
     function flushList() {
       if (!inList) return;
@@ -20,6 +21,11 @@
         : 'class="list-disc list-inside space-y-0.5 my-1"';
       out.push("<" + tag + " " + cls + ">" + listItems.join("") + "</" + tag + ">");
       inList = false; listOl = false; listItems = [];
+    }
+    function flushTable() {
+      if (!inTable) return;
+      out.push("</tbody></table>");
+      inTable = false; tableHeader = false;
     }
     var listItems = [];
 
@@ -94,9 +100,34 @@
         continue;
       }
 
+      // Table
+      if (line.trim().startsWith("|")) {
+        var trimmed = line.trim();
+        // separator row |---|---| → marks end of header
+        if (/^\|[-:\s|]+\|?$/.test(trimmed)) {
+          if (inTable && !tableHeader) { out.push("</thead><tbody>"); tableHeader = true; }
+          continue;
+        }
+        var cells = trimmed.replace(/^\||\|$/g, "").split("|");
+        if (!inTable) {
+          flushList();
+          out.push('<div class="overflow-x-auto my-2"><table class="w-full text-xs border-collapse">');
+          out.push("<thead><tr>" + cells.map(function(c) {
+            return '<th class="border border-white-300 dark:border-navy-600 px-3 py-1.5 text-left font-semibold text-black-900 dark:text-white-100 bg-white-300 dark:bg-navy-700">' + inlineMarkdown(c.trim()) + "</th>";
+          }).join("") + "</tr>");
+          inTable = true; tableHeader = false;
+        } else {
+          out.push("<tr>" + cells.map(function(c) {
+            return '<td class="border border-white-300 dark:border-navy-600 px-3 py-1.5 text-black-900 dark:text-white-100">' + inlineMarkdown(c.trim()) + "</td>";
+          }).join("") + "</tr>");
+        }
+        continue;
+      }
+      flushTable();
       flushList();
       out.push('<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">' + inlineMarkdown(line) + '</p>');
     }
+    flushTable();
     flushList();
     if (inCode && codeLines.length) {
       out.push('<pre class="text-xs font-mono bg-white-200 dark:bg-navy-800 px-4 py-3 rounded-lg overflow-x-auto"><code>' + esc(codeLines.join("\n")) + '</code></pre>');
@@ -957,9 +988,19 @@
           match_key: approvalCurrent.match_key || "",
         }),
       }).then(function (r) {
-        // approval_resolved SSE dismisses the modal. Re-enable button
-        // defensively in case SSE is slow / dropped.
-        if (!r.ok && btn) btn.disabled = false;
+        if (!r.ok) {
+          if (btn) btn.disabled = false;
+          r.json().catch(function () { return {}; }).then(function (body) {
+            var msg = (body && body.error) ? body.error : ("request failed (" + r.status + ")");
+            var modal = document.getElementById("approval-modal");
+            if (!modal) return;
+            var err = modal.querySelector("[data-approval-error]");
+            if (!err) return;
+            err.textContent = msg;
+            err.classList.remove("hidden");
+            setTimeout(function () { err.classList.add("hidden"); }, 5000);
+          });
+        }
       }).catch(function () {
         if (btn) btn.disabled = false;
       });
