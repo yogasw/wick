@@ -58,8 +58,10 @@ import (
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
@@ -429,7 +431,17 @@ func NewServer() *Server {
 	// per-node progress without polling state.json. The broadcaster
 	// session key is "wf:<slug>"; client opens
 	// /stream?session=wf:<slug>.
-	wfMgr.Engine.SetEventHook(agentstool.WorkflowEventHook(agentsBcast))
+	// Optionally mirror events to Loki when workflow_loki_url is set.
+	sseHook := agentstool.WorkflowEventHook(agentsBcast)
+	lokiURL := configsSvc.GetOwned("agents", "workflow_loki_url")
+	lokiLabels := configsSvc.GetOwned("agents", "workflow_loki_labels")
+	lokiPusher := wfstate.NewLokiPusher(lokiURL, lokiLabels)
+	wfMgr.Engine.SetEventHook(func(slug, runID string, ev wf.RunEvent) {
+		sseHook(slug, runID, ev)
+		if lokiPusher != nil {
+			lokiPusher.Push(slug, runID, ev)
+		}
+	})
 	// Wire the shared agent pool + an adapter that translates
 	// tools/agents.Broadcaster events into the slim AgentEvent the
 	// workflow executor consumes. Pool-routed agent nodes go through
