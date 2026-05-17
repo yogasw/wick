@@ -63,4 +63,5 @@ func RegisterAll(reg *integration.Registry, ch *slack.Channel) {
 	registerActionPushModal(reg, ch)
 	registerActionPublishHome(reg, ch)
 	registerActionRespondURL(reg, ch)
+	registerActionOpenDM(reg, ch)
 }
