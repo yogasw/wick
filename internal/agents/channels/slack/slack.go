@@ -1166,18 +1166,12 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 
 func (s *Channel) postChunked(channelID, threadTS, text string) {
 	chunks := chunkText(text, maxSlackChunk)
-	// Footer only in DM sessions — Slack DM channel IDs always start with "D".
-	isDM := strings.HasPrefix(channelID, "D")
 	for i, chunk := range chunks {
 		msg := chunk
 		if i > 0 {
 			msg = "_(cont.)_\n" + chunk
 		}
-		if i == len(chunks)-1 && isDM {
-			s.postReplyWithFooter(channelID, threadTS, msg)
-		} else {
-			s.postReply(channelID, threadTS, msg)
-		}
+		s.postReply(channelID, threadTS, msg)
 	}
 }
 
