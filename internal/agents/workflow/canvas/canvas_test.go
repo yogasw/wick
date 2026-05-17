@@ -18,19 +18,19 @@ type stubService struct {
 	updateErr  error
 }
 
-func newStub(slugs ...string) *stubService {
+func newStub(ids ...string) *stubService {
 	s := &stubService{workflows: map[string]workflow.Workflow{}}
-	for _, slug := range slugs {
-		s.workflows[slug] = minimalWorkflow(slug)
+	for _, id := range ids {
+		s.workflows[id] = minimalWorkflow(id)
 	}
 	return s
 }
 
 // minimalWorkflow builds the smallest workflow that passes parse.Validate.
-func minimalWorkflow(slug string) workflow.Workflow {
+func minimalWorkflow(id string) workflow.Workflow {
 	return workflow.Workflow{
-		ID:      slug,
-		Name:    slug,
+		ID:      id,
+		Name:    id,
 		Enabled: false,
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerManual, EntryNode: "start"},
@@ -43,22 +43,22 @@ func minimalWorkflow(slug string) workflow.Workflow {
 	}
 }
 
-func (s *stubService) Load(slug string) (workflow.Workflow, error) {
+func (s *stubService) Load(id string) (workflow.Workflow, error) {
 	if s.loadErr != nil {
 		return workflow.Workflow{}, s.loadErr
 	}
-	w, ok := s.workflows[slug]
+	w, ok := s.workflows[id]
 	if !ok {
-		return workflow.Workflow{}, errors.New("not found: " + slug)
+		return workflow.Workflow{}, errors.New("not found: " + id)
 	}
 	return w, nil
 }
 
-func (s *stubService) Update(slug string, w workflow.Workflow, _ map[string][]byte) error {
+func (s *stubService) Update(id string, w workflow.Workflow, _ map[string][]byte) error {
 	if s.updateErr != nil {
 		return s.updateErr
 	}
-	s.workflows[slug] = w
+	s.workflows[id] = w
 	return nil
 }
 
@@ -558,13 +558,13 @@ func TestMutate_ValidationFail_WorkflowUnchanged(t *testing.T) {
 	}
 }
 
-func TestMutate_LoadMissingSlug_Error(t *testing.T) {
+func TestMutate_LoadMissingID_Error(t *testing.T) {
 	svc := newStub("wf")
 	c := newCanvas(svc)
 
 	// "other" is not seeded in the stub.
 	_, err := c.AddNode("other", workflow.Node{ID: "x", Type: workflow.NodeShell, Command: []string{"ls"}})
 	if err == nil {
-		t.Fatal("expected error for unknown slug")
+		t.Fatal("expected error for unknown id")
 	}
 }

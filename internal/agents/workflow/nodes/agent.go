@@ -163,7 +163,7 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 //  1. session_from set    → reuse the sessionID resolved for that node
 //  2. session == "new"    → fresh UUID per call
 //  3. rc.DefaultAgentSessionID → set by an upstream session_init node
-//  4. fallback            → "wf:<slug>:run:<runID>"
+//  4. fallback            → "wf:<id>:run:<runID>"
 func resolveAgentSessionID(n workflow.Node, rc *workflow.RunContext) (string, error) {
 	if n.SessionFrom != "" {
 		id, ok := rc.AgentSessionIDs[n.SessionFrom]
@@ -183,12 +183,12 @@ func resolveAgentSessionID(n workflow.Node, rc *workflow.RunContext) (string, er
 
 // DefaultRunSessionID is the engine fallback when neither a
 // session_init node nor a per-node override is set. Format is
-// "wf_<slug>_run_<runID>" — underscores keep the string inside the
+// "wf_<id>_run_<runID>" — underscores keep the string inside the
 // sessionID charset (no colon; the storage validator at
 // internal/agents/storage/validate.go limits the alphabet to
 // `[A-Za-z0-9._-]`).
-func DefaultRunSessionID(slug, runID string) string {
-	return fmt.Sprintf("wf_%s_run_%s", slug, runID)
+func DefaultRunSessionID(id, runID string) string {
+	return fmt.Sprintf("wf_%s_run_%s", id, runID)
 }
 
 // providerUsesPool reports whether a provider name routes through the

@@ -480,7 +480,7 @@ func numToFloat(v any) float64 {
 
 // drawflowJSONToWorkflow parses Drawflow's editor.export() body into
 // a workflow.Workflow.
-func drawflowJSONToWorkflow(slug, body string) (wf.Workflow, error) {
+func drawflowJSONToWorkflow(id, body string) (wf.Workflow, error) {
 	var doc struct {
 		Drawflow struct {
 			Home struct {
@@ -651,9 +651,9 @@ func drawflowJSONToWorkflow(slug, body string) (wf.Workflow, error) {
 	}
 
 	w := wf.Workflow{
-		ID:       slug,
+		ID:       id,
 		Version:  1,
-		Name:     slug,
+		Name:     id,
 		Enabled:  true,
 		Triggers: triggers,
 		Graph: wf.Graph{

@@ -429,17 +429,17 @@ func NewServer() *Server {
 	}
 	// Bridge engine run events → SSE broadcaster so the editor can paint
 	// per-node progress without polling state.json. The broadcaster
-	// session key is "wf:<slug>"; client opens
-	// /stream?session=wf:<slug>.
+	// session key is "wf:<id>"; client opens
+	// /stream?session=wf:<id>.
 	// Optionally mirror events to Loki when workflow_loki_url is set.
 	sseHook := agentstool.WorkflowEventHook(agentsBcast)
 	lokiURL := configsSvc.GetOwned("agents", "workflow_loki_url")
 	lokiLabels := configsSvc.GetOwned("agents", "workflow_loki_labels")
 	lokiPusher := wfstate.NewLokiPusher(lokiURL, lokiLabels)
-	wfMgr.Engine.SetEventHook(func(slug, runID string, ev wf.RunEvent) {
-		sseHook(slug, runID, ev)
+	wfMgr.Engine.SetEventHook(func(id, runID string, ev wf.RunEvent) {
+		sseHook(id, runID, ev)
 		if lokiPusher != nil {
-			lokiPusher.Push(slug, runID, ev)
+			lokiPusher.Push(id, runID, ev)
 		}
 	})
 	// Wire the shared agent pool + an adapter that translates

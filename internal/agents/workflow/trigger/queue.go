@@ -18,13 +18,13 @@ var ErrQueueFull = errors.New("workflow queue full (reject policy)")
 //
 // Workflow is an optional override: when set, the worker runs THIS
 // workflow definition instead of the one registered in
-// Router.defs[slug]. The UI's Run Now path uses this to execute a
+// Router.defs[id]. The UI's Run Now path uses this to execute a
 // freshly-loaded DRAFT (workflow.draft.yaml) without first
 // publishing it — Router.defs only ever holds the published copy
 // so triggers (cron, channel, webhook) keep firing the live
 // version while the user iterates on the draft.
 type WorkItem struct {
-	Slug     string
+	ID       string
 	Event    workflow.Event
 	Workflow *workflow.Workflow
 	Done     chan RunResult

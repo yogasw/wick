@@ -28,50 +28,50 @@ func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessio
 func (l Layout) WorkflowsDir() string  { return filepath.Join(l.BaseDir, "workflows") }
 func (l Layout) DatasetsDir() string   { return filepath.Join(l.BaseDir, "datasets") }
 
-// WorkflowDir is the folder for one workflow (`workflows/<slug>/`).
-func (l Layout) WorkflowDir(slug string) string {
-	return filepath.Join(l.WorkflowsDir(), slug)
+// WorkflowDir is the folder for one workflow (`workflows/<id>/`).
+func (l Layout) WorkflowDir(id string) string {
+	return filepath.Join(l.WorkflowsDir(), id)
 }
-func (l Layout) WorkflowFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "workflow.yaml")
+func (l Layout) WorkflowFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "workflow.yaml")
 }
 
 // WorkflowDraftFile is the in-progress copy edited by the canvas. Save
 // from the UI always writes here, never to workflow.yaml. Publish
 // promotes this file to workflow.yaml and deletes the draft.
-func (l Layout) WorkflowDraftFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "workflow.draft.yaml")
+func (l Layout) WorkflowDraftFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "workflow.draft.yaml")
 }
-func (l Layout) WorkflowRunsDir(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "runs")
+func (l Layout) WorkflowRunsDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "runs")
 }
-func (l Layout) WorkflowRunDir(slug, runID string) string {
-	return filepath.Join(l.WorkflowRunsDir(slug), runID)
+func (l Layout) WorkflowRunDir(id, runID string) string {
+	return filepath.Join(l.WorkflowRunsDir(id), runID)
 }
-func (l Layout) WorkflowRunState(slug, runID string) string {
-	return filepath.Join(l.WorkflowRunDir(slug, runID), "state.json")
+func (l Layout) WorkflowRunState(id, runID string) string {
+	return filepath.Join(l.WorkflowRunDir(id, runID), "state.json")
 }
-func (l Layout) WorkflowRunEvents(slug, runID string) string {
-	return filepath.Join(l.WorkflowRunDir(slug, runID), "events.jsonl")
+func (l Layout) WorkflowRunEvents(id, runID string) string {
+	return filepath.Join(l.WorkflowRunDir(id, runID), "events.jsonl")
 }
 // WorkflowIndexDir holds the sharded run-summary index files
 // (YYYY-MM-DD-NN.jsonl, max 100 lines each) — sibling to runs/.
 // Lets the Runs panel paginate cheaply without scanning every
 // per-run subdir.
-func (l Layout) WorkflowIndexDir(slug string) string {
-	return filepath.Join(l.WorkflowRunsDir(slug), "index")
+func (l Layout) WorkflowIndexDir(id string) string {
+	return filepath.Join(l.WorkflowRunsDir(id), "index")
 }
-func (l Layout) WorkflowEnvFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "env.yaml")
+func (l Layout) WorkflowEnvFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "env.yaml")
 }
-func (l Layout) WorkflowStateFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "state.json")
+func (l Layout) WorkflowStateFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "state.json")
 }
-func (l Layout) WorkflowNodesDir(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "nodes")
+func (l Layout) WorkflowNodesDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "nodes")
 }
-func (l Layout) WorkflowTestsDir(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "__tests__")
+func (l Layout) WorkflowTestsDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "__tests__")
 }
 func (l Layout) DatasetDir(slug string) string {
 	return filepath.Join(l.DatasetsDir(), slug)

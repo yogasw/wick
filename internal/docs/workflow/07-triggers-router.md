@@ -40,8 +40,8 @@ Sama dengan desain routine sebelumnya. Inline disini biar self-contained.
 ### Cron path
 
 `worker/server.go` tetep loop `jobs` table tiap 60s. Workflow muncul di
-table sebagai `workflow:<slug>` dengan `Schedule` dari trigger cron
-pertama. Multi-cron → multi job rows: `workflow:<slug>:cron-0`,
+table sebagai `workflow:<id>` dengan `Schedule` dari trigger cron
+pertama. Multi-cron → multi job rows: `workflow:<id>:cron-0`,
 `:cron-1`, dst.
 
 ### Event path
@@ -52,7 +52,7 @@ SEBELUM session routing. Workflow match? Enqueue + skip session routing
 kalau `consume: true`.
 
 Webhook adapter = HTTP handler di `internal/pkg/api/` — mount
-`/hooks/{slug}/{path}`, verify HMAC, parse body, build Event.
+`/hooks/{id}/{path}`, verify HMAC, parse body, build Event.
 
 ### Per-workflow FIFO queue
 
@@ -351,7 +351,7 @@ Error workflow = workflow biasa dgn trigger `type: error`:
 ```yaml
 # workflow: error-handler.yaml
 id: 0193...
-slug: error-handler
+id: error-handler
 name: "Centralized error handler"
 
 triggers:

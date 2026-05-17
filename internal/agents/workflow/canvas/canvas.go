@@ -29,8 +29,8 @@ func New(svc service.Service) *Canvas {
 }
 
 // AddNode appends a node to the workflow.
-func (c *Canvas) AddNode(slug string, n workflow.Node) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) AddNode(id string, n workflow.Node) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		if err := parse.ValidateNodeID(n.ID); err != nil {
 			return err
 		}
@@ -45,8 +45,8 @@ func (c *Canvas) AddNode(slug string, n workflow.Node) (workflow.Workflow, error
 }
 
 // UpdateNode merges a patch into an existing node.
-func (c *Canvas) UpdateNode(slug, nodeID string, patch map[string]any) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) UpdateNode(id, nodeID string, patch map[string]any) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		idx := -1
 		for i, n := range w.Graph.Nodes {
 			if n.ID == nodeID {
@@ -65,8 +65,8 @@ func (c *Canvas) UpdateNode(slug, nodeID string, patch map[string]any) (workflow
 }
 
 // DeleteNode removes a node and every edge touching it.
-func (c *Canvas) DeleteNode(slug, nodeID string) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) DeleteNode(id, nodeID string) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		if w.Graph.Entry == nodeID {
 			return fmt.Errorf("cannot delete entry node %q — reassign graph.entry to another node first", nodeID)
 		}
@@ -94,8 +94,8 @@ func (c *Canvas) DeleteNode(slug, nodeID string) (workflow.Workflow, error) {
 }
 
 // Connect adds an edge.
-func (c *Canvas) Connect(slug, fromID, toID, caseLabel string) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) Connect(id, fromID, toID, caseLabel string) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		nodes := indexNodes(w.Graph)
 		from, ok := nodes[fromID]
 		if !ok {
@@ -118,8 +118,8 @@ func (c *Canvas) Connect(slug, fromID, toID, caseLabel string) (workflow.Workflo
 }
 
 // Disconnect removes an edge.
-func (c *Canvas) Disconnect(slug, fromID, toID string) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) Disconnect(id, fromID, toID string) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		kept := w.Graph.Edges[:0]
 		removed := false
 		for _, e := range w.Graph.Edges {
@@ -138,8 +138,8 @@ func (c *Canvas) Disconnect(slug, fromID, toID string) (workflow.Workflow, error
 }
 
 // MoveNode updates canvas position metadata.
-func (c *Canvas) MoveNode(slug, nodeID string, x, y int) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) MoveNode(id, nodeID string, x, y int) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		if w.Canvas == nil {
 			w.Canvas = map[string]any{}
 		}
@@ -154,23 +154,23 @@ func (c *Canvas) MoveNode(slug, nodeID string, x, y int) (workflow.Workflow, err
 }
 
 // SetTriggers replaces the trigger list.
-func (c *Canvas) SetTriggers(slug string, triggers []workflow.Trigger) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) SetTriggers(id string, triggers []workflow.Trigger) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		w.Triggers = triggers
 		return nil
 	})
 }
 
 // Toggle flips enabled.
-func (c *Canvas) Toggle(slug string, enabled bool) (workflow.Workflow, error) {
-	return c.mutate(slug, func(w *workflow.Workflow) error {
+func (c *Canvas) Toggle(id string, enabled bool) (workflow.Workflow, error) {
+	return c.mutate(id, func(w *workflow.Workflow) error {
 		w.Enabled = enabled
 		return nil
 	})
 }
 
-func (c *Canvas) mutate(slug string, fn func(*workflow.Workflow) error) (workflow.Workflow, error) {
-	w, err := c.Service.Load(slug)
+func (c *Canvas) mutate(id string, fn func(*workflow.Workflow) error) (workflow.Workflow, error) {
+	w, err := c.Service.Load(id)
 	if err != nil {
 		return workflow.Workflow{}, err
 	}
@@ -180,7 +180,7 @@ func (c *Canvas) mutate(slug string, fn func(*workflow.Workflow) error) (workflo
 	if r := parse.Validate(w); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("post-edit validation failed: %s", r.Error())
 	}
-	if err := c.Service.Update(slug, w, nil); err != nil {
+	if err := c.Service.Update(id, w, nil); err != nil {
 		return workflow.Workflow{}, err
 	}
 	return w, nil

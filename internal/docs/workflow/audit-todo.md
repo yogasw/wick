@@ -20,7 +20,7 @@ Tanggal audit: 2026-05-15. Bandingin `internal/tools/agents/workflows.go` + `int
 
 ### P0 — runtime salah (workflow `cron` ga jalan)
 
-- [ ] **Cron scheduler**: bikin `internal/jobs/workflow/registry.go` sesuai design §17 (baris 4197–4227). Pas boot + `HotReload`, scan `workflow.Triggers`, tiap `type: cron` panggil `jobs.Register(job.Module{Key: "workflow:<slug>:cron-<idx>", DefaultCron: tr.Schedule, Run: func(ctx) { router.RunNow(ctx, slug, evt) }})`. Tambah `jobs.UnregisterPrefix("workflow:<slug>:")` di `internal/jobs/registry.go` buat delete.
+- [ ] **Cron scheduler**: bikin `internal/jobs/workflow/registry.go` sesuai design §17 (baris 4197–4227). Pas boot + `HotReload`, scan `workflow.Triggers`, tiap `type: cron` panggil `jobs.Register(job.Module{Key: "workflow:<id>:cron-<idx>", DefaultCron: tr.Schedule, Run: func(ctx) { router.RunNow(ctx, id, evt) }})`. Tambah `jobs.UnregisterPrefix("workflow:<id>:")` di `internal/jobs/registry.go` buat delete.
 - [ ] **Webhook mount**: wire `trigger.NewWebhookHandler(router)` ke HTTP mux di path `/hooks/` di `internal/pkg/api/server.go`. Handler udah ada di [webhook.go:20](../agents/workflow/trigger/webhook.go#L20) tapi belum pernah di-mount — webhook trigger di YAML mati semua.
 - [ ] **schedule_at trigger**: scheduler belum ada; perlu one-shot timer yang register ke jobs (atau pkg khusus). File baru `internal/agents/workflow/trigger/schedule_at.go` + integrasi `jobs.Register`.
 
@@ -50,8 +50,8 @@ Workflow node = client biasa dari sisi pool. Pool yang nentu: spawn baru atau re
 - [ ] **Adapter via pool**: bikin `internal/agents/workflow/setup/pool_provider.go` yang delegate ke `internal/agents/pool.SendFunc` (yang udah dipakai channel — `channels/channel.go:26`). Workflow tinggal panggil `pool.Send(ctx, sessionID, agentName, "workflow", role, text)`. Pool yang ngurus queue + spawn limit.
 - [ ] **SessionID = key ke pool sesi**: 
   - `SessionNew` → generate UUID per call, `pool.SendFunc` bikin sesi baru.
-  - `SessionRoot` → `workflow:<slug>:run:<runID>:root`, pool reuse selama run hidup.
-  - `SessionPersistent` → `workflow:<slug>:persistent`, pool reuse lintas run (TTL/idle handled pool).
+  - `SessionRoot` → `workflow:<id>:run:<runID>:root`, pool reuse selama run hidup.
+  - `SessionPersistent` → `workflow:<id>:persistent`, pool reuse lintas run (TTL/idle handled pool).
 - [ ] **Tracking di UI**: sesi workflow bakal muncul di list sessions agents karena tracked di pool — user bisa lihat interaksi (transcript, status, crash) sama kayak sesi channel.
 - [ ] **Skills via provider, jangan stub**: [providers.go:110](../agents/workflow/setup/providers.go#L110) return `[]`. Wire ke discovery `~/.claude/skills/` beneran biar picker ada datanya.
 - [ ] **Buang heartbeat/respawn manual**: udah di-handle pool, ga perlu duplikasi di workflow.
@@ -91,7 +91,7 @@ edit di canvas ─► auto-save ke workflow.draft.yaml ─► Run Now (live test
 ```
 
 - [ ] **Layout file**: `workflow.yaml` = published, `workflow.draft.yaml` = work-in-progress. Editor selalu load draft kalau ada, fallback ke published. Publish copy draft → main + hapus draft file.
-- [ ] **Service API**: `service.LoadDraft(slug)` / `service.SaveDraft(slug, w)` / `service.Publish(slug)`. Save dari canvas selalu nulis ke draft, ga pernah ke `workflow.yaml` langsung.
+- [ ] **Service API**: `service.LoadDraft(id)` / `service.SaveDraft(id, w)` / `service.Publish(id)`. Save dari canvas selalu nulis ke draft, ga pernah ke `workflow.yaml` langsung.
 - [ ] **Router behavior**: router register trigger cron/webhook/channel cuma buat versi *published*. Edit draft ga ngaruh ke run live sampai di-Publish.
 - [ ] **Run Now (live test)**: tombol Run Now jalanin **draft** (bukan published), bypass Enabled — itu cara user test sebelum publish. Kalau draft ga ada, jalanin published.
 - [ ] **UI toolbar**: badge `Draft` kalau `draft.yaml` exist. Tombol `Publish` di samping `Save` — disable sampai Validate lolos. Tombol `Discard draft` revert ke published.

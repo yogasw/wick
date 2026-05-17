@@ -57,7 +57,7 @@ templ EditorBottom(vm EditorVM) {
 	// Test case modal shell — rendered empty at page load so JS can
 	// open it. The modal body (form fields) is always present; the
 	// case list is loaded into #wf-test-results on tab click.
-	<div class="wf-tc-modal hidden" id="wf-tc-modal" data-slug={ vm.ID } data-base={ vm.Base }>
+	<div class="wf-tc-modal hidden" id="wf-tc-modal" data-id={ vm.ID } data-base={ vm.Base }>
 		<div class="wf-tc-backdrop" data-wf-tc-cancel></div>
 		<div class="wf-tc-shell">
 			<div class="wf-tc-header">
@@ -117,7 +117,7 @@ templ EditorBottom(vm EditorVM) {
 // panel). The link target is the run detail page; the click toggle
 // is wired in editor.js so we don't pull a stylesheet just for the
 // expand state.
-templ bottomRuns(base, slug string, runs []mcp.RunSummary, page int, hasMore bool) {
+templ bottomRuns(base, id string, runs []mcp.RunSummary, page int, hasMore bool) {
 	if len(runs) == 0 && page <= 1 {
 		<p class="text-sm text-black-600 dark:text-black-700">No runs yet.</p>
 	} else {
@@ -139,12 +139,12 @@ templ bottomRuns(base, slug string, runs []mcp.RunSummary, page int, hasMore boo
 							<button
 								type="button"
 								data-run-copy-to-editor={ r.ID }
-								data-copy-url={ base + "/workflows/edit/" + slug + "/runs/" + r.ID + "/copy-to-editor" }
+								data-copy-url={ base + "/workflows/edit/" + id + "/runs/" + r.ID + "/copy-to-editor" }
 								class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium"
 								title="Restore this run's workflow graph as the current draft"
 							>⤴ Copy to editor</button>
 							<button type="button" data-run-export={ r.ID } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300" title="Copy full run state (events + outputs) as JSON">Export JSON</button>
-							<a href={ templ.SafeURL(base + "/workflows/edit/" + slug + "/runs/" + r.ID) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Open run detail →</a>
+							<a href={ templ.SafeURL(base + "/workflows/edit/" + id + "/runs/" + r.ID) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Open run detail →</a>
 						</div>
 					</div>
 				</li>
@@ -153,13 +153,13 @@ templ bottomRuns(base, slug string, runs []mcp.RunSummary, page int, hasMore boo
 		// Pager — prev/next link bound to `runs_page` query.
 		<div class="mt-3 flex items-center gap-3 text-xs">
 			if page > 1 {
-				<a href={ templ.SafeURL(base + "/workflows/edit/" + slug + "?runs_page=" + pageStr(page-1)) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">← Newer</a>
+				<a href={ templ.SafeURL(base + "/workflows/edit/" + id + "?runs_page=" + pageStr(page-1)) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">← Newer</a>
 			} else {
 				<span class="text-black-700 dark:text-black-600 opacity-50 cursor-not-allowed">← Newer</span>
 			}
 			<span class="text-black-700 dark:text-black-600">Page { pageStr(page) }</span>
 			if hasMore {
-				<a href={ templ.SafeURL(base + "/workflows/edit/" + slug + "?runs_page=" + pageStr(page+1)) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Older →</a>
+				<a href={ templ.SafeURL(base + "/workflows/edit/" + id + "?runs_page=" + pageStr(page+1)) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Older →</a>
 			} else {
 				<span class="text-black-700 dark:text-black-600 opacity-50 cursor-not-allowed">Older →</span>
 			}

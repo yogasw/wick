@@ -23,7 +23,7 @@ import (
 // https://grafana.com/docs/loki/latest/reference/loki-http-api/#push-log-entries-to-loki
 //
 // Label scheme:
-//   - wick_workflow  = workflow slug
+//   - wick_workflow  = workflow id
 //   - wick_run       = run ID
 //   - wick_event     = event type (node_started, node_completed, …)
 //   + any extra labels from ExtraLabels
@@ -40,7 +40,7 @@ type LokiPusher struct {
 }
 
 type lokiEntry struct {
-	slug  string
+	id    string
 	runID string
 	ev    workflow.RunEvent
 }
@@ -66,12 +66,12 @@ func NewLokiPusher(lokiURL, extraLabelStr string) *LokiPusher {
 
 // Push enqueues one event. Non-blocking — drops silently if queue full
 // (Loki is a best-effort sink; disk events.jsonl is the source of truth).
-func (p *LokiPusher) Push(slug, runID string, ev workflow.RunEvent) {
+func (p *LokiPusher) Push(id, runID string, ev workflow.RunEvent) {
 	if p == nil {
 		return
 	}
 	select {
-	case p.queue <- lokiEntry{slug: slug, runID: runID, ev: ev}:
+	case p.queue <- lokiEntry{id: id, runID: runID, ev: ev}:
 	default:
 		// queue full — drop rather than block the engine
 	}
@@ -137,18 +137,18 @@ type lokiStream struct {
 }
 
 func (p *LokiPusher) send(entries []lokiEntry) error {
-	// Group entries by (slug, runID, event) → one Loki stream per combo.
-	type streamKey struct{ slug, runID, event string }
+	// Group entries by (id, runID, event) → one Loki stream per combo.
+	type streamKey struct{ id, runID, event string }
 	grouped := map[streamKey][]lokiEntry{}
 	for _, e := range entries {
-		k := streamKey{e.slug, e.runID, e.ev.Event}
+		k := streamKey{e.id, e.runID, e.ev.Event}
 		grouped[k] = append(grouped[k], e)
 	}
 
 	streams := make([]lokiStream, 0, len(grouped))
 	for k, es := range grouped {
 		labels := map[string]string{
-			"wick_workflow": k.slug,
+			"wick_workflow": k.id,
 			"wick_run":      k.runID,
 			"wick_event":    k.event,
 		}
@@ -161,7 +161,7 @@ func (p *LokiPusher) send(entries []lokiEntry) error {
 			if ts.IsZero() {
 				ts = time.Now().UTC()
 			}
-			line := eventLine(k.slug, k.runID, e.ev)
+			line := eventLine(k.id, k.runID, e.ev)
 			values = append(values, [2]string{
 				fmt.Sprintf("%d", ts.UnixNano()),
 				line,
@@ -194,14 +194,14 @@ func (p *LokiPusher) send(entries []lokiEntry) error {
 
 // eventLine serialises only the metadata fields (no input/output body)
 // to keep Loki entry size manageable.
-func eventLine(slug, runID string, ev workflow.RunEvent) string {
+func eventLine(id, runID string, ev workflow.RunEvent) string {
 	ts := ev.TS
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
 	m := map[string]any{
 		"ts":    ts.UTC().Format(time.RFC3339Nano),
-		"slug":  slug,
+		"id":    id,
 		"run":   runID,
 		"event": ev.Event,
 	}

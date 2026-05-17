@@ -346,7 +346,7 @@ func TestPickTriggerByID(t *testing.T) {
 //
 // The runWorkflowNow handler passes the loaded draft to MCP as an
 // explicit `RunNowWith` override; the router worker prefers
-// `item.Workflow` over `defs[slug]`. This test asserts the data
+// `item.Workflow` over `defs[id]`. This test asserts the data
 // layer of that flow: the helpers Run Now relies on resolve from
 // the workflow value supplied, not from any stale lookup.
 func TestDraftEntryWinsOverStalePublished(t *testing.T) {

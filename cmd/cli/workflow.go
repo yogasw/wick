@@ -25,26 +25,26 @@ func workflowTestCmd() *cobra.Command {
 	var filter string
 
 	cmd := &cobra.Command{
-		Use:   "test <slug>",
+		Use:   "test <id>",
 		Short: "Run __tests__/ fixtures for a workflow",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug := args[0]
+			id := args[0]
 			layout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentconfig.WorkspaceConfig{}))
 			svc := service.New(layout)
 			eng := engine.New(layout, svc, nil)
 			runner := wftest.New(eng, svc, layout)
 
-			cases, err := runner.LoadCases(slug)
+			cases, err := runner.LoadCases(id)
 			if err != nil {
 				return fmt.Errorf("load cases: %w", err)
 			}
 			if len(cases) == 0 {
-				fmt.Fprintf(os.Stderr, "no test cases found in %s/__tests__/\n", slug)
+				fmt.Fprintf(os.Stderr, "no test cases found in %s/__tests__/\n", id)
 				return nil
 			}
 
-			results, err := runner.RunAll(context.Background(), slug)
+			results, err := runner.RunAll(context.Background(), id)
 			if err != nil {
 				return fmt.Errorf("run: %w", err)
 			}

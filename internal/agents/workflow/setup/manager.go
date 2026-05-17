@@ -188,46 +188,46 @@ func (m *Manager) Stop() {
 // router + cron scheduler. Called once from server startup after
 // Service + Router are constructed.
 func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler) error {
-	slugs, err := svc.List()
+	ids, err := svc.List()
 	if err != nil {
 		return err
 	}
-	for _, slug := range slugs {
-		w, err := svc.Load(slug)
+	for _, id := range ids {
+		w, err := svc.Load(id)
 		if err != nil {
 			continue
 		}
 		router.Register(ctx, w)
 		if cron != nil {
-			cron.Sync(slug, w)
+			cron.Sync(id, w)
 		}
 		if schedAt != nil {
-			schedAt.Sync(slug, w)
+			schedAt.Sync(id, w)
 		}
 	}
 	return nil
 }
 
-// HotReload reloads + re-registers (or unregisters) one slug. Used by
+// HotReload reloads + re-registers (or unregisters) one id. Used by
 // fsnotify watcher in production.
-func HotReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, slug string) error {
-	w, err := svc.Load(slug)
+func HotReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string) error {
+	w, err := svc.Load(id)
 	if err != nil {
-		router.Unregister(slug)
+		router.Unregister(id)
 		if cron != nil {
-			cron.Unsync(slug)
+			cron.Unsync(id)
 		}
 		if schedAt != nil {
-			schedAt.Unsync(slug)
+			schedAt.Unsync(id)
 		}
 		return nil
 	}
 	router.Register(ctx, w)
 	if cron != nil {
-		cron.Sync(slug, w)
+		cron.Sync(id, w)
 	}
 	if schedAt != nil {
-		schedAt.Sync(slug, w)
+		schedAt.Sync(id, w)
 	}
 	return nil
 }
@@ -253,12 +253,12 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 	}
 	svc := service.New(layout)
 	store := state.New(layout)
-	slugs, err := svc.List()
+	ids, err := svc.List()
 	if err != nil {
 		return 0, err
 	}
-	for _, slug := range slugs {
-		runs, err := store.ListRuns(slug)
+	for _, id := range ids {
+		runs, err := store.ListRuns(id)
 		if err != nil {
 			continue
 		}
@@ -266,7 +266,7 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 			if opts.KeepMax > 0 && i < opts.KeepMax {
 				continue
 			}
-			st, err := store.Load(slug, rid)
+			st, err := store.Load(id, rid)
 			if err != nil {
 				continue
 			}
@@ -275,7 +275,7 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 				ttl = opts.FailedTTL
 			}
 			if st.EndedAt != nil && opts.Now().Sub(*st.EndedAt) > ttl {
-				dir := layout.WorkflowRunDir(slug, rid)
+				dir := layout.WorkflowRunDir(id, rid)
 				if err := removeAll(dir); err == nil {
 					removed++
 				}

@@ -38,7 +38,7 @@ type Engine struct {
 	Executors  map[workflow.NodeType]workflow.Executor
 	Now        func() time.Time
 	IDGen      func() string
-	OnEvent    func(slug, runID string, ev workflow.RunEvent)
+	OnEvent    func(id, runID string, ev workflow.RunEvent)
 }
 
 // NewRunID returns a fresh run id. Plain UUID — chronological
@@ -70,7 +70,7 @@ func (e *Engine) Register(t workflow.NodeType, ex workflow.Executor) {
 // SetEventHook installs the broadcast callback. Fires after each
 // StateStore.AppendEvent so callers see persistent + ephemeral
 // payloads in lockstep.
-func (e *Engine) SetEventHook(fn func(slug, runID string, ev workflow.RunEvent)) {
+func (e *Engine) SetEventHook(fn func(id, runID string, ev workflow.RunEvent)) {
 	e.OnEvent = fn
 }
 
@@ -89,13 +89,13 @@ func (e *Engine) SetEventHook(fn func(slug, runID string, ev workflow.RunEvent))
 // The whole RunEvent.Data (input on _started, output on _completed,
 // error on _failed) is included after truncation so the grep target
 // has the payload, not just an opaque event name.
-func (e *Engine) emit(ctx context.Context, slug, runID string, ev workflow.RunEvent) {
+func (e *Engine) emit(ctx context.Context, id, runID string, ev workflow.RunEvent) {
 	// Stamp ts once so AppendEvent (state) and OnEvent (SSE) agree.
 	// Without this, FE backfill can't dedup state ↔ stream events.
 	if ev.TS.IsZero() {
 		ev.TS = e.Now()
 	}
-	_ = e.StateStore.AppendEvent(slug, runID, ev)
+	_ = e.StateStore.AppendEvent(id, runID, ev)
 	lg := log.Ctx(ctx)
 	logEvent := lg.Info()
 	if ev.Event == workflow.EventNodeFailed || ev.Event == workflow.EventWorkflowFailed {
@@ -103,14 +103,14 @@ func (e *Engine) emit(ctx context.Context, slug, runID string, ev workflow.RunEv
 	}
 	logEvent.
 		Str("component", "wf").
-		Str("wf_slug", slug).
+		Str("wf_id", id).
 		Str("wf_run_id", runID).
 		Str("wf_node", ev.Node).
 		Str("wf_event", ev.Event).
 		Interface("data", truncateForEvent(ev.Data)).
 		Msg("workflow event")
 	if e.OnEvent != nil {
-		e.OnEvent(slug, runID, ev)
+		e.OnEvent(id, runID, ev)
 	}
 }
 
@@ -373,13 +373,13 @@ func retryJitter(backoff time.Duration) time.Duration {
 	return backoff + time.Duration(rand.Int63n(int64(backoff/2+1)))
 }
 
-func (e *Engine) recordSuccess(ctx context.Context, slug string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput, latencyMs int64) {
+func (e *Engine) recordSuccess(ctx context.Context, id string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput, latencyMs int64) {
 	rc.NodeOutputs[n.ID] = out
 	rc.Outputs[n.ID] = nodeOutputAsMap(out)
 	st.Completed = append(st.Completed, n.ID)
 	st.Outputs = rc.Outputs
 	st.UpdatedAt = e.Now()
-	e.emit(ctx, slug, st.RunID, workflow.RunEvent{
+	e.emit(ctx, id, st.RunID, workflow.RunEvent{
 		Event: workflow.EventNodeCompleted,
 		Node:  n.ID,
 		Data: map[string]any{
@@ -388,15 +388,15 @@ func (e *Engine) recordSuccess(ctx context.Context, slug string, st *workflow.Ru
 			"output":     truncateForEvent(nodeOutputAsMap(out)),
 		},
 	})
-	e.saveState(ctx, slug, st)
+	e.saveState(ctx, id, st)
 }
 
-func (e *Engine) failNode(ctx context.Context, slug string, st *workflow.RunState, n workflow.Node, err error) error {
+func (e *Engine) failNode(ctx context.Context, id string, st *workflow.RunState, n workflow.Node, err error) error {
 	st.Failed = append(st.Failed, n.ID)
 	st.Error = &workflow.NodeError{Node: n.ID, Type: string(n.Type), Message: err.Error()}
 	st.UpdatedAt = e.Now()
-	e.emit(ctx, slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
-	e.saveState(ctx, slug, st)
+	e.emit(ctx, id, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
+	e.saveState(ctx, id, st)
 	return &workflow.ExecError{Node: n.ID, Type: n.Type, Wrapped: err}
 }
 
@@ -429,10 +429,10 @@ func (e *Engine) applyOnFailure(ctx context.Context, w workflow.Workflow, st *wo
 // Callers previously discarded the error with _ = — this surfaces it so
 // operators can diagnose disk-full or permission issues without the engine
 // silently continuing with stale state on disk.
-func (e *Engine) saveState(ctx context.Context, slug string, st *workflow.RunState) {
-	if err := e.StateStore.Save(slug, st.RunID, *st); err != nil {
+func (e *Engine) saveState(ctx context.Context, id string, st *workflow.RunState) {
+	if err := e.StateStore.Save(id, st.RunID, *st); err != nil {
 		zerolog.Ctx(ctx).Warn().
-			Str("slug", slug).
+			Str("wf_id", id).
 			Str("run_id", st.RunID).
 			Err(err).
 			Msg("engine: failed to persist run state — state on disk may be stale")

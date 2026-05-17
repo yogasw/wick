@@ -4,9 +4,9 @@
 
 | Sisi | Tinggal di | Alasan |
 |---|---|---|
-| **Definisi** (graph, triggers, nodes, scripts, prompts) | File `<BaseDir>/workflows/<slug>/` | Gitops, manual-edit |
-| **Governance** (approved, approved_by, last_guard_result) | DB `workflow_state` atau file `<slug>/.governance.json` | Tamper-resistant, audit-able |
-| **Run history** (state.json, events.jsonl) | File `<slug>/runs/<id>/` | Append-only, large, off-DB |
+| **Definisi** (graph, triggers, nodes, scripts, prompts) | File `<BaseDir>/workflows/<id>/` | Gitops, manual-edit |
+| **Governance** (approved, approved_by, last_guard_result) | DB `workflow_state` atau file `<id>/.governance.json` | Tamper-resistant, audit-able |
+| **Run history** (state.json, events.jsonl) | File `<id>/runs/<run-id>/` | Append-only, large, off-DB |
 
 Pilihan **DB vs file** untuk governance: DB lebih atomic + queryable
 (filter "unapproved workflows" cepat). File lebih simple + gitops.
@@ -17,7 +17,7 @@ Recommend **DB** karena query freq tinggi (list page selalu join state).
 | Kolom | Tipe | Catatan |
 |---|---|---|
 | `id` | UUID PK | = workflow.id |
-| `slug` | TEXT | folder name |
+| `workflow_id` | TEXT | folder name = workflow id |
 | `approved_version` | INT NULL | last approved |
 | `approved_hash` | TEXT NULL | snapshot hash |
 | `approved_by` | TEXT | user id |
@@ -39,7 +39,7 @@ Recommend **DB** karena query freq tinggi (list page selalu join state).
 
 ### Identitas
 
-- Folder rename: `id` di YAML tetep → manager update `slug`, approval
+- Folder rename: `id` di YAML tetep → manager update `workflow_id`, approval
   nempel.
 - File ilang `id`: treat sebagai workflow baru, approval reset.
 - Duplicate `id` (copy folder): manager refuse load yang kedua.

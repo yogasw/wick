@@ -22,14 +22,14 @@ import (
 type ScheduleAtScheduler struct {
 	router *Router
 	mu     sync.Mutex
-	timers map[timerKey]*time.Timer // (slug, triggerID) → pending timer
-	// RemoveFn is called (slug, triggerID) when a delete_after trigger fires.
+	timers map[timerKey]*time.Timer // (id, triggerID) → pending timer
+	// RemoveFn is called (id, triggerID) when a delete_after trigger fires.
 	// Optional — pass nil to skip the post-fire cleanup.
-	RemoveFn func(slug, triggerID string)
+	RemoveFn func(id, triggerID string)
 }
 
 type timerKey struct {
-	slug      string
+	id        string
 	triggerID string
 }
 
@@ -41,10 +41,10 @@ func NewScheduleAtScheduler(r *Router) *ScheduleAtScheduler {
 	}
 }
 
-// Sync reconciles all schedule_at triggers for one workflow slug.
+// Sync reconciles all schedule_at triggers for one workflow id.
 // Call on Bootstrap and HotReload. Cancels stale timers for triggers
 // that were removed or already have an At in the past.
-func (s *ScheduleAtScheduler) Sync(slug string, w workflow.Workflow) {
+func (s *ScheduleAtScheduler) Sync(id string, w workflow.Workflow) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -58,16 +58,16 @@ func (s *ScheduleAtScheduler) Sync(slug string, w workflow.Workflow) {
 			// Already past — don't arm.
 			continue
 		}
-		id := tr.ID
-		if id == "" {
-			id = string(tr.Type) // fallback for hand-edited YAML
+		tid := tr.ID
+		if tid == "" {
+			tid = string(tr.Type) // fallback for hand-edited YAML
 		}
-		wanted[id] = tr
+		wanted[tid] = tr
 	}
 
 	// Cancel timers for triggers that are no longer present.
 	for k, t := range s.timers {
-		if k.slug != slug {
+		if k.id != id {
 			continue
 		}
 		if _, ok := wanted[k.triggerID]; !ok {
@@ -76,41 +76,41 @@ func (s *ScheduleAtScheduler) Sync(slug string, w workflow.Workflow) {
 		}
 	}
 
-	// Arm new timers (skip if already armed for same (slug, id)).
-	for id, tr := range wanted {
-		k := timerKey{slug: slug, triggerID: id}
+	// Arm new timers (skip if already armed for same (id, triggerID)).
+	for tid, tr := range wanted {
+		k := timerKey{id: id, triggerID: tid}
 		if _, exists := s.timers[k]; exists {
 			continue
 		}
 		delay := time.Until(tr.At)
 		entry := tr // capture
-		entryID := id
+		entryID := tid
 		t := time.AfterFunc(delay, func() {
-			s.fire(slug, entryID, entry)
+			s.fire(id, entryID, entry)
 		})
 		s.timers[k] = t
-		log.Info().Str("slug", slug).Str("trigger", entryID).
+		log.Info().Str("wf_id", id).Str("trigger", entryID).
 			Str("at", tr.At.UTC().Format(time.RFC3339)).
 			Msg("workflow schedule_at: armed")
 	}
 }
 
-// Unsync cancels all pending timers for slug (called on workflow delete).
-func (s *ScheduleAtScheduler) Unsync(slug string) {
+// Unsync cancels all pending timers for id (called on workflow delete).
+func (s *ScheduleAtScheduler) Unsync(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, t := range s.timers {
-		if k.slug == slug {
+		if k.id == id {
 			t.Stop()
 			delete(s.timers, k)
 		}
 	}
 }
 
-func (s *ScheduleAtScheduler) fire(slug, triggerID string, tr workflow.Trigger) {
+func (s *ScheduleAtScheduler) fire(id, triggerID string, tr workflow.Trigger) {
 	// Remove from map — one-shot.
 	s.mu.Lock()
-	k := timerKey{slug: slug, triggerID: triggerID}
+	k := timerKey{id: id, triggerID: triggerID}
 	delete(s.timers, k)
 	s.mu.Unlock()
 
@@ -121,16 +121,16 @@ func (s *ScheduleAtScheduler) fire(slug, triggerID string, tr workflow.Trigger) 
 	if tr.EntryNode != "" {
 		evt.Payload = map[string]any{"entry_node": tr.EntryNode}
 	}
-	if err := s.router.RunNow(context.Background(), slug, evt); err != nil {
-		log.Warn().Str("slug", slug).Str("trigger", triggerID).Err(err).
+	if err := s.router.RunNow(context.Background(), id, evt); err != nil {
+		log.Warn().Str("wf_id", id).Str("trigger", triggerID).Err(err).
 			Msg("workflow schedule_at: enqueue failed")
 		return
 	}
-	log.Info().Str("slug", slug).Str("trigger", triggerID).
+	log.Info().Str("wf_id", id).Str("trigger", triggerID).
 		Str("at", tr.At.UTC().Format(time.RFC3339)).
 		Msg("workflow schedule_at fired")
 
 	if tr.DeleteAfter && s.RemoveFn != nil {
-		s.RemoveFn(slug, triggerID)
+		s.RemoveFn(id, triggerID)
 	}
 }

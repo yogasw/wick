@@ -1,7 +1,7 @@
 // Package wftest runs workflow test cases loaded from `__tests__/`
 // fixtures. Each case = synthetic event + expected outputs +
 // assertions. Used by `workflow_test` MCP op and CLI
-// `wick workflow test <slug>`.
+// `wick workflow test <id>`.
 package wftest
 
 import (
@@ -84,8 +84,8 @@ func New(e *engine.Engine, svc service.Service, layout config.Layout) *Runner {
 }
 
 // LoadCases reads every `__tests__/*.json` in a workflow folder.
-func (r *Runner) LoadCases(slug string) ([]Case, error) {
-	dir := r.Layout.WorkflowTestsDir(slug)
+func (r *Runner) LoadCases(id string) ([]Case, error) {
+	dir := r.Layout.WorkflowTestsDir(id)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -115,18 +115,18 @@ func (r *Runner) LoadCases(slug string) ([]Case, error) {
 }
 
 // RunAll executes every test case and returns per-case results.
-func (r *Runner) RunAll(ctx context.Context, slug string) ([]Result, error) {
-	results, _, err := r.RunAllWithCoverage(ctx, slug)
+func (r *Runner) RunAll(ctx context.Context, id string) ([]Result, error) {
+	results, _, err := r.RunAllWithCoverage(ctx, id)
 	return results, err
 }
 
 // RunAllWithCoverage runs all cases and computes node coverage.
-func (r *Runner) RunAllWithCoverage(ctx context.Context, slug string) ([]Result, Coverage, error) {
-	cases, err := r.LoadCases(slug)
+func (r *Runner) RunAllWithCoverage(ctx context.Context, id string) ([]Result, Coverage, error) {
+	cases, err := r.LoadCases(id)
 	if err != nil {
 		return nil, Coverage{}, err
 	}
-	w, err := r.Service.Load(slug)
+	w, err := r.Service.Load(id)
 	if err != nil {
 		return nil, Coverage{}, err
 	}

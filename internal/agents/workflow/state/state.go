@@ -1,5 +1,5 @@
 // Package state persists per-run state.json + events.jsonl under
-// `<BaseDir>/workflows/<slug>/runs/<run-id>/`. Atomic writes via the
+// `<BaseDir>/workflows/<id>/runs/<run-id>/`. Atomic writes via the
 // shared internal/agents/storage helpers. In-memory variant available
 // for tests.
 package state
@@ -19,13 +19,13 @@ import (
 // Store persists RunState + appends RunEvent for one workflow's
 // runs/ folder.
 type Store interface {
-	Save(slug, runID string, st workflow.RunState) error
-	Load(slug, runID string) (workflow.RunState, error)
-	AppendEvent(slug, runID string, ev workflow.RunEvent) error
-	ListEvents(slug, runID string) ([]workflow.RunEvent, error)
-	ListRuns(slug string) ([]string, error)
-	IndexAppend(slug string, entry IndexEntry) error
-	IndexList(slug string, page, pageSize int) ([]IndexEntry, bool, error)
+	Save(id, runID string, st workflow.RunState) error
+	Load(id, runID string) (workflow.RunState, error)
+	AppendEvent(id, runID string, ev workflow.RunEvent) error
+	ListEvents(id, runID string) ([]workflow.RunEvent, error)
+	ListRuns(id string) ([]string, error)
+	IndexAppend(id string, entry IndexEntry) error
+	IndexList(id string, page, pageSize int) ([]IndexEntry, bool, error)
 }
 
 // FileStore writes state.json + events.jsonl per run.
@@ -39,29 +39,29 @@ func New(layout config.Layout) *FileStore {
 }
 
 // Save writes state.json atomically.
-func (s *FileStore) Save(slug, runID string, st workflow.RunState) error {
+func (s *FileStore) Save(id, runID string, st workflow.RunState) error {
 	if st.UpdatedAt.IsZero() {
 		st.UpdatedAt = time.Now().UTC()
 	}
-	dir := s.Layout.WorkflowRunDir(slug, runID)
+	dir := s.Layout.WorkflowRunDir(id, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return storage.WriteJSON(s.Layout.WorkflowRunState(slug, runID), st)
+	return storage.WriteJSON(s.Layout.WorkflowRunState(id, runID), st)
 }
 
 // Load reads state.json.
-func (s *FileStore) Load(slug, runID string) (workflow.RunState, error) {
+func (s *FileStore) Load(id, runID string) (workflow.RunState, error) {
 	var st workflow.RunState
-	if err := storage.ReadJSON(s.Layout.WorkflowRunState(slug, runID), &st); err != nil {
+	if err := storage.ReadJSON(s.Layout.WorkflowRunState(id, runID), &st); err != nil {
 		return workflow.RunState{}, err
 	}
 	return st, nil
 }
 
 // AppendEvent appends one line to events.jsonl atomically.
-func (s *FileStore) AppendEvent(slug, runID string, ev workflow.RunEvent) error {
-	dir := s.Layout.WorkflowRunDir(slug, runID)
+func (s *FileStore) AppendEvent(id, runID string, ev workflow.RunEvent) error {
+	dir := s.Layout.WorkflowRunDir(id, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (s *FileStore) AppendEvent(slug, runID string, ev workflow.RunEvent) error 
 		return err
 	}
 	data = append(data, '\n')
-	f, err := os.OpenFile(s.Layout.WorkflowRunEvents(slug, runID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.Layout.WorkflowRunEvents(id, runID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
@@ -83,8 +83,8 @@ func (s *FileStore) AppendEvent(slug, runID string, ev workflow.RunEvent) error 
 }
 
 // ListEvents reads + decodes the full events.jsonl. Empty file → nil.
-func (s *FileStore) ListEvents(slug, runID string) ([]workflow.RunEvent, error) {
-	data, err := os.ReadFile(s.Layout.WorkflowRunEvents(slug, runID))
+func (s *FileStore) ListEvents(id, runID string) ([]workflow.RunEvent, error) {
+	data, err := os.ReadFile(s.Layout.WorkflowRunEvents(id, runID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -104,8 +104,8 @@ func (s *FileStore) ListEvents(slug, runID string) ([]workflow.RunEvent, error) 
 }
 
 // ListRuns returns runs/<id> names sorted, newest first.
-func (s *FileStore) ListRuns(slug string) ([]string, error) {
-	names, err := storage.ScanDirNames(s.Layout.WorkflowRunsDir(slug))
+func (s *FileStore) ListRuns(id string) ([]string, error) {
+	names, err := storage.ScanDirNames(s.Layout.WorkflowRunsDir(id))
 	if err != nil {
 		return nil, err
 	}

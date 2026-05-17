@@ -101,7 +101,7 @@ func (s *MemService) LoadSchema(slug string) (Schema, error) {
 
 // SaveSchema registers or replaces a schema.
 func (s *MemService) SaveSchema(sc Schema) error {
-	if err := parse.ValidateSlug(sc.Slug); err != nil {
+	if err := parse.ValidateID(sc.Slug); err != nil {
 		return err
 	}
 	s.mu.Lock()

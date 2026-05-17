@@ -31,13 +31,13 @@ Jangan skip — phase N+1 butuh phase N. Tiap phase **WAJIB include unit
 Deferred from above (out-of-scope for the package, wire when concrete UIs land):
 - ~~fsnotify watcher~~ ✅ wired as 3s poll-based watcher in
   [`setup/watcher.go`](../../agents/workflow/setup/watcher.go) (no
-  new dep) — calls `HotReload` on mtime change, unregisters slugs
+  new dep) — calls `HotReload` on mtime change, unregisters ids
   whose folder disappears. See §15.
 - Postgres-backed DatasetService + Postgres `wick_workflow_state` table
   (in-memory + per-workflow `state.json` shim sudah jalan)
 - Per-provider impls (Claude Code / Codex / Gemini) — abstraction
   Provider tinggal di-implement di `internal/agents/provider/`
-- ~~CLI `wick workflow test <slug>`~~ ✅ wired via cobra subcommand
+- ~~CLI `wick workflow test <id>`~~ ✅ wired via cobra subcommand
   in [`cmd/cli/workflow.go`](../../../cmd/cli/workflow.go) (RunAll
   + `--filter`; `--integration`/`--watch`/`--coverage`/`--record`
   not yet)
@@ -46,7 +46,7 @@ Deferred from above (out-of-scope for the package, wire when concrete UIs land):
   `Router.WebhookSecretFor`. Rejects invalid `X-Wick-Sig` when
   `secret_ref` declared. See §7.
 - Loki push for the structured log mirror — payload shape is already
-  Loki-compatible (label dimensions = `wf_slug`/`wf_run_id`/`wf_event`),
+  Loki-compatible (label dimensions = `wf_id`/`wf_run_id`/`wf_event`),
   just need the HTTP sink wired
 - Run history import from Loki — reverse direction, rebuild
   `runs/<id>/state.json` from log entries when local files purged
@@ -128,9 +128,9 @@ Integration test:
 **Phase 4 — Trigger router** ✅
 
 Implementation:
-- [ ] Cron path: register sebagai `jobs.Module` Key `workflow:<slug>:cron-<idx>`, reuse existing scheduler
+- [ ] Cron path: register sebagai `jobs.Module` Key `workflow:<id>:cron-<idx>`, reuse existing scheduler
 - [ ] Manual trigger: UI button → enqueue
-- [ ] Webhook handler: mount `/hooks/<slug>/<path>`, HMAC verify, path templating
+- [ ] Webhook handler: mount `/hooks/<id>/<path>`, HMAC verify, path templating
 - [ ] Per-trigger `entry_node` override
 - [ ] Per-workflow FIFO queue + dedup (LRU + file fallback)
 
@@ -213,7 +213,7 @@ Unit tests:
 - [ ] `executor_agent_test.go` — agent node spawn dgn skills + tools allowlist
 - [ ] `session_test.go` — `new` mode fresh process per node
 - [ ] `session_test.go` — `root` mode lazy spawn pertama, reuse subsequent root nodes
-- [ ] `session_test.go` — `persistent` mode persist cross-run via session ID `workflow:<slug>:persistent`
+- [ ] `session_test.go` — `persistent` mode persist cross-run via session ID `workflow:<id>:persistent`
 - [ ] `session_crash_test.go` — PID check dead → respawn, log "session lost context"
 - [ ] `session_crash_test.go` — heartbeat stale → probe → respawn on timeout
 - [ ] `session_concurrent_test.go` — concurrent runs persistent session → serialize via lock
@@ -349,7 +349,7 @@ Implementation:
   - CaptureLog untuk assertions
   - Determinism (frozen clock + seeded random)
   - Assertion DSL parser
-- [ ] CLI: `wick workflow test <slug> --filter --integration --watch --coverage --record`
+- [ ] CLI: `wick workflow test <id> --filter --integration --watch --coverage --record`
 - [ ] MCP ops: full set per §9 (introspection + write + canvas + action + test)
 - [ ] Datasets UI tab (table view, schema editor, query console)
 

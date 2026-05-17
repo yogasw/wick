@@ -9,10 +9,10 @@ import (
 
 // branchWorkflow builds a minimal workflow whose entry node is a
 // classify (branch source) node, which makes case-labelled edges valid.
-func branchWorkflow(slug string) workflow.Workflow {
+func branchWorkflow(id string) workflow.Workflow {
 	return workflow.Workflow{
-		ID:      slug,
-		Name:    slug,
+		ID:      id,
+		Name:    id,
 		Enabled: false,
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerManual, EntryNode: "cls"},

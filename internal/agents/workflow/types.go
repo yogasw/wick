@@ -1,5 +1,5 @@
 // Package workflow is the domain for AI-orchestrated multi-step
-// automations stored at `<BaseDir>/workflows/<slug>/`. A workflow is a
+// automations stored at `<BaseDir>/workflows/<id>/`. A workflow is a
 // directed acyclic graph of typed nodes (classify/agent/connector/
 // shell/http/branch/parallel/merge/dataset_*/transform/end) with one
 // or more triggers (cron, channel, webhook, manual, schedule_at,
@@ -72,7 +72,7 @@ const (
 // Workflow is the root document parsed from `workflow.yaml`.
 //
 // ID is the stable folder name (UUID for canvas-created workflows,
-// arbitrary slug for legacy hand-edited ones). Display title lives in
+// arbitrary id for legacy hand-edited ones). Display title lives in
 // Name and is freely renameable — the folder/URL/log paths stay
 // anchored to ID so run history survives a rename.
 type Workflow struct {

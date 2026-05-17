@@ -18,15 +18,15 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
 
-// SlugRe is the canonical slug pattern. Folder names and trigger
+// IDRe is the canonical id pattern. Folder names and trigger
 // path templates must match.
-var SlugRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+var IDRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// NodeIDRe accepts slug charset plus underscore. Underscore is allowed
+// NodeIDRe accepts id charset plus underscore. Underscore is allowed
 // because palette node-type names (e.g. `session_init`, `dataset_query`)
 // are reused as the seeded ID on drop — rejecting `_` here would force
 // every Go const to dual-spell as `session-init` solely for the
-// validator. Folder names still use SlugRe (hyphen-only).
+// validator. Folder names still use IDRe (hyphen-only).
 var NodeIDRe = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // Error is returned by Parse with a path-style locator for the
@@ -43,13 +43,13 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Path, e.Message)
 }
 
-// ValidateSlug rejects names that would break path math.
-func ValidateSlug(slug string) error {
-	if slug == "" {
-		return Error{Path: "slug", Message: "is empty"}
+// ValidateID rejects names that would break path math.
+func ValidateID(id string) error {
+	if id == "" {
+		return Error{Path: "id", Message: "is empty"}
 	}
-	if !SlugRe.MatchString(slug) {
-		return Error{Path: "slug", Message: fmt.Sprintf("%q is not [a-z0-9-]+", slug)}
+	if !IDRe.MatchString(id) {
+		return Error{Path: "id", Message: fmt.Sprintf("%q is not [a-z0-9-]+", id)}
 	}
 	return nil
 }
@@ -116,7 +116,7 @@ func (r *Result) Ok() bool { return r == nil || len(r.Errors) == 0 }
 func Validate(w workflow.Workflow) *Result {
 	r := &Result{}
 
-	if err := ValidateSlug(w.ID); err != nil {
+	if err := ValidateID(w.ID); err != nil {
 		r.Errors = append(r.Errors, err.(Error))
 	}
 	if w.Name == "" {

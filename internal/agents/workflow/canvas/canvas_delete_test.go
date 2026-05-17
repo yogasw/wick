@@ -9,10 +9,10 @@ import (
 
 // entryWorkflow builds a workflow where graph.Entry is explicitly set to
 // "start", giving us a concrete node to attempt deleting.
-func entryWorkflow(slug string) workflow.Workflow {
+func entryWorkflow(id string) workflow.Workflow {
 	return workflow.Workflow{
-		ID:      slug,
-		Name:    slug,
+		ID:      id,
+		Name:    id,
 		Enabled: false,
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerManual},

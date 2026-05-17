@@ -26,7 +26,7 @@
      `workflow_validate` (parse + cycle + schema), `workflow_simulate`
      (event sintetis, no side effect), `workflow_test` (fixtures). Error
      messages structured + actionable (path field, expected vs got).
-   - **Scaffold templates.** `workflow_create(slug, template)` punya 4+
+   - **Scaffold templates.** `workflow_create(id, template)` punya 4+
      starter (empty, support-triage, incident-response, daily-digest)
      yang AI extend, bukan generate from-scratch.
    - **Canvas ops as alternative to file edit.** AI di remote env (Claude
@@ -44,7 +44,7 @@
    prompt?". Kalau jawaban "perlu human read docs first" → redesign.
 
 1. **File-based, UI = primary editor.** Workflow = folder
-   `<BaseDir>/workflows/<slug>/` dengan `workflow.yaml` (graph + triggers)
+   `<BaseDir>/workflows/<id>/` dengan `workflow.yaml` (graph + triggers)
    + folder `nodes/` (per-node script/prompt). File adalah storage,
    canvas adalah surface utama. Hand-edit YAML tetep didukung (gitops,
    power-user). Atomic write via `tmp+rename`.

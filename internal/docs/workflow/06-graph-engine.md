@@ -183,7 +183,6 @@ type Engine struct {
 type Run struct {
     ID         string                   // UUIDv7
     WorkflowID string                   // workflow.id
-    Slug       string
     StartedAt  time.Time
     Event      Event                    // trigger event
     State      RunState
@@ -228,11 +227,11 @@ state.current = next of that.
 Engine `emit()` is the single funnel for every run event:
 
 ```
-emit(slug, runID, ev):
+emit(id, runID, ev):
   1. stamp ev.TS = Now() once (if not already set)
   2. StateStore.AppendEvent → events.jsonl row
-  3. zerolog Info (wf_slug, wf_run_id, wf_event, request_id, data)
-  4. OnEvent hook → SSE broadcaster (wf:<slug> session)
+  3. zerolog Info (wf_id, wf_run_id, wf_event, request_id, data)
+  4. OnEvent hook → SSE broadcaster (wf:<id> session)
 ```
 
 `workflow_started` follows the same shape — TS stamped before
@@ -244,7 +243,7 @@ AppendEvent, so the row written to `events.jsonl` and the payload
 broadcast via `OnEvent` share the same ts down to the nanosecond.
 
 This invariant is load-bearing for the editor's live-run UI:
-`POST /workflows/edit/<slug>/run` returns immediately after the
+`POST /workflows/edit/<id>/run` returns immediately after the
 run is enqueued, so the FE's EventSource subscribe races with the
 worker. The FE closes the window by also fetching
 `/runs/<id>/state` (backfill) and dedup'ing live SSE against
@@ -269,7 +268,7 @@ double-paints.
 }
 ```
 
-`workflow_test(slug)` MCP op (atau "Test" button UI) → engine jalankan
+`workflow_test(id)` MCP op (atau "Test" button UI) → engine jalankan
 dgn fixture sebagai input, compare output ke `expected_output`. Mode:
 - **Per-node**: run 1 node dgn fixture, check output.
 - **Full flow**: run dari entry, kalau ada fixture per-node pakai itu,

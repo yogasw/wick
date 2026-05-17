@@ -337,7 +337,7 @@ control behavior:
 |---|---|---|
 | `new` (default) | Fresh subprocess per node, ga share context | Isolation, deterministic, paralel-safe |
 | `root` | Share single subprocess di-spawn di awal workflow, all `root`-session nodes interact via same agent process. Sequential within workflow run | Multi-turn reasoning across nodes, faster (1× spawn) |
-| `persistent` | Subprocess persist across **workflow runs** (session ID = workflow slug). Context inherit dari run sebelumnya | Long-running assistant pattern, learn-from-history |
+| `persistent` | Subprocess persist across **workflow runs** (session ID = workflow id). Context inherit dari run sebelumnya | Long-running assistant pattern, learn-from-history |
 
 ```yaml
 - id: classify-intent
@@ -392,7 +392,7 @@ Per-node execution dgn root/persistent session:
 **Persistent session lifecycle:**
 - Subprocess detached, written ke wick global session registry
 - Cleanup: idle > 24h (configurable) → terminate
-- Manual cleanup: `wick workflow session kill <slug>` CLI / MCP op
+- Manual cleanup: `wick workflow session kill <id>` CLI / MCP op
 - Restart wick: persistent sessions lost (TBD: future = serialize transcript to disk for resume)
 
 **Concurrent runs same workflow + session:**
@@ -411,8 +411,8 @@ concurrent prompts cleanly). Workflow yg butuh parallel + share context
 
 **Session ID format:**
 - `new`: ephemeral, no ID stored
-- `root`: `workflow:<slug>:run:<run_id>:root`
-- `persistent`: `workflow:<slug>:persistent`
+- `root`: `workflow:<id>:run:<run_id>:root`
+- `persistent`: `workflow:<id>:persistent`
 
 **Default decision:**
 - `classify` default `session: new` (independent classification, no
@@ -742,7 +742,7 @@ Template var:
 - `{{.Event.*}}` — trigger event
 - `{{.Env.<NAME>}}` — workflow env value, from `env.yaml` (UI-managed, hand-edit OK) — lihat §11
 - `{{.Secret.<NAME>}}` — encrypted secret, decrypt runtime. Schema declare `widget: secret` di workflow.yaml, value stored encrypted di `env.yaml` — lihat §11
-- `{{.Workflow.<field>}}` — workflow metadata (Slug, ID, Version, Name)
+- `{{.Workflow.<field>}}` — workflow metadata (ID, Version, Name)
 - `{{.Run.<field>}}` — runtime metadata (ID, StartedAt)
 - `{{.Dataset.<alias>}}` — dataset binding from `datasets:` field — lihat §12
 

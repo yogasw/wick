@@ -17,7 +17,7 @@ import (
 // daily-digest.
 //
 // `name` is the display title (Workflow.Name); when non-empty it
-// overrides whatever default the template would have set. `slug` is
+// overrides whatever default the template would have set. `id` is
 // the stable folder identifier — UUID for canvas-created workflows,
 // kebab for legacy hand-edited ones.
 func Workflow(id, name, template string) workflow.Workflow {

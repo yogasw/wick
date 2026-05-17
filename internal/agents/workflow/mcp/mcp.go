@@ -142,98 +142,98 @@ func (m *Ops) List() ([]Summary, error) {
 }
 
 // Get returns the full workflow.
-func (m *Ops) Get(slug string) (workflow.Workflow, error) { return m.Service.Load(slug) }
+func (m *Ops) Get(id string) (workflow.Workflow, error) { return m.Service.Load(id) }
 
 // ListFiles returns relative file paths in the workflow folder.
-func (m *Ops) ListFiles(slug string) ([]string, error) { return m.Service.ListFiles(slug) }
+func (m *Ops) ListFiles(id string) ([]string, error) { return m.Service.ListFiles(id) }
 
 // ReadFile returns the content of one file.
-func (m *Ops) ReadFile(slug, path string) ([]byte, error) { return m.Service.ReadFile(slug, path) }
+func (m *Ops) ReadFile(id, path string) ([]byte, error) { return m.Service.ReadFile(id, path) }
 
 // ── Tier 2: write ────────────────────────────────────────────────────
 
 // CreateInput is the payload for `workflow_create`.
 //
-// Slug is the on-disk folder name. Optional — when empty, Create
+// ID is the on-disk folder name. Optional — when empty, Create
 // generates a UUID so renaming the display name later doesn't break
 // run history, indexed logs, or shared edit URLs. Power users (MCP,
-// CLI, tests) may pin an explicit slug for human-readable folders.
+// CLI, tests) may pin an explicit id for human-readable folders.
 type CreateInput struct {
-	Slug     string `json:"slug,omitempty"`
+	ID       string `json:"id,omitempty"`
 	Template string `json:"template,omitempty"`
 	Name     string `json:"name,omitempty"`
 }
 
 // Create scaffolds a new workflow from a template.
 func (m *Ops) Create(in CreateInput) (workflow.Workflow, error) {
-	slug := in.Slug
-	if slug == "" {
-		slug = uuid.NewString()
+	id := in.ID
+	if id == "" {
+		id = uuid.NewString()
 	}
-	if err := parse.ValidateSlug(slug); err != nil {
+	if err := parse.ValidateID(id); err != nil {
 		return workflow.Workflow{}, err
 	}
-	w := scaffold.Workflow(slug, in.Name, in.Template)
-	if err := m.Service.Create(slug, w, nil); err != nil {
+	w := scaffold.Workflow(id, in.Name, in.Template)
+	if err := m.Service.Create(id, w, nil); err != nil {
 		return workflow.Workflow{}, err
 	}
-	return m.Service.Load(slug)
+	return m.Service.Load(id)
 }
 
 // WriteFile atomically writes a file inside the workflow folder.
-func (m *Ops) WriteFile(slug, path string, data []byte) error {
-	return m.Service.WriteFile(slug, path, data)
+func (m *Ops) WriteFile(id, path string, data []byte) error {
+	return m.Service.WriteFile(id, path, data)
 }
 
 // DeleteFile removes a file inside the workflow folder.
-func (m *Ops) DeleteFile(slug, path string) error { return m.Service.DeleteFile(slug, path) }
+func (m *Ops) DeleteFile(id, path string) error { return m.Service.DeleteFile(id, path) }
 
 // Delete removes the workflow folder + unregisters scheduling.
-func (m *Ops) Delete(slug string) error {
+func (m *Ops) Delete(id string) error {
 	if m.Router != nil {
-		m.Router.Unregister(slug)
+		m.Router.Unregister(id)
 	}
-	return m.Service.Delete(slug)
+	return m.Service.Delete(id)
 }
 
 // AddNode wraps Canvas.AddNode.
-func (m *Ops) AddNode(slug string, n workflow.Node) (workflow.Workflow, error) {
-	return m.Canvas.AddNode(slug, n)
+func (m *Ops) AddNode(id string, n workflow.Node) (workflow.Workflow, error) {
+	return m.Canvas.AddNode(id, n)
 }
 
 // UpdateNode wraps Canvas.UpdateNode.
-func (m *Ops) UpdateNode(slug, id string, patch map[string]any) (workflow.Workflow, error) {
-	return m.Canvas.UpdateNode(slug, id, patch)
+func (m *Ops) UpdateNode(id, nodeID string, patch map[string]any) (workflow.Workflow, error) {
+	return m.Canvas.UpdateNode(id, nodeID, patch)
 }
 
 // DeleteNode wraps Canvas.DeleteNode.
-func (m *Ops) DeleteNode(slug, id string) (workflow.Workflow, error) {
-	return m.Canvas.DeleteNode(slug, id)
+func (m *Ops) DeleteNode(id, nodeID string) (workflow.Workflow, error) {
+	return m.Canvas.DeleteNode(id, nodeID)
 }
 
 // Connect wraps Canvas.Connect.
-func (m *Ops) Connect(slug, from, to, caseLabel string) (workflow.Workflow, error) {
-	return m.Canvas.Connect(slug, from, to, caseLabel)
+func (m *Ops) Connect(id, from, to, caseLabel string) (workflow.Workflow, error) {
+	return m.Canvas.Connect(id, from, to, caseLabel)
 }
 
 // Disconnect wraps Canvas.Disconnect.
-func (m *Ops) Disconnect(slug, from, to string) (workflow.Workflow, error) {
-	return m.Canvas.Disconnect(slug, from, to)
+func (m *Ops) Disconnect(id, from, to string) (workflow.Workflow, error) {
+	return m.Canvas.Disconnect(id, from, to)
 }
 
 // MoveNode wraps Canvas.MoveNode.
-func (m *Ops) MoveNode(slug, id string, x, y int) (workflow.Workflow, error) {
-	return m.Canvas.MoveNode(slug, id, x, y)
+func (m *Ops) MoveNode(id, nodeID string, x, y int) (workflow.Workflow, error) {
+	return m.Canvas.MoveNode(id, nodeID, x, y)
 }
 
 // SetTriggers wraps Canvas.SetTriggers.
-func (m *Ops) SetTriggers(slug string, triggers []workflow.Trigger) (workflow.Workflow, error) {
-	return m.Canvas.SetTriggers(slug, triggers)
+func (m *Ops) SetTriggers(id string, triggers []workflow.Trigger) (workflow.Workflow, error) {
+	return m.Canvas.SetTriggers(id, triggers)
 }
 
 // Toggle wraps Canvas.Toggle.
-func (m *Ops) Toggle(slug string, enabled bool) (workflow.Workflow, error) {
-	return m.Canvas.Toggle(slug, enabled)
+func (m *Ops) Toggle(id string, enabled bool) (workflow.Workflow, error) {
+	return m.Canvas.Toggle(id, enabled)
 }
 
 // ── Tier 3: action ───────────────────────────────────────────────────
@@ -246,8 +246,8 @@ type ValidateResult struct {
 }
 
 // Validate runs parse + validate (no guard).
-func (m *Ops) Validate(slug string) ValidateResult {
-	w, err := m.Service.Load(slug)
+func (m *Ops) Validate(id string) ValidateResult {
+	w, err := m.Service.Load(id)
 	if err != nil {
 		return ValidateResult{OK: false, Errors: []parse.Error{{Path: "load", Message: err.Error()}}}
 	}
@@ -256,20 +256,20 @@ func (m *Ops) Validate(slug string) ValidateResult {
 }
 
 // Simulate dry-runs a workflow with a synthetic event.
-func (m *Ops) Simulate(ctx context.Context, slug string, evt workflow.Event) (workflow.RunState, error) {
-	w, err := m.Service.Load(slug)
+func (m *Ops) Simulate(ctx context.Context, id string, evt workflow.Event) (workflow.RunState, error) {
+	w, err := m.Service.Load(id)
 	if err != nil {
 		return workflow.RunState{}, err
 	}
 	return m.Engine.Run(ctx, w, evt)
 }
 
-// RunNow enqueues a manual run for one explicit slug. Bypasses
+// RunNow enqueues a manual run for one explicit id. Bypasses
 // Enabled + trigger-match checks so admins can fire a disabled
 // workflow from the UI Run-Now button. Compare with Router.Dispatch
 // which is the trigger-source path.
-func (m *Ops) RunNow(ctx context.Context, slug string, evt workflow.Event) error {
-	return m.RunNowWith(ctx, slug, nil, evt)
+func (m *Ops) RunNow(ctx context.Context, id string, evt workflow.Event) error {
+	return m.RunNowWith(ctx, id, nil, evt)
 }
 
 // RunNowWith fires a single run with an explicit Workflow override.
@@ -277,22 +277,22 @@ func (m *Ops) RunNow(ctx context.Context, slug string, evt workflow.Event) error
 // (workflow.draft.yaml) without waiting for Publish — router's
 // registered copy stays on the published version so cron / channel
 // / webhook triggers keep firing live.
-func (m *Ops) RunNowWith(ctx context.Context, slug string, w *workflow.Workflow, evt workflow.Event) error {
+func (m *Ops) RunNowWith(ctx context.Context, id string, w *workflow.Workflow, evt workflow.Event) error {
 	if m.Router == nil {
 		return fmt.Errorf("router not configured")
 	}
 	if evt.Type == "" {
 		evt.Type = string(workflow.TriggerManual)
 	}
-	return m.Router.RunNowWith(ctx, slug, w, evt)
+	return m.Router.RunNowWith(ctx, id, w, evt)
 }
 
-// GetRuns returns recent run IDs for a slug.
-func (m *Ops) GetRuns(slug string, limit int) ([]string, error) {
+// GetRuns returns recent run IDs for an id.
+func (m *Ops) GetRuns(id string, limit int) ([]string, error) {
 	if m.StateStore == nil {
 		return nil, nil
 	}
-	runs, err := m.StateStore.ListRuns(slug)
+	runs, err := m.StateStore.ListRuns(id)
 	if err != nil {
 		return nil, err
 	}
@@ -318,8 +318,8 @@ type RunSummary struct {
 // instead of scanning the per-run subdirs, so the cost stays
 // constant whether the workflow has 10 or 100,000 historical runs.
 // hasMore=true when older pages exist.
-func (m *Ops) GetRunSummaries(slug string, page, pageSize int) ([]RunSummary, bool, error) {
-	entries, hasMore, err := m.StateStore.IndexList(slug, page, pageSize)
+func (m *Ops) GetRunSummaries(id string, page, pageSize int) ([]RunSummary, bool, error) {
+	entries, hasMore, err := m.StateStore.IndexList(id, page, pageSize)
 	if err != nil {
 		return nil, false, err
 	}

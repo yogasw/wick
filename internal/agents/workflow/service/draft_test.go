@@ -19,10 +19,10 @@ func newTestService(t *testing.T) (*FileService, string) {
 	return New(layout), dir
 }
 
-func makeWorkflow(slug string) wf.Workflow {
+func makeWorkflow(id string) wf.Workflow {
 	return wf.Workflow{
-		ID:       slug,
-		Name:     slug,
+		ID:       id,
+		Name:     id,
 		Enabled:  true,
 		Triggers: []wf.Trigger{{Type: wf.TriggerManual}},
 		Graph: wf.Graph{

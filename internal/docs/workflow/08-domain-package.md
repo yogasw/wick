@@ -59,7 +59,7 @@ const (
 )
 
 type Workflow struct {
-    ID             string // folder name; UUID for canvas-created, slug for legacy
+    ID             string // folder name; UUID for canvas-created, plain id for legacy
     Version        int
     Name           string // display title — freely renameable via /rename
     Description    string
@@ -126,7 +126,7 @@ type Trigger struct {
 }
 
 // Service methods take `id` = folder name (UUID for new workflows).
-// Param is still string-typed; "slug" var names are legacy aliases.
+// Param is still string-typed; legacy "slug" var names are aliases for id.
 type Service interface {
     List() ([]Workflow, error)
     Load(id string) (Workflow, error)

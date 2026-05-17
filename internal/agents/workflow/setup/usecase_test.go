@@ -56,9 +56,9 @@ func runWorkflow(t *testing.T, m *Manager, w workflow.Workflow, evt workflow.Eve
 }
 
 // readEvents loads events.jsonl as []map for assertions.
-func readEvents(t *testing.T, m *Manager, slug, runID string) []map[string]any {
+func readEvents(t *testing.T, m *Manager, id, runID string) []map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(m.Layout.WorkflowRunEvents(slug, runID))
+	data, err := os.ReadFile(m.Layout.WorkflowRunEvents(id, runID))
 	require.NoError(t, err)
 	out := []map[string]any{}
 	dec := json.NewDecoder(newBytesReader(data))

@@ -236,7 +236,7 @@ templ ExecutionsPanel(vm ExecutionsVM) {
 
 // ExecutionDetail is the right-pane content for one run.
 // Also returned as a raw fragment by GET /executions/{runID}.
-templ ExecutionDetail(base, slug string, vm ExecutionDetailVM) {
+templ ExecutionDetail(base, id string, vm ExecutionDetailVM) {
 	<div class="wf-ex-detail-inner" id="wf-ex-detail-inner">
 
 		<!-- Run header -->
@@ -256,7 +256,7 @@ templ ExecutionDetail(base, slug string, vm ExecutionDetailVM) {
 				</div>
 			</div>
 			<a
-				href={ templ.SafeURL(base + "/workflows/edit/" + slug + "/runs/" + vm.RunID) }
+				href={ templ.SafeURL(base + "/workflows/edit/" + id + "/runs/" + vm.RunID) }
 				class="wf-ex-open-link"
 				title="Open full run detail page"
 			>Full detail ↗</a>

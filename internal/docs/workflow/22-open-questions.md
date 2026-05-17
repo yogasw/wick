@@ -21,7 +21,7 @@
      Same engine, same audit, blocking call:
      ```yaml
      - type: workflow
-       slug: other-workflow
+       id: other-workflow
        args: {event: {Type: "manual", Payload: {...}}}
        timeout_sec: 60
      ```
@@ -60,7 +60,7 @@
       → suggest tighter retention atau dataset approach.
 
 6. [**decided**] **Workflow versioning** — rely on git, no wick layer.
-   - Workflow folder = git-tracked. `git log workflows/<slug>/` =
+   - Workflow folder = git-tracked. `git log workflows/<id>/` =
      audit history. `git diff` between commits = compare versions.
    - `version:` field di workflow.yaml = signal user-driven (manual
      bump untuk material change). Drives re-approval trigger.
@@ -131,8 +131,8 @@
     - AI tokens default = write-without-enable, wajib panggil
       `workflow_request_review` buat ngumumin perubahan ke admin.
     - Admin approve via UI (lihat AI guard §17).
-    - Token allowlist per workflow slug (`workflow_allowlist: ["*"]` atau
-      specific slugs).
+    - Token allowlist per workflow id (`workflow_allowlist: ["*"]` atau
+      specific ids).
     - Audit log catat tiap MCP call (token ID, op, args hash, timestamp,
       result), reuse infra audit yang sudah ada.
 14. [**deferred**] **`workflow_grep` MCP op** — tunda. AI di remote env
@@ -159,7 +159,7 @@
     both. Need benchmark di prod scale (>1M rows per dataset).
 17. [**decided**] **Dataset row-level access** —
     - V1 = `access.workflows` allowlist di `dataset.yaml` (read /
-      read_write per workflow slug).
+      read_write per workflow id).
     - **Stamping**: tiap row di-insert otomatis ada `_meta.created_by_workflow`
       di JSONB. Used buat audit + future RBAC.
     - **Filter by workflow** (opt-in di dataset.yaml):
@@ -169,7 +169,7 @@
         row_filter: by_creator    # by_creator | none
       ```
       `by_creator` = workflow cuma boleh `dataset_*` ke row yang
-      `_meta.created_by_workflow == own_slug`. Cross-workflow read
+      `_meta.created_by_workflow == own_id`. Cross-workflow read
       di-allow, write/delete reject.
     - Multi-tenant deeper (per-user, per-team) tunda sampai use case.
 18. **Dataset query DSL** — pakai WHERE clause string (SQL-flavored)

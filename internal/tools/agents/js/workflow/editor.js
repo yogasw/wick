@@ -1157,12 +1157,12 @@
       const target = document.getElementById('wf-test-results');
       if (!target) return;
       const base = document.getElementById('wf-tc-modal')?.dataset.base || '';
-      const slug = document.getElementById('wf-tc-modal')?.dataset.slug || '';
-      if (!base || !slug) return;
+      const id = document.getElementById('wf-tc-modal')?.dataset.id || '';
+      if (!base || !id) return;
       target.innerHTML = '<span class="p-3 italic text-xs text-black-600 dark:text-black-700">Loading…</span>';
-      fetch(`${base}/workflows/edit/${slug}/test-cases`)
+      fetch(`${base}/workflows/edit/${id}/test-cases`)
         .then(r => r.text())
-        .then(html => { target.innerHTML = html; bindTestManager(base, slug); })
+        .then(html => { target.innerHTML = html; bindTestManager(base, id); })
         .catch(err => { target.innerHTML = `<span class="text-red-600 text-xs p-3">${err.message}</span>`; });
     });
   }
@@ -1181,7 +1181,7 @@
     }
   });
 
-  function bindTestManager(base, slug) {
+  function bindTestManager(base, id) {
     const panel = document.getElementById('wf-test-results');
     if (!panel) return;
 
@@ -1307,7 +1307,7 @@
   // Save
   tcSaveBtn?.addEventListener('click', async () => {
     const base   = tcModal.dataset.base;
-    const slug   = tcModal.dataset.slug;
+    const id   = tcModal.dataset.id;
     const name   = document.getElementById('wf-tc-name').value.trim();
     if (!name) { showTCError('Name is required'); return; }
 
@@ -1336,7 +1336,7 @@
     tcSaveBtn.disabled = true;
     tcSaveBtn.textContent = 'Saving…';
     try {
-      const resp = await fetch(`${base}/workflows/edit/${slug}/test-cases`, {
+      const resp = await fetch(`${base}/workflows/edit/${id}/test-cases`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, input: { Event: evt }, assertions }),
@@ -1346,9 +1346,9 @@
       closeTCModal();
       // Reload the manager panel
       const target = document.getElementById('wf-test-results');
-      fetch(`${base}/workflows/edit/${slug}/test-cases`)
+      fetch(`${base}/workflows/edit/${id}/test-cases`)
         .then(r => r.text())
-        .then(html => { if (target) { target.innerHTML = html; bindTestManager(base, slug); } });
+        .then(html => { if (target) { target.innerHTML = html; bindTestManager(base, id); } });
     } catch (err) {
       showTCError(err.message);
     } finally {
@@ -1374,11 +1374,11 @@
   // workflow.draft.yaml — published workflow.yaml untouched until
   // user clicks Publish.
   const statusEl = document.getElementById('wf-save-status');
-  // baseURL = `<base>/workflows` (from data-wf-base). So the slug-bound
-  // path is `${baseURL}/edit/${slug}/save`. The registry catalog lives
+  // baseURL = `<base>/workflows` (from data-wf-base). So the id-bound
+  // path is `${baseURL}/edit/${id}/save`. The registry catalog lives
   // at `${baseURL}/api/registry`.
-  const slug = window.location.pathname.split('/').filter(Boolean).pop();
-  const saveURL = `${baseURL}/edit/${slug}/save`;
+  const id = window.location.pathname.split('/').filter(Boolean).pop();
+  const saveURL = `${baseURL}/edit/${id}/save`;
   let saveTimer = null;
   let lastSavedAt = null;
   let savedRefreshTimer = null;
@@ -2532,7 +2532,7 @@
   // event). Flow on submit:
   //   1) cancel any pending autosave + flush save synchronously
   //   2) POST /run with Accept: application/json, expect 202 {run_id}
-  //   3) open EventSource on /stream?session=wf:<slug>, paint events
+  //   3) open EventSource on /stream?session=wf:<id>, paint events
   //   4) close stream on workflow_completed | workflow_failed
   // Execute workflow pill — the run trigger lives on the canvas
   // floating button. `wf-execute-pill` opens a picker; the actual
@@ -2704,7 +2704,7 @@
     if (runEventSource) {
       try { runEventSource.close(); } catch (_) {}
     }
-    const url = `${baseURL.replace(/\/workflows$/, '')}/stream?session=wf:${slug}`;
+    const url = `${baseURL.replace(/\/workflows$/, '')}/stream?session=wf:${id}`;
     runEventSource = new EventSource(url);
     runEventSource.addEventListener('agent', (e) => {
       let payload;
@@ -2786,7 +2786,7 @@
     const page = parseInt(params.get('runs_page') || '1', 10);
     if (page > 1) return;
     try {
-      const resp = await fetch(`${baseURL}/edit/${slug}/runs/${rid}/state`, {
+      const resp = await fetch(`${baseURL}/edit/${id}/runs/${rid}/state`, {
         headers: { 'Accept': 'application/json' },
       });
       if (!resp.ok) return;
@@ -2830,7 +2830,7 @@
         </button>
         <div class="wf-run-detail hidden">
           <div class="font-mono text-[11px] text-black-700 dark:text-black-600 break-all">${escapeHTML(rid)}</div>
-          <a href="${baseURL}/edit/${slug}/runs/${rid}" class="mt-1 inline-block text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Open run detail →</a>
+          <a href="${baseURL}/edit/${id}/runs/${rid}" class="mt-1 inline-block text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Open run detail →</a>
         </div>`;
       list.insertBefore(li, list.firstChild);
       // Bump the tab counter — pull the integer out of the existing
@@ -2906,7 +2906,7 @@
     await flushAutosave();
     try {
       const tid = (triggerNode.data && triggerNode.data.id) || triggerNode.name;
-      const resp = await fetch(`${baseURL}/edit/${slug}/run`, {
+      const resp = await fetch(`${baseURL}/edit/${id}/run`, {
         method: 'POST',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ trigger_id: tid }).toString(),
@@ -3083,7 +3083,7 @@
     try {
       const body = { node: live, input: input };
       if (event) body.event = event;
-      const resp = await fetch(`${baseURL}/edit/${slug}/exec-node`, {
+      const resp = await fetch(`${baseURL}/edit/${id}/exec-node`, {
         method: 'POST',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -3318,7 +3318,7 @@
     });
   }
 
-  bindBackgroundForm(document.querySelector(`form[action$="/edit/${slug}/publish"]`), {
+  bindBackgroundForm(document.querySelector(`form[action$="/edit/${id}/publish"]`), {
     okTitle: 'Published',
     okBody: 'Draft promoted to workflow.yaml.',
     errTitle: 'Cannot publish',
@@ -3326,7 +3326,7 @@
       // Draft is now the published copy — hide the Publish button until
       // the next save creates a new draft. Easier than re-rendering the
       // toolbar: disable in place, swap the title.
-      document.querySelectorAll(`form[action$="/edit/${slug}/publish"] button[type=submit]`).forEach((btn) => {
+      document.querySelectorAll(`form[action$="/edit/${id}/publish"] button[type=submit]`).forEach((btn) => {
         btn.disabled = true;
         btn.title = 'No draft to publish';
         btn.classList.add('cursor-not-allowed');
@@ -3334,7 +3334,7 @@
         btn.classList.add('bg-blue-500/40');
         btn.classList.remove('bg-blue-500');
       });
-      document.querySelectorAll(`form[action$="/edit/${slug}/discard"] button[type=submit]`).forEach((btn) => {
+      document.querySelectorAll(`form[action$="/edit/${id}/discard"] button[type=submit]`).forEach((btn) => {
         btn.disabled = true;
         btn.classList.add('opacity-50', 'cursor-not-allowed');
       });
@@ -3356,7 +3356,7 @@
   async function backfillRunEvents(runID) {
     if (!runID) return;
     try {
-      const resp = await fetch(`${baseURL}/edit/${slug}/runs/${encodeURIComponent(runID)}/state`, {
+      const resp = await fetch(`${baseURL}/edit/${id}/runs/${encodeURIComponent(runID)}/state`, {
         headers: { 'Accept': 'application/json' },
       });
       if (!resp.ok) return;
@@ -3372,7 +3372,7 @@
 
   async function replayRun(runID) {
     if (!runID) return;
-    const url = `${baseURL}/edit/${slug}/runs/${encodeURIComponent(runID)}/state`;
+    const url = `${baseURL}/edit/${id}/runs/${encodeURIComponent(runID)}/state`;
     try {
       const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
       if (!resp.ok) {
@@ -3432,7 +3432,7 @@
 
   async function exportRun(runID) {
     if (!runID) return;
-    const url = `${baseURL}/edit/${slug}/runs/${encodeURIComponent(runID)}/state`;
+    const url = `${baseURL}/edit/${id}/runs/${encodeURIComponent(runID)}/state`;
     try {
       const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
       if (!resp.ok) {
@@ -3501,7 +3501,7 @@
     }
   });
 
-  bindBackgroundForm(document.querySelector(`form[action$="/edit/${slug}/discard"]`), {
+  bindBackgroundForm(document.querySelector(`form[action$="/edit/${id}/discard"]`), {
     confirmText: 'Rollback to last published version? All draft changes will be lost.',
     okTitle: 'Draft discarded',
     okBody: 'Editor will refresh to the last published version.',

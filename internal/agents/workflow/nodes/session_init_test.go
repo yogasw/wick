@@ -135,11 +135,11 @@ func TestSessionInit_EmptyRenderedID_Errors(t *testing.T) {
 
 // Storage validator gates sessionIDs at the pool boundary — make sure
 // every default-resolved ID survives that check. The original bug:
-// "wf:slug:run:uuid" was rejected because `:` is not in the allowed
+// "wf:id:run:uuid" was rejected because `:` is not in the allowed
 // charset. Underscores are.
 func TestDefaultRunSessionID_PassesStorageValidator(t *testing.T) {
 	cases := []struct {
-		slug  string
+		id    string
 		runID string
 	}{
 		{"it-ops", "0d147eca-82ca-48e9-8d11-8d3eaa926865"},
@@ -147,9 +147,9 @@ func TestDefaultRunSessionID_PassesStorageValidator(t *testing.T) {
 		{"abc123", "x"},
 	}
 	for _, c := range cases {
-		id := DefaultRunSessionID(c.slug, c.runID)
-		if err := storage.ValidateSessionID(id); err != nil {
-			t.Errorf("slug=%q runID=%q → %q: %v", c.slug, c.runID, id, err)
+		sid := DefaultRunSessionID(c.id, c.runID)
+		if err := storage.ValidateSessionID(sid); err != nil {
+			t.Errorf("id=%q runID=%q → %q: %v", c.id, c.runID, sid, err)
 		}
 	}
 }

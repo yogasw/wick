@@ -4,7 +4,7 @@
 
 `internal/jobs/workflow/registry.go` punya `RegisterAll(svc)`:
 - Loop `svc.List()`, register tiap workflow ke `jobs.Register(job.Module{
-  Meta.Key: "workflow:<slug>:<trigger-idx>", DefaultCron: ..., Run: ...
+  Meta.Key: "workflow:<id>:<trigger-idx>", DefaultCron: ..., Run: ...
   })`.
 - Idempotent on Key.
 
@@ -20,7 +20,7 @@ CRUD (UI canvas / MCP / hand-edit + fsnotify) → handler panggil
 
 ### Delete
 
-Hapus folder + `jobs.Unregister("workflow:<slug>:*")` (perlu tambah
+Hapus folder + `jobs.Unregister("workflow:<id>:*")` (perlu tambah
 method `UnregisterPrefix` di
 [internal/jobs/registry.go](../jobs/registry.go) — sekarang cuma ada
 `Register`).
@@ -32,9 +32,9 @@ Poll-based watcher (3s tick, no fsnotify dep) di
 scan `<BaseDir>/workflows/*/workflow.yaml` mtimes per tick.
 
 Per tick:
-- New/changed slug → `setup.HotReload(ctx, Service, Router, Cron, slug)`
+- New/changed id → `setup.HotReload(ctx, Service, Router, Cron, id)`
   (re-parse YAML, re-validate, re-register triggers/cron).
-- Slug folder disappeared → unregister from Router + Cron.
+- ID folder disappeared → unregister from Router + Cron.
 - Hash unchanged → no-op.
 
 Started inside `Server.startChannels` so it shares the server ctx
@@ -46,7 +46,7 @@ semantics). Acceptable since canvas edits go through the
 in-process API path (no watcher needed) — the watcher is for
 gitops / external editor / MCP filesystem writes.
 
-UI clients that have a workflow open get the SSE `wf:<slug>`
+UI clients that have a workflow open get the SSE `wf:<id>`
 session pushes any subsequent run events (live runs), but the
 watcher itself doesn't currently push a "yaml changed" signal —
 refresh is manual.

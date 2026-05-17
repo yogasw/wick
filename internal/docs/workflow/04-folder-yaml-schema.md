@@ -28,7 +28,7 @@
 ### Identity — folder name = workflow ID
 
 Folder name is the workflow `id` — UUID for canvas-created workflows,
-arbitrary `[a-z0-9-]+` slug for legacy hand-edited ones (the regex
+arbitrary `[a-z0-9-]+` id for legacy hand-edited ones (the regex
 still accepts hex+dashes so UUIDs pass). Display title lives in
 `name:` and is freely renameable through the editor toolbar; the
 folder, URL (`/workflows/edit/<id>`), and run index all stay anchored
@@ -340,7 +340,7 @@ picker on the canvas (or via the MCP `workflow_run` op).
 - id: trigger-error
   type: error
   entry_node: notify-oncall
-  source_workflow: "*"              # workflow slug atau pattern; "*" = semua
+  source_workflow: "*"              # workflow id atau pattern; "*" = semua
   severity: [high, critical]        # optional filter: error severity levels
   node_types: [shell, http, connector]  # optional filter: cuma error dari node types ini
   dedup_ttl_sec: 300                # default 5min, hindari error storm
@@ -356,7 +356,7 @@ Source workflow `on_error` opt-in:
 ```yaml
 # Source workflow declares error handler binding
 on_error:
-  trigger_workflow: "error-handler"   # workflow slug yg pasang trigger type: error
+  trigger_workflow: "error-handler"   # workflow id yg pasang trigger type: error
   severity: critical                  # filter mana error yg fire handler
   include_state: true                 # ship full state.json ke handler
   include_node_output: true           # include outputs hingga node yg fail

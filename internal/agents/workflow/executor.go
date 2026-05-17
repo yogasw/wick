@@ -37,7 +37,7 @@ type RunContext struct {
 	// DefaultAgentSessionID is set by an upstream `session_init` node
 	// and consumed by downstream `agent` nodes that don't override
 	// session: themselves. Empty = engine falls back to the per-run
-	// pattern "wf:<slug>:run:<runID>". See pool.md for the resolver
+	// pattern "wf:<id>:run:<runID>". See pool.md for the resolver
 	// order.
 	DefaultAgentSessionID string
 

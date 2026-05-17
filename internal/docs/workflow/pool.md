@@ -17,7 +17,7 @@ Update terakhir: 2026-05-16.
 - [x] `pool/pool.go` — `Pool.EnsureSession` public method
 - [x] `workflow/setup/providers.go` — drop 5-menit timeout, tambah semaphore
 - [x] Canvas palette + codec + inspector lewat plugin arch (lihat [plugin-arch.md](plugin-arch.md))
-- [x] sessionID separator `_` (charset-safe) — `DefaultRunSessionID(slug, runID)` helper
+- [x] sessionID separator `_` (charset-safe) — `DefaultRunSessionID(id, runID)` helper
 - [x] Validator allow `_` di Node ID
 - [x] Inspector UI: "Reuse" framing (sharing-oriented copy)
 - [x] Tests: 15 unit test di `nodes/agent_session_test.go` + `nodes/session_init_test.go`
@@ -89,7 +89,7 @@ ke-expose lewat `Pool.QueueSnapshot()`, operator bisa naikin
 Tiap workflow run dapet sessionID otomatis:
 
 ```
-wf:<slug>:run:<runID>
+wf:<id>:run:<runID>
 ```
 
 Semua agent node di run yg sama share subprocess. Konsekuensi:
@@ -125,13 +125,13 @@ downstream node + bikin session record di registry.
 
 | Preset | sessionID jadi | Inspector label | Cocok buat |
 |---|---|---|---|
-| `workflow_run` ← default | `wf_<slug>_run_<runID>` | Reuse in run | Agents 1 run share subprocess; run baru = fresh |
-| `workflow_global` | `wf_<slug>` | Reuse across runs | Cross-run state — agent inget conversation lama |
+| `workflow_run` ← default | `wf_<id>_run_<runID>` | Reuse in run | Agents 1 run share subprocess; run baru = fresh |
+| `workflow_global` | `wf_<id>` | Reuse across runs | Cross-run state — agent inget conversation lama |
 | `new` | UUID baru per call | Fresh each call | Isolated tiap exec |
 
 Separator pakai `_` (bukan `:`) — Windows-safe + lulus
 `storage.ValidateSessionID` charset `[A-Za-z0-9._-]`. Helper:
-`nodes.DefaultRunSessionID(slug, runID)` di
+`nodes.DefaultRunSessionID(id, runID)` di
 [internal/agents/workflow/nodes/agent.go](../../agents/workflow/nodes/agent.go).
 
 **Custom ID:**
@@ -193,7 +193,7 @@ reachable via DAG walker. Forward-ref + cycle ditolak validator.
 1. node.session.from set       → resolve sessionID dari node target
 2. node.session == "new"       → UUID baru
 3. rc.DefaultAgentSessionID    ← di-set oleh upstream session_init (atau engine default)
-4. fallback engine             → "wf:<slug>:run:<runID>"
+4. fallback engine             → "wf:<id>:run:<runID>"
 ```
 
 `session_init` ngak ada di run → engine pake step 4 langsung. Jadi
@@ -320,9 +320,9 @@ func resolveSessionInitID(n workflow.Node, rc *workflow.RunContext) (string, err
     }
     switch n.SessionPreset {
     case "", workflow.SessionPresetWorkflowRun:
-        return "wf:" + rc.Workflow.Slug + ":run:" + rc.RunID, nil
+        return "wf:" + rc.Workflow.ID + ":run:" + rc.RunID, nil
     case workflow.SessionPresetWorkflowGlobal:
-        return "wf:" + rc.Workflow.Slug, nil
+        return "wf:" + rc.Workflow.ID, nil
     case workflow.SessionPresetNew:
         return "wf:adhoc:" + uuid.NewString(), nil
     }
