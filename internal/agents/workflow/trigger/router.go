@@ -38,9 +38,10 @@ import (
 // Router matches incoming events to registered workflows, applies
 // dedup, and enqueues per workflow.
 // webhookEntry holds the secretRef for one webhook path pattern.
+// workflowID is the UUID of the owning workflow (workflow.Workflow.ID).
 type webhookEntry struct {
-	slug      string
-	secretRef string
+	workflowID string
+	secretRef  string
 }
 
 type Router struct {
@@ -449,7 +450,7 @@ func (r *Router) reindexLocked(w workflow.Workflow) {
 			if path == "" {
 				path = "*"
 			}
-			r.webhookIndex[path] = webhookEntry{slug: w.ID, secretRef: tr.SecretRef}
+			r.webhookIndex[path] = webhookEntry{workflowID: w.ID, secretRef: tr.SecretRef}
 		}
 	}
 }
@@ -471,7 +472,7 @@ func (r *Router) removeFromIndexLocked(slug string) {
 		}
 	}
 	for path, entry := range r.webhookIndex {
-		if entry.slug == slug {
+		if entry.workflowID == slug {
 			delete(r.webhookIndex, path)
 		}
 	}
