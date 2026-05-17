@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/appname"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
@@ -608,6 +609,43 @@ func NewServer() *Server {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
 
+	// Wire Slack user-token lookup via the connectors service.
+	// Iterates registered channels and type-asserts to *slackch.Channel;
+	// if found, attaches a ConnectorTokenFn that scans Slack connector rows
+	// configured in user_token auth mode and matches by auth.test UserID.
+	for _, ch := range channelReg.Channels() {
+		if slackCh, ok := ch.(*slackch.Channel); ok {
+			slackCh.SetConnectorTokenFn(func(ctx context.Context, slackUserID string) (string, bool) {
+				rows, err := connectorsSvc.ListByKey(ctx, "slack")
+				if err != nil {
+					log.Warn().Err(err).Msg("slack connector token lookup: ListByKey failed")
+					return "", false
+				}
+				for _, row := range rows {
+					cfgs := connectorsSvc.LoadConfigs(row)
+					if cfgs["auth_mode"] != "user_token" {
+						continue
+					}
+					token := cfgs["user_token"]
+					if token == "" {
+						continue
+					}
+					resp, err := slackch.AuthTestWithToken(ctx, token)
+					if err != nil {
+						log.Debug().Err(err).Str("connector", row.ID).
+							Msg("slack connector token lookup: auth.test failed")
+						continue
+					}
+					if resp == slackUserID {
+						return token, true
+					}
+				}
+				return "", false
+			})
+			break
+		}
+	}
+
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	// tokensSvc instantiated earlier so the REST channel can reuse it.
 	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
@@ -945,6 +983,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	}
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
+
+	// Expose the server port to agent subprocesses via WICK_PORT so they
+	// can reach wick's local proxy endpoints (e.g. /integrations/slack/send)
+	// without needing any credentials injected into their environment.
+	os.Setenv("WICK_PORT", fmt.Sprintf("%d", port)) //nolint:errcheck
 
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)

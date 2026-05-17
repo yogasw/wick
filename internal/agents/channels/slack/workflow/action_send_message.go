@@ -9,6 +9,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // SendMessageInput is the schema for the slack.send_message action.
@@ -19,6 +20,7 @@ type SendMessageInput struct {
 	Text     string `json:"text"`                // fallback / accessibility text
 	Blocks   string `json:"blocks,omitempty"`    // JSON array of Block Kit blocks
 	ThreadTS string `json:"thread_ts,omitempty"` // post inside a thread
+	Signed   bool   `json:"signed,omitempty"`    // append "Sent by wick · <appname>" footer
 }
 
 // SendMessageOutput is the typed response a downstream node can
@@ -49,8 +51,13 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 			text := argStringOpt(args, "text")
 			blocksRaw := argStringOpt(args, "blocks")
 			threadTS := argStringOpt(args, "thread_ts")
+			signed, _ := args["signed"].(bool)
 			if text == "" && blocksRaw == "" {
 				return nil, fmt.Errorf("either text or blocks is required")
+			}
+
+			if signed && text != "" {
+				text += "\n\n_Sent by *wick* · " + appname.Resolve() + "_"
 			}
 
 			opts := []slackgo.MsgOption{}

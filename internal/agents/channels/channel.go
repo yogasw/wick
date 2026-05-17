@@ -197,6 +197,13 @@ type HTTPHandlerProvider interface {
 	HTTPHandler() http.Handler
 }
 
+// MultiHTTPHandlerProvider extends HTTPHandlerProvider for channels
+// that need to register more than one HTTP route (e.g. Slack registers
+// both the inbound event webhook and a local send-message proxy).
+type MultiHTTPHandlerProvider interface {
+	HTTPHandlers() map[string]http.Handler
+}
+
 // ConfigSource is per-channel hot-reload glue. Hash returns a stable
 // fingerprint of the currently-applied config; the registry watcher
 // compares against the previous hash on each tick and calls Reload

@@ -28,7 +28,6 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/appname"
 )
 
 const (
@@ -88,14 +87,21 @@ type turn struct {
 type Channel struct {
 	sendFn agentchannels.SendFunc
 
-	cfgMu  sync.Mutex
-	cfg    agentconfig.SlackChannelConfig
-	pubURL string
-	api    *slackgo.Client
-	socket *socketmode.Client
+	cfgMu          sync.Mutex
+	cfg            agentconfig.SlackChannelConfig
+	pubURL         string
+	api            *slackgo.Client
+	socket         *socketmode.Client
+	botUserID      string            // Slack user ID of the bot itself (U...), resolved via auth.test
+	connectorToken ConnectorTokenFn  // optional; nil = no user-token DM support
 
 	mu    sync.Mutex
 	turns map[string]*turn
+
+	// userTokenCache maps Slack user ID → resolved xoxp token.
+	// Avoids repeated connectorToken lookups on every send call.
+	userTokenMu    sync.RWMutex
+	userTokenCache map[string]string
 
 	approveFn      agentchannels.ApproveFn
 	sessions       agentchannels.SessionChecker
@@ -158,18 +164,37 @@ func (s *Channel) SetSessionStartHook(fn agentchannels.SessionStartHook) {
 	s.onSessionStart = fn
 }
 
-// HTTPPath returns the mux path for the Slack webhook (channels.HTTPHandlerProvider).
-func (s *Channel) HTTPPath() string { return "POST /integrations/slack/events" }
+// HTTPHandlers satisfies channels.MultiHTTPHandlerProvider.
+// Returns two routes:
+//   - POST /integrations/slack/events — inbound Slack webhook (existing)
+//   - POST /integrations/slack/send   — local agent proxy, no external auth
+func (s *Channel) HTTPHandlers() map[string]http.Handler {
+	return map[string]http.Handler{
+		"POST /integrations/slack/events": s.HTTPHandler(),
+		"POST /integrations/slack/send":   s.sendHandler(),
+	}
+}
 
 // applyConfig replaces cfg/pubURL/api/socket atomically.
+// Also resolves the bot's own Slack user ID via auth.test so the footer
+// can render as a proper @mention ("Sent using <@UBOT123>").
 func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string) {
 	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
 	socket := socketmode.New(api)
+
+	botUserID := ""
+	if cfg.BotToken != "" {
+		if resp, err := api.AuthTest(); err == nil {
+			botUserID = resp.UserID
+		}
+	}
+
 	s.cfgMu.Lock()
 	s.cfg = cfg
 	s.pubURL = pubURL
 	s.api = api
 	s.socket = socket
+	s.botUserID = botUserID
 	s.cfgMu.Unlock()
 }
 
@@ -771,36 +796,26 @@ func (s *Channel) sessionOnDisk(sessionID string) bool {
 func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS string) string {
 	s.cfgMu.Lock()
 	api := s.api
-	cfg := s.cfg
 	s.cfgMu.Unlock()
 	if api == nil {
 		return ""
 	}
 
+	// Resolve channel info.
 	channelName := ev.Channel
-	channelType := ""
 	if info, err := api.GetConversationInfo(&slackgo.GetConversationInfoInput{ChannelID: ev.Channel}); err == nil && info != nil {
 		if info.Name != "" {
-			channelName = "#" + info.Name
-		}
-		switch {
-		case info.IsIM:
-			channelType = "direct message"
-		case info.IsMpIM:
-			channelType = "group DM"
-		case info.IsPrivate:
-			channelType = "private channel"
-		default:
-			channelType = "channel"
+			channelName = info.Name
 		}
 	}
 
+	// Resolve user info.
 	userHandle := ev.User
 	userReal := ""
 	teamName := ""
 	if u, err := api.GetUserInfo(ev.User); err == nil && u != nil {
 		if u.Name != "" {
-			userHandle = "@" + u.Name
+			userHandle = u.Name
 		}
 		userReal = u.RealName
 	}
@@ -813,8 +828,8 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 		permalink = pl
 	}
 
-	// Enhancement 1: pre-resolve the DM channel for the requesting user so
-	// Claude can send DMs back without needing an extra API call.
+	// Pre-resolve the DM channel so Claude can send DMs without an extra API call.
+	// 3-second timeout; failure is non-fatal — section is omitted.
 	dmChannelID := ""
 	dmCtx, dmCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer dmCancel()
@@ -824,11 +839,12 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 	}); err == nil && ch != nil {
 		dmChannelID = ch.ID
 	} else if err != nil {
-		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).Msg("buildSessionContext: conversations.open failed; omitting DM channel ID")
+		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).
+			Msg("buildSessionContext: conversations.open failed; omitting DM channel ID")
 	}
 
-	// Enhancement 2: fetch the first 50 workspace members to give Claude a
-	// username→user_id directory so it can resolve "@alice" to "U111A".
+	// Fetch first 50 workspace members for a username→user_id directory.
+	// 3-second timeout; failure is non-fatal — section is omitted.
 	var memberEntries []string
 	membersCtx, membersCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer membersCancel()
@@ -840,61 +856,43 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 			memberEntries = append(memberEntries, fmt.Sprintf("@%s (%s)", m.Name, m.ID))
 		}
 	} else {
-		log.Warn().Str("channel", "slack").Err(err).Msg("buildSessionContext: users.list failed; omitting member directory")
+		log.Warn().Str("channel", "slack").Err(err).
+			Msg("buildSessionContext: users.list failed; omitting member directory")
 	}
 
-	channelLine := channelName
-	if channelType != "" {
-		channelLine = fmt.Sprintf("%s (%s)", channelName, channelType)
-	}
-	userLine := userHandle
-	if userReal != "" && userReal != strings.TrimPrefix(userHandle, "@") {
-		userLine = fmt.Sprintf("%s (%s)", userHandle, userReal)
-	}
-
-	lines := []string{"[Slack thread context — sent automatically by wick]"}
+	lines := []string{"[Slack thread context — injected by wick]"}
 	if teamName != "" {
 		lines = append(lines, "Workspace: "+teamName)
 	}
 	lines = append(lines,
-		fmt.Sprintf("Channel: %s [%s]", channelLine, ev.Channel),
-		fmt.Sprintf("User: %s [%s]", userLine, ev.User),
+		fmt.Sprintf("Channel: #%s [%s]", channelName, ev.Channel),
+		fmt.Sprintf("User: @%s (%s) [%s]", userHandle, userReal, ev.User),
 	)
-	// Enhancement 1: inject pre-resolved DM channel ID.
 	if dmChannelID != "" {
-		lines = append(lines, "DM channel with this user: "+dmChannelID)
+		lines = append(lines, "DM channel: "+dmChannelID)
 	}
 	lines = append(lines, "Thread: "+threadTS)
 	if permalink != "" {
 		lines = append(lines, "Link: "+permalink)
 	}
 
-	// Enhancement 2: compact member directory.
 	if len(memberEntries) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("Slack workspace members (first %d):", len(memberEntries)))
-		lines = append(lines, strings.Join(memberEntries, " | "))
+		lines = append(lines, fmt.Sprintf("Workspace members (first %d): %s", len(memberEntries), strings.Join(memberEntries, " | ")))
 	}
 
-	// Enhancement 4: Slack capabilities section so Claude knows how to
-	// call the Slack Web API from bash using $WICK_SLACK_TOKEN.
-	if cfg.BotToken != "" {
-		lines = append(lines, "")
-		lines = append(lines, "Slack capabilities:")
-		if dmChannelID != "" {
-			lines = append(lines, fmt.Sprintf("- To send a DM to the requesting user: use channel %s with chat.postMessage", dmChannelID))
-		}
-		lines = append(lines, "- To DM another user: first call conversations.open with their user_id (from the member directory above), then post to the returned channel")
-		lines = append(lines, "- Token available as: $WICK_SLACK_TOKEN (use with Slack Web API)")
-		lines = append(lines, "- Example DM: curl -s -X POST https://slack.com/api/chat.postMessage \\")
-		lines = append(lines, `    -H "Authorization: Bearer $WICK_SLACK_TOKEN" \`)
-		lines = append(lines, `    -H "Content-Type: application/json" \`)
-		if dmChannelID != "" {
-			lines = append(lines, fmt.Sprintf(`    -d '{"channel":"%s","text":"hello"}'`, dmChannelID))
-		} else {
-			lines = append(lines, `    -d '{"channel":"D...","text":"hello"}'`)
-		}
+	lines = append(lines, "")
+	lines = append(lines, "IMPORTANT: To send Slack messages, use wick proxy only — do NOT use Slack MCP tools.")
+	lines = append(lines, "Send via wick:")
+	lines = append(lines, `  curl -s -X POST "http://localhost:$WICK_PORT/integrations/slack/send" \`)
+	lines = append(lines, `    -H "Content-Type: application/json" \`)
+	if dmChannelID != "" {
+		lines = append(lines, fmt.Sprintf(`    -d '{"channel_id":"%s","text":"YOUR MESSAGE"}'`, dmChannelID))
+	} else {
+		lines = append(lines, `    -d '{"channel_id":"D...","text":"YOUR MESSAGE"}'`)
 	}
+	lines = append(lines, "To send appearing FROM a specific user (if their token is configured):")
+	lines = append(lines, fmt.Sprintf(`  Add "sender_user_id":"%s" to the request body.`, ev.User))
 
 	return strings.Join(lines, "\n")
 }
@@ -1101,40 +1099,24 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 	})
 }
 
-func (s *Channel) postReply(channelID, threadTS, text string) {
-	s.cfgMu.Lock()
-	api := s.api
-	s.cfgMu.Unlock()
-	s.withBackoff(func() error {
-		_, _, err := api.PostMessage(
-			channelID,
-			slackgo.MsgOptionText(text, false),
-			slackgo.MsgOptionTS(threadTS),
-		)
-		return err
-	})
-}
 
 func (s *Channel) postChunked(channelID, threadTS, text string) {
 	chunks := chunkText(text, maxSlackChunk)
-	footer := signedFooter()
+	// Footer only in DM sessions — Slack DM channel IDs always start with "D".
+	isDM := strings.HasPrefix(channelID, "D")
 	for i, chunk := range chunks {
 		msg := chunk
 		if i > 0 {
 			msg = "_(cont.)_\n" + chunk
 		}
-		if i == len(chunks)-1 && footer != "" {
-			msg += footer
+		if i == len(chunks)-1 && isDM {
+			s.postReplyWithFooter(channelID, threadTS, msg)
+		} else {
+			s.postReply(channelID, threadTS, msg)
 		}
-		s.postReply(channelID, threadTS, msg)
 	}
 }
 
-// signedFooter returns a Slack-formatted signature appended to the last
-// chunk of every agent reply — mirrors the "sent via Claude" footer style.
-func signedFooter() string {
-	return "\n\n_Sent by *wick* · " + appname.Resolve() + "_"
-}
 
 func chunkText(s string, max int) []string {
 	if len(s) <= max {
