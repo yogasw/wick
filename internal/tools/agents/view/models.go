@@ -104,6 +104,16 @@ type SessionsTableVM struct {
 	HasNext       bool
 }
 
+// TurnEventVM is one tool/thinking event within an assistant turn.
+type TurnEventVM struct {
+	Type      string // "tool_use" | "tool_result" | "thinking"
+	ToolName  string
+	ToolInput string
+	ToolUseID string
+	IsError   bool
+	Text      string
+}
+
 // TurnVM is one conversation turn for the UI.
 type TurnVM struct {
 	Role      string // "user" | "assistant" | "system"
@@ -111,6 +121,7 @@ type TurnVM struct {
 	Text      string
 	Truncated bool
 	Time      time.Time
+	Events    []TurnEventVM
 }
 
 // SessionDetailVM holds data for the Session detail page.

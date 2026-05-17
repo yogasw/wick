@@ -78,6 +78,8 @@ type AgentEvent struct {
 	Text      string // TextDelta / Thinking / ToolResult body
 	ToolName  string // ToolUse: tool identifier (e.g. "Bash")
 	ToolInput string // ToolUse: JSON-encoded arguments before exec
+	ToolUseID string // ToolUse + ToolResult: correlation ID to pair call with result
+	IsError   bool   // ToolResult: true when the tool returned an error
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
 	Raw       string // verbatim source line

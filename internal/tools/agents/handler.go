@@ -589,13 +589,24 @@ func sessionDetail(c *tool.Ctx) {
 			log.Ctx(c.Context()).Error().Msgf("load conversation %s: %s", id, err.Error())
 		}
 		for _, t := range raw {
-			turns = append(turns, view.TurnVM{
+			vm := view.TurnVM{
 				Role:      t.Role,
 				Agent:     t.Agent,
 				Text:      t.Text,
 				Truncated: t.Truncated,
 				Time:      t.Timestamp,
-			})
+			}
+			for _, e := range t.Events {
+				vm.Events = append(vm.Events, view.TurnEventVM{
+					Type:      e.Type,
+					ToolName:  e.ToolName,
+					ToolInput: e.ToolInput,
+					ToolUseID: e.ToolUseID,
+					IsError:   e.IsError,
+					Text:      e.Text,
+				})
+			}
+			turns = append(turns, vm)
 		}
 	case "commands":
 		lines, err := loadCommands(globalLayout, id)

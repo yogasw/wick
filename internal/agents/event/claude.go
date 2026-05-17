@@ -66,8 +66,11 @@ type claudeContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// thinking fields
+	Thinking string `json:"thinking,omitempty"`
 	// tool_result fields
 	ToolUseID string `json:"tool_use_id,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 	// tool_result.content can be a string OR an array of blocks; keep
 	// the raw bytes so we don't fight Anthropic's polymorphism here.
 	ResultContent json.RawMessage `json:"content,omitempty"`
@@ -128,16 +131,26 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 		}
 		for _, b := range raw.Message.Content {
-			if b.Type == "tool_use" {
+			switch b.Type {
+			case "tool_use":
 				return AgentEvent{
 					Type:      ToolUse,
 					ToolName:  b.Name,
 					ToolInput: string(b.Input),
+					ToolUseID: b.ID,
 					Raw:       trimmed,
 				}, nil
+			case "thinking":
+				if b.Thinking != "" {
+					return AgentEvent{
+						Type: Thinking,
+						Text: b.Thinking,
+						Raw:  trimmed,
+					}, nil
+				}
 			}
 		}
-		// No tool_use — return concatenated text as TextDelta.
+		// No tool_use/thinking — return concatenated text as TextDelta.
 		var buf strings.Builder
 		for _, b := range raw.Message.Content {
 			if b.Type == "text" {
@@ -163,9 +176,11 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		for _, b := range raw.Message.Content {
 			if b.Type == "tool_result" {
 				return AgentEvent{
-					Type: ToolResult,
-					Text: string(b.ResultContent),
-					Raw:  trimmed,
+					Type:      ToolResult,
+					Text:      string(b.ResultContent),
+					ToolUseID: b.ToolUseID,
+					IsError:   b.IsError,
+					Raw:       trimmed,
 				}, nil
 			}
 		}

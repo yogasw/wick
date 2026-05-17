@@ -611,21 +611,97 @@ templ assistantTurn(t TurnVM) {
 				<path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path>
 			</svg>
 		</div>
-		<div class="flex flex-col gap-1 max-w-[80%] min-w-0">
+		<div class="flex flex-col gap-1.5 max-w-[80%] min-w-0" data-turn-events>
 			if t.Agent != "" {
 				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ t.Agent }</span>
 			}
-			<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
-				<div class="prose-turn" data-md>{ t.Text }</div>
-				if t.Truncated {
-					<p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
-				}
-			</div>
+			if len(t.Events) > 0 {
+				<div class="flex flex-col gap-1">
+					<button
+						type="button"
+						onclick="var c=this.closest('[data-turn-events]');var w=c.querySelector('[data-trace-wrap]');w.classList.toggle('hidden');var open=!w.classList.contains('hidden');this.querySelector('[data-chevron]').style.transform=open?'':'rotate(-90deg)';this.querySelector('[data-trace-label]').textContent=open?'hide trace':'show trace';"
+						class="self-start flex items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5"
+					>
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>
+						<span data-trace-label>show trace</span>
+						<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+					</button>
+					<div data-trace-wrap class="hidden flex flex-col gap-1">
+						for _, ev := range t.Events {
+							@turnEventCard(ev)
+						}
+					</div>
+				</div>
+			}
+			if t.Text != "" {
+				<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
+					<div class="prose-turn" data-md>{ t.Text }</div>
+					if t.Truncated {
+						<p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
+					}
+				</div>
+			}
 			if !t.Time.IsZero() {
 				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
 			}
 		</div>
 	</div>
+}
+
+templ turnEventCard(ev TurnEventVM) {
+	switch ev.Type {
+		case "thinking":
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs">
+				<button
+					type="button"
+					onclick="var b=this.parentElement.querySelector('[data-thinking-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
+					class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-600 dark:text-black-700"
+				>
+					<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5.5v3l1.5 1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+					<span class="italic">thinking</span>
+					<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				</button>
+				<div data-thinking-body class="hidden border-t border-white-300 dark:border-navy-600 px-3 py-2 italic text-black-600 dark:text-black-700 leading-relaxed break-words text-xs">{ ev.Text }</div>
+			</div>
+		case "tool_use":
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs">
+				<button
+					type="button"
+					onclick="var b=this.parentElement.querySelector('[data-tool-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
+					class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+				>
+					<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path><path d="M6 8h4" stroke-linecap="round"></path></svg>
+					<span class="font-mono font-medium text-black-900 dark:text-white-100">{ ev.ToolName }</span>
+					<span class="ml-auto text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide shrink-0">tool call</span>
+					<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				</button>
+				if ev.ToolInput != "" {
+					<div data-tool-body class="hidden border-t border-white-300 dark:border-navy-600">
+						<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{ ev.ToolInput }</pre>
+					</div>
+				}
+			</div>
+		case "tool_result":
+			<div class={ "rounded-xl border overflow-hidden text-xs", templ.KV("border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20", ev.IsError), templ.KV("border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900", !ev.IsError) }>
+				<button
+					type="button"
+					onclick="var b=this.parentElement.querySelector('[data-result-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
+					class={ "flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors", templ.KV("text-red-600 dark:text-red-400", ev.IsError), templ.KV("text-black-600 dark:text-black-700", !ev.IsError) }
+				>
+					if ev.IsError {
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v4M8 11v.5" stroke-linecap="round"></path></svg>
+						<span class="text-[10px] uppercase tracking-wide shrink-0">error</span>
+					} else {
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l3 3 7-7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+						<span class="text-[10px] uppercase tracking-wide shrink-0">result</span>
+					}
+					<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				</button>
+				<div data-result-body class="hidden border-t border-white-300 dark:border-navy-600">
+					<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{ ev.Text }</pre>
+				</div>
+			</div>
+	}
 }
 
 templ systemTurn(t TurnVM) {
