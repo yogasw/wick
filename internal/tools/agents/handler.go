@@ -236,9 +236,14 @@ func settingsPage(c *tool.Ctx) {
 	rows := globalConfigs.ListOwned("agents")
 	// Split system_prompt_append out — rendered in its own panel with a
 	// Reset button. The rest fall through to the generic ConfigsTable.
+	// Skip Hidden rows — those belong to dedicated pages (Channels,
+	// Providers, Workspaces) and must not leak onto generic Settings.
 	current := ""
 	rest := rows[:0:len(rows)]
 	for _, r := range rows {
+		if r.Hidden {
+			continue
+		}
 		if r.Key == "system_prompt" {
 			current = r.Value
 			continue
