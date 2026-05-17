@@ -388,6 +388,55 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 	}
 }
 
+// hasCycle reports whether the graph contains at least one cycle using
+// iterative DFS with a recursion-stack colour map (white/grey/black).
+// This provides an independent cycle check complementary to DetectCycle.
+func hasCycle(g workflow.Graph) bool {
+	adj := map[string][]string{}
+	for _, n := range g.Nodes {
+		adj[n.ID] = nil // ensure every node is present even with no edges
+	}
+	for _, e := range g.Edges {
+		if _, ok := adj[e.From]; ok {
+			if _, ok := adj[e.To]; ok {
+				adj[e.From] = append(adj[e.From], e.To)
+			}
+		}
+	}
+	// colour: 0 = white (unvisited), 1 = grey (in stack), 2 = black (done)
+	colour := map[string]int{}
+	type frame struct {
+		node    string
+		nbIndex int
+	}
+	for start := range adj {
+		if colour[start] != 0 {
+			continue
+		}
+		stack := []frame{{node: start, nbIndex: 0}}
+		colour[start] = 1
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			neighbours := adj[top.node]
+			if top.nbIndex < len(neighbours) {
+				nb := neighbours[top.nbIndex]
+				top.nbIndex++
+				if colour[nb] == 1 {
+					return true // back-edge → cycle
+				}
+				if colour[nb] == 0 {
+					colour[nb] = 1
+					stack = append(stack, frame{node: nb, nbIndex: 0})
+				}
+			} else {
+				colour[top.node] = 2
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	return false
+}
+
 // DetectCycle returns the IDs of nodes participating in a cycle, or
 // nil if the graph is acyclic. Uses Kahn's topological sort.
 func DetectCycle(g workflow.Graph) []string {
