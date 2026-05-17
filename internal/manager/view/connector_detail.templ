@@ -86,6 +86,9 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 					Per-row values shared by every operation on this connector. Read in handler code via <code class="font-mono text-xs">c.Cfg(...)</code>.
 				</p>
 				@ConfigsTable(configs, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/configs", editKey, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID)
+			if mod.Meta.Key == "slack" && slackOAuthReady(configs) {
+				@slackConnectButton(row.ID, slackConnectedUser(configs))
+			}
 			</section>
 
 			<!-- Rate Limit -->
@@ -303,6 +306,65 @@ templ operationRow(key, rowID string, op connector.Operation, st connectors.OpSt
 			}
 		</td>
 	</tr>
+}
+
+// slackOAuthReady returns true when this connector row has auth_mode=user_token
+// AND client_id is filled — meaning the "Connect with Slack" button can work.
+func slackOAuthReady(configs []entity.Config) bool {
+	authMode := ""
+	clientID := ""
+	for _, c := range configs {
+		switch c.Key {
+		case "auth_mode":
+			authMode = c.Value
+		case "client_id":
+			clientID = c.Value
+		}
+	}
+	return authMode == "user_token" && clientID != ""
+}
+
+// slackConnectedUser returns the current connected Slack username if user_token
+// is set, otherwise empty string.
+func slackConnectedUser(configs []entity.Config) string {
+	for _, c := range configs {
+		if c.Key == "connected_user" {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// slackConnectButton renders the "Connect with Slack" OAuth button.
+templ slackConnectButton(rowID string, connectedUser string) {
+	<div class="mt-4 rounded-lg border border-white-400 dark:border-navy-600 bg-white-50 dark:bg-navy-800 p-4">
+		<div class="flex items-center justify-between">
+			<div>
+				<p class="text-sm font-medium text-black-900 dark:text-white-100">Slack Account</p>
+				if connectedUser != "" {
+					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connected as <strong>@{ connectedUser }</strong></p>
+				} else {
+					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connect your Slack account to enable sending messages as you.</p>
+				}
+			</div>
+			<a
+				href={ templ.SafeURL("/integrations/slack/oauth/start?connector_id=" + rowID) }
+				class="inline-flex items-center gap-2 rounded-lg bg-[#4A154B] px-4 py-2 text-sm font-medium text-white hover:bg-[#3d1040] transition-colors"
+			>
+				<svg width="16" height="16" viewBox="0 0 54 54" fill="none" xmlns="http://www.w3.org/2000/svg">
+					<path d="M19.712.133a5.381 5.381 0 0 0-5.376 5.387 5.381 5.381 0 0 0 5.376 5.386h5.376V5.52A5.381 5.381 0 0 0 19.712.133m0 14.365H5.376A5.381 5.381 0 0 0 0 19.884a5.381 5.381 0 0 0 5.376 5.387h14.336a5.381 5.381 0 0 0 5.376-5.387 5.381 5.381 0 0 0-5.376-5.386" fill="#36C5F0"/>
+					<path d="M53.76 19.884a5.381 5.381 0 0 0-5.376-5.386 5.381 5.381 0 0 0-5.376 5.386v5.387h5.376a5.381 5.381 0 0 0 5.376-5.387m-14.336 0V5.52A5.381 5.381 0 0 0 34.048.133a5.381 5.381 0 0 0-5.376 5.387v14.364a5.381 5.381 0 0 0 5.376 5.387 5.381 5.381 0 0 0 5.376-5.387" fill="#2EB67D"/>
+					<path d="M34.048 54a5.381 5.381 0 0 0 5.376-5.387 5.381 5.381 0 0 0-5.376-5.386h-5.376v5.386A5.381 5.381 0 0 0 34.048 54m0-14.365h14.336a5.381 5.381 0 0 0 5.376-5.386 5.381 5.381 0 0 0-5.376-5.387H34.048a5.381 5.381 0 0 0-5.376 5.387 5.381 5.381 0 0 0 5.376 5.386" fill="#ECB22E"/>
+					<path d="M0 34.249a5.381 5.381 0 0 0 5.376 5.386 5.381 5.381 0 0 0 5.376-5.386v-5.387H5.376A5.381 5.381 0 0 0 0 34.25m14.336 0v14.364A5.381 5.381 0 0 0 19.712 54a5.381 5.381 0 0 0 5.376-5.387V34.25a5.381 5.381 0 0 0-5.376-5.387 5.381 5.381 0 0 0-5.376 5.387" fill="#E01E5A"/>
+				</svg>
+				if connectedUser != "" {
+					Reconnect Slack
+				} else {
+					Connect with Slack
+				}
+			</a>
+		</div>
+	</div>
 }
 
 templ runStatusBadge(s entity.ConnectorRunStatus) {

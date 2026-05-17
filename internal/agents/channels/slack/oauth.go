@@ -34,20 +34,23 @@ import (
 	slackgo "github.com/slack-go/slack"
 )
 
-// OAuthConfig holds the Slack app credentials needed for user OAuth flow.
+// OAuthConfig holds the Slack OAuth flow dependencies.
 type OAuthConfig struct {
-	ClientID     string
-	ClientSecret string
-	RedirectURI  string
-	// OnTokenSaved is called after a successful OAuth exchange with the
-	// user's Slack ID, display name, and xoxp token. Server.go wires this
-	// to upsert the connector row and refresh the token map.
-	OnTokenSaved func(ctx context.Context, slackUserID, displayName, xoxpToken string) error
+	RedirectURI string
+	// CredentialsFor returns the client_id and client_secret for a given
+	// connector row ID. Server.go wires this to read from the connector row
+	// configs — keeping credentials in the connector, not the channel config.
+	CredentialsFor func(ctx context.Context, connectorRowID string) (clientID, clientSecret string, err error)
+	// OnTokenSaved is called after a successful OAuth exchange.
+	// connectorRowID is the row that was updated (from the start URL param).
+	OnTokenSaved func(ctx context.Context, slackUserID, displayName, xoxpToken, connectorRowID string) error
 }
 
-// oauthStateEntry stores a pending OAuth state with its expiry.
+// oauthStateEntry stores a pending OAuth state with its expiry and optional
+// connector row ID so the callback knows which row to update.
 type oauthStateEntry struct {
-	expiresAt time.Time
+	expiresAt      time.Time
+	connectorRowID string // non-empty = update this specific row
 }
 
 // oauthStartHandler redirects the browser to the Slack OAuth consent page.
@@ -59,8 +62,21 @@ func (s *Channel) oauthStartHandler() http.Handler {
 		cfg := s.oauthCfg
 		s.cfgMu.Unlock()
 
-		if cfg.ClientID == "" {
-			http.Error(w, "Slack OAuth not configured (missing client_id)", http.StatusServiceUnavailable)
+		if cfg.CredentialsFor == nil {
+			http.Error(w, "Slack OAuth not configured", http.StatusServiceUnavailable)
+			return
+		}
+
+		// connector_id is required — credentials are read from the connector row.
+		connectorRowID := r.URL.Query().Get("connector_id")
+		if connectorRowID == "" {
+			http.Error(w, "connector_id is required", http.StatusBadRequest)
+			return
+		}
+
+		clientID, _, err := cfg.CredentialsFor(r.Context(), connectorRowID)
+		if err != nil || clientID == "" {
+			http.Error(w, "connector row missing client_id — set it in the connector credentials first", http.StatusBadRequest)
 			return
 		}
 
@@ -71,18 +87,18 @@ func (s *Channel) oauthStartHandler() http.Handler {
 			return
 		}
 
-		// Store state with 10-minute expiry.
-		s.oauthPending.Store(state, oauthStateEntry{expiresAt: time.Now().Add(10 * time.Minute)})
+		s.oauthPending.Store(state, oauthStateEntry{
+			expiresAt:      time.Now().Add(10 * time.Minute),
+			connectorRowID: connectorRowID,
+		})
 
-		// Build Slack OAuth URL with user scopes.
 		params := url.Values{}
-		params.Set("client_id", cfg.ClientID)
-		params.Set("user_scope", "chat:write,im:write,channels:read,users:read")
+		params.Set("client_id", clientID)
+		params.Set("user_scope", "chat:write,im:write,channels:read,users:read,chat:write.customize")
 		params.Set("redirect_uri", cfg.RedirectURI)
 		params.Set("state", state)
 
-		slackURL := "https://slack.com/oauth/v2/authorize?" + params.Encode()
-		http.Redirect(w, r, slackURL, http.StatusTemporaryRedirect)
+		http.Redirect(w, r, "https://slack.com/oauth/v2/authorize?"+params.Encode(), http.StatusTemporaryRedirect)
 	})
 }
 
@@ -132,13 +148,19 @@ func (s *Channel) oauthCallbackHandler() http.Handler {
 		cfg := s.oauthCfg
 		s.cfgMu.Unlock()
 
-		if cfg.ClientID == "" || cfg.ClientSecret == "" {
+		if cfg.CredentialsFor == nil {
 			http.Error(w, "Slack OAuth not configured", http.StatusServiceUnavailable)
 			return
 		}
 
+		clientID, clientSecret, err := cfg.CredentialsFor(r.Context(), entry.connectorRowID)
+		if err != nil || clientID == "" || clientSecret == "" {
+			http.Error(w, "connector credentials not found", http.StatusBadRequest)
+			return
+		}
+
 		// Exchange code for token via Slack API.
-		resp, err := slackgo.GetOAuthV2ResponseContext(r.Context(), http.DefaultClient, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI)
+		resp, err := slackgo.GetOAuthV2ResponseContext(r.Context(), http.DefaultClient, clientID, clientSecret, code, cfg.RedirectURI)
 		if err != nil {
 			log.Error().Err(err).Msg("slack oauth: token exchange failed")
 			http.Error(w, "token exchange failed: "+err.Error(), http.StatusBadGateway)
@@ -166,9 +188,9 @@ func (s *Channel) oauthCallbackHandler() http.Handler {
 			log.Warn().Err(err).Str("user_id", slackUserID).Msg("slack oauth: auth.test failed; using user ID as display name")
 		}
 
-		// Persist token via callback.
+		// Persist token — pass connector row ID so server.go updates the right row.
 		if cfg.OnTokenSaved != nil {
-			if saveErr := cfg.OnTokenSaved(r.Context(), slackUserID, displayName, xoxpToken); saveErr != nil {
+			if saveErr := cfg.OnTokenSaved(r.Context(), slackUserID, displayName, xoxpToken, entry.connectorRowID); saveErr != nil {
 				log.Error().Err(saveErr).Str("user_id", slackUserID).Msg("slack oauth: OnTokenSaved failed")
 				http.Error(w, "failed to save token: "+saveErr.Error(), http.StatusInternalServerError)
 				return
@@ -185,17 +207,25 @@ func (s *Channel) oauthCallbackHandler() http.Handler {
 		s.userTokenMu.Unlock()
 
 		log.Info().Str("user_id", slackUserID).Str("display_name", displayName).
+			Str("connector_row_id", entry.connectorRowID).
 			Msg("slack oauth: user token saved successfully")
 
-		// Show a simple success page.
+		// Redirect to connector detail page if we know which row was updated,
+		// otherwise show a success page with a link back.
+		if entry.connectorRowID != "" {
+			http.Redirect(w, r,
+				"/manager/connectors/slack/"+entry.connectorRowID+"?oauth=success&user="+url.QueryEscape(displayName),
+				http.StatusSeeOther)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>Slack Connected</title></head>
 <body style="font-family:sans-serif;max-width:480px;margin:60px auto;text-align:center">
   <h2>&#x2713; Slack connected</h2>
-  <p>Your Slack account (<strong>@%s</strong>) has been connected to wick.<br>
-  You can close this window.</p>
+  <p>Your Slack account (<strong>@%s</strong>) has been connected to wick.</p>
+  <p><a href="/manager/connectors/slack">Back to Slack connectors</a></p>
 </body>
 </html>`, strings.ReplaceAll(displayName, "<", "&lt;"))
 	})

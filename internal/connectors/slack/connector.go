@@ -29,7 +29,9 @@ const defaultBaseURL = "https://slack.com/api"
 type Configs struct {
 	AuthMode  string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface; user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
 	BotToken  string `wick:"secret;visible_when=auth_mode:bot_token;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read."`
-	UserToken string `wick:"secret;visible_when=auth_mode:user_token;desc=User OAuth Token (xoxp-...). Use when the workflow needs to act as a specific Slack user (e.g. search.messages, posting as a human)."`
+	UserToken string `wick:"secret;visible_when=auth_mode:user_token;desc=User OAuth Token (xoxp-...). Filled automatically by the Connect with Slack button, or paste manually."`
+	ClientID  string `wick:"visible_when=auth_mode:user_token;key=client_id;desc=Slack app Client ID. Required to show the Connect with Slack button for one-click OAuth. Find it at api.slack.com/apps → your app → Basic Information."`
+	ClientSecret string `wick:"secret;visible_when=auth_mode:user_token;key=client_secret;desc=Slack app Client Secret. Required for OAuth. Find it at api.slack.com/apps → your app → Basic Information."`
 }
 
 // ── Input structs ────────────────────────────────────────────────────

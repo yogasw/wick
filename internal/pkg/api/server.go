@@ -642,13 +642,26 @@ func NewServer() *Server {
 				}
 			}(slackCh)
 
-			// Wire OAuth config so the /oauth/start + /oauth/callback routes work.
+			// Wire OAuth config — credentials are read from the specific connector
+			// row, not from channel config. This makes the pattern reusable for
+			// other connectors (Google, GitHub, etc.) in the future.
 			slackCh.SetOAuthConfig(slackch.OAuthConfig{
-				ClientID:     configsSvc.GetOwned("agents", "slack_client_id"),
-				ClientSecret: configsSvc.GetOwned("agents", "slack_client_secret"),
-				RedirectURI:  strings.TrimRight(configsSvc.AppURL(), "/") + "/integrations/slack/oauth/callback",
-				OnTokenSaved: func(ctx context.Context, slackUserID, displayName, xoxpToken string) error {
-					return slackOAuthSaveToken(ctx, connectorsSvc, slackCh, slackUserID, displayName, xoxpToken)
+				RedirectURI: strings.TrimRight(configsSvc.AppURL(), "/") + "/integrations/slack/oauth/callback",
+				CredentialsFor: func(ctx context.Context, connectorRowID string) (clientID, clientSecret string, err error) {
+					rows, listErr := connectorsSvc.ListByKey(ctx, "slack")
+					if listErr != nil {
+						return "", "", listErr
+					}
+					for _, row := range rows {
+						if row.ID == connectorRowID {
+							cfgs := connectorsSvc.LoadConfigs(row)
+							return strings.TrimSpace(cfgs["client_id"]), strings.TrimSpace(cfgs["client_secret"]), nil
+						}
+					}
+					return "", "", fmt.Errorf("connector row %s not found", connectorRowID)
+				},
+				OnTokenSaved: func(ctx context.Context, slackUserID, displayName, xoxpToken, connectorRowID string) error {
+					return slackOAuthSaveToken(ctx, connectorsSvc, slackCh, slackUserID, displayName, xoxpToken, connectorRowID)
 				},
 			})
 
@@ -972,42 +985,56 @@ func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[st
 // updates that row in place. If not found, it creates a new connector row.
 // After saving, it triggers a RefreshTokenMap on the channel so the
 // in-memory cache reflects the new token immediately.
-func slackOAuthSaveToken(ctx context.Context, svc *connectors.Service, ch *slackch.Channel, slackUserID, displayName, xoxpToken string) error {
+// slackOAuthSaveToken persists an xoxp token from the Slack OAuth flow.
+// When connectorRowID is non-empty, it updates that specific row directly
+// (triggered from the "Connect with Slack" button on the connector detail page).
+// Otherwise it scans for an existing row for this user or creates a new one.
+func slackOAuthSaveToken(ctx context.Context, svc *connectors.Service, ch *slackch.Channel, slackUserID, displayName, xoxpToken, connectorRowID string) error {
+	// Fast path: connector_id known — update that row directly.
+	if connectorRowID != "" {
+		rows, err := svc.ListByKey(ctx, "slack")
+		if err != nil {
+			return fmt.Errorf("slack oauth save: list connectors: %w", err)
+		}
+		for _, row := range rows {
+			if row.ID == connectorRowID {
+				if err := svc.Update(ctx, row.ID, row.Label, map[string]string{
+					"auth_mode":  "user_token",
+					"user_token": xoxpToken,
+				}, row.Disabled); err != nil {
+					return fmt.Errorf("slack oauth save: update row %s: %w", row.ID, err)
+				}
+				log.Info().Str("user_id", slackUserID).Str("connector_id", row.ID).
+					Msg("slack oauth: updated connector row (from detail page button)")
+				ch.RefreshTokenMap(ctx)
+				return nil
+			}
+		}
+	}
+
+	// Slow path: scan for existing user_token row for this user.
 	rows, err := svc.ListByKey(ctx, "slack")
 	if err != nil {
 		return fmt.Errorf("slack oauth save: list connectors: %w", err)
 	}
-
-	// Look for an existing user_token row for this Slack user.
 	for _, row := range rows {
 		cfgs := svc.LoadConfigs(row)
 		if strings.TrimSpace(cfgs["auth_mode"]) != "user_token" {
 			continue
 		}
-		existingTok := strings.TrimSpace(cfgs["user_token"])
-		if existingTok == "" {
-			continue
-		}
-		uid, err := slackch.AuthTestWithToken(ctx, existingTok)
-		if err != nil {
-			// Token may be revoked; skip and continue scanning.
-			continue
-		}
-		if uid == slackUserID {
-			// Update the existing row with the fresh token.
+		if uid, err := slackch.AuthTestWithToken(ctx, strings.TrimSpace(cfgs["user_token"])); err == nil && uid == slackUserID {
 			if err := svc.Update(ctx, row.ID, row.Label, map[string]string{"user_token": xoxpToken}, row.Disabled); err != nil {
-				return fmt.Errorf("slack oauth save: update connector row %s: %w", row.ID, err)
+				return fmt.Errorf("slack oauth save: update row %s: %w", row.ID, err)
 			}
 			log.Info().Str("user_id", slackUserID).Str("connector_id", row.ID).
-				Msg("slack oauth: updated existing connector row with new token")
+				Msg("slack oauth: updated existing connector row")
 			ch.RefreshTokenMap(ctx)
 			return nil
 		}
 	}
 
-	// No existing row found — create a new connector row.
-	label := "Slack – @" + displayName
-	newRow, err := svc.Create(ctx, "slack", label, map[string]string{
+	// No existing row — create new.
+	newRow, err := svc.Create(ctx, "slack", "Slack – @"+displayName, map[string]string{
 		"auth_mode":  "user_token",
 		"user_token": xoxpToken,
 	}, "oauth")
