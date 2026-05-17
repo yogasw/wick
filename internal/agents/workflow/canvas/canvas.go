@@ -10,6 +10,8 @@ package canvas
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
@@ -55,7 +57,9 @@ func (c *Canvas) UpdateNode(slug, nodeID string, patch map[string]any) (workflow
 		if idx < 0 {
 			return fmt.Errorf("node %q not found", nodeID)
 		}
-		applyNodePatch(&w.Graph.Nodes[idx], patch)
+		if err := applyNodePatch(&w.Graph.Nodes[idx], patch); err != nil {
+			return err
+		}
 		return nil
 	})
 }
@@ -63,6 +67,9 @@ func (c *Canvas) UpdateNode(slug, nodeID string, patch map[string]any) (workflow
 // DeleteNode removes a node and every edge touching it.
 func (c *Canvas) DeleteNode(slug, nodeID string) (workflow.Workflow, error) {
 	return c.mutate(slug, func(w *workflow.Workflow) error {
+		if w.Graph.Entry == nodeID {
+			return fmt.Errorf("cannot delete entry node %q — reassign graph.entry to another node first", nodeID)
+		}
 		idx := -1
 		for i, n := range w.Graph.Nodes {
 			if n.ID == nodeID {
@@ -182,7 +189,24 @@ func indexNodes(g workflow.Graph) map[string]workflow.Node {
 	return m
 }
 
-func applyNodePatch(n *workflow.Node, patch map[string]any) {
+func applyNodePatch(n *workflow.Node, patch map[string]any) error {
+	knownKeys := map[string]struct{}{
+		"label": {}, "description": {}, "prompt": {}, "prompt_file": {},
+		"timeout_sec": {}, "on_failure": {}, "fallback": {}, "provider": {},
+		"preset": {}, "session": {}, "output_cases": {}, "expr": {},
+		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
+		"row_id": {}, "args": {}, "command": {},
+	}
+	var unknown []string
+	for k := range patch {
+		if _, ok := knownKeys[k]; !ok {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown patch key(s): %s", strings.Join(unknown, ", "))
+	}
 	if v, ok := patch["label"].(string); ok {
 		n.Label = v
 	}
@@ -255,4 +279,5 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) {
 		}
 		n.Command = out
 	}
+	return nil
 }
