@@ -269,8 +269,9 @@ Clients (--client):
 				return err
 			}
 			if name == "" {
-				name = filepath.Base(cwd)
+				name = BuildAppName
 			}
+			fmt.Fprintf(os.Stdout, "%s %s (wick %s)\n", BuildAppName, BuildAppVersion, BuildWickVersion)
 			entry, err := mcpconfig.SelfEntry()
 			if err != nil {
 				return err
@@ -355,9 +356,9 @@ func Run() {
 	defaultPort := config.Load().App.Port
 	var port int
 	root := &cobra.Command{
-		Use:   "app",
-		Short: "wick-powered service",
-		Long:  "Run with no args to launch the system tray. Use subcommands for headless server / worker / MCP / install.",
+		Use:   BuildAppName,
+		Short: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")",
+		Long:  BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")\n\nRun with no args to launch the system tray. Use subcommands for headless server / worker / MCP / install.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
