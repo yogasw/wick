@@ -25,9 +25,13 @@ var embeddedGateFS embed.FS
 // default.
 func AppName() string {
 	if exe, err := os.Executable(); err == nil {
-		stem := strings.TrimSuffix(filepath.Base(exe), ".exe")
-		stem = strings.TrimSuffix(stem, "-gate")
-		if stem != "" && stem != "gate" {
+		base := strings.TrimSuffix(filepath.Base(exe), ".exe")
+		// Only derive from exe name for explicit gate sidecars (must carry
+		// the -gate suffix). Non-gate binaries (server "lab", "wick-lab",
+		// embedded "gate") must fall through to appname.Resolve() so the
+		// BuildAppName ldflag — baked into both server and gate builds — is
+		// the single source of truth regardless of how the binary is named.
+		if stem, ok := strings.CutSuffix(base, "-gate"); ok && stem != "" {
 			return stem
 		}
 	}
