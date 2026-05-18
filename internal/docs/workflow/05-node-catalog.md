@@ -748,15 +748,18 @@ errors awal.
 ### Output reference syntax
 
 Template var:
-- `{{.Node.<id>}}` — full output object
-- `{{.Node.<id>.<field>}}` — sub-field
-- `{{.Node.<id>.<field> | <filter>}}` — Go template pipe filter
-- `{{.Event.*}}` — trigger event
+- `{{.Node.<label>}}` — full output object (label is the user-facing name shown in the inspector; falls back to id when label empty)
+- `{{.Node.<label>.<field>}}` — sub-field
+- `{{.Node.<label>.<field> | <filter>}}` — Go template pipe filter
+- **Trigger nodes** also live under `.Node.<label>` — payload at `{{.Node.<trigger-label>.payload.<key>}}`, envelope keys `type/subtype/channel/at` directly under the trigger label
+- `{{.Event.*}}` — **legacy**, still resolved by the engine for older workflows; new workflows should use `{{.Node.<trigger-label>.payload.…}}` so triggers and regular nodes share the same access pattern
 - `{{.Env.<NAME>}}` — workflow env value, from `env.yaml` (UI-managed, hand-edit OK) — lihat §11
 - `{{.Secret.<NAME>}}` — encrypted secret, decrypt runtime. Schema declare `widget: secret` di workflow.yaml, value stored encrypted di `env.yaml` — lihat §11
 - `{{.Workflow.<field>}}` — workflow metadata (ID, Version, Name)
 - `{{.Run.<field>}}` — runtime metadata (ID, StartedAt)
 - `{{.Dataset.<alias>}}` — dataset binding from `datasets:` field — lihat §12
+
+**Label vs id:** Inspector exposes `label` (free-form, must be a Go identifier — letters/digits/underscore, no spaces, unique within workflow). Renaming a label cascades through every `{{.Node.<old>...}}` reference, `index .Node "<old>"` form, graph edges, trigger `entry_node`, and `session_from`. The internal numeric Drawflow id stays stable so saved YAML and runtime state survive renames. When label is empty or not a valid identifier the canvas falls back to id for the template path.
 
 ---
 

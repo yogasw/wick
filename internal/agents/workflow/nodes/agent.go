@@ -80,9 +80,13 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	if err != nil {
 		return workflow.NodeOutput{}, err
 	}
-	prompt, err := template.Render(n.Prompt, rc.RenderCtx())
-	if err != nil {
-		return workflow.NodeOutput{}, err
+	prompt := n.Prompt
+	if n.ArgModes["prompt"] != "fixed" {
+		rendered, err := template.Render(n.Prompt, rc.RenderCtx())
+		if err != nil {
+			return workflow.NodeOutput{}, err
+		}
+		prompt = rendered
 	}
 	if err := validateSkills(ctx, prov, n.Skills); err != nil {
 		return workflow.NodeOutput{}, err

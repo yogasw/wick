@@ -126,7 +126,7 @@ func TestUseCase_MultiTrigger_RouterRegistersAll(t *testing.T) {
 		Enabled: true,
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerCron, Schedule: "0 8 * * *"},
-			{Type: workflow.TriggerManual, Label: "Run now"},
+			{Type: workflow.TriggerManual, Label: "run_now"},
 			{Type: workflow.TriggerWebhook, Path: "/hooks/uc-multi"},
 		},
 		Graph: workflow.Graph{

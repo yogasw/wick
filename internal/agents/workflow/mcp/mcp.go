@@ -101,9 +101,10 @@ func (m *Ops) Workspace() map[string]any {
 func WorkspaceFormatContracts() map[string]any {
 	return map[string]any{
 		"event_payload": map[string]any{
-			"rule":    "workflow.Event has no shorthand fields. All event data lives in Payload map.",
-			"correct": `{{index .Event.Payload "key"}}`,
-			"wrong":   []string{"{{.Event.User}}", "{{.Event.Text}}", "{{.Event.Ts}}", "{{.Event.TriggerId}}"},
+			"rule":      "Every trigger and node lives under .Node.<label>. Trigger payload at .Node.<trigger-label>.payload.<key>. Use {{index .Node.<label>.payload \"key\"}} when the key has special chars; dotted form works for plain identifiers. Legacy .Event.Payload still resolves but new workflows should use .Node.<label>.",
+			"correct":   `{{.Node.<trigger-label>.payload.text}}  OR  {{index .Node.<trigger-label>.payload "channel_id"}}`,
+			"wrong":     []string{"{{.Event.User}}", "{{.Event.Text}}", "{{.Event.Ts}}", "{{.Event.TriggerId}}"},
+			"deprecated": []string{`{{index .Event.Payload "key"}}`},
 			"common_keys": map[string]any{
 				"message":      []string{"text", "ts", "user", "channel_id", "thread", "is_dm"},
 				"block_action": []string{"trigger_id", "action_id", "value", "user", "channel_id", "ts"},
@@ -145,20 +146,23 @@ func WorkspaceFormatContracts() map[string]any {
 		},
 		"template_functions": map[string]any{
 			"available":     wftemplate.BuiltinFuncDocs,
-			"NOT available": []string{"js", "trunc", "date", "fromJson", "sprig functions"},
+			"NOT available": []string{"js", "trunc", "date", "sprig functions"},
 			"usage": map[string]string{
-				"embed in JSON body": `"title": "{{jsonEscape (index .Event.Payload \"text\")}}"`,
-				"current timestamp":  `{{now "2006-01-02T15:04:05Z07:00"}}`,
-				"marshal map":        `{{toJSON .Node.somenode.row}}`,
+				"embed in JSON body":       `"title": "{{jsonEscape (index .Node.trigger.payload \"text\")}}"`,
+				"current timestamp":        `{{now "2006-01-02T15:04:05Z07:00"}}`,
+				"marshal map":              `{{toJSON .Node.somenode.row}}`,
+				"parse JSON string":        `{{(.Node.summarize.text | fromJson).title}}`,
 			},
 		},
 		"node_output": map[string]any{
-			"rule":    "Reference upstream node output via {{.Node.<id>.<field>}}. Node ID must use underscore or camelCase — dash is invalid in Go templates.",
+			"rule":    "Reference any node (triggers + downstream) via {{.Node.<label>.<field>}}. Label is the user-facing name in the inspector and MUST be a Go identifier (letters/digits/underscore, no spaces, no dash). When label is empty the engine falls back to the node id. Triggers expose {payload, type, subtype, channel, at}; regular nodes expose their declared output fields.",
 			"examples": map[string]string{
-				"transform": "{{.Node.build.result}}",
-				"agent":     "{{.Node.summarize.text}}",
-				"send_message": "{{.Node.sendmsg.ts}}",
-				"open_modal":   "{{.Node.openmodal.view_id}}",
+				"trigger payload": "{{.Node.slack_msg.payload.text}}",
+				"trigger field":   `{{index .Node.slack_msg.payload "channel_id"}}`,
+				"transform":       "{{.Node.build.result}}",
+				"agent":           "{{.Node.summarize.text}}",
+				"send_message":    "{{.Node.sendmsg.ts}}",
+				"open_modal":      "{{.Node.openmodal.view_id}}",
 			},
 		},
 	}

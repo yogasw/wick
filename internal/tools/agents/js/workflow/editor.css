@@ -645,10 +645,18 @@
   outline: none;
 }
 .wf-input:focus { border-color: #ef4444; }
+.wf-input.wf-input-error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+}
 .dark .wf-input {
   background: #1e293b;
   border-color: #334155;
   color: #f1f5f9;
+}
+.dark .wf-input.wf-input-error {
+  border-color: #f87171;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.24);
 }
 
 /* ── Floating Execute workflow pill + trigger picker ─────────── */

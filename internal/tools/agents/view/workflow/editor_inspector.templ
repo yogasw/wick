@@ -79,9 +79,18 @@ templ EditorInspector(vm EditorVM) {
 						<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Label</label>
 						<input id="ins-label" type="text" class="wf-input"/>
 
-						<div id="ins-prompt-panel" class="hidden">
-							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Prompt</label>
-							<textarea id="ins-prompt" class="wf-input font-mono" rows="6"></textarea>
+						<div id="ins-prompt-panel" class="hidden mt-3">
+							<div class="wf-arg-field" data-field-key="prompt">
+								<div class="wf-arg-field-head">
+									<label class="wf-arg-field-label">Prompt</label>
+									<div class="wf-arg-mode">
+										<button type="button" data-arg-mode="fixed">Fixed</button>
+										<button type="button" data-arg-mode="expression">Expression</button>
+									</div>
+								</div>
+								<textarea id="ins-prompt" name="value" data-field-key="prompt" class="wf-input font-mono" rows="6"></textarea>
+								<div data-arg-preview class="wf-arg-preview"></div>
+							</div>
 						</div>
 
 						<div id="ins-cases-panel" class="hidden">

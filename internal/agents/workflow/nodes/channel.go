@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
@@ -67,11 +68,40 @@ func (e *ChannelExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("%s: %w", key, err)
 	}
-	out := workflow.NodeOutput{Result: result, Fields: map[string]any{"result": result}}
-	if m, ok := result.(map[string]any); ok {
-		for k, v := range m {
-			out.Fields[k] = v
-		}
+	// Convert typed struct → map[string]any via JSON tags so templates
+	// can drill into `.result.<json-tag>` (Go text/template can't reflect
+	// into an `interface{}` to reach struct fields by tag name).
+	flat := flattenFields(result)
+	var resultVal any = flat
+	if flat == nil {
+		resultVal = result
+	}
+	out := workflow.NodeOutput{Result: resultVal, Fields: map[string]any{"result": resultVal}}
+	for k, v := range flat {
+		out.Fields[k] = v
 	}
 	return out, nil
+}
+
+// flattenFields turns an action's typed output (struct or map) into a
+// flat map[string]any keyed by JSON tag, so templates can reach each
+// field via {{.Node.<id>.<field>}}. Without this, struct outputs only
+// expose `result` and downstream templates fail with "map has no entry
+// for key" on every named field.
+func flattenFields(v any) map[string]any {
+	if v == nil {
+		return nil
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
+	}
+	return out
 }

@@ -207,14 +207,23 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		return st, errors.New("no entry node (graph.entry + no trigger entry_node)")
 	}
 	envVals, _ := e.Service.LoadEnvValues(w.ID)
+	triggerNodeID := ""
+	if firedTrigger != nil {
+		if firedTrigger.ID != "" {
+			triggerNodeID = firedTrigger.ID
+		} else if firedTrigger.EntryNode != "" {
+			triggerNodeID = firedTrigger.EntryNode
+		}
+	}
 	rc := &workflow.RunContext{
-		Workflow:    w,
-		Event:       evt,
-		Outputs:     st.Outputs,
-		EnvValues:   envVals,
-		Secrets:     extractSecrets(w.Env, envVals),
-		RunID:       runID,
-		NodeOutputs: map[string]workflow.NodeOutput{},
+		Workflow:      w,
+		Event:         evt,
+		Outputs:       st.Outputs,
+		EnvValues:     envVals,
+		Secrets:       extractSecrets(w.Env, envVals),
+		RunID:         runID,
+		NodeOutputs:   map[string]workflow.NodeOutput{},
+		TriggerNodeID: triggerNodeID,
 	}
 	// Log which runID source we used so any future mismatch between
 	// the UI-issued ID and the engine's effective ID is grep-able.
@@ -226,6 +235,9 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	if firedTrigger != nil {
 		if firedTrigger.ID != "" {
 			startData["trigger_id"] = firedTrigger.ID
+		}
+		if firedTrigger.EntryNode != "" {
+			startData["entry_node"] = firedTrigger.EntryNode
 		}
 		startData["trigger_type"] = string(firedTrigger.Type)
 	} else if tid, _ := evt.Payload["trigger_id"].(string); tid != "" {
@@ -761,9 +773,13 @@ func pickEntry(w workflow.Workflow, evt workflow.Event) (string, *workflow.Trigg
 	}
 	for i := range w.Triggers {
 		tr := &w.Triggers[i]
-		if tr.EntryNode != "" && string(tr.Type) == evt.Type {
-			return tr.EntryNode, tr
+		if tr.EntryNode == "" || string(tr.Type) != evt.Type {
+			continue
 		}
+		if tr.Event != "" && evt.Subtype != "" && tr.Event != evt.Subtype {
+			continue
+		}
+		return tr.EntryNode, tr
 	}
 	return w.Graph.Entry, nil
 }

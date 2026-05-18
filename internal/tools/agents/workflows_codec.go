@@ -109,6 +109,9 @@ func nodeDataFromWorkflow(n wf.Node) map[string]any {
 		data["preset"] = n.Preset
 		data["session"] = n.Session
 		data["session_from"] = n.SessionFrom
+		if len(n.ArgModes) > 0 {
+			data["__arg_modes"] = n.ArgModes
+		}
 	case wf.NodeShell:
 		data["command"] = n.Command
 	case wf.NodeChannel:
@@ -753,6 +756,7 @@ func workflowNodeFromDrawflow(dn drawflowNode) wf.Node {
 		wn.Preset, _ = inner["preset"].(string)
 		wn.Session, _ = inner["session"].(string)
 		wn.SessionFrom, _ = inner["session_from"].(string)
+		wn.ArgModes = stringMapFromAny(inner["__arg_modes"])
 	case wf.NodeShell:
 		wn.Command = stringSliceFromAny(inner["command"])
 	case wf.NodeChannel:

@@ -1,6 +1,44 @@
 (function () {
   "use strict";
 
+  // Shared trace toggle — wired by inline onclick on both top and
+  // bottom toggle buttons inside an assistant turn. Reads the wrap's
+  // hidden state, flips it, then syncs label + chevron + bottom-button
+  // visibility so the user can collapse from either end without
+  // scrolling.
+  window.wickToggleTrace = function (btn) {
+    var section = btn.closest("[data-turn-events]");
+    if (!section) return;
+    var wrap = section.querySelector("[data-trace-wrap]");
+    var top = section.querySelector("[data-trace-toggle]");
+    var bottom = section.querySelector("[data-trace-toggle-bottom]");
+    if (!wrap || !top) return;
+    var willOpen = wrap.classList.contains("hidden");
+    if (willOpen) { wrap.classList.remove("hidden"); wrap.classList.add("flex", "flex-col"); }
+    else { wrap.classList.add("hidden"); wrap.classList.remove("flex", "flex-col"); }
+    var chev = top.querySelector("[data-chevron]");
+    if (chev) chev.style.transform = willOpen ? "" : "rotate(-90deg)";
+    var loading = top.dataset.loading === "1";
+    var lbl = top.querySelector("[data-trace-label]");
+    if (lbl) lbl.textContent = willOpen ? "hide trace" : (loading ? "working…" : "show trace");
+    if (bottom) {
+      if (willOpen) { bottom.classList.remove("hidden"); bottom.classList.add("flex"); }
+      else { bottom.classList.add("hidden"); bottom.classList.remove("flex"); }
+      var bspin = bottom.querySelector("[data-trace-spin-bottom]");
+      var bicon = bottom.querySelector("[data-trace-icon-bottom]");
+      var blbl = bottom.querySelector("[data-trace-label-bottom]");
+      if (bspin) bspin.classList.toggle("hidden", !loading);
+      if (bicon) bicon.classList.toggle("hidden", loading);
+      if (blbl) blbl.textContent = loading ? "working… (hide)" : "hide trace";
+    }
+    if (willOpen) {
+      var target = bottom && !bottom.classList.contains("hidden") ? bottom : wrap;
+      if (target && target.scrollIntoView) {
+        target.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
+    }
+  };
+
   // ── Minimal markdown renderer ─────────────────────────────────────────
   // No external deps — handles bold, italic, inline code, fenced code
   // blocks, headers, bullet lists, numbered lists, blockquotes, and
@@ -318,6 +356,7 @@
           hideTypingIndicator();
           appendToolResultCard(ev);
           applyLifecycle("working", 0);
+          if (!turnHasText) showTypingIndicator();
         }
       }
 
@@ -353,15 +392,23 @@
           var traceSection = document.createElement("div");
           traceSection.className = "flex flex-col gap-1";
           traceSection.innerHTML =
-            '<button type="button" data-trace-toggle ' +
-            'onclick="if(this.dataset.loading===\'1\')return;var w=this.closest(\'[data-turn-events]\').querySelector(\'[data-trace-wrap]\');var open=w.classList.contains(\'hidden\');if(open){w.classList.remove(\'hidden\');w.classList.add(\'flex\',\'flex-col\');}else{w.classList.add(\'hidden\');w.classList.remove(\'flex\',\'flex-col\');}this.querySelector(\'[data-chevron]\').style.transform=open?\'\':\' rotate(-90deg)\';this.querySelector(\'[data-trace-label]\').textContent=open?\'hide trace\':\'show trace\';" ' +
-            'data-loading="1" ' +
+            '<button type="button" data-trace-toggle data-loading="1" ' +
+            'onclick="window.wickToggleTrace(this);" ' +
             'class="self-start flex items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5">' +
-            '<svg data-trace-icon viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
+            '<svg data-trace-spin viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
+            '<svg data-trace-icon viewBox="0 0 16 16" class="h-3 w-3 shrink-0 hidden" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>' +
             '<span data-trace-label class="italic">working…</span>' +
-            '<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 transition-transform hidden" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+            '<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
             '</button>' +
-            '<div data-trace-wrap class="hidden gap-1"></div>';
+            '<div data-trace-wrap class="hidden gap-1"></div>' +
+            '<button type="button" data-trace-toggle-bottom ' +
+            'onclick="window.wickToggleTrace(this);" ' +
+            'class="hidden self-start items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5">' +
+            '<svg data-trace-spin-bottom viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin hidden" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
+            '<svg data-trace-icon-bottom viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>' +
+            '<span data-trace-label-bottom>hide trace</span>' +
+            '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+            '</button>';
           body.appendChild(traceSection);
           wrap = traceSection.querySelector("[data-trace-wrap]");
         }
@@ -506,19 +553,29 @@
         if (!pendingTurnEl) return;
         var wrap = pendingTurnEl.querySelector("[data-trace-wrap]");
         if (!wrap) return;
-        wrap.classList.add("hidden");
-        wrap.classList.remove("flex", "flex-col");
+        var open = !wrap.classList.contains("hidden");
         var traceSection = wrap.parentElement;
         if (!traceSection) return;
         var btn = traceSection.querySelector("button[data-trace-toggle]");
         if (!btn) return;
         btn.dataset.loading = "0";
+        var spin = btn.querySelector("[data-trace-spin]");
+        if (spin) spin.classList.add("hidden");
+        var icon = btn.querySelector("[data-trace-icon]");
+        if (icon) icon.classList.remove("hidden");
         var lbl = btn.querySelector("[data-trace-label]");
-        if (lbl) { lbl.textContent = "show trace"; lbl.classList.remove("italic"); }
-        var spinner = btn.querySelector("[data-trace-icon]");
-        if (spinner) spinner.classList.add("hidden");
-        var chev = btn.querySelector("[data-chevron]");
-        if (chev) { chev.classList.remove("hidden"); chev.style.transform = "rotate(-90deg)"; }
+        if (lbl) { lbl.classList.remove("italic"); lbl.textContent = open ? "hide trace" : "show trace"; }
+        var bottom = traceSection.querySelector("button[data-trace-toggle-bottom]");
+        if (bottom) {
+          if (open) { bottom.classList.remove("hidden"); bottom.classList.add("flex"); }
+          else { bottom.classList.add("hidden"); bottom.classList.remove("flex"); }
+          var bspin = bottom.querySelector("[data-trace-spin-bottom]");
+          if (bspin) bspin.classList.add("hidden");
+          var bicon = bottom.querySelector("[data-trace-icon-bottom]");
+          if (bicon) bicon.classList.remove("hidden");
+          var blbl = bottom.querySelector("[data-trace-label-bottom]");
+          if (blbl) blbl.textContent = "hide trace";
+        }
       }
     }
 

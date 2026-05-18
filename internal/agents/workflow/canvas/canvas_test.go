@@ -167,7 +167,7 @@ func TestUpdateNode_KnownKey(t *testing.T) {
 	svc := newStub("wf")
 	c := newCanvas(svc)
 
-	patch := map[string]any{"label": "my label"}
+	patch := map[string]any{"label": "my_label"}
 	got, err := c.UpdateNode("wf", "start", patch)
 	if err != nil {
 		t.Fatalf("UpdateNode error: %v", err)
@@ -176,7 +176,7 @@ func TestUpdateNode_KnownKey(t *testing.T) {
 	if !ok {
 		t.Fatal("start node missing from result")
 	}
-	if n.Label != "my label" {
+	if n.Label != "my_label" {
 		t.Errorf("expected label %q, got %q", "my label", n.Label)
 	}
 }

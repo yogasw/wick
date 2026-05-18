@@ -121,9 +121,33 @@ var BuiltinFuncDocs = map[string]string{
 	"lower str":      "lowercase",
 	"trim str":       "trim whitespace",
 	"default d v":    "return v if non-empty, else d",
-	"toJSON v":       "marshal any value to JSON string — safe for body: fields",
+	"toJSON v":       "marshal any value to JSON string — safe for body: fields (aliases: toJson, tojson)",
+	"fromJSON s":     "parse JSON string to map/slice/scalar — use to read fields out of stringified JSON (aliases: fromJson, fromjson)",
 	"jsonEscape str": "escape string for embedding inside a JSON string literal",
 	"now format":     "current UTC time — format uses Go ref time e.g. '2006-01-02T15:04:05Z07:00'",
+}
+
+func toJSON(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// fromJSON parses a JSON string into a generic value (map/slice/scalar)
+// so templates can read fields out of stringified JSON payloads. Common
+// case: an agent node returns `text` as a JSON string and a downstream
+// channel/http node needs to pull individual fields out for the body.
+func fromJSON(s string) (any, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return nil, fmt.Errorf("fromJSON: %w", err)
+	}
+	return v, nil
 }
 
 // BuiltinFuncs are convenience template funcs available in every Render.
@@ -144,14 +168,15 @@ var BuiltinFuncs = gotemplate.FuncMap{
 		return v
 	},
 	// toJSON marshals any value to a JSON string. Safe for embedding in
-	// body: fields or building dynamic JSON payloads.
-	"toJSON": func(v any) (string, error) {
-		b, err := json.Marshal(v)
-		if err != nil {
-			return "", err
-		}
-		return string(b), nil
-	},
+	// body: fields or building dynamic JSON payloads. Aliased as `toJson`
+	// and `tojson` so authors don't get bitten by Go template's
+	// case-sensitive name lookup when copying from other ecosystems.
+	"toJSON":   toJSON,
+	"toJson":   toJSON,
+	"tojson":   toJSON,
+	"fromJSON": fromJSON,
+	"fromJson": fromJSON,
+	"fromjson": fromJSON,
 	// jsonEscape escapes a string for safe embedding inside a JSON string
 	// literal — replaces backslash, quote, and control characters.
 	"jsonEscape": func(s string) string {
