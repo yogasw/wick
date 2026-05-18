@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	slackgo "github.com/slack-go/slack"
 
@@ -16,11 +17,11 @@ import (
 // Blocks travels as a JSON string so the operator can paste output
 // from Slack's Block Kit Builder directly into the YAML / args field.
 type SendMessageInput struct {
-	Channel  string `json:"channel"`             // required — C…, D…, or @user
-	Text     string `json:"text"`                // fallback / accessibility text
-	Blocks   string `json:"blocks,omitempty"`    // JSON array of Block Kit blocks
-	ThreadTS string `json:"thread_ts,omitempty"` // post inside a thread
-	Signed   bool   `json:"signed,omitempty"`    // append "Sent by wick · <appname>" footer
+	Channel  string `json:"channel"    wick:"required;desc=Channel ID, DM, or @user"`
+	Text     string `json:"text"       wick:"desc=Message text (fallback / accessibility)"`
+	Blocks   string `json:"blocks"     wick:"textarea;desc=Block Kit JSON array (overrides text)"`
+	ThreadTS string `json:"thread_ts"  wick:"key=thread_ts;desc=Post inside this thread (message ts)"`
+	Signed   bool   `json:"signed"     wick:"desc=Append 'Sent by wick' footer"`
 }
 
 // SendMessageOutput is the typed response a downstream node can
@@ -88,16 +89,22 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 // array `[{...}]` or an object with a `blocks` key. Slack's Block Kit
 // Builder copies the object form; operators typing inline tend to use
 // the bare array — accept both.
+//
+// slack.Block is an interface, so json.Unmarshal into *[]Block fails.
+// Use slack.Blocks (which has a custom UnmarshalJSON via block_conv.go)
+// wrapping the raw JSON in {"blocks":[...]} when it's a bare array.
 func decodeBlocks(raw string, out *[]slackgo.Block) error {
-	if err := json.Unmarshal([]byte(raw), out); err == nil {
-		return nil
+	s := strings.TrimSpace(raw)
+	var wrapped string
+	if strings.HasPrefix(s, "[") {
+		wrapped = `{"blocks":` + s + `}`
+	} else {
+		wrapped = s
 	}
-	var wrapper struct {
-		Blocks []slackgo.Block `json:"blocks"`
-	}
-	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
+	var b slackgo.Blocks
+	if err := json.Unmarshal([]byte(wrapped), &b); err != nil {
 		return err
 	}
-	*out = wrapper.Blocks
+	*out = b.BlockSet
 	return nil
 }

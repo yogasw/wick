@@ -64,6 +64,7 @@ func (s *stubService) Update(id string, w workflow.Workflow, _ map[string][]byte
 
 // Remaining interface methods — all no-ops.
 func (s *stubService) List() ([]string, error)                               { return nil, nil }
+func (s *stubService) FindByName(_, _ string) (string, error)                 { return "", nil }
 func (s *stubService) Create(_ string, _ workflow.Workflow, _ map[string][]byte) error {
 	return nil
 }

@@ -18,12 +18,12 @@ import (
 // edit / replace the original ephemeral or in-channel message a slash
 // command produced — chat.update doesn't work on ephemerals.
 type RespondURLInput struct {
-	ResponseURL     string `json:"response_url"`              // required
-	Text            string `json:"text,omitempty"`            // fallback text
-	Blocks          string `json:"blocks,omitempty"`          // Block Kit JSON
-	ResponseType    string `json:"response_type,omitempty"`   // "ephemeral" | "in_channel"
-	ReplaceOriginal bool   `json:"replace_original,omitempty"`
-	DeleteOriginal  bool   `json:"delete_original,omitempty"`
+	ResponseURL     string `json:"response_url"               wick:"required;key=response_url;desc=response_url from Slack interaction payload"`
+	Text            string `json:"text,omitempty"             wick:"desc=Fallback text"`
+	Blocks          string `json:"blocks,omitempty"           wick:"textarea;desc=Block Kit JSON array (overrides text)"`
+	ResponseType    string `json:"response_type,omitempty"    wick:"key=response_type;desc=ephemeral or in_channel"`
+	ReplaceOriginal bool   `json:"replace_original,omitempty" wick:"key=replace_original;desc=Replace the original message"`
+	DeleteOriginal  bool   `json:"delete_original,omitempty"  wick:"key=delete_original;desc=Delete the original message"`
 }
 
 type respondURLBody struct {

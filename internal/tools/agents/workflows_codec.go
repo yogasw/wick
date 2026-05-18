@@ -601,8 +601,19 @@ func drawflowJSONToWorkflow(id, body string) (wf.Workflow, error) {
 				if v, ok := inner["event"].(string); ok {
 					tr.Event = v
 				}
+				if v, ok := inner["target"].(string); ok {
+					tr.Target = v
+				}
 				if v, ok := inner["match"].(map[string]any); ok && len(v) > 0 {
 					tr.Match = v
+					// Auto-sync Target from channel_id whitelist when not set explicitly.
+					if tr.Target == "" {
+						if ids, ok := v["channel_id"].([]any); ok && len(ids) > 0 {
+							if first, ok := ids[0].(string); ok {
+								tr.Target = first
+							}
+						}
+					}
 				}
 				if v, ok := inner["match_enabled"].(bool); ok {
 					tr.MatchEnabled = v

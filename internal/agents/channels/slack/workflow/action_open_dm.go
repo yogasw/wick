@@ -12,7 +12,7 @@ import (
 
 // OpenDMInput is the schema for the slack.open_dm action.
 type OpenDMInput struct {
-	UserID string `json:"user_id"` // required — Slack user ID (U...)
+	UserID string `json:"user_id" wick:"required;key=user_id;desc=Slack user ID (U...) to open DM with"`
 }
 
 // OpenDMOutput is the response containing the DM channel ID.

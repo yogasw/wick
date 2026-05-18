@@ -99,7 +99,7 @@ func New(layout config.Layout) *Manager {
 		eng.Register(t, dsExec)
 	}
 
-	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dsSvc, ss)
+	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dsSvc, ss).WithIntegration(intReg)
 
 	return &Manager{
 		Layout:      layout,

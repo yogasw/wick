@@ -14,10 +14,10 @@ import (
 // must reference a message posted by the same bot — Slack rejects
 // edits to other users' messages.
 type UpdateMessageInput struct {
-	Channel string `json:"channel"` // required
-	TS      string `json:"ts"`      // required — message timestamp
-	Text    string `json:"text"`    // new fallback text
-	Blocks  string `json:"blocks,omitempty"`
+	Channel string `json:"channel"          wick:"required;desc=Channel ID of the original message"`
+	TS      string `json:"ts"               wick:"required;desc=Timestamp of the message to edit (ts from send_message)"`
+	Text    string `json:"text"             wick:"desc=New fallback text"`
+	Blocks  string `json:"blocks,omitempty" wick:"textarea;desc=New Block Kit JSON array (overrides text)"`
 }
 
 // UpdateMessageOutput echoes the channel + ts the edit landed on.

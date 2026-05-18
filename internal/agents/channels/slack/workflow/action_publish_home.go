@@ -14,9 +14,9 @@ import (
 // Typically called from an app_home_opened trigger so each user sees
 // content tailored to them.
 type PublishHomeInput struct {
-	User string `json:"user"`           // required — target user ID
-	Hash string `json:"hash,omitempty"` // optional concurrency token
-	View string `json:"view"`           // required — JSON Home view (type: home)
+	User string `json:"user"           wick:"required;desc=Target user ID"`
+	Hash string `json:"hash,omitempty" wick:"desc=Concurrency token (optional, from previous publish)"`
+	View string `json:"view"           wick:"required;textarea;desc=Block Kit Home tab JSON (type: home)"`
 }
 
 type PublishHomeOutput struct {

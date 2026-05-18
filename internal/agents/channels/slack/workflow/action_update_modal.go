@@ -15,9 +15,9 @@ import (
 // optional — Slack uses it for optimistic-concurrency, prevents racing
 // updates.
 type UpdateModalInput struct {
-	ViewID   string `json:"view_id"`        // required
-	Hash     string `json:"hash,omitempty"` // optional — concurrency token
-	View     string `json:"view"`           // required — new view JSON
+	ViewID string `json:"view_id"        wick:"required;key=view_id;desc=View ID from open_modal output"`
+	Hash   string `json:"hash,omitempty" wick:"desc=Concurrency token (view_hash from open_modal, optional)"`
+	View   string `json:"view"           wick:"required;textarea;desc=New Block Kit modal JSON (type: modal)"`
 }
 
 type UpdateModalOutput struct {

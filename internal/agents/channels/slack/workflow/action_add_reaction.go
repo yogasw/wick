@@ -13,9 +13,9 @@ import (
 // AddReactionInput is the schema for slack.add_reaction. Emoji is the
 // shortname without colons (e.g. "thumbsup", "white_check_mark").
 type AddReactionInput struct {
-	Channel string `json:"channel"` // required
-	TS      string `json:"ts"`      // required — message timestamp
-	Emoji   string `json:"emoji"`   // required — shortname without colons
+	Channel string `json:"channel" wick:"required;desc=Channel ID containing the message"`
+	TS      string `json:"ts"      wick:"required;desc=Message timestamp (ts from send_message output)"`
+	Emoji   string `json:"emoji"   wick:"required;desc=Emoji shortname without colons (e.g. thumbsup)"`
 }
 
 func registerActionAddReaction(reg *integration.Registry, ch *slack.Channel) {

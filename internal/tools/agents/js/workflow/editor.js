@@ -315,7 +315,6 @@
     // (kvlist still uses the inline pattern). Remove once every
     // widget moves to the loaded-once approach.
     reExecInlineScripts(container);
-    wireVisibleWhen(container);
     container.querySelectorAll('.wf-arg-field').forEach((wrap) => {
       const key = wrap.dataset.fieldKey;
       const editable = argEditable(wrap);
@@ -326,6 +325,47 @@
         editable.checked = stored === 'true';
       } else if (stored !== '' || editable.tagName === 'SELECT') {
         editable.value = stored;
+        // Picker hidden inputs need chips re-rendered after value is set
+        // because wickInitPickers ran before value restoration.
+        if (editable.type === 'hidden' && editable.closest('.wf-picker')) {
+          const pickerWrap = editable.closest('.wf-picker');
+          // Re-render chips inline without depending on wickRefreshPicker.
+          try {
+            const arr = JSON.parse(editable.value || '[]') || [];
+            const chipList = pickerWrap.querySelector('[data-picker-chips]');
+            if (chipList) {
+              chipList.innerHTML = '';
+              arr.forEach((item) => {
+                const chip = document.createElement('span');
+                chip.className = 'wf-picker-chip';
+                const label = document.createElement('span');
+                label.className = 'wf-picker-chip-label';
+                label.textContent = item.name || item.id;
+                chip.appendChild(label);
+                if (item.name && item.name !== item.id) {
+                  const sub = document.createElement('span');
+                  sub.className = 'wf-picker-chip-id';
+                  sub.textContent = item.id;
+                  chip.appendChild(sub);
+                }
+                const rm = document.createElement('button');
+                rm.type = 'button';
+                rm.className = 'wf-picker-chip-remove';
+                rm.setAttribute('aria-label', 'Remove');
+                rm.textContent = '×';
+                rm.addEventListener('click', () => {
+                  const cur = JSON.parse(editable.value || '[]');
+                  editable.value = JSON.stringify(cur.filter((it) => it.id !== item.id));
+                  editable.dispatchEvent(new Event('input', { bubbles: true }));
+                  editable.dispatchEvent(new Event('change', { bubbles: true }));
+                  chip.remove();
+                });
+                chip.appendChild(rm);
+                chipList.appendChild(chip);
+              });
+            }
+          } catch (_) {}
+        }
       }
       // Initial mode — Fixed by default. Operator opts into Expression.
       const initialMode = (modes && modes[key]) || 'fixed';
@@ -343,6 +383,9 @@
       editable.addEventListener('input', () => updateArgPreview(wrap));
       updateArgPreview(wrap);
     });
+    // wireVisibleWhen runs after value restoration so initial evaluate()
+    // sees the correct stored values (not select defaults).
+    wireVisibleWhen(container);
   }
 
   // argEditable returns the value-bearing element inside an arg
@@ -549,8 +592,19 @@
     if (!e.target.closest('.wf-arg-field')) return;
     if (selectedID) updateNodeData(selectedID);
   }
+  // Picker widgets store their value on a hidden input and fire input+change
+  // from it. The selector above excludes hidden inputs, so we need a separate
+  // handler to catch picker mutations and persist them.
+  function deliverPickerEdit(e) {
+    if (e.target.type !== 'hidden') return;
+    if (!e.target.dataset.fieldKey) return;
+    if (!e.target.closest('.wf-arg-field')) return;
+    if (selectedID) updateNodeData(selectedID);
+  }
   document.body.addEventListener('input', deliverArgEdit);
   document.body.addEventListener('change', deliverArgEdit);
+  document.body.addEventListener('input', deliverPickerEdit);
+  document.body.addEventListener('change', deliverPickerEdit);
 
   // Cascade refresh when parent picker changes.
   f.channel?.addEventListener('change', () => { hydrateChannelOps(); refreshChannelArgs(); if (selectedID) updateNodeData(selectedID); });
@@ -562,6 +616,7 @@
     cases: document.getElementById('ins-cases-panel'),
     preset: document.getElementById('ins-preset-panel'),
     command: document.getElementById('ins-command-panel'),
+    transform: document.getElementById('ins-transform-panel'),
     url: document.getElementById('ins-url-panel'),
     channel: document.getElementById('ins-channel-panel'),
     connector: document.getElementById('ins-connector-panel'),
@@ -633,7 +688,8 @@
   // Agent override controls live in editor_inspector.templ (not
   // migrated to a per-node module yet); wire their input/change
   // listeners here.
-  ['ins-agent-session', 'ins-agent-session-from'].forEach((id) => {
+  ['ins-agent-session', 'ins-agent-session-from',
+   'ins-transform-engine', 'ins-transform-expression'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('input', () => { if (selectedID) updateNodeData(selectedID); });
@@ -1908,6 +1964,13 @@
       panels.command.classList.remove('hidden');
       f.command.value = (inner.command || []).join('\n');
     }
+    if (kind === 'transform') {
+      panels.transform.classList.remove('hidden');
+      const tEng = document.getElementById('ins-transform-engine');
+      const tExpr = document.getElementById('ins-transform-expression');
+      if (tEng) tEng.value = inner.engine || 'gotemplate';
+      if (tExpr) tExpr.value = inner.expression || '';
+    }
     if (kind === 'http') {
       panels.url.classList.remove('hidden');
       f.url.value = inner.url || '';
@@ -2022,7 +2085,7 @@
       const enabled = !!inner.match_enabled;
       matchEnabled.checked = enabled;
       matchPanel.classList.toggle('hidden', !enabled);
-      hydrateArgsForm(matchPanel, html, inner.match || {}, inner.__match_modes || {}, chSel.value);
+        hydrateArgsForm(matchPanel, html, inner.match || {}, inner.__match_modes || {}, chSel.value);
     }
 
     chSel.onchange = () => {
@@ -2380,6 +2443,12 @@
     if (kind === 'shell') {
       inner.command = f.command.value.split('\n').filter(Boolean);
     }
+    if (kind === 'transform') {
+      const tEng = document.getElementById('ins-transform-engine');
+      const tExpr = document.getElementById('ins-transform-expression');
+      if (tEng) inner.engine = tEng.value;
+      if (tExpr) inner.expression = tExpr.value;
+    }
     if (kind === 'http') {
       inner.url = f.url.value;
       inner.method = f.method.value;
@@ -2415,7 +2484,7 @@
         inner.event = evSel?.value || '';
         const enabled = !!(matchEnabled && matchEnabled.checked);
         inner.match_enabled = enabled;
-        if (enabled && matchPanel) {
+        if (matchPanel) {
           inner.match = collectArgs(matchPanel);
           inner.__match_modes = collectArgModes(matchPanel);
         } else {

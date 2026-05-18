@@ -170,7 +170,10 @@ func (c *Canvas) Toggle(id string, enabled bool) (workflow.Workflow, error) {
 }
 
 func (c *Canvas) mutate(id string, fn func(*workflow.Workflow) error) (workflow.Workflow, error) {
-	w, err := c.Service.Load(id)
+	// Read from draft if present so canvas edits (add_node, update_node,
+	// connect, etc.) stack on top of in-progress draft edits rather than
+	// reading stale published state and overwriting draft content.
+	w, err := c.Service.LoadDraft(id)
 	if err != nil {
 		return workflow.Workflow{}, err
 	}
@@ -180,7 +183,7 @@ func (c *Canvas) mutate(id string, fn func(*workflow.Workflow) error) (workflow.
 	if r := parse.Validate(w); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("post-edit validation failed: %s", r.Error())
 	}
-	if err := c.Service.Update(id, w, nil); err != nil {
+	if err := c.Service.SaveDraft(id, w); err != nil {
 		return workflow.Workflow{}, err
 	}
 	return w, nil
@@ -201,6 +204,8 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 		"preset": {}, "session": {}, "output_cases": {}, "expr": {},
 		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
 		"row_id": {}, "args": {}, "command": {},
+		"expression": {}, "engine": {}, "result": {},
+		"max_turns": {}, "skills": {}, "tools": {},
 	}
 	var unknown []string
 	for k := range patch {
@@ -224,8 +229,11 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	if v, ok := patch["prompt_file"].(string); ok {
 		n.PromptFile = v
 	}
-	if v, ok := patch["timeout_sec"].(int); ok {
+	switch v := patch["timeout_sec"].(type) {
+	case int:
 		n.TimeoutSec = v
+	case float64:
+		n.TimeoutSec = int(v)
 	}
 	if v, ok := patch["on_failure"].(string); ok {
 		n.OnFailure = v
@@ -271,6 +279,39 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["row_id"].(string); ok {
 		n.Row = v
+	}
+	if v, ok := patch["expression"].(string); ok {
+		n.Expression = v
+	}
+	if v, ok := patch["engine"].(string); ok {
+		n.Engine = v
+	}
+	if v, ok := patch["result"].(string); ok {
+		n.Result = v
+	}
+	switch v := patch["max_turns"].(type) {
+	case int:
+		n.MaxTurns = v
+	case float64:
+		n.MaxTurns = int(v)
+	}
+	if v, ok := patch["skills"].([]any); ok {
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		n.Skills = out
+	}
+	if v, ok := patch["tools"].([]any); ok {
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		n.Tools = out
 	}
 	if v, ok := patch["args"].(map[string]any); ok {
 		n.Args = v

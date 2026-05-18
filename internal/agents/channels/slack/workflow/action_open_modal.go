@@ -19,8 +19,8 @@ import (
 // modal export. Required at the top level: `type: "modal"`, `title`,
 // `blocks`.
 type OpenModalInput struct {
-	TriggerID string `json:"trigger_id"` // required — from event payload
-	View      string `json:"view"`       // required — JSON modal view
+	TriggerID string `json:"trigger_id" wick:"required;key=trigger_id;desc=Trigger ID from block_action payload (expires in 3s)"`
+	View      string `json:"view"       wick:"required;textarea;desc=Block Kit modal JSON (type:modal, title, blocks)"`
 }
 
 // OpenModalOutput exposes the opened view's id + hash so a subsequent

@@ -14,8 +14,8 @@ import (
 // user can dismiss it to return to the parent. Same 3-second
 // trigger_id rule as open_modal.
 type PushModalInput struct {
-	TriggerID string `json:"trigger_id"` // required
-	View      string `json:"view"`       // required — JSON modal view
+	TriggerID string `json:"trigger_id" wick:"required;key=trigger_id;desc=Trigger ID from block_action payload (expires in 3s)"`
+	View      string `json:"view"       wick:"required;textarea;desc=Block Kit modal JSON (type: modal)"`
 }
 
 type PushModalOutput struct {

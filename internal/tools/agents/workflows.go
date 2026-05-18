@@ -16,6 +16,7 @@ import (
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
@@ -782,13 +783,22 @@ func workflowRegistryAPI(c *tool.Ctx) {
 	}
 	channels := []map[string]any{}
 	for _, info := range globalWorkflowMgr.MCP.ChannelsList() {
+		// Index ActionDescriptors by action id so we can attach args_html.
+		actionDescs := map[string]integration.ActionDescriptor{}
+		for _, ad := range globalWorkflowMgr.Integration.ActionsByChannel(info.Name) {
+			actionDescs[ad.Action] = ad
+		}
 		ops := []map[string]any{}
 		for _, a := range info.Actions {
-			ops = append(ops, map[string]any{
+			row := map[string]any{
 				"id":          a.ID,
 				"description": a.Description,
 				"destructive": a.Destructive,
-			})
+			}
+			if ad, ok := actionDescs[a.ID]; ok && ad.InputType != nil {
+				row["args_html"] = renderArgFormHTML(c.Context(), entity.StructToConfigs(ad.InputType))
+			}
+			ops = append(ops, row)
 		}
 		// Per-event match form — each EventDescriptor declares
 		// MatchSchema, the API renders it to HTML via ArgForm so the

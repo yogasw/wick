@@ -96,6 +96,16 @@ templ EditorInspector(vm EditorVM) {
 							<textarea id="ins-command" class="wf-input font-mono" rows="3"></textarea>
 						</div>
 
+						<div id="ins-transform-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Engine</label>
+							<select id="ins-transform-engine" class="wf-input">
+								<option value="gotemplate">gotemplate</option>
+								<option value="jsonpath">jsonpath</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Expression</label>
+							<textarea id="ins-transform-expression" class="wf-input font-mono" rows="6" placeholder="Go template expression…"></textarea>
+						</div>
+
 						@nodeModulePartials()
 
 						<div id="ins-agent-session-panel" class="hidden">

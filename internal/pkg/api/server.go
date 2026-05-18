@@ -63,7 +63,11 @@ import (
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
 	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
+	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
+	"github.com/yogasw/wick/internal/agents/workflow/wftest"
+	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -611,6 +615,17 @@ func NewServer() *Server {
 		meta := m.Meta
 		meta.Path = "/tools/" + meta.Key
 		allItems = append(allItems, meta)
+	}
+
+	// workflow is a built-in single-instance connector that exposes the
+	// workflow engine's full Tier 1/2/3 MCP surface. Lets any AI client
+	// (Claude Desktop, ChatGPT, Gemini) create/edit/test/run workflows
+	// over MCP without native file access. Late-bound here because it
+	// needs wfMgr.MCP — the resolved Ops bundle built during workflow
+	// bootstrap above.
+	if wfMgr != nil && wfMgr.MCP != nil {
+		wfRunner := wftest.New(wfMgr.Engine, wfMgr.Service, wfMgr.Layout)
+		connectors.Register(wfconn.ModuleWithRunner(wfMgr.MCP, wfRunner))
 	}
 
 	// wickmanager is a built-in single-instance connector that exposes
@@ -1179,6 +1194,33 @@ func RunMCPStdio(version, commit, buildTime string) {
 		Login:      authSvc,
 		AppName:    appname.Resolve(),
 	}))
+
+	// Workflow connector — bootstrap minimal workflow manager so MCP
+	// clients (Claude Desktop, Cursor) can introspect / create / edit /
+	// test workflows. Engine has no live channel / provider wiring here
+	// so type:channel + type:agent nodes will fail at run time; everything
+	// else (validate/simulate/test/file ops/canvas mutations) works.
+	stdioAgentsCfg := agentconfig.WorkspaceConfig{
+		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
+		DefaultWorkspace: configsSvc.GetOwned("agents", "default_workspace"),
+	}
+	stdioWfLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(stdioAgentsCfg))
+	stdioWfMgr := wfsetup.New(stdioWfLayout)
+	wfsetup.RegisterLiveConnectors(stdioWfMgr.Connectors)
+	stdioWfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connSvc))
+	// Register Slack workflow descriptors into the integration registry
+	// so workflow_integration / workflow_channels can surface full
+	// MatchSchema + InputSchema metadata. Execute closures bind to a
+	// stub Slack channel (no live API) — they error at runtime if a node
+	// actually fires, but AI discovery + workflow_validate work fully.
+	stdioStubSlack := agentslack.New(agentconfig.SlackChannelConfig{})
+	slackwf.RegisterAll(stdioWfMgr.Integration, stdioStubSlack)
+	if err := stdioWfMgr.Start(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("stdio: workflow bootstrap failed; workflow_* ops unavailable")
+	} else {
+		stdioRunner := wftest.New(stdioWfMgr.Engine, stdioWfMgr.Service, stdioWfMgr.Layout)
+		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
+	}
 
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())

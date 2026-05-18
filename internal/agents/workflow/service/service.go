@@ -22,6 +22,12 @@ import (
 // ErrNotFound is returned when an id is missing.
 var ErrNotFound = errors.New("workflow not found")
 
+// ErrNameTaken is returned when Create / Update would land on a Name
+// that another workflow already uses. Display name uniqueness keeps
+// list + canvas pickers unambiguous; the underlying id stays the
+// stable file identifier.
+var ErrNameTaken = errors.New("workflow name already taken")
+
 // Service is the CRUD contract.
 type Service interface {
 	List() ([]string, error)
@@ -30,6 +36,13 @@ type Service interface {
 	Update(id string, w workflow.Workflow, files map[string][]byte) error
 	Delete(id string) error
 	Toggle(id string, enabled bool) error
+
+	// FindByName returns the id of an existing workflow whose Name
+	// matches the given name (case-insensitive, trimmed). Excludes the
+	// optional `exceptID` so Update can call this without flagging
+	// itself. Empty id + nil error means no collision. UI form
+	// pre-validation + Create/Update guards both use this.
+	FindByName(name, exceptID string) (string, error)
 
 	// Draft/Publish lifecycle.
 	// LoadDraft returns the draft if present, else the published workflow.
@@ -95,10 +108,49 @@ func (s *FileService) Load(id string) (workflow.Workflow, error) {
 	return w, nil
 }
 
+// FindByName scans every workflow on disk and returns the id of the
+// first one whose Name (case-insensitive, trimmed) matches the target.
+// `exceptID` lets Update skip the current workflow when re-checking
+// its own name. Returns "" + nil error when no collision exists.
+//
+// O(N) scan acceptable — workflow counts stay small (tens, not
+// thousands) and this only fires on create/update/UI validation, not
+// on hot paths.
+func (s *FileService) FindByName(name, exceptID string) (string, error) {
+	target := strings.ToLower(strings.TrimSpace(name))
+	if target == "" {
+		return "", nil
+	}
+	ids, err := s.List()
+	if err != nil {
+		return "", err
+	}
+	for _, id := range ids {
+		if id == exceptID {
+			continue
+		}
+		w, err := s.Load(id)
+		if err != nil {
+			continue // skip broken workflows, don't block create
+		}
+		if strings.ToLower(strings.TrimSpace(w.Name)) == target {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
 // Create scaffolds a new folder.
 func (s *FileService) Create(id string, w workflow.Workflow, files map[string][]byte) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
+	}
+	if strings.TrimSpace(w.Name) != "" {
+		if existing, err := s.FindByName(w.Name, ""); err != nil {
+			return err
+		} else if existing != "" {
+			return fmt.Errorf("%w: %q used by workflow %q", ErrNameTaken, w.Name, existing)
+		}
 	}
 	dir := s.Layout.WorkflowDir(id)
 	if storage.PathExists(dir) {

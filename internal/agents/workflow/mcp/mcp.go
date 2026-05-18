@@ -17,6 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/dataset"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
 	"github.com/yogasw/wick/internal/agents/workflow/scaffold"
@@ -27,15 +28,16 @@ import (
 
 // Ops bundles every MCP operation surface.
 type Ops struct {
-	Service    service.Service
-	Engine     *engine.Engine
-	Router     *trigger.Router
-	Canvas     *canvas.Canvas
-	Channels   *channel.Registry
-	Connectors *connector.Registry
-	Providers  *provider.Registry
-	Datasets   dataset.Service
-	StateStore state.Store
+	Service     service.Service
+	Engine      *engine.Engine
+	Router      *trigger.Router
+	Canvas      *canvas.Canvas
+	Channels    *channel.Registry
+	Connectors  *connector.Registry
+	Providers   *provider.Registry
+	Datasets    dataset.Service
+	StateStore  state.Store
+	Integration *integration.Registry
 }
 
 // New wires the dispatcher.
@@ -51,6 +53,32 @@ func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canva
 		Datasets:   datasets,
 		StateStore: ss,
 	}
+}
+
+// WithIntegration wires the integration registry so workflow_integration
+// can expose per-channel event + action descriptors (incl. MatchSchema)
+// independent of the live Channel registry. Useful for stdio MCP where
+// no Slack channel runs but AI still needs full filter schemas.
+func (m *Ops) WithIntegration(reg *integration.Registry) *Ops {
+	m.Integration = reg
+	return m
+}
+
+// IntegrationEvents returns every registered event descriptor across all
+// channels. Includes MatchSchema + PayloadType for full filter discovery.
+func (m *Ops) IntegrationEvents() []integration.EventDescriptor {
+	if m.Integration == nil {
+		return nil
+	}
+	return m.Integration.Events()
+}
+
+// IntegrationActions returns every registered action descriptor.
+func (m *Ops) IntegrationActions() []integration.ActionDescriptor {
+	if m.Integration == nil {
+		return nil
+	}
+	return m.Integration.Actions()
 }
 
 // ── Tier 1: introspection ───────────────────────────────────────────

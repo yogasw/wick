@@ -50,9 +50,24 @@ func argBool(args map[string]any, key string, def bool) bool {
 // can paste from the Block Kit Builder directly. Returns an error if
 // the field is missing, not a string, or invalid JSON.
 func argJSON(args map[string]any, key string, out any) error {
-	raw, err := argString(args, key)
-	if err != nil {
-		return err
+	val, ok := args[key]
+	if !ok || val == nil {
+		return fmt.Errorf("arg %q must be a non-empty string", key)
+	}
+	// Accept either a JSON string or a pre-decoded map/slice (e.g. from YAML).
+	var raw string
+	switch v := val.(type) {
+	case string:
+		if v == "" {
+			return fmt.Errorf("arg %q must be a non-empty string", key)
+		}
+		raw = v
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Errorf("arg %q: cannot marshal to JSON: %w", key, err)
+		}
+		raw = string(b)
 	}
 	if err := json.Unmarshal([]byte(raw), out); err != nil {
 		return fmt.Errorf("arg %q: invalid JSON: %w", key, err)

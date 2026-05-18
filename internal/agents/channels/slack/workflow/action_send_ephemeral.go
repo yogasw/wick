@@ -13,10 +13,10 @@ import (
 // SendEphemeralInput is the schema for slack.send_ephemeral. The
 // message is visible only to the target user inside the channel.
 type SendEphemeralInput struct {
-	Channel string `json:"channel"`          // required
-	User    string `json:"user"`             // required — target user ID
-	Text    string `json:"text"`             // fallback text
-	Blocks  string `json:"blocks,omitempty"` // optional Block Kit JSON
+	Channel string `json:"channel"          wick:"required;desc=Channel ID"`
+	User    string `json:"user"             wick:"required;desc=Target user ID (message visible only to them)"`
+	Text    string `json:"text"             wick:"desc=Message text (fallback / accessibility)"`
+	Blocks  string `json:"blocks,omitempty" wick:"textarea;desc=Block Kit JSON array (overrides text)"`
 }
 
 // SendEphemeralOutput is the response — Slack returns only the
