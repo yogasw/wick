@@ -54,6 +54,7 @@ import (
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
+	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
@@ -1153,6 +1154,8 @@ func RunMCPStdio(version, commit, buildTime string) {
 		projectRoot := filepath.Dir(filepath.Dir(filepath.Clean(exe)))
 		if err := os.Chdir(projectRoot); err == nil {
 			_ = godotenv.Load()
+			name := appname.ResolveAfterChdir()
+			userconfig.ResolveDBPath(name, "")
 		}
 	}
 

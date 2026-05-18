@@ -2184,37 +2184,82 @@
     }
   }
 
-  // hydrateInputPane fills the left "INPUT" column from the parent
-  // node's last output (run history). If there's no parent or no
-  // history, shows the empty state with the "Execute previous nodes"
-  // affordance. `lastRunOutputs` is populated by handleRunEvent — it
-  // stays empty until the user actually runs the workflow.
+  // hydrateInputPane fills the left INPUT column. Trigger nodes have
+  // no parent so always show empty state. For all other nodes, populate
+  // the dropdown with upstream nodes that have run output, defaulting
+  // to the direct parent. User can switch to any upstream node.
   function hydrateInputPane(node) {
     const inputEmpty = document.getElementById('ins-input-empty');
     const inputData = document.getElementById('ins-input-data');
     if (!inputEmpty || !inputData) return;
-    const parentID = findParentNodeID(node);
-    const parentOutput = parentID && lastRunOutputs[parentID];
-    if (!parentID || !parentOutput) {
+
+    // Trigger nodes have no input — always empty state.
+    if (node && node.data && node.data.type === 'trigger') {
       inputEmpty.classList.remove('hidden');
       inputData.classList.add('hidden');
       lastInputPrefix = null;
       lastInputData = null;
       return;
     }
+
+    const nodeID = node && node.data && (node.data.id || node.name);
+    const upstream = nodeID ? getUpstreamNodeIDs(nodeID) : null;
+
+    // Collect upstream node IDs that have run output, exclude self.
+    const available = upstream
+      ? [...upstream].filter(id => id !== nodeID && lastRunOutputs[id])
+      : Object.keys(lastRunOutputs);
+
+    if (available.length === 0) {
+      inputEmpty.classList.remove('hidden');
+      inputData.classList.add('hidden');
+      lastInputPrefix = null;
+      lastInputData = null;
+      return;
+    }
+
     inputEmpty.classList.add('hidden');
     inputData.classList.remove('hidden');
+
+    // Populate dropdown — default to direct parent if available.
+    const sel = document.getElementById('ins-allnodes-select');
+    if (sel) {
+      const parentID = findParentNodeID(node);
+      const prevVal = sel.value;
+      sel.innerHTML = '';
+      available.forEach(id => {
+        const n = getNodeByID(id);
+        const label = (n && n.data && n.data.label) || id;
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = label + (label !== id ? ' (' + id + ')' : '');
+        sel.appendChild(opt);
+      });
+      // Prefer: previous selection > direct parent > first available
+      if (prevVal && available.includes(prevVal)) sel.value = prevVal;
+      else if (parentID && available.includes(parentID)) sel.value = parentID;
+      else sel.value = available[0];
+    }
+
+    renderInputFromSelected();
+  }
+
+  // renderInputFromSelected reads the dropdown selection and renders
+  // that node's output into the JSON/Schema panes.
+  function renderInputFromSelected() {
+    const sel = document.getElementById('ins-allnodes-select');
     const jsonEl = document.getElementById('ins-input-json');
     const schemaEl = document.getElementById('ins-input-schema');
-    // Detect prefix: when the parent is a trigger, its cached output
-    // is the workflow.Event object — drags should produce
-    // `{{.Event.<path>}}`. For regular nodes use `{{.Node.<id>.<path>}}`.
-    const prefix = inputPrefixForParent(parentID);
+    if (!sel) return;
+    const nodeID = sel.value;
+    if (!nodeID) return;
+    const output = lastRunOutputs[nodeID];
+    if (!output) return;
+    const prefix = inputPrefixForParent(nodeID);
     lastInputPrefix = prefix;
-    lastInputData = parentOutput;
-    if (jsonEl) renderInteractiveJSON(jsonEl, parentOutput, prefix);
-    if (schemaEl) schemaEl.textContent = inferSchema(parentOutput);
-    // Refresh inline preview on every visible arg field.
+    lastInputData = output;
+    if (jsonEl) renderInteractiveJSON(jsonEl, output, prefix);
+    if (schemaEl) schemaEl.textContent = inferSchema(output);
     refreshArgPreviews();
   }
 
@@ -2229,43 +2274,55 @@
     return null;
   }
 
-  // renderAllNodesPanel fills #ins-allnodes-list with collapsible
-  // sections for every node that has run output in lastRunOutputs.
-  // Each leaf value is a draggable span like the parent JSON panel.
-  function renderAllNodesPanel() {
-    const list = document.getElementById('ins-allnodes-list');
-    const empty = document.getElementById('ins-allnodes-empty');
-    if (!list || !empty) return;
-    const ids = Object.keys(lastRunOutputs);
-    if (ids.length === 0) {
-      list.innerHTML = '';
-      empty.classList.remove('hidden');
-      return;
+  // getUpstreamNodeIDs returns all node IDs that are upstream of
+  // (or equal to) a given node id by walking edges backwards.
+  // Returns a Set of node id strings. Trigger nodes are always included.
+  function getUpstreamNodeIDs(nodeID) {
+    const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+    if (!live) return new Set();
+    // Build id→drawflow-key map and edges map (to→[from,...])
+    const idToKey = {};
+    for (const k in live) {
+      const n = live[k];
+      if (n && n.data) idToKey[n.data.id || n.name] = k;
     }
-    empty.classList.add('hidden');
-    list.innerHTML = '';
-    ids.forEach((nodeID) => {
-      const output = lastRunOutputs[nodeID];
-      const section = document.createElement('details');
-      section.open = false;
-      section.className = 'border border-black-300/20 dark:border-white-100/10 rounded';
-      const summary = document.createElement('summary');
-      summary.className = 'cursor-pointer px-2 py-1 text-[11px] font-medium text-black-800 dark:text-black-600 select-none';
-      // Show node label if available, fall back to ID
-      const nodeObj = getNodeByID(nodeID);
-      const label = (nodeObj && nodeObj.data && nodeObj.data.label) || nodeID;
-      summary.textContent = label + (label !== nodeID ? ' (' + nodeID + ')' : '');
-      section.appendChild(summary);
-      const pre = document.createElement('pre');
-      pre.className = 'px-2 pb-2 font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap';
-      // Use trigger prefix for trigger nodes, node prefix otherwise
-      const isTrigger = nodeObj && nodeObj.data && nodeObj.data.type === 'trigger';
-      const prefix = isTrigger ? '.Event' : '.Node.' + nodeID;
-      renderInteractiveJSON(pre, output, prefix);
-      section.appendChild(pre);
-      list.appendChild(section);
-    });
+    // Build reverse edge map: nodeID → [parentIDs]
+    const parents = {};
+    for (const k in live) {
+      const n = live[k];
+      if (!n || !n.inputs) continue;
+      const nid = n.data && (n.data.id || n.name);
+      if (!nid) continue;
+      for (const slot of Object.values(n.inputs)) {
+        for (const c of (slot.connections || [])) {
+          const parentNode = live[c.node];
+          const pid = parentNode && parentNode.data && (parentNode.data.id || parentNode.name);
+          if (pid) {
+            if (!parents[nid]) parents[nid] = [];
+            parents[nid].push(pid);
+          }
+        }
+      }
+    }
+    // BFS upwards
+    const visited = new Set();
+    const queue = [nodeID];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      (parents[cur] || []).forEach(p => queue.push(p));
+    }
+    // Always include trigger nodes (they carry the event payload)
+    for (const k in live) {
+      const n = live[k];
+      if (n && n.data && n.data.type === 'trigger') {
+        visited.add(n.data.id || n.name);
+      }
+    }
+    return visited;
   }
+
 
   // inputPrefixForParent returns the template-path prefix for drags
   // out of the INPUT pane based on what kind of node fed the data.
@@ -2901,10 +2958,10 @@
           hydrateOutputPane(node);
         }
       }
-      // If "All nodes" tab is active, refresh it with the new output.
-      const allTab = document.querySelector('[data-input-col-tab="allnodes"]');
-      if (allTab && allTab.classList.contains('font-medium')) {
-        renderAllNodesPanel();
+      // Refresh input pane dropdown if inspector is open.
+      if (selectedID) {
+        const selEl = document.getElementById('ins-allnodes-select');
+        if (selEl) hydrateInputPane(editor.getNodeFromId(selectedID));
       }
     }
     if (ev.event === 'node_failed' && domID) {
@@ -3303,38 +3360,8 @@
     });
   });
 
-  // Input column tab: Parent (default) vs All nodes.
-  document.querySelectorAll('[data-input-col-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.inputColTab;
-      document.querySelectorAll('[data-input-col-tab]').forEach((b) => {
-        const on = b === btn;
-        b.classList.toggle('bg-red-500/20', on);
-        b.classList.toggle('text-red-700', on);
-        b.classList.toggle('dark:text-red-300', on);
-        b.classList.toggle('font-medium', on);
-        b.classList.toggle('text-black-700', !on);
-        b.classList.toggle('dark:text-black-600', !on);
-      });
-      if (key === 'allnodes') {
-        document.getElementById('ins-input-empty')?.classList.add('hidden');
-        document.getElementById('ins-input-data')?.classList.add('hidden');
-        document.getElementById('ins-allnodes-data')?.classList.remove('hidden');
-        renderAllNodesPanel();
-      } else {
-        document.getElementById('ins-allnodes-data')?.classList.add('hidden');
-        // restore parent tab state
-        const hasParent = selectedID && findParentNodeID(getNodeByID(selectedID));
-        if (hasParent && lastRunOutputs[findParentNodeID(getNodeByID(selectedID))]) {
-          document.getElementById('ins-input-empty')?.classList.add('hidden');
-          document.getElementById('ins-input-data')?.classList.remove('hidden');
-        } else {
-          document.getElementById('ins-input-empty')?.classList.remove('hidden');
-          document.getElementById('ins-input-data')?.classList.add('hidden');
-        }
-      }
-    });
-  });
+  // Dropdown node selector in INPUT pane — re-render when user picks a node.
+  document.getElementById('ins-allnodes-select')?.addEventListener('change', renderInputFromSelected);
 
   // Output-pane buttons in the empty state — "Execute step" mirrors
   // the header button (single-node exec); "set mock data" jumps to
@@ -3596,12 +3623,21 @@
       // of "No output data".
       const triggerEvent = payload.state && payload.state.event;
       if (triggerEvent) {
+        // Only cache the event under the trigger that actually fired —
+        // workflow_started carries trigger_id which matches the node id.
+        // Caching under ALL trigger nodes was wrong: it made trigger-2
+        // appear in All nodes even when only trigger-1 ran.
+        const startedEv = payload.events && payload.events.find(e => e.event === 'workflow_started');
+        const firingTriggerID = (startedEv && startedEv.data && startedEv.data.trigger_id) || null;
         const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
         if (live) {
           for (const k in live) {
             const n = live[k];
             if (!n || !n.data || n.data.type !== 'trigger') continue;
-            lastRunOutputs[n.data.id || n.name] = triggerEvent;
+            const nid = n.data.id || n.name;
+            // Only set the firing trigger; skip others.
+            if (firingTriggerID && nid !== firingTriggerID) continue;
+            lastRunOutputs[nid] = triggerEvent;
           }
         }
       }

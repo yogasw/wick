@@ -7,6 +7,7 @@ import (
 	"time"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
@@ -32,9 +33,38 @@ func (h *handlers) channels(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) integration(c *connector.Ctx) (any, error) {
+	rawActions := h.ops.IntegrationActions()
+	actions := make([]map[string]any, len(rawActions))
+	for i, a := range rawActions {
+		actions[i] = map[string]any{
+			"channel":       a.Channel,
+			"action":        a.Action,
+			"name":          a.Name,
+			"description":   a.Description,
+			"destructive":   a.Destructive,
+			"input_schema":  integration.StructSchema(a.InputType),
+			"output_schema": integration.StructSchema(a.OutputType),
+		}
+	}
+
+	rawEvents := h.ops.IntegrationEvents()
+	events := make([]map[string]any, len(rawEvents))
+	for i, e := range rawEvents {
+		ev := map[string]any{
+			"channel":     e.Channel,
+			"event":       e.Event,
+			"name":        e.Name,
+			"description": e.Description,
+		}
+		if e.MatchSchema != nil {
+			ev["match_schema"] = e.MatchSchema
+		}
+		events[i] = ev
+	}
+
 	return map[string]any{
-		"events":  h.ops.IntegrationEvents(),
-		"actions": h.ops.IntegrationActions(),
+		"events":  events,
+		"actions": actions,
 	}, nil
 }
 

@@ -98,6 +98,7 @@ func init() {
 	// reading `app.BuildAppName` see the same value as agents/gate/
 	// Layout etc. that read appname.Resolve() directly.
 	BuildAppName = appname.Resolve()
+	appname.BuildAppVersion = BuildAppVersion
 
 	// Cobra ships an anti-double-click guard: when a binary is launched
 	// from Explorer on Windows, it prints `MousetrapHelpText` and exits

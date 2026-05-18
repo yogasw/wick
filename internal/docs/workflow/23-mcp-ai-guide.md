@@ -9,8 +9,7 @@ tanpa akses file. Berisi kontrak eksak, gotcha, dan template siap pakai.
 
 - [ ] Dokumentasikan field `Event.Payload` per event type lebih lengkap (reaction, submission, dll)
 - [ ] Expose `schema` field di `workflow_node_types` / `workflow_trigger_types` response
-- [ ] Expose `workflow_channels` dengan full action input/output schema (saat ini return `[]`)
-- [ ] Tambah `workflow_integration` yang return non-empty (saat ini return `{}`)
+- [ ] Serialize `InputType`/`OutputType` sebagai JSON schema di `workflow_integration` actions (saat ini serialize sebagai `{}`)
 
 ---
 
@@ -72,8 +71,8 @@ Engine inject `workflow.Event` ke setiap run. Field yang tersedia di template:
 | `mention` | `text`, `ts`, `user`, `channel_id` |
 
 **Cara tahu payload shape:** run workflow sekali → buka inspector node mana saja →
-klik tab **All nodes** di panel INPUT kiri → expand node `trigger` → semua field payload
-terlihat dengan path expression siap pakai (`{{index .Event.Payload "..."}}` atau
+pilih node `trigger` dari dropdown INPUT kiri → semua field payload terlihat dengan
+path expression siap pakai (`{{index .Event.Payload "..."}}` atau
 `{{.Event.Payload.field}}`).
 
 ---
@@ -132,13 +131,17 @@ Setiap arg field di channel / connector node punya toggle **Fixed** atau **Expre
 | **Fixed** | Nilai literal tidak berubah per-run | `C0ASUHYCRNU`, `true`, `Ada pesan baru` |
 | **Expression** | Nilai bergantung pada event / output node lain | `{{index .Event.Payload "ts"}}`, `{{.Node.build.result}}` |
 
-**Tips:** gunakan panel **All nodes** (tab kiri INPUT saat inspector terbuka) untuk
-melihat semua output dari run terakhir. Klik/drag nilai ke field expression — path
-`{{...}}` otomatis ter-insert.
+**Default: pakai Expression langsung di field arg.** Field `blocks` di `send_message`
+juga support Expression — isi dengan JSON blocks yang embed template expression.
+Tidak perlu `transform` node kecuali expression-nya terlalu kompleks untuk satu field.
+
+**Tips:** gunakan dropdown node selector di panel INPUT (inspector terbuka) untuk
+melihat output dari run terakhir. Klik/drag nilai ke field expression — path `{{...}}`
+otomatis ter-insert.
 
 **Jika belum ada data:** jalankan workflow sekali (Run Now atau tunggu trigger real),
-buka inspector, tab All nodes, lihat shape payload-nya. Lalu set expression sesuai.
-Untuk share ke AI: paste isi tab All nodes sebagai context — AI bisa langsung tulis
+buka inspector, pilih node dari dropdown, lihat shape output-nya. Lalu set expression sesuai.
+Untuk share ke AI: paste isi JSON dari dropdown sebagai context — AI bisa langsung tulis
 expression yang tepat.
 
 ---
@@ -146,6 +149,8 @@ expression yang tepat.
 ## 6. Channel Node: Slack Actions
 
 ### send_message
+
+**Preferred pattern:** set `blocks` mode = `expression`, embed Go template langsung:
 
 ```yaml
 - id: sendmsg
@@ -156,8 +161,7 @@ expression yang tepat.
     channel: '{{index .Event.Payload "channel_id"}}'
     thread_ts: '{{index .Event.Payload "ts"}}'
     text: 'Fallback text (wajib jika blocks kosong)'
-    blocks: |
-      [{"type":"actions","elements":[{"type":"button","text":{"type":"plain_text","text":"Buat Tiket"},"action_id":"create_tiket","value":"{{index .Event.Payload \"ts\"}}"}]}]
+    blocks: '[{"type":"actions","elements":[{"type":"button","text":{"type":"plain_text","text":"Buat Tiket"},"action_id":"create_tiket","value":"{{index .Event.Payload \"ts\"}}"}]}]'
   arg_modes:
     channel: expression
     thread_ts: expression
@@ -165,16 +169,9 @@ expression yang tepat.
     blocks: expression
 ```
 
-**Gotcha `blocks` — 2 cara valid:**
-
-1. **Inline expression** (value/ts embed di blocks JSON): gunakan `transform` node dulu
-   karena quote dalam YAML string sulit di-escape. Lihat §6.1.
-
-2. **Static blocks** (tidak ada template): tulis JSON langsung di field `blocks`,
-   mode = `fixed`. Tidak perlu transform.
+**Static blocks** (tidak ada template — tidak perlu transform):
 
 ```yaml
-# blocks fixed — tidak ada expression di dalamnya
 - id: sendmsg
   type: channel
   channel: slack
@@ -182,19 +179,25 @@ expression yang tepat.
   args:
     channel: C0ASUHYCRNU
     text: 'Ada pesan baru. Klik tombol.'
-    blocks: |
-      [{"type":"actions","elements":[{"type":"button","text":{"type":"plain_text","text":"Buat Tiket"},"action_id":"create_tiket","value":"static"}]}]
+    blocks: '[{"type":"actions","elements":[{"type":"button","text":{"type":"plain_text","text":"Buat Tiket"},"action_id":"create_tiket","value":"static"}]}]'
   arg_modes:
     channel: fixed
     text: fixed
     blocks: fixed
 ```
 
-### 6.1 transform → send_message (untuk blocks dengan expression)
+**Kapan perlu `transform` node:** hanya jika blocks JSON sangat panjang / nested dan
+sulit di-escape di satu YAML string field. Lihat §6.1 untuk pola transform → send_message.
 
-Kapan perlu `transform`: blocks JSON mengandung nilai dinamis (ts, user ID, dll) yang
-harus embed lewat template. Transform node build string JSON-nya, send_message ambil
-hasilnya.
+`blocks` field menerima dua format:
+- Bare array: `[{...}]`
+- Block Kit Builder export (object dengan key `blocks`): `{"blocks":[{...}]}`
+
+Engine auto-detect dan unwrap keduanya.
+
+### 6.1 transform → send_message (opsional, untuk blocks kompleks)
+
+Pakai `transform` node **hanya jika** blocks terlalu panjang / sulit di-inline:
 
 ```yaml
 - id: buildblocks
@@ -405,16 +408,19 @@ Saat workflow error atau output tidak sesuai:
 
 1. **Lihat badge node** — merah = failed, hijau = success
 2. **Klik node yang merah** → buka inspector → panel OUTPUT → error message tampil
-3. **Tab All nodes** (panel INPUT kiri) → lihat output semua node yang sudah run
-4. **Drag nilai** dari All nodes ke field expression — path `{{...}}` otomatis ter-insert
+3. **Dropdown node selector** (panel INPUT kiri) → pilih node upstream untuk lihat outputnya
+4. **Drag nilai** dari panel INPUT ke field expression — path `{{...}}` otomatis ter-insert
 5. **Execute step** — jalankan satu node saja dengan input dari run sebelumnya
 6. **Replay run** — load ulang run tertentu dari Runs panel untuk inspect step-by-step
 
 **Cara share payload ke AI untuk perbaikan expression:**
 - Run workflow (bisa gagal, tidak apa)
-- Buka inspector node mana saja → tab All nodes
-- Copy isi JSON dari node `trigger` atau node upstream
+- Buka inspector node mana saja → pilih node `trigger` dari dropdown INPUT
+- Copy isi JSON yang tampil
 - Paste ke AI sebagai context — AI bisa tulis expression yang tepat berdasarkan shape data asli
+
+**Note:** trigger node tidak punya OUTPUT panel — trigger adalah event masuk, bukan output.
+Lihat trigger payload lewat dropdown INPUT dari node downstream.
 
 ---
 
@@ -422,8 +428,8 @@ Saat workflow error atau output tidak sesuai:
 
 | Limitasi | Keterangan |
 |---|---|
-| `workflow_channels` return `[]` | Slack actions tidak expose schema via MCP |
-| `workflow_integration` return `{}` | Integration registry tidak ter-expose di stdio mode |
+| `workflow_channels` return `[]` | Channel registry tidak ter-expose via MCP (transport concern) |
+| `workflow_integration` actions `InputType = {}` | Struct di-serialize sebagai zero-value, schema belum di-reflect |
 | `workflow_node_types` schema null | Schema field belum di-populate |
 | Agent node gagal di simulate | Provider tidak di-wire ke stdio MCP |
 | Node ID dengan `-` | Go template reject, pakai `_` atau camelCase |

@@ -34,31 +34,28 @@ templ EditorInspector(vm EditorVM) {
 			<div id="inspector-node" class="wf-inspector-body">
 				// ── Input pane ─────────────────────────────────────
 				<div class="wf-inspector-col wf-inspector-input">
-					<div class="wf-inspector-col-head flex items-center justify-between">
-						<span>INPUT</span>
-						<div class="flex items-center gap-1 text-[11px]">
-							<button type="button" data-input-col-tab="parent" class="px-2 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-300 font-medium">Parent</button>
-							<button type="button" data-input-col-tab="allnodes" class="px-2 py-0.5 rounded text-black-700 dark:text-black-600">All nodes</button>
-						</div>
-					</div>
+					<div class="wf-inspector-col-head">INPUT</div>
+					// Single unified input panel — dropdown selects which upstream
+					// node's output to preview. Default = direct parent. Trigger
+					// nodes show "No input data" (no parent exists).
 					<div id="ins-input-empty" class="wf-inspector-empty">
 						<div class="text-3xl mb-2">⤓</div>
 						<div class="font-medium text-black-900 dark:text-white-100">No input data</div>
 						<button type="button" id="ins-input-from-parent" class="mt-3 rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-600">Execute previous nodes</button>
 						<div class="mt-2 text-[11px] text-black-700 dark:text-black-600">to view input data</div>
 					</div>
-					<div id="ins-input-data" class="hidden flex-1 overflow-y-auto p-3">
-						<div class="flex items-center gap-2 mb-2 text-[11px]">
+					<div id="ins-input-data" class="hidden flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+						<div class="flex items-center gap-2">
+							<select id="ins-allnodes-select" class="wf-input text-xs flex-1">
+								<option value="">— select node —</option>
+							</select>
+						</div>
+						<div class="flex items-center gap-2 text-[11px]">
 							<button type="button" data-input-view="json" class="px-2 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-300 font-medium">JSON</button>
 							<button type="button" data-input-view="schema" class="px-2 py-0.5 rounded text-black-700 dark:text-black-600">Schema</button>
 						</div>
 						<pre id="ins-input-json" class="font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap"></pre>
 						<pre id="ins-input-schema" class="hidden font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap"></pre>
-					</div>
-					<div id="ins-allnodes-data" class="hidden flex-1 overflow-y-auto p-3">
-						<div class="text-[11px] text-black-700 dark:text-black-600 mb-2">All node outputs from last run. Drag a value into any expression field.</div>
-						<div id="ins-allnodes-list" class="space-y-2 font-mono text-xs text-black-900 dark:text-white-100"></div>
-						<div id="ins-allnodes-empty" class="hidden text-[11px] italic text-black-700 dark:text-black-600">No nodes have run yet. Run the workflow first.</div>
 					</div>
 				</div>
 
