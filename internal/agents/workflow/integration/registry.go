@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // EventDescriptor declares one inbound event class a channel can fire
@@ -79,6 +80,7 @@ type EventDescriptor struct {
 	PayloadType any             // zero-value sample for schema gen
 	MatchSchema []entity.Config // filter form schema (per event)
 	Match       MatchFunc       // optional custom matcher; nil = key-equality
+	wickdocs.Docs               // opt-in self-documentation for MCP workflow_node_detail
 }
 
 // Key returns the canonical "<channel>.<event>" identifier the workflow
@@ -99,6 +101,7 @@ type ActionDescriptor struct {
 	OutputType  any         // zero-value sample for output schema
 	Destructive bool        // shown with the destructive badge in UI
 	Execute     ExecuteFunc // handler — receives args, returns output
+	wickdocs.Docs           // opt-in self-documentation for MCP workflow_node_detail
 }
 
 // Key returns the canonical "<channel>.<action>" identifier.

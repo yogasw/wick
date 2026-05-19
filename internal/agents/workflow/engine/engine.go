@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Engine walks a workflow graph and dispatches each node to its
@@ -34,6 +35,12 @@ import (
 // NodeDescriptor bundles the schema + docs for a node type.
 // Populated via RegisterWithDesc — single source of truth lives in the
 // executor file itself (nodes/<type>.go Descriptor method).
+//
+// Docs carries the opt-in self-documentation contract (quirks,
+// examples, templateable fields, pair-with, common pitfalls) projected
+// by the MCP `workflow_node_detail` op. Zero-value Docs = current
+// behaviour; populate per executor when worth it. See
+// internal/agents/workflow/docs and internal/docs/workflow/24-describe-contract.md.
 type NodeDescriptor struct {
 	Type        workflow.NodeType
 	Description string
@@ -41,6 +48,7 @@ type NodeDescriptor struct {
 	Example     string
 	Schema      map[string]any    // reflected from per-node schema struct
 	Output      map[string]string // field → description
+	wickdocs.Docs
 }
 
 // Describer is implemented by executors that want to expose schema +
@@ -56,9 +64,13 @@ type Engine struct {
 	StateStore  state.Store
 	Executors   map[workflow.NodeType]workflow.Executor
 	Descriptors map[workflow.NodeType]NodeDescriptor
-	Now         func() time.Time
-	IDGen       func() string
-	OnEvent     func(id, runID string, ev workflow.RunEvent)
+	// Triggers carries the per-trigger-type descriptors (schema + docs).
+	// MCP `workflow_node_detail` resolves `trigger:<type>` against this
+	// registry. Seeded by setup; zero value = no triggers discoverable.
+	Triggers *TriggerRegistry
+	Now      func() time.Time
+	IDGen    func() string
+	OnEvent  func(id, runID string, ev workflow.RunEvent)
 }
 
 // NewRunID returns a fresh run id. Plain UUID — chronological
@@ -71,13 +83,21 @@ func NewRunID() string {
 
 // New builds a bare engine — no executors registered. Caller must
 // Register at least the node types the workflow uses.
+//
+// The Triggers registry is pre-seeded with DefaultTriggerDescriptors
+// so MCP discovery surfaces the canonical trigger types out of the
+// box. Channel setup code overrides the entry for `trigger:channel`
+// to attach channel-specific Docs (multi-trigger routing quirk etc.).
 func New(layout config.Layout, svc service.Service, ss state.Store) *Engine {
+	tr := NewTriggerRegistry()
+	tr.RegisterMany(DefaultTriggerDescriptors()...)
 	return &Engine{
 		Layout:      layout,
 		Service:     svc,
 		StateStore:  ss,
 		Executors:   map[workflow.NodeType]workflow.Executor{},
 		Descriptors: map[workflow.NodeType]NodeDescriptor{},
+		Triggers:    tr,
 		Now:         func() time.Time { return time.Now().UTC() },
 		IDGen:       NewRunID,
 	}

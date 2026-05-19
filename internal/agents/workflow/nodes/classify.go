@@ -11,6 +11,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 type classifyNodeSchema struct {
@@ -32,6 +33,41 @@ func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
 			"verdict":    "string — matched case label",
 			"confidence": "float — 0.0–1.0",
 			"reasoning":  "string — LLM explanation",
+		},
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"verdict":    "Matched output_cases label. Edge `case:` filters route on this value. Falls back to \"default\" after retries fail.",
+				"confidence": "0.0–1.0 score from the provider's structured output. 0 when the provider didn't return one.",
+				"reasoning":  "Short explanation. Useful as Slack reply or audit log; not a routing input.",
+				"raw":        "Raw provider response — debugging only.",
+				"fuzzy":      "True when the verdict was resolved via fuzzy match instead of exact.",
+			},
+			TemplateableFields: []string{"input", "prompt_file"},
+			Quirks: []string{
+				"output_cases is a YAML list — each entry becomes a JSON Schema enum value passed to the provider's structured output.",
+				"6-layer reliability stack: structured_output → normalize → exact → fuzzy → retry_on_mismatch → confidence_threshold fallback to \"default\".",
+				"verdict \"default\" fires when no enum match after all retries, OR when confidence < confidence_threshold. Add a \"default\" case in your downstream branch to catch it.",
+				"fuzzy_match enables Levenshtein + substring fallback — useful when the model occasionally returns variants like \"bugs\" instead of \"bug\".",
+				"retry_on_mismatch tightens the system prompt on each retry. Costs more tokens; keep ≤2 unless the model is unreliable.",
+			},
+			PairWith:     []string{"branch", "switch", "agent"},
+			CommonPitfalls: []string{
+				"Don't add \"default\" to output_cases — the engine reserves \"default\" as the fallback verdict. Add it as a downstream edge case, not an input enum.",
+				"Don't use classify for boolean/structured routing — use branch with an expression instead. Classify is for free-text input.",
+			},
+			InputSample:  `{"output_cases":["bug","feature","question"],"input":"{{index .Event.Payload \"text\"}}","provider":"claude","fuzzy_match":true,"retry_on_mismatch":1}`,
+			OutputSample: `{"verdict":"bug","confidence":0.92,"reasoning":"User reports authentication failure after deploy — concrete defect, reproducible."}`,
+			Examples: []wickdocs.Example{
+				{
+					Name: "triage_support_intent",
+					YAML: `- id: triage
+  type: classify
+  provider: claude
+  output_cases: [bug, feature, question]
+  input: '{{.Node.trigger.payload.text}}'
+  fuzzy_match: true`,
+				},
+			},
 		},
 	}
 }

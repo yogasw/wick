@@ -8,6 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // OpenDMInput is the schema for the slack.open_dm action.
@@ -30,6 +31,20 @@ func registerActionOpenDM(reg *integration.Registry, ch *slack.Channel) {
 		InputType:   OpenDMInput{},
 		OutputType:  OpenDMOutput{},
 		Destructive: false,
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"channel_id": "DM channel ID (D…). Pass to send_message in subsequent nodes.",
+				"user_id":    "Echoed user_id for downstream references.",
+			},
+			TemplateableFields: []string{"user_id"},
+			Quirks: []string{
+				"Idempotent — returns existing DM channel ID if already opened.",
+				"Requires im:write scope on the bot token.",
+			},
+			PairWith: []string{"channel:slack.send_message"},
+			InputSample:  `{"user_id":"U02ABCDEF"}`,
+			OutputSample: `{"channel_id":"D03DM1234","user_id":"U02ABCDEF"}`,
+		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
 			api := ch.API()
 			if api == nil {

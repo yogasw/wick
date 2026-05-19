@@ -29,6 +29,7 @@ import (
 	"net/http"
 
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Key is the connector definition slug. Surfaced as the prefix of every
@@ -38,10 +39,10 @@ const Key = "crudcrud"
 // Configs is the per-instance credential / endpoint set. Reflected by
 // entity.StructToConfigs into the admin form.
 type Configs struct {
-	BaseURL     string `wick:"url;required;desc=Unique crudcrud endpoint URL. Example: https://crudcrud.com/api/abcdef0123456789"`
-	SecretWord  string `wick:"secret;desc=Reserved sensitive field. Currently unused."`
-	SecretWords             string `wick:"kvlist;desc=One keyword per row. Any keyword that appears in a create / get / update response is replaced with an encrypted token."`
-	SecretWordsIgnoreCase   bool   `wick:"desc=When checked, keyword matching folds case (Admin == admin) and all variants share one token."`
+	BaseURL               string `wick:"url;required;desc=Unique crudcrud endpoint URL. Example: https://crudcrud.com/api/abcdef0123456789"`
+	SecretWord            string `wick:"secret;desc=Reserved sensitive field. Currently unused."`
+	SecretWords           string `wick:"kvlist;desc=One keyword per row. Any keyword that appears in a create / get / update response is replaced with an encrypted token."`
+	SecretWordsIgnoreCase bool   `wick:"desc=When checked, keyword matching folds case (Admin == admin) and all variants share one token."`
 }
 
 // CreateInput is the argument schema for the "create" operation.
@@ -95,35 +96,35 @@ func Operations() []connector.Operation {
 			"Create Document",
 			"Create a new JSON document under {resource}. crudcrud auto-generates an _id and returns the stored document.",
 			CreateInput{},
-			create,
+			create, wickdocs.Docs{},
 		),
 		connector.Op(
 			"list",
 			"List Documents",
 			"List every document in {resource}. Returns an array; empty when the collection has no entries yet.",
 			ListInput{},
-			list,
+			list, wickdocs.Docs{},
 		),
 		connector.Op(
 			"get",
 			"Get Document",
 			"Fetch a single document from {resource} by its _id.",
 			GetInput{},
-			get,
+			get, wickdocs.Docs{},
 		),
 		connector.Op(
 			"update",
 			"Update Document",
 			"Replace the document at {resource}/{id} with the provided JSON. Full replacement, not a partial patch.",
 			UpdateInput{},
-			update,
+			update, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"delete",
 			"Delete Document",
 			"Permanently delete the document at {resource}/{id}. Cannot be undone.",
 			DeleteInput{},
-			deleteOp,
+			deleteOp, wickdocs.Docs{},
 		),
 	}
 }

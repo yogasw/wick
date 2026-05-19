@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // HTTPExecutor performs an HTTP request. Retry policy from n.Retry;
@@ -52,6 +53,56 @@ func (e *HTTPExecutor) Descriptor() engine.NodeDescriptor {
 			"status":  "int — HTTP status code",
 			"body":    "string — response body",
 			"headers": "map[string]string — response headers",
+		},
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"status":  "Numeric HTTP status. Branch on it via a downstream branch node ({{.Node.x.status}} >= 400).",
+				"body":    "Response body as string. Always populated regardless of parse_response.",
+				"headers": "Flat map of response headers — first value per key.",
+				"json":    "Parsed JSON body. Populated when parse_response is \"json\" or unset and the body is valid JSON. Use {{.Node.x.json.<field>}}.",
+				"bytes":   "Raw bytes — populated only when parse_response is \"bytes\".",
+			},
+			TemplateableFields: []string{"url", "body", "headers", "query"},
+			Quirks: []string{
+				"Default timeout is 30s. Override with timeout_sec when the upstream is known to be slow.",
+				"Retry policy comes from the common retry block (max, backoff_sec). Retries fire on transport errors and 5xx — NOT on 4xx (those are user errors).",
+				"headers / query are kv-list widgets in the inspector — each VALUE is template-rendered. Set arg_modes.headers: fixed (or query: fixed) to render the whole map literally.",
+				"parse_response defaults to \"json\" — when the body is valid JSON, .Node.<this>.json is populated. Set to \"raw\" or \"bytes\" to skip parsing.",
+				"jsonEscape your template values when embedding into a JSON body — unescaped quotes break the payload.",
+			},
+			PairWith: []string{"branch", "transform", "shell"},
+			CommonPitfalls: []string{
+				"Don't put secrets directly in headers — use wick_enc_ tokens, or reference them via {{.Env.MY_SECRET}}.",
+				"Don't depend on .Node.<this>.json when parse_response is \"raw\" — only .body is populated.",
+				"Don't forget Content-Type: application/json when posting JSON — wick doesn't auto-set it.",
+			},
+			InputSample:  `{"method":"POST","url":"https://api.example.com/tickets","headers":{"Authorization":"Bearer {{.Env.API_TOKEN}}","Content-Type":"application/json"},"body":"{\"title\":\"{{jsonEscape .Node.classify.reasoning}}\"}","parse_response":"json","timeout_sec":"15"}`,
+			OutputSample: `{"status":201,"body":"{\"id\":42,\"title\":\"Payment refund bug\"}","headers":{"Content-Type":"application/json"},"json":{"id":42,"title":"Payment refund bug"}}`,
+			Examples: []wickdocs.Example{
+				{
+					Name: "post_json_body",
+					YAML: `- id: file_ticket
+  type: http
+  method: POST
+  url: https://api.example.com/tickets
+  headers:
+    Content-Type: application/json
+    Authorization: "Bearer {{.Env.API_TOKEN}}"
+  body: |
+    {"title": "{{jsonEscape .Node.classify.reasoning}}"}
+  parse_response: json
+  timeout_sec: "15"`,
+				},
+				{
+					Name: "get_with_query",
+					YAML: `- id: lookup
+  type: http
+  method: GET
+  url: https://api.example.com/users
+  query:
+    email: "{{.Node.trigger.payload.email}}"`,
+				},
+			},
 		},
 	}
 }

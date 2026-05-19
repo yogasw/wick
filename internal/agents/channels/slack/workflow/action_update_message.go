@@ -8,6 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // UpdateMessageInput is the schema for slack.update_message. The ts
@@ -35,6 +36,21 @@ func registerActionUpdateMessage(reg *integration.Registry, ch *slack.Channel) {
 		InputType:   UpdateMessageInput{},
 		OutputType:  UpdateMessageOutput{},
 		Destructive: true,
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"channel": "Channel ID the edit landed on (echo of input).",
+				"ts":      "Edited message ts (matches input ts).",
+			},
+			TemplateableFields: []string{"channel", "ts", "text", "blocks"},
+			Quirks: []string{
+				"Can only edit messages the bot itself posted. Slack rejects edits to other users' messages.",
+				"Doesn't work on ephemerals — use respond_url with replace_original instead.",
+				"blocks REPLACES the entire block set; pass the full new state, not a diff.",
+			},
+			PairWith: []string{"channel:slack.send_message", "channel:slack.delete_message"},
+			InputSample:  `{"channel":"C12345","ts":"1700001234.005600","text":"Ticket resolved. Thanks!"}`,
+			OutputSample: `{"channel":"C12345","ts":"1700001234.005600"}`,
+		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
 			api := ch.API()
 			if api == nil {

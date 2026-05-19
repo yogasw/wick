@@ -32,6 +32,10 @@ func (h *handlers) channels(c *connector.Ctx) (any, error) {
 	return h.ops.ChannelsList(), nil
 }
 
+func (h *handlers) nodeDetail(c *connector.Ctx) (any, error) {
+	return h.ops.NodeDetail(c.Input("node_type"))
+}
+
 func (h *handlers) integration(c *connector.Ctx) (any, error) {
 	rawActions := h.ops.IntegrationActions()
 	actions := make([]map[string]any, len(rawActions))

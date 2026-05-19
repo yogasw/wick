@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 const Key = "slack"
@@ -50,8 +51,8 @@ type SearchChannelsInput struct {
 }
 
 type GetChannelInfoInput struct {
-	Channel             string `wick:"required;desc=Channel ID (C..., G..., D...) or #channel-name."`
-	IncludeNumMembers   bool   `wick:"desc=Include member count. Default: false."`
+	Channel           string `wick:"required;desc=Channel ID (C..., G..., D...) or #channel-name."`
+	IncludeNumMembers bool   `wick:"desc=Include member count. Default: false."`
 }
 
 type GetChannelHistoryInput struct {
@@ -84,25 +85,25 @@ type GetUserByEmailInput struct {
 }
 
 type GetPermalinkInput struct {
-	Channel    string `wick:"required;desc=Channel ID where the message lives."`
-	MessageTS  string `wick:"required;desc=Timestamp of the target message."`
+	Channel   string `wick:"required;desc=Channel ID where the message lives."`
+	MessageTS string `wick:"required;desc=Timestamp of the target message."`
 }
 
 type SendMessageInput struct {
-	Channel  string `wick:"required;desc=Channel ID, user ID (DM), or #channel-name."`
-	Text     string `wick:"textarea;desc=Fallback / plain-text body. Required if Blocks is empty."`
-	Blocks   string `wick:"textarea;desc=Optional Block Kit JSON array (string). When set, supersedes text rendering."`
-	ThreadTS string `wick:"desc=Parent message ts to reply in a thread."`
-	ReplyBroadcast bool `wick:"desc=When replying in a thread, also broadcast to the channel. Default: false."`
-	UnfurlLinks    bool `wick:"desc=Enable link unfurling. Default: true."`
-	Mrkdwn         bool `wick:"desc=Enable Slack markdown rendering. Default: true."`
+	Channel        string `wick:"required;desc=Channel ID, user ID (DM), or #channel-name."`
+	Text           string `wick:"textarea;desc=Fallback / plain-text body. Required if Blocks is empty."`
+	Blocks         string `wick:"textarea;desc=Optional Block Kit JSON array (string). When set, supersedes text rendering."`
+	ThreadTS       string `wick:"desc=Parent message ts to reply in a thread."`
+	ReplyBroadcast bool   `wick:"desc=When replying in a thread, also broadcast to the channel. Default: false."`
+	UnfurlLinks    bool   `wick:"desc=Enable link unfurling. Default: true."`
+	Mrkdwn         bool   `wick:"desc=Enable Slack markdown rendering. Default: true."`
 }
 
 type SendEphemeralInput struct {
-	Channel string `wick:"required;desc=Channel ID where the ephemeral will appear."`
-	User    string `wick:"required;desc=User ID who will see the ephemeral message."`
-	Text    string `wick:"textarea;desc=Plain-text body. Required if Blocks is empty."`
-	Blocks  string `wick:"textarea;desc=Optional Block Kit JSON array (string)."`
+	Channel  string `wick:"required;desc=Channel ID where the ephemeral will appear."`
+	User     string `wick:"required;desc=User ID who will see the ephemeral message."`
+	Text     string `wick:"textarea;desc=Plain-text body. Required if Blocks is empty."`
+	Blocks   string `wick:"textarea;desc=Optional Block Kit JSON array (string)."`
 	ThreadTS string `wick:"desc=Optional parent thread ts."`
 }
 
@@ -130,7 +131,6 @@ type RemoveReactionInput struct {
 	Name    string `wick:"required;desc=Emoji name without colons."`
 }
 
-
 // Meta returns the static metadata block for this connector.
 func Meta() connector.Meta {
 	return connector.Meta{
@@ -150,20 +150,34 @@ func Operations() []connector.Operation {
 			"List channels visible to the bot. Returns id, name, is_private, is_archived, topic, purpose, and pagination cursor.",
 			ListChannelsInput{},
 			listChannels,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"channels":           "Array of channel objects: id, name, is_private, is_archived, topic, purpose, num_members.",
+					"response_metadata":  "Pagination wrapper. response_metadata.next_cursor non-empty = call again with cursor.",
+				},
+				Quirks: []string{
+					"types defaults to public_channel,private_channel. Add mpim,im to include group DMs and DMs.",
+					"exclude_archived defaults true — flip to false when auditing/restoring.",
+					"name_contains is applied client-side after Slack returns the page; if your match is in a later page it won't surface without paginating.",
+					"Slack caps the per-call result at 1000. Use cursor for the next page.",
+				},
+				PairWith:     []string{"connector:slack.search_channels", "connector:slack.get_channel_info"},
+				OutputSample: `{"ok":true,"channels":[{"id":"C12345","name":"general","is_private":false,"is_archived":false}],"response_metadata":{"next_cursor":""}}`,
+			},
 		),
 		connector.Op(
 			"search_channels",
 			"Search Channels by Name",
 			"Find channels whose name contains the query (case-insensitive). Returns up to {limit} matches with id, name, is_private.",
 			SearchChannelsInput{},
-			searchChannels,
+			searchChannels, wickdocs.Docs{},
 		),
 		connector.Op(
 			"get_channel_info",
 			"Get Channel Info",
 			"Return metadata for a single channel: id, name, is_private, is_archived, topic, purpose, creator, created.",
 			GetChannelInfoInput{},
-			getChannelInfo,
+			getChannelInfo, wickdocs.Docs{},
 		),
 		connector.Op(
 			"get_channel_history",
@@ -171,13 +185,29 @@ func Operations() []connector.Operation {
 			"Read recent messages in a channel. Returns ts, user, text, thread_ts, reply_count, reactions, and pagination cursor.",
 			GetChannelHistoryInput{},
 			getChannelHistory,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"messages":          "Array of message objects (ts, user, text, thread_ts, reply_count, reactions).",
+					"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = more pages.",
+					"has_more":          "True when older messages exist beyond the current page.",
+				},
+				Quirks: []string{
+					"oldest / latest are INCLUSIVE Slack ts strings (e.g. \"1700000000.000100\"), not RFC3339.",
+					"Default limit 50, max 1000. For long ranges paginate with cursor instead of bumping limit.",
+					"Returns ONLY top-level messages — threaded replies need get_thread_replies on the parent ts.",
+					"Requires channels:history (public), groups:history (private), or im:history / mpim:history depending on channel type.",
+				},
+				PairWith:     []string{"connector:slack.get_thread_replies", "connector:slack.get_permalink"},
+				InputSample:  `{"channel":"C12345","limit":50,"oldest":"1700000000.000000"}`,
+				OutputSample: `{"ok":true,"messages":[{"ts":"1700001234.005600","user":"U02ABCDEF","text":"hello","thread_ts":"1700001234.005600","reply_count":3}],"has_more":false,"response_metadata":{"next_cursor":""}}`,
+			},
 		),
 		connector.Op(
 			"get_thread_replies",
 			"Get Thread Replies",
 			"Read all replies under a parent message thread. Returns parent + replies (ts, user, text, reactions) and pagination cursor.",
 			GetThreadRepliesInput{},
-			getThreadReplies,
+			getThreadReplies, wickdocs.Docs{},
 		),
 		connector.Op(
 			"list_users",
@@ -185,13 +215,26 @@ func Operations() []connector.Operation {
 			"List workspace members. Returns id, name, real_name, email, is_bot, is_admin, deleted, and pagination cursor.",
 			ListUsersInput{},
 			listUsers,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"members":           "Array of user objects (id, name, real_name, profile.email, is_bot, is_admin, deleted).",
+					"response_metadata": "Pagination wrapper — response_metadata.next_cursor.",
+				},
+				Quirks: []string{
+					"Slack returns deactivated users by default — set include_deleted=false-ish via custom filter in your workflow if you don't want them.",
+					"Email visibility requires users:read.email scope. Without it the email field is empty.",
+					"Tier-2 rate limit — paginate, don't tight-loop.",
+				},
+				PairWith:     []string{"connector:slack.get_user_info", "connector:slack.get_user_by_email"},
+				OutputSample: `{"ok":true,"members":[{"id":"U02ABCDEF","name":"yoga","real_name":"Yoga Setiawan","profile":{"email":"yoga@example.com"},"is_bot":false,"deleted":false}],"response_metadata":{"next_cursor":""}}`,
+			},
 		),
 		connector.Op(
 			"get_user_info",
 			"Get User Info",
 			"Return profile for a single user id: id, name, real_name, email, is_bot, is_admin, deleted.",
 			GetUserInfoInput{},
-			getUserInfo,
+			getUserInfo, wickdocs.Docs{},
 		),
 		connector.Op(
 			"get_user_by_email",
@@ -199,13 +242,26 @@ func Operations() []connector.Operation {
 			"Resolve a workspace user by their email address. Returns the same shape as get_user_info.",
 			GetUserByEmailInput{},
 			getUserByEmail,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"user": "Single user object (id, name, real_name, profile.email, is_bot, is_admin, deleted). Empty when no match.",
+				},
+				Quirks: []string{
+					"Requires users:read.email scope.",
+					"Slack returns users_not_found when no workspace member uses that exact email — wick surfaces the error verbatim.",
+					"Email is matched case-insensitively but must be the FULL address (no aliasing).",
+				},
+				PairWith:     []string{"connector:slack.get_user_info", "channel:slack.open_dm"},
+				InputSample:  `{"email":"yoga@example.com"}`,
+				OutputSample: `{"ok":true,"user":{"id":"U02ABCDEF","name":"yoga","real_name":"Yoga Setiawan","profile":{"email":"yoga@example.com"},"is_bot":false}}`,
+			},
 		),
 		connector.Op(
 			"get_permalink",
 			"Get Message Permalink",
 			"Return the permalink URL for a message ts in a channel.",
 			GetPermalinkInput{},
-			getPermalink,
+			getPermalink, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"send_message",
@@ -213,13 +269,71 @@ func Operations() []connector.Operation {
 			"Post a message to a channel, DM, or thread. Returns the posted message ts and channel id. Idempotent only if the caller dedupes upstream.",
 			SendMessageInput{},
 			sendMessage,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ok":      "Slack API success flag. False means the request reached Slack but the post was rejected.",
+					"channel": "Channel ID the message landed in (C…/D…/G…). Resolved from #name input server-side.",
+					"ts":      "Slack message timestamp / message ID. Pass to update_message, delete_message, get_permalink, add_reaction, or as thread_ts for follow-ups.",
+					"message": "Echoed payload Slack accepted, including normalised text/blocks. Useful for audit fixtures.",
+				},
+				TemplateableFields: []string{"channel", "text", "blocks", "thread_ts"},
+				Quirks: []string{
+					"channel accepts: channel ID (C…), DM ID (D…), user ID (U…) for an auto-opened DM, or #channel-name (resolved server-side). #name fails when the bot isn't already a member.",
+					"When blocks is set it OVERRIDES text for rendering, but Slack still requires a non-empty text for notifications. Always set both.",
+					"thread_ts must be the PARENT message's ts. Replying to a reply still uses the root ts.",
+					"reply_broadcast only does anything when thread_ts is set. With it true, the threaded reply also fans out to the main channel.",
+					"Rate limit: 1 msg/sec per channel for posting. Bursts beyond that get queued then 429'd.",
+				},
+				PairWith: []string{
+					"connector:slack.update_message",
+					"connector:slack.delete_message",
+					"connector:slack.add_reaction",
+					"channel:slack.send_message",
+				},
+				CommonPitfalls: []string{
+					"Don't put both text and blocks as templates and forget to {{jsonEscape}} text inside blocks — unescaped quotes break the JSON.",
+					"Don't pass channel: \"#name\" expecting Slack to auto-invite the bot — name resolution succeeds only when the bot is already a member.",
+					"Don't reuse a stored ts across days for thread_ts on a high-volume channel — Slack purges old thread state.",
+				},
+				InputSample:  `{"channel":"#alerts","text":"New ticket from U12345: payment refund issue","thread_ts":"1700000000.000100"}`,
+				OutputSample: `{"ok":true,"channel":"C12345","ts":"1700001234.005600","message":{"text":"New ticket from U12345: payment refund issue","user":"UBOT01","ts":"1700001234.005600"}}`,
+				Examples: []wickdocs.Example{
+					{
+						Name: "simple_send",
+						YAML: `- id: notify
+  type: connector
+  module: slack
+  op: send_message
+  arg_modes:
+    text: expression
+  args:
+    channel: "#alerts"
+    text: "New ticket from {{.Node.trigger.payload.user}}: {{.Node.trigger.payload.text}}"`,
+					},
+					{
+						Name: "thread_reply",
+						YAML: `- id: reply
+  type: connector
+  module: slack
+  op: send_message
+  arg_modes:
+    channel: expression
+    text: expression
+    thread_ts: expression
+  args:
+    channel: '{{.Node.trigger.payload.channel_id}}'
+    thread_ts: '{{.Node.trigger.payload.thread}}'
+    text: "Got it — looking into this now."`,
+					},
+				},
+			},
 		),
 		connector.OpDestructive(
 			"send_ephemeral",
 			"Send Ephemeral Message",
 			"Post a message visible only to {user} in {channel}. Returns the message ts.",
 			SendEphemeralInput{},
-			sendEphemeral,
+			sendEphemeral, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"update_message",
@@ -227,13 +341,30 @@ func Operations() []connector.Operation {
 			"Edit a previously-sent message identified by ts. Returns the new ts and text.",
 			UpdateMessageInput{},
 			updateMessage,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ok":      "True on success.",
+					"channel": "Channel ID (echo).",
+					"ts":      "Edited message ts (matches input).",
+					"text":    "Echoed new text.",
+				},
+				TemplateableFields: []string{"channel", "ts", "text", "blocks"},
+				Quirks: []string{
+					"Can only edit messages the bot itself posted. Other authors' messages return cant_update_message.",
+					"Doesn't work on ephemerals — use respond_url with replace_original.",
+					"blocks REPLACES the entire block set. Pass full new state, not a diff.",
+				},
+				PairWith:     []string{"connector:slack.send_message", "connector:slack.delete_message"},
+				InputSample:  `{"channel":"C12345","ts":"1700001234.005600","text":"Resolved. Thanks!"}`,
+				OutputSample: `{"ok":true,"channel":"C12345","ts":"1700001234.005600","text":"Resolved. Thanks!"}`,
+			},
 		),
 		connector.OpDestructive(
 			"delete_message",
 			"Delete Message",
 			"Permanently delete a message by ts. Not reversible.",
 			DeleteMessageInput{},
-			deleteMessage,
+			deleteMessage, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"add_reaction",
@@ -241,13 +372,27 @@ func Operations() []connector.Operation {
 			"Add an emoji reaction to a message. Emoji name is unprefixed (e.g. 'thumbsup').",
 			AddReactionInput{},
 			addReaction,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ok": "True on success or already_reacted.",
+				},
+				TemplateableFields: []string{"channel", "ts", "name"},
+				Quirks: []string{
+					"name is the emoji shortname WITHOUT colons (\"thumbsup\", not \":thumbsup:\").",
+					"Idempotent: re-adding the same reaction errors with already_reacted — wrap with on_failure: skip if you don't want to fail the workflow.",
+					"Requires reactions:write scope.",
+				},
+				PairWith:     []string{"connector:slack.remove_reaction"},
+				InputSample:  `{"channel":"C12345","ts":"1700001234.005600","name":"white_check_mark"}`,
+				OutputSample: `{"ok":true}`,
+			},
 		),
 		connector.OpDestructive(
 			"remove_reaction",
 			"Remove Reaction",
 			"Remove an emoji reaction previously added by the bot.",
 			RemoveReactionInput{},
-			removeReaction,
+			removeReaction, wickdocs.Docs{},
 		),
 	}
 }

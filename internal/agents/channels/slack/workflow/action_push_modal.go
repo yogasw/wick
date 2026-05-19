@@ -8,6 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // PushModalInput layers a new modal on top of the current one — the
@@ -31,6 +32,21 @@ func registerActionPushModal(reg *integration.Registry, ch *slack.Channel) {
 		Description: "Stack a new modal on top of the current one. trigger_id expires in 3s — keep this node on a short path from the originating event.",
 		InputType:   PushModalInput{},
 		OutputType:  PushModalOutput{},
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"view_id":   "Pushed modal view ID. Use for update_modal targeting the pushed layer.",
+				"view_hash": "Concurrency hash.",
+			},
+			TemplateableFields: []string{"trigger_id", "view"},
+			Quirks: []string{
+				"Same 3-second trigger_id rule as open_modal — keep this on a short path.",
+				"User can dismiss the pushed modal to return to the parent; on submit, view_submission fires only for the topmost view.",
+			},
+			PairWith: []string{"channel:slack.open_modal", "channel:slack.update_modal"},
+			CommonPitfalls: []string{
+				"Don't push more than ~3 levels — Slack lets you, but users get lost.",
+			},
+		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
 			api := ch.API()
 			if api == nil {

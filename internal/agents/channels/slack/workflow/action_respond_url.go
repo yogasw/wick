@@ -11,6 +11,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // RespondURLInput posts to a Slack response_url returned with a block
@@ -46,6 +47,30 @@ func registerActionRespondURL(reg *integration.Registry, _ *slack.Channel) {
 		Name:        "Slack: Respond via response_url",
 		Description: "POST a reply to the response_url Slack issues with each interaction. Required for editing slash-command ephemerals and for delayed responses (up to 30 mins / 5 calls).",
 		InputType:   RespondURLInput{},
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"ok":     "True when Slack accepted the POST.",
+				"status": "HTTP status code from Slack's response_url endpoint.",
+			},
+			TemplateableFields: []string{"response_url", "text", "blocks", "response_type"},
+			Quirks: []string{
+				"response_url is valid for 30 minutes and at most 5 posts per interaction. After that wick returns the upstream error.",
+				"response_type \"ephemeral\" replies privately to the invoking user; \"in_channel\" posts visible to the channel. Default is whatever Slack used for the original message.",
+				"replace_original / delete_original work only when the original message was posted by Slack as a result of the interaction (slash command response, action ack). Cannot edit messages posted via chat.postMessage.",
+				"Either text, blocks, or delete_original is required. Wick rejects empty payloads before sending.",
+			},
+			PairWith: []string{
+				"channel:slack.block_action",
+				"channel:slack.command",
+				"channel:slack.send_ephemeral",
+			},
+			CommonPitfalls: []string{
+				"Don't try to chat.update an ephemeral message — respond_url is the only way to edit/replace it.",
+				"Don't store response_url across runs — it expires fast.",
+			},
+			InputSample:  `{"response_url":"https://hooks.slack.com/actions/T123/...","text":"Working on it…","response_type":"ephemeral","replace_original":true}`,
+			OutputSample: `{"ok":true,"status":200}`,
+		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
 			respURL, err := argString(args, "response_url")
 			if err != nil {

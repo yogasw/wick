@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 func benchModule(repeat int) connector.Module {
@@ -38,7 +39,7 @@ func benchModule(repeat int) connector.Module {
 						"echoed_password": c.Input("password"),
 						"filler":          filler,
 					}, nil
-				},
+				}, wickdocs.Docs{},
 			),
 		},
 	}

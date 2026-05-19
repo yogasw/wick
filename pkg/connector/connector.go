@@ -48,6 +48,7 @@ import (
 
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Meta is the static metadata for a connector definition. Key must be
@@ -114,6 +115,12 @@ type Operation struct {
 	Input       []entity.Config
 	Execute     ExecuteFunc
 	Destructive bool
+	// Docs carries the opt-in self-documentation fields the workflow
+	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
+	// quirks, templateable fields, pair-with, common pitfalls).
+	// Zero-value Docs = current behaviour; populate per op when worth
+	// it. See pkg/wickdocs + internal/docs/workflow/24-describe-contract.md.
+	wickdocs.Docs
 }
 
 // Op is a small constructor that reflects a typed input struct into
@@ -121,26 +128,33 @@ type Operation struct {
 // hand and calling entity.StructToConfigs(input) yourself, but reads
 // nicer when listing many operations inline.
 //
+// docs carries the optional self-documentation bundle exposed by the
+// workflow MCP `workflow_node_detail` op — quirks, examples, sample
+// payloads, pair-with, common pitfalls. Pass `wickdocs.Docs{}` when
+// the op has no extra guidance; the description + reflected schema
+// alone are already enough for callers in that case.
+//
 //	connector.Op("query", "Query Logs",
 //	    "Search Loki using LogQL.",
-//	    QueryInput{}, queryExec)
+//	    QueryInput{}, queryExec, wickdocs.Docs{})
 //
-// Pass struct{}{} when the operation takes no input arguments.
-func Op[I any](key, name, description string, input I, exec ExecuteFunc) Operation {
+// Pass struct{}{} as input when the operation takes no input arguments.
+func Op[I any](key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs) Operation {
 	return Operation{
 		Key:         key,
 		Name:        name,
 		Description: description,
 		Input:       entity.StructToConfigs(input),
 		Execute:     exec,
+		Docs:        docs,
 	}
 }
 
 // OpDestructive is the destructive-marked variant of Op. The resulting
 // Operation defaults to disabled when a new instance is created, and
 // the admin UI flags it so admins know to verify before enabling.
-func OpDestructive[I any](key, name, description string, input I, exec ExecuteFunc) Operation {
-	op := Op(key, name, description, input, exec)
+func OpDestructive[I any](key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs) Operation {
+	op := Op(key, name, description, input, exec, docs)
 	op.Destructive = true
 	return op
 }

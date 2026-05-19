@@ -10,6 +10,7 @@ import (
 
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // healthModule returns a module with three ops and a HealthCheck hook
@@ -21,9 +22,9 @@ func healthModule(report *[]connector.OpHealth, callErr *error) connector.Module
 	return connector.Module{
 		Meta: connector.Meta{Key: "health-stub", Name: "Health Stub"},
 		Operations: []connector.Operation{
-			connector.Op("a", "A", "first", struct{}{}, noop),
-			connector.Op("b", "B", "second", struct{}{}, noop),
-			connector.Op("c", "C", "third", struct{}{}, noop),
+			connector.Op("a", "A", "first", struct{}{}, noop, wickdocs.Docs{}),
+			connector.Op("b", "B", "second", struct{}{}, noop, wickdocs.Docs{}),
+			connector.Op("c", "C", "third", struct{}{}, noop, wickdocs.Docs{}),
 		},
 		HealthCheck: func(c *connector.Ctx) ([]connector.OpHealth, error) {
 			if callErr != nil && *callErr != nil {

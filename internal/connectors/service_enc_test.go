@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 const testEncKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -55,7 +56,7 @@ func echoModule() connector.Module {
 						"echoed_token":    c.Cfg("token"),
 						"echoed_password": c.Input("password"),
 					}, nil
-				},
+				}, wickdocs.Docs{},
 			),
 		},
 	}
@@ -220,7 +221,7 @@ func echoNonSecretModule() connector.Module {
 						"echoed_token": c.Cfg("token"),
 						"echoed_note":  c.Input("note"),
 					}, nil
-				},
+				}, wickdocs.Docs{},
 			),
 		},
 	}
@@ -313,7 +314,7 @@ func echoMaskModule() connector.Module {
 					return map[string]string{
 						"raw_field": dyn, // intentionally raw — middleware must catch it
 					}, nil
-				},
+				}, wickdocs.Docs{},
 			),
 		},
 	}
@@ -372,7 +373,7 @@ func errLeakModule() connector.Module {
 				EchoInput{},
 				func(c *connector.Ctx) (any, error) {
 					return nil, fmt.Errorf("upstream auth failed for token %q", c.Cfg("token"))
-				},
+				}, wickdocs.Docs{},
 			),
 		},
 	}
