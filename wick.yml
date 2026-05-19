@@ -28,9 +28,10 @@ vars:
       darwin: internal/agents/gate/assets/gate-darwin-amd64
       linux/arm64: internal/agents/gate/assets/gate-linux-arm64
       linux: internal/agents/gate/assets/gate-linux-amd64
-  # LDFLAGS bakes the app name into both binaries so paths (socket, logs,
-  # spec) resolve correctly regardless of the working directory at runtime.
-  LDFLAGS: -X=github.com/yogasw/wick/internal/appname.BuildAppName=wick-lab
+  # LDFLAGS bakes the app name and version into both binaries so paths
+  # (socket, logs, spec) resolve correctly and wick_info reports the right
+  # app_name / app_version regardless of working directory at runtime.
+  LDFLAGS: -X=github.com/yogasw/wick/internal/appname.BuildAppName={{.NAME}} -X=github.com/yogasw/wick/internal/appname.BuildAppVersion={{.VERSION}}
 
 tasks:
   setup:
