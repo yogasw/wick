@@ -25,7 +25,10 @@
     {
       "label": "css: watch",
       "type": "shell",
-      "command": "bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css --watch",
+      "command": "bin/tailwindcss -i web/src/input.css -o web/public/css/app.css --watch",
+      "windows": {
+        "command": "bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css --watch"
+      },
       "isBackground": true,
       "problemMatcher": [
         {
@@ -52,13 +55,19 @@
     {
       "label": "css: build",
       "type": "shell",
-      "command": "bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css",
+      "command": "bin/tailwindcss -i web/src/input.css -o web/public/css/app.css",
+      "windows": {
+        "command": "bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css"
+      },
       "problemMatcher": []
     },
     {
       "label": "gate: build",
       "type": "shell",
-      "command": "go build -o bin/wick-lab-gate.exe ./cmd/gate",
+      "command": "go build -o bin/wick-lab-gate ./cmd/gate",
+      "windows": {
+        "command": "go build -o bin/wick-lab-gate.exe ./cmd/gate"
+      },
       "problemMatcher": ["$go"]
     },
     {
