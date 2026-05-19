@@ -262,6 +262,39 @@
       var turnHasText = false;
 
       var ssePort = null;
+      var sseConnectedHideTimer = null;
+      // Render the SSE connection pill in the header. state: "" = hide,
+      // "connected" = green dot (auto-hide 2s), "reconnecting" = amber spinner.
+      function setSseStatus(state) {
+        var pill = document.querySelector("[data-sse-status]");
+        if (!pill) return;
+        if (sseConnectedHideTimer) { clearTimeout(sseConnectedHideTimer); sseConnectedHideTimer = null; }
+        var spin = pill.querySelector("[data-sse-spin]");
+        var dot = pill.querySelector("[data-sse-dot]");
+        var lbl = pill.querySelector("[data-sse-label]");
+        pill.classList.remove(
+          "border-green-300","dark:border-green-700","bg-green-50","dark:bg-green-900/20","text-green-700","dark:text-green-300",
+          "border-amber-300","dark:border-amber-700","bg-amber-50","dark:bg-amber-900/20","text-amber-700","dark:text-amber-300"
+        );
+        if (state === "connected") {
+          pill.classList.remove("hidden");
+          pill.classList.add("border-green-300","dark:border-green-700","bg-green-50","dark:bg-green-900/20","text-green-700","dark:text-green-300");
+          if (spin) spin.classList.add("hidden");
+          if (dot) dot.classList.remove("hidden");
+          if (lbl) lbl.textContent = "connected";
+          sseConnectedHideTimer = setTimeout(function () { pill.classList.add("hidden"); }, 2000);
+        } else if (state === "reconnecting") {
+          pill.classList.remove("hidden");
+          pill.classList.add("border-amber-300","dark:border-amber-700","bg-amber-50","dark:bg-amber-900/20","text-amber-700","dark:text-amber-300");
+          if (spin) spin.classList.remove("hidden");
+          if (dot) dot.classList.add("hidden");
+          if (lbl) lbl.textContent = "reconnecting…";
+        } else {
+          pill.classList.add("hidden");
+        }
+        pill.dataset.state = state || "";
+      }
+
       if (typeof SharedWorker !== "undefined") {
         var worker = new SharedWorker(base + "/static/js/sse-worker.js");
         ssePort = worker.port;
@@ -274,6 +307,10 @@
           var data = msg.data;
           if (!data) return;
           if (data.type === "event") handleAgentEvent(data.event);
+          else if (data.type === "status") {
+            if (data.status === "connected") setSseStatus("connected");
+            else if (data.status === "error") setSseStatus("reconnecting");
+          }
         };
       } else {
         // Fallback for browsers without SharedWorker support.
@@ -282,6 +319,11 @@
           var ev; try { ev = JSON.parse(e.data); } catch(_) { return; }
           handleAgentEvent(ev);
         });
+        es.onopen = function () { setSseStatus("connected"); };
+        es.onerror = function () {
+          // EventSource auto-reconnects unless readyState === CLOSED.
+          if (es.readyState !== EventSource.CLOSED) setSseStatus("reconnecting");
+        };
       }
 
       function showTypingIndicator() {
