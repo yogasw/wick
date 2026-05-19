@@ -14,6 +14,10 @@ templ storageSettingsPanel() {
 					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
 					Restore Now
 				</button>
+				<button onclick="triggerRepairTree()" title="Rewire orphan parent_id values from rel_path. Use if tree drill-down shows Empty unexpectedly." class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+					Repair Tree
+				</button>
 			</div>
 		</div>
 		<div id="settings-trigger-msg" class="hidden mb-5 px-4 py-2 text-xs text-black-800 dark:text-black-500 bg-white-200 dark:bg-navy-800 rounded-xl"></div>
@@ -34,13 +38,14 @@ templ storageSettingsPanel() {
 							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Label</th>
 							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Path</th>
 							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Mode</th>
+							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Retention (days)</th>
 							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">Added</th>
 							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500">On</th>
 							<th class="px-3 py-2 text-left font-medium text-black-800 dark:text-black-500"></th>
 						</tr>
 					</thead>
 					<tbody id="sources-tbody">
-						<tr><td colspan="7" class="px-3 py-6 text-center text-black-700 dark:text-black-500">Loading…</td></tr>
+						<tr><td colspan="8" class="px-3 py-6 text-center text-black-700 dark:text-black-500">Loading…</td></tr>
 					</tbody>
 				</table>
 			</div>

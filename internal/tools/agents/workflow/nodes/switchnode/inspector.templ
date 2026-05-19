@@ -1,0 +1,80 @@
+package switchnode
+
+// Inspector is the parameters-tab partial for the switch node. Unlike
+// http/go_eval the body is hand-coded (no ArgForm) because the user
+// asked for a custom rows builder with Add Rule / × / drag-reorder
+// affordances that don't map cleanly to the schema-driven widget pool.
+//
+// The partial owns three DOM hooks for inspector.js:
+//
+//	#ins-switch-rows           — the rows container, one .switch-row per case
+//	#ins-switch-add            — Add Rule button
+//	#ins-switch-default        — default_case input
+//
+// inspector.js iterates wf.Node.Cases on hydrate, clones the
+// .switch-row-template <template> tag below, and wires input + delete
+// listeners; save reads each visible row back into a {when, case}
+// list. No external CSS dependencies — Tailwind utility classes match
+// the rest of the inspector for theme parity.
+templ Inspector() {
+	<div class="wf-inspector-panel hidden" data-node-type="switch">
+		<div class="space-y-3">
+			<div>
+				<div class="flex items-center justify-between mb-1">
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600">Rules <span class="text-neg-500">*</span></label>
+					<button
+						type="button"
+						id="ins-switch-add"
+						class="rounded-md bg-green-500/15 dark:bg-green-500/20 px-2 py-0.5 text-[11px] font-medium text-green-700 dark:text-green-300 hover:bg-green-500/25 dark:hover:bg-green-500/30 transition-colors"
+					>+ Add rule</button>
+				</div>
+				<div id="ins-switch-rows" class="space-y-2"></div>
+				<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+					First rule whose <code>when</code> is true wins. Emits <code>verdict=case</code> — connect downstream edges with matching <code>case:</code> labels.
+				</p>
+			</div>
+			<div>
+				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Default case</label>
+				<input
+					id="ins-switch-default"
+					type="text"
+					placeholder="fallback label (leave blank to fail closed)"
+					class="wf-input font-mono"
+				/>
+				<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+					Verdict emitted when no rule matches. Blank = error (workflow halts).
+				</p>
+			</div>
+		</div>
+		<template id="ins-switch-row-template">
+			<div class="switch-row grid grid-cols-[1fr_auto_auto] gap-2 items-start rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-2">
+				<div class="space-y-1">
+					<input
+						type="text"
+						data-switch-when
+						placeholder="{{.Event.Payload.status}} == &quot;approved&quot;"
+						class="wf-input font-mono text-xs"
+					/>
+					<input
+						type="text"
+						data-switch-case
+						placeholder="case label (e.g. approve)"
+						class="wf-input font-mono text-xs"
+					/>
+				</div>
+				<button
+					type="button"
+					data-switch-move
+					class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 cursor-grab text-lg leading-none px-1"
+					title="Drag to reorder"
+				>⋮⋮</button>
+				<button
+					type="button"
+					data-switch-remove
+					class="text-black-700 dark:text-black-600 hover:text-neg-500 text-base leading-none px-1"
+					title="Remove rule"
+				>×</button>
+			</div>
+		</template>
+	</div>
+}

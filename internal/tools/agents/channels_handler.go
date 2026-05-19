@@ -205,9 +205,30 @@ func channelHealthHandler(c *tool.Ctx) {
 	c.JSON(http.StatusOK, checks)
 }
 
+// channelSecretKeys returns the set of secret key names for a channel type,
+// derived from the wick:"secret" tag on each channel's config struct.
+func channelSecretKeys(channelType string) map[string]bool {
+	var seed []entity.Config
+	switch channelType {
+	case "slack":
+		seed = agentconfig.SeedSlackChannelConfig()
+	case "telegram":
+		seed = agentconfig.SeedTelegramChannelConfig()
+	}
+	m := make(map[string]bool, len(seed))
+	for _, r := range seed {
+		if r.IsSecret {
+			m[r.Key] = true
+		}
+	}
+	return m
+}
+
 // makeChannelSaveHandler returns a POST handler for /channels/{channelType}/{key}
 // that saves one config value for channelType in the agent_channels table.
+// Fields declared secret in the channel's config struct are encrypted at rest.
 func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
+	secretKeys := channelSecretKeys(channelType)
 	return func(c *tool.Ctx) {
 		if notReady(c) {
 			return
@@ -218,6 +239,14 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 		}
 		key := c.PathValue("key")
 		value := c.Form("value")
+		if value != "" && secretKeys[key] && globalConfigs != nil {
+			encrypted, err := globalConfigs.EncryptSecret(value)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, map[string]string{"error": "encrypt: " + err.Error()})
+				return
+			}
+			value = encrypted
+		}
 		if err := agentchannels.SetChannelConfigKey(globalDB, channelType, key, value); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -229,6 +258,8 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 // loadChannelRows returns entity.Config rows (for the ConfigsTable UI component)
 // with values populated from the agent_channels JSON config.
 // workspaceKey is the key whose Options should be set to the live workspace list.
+// Secret values stored as wick_cenc_ tokens are decrypted before render so the
+// UI can show the "stored" badge correctly (non-empty value = stored).
 func loadChannelRows(channelType string, seed []entity.Config, workspaceKey string) []entity.Config {
 	rows := make([]entity.Config, len(seed))
 	copy(rows, seed)
@@ -237,9 +268,17 @@ func loadChannelRows(channelType string, seed []entity.Config, workspaceKey stri
 	if globalDB != nil {
 		m, _ := agentchannels.GetChannelConfigMap(globalDB, channelType)
 		for i := range rows {
-			if v, ok := m[rows[i].Key]; ok {
-				rows[i].Value = v
+			v, ok := m[rows[i].Key]
+			if !ok {
+				continue
 			}
+			if rows[i].IsSecret && globalConfigs != nil {
+				plain, err := globalConfigs.DecryptSecret(v)
+				if err == nil {
+					v = plain
+				}
+			}
+			rows[i].Value = v
 		}
 	}
 

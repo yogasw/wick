@@ -273,11 +273,44 @@ templ sessionPager(vm SessionsTableVM) {
 // SessionDetail renders the session detail page with tabs and composer.
 templ SessionDetail(vm SessionDetailVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="flex flex-col gap-4" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
-			@GateDisabledBanner(vm.Gate)
-			@sessionDetailHeader(vm)
-			@sessionDetailTabs(vm)
-			@sessionDetailContent(vm)
+		<div class="relative flex flex-col -mt-6 -mx-6" style="height:100vh" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+			<!-- Zone 1: transparent overlay bar -->
+			<div class="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 py-2">
+				<!-- Left: tab dropdown -->
+				@sessionDetailTabs(vm)
+				<!-- Right: info + actions -->
+				<div class="flex items-center gap-2 shrink-0">
+					if vm.Session.Meta.Workspace != "" {
+						<span class="text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
+					}
+					if len(vm.Session.Agents) > 0 {
+						<span class="text-xs text-black-500 dark:text-black-600">{ vm.Session.Agents[0].Name } · { vm.Session.Agents[0].Provider }</span>
+					}
+					@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
+					<button data-kill={ vm.Session.ID } class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors">
+						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M4 4l4 4M8 4L4 8" stroke-linecap="round"></path></svg>
+						Kill
+					</button>
+					<button data-delete-session={ vm.Session.ID } class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors">
+						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M4 3V2h4v1M5 5.5v3M7 5.5v3M3 3l.5 7h5L9 3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+						Delete
+					</button>
+				</div>
+			</div>
+			<div class="absolute top-12 left-4 right-4 z-10">
+				@GateDisabledBanner(vm.Gate)
+			</div>
+			<!-- Zone 2: scroll area full width, content centered -->
+			<div class="flex-1 overflow-y-auto" data-chat-panel>
+				@sessionDetailContent(vm)
+			</div>
+			<!-- Zone 3: composer fixed at bottom, centered -->
+			<div class="shrink-0 px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+				<div class="max-w-4xl mx-auto">
+					@AskUserCard(vm.Base)
+					@chatComposer(vm)
+				</div>
+			</div>
 		</div>
 		@ApprovalModal(vm.Base)
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
@@ -285,35 +318,20 @@ templ SessionDetail(vm SessionDetailVM) {
 }
 
 templ sessionDetailHeader(vm SessionDetailVM) {
-	<div class="flex flex-wrap items-start justify-between gap-3">
-		<div class="min-w-0">
-			<a
-				href={ templ.SafeURL(vm.Base + "/sessions") }
-				class="inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-colors mb-1"
-			>
-				<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-				Sessions
-			</a>
-			<div class="flex flex-wrap items-center gap-2">
-				<h1 class="font-mono text-sm font-semibold text-black-900 dark:text-white-100 break-all">{ vm.Session.ID }</h1>
-				@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
-			</div>
-			<div class="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-black-700 dark:text-black-600">
-				if vm.Session.Meta.Workspace != "" {
-					<span class="inline-flex items-center gap-1">
-						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="10" height="8" rx="1"></rect><path d="M4 3V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V3" stroke-linecap="round"></path></svg>
-						<strong class="font-medium text-black-900 dark:text-white-100">{ vm.Session.Meta.Workspace }</strong>
-					</span>
-				}
-				if len(vm.Session.Agents) > 0 {
-					<span class="inline-flex items-center gap-1">
-						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="4" r="2"></circle><path d="M2 10c0-2.21 1.79-4 4-4s4 1.79 4 4" stroke-linecap="round"></path></svg>
-						<strong class="font-medium text-black-900 dark:text-white-100">{ vm.Session.Agents[0].Name }</strong>
-						<span class="text-black-600 dark:text-black-700">({ vm.Session.Agents[0].Provider })</span>
-					</span>
-				}
-			</div>
+	<div class="flex items-center gap-3 min-w-0">
+		<!-- Left: workspace/agent + badge, session ID as tooltip -->
+		<div class="flex items-center gap-2 min-w-0 flex-1">
+			if vm.Session.Meta.Workspace != "" {
+				<span class="font-semibold text-sm text-black-900 dark:text-white-100" data-tooltip={ vm.Session.ID }>{ vm.Session.Meta.Workspace }</span>
+			} else {
+				<span class="font-mono text-xs text-black-600 dark:text-black-700 truncate" data-tooltip={ vm.Session.ID }>{ vm.Session.ID[:12] }…</span>
+			}
+			if len(vm.Session.Agents) > 0 {
+				<span class="text-xs text-black-600 dark:text-black-700">{ vm.Session.Agents[0].Name } · { vm.Session.Agents[0].Provider }</span>
+			}
+			@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
 		</div>
+		<!-- Right: actions -->
 		<div class="flex gap-2 shrink-0">
 			<button
 				data-kill={ vm.Session.ID }
@@ -334,20 +352,44 @@ templ sessionDetailHeader(vm SessionDetailVM) {
 }
 
 templ sessionDetailTabs(vm SessionDetailVM) {
-	<div class="flex gap-1 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 w-fit">
-		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=conversation", "Conversation", vm.Tab == "conversation")
-		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=commands", "Commands", vm.Tab == "commands")
-		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=approvals", "Approvals", vm.Tab == "approvals")
-		@sessionTab(vm.Base+"/sessions/"+vm.Session.ID+"?tab=raw", "Raw", vm.Tab == "raw")
-	</div>
+	<details class="relative" data-row-action>
+		<summary class="list-none cursor-pointer inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors select-none">
+			<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 3h10M1 6h10M1 9h6" stroke-linecap="round"></path></svg>
+			{ tabLabel(vm.Tab) }
+			<svg viewBox="0 0 12 12" class="h-3 w-3 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+		</summary>
+		<div class="absolute top-full left-0 mt-1 z-30 min-w-[140px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg py-1">
+			<a href={ templ.SafeURL(vm.Base+"/sessions/"+vm.Session.ID+"?tab=conversation") } class={ tabDropdownItem(vm.Tab == "conversation") }>Conversation</a>
+			<a href={ templ.SafeURL(vm.Base+"/sessions/"+vm.Session.ID+"?tab=commands") } class={ tabDropdownItem(vm.Tab == "commands") }>Commands</a>
+			<a href={ templ.SafeURL(vm.Base+"/sessions/"+vm.Session.ID+"?tab=approvals") } class={ tabDropdownItem(vm.Tab == "approvals") }>Approvals</a>
+			<a href={ templ.SafeURL(vm.Base+"/sessions/"+vm.Session.ID+"?tab=raw") } class={ tabDropdownItem(vm.Tab == "raw") }>Raw</a>
+		</div>
+	</details>
+}
+
+func tabLabel(tab string) string {
+	switch tab {
+	case "commands":
+		return "Commands"
+	case "approvals":
+		return "Approvals"
+	case "raw":
+		return "Raw"
+	default:
+		return "Conversation"
+	}
+}
+
+func tabDropdownItem(active bool) string {
+	base := "block px-3 py-2 text-xs transition-colors "
+	if active {
+		return base + "text-green-600 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/20"
+	}
+	return base + "text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800"
 }
 
 templ sessionDetailContent(vm SessionDetailVM) {
-	<div
-		class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 shadow-sm overflow-hidden flex flex-col"
-		data-chat-panel
-		style="height:calc(100vh - 4rem - 200px); min-height:320px"
-	>
+	<div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-4 flex flex-col gap-4">
 		if vm.Tab == "conversation" {
 			@sessionConversationTab(vm)
 		} else if vm.Tab == "commands" {
@@ -361,7 +403,7 @@ templ sessionDetailContent(vm SessionDetailVM) {
 }
 
 templ sessionConversationTab(vm SessionDetailVM) {
-	<div class="flex-1 overflow-y-auto px-4 py-5 space-y-5 scrollbar-thin" data-turns id="chat-turns">
+	<div class="space-y-5" data-turns id="chat-turns">
 		if len(vm.Turns) == 0 {
 			@chatEmptyState()
 		}
@@ -369,10 +411,6 @@ templ sessionConversationTab(vm SessionDetailVM) {
 			@conversationTurn(t)
 		}
 		<div id="chat-bottom"></div>
-	</div>
-	<div class="shrink-0 px-4 pb-4 pt-2">
-		@AskUserCard(vm.Base)
-		@chatComposer(vm)
 	</div>
 }
 
@@ -575,21 +613,108 @@ templ assistantTurn(t TurnVM) {
 				<path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path>
 			</svg>
 		</div>
-		<div class="flex flex-col gap-1 max-w-[80%] min-w-0">
+		<div class="flex flex-col gap-1.5 max-w-[80%] min-w-0" data-turn-events>
 			if t.Agent != "" {
 				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ t.Agent }</span>
 			}
-			<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
-				<div class="prose-turn" data-md>{ t.Text }</div>
-				if t.Truncated {
-					<p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
-				}
-			</div>
+			if len(t.Events) > 0 {
+				<div class="flex flex-col gap-1">
+					<button
+						type="button"
+						data-trace-toggle
+						onclick="window.wickToggleTrace(this);"
+						class="self-start flex items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5"
+					>
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>
+						<span data-trace-label>show trace</span>
+						<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+					</button>
+					<div data-trace-wrap class="hidden gap-1">
+						for _, ev := range t.Events {
+							@turnEventCard(ev)
+						}
+					</div>
+					<button
+						type="button"
+						data-trace-toggle-bottom
+						onclick="window.wickToggleTrace(this);"
+						class="hidden self-start items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5"
+					>
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>
+						<span>hide trace</span>
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+					</button>
+				</div>
+			}
+			if t.Text != "" {
+				<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
+					<div class="prose-turn" data-md>{ t.Text }</div>
+					if t.Truncated {
+						<p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
+					}
+				</div>
+			}
 			if !t.Time.IsZero() {
 				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
 			}
 		</div>
 	</div>
+}
+
+templ turnEventCard(ev TurnEventVM) {
+	switch ev.Type {
+		case "thinking":
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs">
+				<button
+					type="button"
+					onclick="var b=this.parentElement.querySelector('[data-thinking-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
+					class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-600 dark:text-black-700"
+				>
+					<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5.5v3l1.5 1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+					<span class="italic">thinking</span>
+					<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				</button>
+				<div data-thinking-body class="hidden border-t border-white-300 dark:border-navy-600 px-3 py-2 italic text-black-600 dark:text-black-700 leading-relaxed break-words text-xs">{ ev.Text }</div>
+			</div>
+		case "tool_use":
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs">
+				<button
+					type="button"
+					onclick="var b=this.parentElement.querySelector('[data-tool-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
+					class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+				>
+					<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path><path d="M6 8h4" stroke-linecap="round"></path></svg>
+					<span class="font-mono font-medium text-black-900 dark:text-white-100">{ ev.ToolName }</span>
+					<span class="ml-auto text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide shrink-0">tool call</span>
+					<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				</button>
+				if ev.ToolInput != "" {
+					<div data-tool-body class="hidden border-t border-white-300 dark:border-navy-600">
+						<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{ ev.ToolInput }</pre>
+					</div>
+				}
+			</div>
+		case "tool_result":
+			<div class={ "rounded-xl border overflow-hidden text-xs", templ.KV("border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20", ev.IsError), templ.KV("border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900", !ev.IsError) }>
+				<button
+					type="button"
+					onclick="var b=this.parentElement.querySelector('[data-result-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
+					class={ "flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors", templ.KV("text-red-600 dark:text-red-400", ev.IsError), templ.KV("text-black-600 dark:text-black-700", !ev.IsError) }
+				>
+					if ev.IsError {
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v4M8 11v.5" stroke-linecap="round"></path></svg>
+						<span class="text-[10px] uppercase tracking-wide shrink-0">error</span>
+					} else {
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l3 3 7-7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+						<span class="text-[10px] uppercase tracking-wide shrink-0">result</span>
+					}
+					<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				</button>
+				<div data-result-body class="hidden border-t border-white-300 dark:border-navy-600">
+					<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{ ev.Text }</pre>
+				</div>
+			</div>
+	}
 }
 
 templ systemTurn(t TurnVM) {

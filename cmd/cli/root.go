@@ -28,6 +28,7 @@ func Execute(tpl, designSystem embed.FS) {
 	root.AddCommand(upgradeCmd())
 	root.AddCommand(mcpCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(workflowCmd())
 	root.AddCommand(versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

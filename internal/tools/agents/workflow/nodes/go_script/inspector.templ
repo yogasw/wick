@@ -1,0 +1,23 @@
+package go_script
+
+import (
+	engnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	"github.com/yogasw/wick/internal/entity"
+	wfview "github.com/yogasw/wick/internal/tools/agents/view/workflow"
+)
+
+// Inspector is the parameters-tab partial for the go_script node.
+// Renders ArgForm from GoScriptSchema — the same struct the engine
+// reflects for workflow_node_types. The `code` field is a textarea
+// row; inspector.js upgrades it to an Ace editor (Go mode, gutter,
+// soft errors) at hydrate time so users see syntax highlighting +
+// line numbers + parse errors inline. The Fixed/Expression toggle
+// still wraps the editor so users can pin code as a literal that the
+// engine won't pre-render through Go templates.
+templ Inspector() {
+	<div class="wf-inspector-panel hidden" data-node-type="go_script">
+		<div id="ins-goscript-args" class="space-y-2">
+			@wfview.ArgForm(entity.StructToConfigs(engnodes.GoScriptSchema{}))
+		</div>
+	</div>
+}

@@ -28,7 +28,9 @@ import (
 
 	"github.com/google/uuid"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/entity"
+	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -111,89 +113,58 @@ func SetChannelConfigKey(db *gorm.DB, channelType, key, value string) error {
 	}).Error
 }
 
-// firstNonEmpty returns v when non-empty, otherwise fallback. Used to
-// supply per-list mode defaults on legacy rows that pre-date the new keys.
-func firstNonEmpty(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-// LoadSlackConfig reads the Slack channel config from agent_channels.
-// Returns zero value + empty pubURL when no row exists.
-func LoadSlackConfig(db *gorm.DB) (cfg agentconfig.SlackChannelConfig, pubURL string, err error) {
-	m, err := GetChannelConfigMap(db, "slack")
-	if err != nil {
-		return
-	}
-	cfg = agentconfig.SlackChannelConfig{
-		Mode:               m["mode"],
-		BotToken:           m["bot_token"],
-		AppToken:           m["app_token"],
-		SigningSecret:      m["signing_secret"],
-		UsersMode:          firstNonEmpty(m["users_mode"], "all"),
-		AllowedUsers:       m["allowed_users"],
-		GroupsMode:         firstNonEmpty(m["groups_mode"], "all"),
-		AllowedGroups:      m["allowed_groups"],
-		ChannelsMode:       firstNonEmpty(m["channels_mode"], "all"),
-		AllowedChannels:    m["allowed_channels"],
-		GateApprovers:      firstNonEmpty(m["gate_approvers"], "trigger_users"),
-		GateApproverUsers:  m["gate_approver_users"],
-		GateApproverGroups: m["gate_approver_groups"],
-		Workspace:          m["workspace"],
-	}
-	pubURL = m["public_url"]
-	return
-}
-
-// LoadTelegramConfig reads the Telegram channel config from agent_channels.
-func LoadTelegramConfig(db *gorm.DB) (agentconfig.TelegramChannelConfig, error) {
-	m, err := GetChannelConfigMap(db, "telegram")
-	if err != nil {
-		return agentconfig.TelegramChannelConfig{}, err
-	}
-	return agentconfig.TelegramChannelConfig{
-		BotToken:   m["bot_token"],
-		AllowedIDs: m["allowed_ids"],
-		Workspace:  m["workspace"],
-	}, nil
-}
-
-// LoadRestConfig reads the REST channel config from agent_channels.
-func LoadRestConfig(db *gorm.DB) (agentconfig.RestChannelConfig, error) {
-	m, err := GetChannelConfigMap(db, "rest")
-	if err != nil {
-		return agentconfig.RestChannelConfig{}, err
-	}
-	return agentconfig.RestChannelConfig{
-		Enabled:   m["enabled"],
-		Workspace: m["workspace"],
-	}, nil
-}
-
 // DBStore satisfies SlackConfigStore + TelegramConfigStore by delegating
-// to the package-level Load*Config helpers. Server wires one of these at
+// to configMap so callers always receive decrypted plaintext values. Server
+// wires one of these at
 // boot so per-channel ConfigSource implementations don't need to import
 // gorm directly.
-type DBStore struct{ db *gorm.DB }
+// Configs is optional — when set, wick_cenc_ tokens in the JSON config
+// are decrypted before being returned to callers.
+type DBStore struct {
+	db      *gorm.DB
+	Configs *configs.Service
+}
 
 // NewDBStore returns a DBStore bound to db.
 func NewDBStore(db *gorm.DB) DBStore { return DBStore{db: db} }
 
+// configMap loads, decrypts, and maps the JSON config for channelType
+// directly into dst (pointer to a config struct).
+func (s DBStore) configMap(channelType string, dst any) error {
+	m, err := GetChannelConfigMap(s.db, channelType)
+	if err != nil {
+		return err
+	}
+	if s.Configs != nil {
+		for k, v := range m {
+			if plain, err := s.Configs.DecryptSecret(v); err == nil {
+				m[k] = plain
+			}
+		}
+	}
+	pkgentity.MapToStruct(m, dst)
+	return nil
+}
+
 // LoadSlack satisfies SlackConfigStore.
 func (s DBStore) LoadSlack() (agentconfig.SlackChannelConfig, string, error) {
-	return LoadSlackConfig(s.db)
+	var cfg agentconfig.SlackChannelConfig
+	if err := s.configMap("slack", &cfg); err != nil {
+		return cfg, "", err
+	}
+	return cfg, cfg.PublicURL, nil
 }
 
 // LoadTelegram satisfies TelegramConfigStore.
 func (s DBStore) LoadTelegram() (agentconfig.TelegramChannelConfig, error) {
-	return LoadTelegramConfig(s.db)
+	var cfg agentconfig.TelegramChannelConfig
+	return cfg, s.configMap("telegram", &cfg)
 }
 
 // LoadRest satisfies RestConfigStore.
 func (s DBStore) LoadRest() (agentconfig.RestChannelConfig, error) {
-	return LoadRestConfig(s.db)
+	var cfg agentconfig.RestChannelConfig
+	return cfg, s.configMap("rest", &cfg)
 }
 
 // EnsureChannel satisfies ChannelEnsurer.

@@ -72,6 +72,18 @@ export default withMermaid(defineConfig({
         ],
       },
       {
+        text: 'Built-in Connectors',
+        items: [
+          { text: 'Overview', link: '/connectors/' },
+          { text: 'HTTP / REST', link: '/connectors/httprest' },
+          { text: 'GitHub', link: '/connectors/github' },
+          { text: 'Slack', link: '/connectors/slack' },
+          { text: 'Wick Manager', link: '/connectors/wickmanager' },
+          { text: 'Workflow', link: '/connectors/workflow' },
+          { text: 'CRUD CRUD (lab)', link: '/connectors/crudcrud' },
+        ],
+      },
+      {
         text: 'AI Agents',
         items: [
           { text: 'Agent Host Only (no Go needed)', link: '/guide/agents-only' },
@@ -81,6 +93,37 @@ export default withMermaid(defineConfig({
           { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
           { text: 'Command Gate', link: '/guide/command-gate' },
+        ],
+      },
+      {
+        text: 'Workflows',
+        items: [
+          { text: 'Overview', link: '/workflow/' },
+          { text: 'Nodes', link: '/workflow/nodes' },
+          { text: 'Triggers', link: '/workflow/triggers' },
+          { text: 'Canvas editor', link: '/workflow/canvas' },
+          { text: 'MCP authoring', link: '/workflow/mcp' },
+          { text: 'Run state', link: '/workflow/state' },
+        ],
+      },
+      {
+        text: 'Workflow nodes',
+        collapsed: true,
+        items: [
+          { text: 'agent', link: '/workflow/nodes/agent' },
+          { text: 'branch', link: '/workflow/nodes/branch' },
+          { text: 'channel', link: '/workflow/nodes/channel' },
+          { text: 'classify', link: '/workflow/nodes/classify' },
+          { text: 'connector', link: '/workflow/nodes/connector' },
+          { text: 'dataset_*', link: '/workflow/nodes/dataset' },
+          { text: 'db_query', link: '/workflow/nodes/db-query' },
+          { text: 'end', link: '/workflow/nodes/end' },
+          { text: 'go_script', link: '/workflow/nodes/go-script' },
+          { text: 'http', link: '/workflow/nodes/http' },
+          { text: 'session_init', link: '/workflow/nodes/session_init' },
+          { text: 'shell', link: '/workflow/nodes/shell' },
+          { text: 'switch', link: '/workflow/nodes/switch' },
+          { text: 'transform', link: '/workflow/nodes/transform' },
         ],
       },
       {

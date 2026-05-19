@@ -73,3 +73,12 @@ func (r *repo) DeleteByOwner(ctx context.Context, owner string) error {
 		Where("owner = ?", owner).
 		Delete(&entity.Config{}).Error
 }
+
+// DeleteByOwnerKey removes a single row (owner+key). Used by one-shot
+// migrations that retire a config key without touching siblings under
+// the same owner.
+func (r *repo) DeleteByOwnerKey(ctx context.Context, owner, key string) error {
+	return r.db.WithContext(ctx).
+		Where("owner = ? AND key = ?", owner, key).
+		Delete(&entity.Config{}).Error
+}

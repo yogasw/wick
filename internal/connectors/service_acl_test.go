@@ -9,18 +9,21 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // adminModule returns a connector with one regular op and one admin-only op.
 func adminModule() connector.Module {
-	type In struct{ V string `wick:"required"` }
+	type In struct {
+		V string `wick:"required"`
+	}
 	noop := func(c *connector.Ctx) (any, error) { return "ok", nil }
 	return connector.Module{
 		Meta:    connector.Meta{Key: "acl-stub", Name: "ACL Stub", Description: "access control test"},
 		Configs: nil,
 		Operations: []connector.Operation{
-			connector.Op("read", "Read", "readable by all", In{}, noop),
-			connector.OpDestructive("write", "Write", "admin-restricted", In{}, noop),
+			connector.Op("read", "Read", "readable by all", In{}, noop, wickdocs.Docs{}),
+			connector.OpDestructive("write", "Write", "admin-restricted", In{}, noop, wickdocs.Docs{}),
 		},
 	}
 }

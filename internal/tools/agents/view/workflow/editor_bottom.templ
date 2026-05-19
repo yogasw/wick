@@ -1,0 +1,223 @@
+package workflow
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/yogasw/wick/internal/agents/workflow/mcp"
+)
+
+// EditorBottom — tabbed pane under canvas with a collapse toggle so
+// the bottom area doesn't eat the canvas vertical space. Default
+// state: collapsed (just tab bar visible); user clicks any tab to
+// expand. Theme palette matches agents.
+templ EditorBottom(vm EditorVM) {
+	<div class="shrink-0 border-t border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700" id="wf-bottom">
+		<div class="flex items-center border-b border-white-300 dark:border-navy-600 text-sm">
+			<button type="button" data-bottom-tab="logs" class="px-4 py-2 border-b-2 border-green-500 text-green-700 dark:text-green-400 font-medium">
+				Logs <span id="wf-logs-counter" class="ml-1 text-xs text-black-600 dark:text-black-700">(0)</span>
+			</button>
+			<button type="button" data-bottom-tab="yaml" class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">YAML preview</button>
+			<button type="button" data-bottom-tab="runs" class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Runs ({ runsLabel(len(vm.Runs)) })</button>
+			<button type="button" data-bottom-tab="guard" class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Guard</button>
+			<button
+				type="button"
+				data-bottom-tab="tests"
+				data-wf-run-tests={ vm.Base + "/workflows/edit/" + vm.ID + "/test" }
+				class="px-4 py-2 text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
+			>Tests</button>
+			<span id="wf-run-cancel-host" class="ml-auto"></span>
+			<button type="button" id="wf-bottom-toggle" class="px-3 py-2 text-xs text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100" data-collapsed="true">▴ expand</button>
+		</div>
+		<div id="wf-bottom-body" class="hidden">
+			// Logs is the default — empty state until a run kicks off,
+			// SSE events fill it in as nodes complete. Each row expands
+			// to show input/output JSON + latency.
+			<div data-bottom-panel="logs" class="p-3 max-h-72 overflow-y-auto text-xs">
+				<div id="wf-logs-list" class="space-y-1"></div>
+				<p id="wf-logs-empty" class="text-black-600 dark:text-black-700 italic">No run yet. Click Run Now to execute the workflow.</p>
+			</div>
+			<div data-bottom-panel="yaml" class="hidden">
+				<pre id="wf-yaml" class="p-4 font-mono text-xs text-white-100 bg-navy-800 dark:bg-black-900 overflow-x-auto leading-relaxed max-h-48">{ vm.YAML }</pre>
+			</div>
+			<div data-bottom-panel="runs" class="hidden p-4 max-h-72 overflow-y-auto">
+				@bottomRuns(vm.Base, vm.ID, vm.Runs, vm.RunsPage, vm.RunsHasMore)
+			</div>
+			<div data-bottom-panel="guard" class="hidden p-4 max-h-48 overflow-y-auto">
+				@bottomGuard(vm.GuardReport)
+			</div>
+			<div data-bottom-panel="tests" class="hidden max-h-72 overflow-y-auto">
+				<div id="wf-test-results" class="text-xs">
+					<div class="p-3 italic text-black-600 dark:text-black-700">Click <strong>Tests</strong> tab to load test cases.</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	// Test case modal shell — rendered empty at page load so JS can
+	// open it. The modal body (form fields) is always present; the
+	// case list is loaded into #wf-test-results on tab click.
+	<div class="wf-tc-modal hidden" id="wf-tc-modal" data-id={ vm.ID } data-base={ vm.Base }>
+		<div class="wf-tc-backdrop" data-wf-tc-cancel></div>
+		<div class="wf-tc-shell">
+			<div class="wf-tc-header">
+				<span id="wf-tc-modal-title" class="font-semibold text-black-900 dark:text-white-100">New Test Case</span>
+				<button type="button" class="ml-auto text-black-600 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 text-xl leading-none" data-wf-tc-cancel>×</button>
+			</div>
+			<div class="wf-tc-body">
+				<input type="hidden" id="wf-tc-edit-name"/>
+				<label class="block text-xs font-semibold text-black-800 dark:text-black-300 mb-1">Name <span class="text-red-500">*</span></label>
+				<input id="wf-tc-name" type="text" class="wf-input w-full mb-4" placeholder="test-bug-flow"/>
+				<div class="grid grid-cols-3 gap-2 mb-3">
+					<div>
+						<label class="block text-xs font-semibold text-black-800 dark:text-black-300 mb-1">Trigger type</label>
+						<select id="wf-tc-evt-type" class="wf-input w-full">
+							<option value="manual">manual</option>
+							<option value="channel">channel</option>
+							<option value="webhook">webhook</option>
+							<option value="cron">cron</option>
+						</select>
+					</div>
+					<div id="wf-tc-channel-col">
+						<label class="block text-xs font-semibold text-black-800 dark:text-black-300 mb-1">Channel</label>
+						<select id="wf-tc-channel" class="wf-input w-full">
+							<option value="slack">slack</option>
+							<option value="telegram">telegram</option>
+						</select>
+					</div>
+					<div id="wf-tc-subtype-col">
+						<label class="block text-xs font-semibold text-black-800 dark:text-black-300 mb-1">Subtype</label>
+						<select id="wf-tc-subtype" class="wf-input w-full">
+							<option value="message">message</option>
+							<option value="action">action</option>
+							<option value="submission">submission</option>
+						</select>
+					</div>
+				</div>
+				<label class="block text-xs font-semibold text-black-800 dark:text-black-300 mb-1">Payload <span class="text-black-500 dark:text-black-600 font-normal">(JSON)</span></label>
+				<textarea id="wf-tc-payload" class="wf-input w-full font-mono text-xs mb-4" rows="5" placeholder='{ "text": "ada bug di checkout" }'></textarea>
+				<div class="flex items-center mb-2">
+					<label class="text-xs font-semibold text-black-800 dark:text-black-300 flex-1">Assertions</label>
+					<button type="button" class="text-xs text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300" id="wf-tc-add-assertion">+ Add</button>
+				</div>
+				<div id="wf-tc-assertions" class="space-y-1.5 mb-4"></div>
+				<div id="wf-tc-error" class="hidden text-xs text-red-600 dark:text-red-400 mb-2"></div>
+			</div>
+			<div class="wf-tc-footer">
+				<button type="button" class="wf-tc-footer-btn wf-tc-footer-cancel" data-wf-tc-cancel>Cancel</button>
+				<button type="button" class="wf-tc-footer-btn wf-tc-footer-save" id="wf-tc-save">Save Test Case</button>
+			</div>
+		</div>
+	</div>
+}
+
+// bottomRuns renders the recent runs list. Each row shows the
+// human-readable timestamp by default; clicking expands a detail
+// line with the full run ID + status (mirrors the n8n executions
+// panel). The link target is the run detail page; the click toggle
+// is wired in editor.js so we don't pull a stylesheet just for the
+// expand state.
+templ bottomRuns(base, id string, runs []mcp.RunSummary, page int, hasMore bool) {
+	if len(runs) == 0 && page <= 1 {
+		<p class="text-sm text-black-600 dark:text-black-700">No runs yet.</p>
+	} else {
+		<ul class="space-y-1 text-xs" id="wf-runs-list">
+			for _, r := range runs {
+				<li class="wf-run-row" data-run-id={ r.ID }>
+					<button type="button" class="wf-run-head" data-run-toggle>
+						<span class={ "wf-run-status wf-run-status-" + runStatusKey(r.Status) }>{ runStatusKey(r.Status) }</span>
+						<span class="wf-run-time">{ formatRunTime(r.StartedAt) }</span>
+						<span class="wf-run-dur">{ formatRunDuration(r) }</span>
+					</button>
+					<div class="wf-run-detail hidden">
+						<div class="flex items-center gap-2">
+							<div class="flex-1 font-mono text-[11px] text-black-700 dark:text-black-600 break-all">{ r.ID }</div>
+							<button type="button" data-run-copy-id={ r.ID } class="text-[11px] text-green-600 dark:text-green-400 hover:underline" title="Copy run ID">copy</button>
+						</div>
+						<div class="mt-2 flex gap-3 text-xs">
+							<button type="button" data-run-replay={ r.ID } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 font-medium" title="Load this run's events + node outputs into the editor for debugging">↻ Replay in editor</button>
+							<button
+								type="button"
+								data-run-copy-to-editor={ r.ID }
+								data-copy-url={ base + "/workflows/edit/" + id + "/runs/" + r.ID + "/copy-to-editor" }
+								class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium"
+								title="Restore this run's workflow graph as the current draft"
+							>⤴ Copy to editor</button>
+							<button type="button" data-run-export={ r.ID } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300" title="Copy full run state (events + outputs) as JSON">Export JSON</button>
+							<a href={ templ.SafeURL(base + "/workflows/edit/" + id + "/runs/" + r.ID) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Open run detail →</a>
+						</div>
+					</div>
+				</li>
+			}
+		</ul>
+		// Pager — prev/next link bound to `runs_page` query.
+		<div class="mt-3 flex items-center gap-3 text-xs">
+			if page > 1 {
+				<a href={ templ.SafeURL(base + "/workflows/edit/" + id + "?runs_page=" + pageStr(page-1)) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">← Newer</a>
+			} else {
+				<span class="text-black-700 dark:text-black-600 opacity-50 cursor-not-allowed">← Newer</span>
+			}
+			<span class="text-black-700 dark:text-black-600">Page { pageStr(page) }</span>
+			if hasMore {
+				<a href={ templ.SafeURL(base + "/workflows/edit/" + id + "?runs_page=" + pageStr(page+1)) } class="text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">Older →</a>
+			} else {
+				<span class="text-black-700 dark:text-black-600 opacity-50 cursor-not-allowed">Older →</span>
+			}
+		</div>
+	}
+}
+
+// pageStr stringifies a page number for the templ URL builder.
+func pageStr(n int) string {
+	return strconv.Itoa(n)
+}
+
+// runStatusKey normalises an empty status to "queued" so the CSS
+// selector class stays valid.
+func runStatusKey(s string) string {
+	if s == "" {
+		return "queued"
+	}
+	return s
+}
+
+// formatRunTime renders a started-at timestamp like
+// "2026-05-15 14:23:47" — local time, second precision (per user
+// request). UTC fields are rendered in local TZ so operators can
+// match against their wall clock.
+func formatRunTime(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+// formatRunDuration shows wall-clock duration when both start and
+// end are known. Empty otherwise — caller's CSS hides the slot via
+// :empty so the row layout stays tight.
+func formatRunDuration(r mcp.RunSummary) string {
+	if r.EndedAt == nil || r.StartedAt.IsZero() {
+		return ""
+	}
+	d := r.EndedAt.Sub(r.StartedAt)
+	if d < time.Second {
+		return d.Truncate(time.Millisecond).String()
+	}
+	return d.Truncate(time.Second).String()
+}
+
+templ bottomGuard(rep *guardReportLike) {
+	if rep == nil || rep.OK {
+		<p class="text-sm text-green-700 dark:text-green-400">No guard violations.</p>
+	} else {
+		<ul class="space-y-1 text-sm text-red-800 dark:text-red-300">
+			for _, v := range rep.Violations {
+				<li>
+					<span class="font-mono text-xs bg-red-50 dark:bg-red-900/30 px-1.5 py-0.5 rounded">{ v.Rule }</span>
+					<span class="ml-2">{ v.Message }</span>
+					<span class="text-xs text-black-700 dark:text-black-600"> ({ v.Severity })</span>
+				</li>
+			}
+		</ul>
+	}
+}

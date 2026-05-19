@@ -44,8 +44,11 @@
 package connector
 
 import (
+	"context"
+
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Meta is the static metadata for a connector definition. Key must be
@@ -112,6 +115,12 @@ type Operation struct {
 	Input       []entity.Config
 	Execute     ExecuteFunc
 	Destructive bool
+	// Docs carries the opt-in self-documentation fields the workflow
+	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
+	// quirks, templateable fields, pair-with, common pitfalls).
+	// Zero-value Docs = current behaviour; populate per op when worth
+	// it. See pkg/wickdocs + internal/docs/workflow/24-describe-contract.md.
+	wickdocs.Docs
 }
 
 // Op is a small constructor that reflects a typed input struct into
@@ -119,26 +128,33 @@ type Operation struct {
 // hand and calling entity.StructToConfigs(input) yourself, but reads
 // nicer when listing many operations inline.
 //
+// docs carries the optional self-documentation bundle exposed by the
+// workflow MCP `workflow_node_detail` op — quirks, examples, sample
+// payloads, pair-with, common pitfalls. Pass `wickdocs.Docs{}` when
+// the op has no extra guidance; the description + reflected schema
+// alone are already enough for callers in that case.
+//
 //	connector.Op("query", "Query Logs",
 //	    "Search Loki using LogQL.",
-//	    QueryInput{}, queryExec)
+//	    QueryInput{}, queryExec, wickdocs.Docs{})
 //
-// Pass struct{}{} when the operation takes no input arguments.
-func Op[I any](key, name, description string, input I, exec ExecuteFunc) Operation {
+// Pass struct{}{} as input when the operation takes no input arguments.
+func Op[I any](key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs) Operation {
 	return Operation{
 		Key:         key,
 		Name:        name,
 		Description: description,
 		Input:       entity.StructToConfigs(input),
 		Execute:     exec,
+		Docs:        docs,
 	}
 }
 
 // OpDestructive is the destructive-marked variant of Op. The resulting
 // Operation defaults to disabled when a new instance is created, and
 // the admin UI flags it so admins know to verify before enabling.
-func OpDestructive[I any](key, name, description string, input I, exec ExecuteFunc) Operation {
-	op := Op(key, name, description, input, exec)
+func OpDestructive[I any](key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs) Operation {
+	op := Op(key, name, description, input, exec, docs)
 	op.Destructive = true
 	return op
 }
@@ -164,6 +180,31 @@ type OpHealth struct {
 // project the granted permissions against each operation's requirements.
 type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 
+// OAuthMeta describes how a connector participates in the OAuth 2.0 flow.
+// The generic manager handler uses AuthorizeURL and Scopes to build the
+// consent redirect; GetUserIdentity is called after the token exchange to
+// resolve who the token belongs to.
+//
+// Set Module.OAuth to a non-nil pointer to opt in. The manager UI will
+// render an "OAuth App" section on the connector list page and a "Connect"
+// button on user-token rows automatically.
+type OAuthMeta struct {
+	// AuthorizeURL is the OAuth consent redirect URL
+	// (e.g. https://slack.com/oauth/v2/authorize).
+	AuthorizeURL string
+	// Scopes is the space- or comma-separated list of requested scopes
+	// (sent as the user_scope param for Slack, scope for standard OAuth2).
+	Scopes string
+	// DisplayName is shown on the Connect button (e.g. "Slack", "Google").
+	DisplayName string
+	// Icon is an SVG string or emoji rendered next to the Connect button.
+	Icon string
+	// GetUserIdentity exchanges a fresh access token for a unique user ID
+	// and human-readable display name. Called after the code→token exchange
+	// to route the token to the correct connector row.
+	GetUserIdentity func(ctx context.Context, accessToken string) (userID, displayName string, err error)
+}
+
 // Module is the internal, fully-resolved registration record wick keeps
 // for every connector definition. It is produced by app.RegisterConnector
 // — the Meta, the configs reflected from the typed Creds struct, and
@@ -173,9 +214,15 @@ type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 // HealthCheck is optional. When non-nil, the connector detail page
 // renders a "Check Permissions" button that invokes it and toggles
 // per-operation system_disabled flags based on the report.
+//
+// OAuth is non-nil when this connector supports user OAuth. The manager UI
+// shows an "OAuth App" section on the list page and a "Connect" button on
+// detail pages automatically — no per-connector handler wiring needed.
 type Module struct {
 	Meta        Meta
 	Configs     []entity.Config
 	Operations  []Operation
 	HealthCheck HealthCheckFunc
+	// OAuth is non-nil when this connector supports user OAuth.
+	OAuth *OAuthMeta
 }

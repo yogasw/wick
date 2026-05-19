@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 const Key = "github"
@@ -55,10 +56,10 @@ type CreateIssueInput struct {
 
 // GetFileInput reads a file from a repository.
 type GetFileInput struct {
-	Owner  string `wick:"required;desc=Repository owner."`
-	Repo   string `wick:"required;desc=Repository name."`
-	Path   string `wick:"required;desc=File path in repo. Example: README.md or src/main.go"`
-	Ref    string `wick:"desc=Branch, tag, or commit SHA. Default: repo default branch."`
+	Owner string `wick:"required;desc=Repository owner."`
+	Repo  string `wick:"required;desc=Repository name."`
+	Path  string `wick:"required;desc=File path in repo. Example: README.md or src/main.go"`
+	Ref   string `wick:"desc=Branch, tag, or commit SHA. Default: repo default branch."`
 }
 
 // ListPRsInput lists pull requests.
@@ -96,6 +97,19 @@ func Operations() []connector.Operation {
 			"List repositories visible to the authenticated token. Returns name, description, language, visibility, and clone URL.",
 			ListReposInput{},
 			listRepos,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"repos": "Array of repo summaries (full_name, name, description, private, language, default_branch, html_url).",
+				},
+				Quirks: []string{
+					"affiliation defaults to \"owner\" — pass \"owner,collaborator,organization_member\" to widen.",
+					"GitHub paginates server-side. PerPage max 100; for >100 repos call again with the next page (this op currently returns the first page only).",
+					"PAT scope: repo for private repos, public_repo for public-only listings.",
+				},
+				PairWith:     []string{"connector:github.list_issues", "connector:github.list_prs", "connector:github.get_file"},
+				InputSample:  `{"affiliation":"owner","visibility":"all","per_page":30}`,
+				OutputSample: `{"repos":[{"full_name":"abc/web","name":"web","private":false,"language":"Go","default_branch":"main","html_url":"https://github.com/abc/web"}]}`,
+			},
 		),
 		connector.Op(
 			"list_issues",
@@ -103,6 +117,19 @@ func Operations() []connector.Operation {
 			"List issues in a repository. Returns number, title, state, labels, and author.",
 			ListIssuesInput{},
 			listIssues,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"issues": "Array of issue summaries (number, title, state, labels[], user.login, html_url, created_at, updated_at).",
+				},
+				Quirks: []string{
+					"GitHub's REST issues endpoint returns BOTH issues and pull requests — PR rows have a non-null pull_request key. Filter client-side if you want issues only.",
+					"state defaults to \"open\". Pass \"all\" to include closed.",
+					"Pagination: PerPage max 100, page param not exposed here (first page only). Loop in your workflow if you need deeper history.",
+				},
+				PairWith:     []string{"connector:github.create_issue", "connector:github.add_comment"},
+				InputSample:  `{"owner":"abc","repo":"web","state":"open","per_page":30}`,
+				OutputSample: `{"issues":[{"number":42,"title":"Payment refund bug","state":"open","labels":[{"name":"bug"}],"user":{"login":"yoga"},"html_url":"https://github.com/abc/web/issues/42"}]}`,
+			},
 		),
 		connector.OpDestructive(
 			"create_issue",
@@ -110,27 +137,65 @@ func Operations() []connector.Operation {
 			"Create a new issue in a repository. Returns the created issue number and URL.",
 			CreateIssueInput{},
 			createIssue,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"number":   "Created issue number — pass to add_comment for follow-ups.",
+					"html_url": "Web URL of the new issue, useful for Slack message replies.",
+					"state":    "Always \"open\" right after creation.",
+				},
+				TemplateableFields: []string{"owner", "repo", "title", "body", "labels"},
+				Quirks: []string{
+					"labels is COMMA-separated string at the wick layer; the connector splits it server-side before calling GitHub.",
+					"body supports GitHub-flavoured Markdown (mentions, task lists, code fences).",
+					"PAT scope: repo (private) or public_repo (public). Issues permission must be set to write in fine-grained PATs.",
+					"Won't fail if labels don't exist — GitHub silently ignores unknown labels.",
+				},
+				PairWith: []string{"connector:github.add_comment", "connector:github.list_issues"},
+				CommonPitfalls: []string{
+					"Don't include \"#\" in labels (label is \"bug\", not \"#bug\").",
+				},
+				InputSample:  `{"owner":"abc","repo":"web","title":"Payment refund bug","body":"User U12345 reports failed refunds.\n\n## Steps\n- ...","labels":"bug,priority:high"}`,
+				OutputSample: `{"number":42,"html_url":"https://github.com/abc/web/issues/42","state":"open","title":"Payment refund bug"}`,
+				Examples: []wickdocs.Example{
+					{
+						Name: "create_from_slack",
+						YAML: `- id: file_bug
+  type: connector
+  module: github
+  op: create_issue
+  arg_modes:
+    title: expression
+    body: expression
+  args:
+    owner: abc
+    repo: web
+    title: "{{.Node.classify.parsed.summary}}"
+    body: "Reported in Slack by <@{{.Node.trigger.payload.user}}>:\n\n{{.Node.trigger.payload.text}}"
+    labels: bug,from-slack`,
+					},
+				},
+			},
 		),
 		connector.Op(
 			"get_file",
 			"Get File Content",
 			"Read a file from a repository. Returns the decoded text content. Binary files are not supported.",
 			GetFileInput{},
-			getFile,
+			getFile, wickdocs.Docs{},
 		),
 		connector.Op(
 			"list_prs",
 			"List Pull Requests",
 			"List pull requests in a repository. Returns number, title, state, head/base branches, and author.",
 			ListPRsInput{},
-			listPRs,
+			listPRs, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"add_comment",
 			"Add Comment",
 			"Post a comment on an issue or pull request. Returns the comment ID and URL.",
 			AddCommentInput{},
-			addComment,
+			addComment, wickdocs.Docs{},
 		),
 	}
 }

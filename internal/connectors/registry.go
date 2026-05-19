@@ -91,6 +91,7 @@ func RegisterBuiltins() {
 		Configs:     entity.StructToConfigs(slack.Configs{}),
 		Operations:  slack.Operations(),
 		HealthCheck: slack.HealthCheck,
+		OAuth:       slack.SlackOAuthMeta(),
 	})
 }
 

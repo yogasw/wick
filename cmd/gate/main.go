@@ -354,12 +354,42 @@ func run() int {
 	return 0
 }
 
+// isAlwaysAllowedTool returns true for tools whose own purpose is to
+// prompt the user — gating them would force the user to approve a
+// tool that exists to ask the user. Covers Claude's built-in
+// AskUserQuestion + any MCP tool whose name ends in "ask_user" (wick's
+// own MCP exposes mcp__<server>__ask_user; the suffix match keeps the
+// list robust to server-name changes between transports).
+//
+// AskUserQuestion is bridged into the wick ask_user card by the daemon
+// (see internal/agents/pool.askUserBridge) — the daemon parses the
+// tool_use, renders the question, and sends a tool_result frame back
+// into Claude's stdin. The gate just needs to get out of the way.
+func isAlwaysAllowedTool(name string) bool {
+	if name == "AskUserQuestion" {
+		return true
+	}
+	return strings.HasPrefix(name, "mcp__") && strings.HasSuffix(name, "__ask_user")
+}
+
 // runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob, MCP, etc.).
 // File tools enforce scope restriction; unknown/MCP tools always go to
 // interactive approval so the user sees every tool call.
 func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	path := pathFromInput(in)
 	tool := in.ToolName
+
+	// Always-allow list: tools that themselves prompt the user (Claude's
+	// built-in AskUserQuestion + wick's MCP ask_user) must NOT route
+	// through the gate — that would force the user to approve a tool
+	// whose entire purpose is to ask the user. The MCP ask_user has its
+	// own gate-policy check on the daemon side (handleAskUser), so the
+	// per-tool prompt-approval is redundant.
+	if isAlwaysAllowedTool(tool) {
+		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "always_allow", "")
+		emitAllow("always_allow")
+		return 0
+	}
 
 	// Unknown tool (MCP or future tool) — no path to scope-check.
 	// Always ask the user rather than silently allowing.
@@ -388,13 +418,22 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 		return 0
 	}
 
-	// Known file tool: no path extracted or relative path — safe (CWD = workspace).
+	// Known file tool: no path extracted — nothing to scope-check, allow.
+	if path == "" {
+		logTerminalEntry(requestID, tool, "", in.CWD, "allowed", "no_path", "")
+		emitAllow("no_path")
+		return 0
+	}
+	// Relative path: resolve against CWD before scope check so traversal
+	// sequences like "../../etc/passwd" are caught by PathWithinScope.
 	// Use filepath.IsAbs for cross-platform: Windows paths (C:\...) are
 	// absolute but don't start with "/", so HasPrefix alone misses them.
-	if path == "" || (!strings.HasPrefix(path, "/") && !filepath.IsAbs(path)) {
-		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "relative_path", "")
-		emitAllow("relative_path")
-		return 0
+	if !strings.HasPrefix(path, "/") && !filepath.IsAbs(path) {
+		if in.CWD != "" {
+			path = filepath.Clean(filepath.Join(in.CWD, path))
+		}
+		// If CWD is empty the path stays relative; scope check below
+		// treats it as within-scope (safe default when workspace unknown).
 	}
 
 	// Within default scope → allow immediately.

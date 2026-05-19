@@ -27,6 +27,12 @@ type Event struct {
 	AgentName string `json:"agent_name"`
 	Type      string `json:"type"`
 	Data      string `json:"data"`
+	// ToolName, ToolInput, ToolUseID are populated for tool_use events;
+	// ToolUseID and IsError are also set for tool_result events.
+	ToolName  string `json:"tool_name,omitempty"`
+	ToolInput string `json:"tool_input,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 	PID       int    `json:"pid,omitempty"`
 	Lifecycle string `json:"lifecycle,omitempty"`
 }
@@ -84,7 +90,16 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		Type:      ev.Type.String(),
 		Data:      ev.Text,
 	}
-	if ev.ErrorMsg != "" {
+	switch ev.Type {
+	case event.ToolUse:
+		payload.Data = ev.ToolName
+		payload.ToolName = ev.ToolName
+		payload.ToolInput = ev.ToolInput
+		payload.ToolUseID = ev.ToolUseID
+	case event.ToolResult:
+		payload.ToolUseID = ev.ToolUseID
+		payload.IsError = ev.IsError
+	case event.Error:
 		payload.Data = ev.ErrorMsg
 	}
 	b.fanout(sessionID, payload)

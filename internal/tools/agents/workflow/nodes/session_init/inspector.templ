@@ -1,0 +1,27 @@
+package session_init
+
+// Inspector is the parameters-tab partial for the session_init node.
+// editor.js shows the block when the selected node's type matches
+// data-node-type, and hides every other panel. The partial owns its
+// own DOM IDs (ins-session-mode, ins-session-id, ins-session-regen)
+// so the JS module in inspector.js can read/write state without
+// going through editor.js.
+templ Inspector() {
+	<div class="wf-inspector-panel hidden" data-node-type="session_init">
+		<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Session sharing</label>
+		<select id="ins-session-mode" class="wf-input">
+			<option value="workflow_run">Reuse in run — agents share subprocess within 1 run (default)</option>
+			<option value="workflow_global">Reuse across runs — agent remembers history forever</option>
+			<option value="new">Fresh each call — no context carry, new subprocess every node</option>
+			<option value="custom">Custom ID — literal or template</option>
+		</select>
+		<div id="ins-session-custom-wrap" class="hidden mt-3">
+			<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Session ID</label>
+			<div class="flex gap-2">
+				<input id="ins-session-id" type="text" placeholder={ "literal or {{.Event.Payload.thread_ts}}" } class="wf-input font-mono flex-1"/>
+				<button type="button" id="ins-session-regen" class="rounded-lg bg-violet-500/15 dark:bg-violet-500/20 px-2 text-xs font-medium text-violet-700 dark:text-violet-300 hover:bg-violet-500/25 dark:hover:bg-violet-500/30 transition-colors" title="Generate new UUID into the input">Auto</button>
+			</div>
+			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">Literal string baked into YAML, or template rendered at runtime.</div>
+		</div>
+	</div>
+}

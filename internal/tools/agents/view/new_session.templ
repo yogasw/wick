@@ -1,0 +1,131 @@
+package view
+
+// NewSessionCompose is the ChatGPT/Claude-style landing for starting a
+// new conversation: pick provider (and optionally preset/workspace),
+// type the first message, then submit. The HTTP handler creates the
+// session, attaches the agent, and forwards the first message — only
+// after the user actually sends something. No empty session is ever
+// persisted from a stray visit.
+templ NewSessionCompose(vm NewSessionComposeVM) {
+	@AgentsLayout(vm.Layout) {
+		<style>
+			@keyframes ns-fade-up {
+				from { opacity: 0; transform: translateY(8px); }
+				to   { opacity: 1; transform: translateY(0); }
+			}
+			[data-ns-card] {
+				animation: ns-fade-up 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+			}
+			[data-ns-card] textarea { transition: height 120ms ease-out; }
+			[data-ns-card] select { transition: border-color 120ms ease, background-color 120ms ease; }
+			[data-ns-card] button[type="submit"] { transition: transform 120ms ease, background-color 120ms ease; }
+			[data-ns-card] button[type="submit"]:active { transform: scale(0.96); }
+			@media (prefers-reduced-motion: reduce) {
+				[data-ns-card] { animation: none; }
+			}
+		</style>
+		<div data-ns-card class="mx-auto flex h-full w-full max-w-2xl flex-col items-center justify-center px-6">
+			<div class="mb-8 text-center">
+				<div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-green-500 text-xl text-white-100 font-semibold select-none">✦</div>
+				<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">New session</h1>
+				<p class="mt-1.5 text-sm text-black-700 dark:text-black-600">Pick a provider and start the conversation. The session is created when you send the first message.</p>
+			</div>
+			if vm.Error != "" {
+				<div class="mb-4 w-full rounded-lg border border-neg-300 dark:border-neg-700 bg-neg-50 dark:bg-neg-900/20 px-4 py-2.5">
+					<p class="text-xs text-neg-600 dark:text-neg-400">{ vm.Error }</p>
+				</div>
+			}
+			if len(vm.Providers) == 0 {
+				<div class="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
+					<p class="text-sm text-amber-700 dark:text-amber-300">
+						No healthy providers found. Configure one in
+						<a class="font-medium underline" href={ templ.SafeURL(vm.Base + "/providers") }>Providers</a>
+						first.
+					</p>
+				</div>
+			} else {
+				<form method="POST" action={ templ.SafeURL(vm.Base) } class="w-full" data-ns-form>
+					<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+						<textarea
+							name="message"
+							rows="4"
+							required
+							autofocus
+							placeholder="Ask anything... (Shift+Enter for new line)"
+							class="block w-full resize-none border-0 bg-transparent px-4 pt-3.5 pb-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:outline-none focus:ring-0"
+							data-ns-textarea
+						>{ vm.Message }</textarea>
+						<div class="flex flex-wrap items-center gap-2 border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
+							<label class="sr-only" for="ns-provider">Provider</label>
+							<select
+								id="ns-provider"
+								name="provider"
+								class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
+							>
+								for _, p := range vm.Providers {
+									if p.Type == vm.DefaultProvider {
+										<option value={ p.Type } selected>{ p.Type } · { p.Name }</option>
+									} else {
+										<option value={ p.Type }>{ p.Type } · { p.Name }</option>
+									}
+								}
+							</select>
+							if len(vm.Presets) > 0 {
+								<label class="sr-only" for="ns-preset">Preset</label>
+								<select
+									id="ns-preset"
+									name="preset"
+									class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
+								>
+									<option value="">— preset (default) —</option>
+									for _, name := range vm.Presets {
+										if name == vm.DefaultPreset {
+											<option value={ name } selected>{ name }</option>
+										} else {
+											<option value={ name }>{ name }</option>
+										}
+									}
+								</select>
+							}
+							if len(vm.Workspaces) > 0 {
+								<label class="sr-only" for="ns-workspace">Workspace</label>
+								<select
+									id="ns-workspace"
+									name="workspace"
+									class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
+								>
+									<option value="">— no workspace —</option>
+									for _, name := range vm.Workspaces {
+										<option value={ name }>{ name }</option>
+									}
+								</select>
+							}
+							<button
+								type="submit"
+								class="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+							>
+								<span>Send</span>
+								<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
+									<path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+								</svg>
+							</button>
+						</div>
+					</div>
+				</form>
+			}
+		</div>
+		<script>
+			(function () {
+				var ta = document.querySelector('[data-ns-textarea]');
+				if (!ta) return;
+				var form = ta.closest('[data-ns-form]');
+				ta.addEventListener('keydown', function (e) {
+					if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+						e.preventDefault();
+						if (form && ta.value.trim()) form.submit();
+					}
+				});
+			})();
+		</script>
+	}
+}

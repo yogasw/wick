@@ -18,6 +18,11 @@ type AgentsLayoutVM struct {
 	SidebarLabels    map[string]string // session id → first user message preview
 	ActiveSessionID  string
 	IdleTimeoutMs    int64
+	// FullBleed=true skips the layout's default px-6 py-6 padding
+	// wrapper so the page can paint edge-to-edge. The workflow
+	// editor needs the full viewport for its canvas; padded pages
+	// (sessions, presets, …) leave this false.
+	FullBleed bool
 }
 
 // OverviewVM holds data for the Overview page. SessionIDs is the
@@ -99,6 +104,16 @@ type SessionsTableVM struct {
 	HasNext       bool
 }
 
+// TurnEventVM is one tool/thinking event within an assistant turn.
+type TurnEventVM struct {
+	Type      string // "tool_use" | "tool_result" | "thinking"
+	ToolName  string
+	ToolInput string
+	ToolUseID string
+	IsError   bool
+	Text      string
+}
+
 // TurnVM is one conversation turn for the UI.
 type TurnVM struct {
 	Role      string // "user" | "assistant" | "system"
@@ -106,6 +121,7 @@ type TurnVM struct {
 	Text      string
 	Truncated bool
 	Time      time.Time
+	Events    []TurnEventVM
 }
 
 // SessionDetailVM holds data for the Session detail page.
@@ -129,6 +145,22 @@ type SessionDetailVM struct {
 	ActiveProvider  string
 	WorkspaceList   []string
 	ActiveWorkspace string
+}
+
+// NewSessionComposeVM feeds the ChatGPT-style compose page that
+// gathers provider/preset/workspace + first message before any
+// session is persisted. The session is created server-side only when
+// the form posts back with a non-empty message.
+type NewSessionComposeVM struct {
+	Layout          AgentsLayoutVM
+	Base            string
+	Providers       []ProviderChoiceVM
+	Presets         []string
+	Workspaces      []string
+	DefaultProvider string
+	DefaultPreset   string
+	Message         string // round-tripped on validation error
+	Error           string
 }
 
 // WorkspacesVM holds data for the Workspaces page.
@@ -171,14 +203,31 @@ type ProvidersVM struct {
 	SupportedKeys []string
 	Gate          GateStatusVM
 	AutoRescan    bool
+	MCP           MCPStatusVM
 }
 
-// GateStatusVM is the small "is the command gate alive?" card on
-// the Providers page. The fields cover the three things an operator
-// needs to glance at when claude is misbehaving:
-//   - Enabled: was the parent able to resolve a gate binary?
-//   - Binary:  which one (env override / sibling / PATH)?
-//   - Note:    one-sentence consequence text — what gets blocked.
+// MCPClientStatusVM is one row in the MCP Wick card — one per detected
+// MCP client (Claude Desktop, Cursor, Gemini CLI, etc.).
+type MCPClientStatusVM struct {
+	ID          string // "claude", "cursor", "gemini", "codex", "claude-code"
+	Label       string // "Claude Desktop", "Cursor", …
+	Detected    bool   // client config dir exists on this host
+	Installed   bool   // wick entry present in client's mcpServers
+	Blocklisted bool   // user manually uninstalled — skip auto-install
+	ConfigPath  string // absolute path to config file (for tooltip)
+}
+
+// MCPStatusVM is the aggregate for the MCP Wick card on the Providers page.
+type MCPStatusVM struct {
+	AppName string
+	Clients []MCPClientStatusVM
+}
+
+// GateStatusVM is the umbrella "what is the gate doing right now?"
+// card on the Providers page. Gate covers two sub-policies — the
+// permission prompt and the ask_user MCP tool — so the VM carries
+// both, plus the boot-time binary resolution state for the permission
+// hook.
 type GateStatusVM struct {
 	Enabled bool
 	Binary  string // absolute path (when enabled)
@@ -186,11 +235,15 @@ type GateStatusVM struct {
 	Reason  string // why disabled, when Enabled=false
 	Note    string // human-readable behavior summary; rendered as-is
 
-	// BypassLocked is true when agents.bypass_permissions=true. In that
-	// state the gate is forced off (spawner strips the hook config) and
-	// the UI must hide the toggle / per-provider enable buttons so the
-	// operator can't trigger no-op actions. Mutually exclusive with
-	// Enabled — never both true at once.
+	// PermissionMode is the active value of GateConfig.PermissionMode
+	// ("on" | "bypass"). "bypass" means the spawner strips the hook
+	// config and runs unguarded — UI surfaces that as a locked badge
+	// so operators can't toggle individual provider hooks (no-op).
+	PermissionMode string
+
+	// BypassLocked is true when PermissionMode=="bypass". Retained for
+	// templ branches that already key off this flag; equivalent to
+	// PermissionMode == "bypass".
 	BypassLocked bool
 }
 

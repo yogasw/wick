@@ -19,8 +19,10 @@ templ Layout(title string) {
 		<body>
 			{ children... }
 			@Palette()
+			@Dialog()
 			<script src="/public/js/app.js"></script>
 			<script src="/public/js/palette.js"></script>
+			<script src="/public/js/dialog.js"></script>
 		</body>
 	</html>
 }

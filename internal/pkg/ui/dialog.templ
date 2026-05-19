@@ -1,0 +1,43 @@
+package ui
+
+// Dialog renders the global confirm/alert modal shell mounted once
+// per page via @Layout. JS helpers in web/public/js/dialog.js
+// (wickConfirm / wickAlert) drive open/close + slot the title and
+// body text. Using a single shared element keeps the modal stackable
+// at the top of <body> so backdrop blur never gets clipped by a
+// parent's overflow.
+//
+// Why replace native confirm()/alert(): the browser dialogs render
+// with OS chrome (white-on-black on Windows, grey-on-white on macOS,
+// and they get blocked entirely on iOS Safari for cross-origin
+// embeds). A custom modal lets every dialog inherit the project
+// theme and behave consistently across pages.
+templ Dialog() {
+	<div
+		id="wickdlg"
+		class="wickdlg hidden fixed inset-0 z-[200] flex items-center justify-center px-4"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="wickdlg-title"
+	>
+		<div class="wickdlg-backdrop absolute inset-0 bg-black-900/50 backdrop-blur-sm" data-wickdlg-cancel></div>
+		<div class="wickdlg-shell relative w-full max-w-md overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl">
+			<div class="px-6 pt-5 pb-2">
+				<h2 id="wickdlg-title" class="text-base font-semibold text-black-900 dark:text-white-100" data-wickdlg-title>Confirm</h2>
+			</div>
+			<div class="px-6 pb-5 text-sm text-black-800 dark:text-black-600 whitespace-pre-line" data-wickdlg-body></div>
+			<div class="flex items-center justify-end gap-2 border-t border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-6 py-3" data-wickdlg-actions>
+				<button
+					type="button"
+					data-wickdlg-cancel
+					class="inline-flex items-center justify-center rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-1.5 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+				>Cancel</button>
+				<button
+					type="button"
+					data-wickdlg-confirm
+					class="inline-flex items-center justify-center rounded-lg bg-green-500 px-4 py-1.5 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors"
+				>OK</button>
+			</div>
+		</div>
+	</div>
+}

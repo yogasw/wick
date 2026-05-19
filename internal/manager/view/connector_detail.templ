@@ -12,7 +12,11 @@ import (
 // Identity (label + actions), credentials, and the operations table.
 // Test runs and run history live on dedicated sibling pages reached via
 // the per-operation action links — keeps this page focused on settings.
-templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner) {
+// ConnectorDetailPage renders the per-row admin surface.
+// oauthURL is non-empty when the connector supports OAuth AND client_id is
+// configured — the handler computes this so the template stays free of
+// config-service access.
+templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner, oauthURL string) {
 	@Layout("Manager · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -86,6 +90,9 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 					Per-row values shared by every operation on this connector. Read in handler code via <code class="font-mono text-xs">c.Cfg(...)</code>.
 				</p>
 				@ConfigsTable(configs, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/configs", editKey, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID)
+			if oauthURL != "" {
+				@oauthConnectButton(oauthURL, oauthConnectedUser(configs))
+			}
 			</section>
 
 			<!-- Rate Limit -->
@@ -303,6 +310,34 @@ templ operationRow(key, rowID string, op connector.Operation, st connectors.OpSt
 			}
 		</td>
 	</tr>
+}
+
+// oauthConnectButton renders the generic OAuth "Connect" button shown on
+// connector rows that support user OAuth. Works for any provider (Slack, GitHub, …).
+// oauthURL is the full OAuth start URL including the connector_id param.
+templ oauthConnectButton(oauthURL string, connectedUser string) {
+	<div class="mt-4 rounded-lg border border-white-400 dark:border-navy-600 bg-white-50 dark:bg-navy-800 p-4">
+		<div class="flex items-center justify-between">
+			<div>
+				<p class="text-sm font-medium text-black-900 dark:text-white-100">Connected Account</p>
+				if connectedUser != "" {
+					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connected as <strong>{ "@" + connectedUser }</strong></p>
+				} else {
+					<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Connect your account to enable sending as you.</p>
+				}
+			</div>
+			<a
+				href={ templ.SafeURL(oauthURL) }
+				class="inline-flex items-center gap-2 rounded-lg border border-green-500 px-4 py-2 text-sm font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+			>
+				if connectedUser != "" {
+					Reconnect
+				} else {
+					Connect Account
+				}
+			</a>
+		</div>
+	</div>
 }
 
 templ runStatusBadge(s entity.ConnectorRunStatus) {

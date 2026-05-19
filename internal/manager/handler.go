@@ -2,11 +2,14 @@ package manager
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -33,6 +36,12 @@ type Handler struct {
 	// configDecorators: per-tool key → function that can mutate config rows
 	// before they are rendered (e.g. to inject dynamic dropdown options).
 	configDecorators map[string]func([]entity.Config) []entity.Config
+
+	// oauthSecret is a per-process random secret used to HMAC-sign OAuth state tokens.
+	oauthSecret []byte
+	// oauthPending stores in-flight OAuth state tokens keyed by the state string.
+	// Values are oauthStateEntry (defined in oauth.go).
+	oauthPending sync.Map
 }
 
 // RegisterConfigDecorator registers a function that is called on the config
@@ -43,6 +52,11 @@ func (h *Handler) RegisterConfigDecorator(toolKey string, fn func([]entity.Confi
 }
 
 func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connectors.Service, tagsSvc *tags.Service, usersSvc *login.Service, tools []tool.Tool) *Handler {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		log.Warn().Err(err).Msg("manager oauth: failed to generate secret; using fallback")
+		secret = []byte("wick-manager-oauth-fallback-secret")
+	}
 	return &Handler{
 		svc:              svc,
 		configs:          configsSvc,
@@ -51,6 +65,7 @@ func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connec
 		users:            usersSvc,
 		tools:            tools,
 		configDecorators: make(map[string]func([]entity.Config) []entity.Config),
+		oauthSecret:      secret,
 	}
 }
 
@@ -86,6 +101,8 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 
 	// Connectors — list + per-row detail with test panel and action menu.
 	h.connectorRoutes(mux, authMidd)
+	// OAuth — public routes for connector user OAuth flows (no auth middleware).
+	h.oauthRoutes(mux)
 
 	// Audit log — cross-connector run history (admin only).
 	mux.Handle("GET /manager/runs", adminOnly(h.auditLogPage))

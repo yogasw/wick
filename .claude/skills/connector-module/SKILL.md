@@ -206,12 +206,127 @@ func RegisterBuiltins() {
             Meta:       myconn.Meta(),
             Configs:    entity.StructToConfigs(myconn.Configs{}),
             Operations: myconn.Operations(),
+            OAuth:      myconn.OAuthMeta(), // optional — see OAuth section below
         },
     )
 }
 ```
 
 Downstream projects use `app.RegisterConnector(meta, configs, ops)` from `main.go` instead — that's the path the downstream skill covers.
+
+## OAuth (user token acquisition)
+
+Connectors that need per-user OAuth tokens (e.g., Slack user token `xoxp-`, Google OAuth, GitHub app) can opt into wick's generic OAuth framework by setting `Module.OAuth`.
+
+### When to use
+
+Use `Module.OAuth` when:
+- Your connector needs a **user identity token** (not a shared service account token).
+- The user must explicitly grant permission via an OAuth consent page.
+- Examples: Slack DM-as-user, Google Drive per-user, GitHub app installations.
+
+Do **not** use for bot/service tokens pasted by admins — those go in `Configs` as a `secret`-tagged field.
+
+### How to add OAuth to a new connector
+
+**Step 1 — Create `internal/connectors/myconn/oauth.go`:**
+
+```go
+package myconn
+
+import (
+    "context"
+    "github.com/yogasw/wick/pkg/connector"
+)
+
+// OAuthMeta returns the OAuth configuration for MyConn.
+func OAuthMeta() *connector.OAuthMeta {
+    return &connector.OAuthMeta{
+        // AuthorizeURL is the provider's consent page.
+        AuthorizeURL: "https://myservice.com/oauth/authorize",
+        // Scopes is the comma or space-separated list of requested user scopes.
+        Scopes: "read:user,write:messages",
+        // DisplayName appears on the "Connect" button in the UI.
+        DisplayName: "MyService",
+        // Icon is an inline SVG or emoji rendered on the Connect button.
+        Icon: "🔗",
+        // GetUserIdentity is called after the token exchange to resolve
+        // who the token belongs to. Return a stable unique ID (not display name)
+        // as userID — it is used to route tokens to the right connector row.
+        GetUserIdentity: func(ctx context.Context, accessToken string) (userID, displayName string, err error) {
+            // Call the provider's "who am I" endpoint with the new token.
+            // Example: GET https://myservice.com/api/me
+            // return resp.UserID, resp.Username, nil
+        },
+    }
+}
+```
+
+**Step 2 — Register with `OAuth` field in `registry.go`:**
+
+```go
+connector.Module{
+    Meta:       myconn.Meta(),
+    Configs:    entity.StructToConfigs(myconn.Configs{}),
+    Operations: myconn.Operations(),
+    OAuth:      myconn.OAuthMeta(), // ← this is all that's needed
+},
+```
+
+**That's it.** The manager UI and OAuth handler pick up everything automatically:
+
+| What appears automatically | Where |
+|---|---|
+| "OAuth App" section (Client ID + Client Secret fields) | `/manager/connectors/myconn` list page (admin-only) |
+| "Connect with MyService" button | `/manager/connectors/myconn/{id}` detail page (any user with access) |
+| OAuth start + callback routes | `GET /manager/connectors/myconn/oauth/start` and `.../callback` |
+| Token saved to connector row on success | Automatic via `oauthSaveToken` in `internal/manager/oauth.go` |
+| In-memory token map refresh | Automatic via `RefreshTokenMap` on the Slack channel |
+
+**Step 3 — Add Redirect URI to provider app settings:**
+
+```
+http://localhost:9425/manager/connectors/myconn/oauth/callback
+```
+
+Replace `myconn` with `Module.Meta.Key` and `localhost:9425` with the production `app_url` from wick settings.
+
+### How the framework works (internals)
+
+```
+Admin sets Client ID + Secret
+  → stored in configs table with owner "connector_oauth:{key}"
+
+User clicks "Connect with MyService"
+  → GET /manager/connectors/{key}/oauth/start?connector_id={rowID}
+  → reads OAuthMeta.AuthorizeURL + Scopes
+  → generates HMAC-signed state token (stored with 10-min TTL)
+  → redirects to provider consent page
+
+Provider redirects back
+  → GET /manager/connectors/{key}/oauth/callback?code=...&state=...
+  → validates state token
+  → exchanges code via standard POST to provider token endpoint
+  → calls OAuthMeta.GetUserIdentity(token) → (userID, displayName)
+  → saves token to connector row (updates existing row or creates new one)
+  → refreshes in-memory token map immediately
+  → redirects back to /manager/connectors/{key}/{rowID}?oauth=success
+```
+
+### Reference files
+
+| File | Role |
+|---|---|
+| `pkg/connector/oauth.go` | `OAuthMeta` struct + `OAuthProvider` interface definition |
+| `internal/manager/oauth.go` | Generic handler (start, callback, state management, token save) |
+| `internal/connectors/slack/oauth.go` | Slack reference implementation of `OAuthMeta` |
+| `internal/manager/connectors.go` | How `mod.OAuth != nil` drives the UI sections |
+
+### Caveats
+
+- The generic callback uses `slackgo.GetOAuthV2ResponseContext` — currently Slack-specific. If your provider uses a different token exchange endpoint, update `internal/manager/oauth.go::oauthCallback` to detect by connector key or add a `TokenURL` field to `OAuthMeta`.
+- `GetUserIdentity` is called with the **access token**, not the refresh token. Store the access token in the connector row; add a `RefreshToken` field to `Configs` if your provider issues long-lived refresh tokens.
+- The stored token is written to the connector row's `user_token` config key. Your `Configs` struct must have a `UserToken string` field tagged `wick:"secret;..."` for the admin UI to show it (and for `c.Cfg("user_token")` to work in operations).
 
 ## Bootstrap
 
@@ -267,7 +382,7 @@ The retention job [`internal/jobs/connector-runs-purge`](../../../internal/jobs/
 
 ## When to ask before acting
 
-- New external API that requires its own OAuth dance (separate from wick's OAuth surface) — confirm authn flow, where tokens go, and refresh strategy before writing code.
+- New connector that needs per-user OAuth tokens — ask: (a) does it use standard OAuth 2.0 authorization code flow? (b) what scopes are needed? (c) does the provider return a `user_id` from a "who am I" endpoint after token exchange? (d) are refresh tokens issued and how long do they live? If all yes → use `Module.OAuth` + `OAuthMeta`. If non-standard (e.g., device flow, PKCE-only, custom token endpoint) — confirm before building.
 - **Removing an existing connector or operation** — confirm: removing an op orphans `connector_operations` rows and breaks any active MCP client that listed the old `tool_id`. Migration plan needs to land in the same change.
 - Adding an operation that needs `multipart/form-data` upload — wick's connector path is JSON-first; this is doable but uncommon, flag it.
 - Adding `IsFilter` tags — never on your own initiative.

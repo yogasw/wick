@@ -1,0 +1,9 @@
+package workflow
+
+// Shell loads the Drawflow CSS+JS + editor.css+editor.js. Mounted by
+// every workflow page so the agents sidebar stays consistent.
+templ Shell(base string) {
+	<link rel="stylesheet" href={ base + "/static/js/workflow/drawflow.min.css" }/>
+	<link rel="stylesheet" href={ base + "/static/js/workflow/editor.css" }/>
+	<script src={ base + "/static/js/workflow/drawflow.min.js" }></script>
+}

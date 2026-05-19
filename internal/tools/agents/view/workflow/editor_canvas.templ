@@ -1,0 +1,62 @@
+package workflow
+
+// EditorCanvas is the centre column — Drawflow drop target + zoom
+// controls. Background grid lives in editor.css; theme tokens
+// applied via the wrap div.
+templ EditorCanvas(vm EditorVM) {
+	<div class="flex-1 relative bg-white-200 dark:bg-navy-800" id="wf-canvas-wrap">
+		// Zoom + auto-layout controls — bottom-left so they don't fight
+		// the top-right Add-node button and the bottom-centre Execute
+		// pill for screen real estate.
+		<div class="wf-canvas-controls wf-canvas-controls-bl">
+			<button type="button" id="wf-zoom-in" title="Zoom in (Ctrl + Scroll)">+</button>
+			<button type="button" id="wf-zoom-out" title="Zoom out (Ctrl + Scroll)">−</button>
+			<button type="button" id="wf-zoom-reset" title="Reset view">⤢</button>
+			<button type="button" id="wf-layout" title="Auto-format (layered T→B)">⇒</button>
+			// Lock toggle. When on: nodes can be selected (inspector still
+			// opens) but can't be dragged, deleted, or have connections
+			// rewired. Scroll/trackpad pan + zoom still work so the
+			// operator can review the graph without nudging it. Persisted
+			// per-browser via localStorage so reloads keep the state.
+			<button type="button" id="wf-lock" title="Lock canvas — disable node edits" aria-pressed="false">🔒</button>
+		</div>
+		// Add-node trigger top-right — opens the palette drawer
+		// (which now lives as a left slide-in modal). Pattern mirrors
+		// n8n's floating + button.
+		<button type="button" id="wf-palette-open" class="wf-canvas-add" title="Add node">
+			<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+		</button>
+		// Search button — opens node search modal (Ctrl+K)
+		<button type="button" id="wf-node-search-btn" class="wf-canvas-search" title="Search nodes (Ctrl+K)">
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+		</button>
+		<div id="wf-canvas"></div>
+		// Node search modal — opened by Ctrl+K or the search button.
+		// Results rendered dynamically by editor.js; backdrop click closes.
+		<div id="wf-node-search" class="wf-node-search-overlay hidden" role="dialog" aria-modal="true" aria-label="Search nodes">
+			<div class="wf-node-search-backdrop"></div>
+			<div class="wf-node-search-box">
+				<div class="wf-node-search-header">
+					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="wf-node-search-icon"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+					<input type="text" id="wf-node-search-input" class="wf-node-search-input" placeholder="Search nodes by name or type…" autocomplete="off" spellcheck="false"/>
+					<kbd class="wf-node-search-esc">ESC</kbd>
+				</div>
+				<ul id="wf-node-search-results" class="wf-node-search-results" role="listbox"></ul>
+				<div class="wf-node-search-footer">↑↓ navigate &nbsp;·&nbsp; ↵ jump &nbsp;·&nbsp; ESC close</div>
+			</div>
+		</div>
+		// Floating "Execute workflow" pill at the canvas bottom. Acts
+		// as a launcher that opens a trigger picker — the user must
+		// choose which wired trigger to fire (manual, slack, cron, …)
+		// so multi-trigger workflows route correctly. With no wired
+		// trigger the pill stays disabled and explains why.
+		<div id="wf-execute-host" class="wf-execute-host">
+			<button type="button" id="wf-execute-pill" class="wf-execute-pill" title="Pick a trigger to fire">
+				<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>
+				Execute workflow
+				<span class="wf-execute-caret">▾</span>
+			</button>
+			<div id="wf-execute-menu" class="wf-execute-menu hidden" role="menu" aria-label="Pick trigger to fire"></div>
+		</div>
+	</div>
+}

@@ -331,6 +331,8 @@ After registering and filling credentials:
 
 - Public API: `pkg/connector` — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `ExecuteFunc`, `Ctx`
 - Canonical example: [`connectors/crudcrud/`](https://github.com/yogasw/wick/tree/master/template/connectors/crudcrud) — three-file split (`connector.go` + `service.go` + `repo.go`)
+- **Built-in connectors** shipped with wick (httprest, github, slack, wickmanager, workflow, crudcrud) — see [Built-in Connectors](/connectors/)
 - MCP transport: [MCP for LLMs](./mcp)
 - Auth modes: [Access Tokens (PAT)](./access-tokens), [OAuth Connections](./oauth-connections)
 - Audit retention: [Connector Runs Purge](./connector-runs-purge)
+- Workflows: a `connector` node calls one operation on an existing row through the same code path as `wick_execute` — see [Workflows ▶ connector node](/workflow/nodes/connector).

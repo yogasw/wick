@@ -174,6 +174,22 @@ func (s *Service) DeleteOwned(ctx context.Context, owner string) error {
 	return nil
 }
 
+// DeleteOwnedKey removes one (owner, key) row from the DB and the
+// in-memory cache. Used by one-shot migrations that retire a config
+// key without touching siblings. Returns nil even when no such row
+// existed — callers treat it as idempotent.
+func (s *Service) DeleteOwnedKey(ctx context.Context, owner, key string) error {
+	if err := s.repo.DeleteByOwnerKey(ctx, owner, key); err != nil {
+		return fmt.Errorf("delete config %s/%s: %w", owner, key, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ck := ownerKey{Owner: owner, Key: key}
+	delete(s.cache, ck)
+	delete(s.meta, ck)
+	return nil
+}
+
 func (s *Service) reconcile(ctx context.Context, row entity.Config) error {
 	existing, err := s.repo.FindByOwnerKey(ctx, row.Owner, row.Key)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -264,15 +280,26 @@ func (s *Service) GetOwned(owner, key string) string {
 }
 
 // ListOwned returns every config scoped to owner in declaration order.
+// Non-persisted metadata fields (Hidden, VisibleWhen, Options, …) are
+// restored from the meta map because gorm:"-" tags strip them on DB
+// round-trips.
 func (s *Service) ListOwned(owner string) []entity.Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	keys := s.declOrder[owner]
 	out := make([]entity.Config, 0, len(keys))
 	for _, key := range keys {
-		if v, ok := s.cache[ownerKey{Owner: owner, Key: key}]; ok {
-			out = append(out, v)
+		k := ownerKey{Owner: owner, Key: key}
+		v, ok := s.cache[k]
+		if !ok {
+			continue
 		}
+		if m, ok := s.meta[k]; ok {
+			v.Hidden = m.Hidden
+			v.VisibleWhen = m.VisibleWhen
+			v.ColOptions = m.ColOptions
+		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -416,4 +443,36 @@ func (s *Service) EncryptionKey() string {
 		return v
 	}
 	return s.Get(KeyEncryptionKey)
+}
+
+// EncryptSecret encrypts plain using the master key. Returns the
+// wick_cenc_ token. No-op (returns plain) when no encryptor is wired
+// or encryption is disabled.
+func (s *Service) EncryptSecret(plain string) (string, error) {
+	if plain == "" || isAnyToken(plain) {
+		return plain, nil
+	}
+	s.mu.RLock()
+	e := s.enc
+	s.mu.RUnlock()
+	if e == nil || e.Disabled() {
+		return plain, nil
+	}
+	return e.EncryptMaster(plain)
+}
+
+// DecryptSecret decrypts a wick_cenc_ token back to plaintext. Returns
+// the input unchanged when it is not a master token or no encryptor is
+// wired.
+func (s *Service) DecryptSecret(token string) (string, error) {
+	if !enc.IsMasterToken(token) {
+		return token, nil
+	}
+	s.mu.RLock()
+	e := s.enc
+	s.mu.RUnlock()
+	if e == nil {
+		return token, nil
+	}
+	return e.DecryptMaster(token)
 }

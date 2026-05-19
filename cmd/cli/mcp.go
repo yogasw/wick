@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/mcpconfig"
 )
 
@@ -221,7 +222,7 @@ func mcpConfigCmd() *cobra.Command {
 				return err
 			}
 			if name == "" {
-				name = filepath.Base(cwd)
+				name = appname.Resolve()
 			}
 			snippet := map[string]any{
 				"mcpServers": map[string]any{name: mcpconfig.WickEntry(cwd, mode)},
@@ -266,7 +267,7 @@ Modes (--mode): same as mcp serve --mode. Use "dev" to force go run,
 				return err
 			}
 			if name == "" {
-				name = filepath.Base(cwd)
+				name = appname.Resolve()
 			}
 			targets, err := mcpconfig.ResolveTargets(cwd, client)
 			if err != nil {

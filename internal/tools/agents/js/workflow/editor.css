@@ -1,0 +1,1974 @@
+/* workflow editor.css — wick-flavored Drawflow overrides.
+ * Theme palette matches the agents tab: white-{100..400} / navy-{600..800} /
+ * black-{500..900} / green-{500..700}. No slate-* colors.
+ *
+ * Source-order rule: Tailwind utilities always win over rules in this
+ * file. The `.hidden { display: none !important }` line below ensures
+ * Tailwind's `hidden` utility actually hides elements regardless of
+ * any `display: flex` / `display: grid` we put on the same element
+ * (e.g. .wf-inspector-empty, .wf-palette-list). When you need a
+ * "stays in DOM but visually closed" state (e.g. palette drawer
+ * slide-out via transform), use a custom class like
+ * `.wf-palette-drawer-closed`, NOT the Tailwind `hidden` utility. */
+.hidden { display: none !important; }
+
+/* Canvas drop zone. Light mode = white-200 bg + white-400 grid dots.
+ * Dark mode handled via .dark scope set on <html>. */
+#wf-canvas {
+  height: 100%;
+  width: 100%;
+  background-color: #f1efeb; /* white-200 */
+  background-image: radial-gradient(circle, #d6cfc4 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.dark #wf-canvas {
+  background-color: #131c2f; /* navy-800 */
+  background-image: radial-gradient(circle, #2c3a5a 1px, transparent 1px);
+}
+
+/* Hide the precanvas during the initial import+fit window so the
+ * graph never paints at the wrong origin/scale. editor.js stamps
+ * `.wf-fitting` before import, then removes it after fitToView; the
+ * 120ms fade re-reveals everything in its final position so there's
+ * no visible jump from corner to centre. */
+.drawflow.wf-fitting { opacity: 0; }
+.drawflow { transition: opacity 0.12s ease-out; }
+
+/* Drawflow node card. */
+.drawflow .drawflow-node {
+  border-radius: 12px;
+  padding: 0;
+  background: #ffffff;
+  border: 2px solid transparent;
+  min-width: 200px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.dark .drawflow .drawflow-node {
+  background: #1e2942; /* navy-700 */
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.drawflow .drawflow-node.selected {
+  border-color: #16a34a; /* green-500 */
+  box-shadow: 0 0 0 4px rgba(22,163,74,0.18);
+}
+.drawflow .drawflow-node .node-head {
+  padding: 8px 12px;
+  border-radius: 10px 10px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #fff;
+}
+.drawflow .drawflow-node .node-body { padding: 10px 12px; }
+.drawflow .drawflow-node .node-body .title {
+  font-weight: 600; font-size: 13px; color: #18181b;
+}
+.dark .drawflow .drawflow-node .node-body .title { color: #f5f3ef; }
+.drawflow .drawflow-node .node-body .meta {
+  font-size: 11px; color: #6b7280;
+}
+.dark .drawflow .drawflow-node .node-body .meta { color: #9aa3b2; }
+
+/* Per-type header colour. */
+.drawflow .drawflow-node.node-trigger .node-head   { background: #6366f1; }
+.drawflow .drawflow-node.node-classify .node-head  { background: #ec4899; }
+.drawflow .drawflow-node.node-agent .node-head     { background: #8b5cf6; }
+.drawflow .drawflow-node.node-connector .node-head { background: #14b8a6; }
+.drawflow .drawflow-node.node-channel .node-head   { background: #6366f1; }
+.drawflow .drawflow-node.node-shell .node-head     { background: #64748b; }
+.drawflow .drawflow-node.node-http .node-head      { background: #f59e0b; }
+.drawflow .drawflow-node.node-db_query .node-head  { background: #0ea5e9; }
+.drawflow .drawflow-node.node-branch .node-head    { background: #f43f5e; }
+.drawflow .drawflow-node.node-parallel .node-head  { background: #a3e635; color: #1a2e05; }
+.drawflow .drawflow-node.node-merge .node-head     { background: #475569; }
+.drawflow .drawflow-node.node-end .node-head       { background: #16a34a; } /* green-500 */
+.drawflow .drawflow-node.node-transform .node-head { background: #84cc16; }
+
+/* Connections. Arrow head sits at the midpoint of the curve (the
+ * editor.js createCurvature override emits an M+C+C path with a
+ * vertex at the midpoint so <marker-mid> can attach). End-tip arrows
+ * piled on top of each other when multiple edges fanned into the same
+ * input port; mid-curve arrows scale to any fan-in width. */
+.drawflow .connection .main-path {
+  stroke: #9aa3b2;
+  stroke-width: 2;
+  marker-mid: url(#wf-arrow);
+  fill: none;
+}
+.dark .drawflow .connection .main-path {
+  stroke: #5b6478;
+  marker-mid: url(#wf-arrow-dark);
+}
+
+.drawflow .input, .drawflow .output {
+  width: 14px; height: 14px;
+  border-color: #9aa3b2;
+}
+
+/* Top→bottom flow: input port centered on TOP edge, output port on
+ * BOTTOM edge. Drawflow's stock CSS pins ports with position:relative
+ * (so they flow inline beside the node head); we switch them to
+ * absolute and pin to the top/bottom edge instead. Drawflow uses each
+ * port's getBoundingClientRect() to compute path endpoints, so the
+ * connections follow the new visual position automatically. */
+.drawflow .drawflow-node {
+  overflow: visible !important;
+}
+.drawflow .drawflow-node .input,
+.drawflow .drawflow-node .output {
+  position: absolute !important;
+  width: 14px !important;
+  height: 14px !important;
+  margin: 0 !important;
+}
+/* Generous invisible hit target — the visible circle is only 14px so
+ * grabbing it to drag-to-connect was finicky. A ::before overlay
+ * spreads the clickable area to ~30px while leaving the visible
+ * circle the same size. */
+.drawflow .drawflow-node .input::before,
+.drawflow .drawflow-node .output::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  right: -8px;
+  bottom: -8px;
+  border-radius: 50%;
+}
+.drawflow .drawflow-node .input {
+  top: -7px !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  margin-left: -7px !important;
+  z-index: 2 !important;
+}
+.drawflow .drawflow-node .output {
+  top: auto !important;
+  bottom: -7px !important;
+  right: auto !important;
+  left: 50% !important;
+  margin-left: -7px !important;
+  /* Output beats input when ports overlap (e.g. two nodes stacked
+   * tightly in a T→B layout). The drag-to-connect flow only fires
+   * from output, so giving it the higher z keeps that gesture
+   * reachable. */
+  z-index: 3 !important;
+}
+
+/* Floating zoom controls top-right. */
+.wf-canvas-controls {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Bottom-left variant — zoom + auto-layout. Keeps top-right free for
+   the Add-node trigger and bottom-centre free for the Execute pill. */
+.wf-canvas-controls-bl {
+  right: auto;
+  top: auto;
+  left: 12px;
+  bottom: 12px;
+  flex-direction: column-reverse;
+}
+
+/* Top-right Add-node trigger — opens the palette drawer. */
+.wf-canvas-add {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 10;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4a5568;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+  transition: background 0.15s, transform 0.1s;
+}
+.wf-canvas-add:hover { background: #f1efeb; transform: scale(1.05); }
+.dark .wf-canvas-add { background: #1e2942; border-color: #2c3a5a; color: #c9d1de; }
+.dark .wf-canvas-add:hover { background: #131c2f; }
+
+/* ── Palette drawer (right slide-in) ──────────────────────────── */
+.wf-palette-drawer {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* Use a custom "-closed" class instead of Tailwind's `hidden` so the
+   drawer can stay in DOM (display: flex) and slide via transform.
+   Toggling `hidden` would set display:none and reflow the canvas. */
+.wf-palette-shell {
+  position: relative;
+  width: 300px;
+  background: #f5f3ee;
+  border: 1px solid #e0dccf;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.15);
+  transform: translateX(0);
+  transition: transform 0.18s ease-out;
+}
+.wf-palette-drawer-closed .wf-palette-shell {
+  transform: translateX(calc(100% + 12px));
+  pointer-events: none;
+}
+.dark .wf-palette-shell {
+  background: #1a2238;
+  border-color: #2c3a5a;
+}
+.wf-palette-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e0dccf;
+}
+.wf-palette-header > [data-palette-title] {
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.wf-palette-back {
+  background: transparent;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.wf-palette-back:hover { color: #1f2937; }
+.dark .wf-palette-back { color: #94a3b8; }
+.dark .wf-palette-back:hover { color: #f1f5f9; }
+.wf-palette-back.hidden { display: none; }
+.wf-palette-drill { user-select: none; }
+.dark .wf-palette-header { border-bottom-color: #2c3a5a; }
+.wf-palette-close {
+  background: transparent;
+  border: 0;
+  font-size: 20px;
+  line-height: 1;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.wf-palette-close:hover { color: #1f2937; }
+.dark .wf-palette-close { color: #94a3b8; }
+.dark .wf-palette-close:hover { color: #f1f5f9; }
+.wf-palette-search {
+  margin: 10px 12px 4px;
+  padding: 6px 10px;
+  border: 1px solid #e0dccf;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  color: #1f2937;
+  outline: none;
+}
+.wf-palette-search:focus { border-color: #10b981; }
+.dark .wf-palette-search {
+  background: #0f172a;
+  border-color: #2c3a5a;
+  color: #f1f5f9;
+}
+.wf-palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px 16px;
+}
+.wf-canvas-controls button {
+  background: #ffffff;
+  border: 1px solid #e0dccf; /* white-300 */
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-weight: 600;
+  color: #4a5568;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  cursor: pointer;
+}
+.wf-canvas-controls button:hover { background: #f1efeb; }
+.dark .wf-canvas-controls button {
+  background: #1e2942;
+  border-color: #2c3a5a;
+  color: #c9d1de;
+}
+.dark .wf-canvas-controls button:hover { background: #131c2f; }
+/* Lock toggle active state — green-500 fill mirrors the Save pill so
+ * the on-state reads as "engaged" rather than "warning". */
+.wf-canvas-controls button.is-on {
+  background: #16a34a;
+  border-color: #15803d;
+  color: #ffffff;
+}
+.wf-canvas-controls button.is-on:hover { background: #15803d; }
+.dark .wf-canvas-controls button.is-on {
+  background: #16a34a;
+  border-color: #15803d;
+  color: #ffffff;
+}
+.dark .wf-canvas-controls button.is-on:hover { background: #15803d; }
+
+/* Canvas lock visual — subtle "not editable" cursor. Node drag is
+ * already blocked by drawflow fixed mode; this is only feedback so
+ * the operator knows a click won't move anything. */
+#wf-canvas.wf-canvas-locked .drawflow-node { cursor: pointer; }
+#wf-canvas.wf-canvas-locked .drawflow-node .input,
+#wf-canvas.wf-canvas-locked .drawflow-node .output { cursor: not-allowed; }
+
+/* ── Marquee box-select overlay ───────────────────────────────────
+ * Painted at the document level (fixed position) so it sits above
+ * every transformed canvas child without inheriting the precanvas
+ * scale. pointer-events: none keeps the underlying canvas reactive
+ * to the mousemove that drives this rect. */
+.wf-marquee {
+  position: fixed;
+  pointer-events: none;
+  background: rgba(22, 163, 74, 0.10);
+  border: 1px dashed #16a34a;
+  border-radius: 2px;
+  z-index: 1000;
+}
+.dark .wf-marquee {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: #22c55e;
+}
+
+/* Multi-selection ring — drawn alongside drawflow's `.selected`
+ * green outline. Same hue so the affordance reads as "selected"
+ * regardless of which selection mechanism produced it. */
+.drawflow .drawflow-node.wf-multi-selected {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.22);
+}
+
+/* Validation error badge — a small red dot in the node's top-right
+ * corner. Hover shows the violation messages via title. Save stays
+ * non-blocking; this is just a visual heads-up. */
+.drawflow .drawflow-node.wf-node-error {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+.drawflow .drawflow-node .wf-error-badge {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  z-index: 2;
+  cursor: help;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* Palette drag affordance. */
+.wf-palette-item { cursor: grab; user-select: none; transition: transform 0.15s, border-color 0.15s; }
+.wf-palette-item:hover { transform: translateX(2px); }
+.wf-palette-item:active { cursor: grabbing; }
+
+/* YAML syntax-highlight tokens (server-side spans). */
+.yaml-key  { color: #7dd3fc; }
+.yaml-str  { color: #fde68a; }
+.yaml-num  { color: #f0abfc; }
+.yaml-cmt  { color: #6b7280; font-style: italic; }
+.yaml-bool { color: #f0abfc; }
+
+/* ── Run progress: per-node status overlay ─────────────────────── */
+/* Pulsing outline mirrors n8n's "node is running" affordance. */
+.drawflow .drawflow-node.wf-node-running {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+  animation: wf-pulse 1.4s ease-in-out infinite;
+}
+.drawflow .drawflow-node.wf-node-success {
+  outline: 2px solid #10b981;
+  outline-offset: 2px;
+}
+.drawflow .drawflow-node.wf-node-failed {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+.drawflow .drawflow-node.wf-node-skipped {
+  outline: 2px dashed #9ca3af;
+  outline-offset: 2px;
+  opacity: 0.7;
+}
+@keyframes wf-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+}
+.drawflow .drawflow-node .wf-status-badge {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #1f2937;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  z-index: 3;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.drawflow .drawflow-node .wf-status-badge[data-state="running"] { background: #f59e0b; }
+.drawflow .drawflow-node .wf-status-badge[data-state="success"] { background: #10b981; }
+.drawflow .drawflow-node .wf-status-badge[data-state="failed"]  { background: #ef4444; }
+.drawflow .drawflow-node .wf-status-badge[data-state="skipped"] { background: #6b7280; }
+.drawflow .drawflow-node .wf-latency {
+  position: absolute;
+  bottom: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-family: monospace;
+  color: #6b7280;
+  background: rgba(255,255,255,0.85);
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.dark .drawflow .drawflow-node .wf-latency {
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.85);
+}
+
+/* ── Inspector modal overlay (n8n-style 3-col debug) ───────────
+ * Theme-aware: light defaults; `.dark` ancestor flips palette.
+ * Tracks the project's broader light/dark mode toggle so the modal
+ * doesn't look foreign against the rest of the editor. */
+.wf-inspector-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.wf-inspector-modal.hidden { display: none; }
+.wf-inspector-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(40, 50, 70, 0.35);
+  backdrop-filter: blur(2px);
+}
+.dark .wf-inspector-backdrop { background: rgba(8, 11, 19, 0.6); }
+.wf-inspector-shell {
+  position: relative;
+  flex: 1;
+  margin: 24px;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.15);
+  color: #1f2937;
+}
+.dark .wf-inspector-shell {
+  background: #0f172a;
+  border-color: #1f2937;
+  color: #f1f5f9;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+}
+.wf-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0dccf;
+  background: #f7f5f0;
+  color: inherit;
+  font-size: 14px;
+}
+.dark .wf-inspector-header {
+  background: #0b1220;
+  border-bottom-color: #1f2937;
+}
+.wf-inspector-icon {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  border-radius: 50%;
+  background: #e0dccf;
+  font-size: 12px;
+  color: #d97706;
+}
+.dark .wf-inspector-icon { background: #1f2937; color: #f59e0b; }
+.wf-inspector-close {
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.wf-inspector-close:hover { color: #111827; }
+.dark .wf-inspector-close { color: #94a3b8; }
+.dark .wf-inspector-close:hover { color: #f1f5f9; }
+.wf-inspector-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  min-height: 0;
+}
+.wf-inspector-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #e0dccf;
+  background: #ffffff;
+}
+.dark .wf-inspector-col {
+  border-right-color: #1f2937;
+  background: #0f172a;
+}
+.wf-inspector-col:last-child { border-right: 0; }
+.wf-inspector-col-head {
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #6b7280;
+  border-bottom: 1px solid #e0dccf;
+  background: #f7f5f0;
+}
+.dark .wf-inspector-col-head {
+  color: #94a3b8;
+  border-bottom-color: #1f2937;
+  background: #0b1220;
+}
+.wf-inspector-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #6b7280;
+  text-align: center;
+}
+.dark .wf-inspector-empty { color: #94a3b8; }
+.wf-inspector-empty .text-white-100 { color: inherit !important; }
+.wf-inspector-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e0dccf;
+  background: #f7f5f0;
+}
+.dark .wf-inspector-tabs {
+  border-bottom-color: #1f2937;
+  background: #0b1220;
+}
+.wf-inspector-tab {
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.dark .wf-inspector-tab { color: #94a3b8; }
+.wf-inspector-tab.is-on {
+  color: #b91c1c;
+  border-bottom-color: #ef4444;
+}
+.dark .wf-inspector-tab.is-on { color: #fca5a5; }
+.wf-inspector-exec-btn {
+  background: #ef4444;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.wf-inspector-exec-btn:hover { background: #dc2626; }
+.wf-inspector-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  font-size: 13px;
+  color: inherit;
+}
+/* .wf-input mirrors theme-aware text input styling. Sits underneath
+   the Tailwind `wf-input` rule so author markup can layer extra
+   utility classes on top without losing the theme contrast. */
+.wf-input {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #d6d3c9;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #1f2937;
+  outline: none;
+}
+.wf-input:focus { border-color: #ef4444; }
+.wf-input.wf-input-error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+}
+.dark .wf-input {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+.dark .wf-input.wf-input-error {
+  border-color: #f87171;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.24);
+}
+
+/* ── Floating Execute workflow pill + trigger picker ─────────── */
+.wf-execute-host {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+}
+.wf-execute-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ef4444;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(239, 68, 68, 0.35);
+  transition: background 0.15s, transform 0.1s;
+}
+.wf-execute-pill:hover { background: #dc2626; }
+.wf-execute-pill:active { transform: translateY(1px); }
+.wf-execute-pill[data-state="running"] {
+  background: #f59e0b;
+  cursor: progress;
+}
+.wf-execute-pill[data-state="disabled"] {
+  background: #9ca3af;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.wf-execute-caret { font-size: 10px; opacity: 0.85; }
+
+/* Picker menu — pops upward so it doesn't fall off the canvas
+   bottom edge. Anchored above the pill via bottom: 100%. */
+.wf-execute-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  max-width: 360px;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wf-execute-menu.hidden { display: none; }
+.dark .wf-execute-menu {
+  background: #0f172a;
+  border-color: #1f2937;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+.wf-execute-menu-header {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7280;
+  padding: 6px 10px 4px;
+}
+.dark .wf-execute-menu-header { color: #94a3b8; }
+.wf-execute-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.wf-execute-menu-item:hover { background: rgba(239, 68, 68, 0.08); }
+.dark .wf-execute-menu-item:hover { background: rgba(239, 68, 68, 0.18); }
+.wf-execute-menu-item[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.wf-execute-menu-item[disabled]:hover { background: transparent; }
+.wf-execute-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.wf-execute-menu-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+.dark .wf-execute-menu-meta { color: #94a3b8; }
+.wf-execute-menu-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: #6b7280;
+  text-align: center;
+}
+.dark .wf-execute-menu-empty { color: #94a3b8; }
+
+/* ── Bottom logs panel rows ─────────────────────────────────────
+ * Theme-aware: light defaults; `.dark` ancestor flips palette so
+ * the panel stays readable against either canvas background. */
+.wf-log-row {
+  border: 1px solid #e0dccf;
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #ffffff;
+  color: #1f2937;
+}
+.dark .wf-log-row {
+  border-color: rgba(156, 163, 175, 0.25);
+  background: rgba(255,255,255,0.04);
+  color: #f1f5f9;
+}
+.wf-log-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: monospace;
+}
+.wf-log-status {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.wf-log-copy {
+  margin-left: auto;
+  font-size: 10px;
+  color: #047857;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.wf-log-copy:hover {
+  background: rgba(16, 185, 129, 0.12);
+}
+.dark .wf-log-copy { color: #34d399; }
+.wf-log-status-started    { background: #f59e0b22; color: #b45309; }
+.wf-log-status-completed  { background: #10b98122; color: #047857; }
+.wf-log-status-failed     { background: #ef444422; color: #b91c1c; }
+.wf-log-status-skipped    { background: #6b728022; color: #4b5563; }
+.dark .wf-log-status-started   { color: #fbbf24; }
+.dark .wf-log-status-completed { color: #34d399; }
+.dark .wf-log-status-failed    { color: #f87171; }
+.dark .wf-log-status-skipped   { color: #9ca3af; }
+.wf-log-node {
+  flex: 0 0 auto;
+  color: #0369a1;
+}
+.dark .wf-log-node { color: #38bdf8; }
+.wf-log-latency {
+  margin-left: auto;
+  color: #6b7280;
+  font-size: 10px;
+}
+.dark .wf-log-latency { color: #94a3b8; }
+.wf-log-body {
+  margin-top: 4px;
+  background: #f7f5f0;
+  color: #1f2937;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.dark .wf-log-body { background: #0f172a; color: #f1f5f9; }
+
+/* ── Runs panel rows ──────────────────────────────────────────── */
+.wf-run-row {
+  border: 1px solid #e0dccf;
+  border-radius: 4px;
+  background: #ffffff;
+}
+.dark .wf-run-row { border-color: rgba(156, 163, 175, 0.25); background: rgba(255,255,255,0.04); }
+.wf-run-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: inherit;
+}
+.wf-run-head:hover { background: rgba(0,0,0,0.04); }
+.dark .wf-run-head:hover { background: rgba(255,255,255,0.04); }
+.wf-run-status {
+  display: inline-block;
+  min-width: 64px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.wf-run-status-success  { background: #10b98122; color: #047857; }
+.wf-run-status-failed   { background: #ef444422; color: #b91c1c; }
+.wf-run-status-running  { background: #f59e0b22; color: #b45309; }
+.wf-run-status-queued   { background: #6b728022; color: #4b5563; }
+.wf-run-status-unknown  { background: #6b728022; color: #4b5563; }
+.dark .wf-run-status-success  { color: #34d399; }
+.dark .wf-run-status-failed   { color: #f87171; }
+.dark .wf-run-status-running  { color: #fbbf24; }
+.dark .wf-run-status-queued,
+.dark .wf-run-status-unknown  { color: #9ca3af; }
+.wf-run-time {
+  font-family: monospace;
+  color: #1f2937;
+}
+.dark .wf-run-time { color: #f1f5f9; }
+.wf-run-dur {
+  margin-left: auto;
+  font-family: monospace;
+  font-size: 10px;
+  color: #6b7280;
+}
+.dark .wf-run-dur { color: #94a3b8; }
+.wf-run-dur:empty { display: none; }
+.wf-run-detail {
+  padding: 4px 8px 8px;
+  border-top: 1px dashed #e0dccf;
+  background: #faf8f3;
+}
+.dark .wf-run-detail {
+  border-top-color: rgba(156, 163, 175, 0.15);
+  background: rgba(255,255,255,0.02);
+}
+
+/* ── Picker widget (searchable typeahead with chips) ─────────────
+ * Lookup URL set on .wf-picker via data-picker-lookup-url. Hidden
+ * input carries JSON [{id,name}, …] payload + fires input event on
+ * every chip mutation so DOM-polling consumers catch the change. */
+.wf-picker { position: relative; }
+.wf-picker-shell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  min-height: 40px;
+  border: 1px solid #d6cfc4;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: text;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.wf-picker-shell:focus-within {
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+.dark .wf-picker-shell {
+  background: #131c2f;
+  border-color: #2c3a5a;
+}
+.wf-picker-chips {
+  display: contents;
+}
+.wf-picker-chip-label { white-space: nowrap; }
+.wf-picker-input {
+  flex: 1 1 120px;
+  min-width: 80px;
+  border: 0;
+  padding: 4px 6px;
+  background: transparent;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: #1f2937;
+  outline: none;
+}
+.dark .wf-picker-input { color: #f1f5f9; }
+.wf-picker-input::placeholder {
+  color: #9ca3af;
+  font-style: italic;
+}
+.wf-picker-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  margin-top: 4px;
+  max-height: 256px;
+  overflow-y: auto;
+  border: 1px solid #e0dccf;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+.dark .wf-picker-results {
+  background: #1a2238;
+  border-color: #2c3a5a;
+}
+.wf-picker-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.wf-picker-result-row:hover {
+  background: rgba(16, 185, 129, 0.08);
+}
+.wf-picker-result-name {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  color: #1f2937;
+}
+.dark .wf-picker-result-name { color: #f1f5f9; }
+.wf-picker-result-id {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 10px;
+  color: #6b7280;
+}
+.wf-picker-status {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+.wf-picker-status-loading {
+  color: #6b7280;
+}
+.wf-picker-status-loading::before {
+  content: "⟳ ";
+  display: inline-block;
+  animation: wf-picker-spin 0.9s linear infinite;
+}
+@keyframes wf-picker-spin {
+  to { transform: rotate(360deg); }
+}
+.wf-picker-status-empty {
+  color: #6b7280;
+  font-style: italic;
+}
+.wf-picker-status-error {
+  color: #b91c1c;
+}
+.dark .wf-picker-status-loading,
+.dark .wf-picker-status-empty {
+  color: #9ca3af;
+}
+.dark .wf-picker-status-error {
+  color: #fca5a5;
+}
+.wf-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.wf-picker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+}
+.dark .wf-picker-chip {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+.wf-picker-chip-id {
+  font-size: 9px;
+  color: #6b7280;
+}
+.dark .wf-picker-chip-id { color: #9ca3af; }
+.wf-picker-chip-remove {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+
+/* ── Workflow arg field wrapper ──────────────────────────────────
+ * .wf-arg-field is the scope class the ArgField templ stamps on
+ * each rendered arg row. The admin widgets (fieldtype.Text /
+ * Dropdown / Textarea / Number / …) ship intentional widths
+ * (w-72 / w-96 / w-40 / w-48) tuned for the Settings page two-column
+ * grid — too small for the workflow inspector which is one wide
+ * lane. Override here so the same widget HTML renders full-width
+ * inside the inspector without modifying the widget itself. */
+.wf-arg-field {
+  margin-bottom: 12px;
+}
+.wf-arg-field input[type="text"],
+.wf-arg-field input[type="email"],
+.wf-arg-field input[type="url"],
+.wf-arg-field input[type="password"],
+.wf-arg-field input[type="number"],
+.wf-arg-field input[type="date"],
+.wf-arg-field input[type="datetime-local"],
+.wf-arg-field select,
+.wf-arg-field textarea {
+  width: 100%;
+}
+.wf-arg-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.wf-arg-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #1f2937;
+}
+.dark .wf-arg-field-label { color: #94a3b8; }
+.wf-arg-field-required {
+  color: #ef4444;
+  margin-left: 2px;
+}
+.wf-arg-field-desc {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+.dark .wf-arg-field-desc { color: #9ca3af; }
+
+/* ── Interactive INPUT JSON + arg preview ────────────────────────
+ * Each JSON leaf in the inspector's INPUT pane is a draggable span
+ * carrying a `{{<template-path>}}` payload. Drop on any arg input
+ * inserts the ref; click copies it to the clipboard.
+ *
+ * Arg preview is the small rendered-value line below each arg
+ * field — fed by lastInputData / lastRunOutputs so the operator sees
+ * what `{{.Event.Payload.text}}` will resolve to without firing the
+ * node. Diagnostic only; the real render still runs server-side. */
+.wf-json-leaf {
+  display: inline;
+  cursor: grab;
+  border-radius: 3px;
+  padding: 0 2px;
+  transition: background 0.12s;
+}
+.wf-json-leaf:hover {
+  background: rgba(16, 185, 129, 0.18);
+}
+.wf-json-leaf:active { cursor: grabbing; }
+.wf-json-leaf-flash { background: rgba(16, 185, 129, 0.4); }
+.wf-json-key    { color: #0e7490; }   /* cyan-700 */
+.wf-json-string { color: #92400e; }   /* amber-800 */
+.wf-json-number { color: #6d28d9; }   /* violet-700 */
+.wf-json-boolean,
+.wf-json-null   { color: #6d28d9; }
+.dark .wf-json-key    { color: #67e8f9; }
+.dark .wf-json-string { color: #fcd34d; }
+.dark .wf-json-number,
+.dark .wf-json-boolean,
+.dark .wf-json-null   { color: #c4b5fd; }
+
+.wf-arg-input-drop {
+  outline: 2px dashed #10b981;
+  outline-offset: 1px;
+}
+.wf-arg-mode {
+  display: inline-flex;
+  border: 1px solid #e0dccf;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 10px;
+  background: #f5f3ee;
+}
+.wf-arg-mode button {
+  padding: 2px 8px;
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.wf-arg-mode button.is-on {
+  background: #10b981;
+  color: #fff;
+  font-weight: 600;
+}
+.dark .wf-arg-mode {
+  background: #1a2238;
+  border-color: #2c3a5a;
+}
+.dark .wf-arg-mode button { color: #94a3b8; }
+.dark .wf-arg-mode button.is-on { background: #10b981; color: #f0fdf4; }
+.wf-arg-preview {
+  display: none;
+  margin-top: 3px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 10px;
+  color: #047857;
+  padding: 2px 6px;
+  background: rgba(16, 185, 129, 0.08);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.wf-arg-preview-active { display: block; }
+.dark .wf-arg-preview { color: #34d399; background: rgba(16, 185, 129, 0.1); }
+
+/* ── Toast notifications ─────────────────────────────────────────
+ * Background-friendly status messages for Publish, Discard, and any
+ * other action that previously reloaded the page. Stacks at the
+ * top-right of the editor viewport with auto-dismiss after 4 seconds.
+ * Click to dismiss early. */
+.wf-toast-host {
+  position: fixed;
+  top: 80px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.wf-toast {
+  pointer-events: auto;
+  min-width: 280px;
+  max-width: 440px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  border: 1px solid transparent;
+  animation: wf-toast-in 0.18s ease-out;
+}
+@keyframes wf-toast-in {
+  from { transform: translateX(20px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.wf-toast.wf-toast-ok {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #065f46;
+}
+.wf-toast.wf-toast-error {
+  background: #fef2f2;
+  border-color: #ef4444;
+  color: #991b1b;
+}
+.wf-toast.wf-toast-warn {
+  background: #fffbeb;
+  border-color: #f59e0b;
+  color: #92400e;
+}
+.dark .wf-toast.wf-toast-ok {
+  background: #022c22;
+  border-color: #10b981;
+  color: #6ee7b7;
+}
+.dark .wf-toast.wf-toast-error {
+  background: #450a0a;
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+.dark .wf-toast.wf-toast-warn {
+  background: #451a03;
+  border-color: #f59e0b;
+  color: #fcd34d;
+}
+.wf-toast-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.wf-toast-body {
+  white-space: pre-wrap;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+/* ── Test Case Manager modal ──────────────────────────────────────── */
+.wf-tc-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wf-tc-modal.hidden { display: none; }
+.wf-tc-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(40, 50, 70, 0.4);
+  backdrop-filter: blur(2px);
+}
+.dark .wf-tc-backdrop { background: rgba(8, 11, 19, 0.65); }
+.wf-tc-shell {
+  position: relative;
+  width: 520px;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.dark .wf-tc-shell {
+  background: #0f172a;
+  border-color: #1e293b;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+.wf-tc-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+.dark .wf-tc-header {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+.wf-tc-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+.wf-tc-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+.dark .wf-tc-footer {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+.wf-tc-footer-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.wf-tc-footer-cancel {
+  background: transparent;
+  border-color: #d1d5db;
+  color: #374151;
+}
+.dark .wf-tc-footer-cancel {
+  border-color: #374151;
+  color: #9ca3af;
+}
+.wf-tc-footer-cancel:hover { background: #f3f4f6; }
+.dark .wf-tc-footer-cancel:hover { background: #1e293b; }
+.wf-tc-footer-save {
+  background: #16a34a;
+  color: #ffffff;
+}
+.wf-tc-footer-save:hover { background: #15803d; }
+.wf-tc-footer-save:disabled { background: #6b7280; cursor: not-allowed; }
+/* assertion row */
+.wf-tc-assertion-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 1fr 24px;
+  gap: 4px;
+  align-items: center;
+}
+
+/* ── Executions panel ─────────────────────────────────────────────── */
+
+/* Outer layout: sidebar + detail pane */
+.wf-ex-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: #f7f5f0;
+}
+.dark .wf-ex-panel { background: #0b1120; }
+
+/* ── Sidebar ─── */
+.wf-ex-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #e0dccf;
+  background: #ffffff;
+}
+.dark .wf-ex-sidebar {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+
+.wf-ex-sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e0dccf;
+  background: #f9f7f2;
+}
+.dark .wf-ex-sidebar-head {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+.wf-ex-sidebar-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #6b7280;
+}
+.dark .wf-ex-sidebar-title { color: #64748b; }
+
+.wf-ex-sidebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-ex-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: #6b7280;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.wf-ex-icon-btn:hover { background: #f0ece4; color: #374151; }
+.dark .wf-ex-icon-btn { color: #64748b; }
+.dark .wf-ex-icon-btn:hover { background: #1e293b; color: #e2e8f0; }
+
+.wf-ex-autorefresh-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+}
+.dark .wf-ex-autorefresh-label { color: #64748b; }
+.wf-ex-autorefresh-label input { width: 12px; height: 12px; accent-color: #16a34a; }
+
+.wf-ex-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Empty state */
+.wf-ex-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: #9ca3af;
+}
+.dark .wf-ex-empty { color: #64748b; }
+.wf-ex-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+.dark .wf-ex-empty-title { color: #94a3b8; }
+.wf-ex-empty-hint { font-size: 11px; line-height: 1.5; }
+
+/* Run row */
+.wf-ex-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #f0ece4;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+.dark .wf-ex-row { border-bottom-color: #1e293b; }
+.wf-ex-row:hover { background: #f7f5f0; }
+.dark .wf-ex-row:hover { background: rgba(255,255,255,0.03); }
+.wf-ex-row.is-active { background: #f0fdf4; }
+.dark .wf-ex-row.is-active { background: rgba(22,163,74,0.08); }
+
+/* Coloured left bar */
+.wf-ex-row-bar {
+  width: 3px;
+  flex-shrink: 0;
+  border-radius: 0;
+}
+.wf-ex-bar-success { background: #16a34a; }
+.wf-ex-bar-failed  { background: #dc2626; }
+.wf-ex-bar-running { background: #f59e0b; }
+.wf-ex-bar-queued  { background: #94a3b8; }
+
+.wf-ex-row-body {
+  flex: 1;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.wf-ex-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.wf-ex-row-dur {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: monospace;
+  color: #6b7280;
+}
+.dark .wf-ex-row-dur { color: #64748b; }
+.wf-ex-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wf-ex-row-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: #374151;
+  background: #f0ece4;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.dark .wf-ex-row-id { color: #94a3b8; background: #1e293b; }
+.wf-ex-row-date {
+  font-size: 11px;
+  color: #9ca3af;
+}
+.dark .wf-ex-row-date { color: #64748b; }
+
+.wf-ex-load-more-wrap {
+  padding: 12px;
+  text-align: center;
+  border-top: 1px solid #f0ece4;
+}
+.dark .wf-ex-load-more-wrap { border-color: #1e293b; }
+.wf-ex-load-more {
+  font-size: 11px;
+  color: #16a34a;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.dark .wf-ex-load-more { color: #4ade80; }
+.wf-ex-load-more:hover { text-decoration: underline; }
+
+/* ── Detail pane ─── */
+.wf-ex-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #ffffff;
+}
+.dark .wf-ex-detail { background: #0f172a; }
+
+.wf-ex-select-hint {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+.dark .wf-ex-select-hint { color: #64748b; }
+
+.wf-ex-detail-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Detail header */
+.wf-ex-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0dccf;
+  background: #f9f7f2;
+  flex-shrink: 0;
+}
+.dark .wf-ex-detail-head {
+  background: #0b1120;
+  border-color: #1e293b;
+}
+.wf-ex-open-link {
+  font-size: 11px;
+  color: #16a34a;
+  text-decoration: none;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.dark .wf-ex-open-link { color: #4ade80; }
+.wf-ex-open-link:hover { text-decoration: underline; }
+
+/* Detail body: 2 columns */
+.wf-ex-detail-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Section heading shared */
+.wf-ex-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #9ca3af;
+  background: #f9f7f2;
+  border-bottom: 1px solid #e0dccf;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.dark .wf-ex-section-head {
+  background: #0b1120;
+  border-color: #1e293b;
+  color: #475569;
+}
+.wf-ex-section-count {
+  margin-left: auto;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+/* ── Node list (left column) ── */
+.wf-ex-nodes {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid #e0dccf;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.dark .wf-ex-nodes { border-color: #1e293b; }
+.wf-ex-nodes-empty {
+  padding: 16px 12px;
+  font-size: 11px;
+  color: #9ca3af;
+  font-style: italic;
+}
+.dark .wf-ex-nodes-empty { color: #64748b; }
+
+.wf-ex-node-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+.wf-ex-node-row:hover { background: #f7f5f0; }
+.dark .wf-ex-node-row:hover { background: rgba(255,255,255,0.04); }
+.wf-ex-node-row--success { border-left-color: #16a34a; }
+.wf-ex-node-row--failed  { border-left-color: #dc2626; }
+.wf-ex-node-row--skipped { border-left-color: #94a3b8; opacity: 0.55; }
+
+.wf-ex-node-icon {
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.wf-ex-node-icon--success { color: #16a34a; }
+.wf-ex-node-icon--failed  { color: #dc2626; }
+.wf-ex-node-icon--skipped { color: #94a3b8; }
+.dark .wf-ex-node-icon--success { color: #4ade80; }
+.dark .wf-ex-node-icon--failed  { color: #f87171; }
+
+.wf-ex-node-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: #374151;
+  truncate: true;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.dark .wf-ex-node-id { color: #94a3b8; }
+
+.wf-ex-node-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+.dark .wf-ex-node-hint { color: #475569; }
+
+/* ── Events column ── */
+.wf-ex-events-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wf-ex-events-head {
+  position: sticky;
+  top: 0;
+}
+.wf-ex-events-empty {
+  padding: 16px 12px;
+  font-size: 11px;
+  color: #9ca3af;
+  font-style: italic;
+}
+.dark .wf-ex-events-empty { color: #64748b; }
+
+.wf-ex-events-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wf-ex-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  font-family: monospace;
+  font-size: 11px;
+  border-bottom: 1px solid #f0ece4;
+}
+.dark .wf-ex-event { border-color: #1e293b; }
+.wf-ex-event:hover { background: #f7f5f0; }
+.dark .wf-ex-event:hover { background: rgba(255,255,255,0.03); }
+
+.wf-ex-event-ts { color: #9ca3af; flex-shrink: 0; }
+.dark .wf-ex-event-ts { color: #475569; }
+
+.wf-ex-event-type {
+  font-weight: 600;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.wf-ex-event-node {
+  color: #0369a1;
+  flex-shrink: 0;
+}
+.dark .wf-ex-event-node { color: #38bdf8; }
+
+.wf-ex-event-case {
+  color: #b45309;
+}
+.dark .wf-ex-event-case { color: #fbbf24; }
+
+/* ── Output drawer ── */
+.wf-ex-output {
+  border-bottom: 1px solid #e0dccf;
+  background: #1e293b;
+  max-height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+.dark .wf-ex-output { border-color: #0f172a; }
+.wf-ex-output.hidden { display: none; }
+
+.wf-ex-output-head {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+.wf-ex-output-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  font-family: monospace;
+}
+.wf-ex-output-close {
+  color: #64748b;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.wf-ex-output-close:hover { color: #e2e8f0; }
+.wf-ex-output-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  margin: 0;
+  font-family: monospace;
+  font-size: 11px;
+  color: #e2e8f0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Toolbar view-tab active override */
+#wf-view-editor[data-active="true"],
+#wf-view-executions[data-active="true"] {
+  font-weight: 600;
+}
+
+/* ── Node search modal (Ctrl+K) ───────────────────────────────────── */
+.wf-canvas-search {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wf-canvas-search:hover { background: #f3f4f6; }
+.dark .wf-canvas-search { border-color: #334155; background: #1e293b; color: #94a3b8; }
+.dark .wf-canvas-search:hover { background: #273449; }
+
+.wf-node-search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+}
+.wf-node-search-overlay.hidden { display: none; }
+.wf-node-search-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(40, 50, 70, 0.35);
+  backdrop-filter: blur(2px);
+}
+.dark .wf-node-search-backdrop { background: rgba(8, 11, 19, 0.6); }
+.wf-node-search-box {
+  position: relative;
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dark .wf-node-search-box { background: #1a2235; border-color: #2c3a5a; }
+.wf-node-search-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.dark .wf-node-search-header { border-bottom-color: #2c3a5a; }
+.wf-node-search-icon { color: #9ca3af; flex-shrink: 0; }
+.wf-node-search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  color: #111827;
+}
+.dark .wf-node-search-input { color: #e2e8f0; }
+.wf-node-search-esc {
+  font-size: 10px;
+  padding: 2px 5px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  color: #6b7280;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+.dark .wf-node-search-esc { border-color: #334155; background: #1e293b; color: #64748b; }
+.wf-node-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.wf-node-search-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.wf-node-search-item:hover,
+.wf-node-search-item[aria-selected="true"] { background: #f0fdf4; }
+.dark .wf-node-search-item:hover,
+.dark .wf-node-search-item[aria-selected="true"] { background: #1c2d3f; }
+.wf-node-search-type {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e5e7eb;
+  color: #374151;
+  flex-shrink: 0;
+}
+.dark .wf-node-search-type { background: #2d3748; color: #94a3b8; }
+.wf-node-search-name {
+  font-size: 13px;
+  color: #111827;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dark .wf-node-search-name { color: #e2e8f0; }
+.wf-node-search-id {
+  font-size: 11px;
+  color: #9ca3af;
+  font-family: monospace;
+}
+.wf-node-search-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+.wf-node-search-footer {
+  padding: 6px 14px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 11px;
+  color: #9ca3af;
+  text-align: center;
+}
+.dark .wf-node-search-footer { border-top-color: #2c3a5a; }
+
+/* Search button — below the Add-node (+) button, top-right */
+.wf-canvas-search {
+  position: absolute;
+  right: 14px;
+  top: 58px;
+  z-index: 10;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #e0dccf;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4a5568;
+  cursor: pointer;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.07);
+  transition: background 0.15s;
+}
+.wf-canvas-search:hover { background: #f1efeb; }
+.dark .wf-canvas-search { background: #1e2942; border-color: #2c3a5a; color: #c9d1de; }
+.dark .wf-canvas-search:hover { background: #131c2f; }

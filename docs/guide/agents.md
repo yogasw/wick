@@ -18,6 +18,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 |---|---|
 | **Multi-channel routing** — same agent reachable from Slack, Telegram, and the web UI; each thread / chat / conversation = its own session | [Channels](./agents/channels) |
 | **Multi-session concurrency** — pool caps subprocess count, FIFO-queues the rest, idle-kills + resumes via `--resume <cli_session_id>` | [Pool & Sessions](./agents/pool) |
+| **Workflows** — YAML DAG of classify / agent / connector / http / channel / dataset / branch / parallel nodes triggered by cron, channel events, webhooks, or manual runs; replayable per-run state on disk; visual canvas + MCP `workflow_*` ops | [Workflows](/workflow/) |
 | **Workspaces** — folders on disk (managed or any custom path) used as the agent's `cwd`. Multiple sessions can share one | [Workspaces](./agents/workspaces) |
 | **Multi-instance providers** — two `claude/...` profiles with different PATs, plus codex / gemini side-by-side | [Providers](./agents/providers) |
 | **Command Gate** — `<app>-gate` sidecar binary intercepts every Bash command for whitelist + 4-mode interactive approval | [Command Gate](./command-gate) |

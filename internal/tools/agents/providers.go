@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/mcpconfig"
 
 	// Blank-import each provider sub-package so its init() fires when
 	// the agents UI module loads. Without this, capability.Lookup
@@ -78,6 +81,10 @@ func providersPage(c *tool.Ctx) {
 		}
 	}
 
+	mcpVM := buildMCPStatusVM()
+	// Auto-install into detected clients that don't have wick yet.
+	go autoInstallMCP(mcpVM.AppName)
+
 	c.HTML(view.ProvidersPage(view.ProvidersVM{
 		Layout:        sidebarVM(c, "providers", ""),
 		Base:          c.Base(),
@@ -91,41 +98,59 @@ func providersPage(c *tool.Ctx) {
 		SupportedKeys: supportedTypeKeys(),
 		Gate:          gateStatusVM(),
 		AutoRescan:    autoRescanEnabled(),
+		MCP:           mcpVM,
 	}))
 }
 
 // gateStatusVM converts the boot-time GateStatus + the live master
-// switch into the view-model rendered by gateStatusCard. The Note
-// field carries the human payoff: a one-sentence summary of what
-// happens given the current state. We compute it here so the wording
-// stays next to the UI it shows on.
+// switch + sub-policy modes into the view-model rendered by
+// gateStatusCard. Note carries a one-sentence consequence summary so
+// operators understand what each combination actually does at spawn
+// time.
 func gateStatusVM() view.GateStatusVM {
 	s := GetGateStatus()
 	configEnabled := masterGateEnabled()
-	bypass := bypassPermissionsEnabled()
-	// Bypass trumps the master switch — the spawner strips hook configs
-	// when bypass is on, so the gate cannot enforce regardless of intent.
+	permMode := currentPermissionMode()
+	// Permission bypass trumps the per-provider hook — spawner strips
+	// the hook config when mode=bypass, so the gate cannot enforce
+	// regardless of per-provider intent.
+	bypass := permMode == "bypass"
 	enabled := configEnabled && s.Binary != "" && !bypass
 	vm := view.GateStatusVM{
-		Enabled:      enabled,
-		Binary:       s.Binary,
-		Source:       s.Source,
-		Reason:       s.Reason,
-		BypassLocked: bypass,
+		Enabled:        enabled,
+		Binary:         s.Binary,
+		Source:         s.Source,
+		Reason:         s.Reason,
+		PermissionMode: permMode,
+		BypassLocked:   bypass,
 	}
 	switch {
+	case !configEnabled:
+		vm.Note = "Gate is off — permission prompts skipped, spawns run unguarded. Turn the master switch on to honour the permission policy below."
 	case bypass:
-		vm.Note = "Bypass permissions is on in agents config — the gate is locked off. Spawns run unguarded so non-interactive channels (Slack/HTTP) don't hang on permission prompts. Turn bypass off in agents settings to use the gate."
+		vm.Note = "Permission policy is set to bypass — spawns run unguarded so non-interactive channels (Slack/HTTP) don't hang on permission prompts. Switch to 'on' to gate per-provider hooks."
 	case enabled:
-		vm.Note = "Master switch is on. Per-provider hooks installed for providers you've explicitly enabled below — others fall through to their own permission flow."
+		vm.Note = "Gate is on. Permission prompts route through the per-provider hook below."
 	case configEnabled && s.Binary == "":
 		vm.Note = "Gate is on in config but the gate binary did not resolve. Run `wick build` so the sibling sidecar or embedded fallback is available."
-	case !configEnabled:
-		vm.Note = "Gate is off. No provider has hook configs installed — every provider falls back to its own default permission handling. Turn this on, then enable individual providers below to start gating."
 	default:
-		vm.Note = "Gate binary not resolved — turn the master switch on after running `wick build`."
+		vm.Note = "Gate binary not resolved — re-run `wick build` and reload."
 	}
 	return vm
+}
+
+// currentPermissionMode returns the active GateConfig.PermissionMode,
+// defaulting to "on" when the row is empty so a fresh install enforces
+// permission prompts out of the box.
+func currentPermissionMode() string {
+	if globalConfigs == nil {
+		return "on"
+	}
+	v := globalConfigs.GetOwned("agents", "permission_mode")
+	if v == "" {
+		return "on"
+	}
+	return v
 }
 
 // toggleGate flips the agents.gate_enabled master switch AND
@@ -154,11 +179,15 @@ func toggleGate(c *tool.Ctx) {
 		c.Error(http.StatusServiceUnavailable, "configs service not wired")
 		return
 	}
-	if bypassPermissionsEnabled() {
-		c.Error(http.StatusConflict, "bypass permissions is on — disable it in agents settings before toggling the gate")
+	// PermissionMode=bypass strips the per-provider hook config at spawn
+	// time, so enabling the master switch in that state silently no-ops.
+	// Refuse the toggle and tell the operator to flip permission_mode
+	// back to "on" first.
+	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
+	if !before && bypassPermissionsEnabled() {
+		c.Error(http.StatusConflict, "permission_mode is set to bypass — switch it to 'on' in agents settings before turning the gate on")
 		return
 	}
-	before, _ := strconv.ParseBool(globalConfigs.GetOwned("agents", "gate_enabled"))
 	next := !before
 
 	if err := globalConfigs.SetOwned(c.Context(), "agents", "gate_enabled", strconv.FormatBool(next)); err != nil {
@@ -183,6 +212,29 @@ func toggleGate(c *tool.Ctx) {
 		go runBackgroundProbeAll()
 	}
 
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
+// saveGateModes writes GateConfig.PermissionMode from the gate card form.
+// Constrained to a known enum; unknown values fall back to "on" so a
+// malformed POST never bricks the gate into an unknown state.
+//
+// AskUserMode is not surfaced in the UI — the policy is controlled via
+// system prompt instead. The field remains on GateConfig and respects
+// whatever the config layer has stored (default "on").
+func saveGateModes(c *tool.Ctx) {
+	if globalConfigs == nil {
+		c.Error(http.StatusServiceUnavailable, "configs service not wired")
+		return
+	}
+	perm := strings.TrimSpace(c.Form("permission_mode"))
+	if perm != "bypass" {
+		perm = "on"
+	}
+	if err := globalConfigs.SetOwned(c.Context(), "agents", "permission_mode", perm); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
@@ -295,6 +347,184 @@ func syncProviderStorage(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "synced"})
 }
 
+// buildMCPStatusVM collects per-client install status for the MCP Wick card.
+func buildMCPStatusVM() view.MCPStatusVM {
+	cwd, _ := os.Getwd()
+	name := appname.Resolve()
+	blocklist := mcpBlocklist()
+	clients := mcpconfig.AllClients(cwd)
+	rows := make([]view.MCPClientStatusVM, 0, len(clients))
+	for _, c := range clients {
+		if !isDirPresent(c.Path) {
+			continue
+		}
+		_, installed := mcpconfig.IsInstalled(c, name)
+		rows = append(rows, view.MCPClientStatusVM{
+			ID:          c.ID,
+			Label:       c.Label,
+			Detected:    true,
+			Installed:   installed,
+			Blocklisted: blocklist[c.ID],
+			ConfigPath:  c.Path,
+		})
+	}
+	return view.MCPStatusVM{AppName: name, Clients: rows}
+}
+
+// mcpBlocklist returns the set of client IDs the user has manually
+// uninstalled. Read from agents.mcp_uninstalled_clients (comma-separated).
+func mcpBlocklist() map[string]bool {
+	if globalConfigs == nil {
+		return nil
+	}
+	raw := globalConfigs.GetOwned("agents", "mcp_uninstalled_clients")
+	if raw == "" {
+		return nil
+	}
+	m := make(map[string]bool)
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			m[id] = true
+		}
+	}
+	return m
+}
+
+// mcpAddBlocklist appends a client ID to the persistent blocklist.
+func mcpAddBlocklist(ctx context.Context, clientID string) {
+	if globalConfigs == nil {
+		return
+	}
+	raw := globalConfigs.GetOwned("agents", "mcp_uninstalled_clients")
+	ids := make(map[string]bool)
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids[id] = true
+		}
+	}
+	ids[clientID] = true
+	parts := make([]string, 0, len(ids))
+	for id := range ids {
+		parts = append(parts, id)
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_uninstalled_clients", strings.Join(parts, ","))
+}
+
+// mcpRemoveBlocklist removes a client ID from the persistent blocklist
+// (called when user manually installs a previously-uninstalled client).
+func mcpRemoveBlocklist(ctx context.Context, clientID string) {
+	if globalConfigs == nil {
+		return
+	}
+	raw := globalConfigs.GetOwned("agents", "mcp_uninstalled_clients")
+	var parts []string
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" && id != clientID {
+			parts = append(parts, id)
+		}
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_uninstalled_clients", strings.Join(parts, ","))
+}
+
+// isDirPresent returns true when the file's parent directory exists —
+// same heuristic mcpconfig.Detected uses internally.
+func isDirPresent(path string) bool {
+	dir := path[:max(strings.LastIndexAny(path, `/\`), 0)]
+	if dir == "" {
+		return false
+	}
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
+}
+
+// autoInstallMCP installs wick into every detected client that doesn't
+// have it yet, skipping blocklisted (manually-uninstalled) clients.
+// Only runs once per app lifetime — guarded by agents.mcp_auto_installed.
+func autoInstallMCP(name string) {
+	if globalConfigs == nil {
+		return
+	}
+	if globalConfigs.GetOwned("agents", "mcp_auto_installed") == "true" {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	entry, err := mcpconfig.SelfEntry()
+	if err != nil {
+		log.Warn().Err(err).Msg("mcp auto-install: SelfEntry failed")
+		return
+	}
+	blocklist := mcpBlocklist()
+	ctx := context.Background()
+	for _, c := range mcpconfig.Detected(cwd) {
+		if blocklist[c.ID] {
+			continue
+		}
+		_, installed := mcpconfig.IsInstalled(c, name)
+		if installed {
+			continue
+		}
+		if err := mcpconfig.Install(c, name, entry); err != nil {
+			log.Warn().Err(err).Msgf("mcp auto-install: %s", c.ID)
+		} else {
+			log.Info().Msgf("mcp auto-install: installed %q into %s", name, c.Label)
+		}
+	}
+	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_auto_installed", "true")
+}
+
+// mcpInstallClient installs wick MCP entry into one client by ID and
+// removes it from the blocklist so future auto-installs can reach it.
+// POST /providers/mcp/{clientID}/install
+func mcpInstallClient(c *tool.Ctx) {
+	clientID := c.PathValue("clientID")
+	cwd, _ := os.Getwd()
+	cl, ok := mcpconfig.Find(cwd, clientID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "unknown client " + clientID})
+		return
+	}
+	name := appname.Resolve()
+	entry, err := mcpconfig.SelfEntry()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := mcpconfig.Install(cl, name, entry); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("mcp install %s: %s", clientID, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	mcpRemoveBlocklist(c.Context(), clientID)
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
+// mcpUninstallClient removes wick MCP entry from one client by ID and
+// adds it to the blocklist so auto-install never re-installs it.
+// POST /providers/mcp/{clientID}/uninstall
+func mcpUninstallClient(c *tool.Ctx) {
+	clientID := c.PathValue("clientID")
+	cwd, _ := os.Getwd()
+	cl, ok := mcpconfig.Find(cwd, clientID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "unknown client " + clientID})
+		return
+	}
+	name := appname.Resolve()
+	if err := mcpconfig.Uninstall(cl, name); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("mcp uninstall %s: %s", clientID, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	mcpAddBlocklist(c.Context(), clientID)
+	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
+}
+
 func parseIntForm(s string) int {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -331,15 +561,13 @@ func masterGateEnabled() bool {
 	return b
 }
 
-// bypassPermissionsEnabled reads agents.bypass_permissions. Bypass and
-// gate are mutually exclusive: when this is true the spawner strips the
-// hook config and runs unguarded, so the gate UI must surface the lock
-// rather than offering enable buttons that wouldn't take effect.
+// bypassPermissionsEnabled reports whether the active permission
+// policy is "bypass" — i.e. spawns run unguarded. Mirrors the legacy
+// `agents.bypass_permissions` flag now that it lives under
+// GateConfig.PermissionMode. Used by the UI lock + the toggleGate
+// pre-check.
 func bypassPermissionsEnabled() bool {
-	if globalConfigs == nil {
-		return false
-	}
-	return globalConfigs.GetOwned("agents", "bypass_permissions") == "true"
+	return currentPermissionMode() == "bypass"
 }
 
 // autoRescanEnabled reads agents.auto_rescan from configs. Defaults

@@ -96,10 +96,7 @@ templ storageScript() {
 						<td class="px-3 py-2 font-mono text-black-800 dark:text-black-500">${esc(r.rel_path)}</td>
 						<td class="px-3 py-2 text-black-800 dark:text-black-500">${fmtSize(r.size)}</td>
 						<td class="px-3 py-2 text-black-800 dark:text-black-500">${esc(r.synced_at)}</td>
-						<td class="px-3 py-2">
-							<input type="number" min="0" value="${r.retention_days}" onblur="saveRetention(${r.id},this.value)"
-								class="w-16 rounded border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 text-[0.75rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-prog-300"/>
-						</td>
+						<td class="px-3 py-2">${retentionBtnHTML('file', r.id, r.retention_days, r.rel_path)}</td>
 						<td class="px-3 py-2">
 							<div class="flex gap-1.5">
 								<button onclick="previewFile(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
@@ -175,9 +172,76 @@ templ storageScript() {
 			}).catch(e => toast('Error: ' + e, 'error'));
 		}
 
-		function saveRetention(id, val) {
-			const body = new URLSearchParams({days: val});
-			fetch(BASE + '/' + id + '/retention', {method:'POST', body}).catch(e => toast('Error: ' + e, 'error'));
+		function retentionLabel(days) {
+			const n = Number(days);
+			if (n === 0) return 'Lifetime';
+			if (n === 7) return '7 days';
+			if (n === 30) return '30 days';
+			if (n === 90) return '90 days';
+			return n + ' days';
+		}
+
+		let retentionTarget = null; // {type:'source'|'file', id, currentDays}
+
+		function openRetentionModal(type, id, currentDays, labelText) {
+			retentionTarget = {type, id, currentDays};
+			document.getElementById('retention-modal-label').textContent = labelText || '';
+			const sel = document.getElementById('retention-modal-select');
+			const custom = document.getElementById('retention-modal-custom');
+			const isPreset = ['0','7','30','90'].includes(String(currentDays));
+			sel.value = isPreset ? String(currentDays) : '_custom';
+			if (isPreset) { custom.style.display = 'none'; custom.value = ''; }
+			else { custom.style.display = ''; custom.value = currentDays; }
+			document.getElementById('retention-modal').style.display = '';
+		}
+
+		function onRetentionModalSelect() {
+			const sel = document.getElementById('retention-modal-select');
+			const custom = document.getElementById('retention-modal-custom');
+			if (sel.value === '_custom') {
+				custom.style.display = '';
+				if (!custom.value) custom.value = retentionTarget && retentionTarget.currentDays ? retentionTarget.currentDays : 1;
+				custom.focus();
+			} else {
+				custom.style.display = 'none';
+			}
+		}
+
+		function closeRetentionModal() {
+			document.getElementById('retention-modal').style.display = 'none';
+			retentionTarget = null;
+		}
+
+		function saveRetentionModal() {
+			if (!retentionTarget) return;
+			const sel = document.getElementById('retention-modal-select');
+			let days = sel.value;
+			if (days === '_custom') {
+				days = document.getElementById('retention-modal-custom').value;
+				if (!days || parseInt(days, 10) < 1) { toast('Enter a positive number.', 'warn'); return; }
+			}
+			const url = retentionTarget.type === 'source'
+				? BASE + '/sources/' + retentionTarget.id + '/retention'
+				: BASE + '/' + retentionTarget.id + '/retention';
+			const wasSource = retentionTarget.type === 'source';
+			const body = new URLSearchParams({days});
+			fetch(url, {method:'POST', body}).then(r => r.json()).then(d => {
+				if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+				toast('Retention updated.');
+				closeRetentionModal();
+				if (wasSource) loadSources();
+				if (document.getElementById('view-explorer').style.display !== 'none') {
+					if (expState.provider) loadChildren(expState.provider, expState.instance, expState.parentID);
+					else loadRoots();
+				} else {
+					loadFiles();
+				}
+			}).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function retentionBtnHTML(type, id, days, labelText) {
+			const lbl = retentionLabel(days);
+			return `<button type="button" onclick="openRetentionModal('${type}',${id},${days},'${esc(labelText || '')}')" class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[0.75rem] text-black-900 dark:text-white-100 hover:bg-white-300 dark:hover:bg-navy-700">${esc(lbl)}</button>`;
 		}
 
 		function previewFile(id, path) {
@@ -208,13 +272,39 @@ templ storageScript() {
 			document.getElementById('detect-list-wrap').style.display = 'none';
 			document.getElementById('detect-list').innerHTML = '';
 			document.getElementById('detect-explorer-wrap').style.display = 'none';
+			document.getElementById('custom-path').value = '';
+			document.getElementById('custom-mode').value = 'folder';
 			document.getElementById('add-source-modal').style.display = '';
+		}
+
+		function addCustomPath() {
+			const inp = document.getElementById('custom-path');
+			const path = inp.value.trim();
+			const mode = document.getElementById('custom-mode').value;
+			if (!path) { toast('Enter a path.', 'warn'); return; }
+			if (!document.getElementById('detect-provider').value.trim()) { toast('Pick a Type first.', 'warn'); return; }
+			const label = path.split(/[\\/]/).filter(Boolean).pop() || path;
+			stageOne(path, mode, label);
+			inp.value = '';
 		}
 		function closeAddSourceModal() { document.getElementById('add-source-modal').style.display = 'none'; }
 
 		function deleteFile(id) {
 			if (!confirm('Delete this file from storage?')) return;
 			fetch(BASE + '/' + id, {method:'DELETE'}).then(r => r.json()).then(() => { toast('File deleted.'); loadFiles(); }).catch(e => toast('Error: ' + e, 'error'));
+		}
+
+		function deleteFolder(id, label) {
+			if (!confirm('Delete folder "' + label + '" and ALL its contents from storage? Disk files are not affected.')) return;
+			fetch(BASE + '/' + id, {method:'DELETE'}).then(r => r.json()).then(() => {
+				toast('Folder deleted.');
+				if (document.getElementById('view-explorer').style.display !== 'none') {
+					if (expState.provider) loadChildren(expState.provider, expState.instance, expState.parentID);
+					else loadRoots();
+				} else {
+					loadFiles();
+				}
+			}).catch(e => toast('Error: ' + e, 'error'));
 		}
 
 		function openUploadModal() { document.getElementById('upload-modal').style.display = ''; }
@@ -284,29 +374,47 @@ templ storageScript() {
 		}
 
 		function loadRoots() {
-			fetch(BASE + '/roots').then(r => r.json()).then(roots => {
+			fetch(BASE + '/roots').then(r => r.json()).then(rows => {
 				expState = { provider: null, instance: null, parentID: 0, stack: [] };
 				renderExpBreadcrumb();
-				document.getElementById('exp-check-all').style.visibility = 'hidden';
+				document.getElementById('exp-check-all').checked = false;
+				document.getElementById('exp-check-all').style.visibility = '';
 				const tbody = document.getElementById('explorer-tbody');
-				if (!roots || !roots.length) {
+				if (!rows || !rows.length) {
 					tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-black-700 dark:text-black-500">No files stored yet.</td></tr>';
 					return;
 				}
-				tbody.innerHTML = roots.map(r => `
-					<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
-						<td class="px-3 py-2 w-8"><input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="instance:${esc(r.ProviderType)}:${esc(r.InstanceName)}"/></td>
-						<td class="px-3 py-2 font-mono text-black-900 dark:text-white-100 cursor-pointer" onclick="enterInstance('${esc(r.ProviderType)}','${esc(r.InstanceName)}')">
-							<span class="mr-1 select-none">📦</span>${esc(r.ProviderType)} / ${esc(r.InstanceName)}
-						</td>
-						<td class="px-3 py-2 text-black-800 dark:text-black-500">${r.FileCount} file(s)</td>
-						<td class="px-3 py-2"></td>
-						<td class="px-3 py-2"></td>
-						<td class="px-3 py-2"></td>
-					</tr>`).join('');
+				tbody.innerHTML = rows.map(r => {
+					const icon = r.is_dir ? '📁' : '📄';
+					const nameCell = r.is_dir
+						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDownFromRoot('${esc(r.provider_type)}','${esc(r.instance_name)}',${r.id},'${esc(r.rel_path)}')">${icon} <span class="font-mono">${esc(r.rel_path)}</span></span>`
+						: `${icon} <span class="font-mono">${esc(r.rel_path)}</span>`;
+					const actions = r.is_dir
+						? `<button onclick="deleteFolder(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>`
+						: `<div class="flex gap-1.5">
+							<button onclick="previewFile(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
+							<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
+						</div>`;
+					const cbCell = `<input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="${r.id}"/>`;
+					const retCell = r.is_dir ? '' : retentionBtnHTML('file', r.id, r.retention_days, r.name || r.rel_path);
+					return `<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
+						<td class="px-3 py-2">${cbCell}</td>
+						<td class="px-3 py-2 text-black-900 dark:text-white-100">${nameCell}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${r.size ? fmtSize(r.size) : '—'}</td>
+						<td class="px-3 py-2 text-black-800 dark:text-black-500">${r.synced_at ? fmtTime(r.synced_at) : '—'}</td>
+						<td class="px-3 py-2">${retCell}</td>
+						<td class="px-3 py-2">${actions}</td>
+					</tr>`;
+				}).join('');
 			}).catch(e => {
 				document.getElementById('explorer-tbody').innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
 			});
+		}
+
+		function drillDownFromRoot(provider, instance, id, label) {
+			expState = { provider, instance, parentID: id, stack: [{ label, provider, instance, parentID: id }] };
+			renderExpBreadcrumb();
+			loadChildren(provider, instance, id);
 		}
 
 		function enterInstance(provider, instance) {
@@ -333,13 +441,14 @@ templ storageScript() {
 					const nameCell = r.is_dir
 						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDown(${r.id},'${esc(r.name)}')">${icon} ${esc(r.name)}</span>`
 						: `${icon} <span class="font-mono">${esc(r.name)}</span>`;
-					const actions = r.is_dir ? '' : `
-						<div class="flex gap-1.5">
+					const actions = r.is_dir
+						? `<button onclick="deleteFolder(${r.id},'${esc(r.name)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>`
+						: `<div class="flex gap-1.5">
 							<button onclick="previewFile(${r.id},'${esc(r.name)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
 							<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
 						</div>`;
 					const cbCell = `<input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="${r.id}"/>`;
-					const retCell = r.is_dir ? '' : `<input type="number" min="0" value="${r.retention_days}" onblur="saveRetention(${r.id},this.value)" class="w-16 rounded border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1.5 py-0.5 text-[0.75rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-prog-300"/>`;
+					const retCell = r.is_dir ? '' : retentionBtnHTML('file', r.id, r.retention_days, r.name || r.rel_path);
 					return `<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
 						<td class="px-3 py-2">${cbCell}</td>
 						<td class="px-3 py-2 text-black-900 dark:text-white-100">${nameCell}</td>
@@ -399,7 +508,7 @@ templ storageScript() {
 
 		// ── Settings tab ──────────────────────────────────────────────────
 
-		let stagedItems = [];
+		let stagedItems = []; // unified: each entry has Mode = folder|single|exclude
 		let existingPaths = new Set();
 
 		function loadSettings() {
@@ -431,6 +540,16 @@ templ storageScript() {
 			fetch(BASE + '/restore-now', {method:'POST'}).then(r => r.json()).then(d => {
 				if (d.error) { msg.textContent = 'Error: ' + d.error; return; }
 				msg.textContent = 'Restore complete.';
+				setTimeout(() => msg.classList.add('hidden'), 3000);
+			}).catch(e => { msg.textContent = 'Error: ' + e; });
+		}
+
+		function triggerRepairTree() {
+			const msg = document.getElementById('settings-trigger-msg');
+			msg.textContent = 'Repairing tree…'; msg.classList.remove('hidden');
+			fetch(BASE + '/repair-tree', {method:'POST'}).then(r => r.json()).then(d => {
+				if (d.error) { msg.textContent = 'Error: ' + d.error; return; }
+				msg.textContent = 'Tree repaired (' + (d.fixed || 0) + ' rows rewired).';
 				setTimeout(() => msg.classList.add('hidden'), 3000);
 			}).catch(e => { msg.textContent = 'Error: ' + e; });
 		}
@@ -507,7 +626,7 @@ templ storageScript() {
 				const header = mk('div', 'flex items-center gap-2 px-4 py-3 bg-white-200 dark:bg-navy-800 border-b border-white-300 dark:border-navy-600');
 
 				const modeIcon = mk('span', 'shrink-0 text-[1rem] select-none');
-				modeIcon.textContent = s.Mode === 'folder' ? '📁' : '📄';
+				modeIcon.textContent = s.Mode === 'exclude' ? '🚫' : (s.Mode === 'folder' ? '📁' : '📄');
 
 				const pathBlock = mk('div', 'flex-1 min-w-0');
 				const labelEl = mk('p', 'text-[0.8125rem] font-medium text-black-900 dark:text-white-100 truncate');
@@ -516,7 +635,10 @@ templ storageScript() {
 				pathEl.textContent = s.SyncPath;
 				pathBlock.append(labelEl, pathEl);
 
-				const modeBadge = mk('span', 'shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-400');
+				const isExclude = s.Mode === 'exclude';
+				const modeBadge = mk('span', 'shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ' + (isExclude
+					? 'bg-neg-100 text-neg-500 dark:bg-navy-600 dark:text-neg-300'
+					: 'bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-400'));
 				modeBadge.textContent = s.Mode;
 
 				const rmBtn = mk('button', 'shrink-0 rounded-lg p-1 text-black-700 dark:text-black-500 hover:bg-neg-50 hover:text-neg-400 dark:hover:bg-navy-700 transition-colors');
@@ -530,39 +652,49 @@ templ storageScript() {
 				// ── fields row ──
 				const fields = mk('div', 'grid grid-cols-2 gap-3 px-4 py-3');
 
-				// Label
-				const labelGroup = mk('div', '');
-				const labelLbl = mk('label', 'block text-[0.6875rem] font-medium text-black-800 dark:text-black-500 mb-1');
-				labelLbl.textContent = 'Label';
-				const labelInp = mk('input', inCls);
-				labelInp.type = 'text'; labelInp.value = s.Label;
-				labelInp.oninput = () => { stagedItems[i].Label = labelInp.value; labelEl.textContent = labelInp.value || s.SyncPath.split(/[\\/]/).pop(); };
-				labelGroup.append(labelLbl, labelInp);
+				// Path (editable) — Label auto-derives from basename on save
+				const pathGroup = mk('div', '');
+				const pathLbl = mk('label', 'block text-[0.6875rem] font-medium text-black-800 dark:text-black-500 mb-1');
+				pathLbl.textContent = 'Path';
+				const pathInp = mk('input', inCls + ' font-mono');
+				pathInp.type = 'text'; pathInp.value = s.SyncPath;
+				pathInp.oninput = () => {
+					stagedItems[i].SyncPath = pathInp.value;
+					const base = pathInp.value.split(/[\\/]/).filter(Boolean).pop() || pathInp.value;
+					stagedItems[i].Label = base;
+					labelEl.textContent = base;
+					pathEl.textContent = pathInp.value;
+				};
+				pathGroup.append(pathLbl, pathInp);
 
-				// Retention
-				const retGroup = mk('div', '');
-				const retLbl = mk('label', 'block text-[0.6875rem] font-medium text-black-800 dark:text-black-500 mb-1');
-				retLbl.textContent = 'Retention';
-				const isCustom = !RETENTION_PRESETS.some(p => p.days >= 0 && p.days === s.RetentionDays);
-				const retSel = mk('select', inCls);
-				RETENTION_PRESETS.forEach(p => {
-					const o = document.createElement('option');
-					o.value = p.days === -1 ? '_custom' : String(p.days);
-					o.textContent = p.label;
-					o.selected = (p.days === -1 && isCustom) || (!isCustom && p.days === s.RetentionDays);
-					retSel.appendChild(o);
-				});
-				retSel.onchange = () => onRetentionPreset(i, retSel);
-				retGroup.append(retLbl, retSel);
-				if (isCustom) {
-					const custInp = mk('input', inCls + ' mt-1');
-					custInp.type = 'number'; custInp.min = '1'; custInp.value = s.RetentionDays;
-					custInp.placeholder = 'days';
-					custInp.oninput = () => { stagedItems[i].RetentionDays = parseInt(custInp.value) || 1; };
-					retGroup.appendChild(custInp);
+				if (isExclude) {
+					// Exclude rows don't have retention — full-width path field.
+					fields.className = 'px-4 py-3';
+					fields.append(pathGroup);
+				} else {
+					const retGroup = mk('div', '');
+					const retLbl = mk('label', 'block text-[0.6875rem] font-medium text-black-800 dark:text-black-500 mb-1');
+					retLbl.textContent = 'Retention';
+					const isCustom = !RETENTION_PRESETS.some(p => p.days >= 0 && p.days === s.RetentionDays);
+					const retSel = mk('select', inCls);
+					RETENTION_PRESETS.forEach(p => {
+						const o = document.createElement('option');
+						o.value = p.days === -1 ? '_custom' : String(p.days);
+						o.textContent = p.label;
+						o.selected = (p.days === -1 && isCustom) || (!isCustom && p.days === s.RetentionDays);
+						retSel.appendChild(o);
+					});
+					retSel.onchange = () => onRetentionPreset(i, retSel);
+					retGroup.append(retLbl, retSel);
+					if (isCustom) {
+						const custInp = mk('input', inCls + ' mt-1');
+						custInp.type = 'number'; custInp.min = '1'; custInp.value = s.RetentionDays;
+						custInp.placeholder = 'days';
+						custInp.oninput = () => { stagedItems[i].RetentionDays = parseInt(custInp.value) || 1; };
+						retGroup.appendChild(custInp);
+					}
+					fields.append(pathGroup, retGroup);
 				}
-
-				fields.append(labelGroup, retGroup);
 				card.appendChild(fields);
 				list.appendChild(card);
 			});
@@ -638,11 +770,41 @@ templ storageScript() {
 				};
 				row.appendChild(addBtn);
 
+				const exBtn = mk('button', 'shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] bg-neg-400 text-white-100 hover:bg-neg-500');
+				exBtn.textContent = '− Ignore';
+				exBtn.title = 'Add to exclude patterns on the deepest staged source covering this path';
+				exBtn.onclick = e => {
+					e.stopPropagation();
+					excludeEntry(entry);
+				};
+				row.appendChild(exBtn);
+
 				if (entry.is_dir) {
 					row.onclick = () => { explorerStack.push({path: entry.path, label: entry.name}); renderExplorer(); };
 				}
 				listEl.appendChild(row);
 			});
+		}
+
+		function normPath(p) { return String(p || '').replace(/\\/g, '/').replace(/\/+$/, ''); }
+
+		function excludeEntry(entry) {
+			const target = normPath(entry.path);
+			if (stagedItems.find(s => s.Mode === 'exclude' && normPath(s.SyncPath) === target)) {
+				toast('Already in ignore list.', 'warn');
+				return;
+			}
+			stagedItems.push({
+				ProviderType: document.getElementById('detect-provider').value,
+				InstanceName: '',
+				Label: entry.name || entry.path,
+				SyncPath: entry.path,
+				Mode: 'exclude',
+				RetentionDays: 0,
+				Enabled: true,
+			});
+			renderStagedList();
+			toast('Will ignore: ' + entry.name);
 		}
 
 		function stageOne(path, mode, label) {
@@ -673,7 +835,7 @@ templ storageScript() {
 			Promise.all(saves).then(results => {
 				const errs = results.filter(d => d.error);
 				if (errs.length) { toast('Some errors: ' + errs.map(d => d.error).join(', '), 'error'); }
-				else { toast('Sources saved.'); }
+				else { toast('Saved.'); }
 				stagedItems = [];
 				renderStagedList();
 				closeAddSourceModal();
@@ -681,30 +843,46 @@ templ storageScript() {
 			}).catch(e => toast('Error: ' + e, 'error'));
 		}
 
+		function modeBadgeHTML(mode) {
+			const m = String(mode || 'folder');
+			const cls = m === 'exclude'
+				? 'bg-neg-100 text-neg-500 dark:bg-navy-600 dark:text-neg-300'
+				: 'bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-400';
+			return `<span class="rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ${cls}">${esc(m)}</span>`;
+		}
+
 		function loadSources() {
 			fetch(BASE + '/sources').then(r => r.json()).then(rows => {
 				existingPaths = new Set((rows || []).map(s => s.SyncPath));
 				const tbody = document.getElementById('sources-tbody');
 				if (!rows || !rows.length) {
-					tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-black-700 dark:text-black-500">No sync sources configured.</td></tr>';
+					tbody.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-black-700 dark:text-black-500">No sync sources configured.</td></tr>';
 					return;
 				}
-				tbody.innerHTML = rows.map(s => `
+				tbody.innerHTML = rows.map(s => {
+					const isExclude = s.Mode === 'exclude';
+					const retCell = isExclude
+						? '<span class="text-black-700 dark:text-black-500 text-[0.75rem]">—</span>'
+						: retentionBtnHTML('source', s.ID, s.RetentionDays, s.Label || s.SyncPath);
+					return `
 					<tr class="border-b border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-800">
 						<td class="px-3 py-2 text-black-900 dark:text-white-100 text-[0.75rem]">${esc(s.ProviderType)}/<span class="text-black-700 dark:text-black-500">${esc(s.InstanceName)}</span></td>
 						<td class="px-3 py-2 text-black-800 dark:text-black-500">${esc(s.Label)}</td>
 						<td class="px-3 py-2 font-mono text-[0.75rem] text-black-800 dark:text-black-500 max-w-xs truncate" title="${esc(s.SyncPath)}">${esc(s.SyncPath)}</td>
-						<td class="px-3 py-2 text-black-800 dark:text-black-500">${esc(s.Mode)}</td>
+						<td class="px-3 py-2">${modeBadgeHTML(s.Mode)}</td>
+						<td class="px-3 py-2">${retCell}</td>
 						<td class="px-3 py-2 text-black-800 dark:text-black-500">${fmtTime(s.CreatedAt)}</td>
 						<td class="px-3 py-2">${s.Enabled ? '<span class="text-green-600 dark:text-green-400 text-[0.75rem]">on</span>' : '<span class="text-black-700 dark:text-black-500 text-[0.75rem]">off</span>'}</td>
 						<td class="px-3 py-2">
 							<button onclick="deleteSourceRow(${s.ID})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
 						</td>
-					</tr>`).join('');
+					</tr>`;
+				}).join('');
 			}).catch(e => {
-				document.getElementById('sources-tbody').innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
+				document.getElementById('sources-tbody').innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-red-600">${esc(String(e))}</td></tr>`;
 			});
 		}
+
 
 		function deleteSourceRow(id) {
 			if (!confirm('Delete this sync source?')) return;

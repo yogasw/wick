@@ -167,3 +167,102 @@ func TestLargeTurnTruncated(t *testing.T) {
 		t.Fatalf("body not capped: %d", len(lines[0].Text))
 	}
 }
+
+func TestApplyThinkingBufferedInEvents(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "let me think"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "answer"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if len(lines[0].Events) != 1 {
+		t.Fatalf("events: %d, want 1", len(lines[0].Events))
+	}
+	ev := lines[0].Events[0]
+	if ev.Type != "thinking" || ev.Text != "let me think" {
+		t.Fatalf("thinking event: %+v", ev)
+	}
+}
+
+func TestApplyToolUseAndResultBuffered(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{
+		Type:      event.ToolUse,
+		ToolName:  "Bash",
+		ToolInput: `{"command":"ls"}`,
+		ToolUseID: "t1",
+	})
+	st.Apply(event.AgentEvent{
+		Type:      event.ToolResult,
+		Text:      "file1\nfile2",
+		ToolUseID: "t1",
+		IsError:   false,
+	})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "done"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	evs := lines[0].Events
+	if len(evs) != 2 {
+		t.Fatalf("events: %d, want 2", len(evs))
+	}
+	if evs[0].Type != "tool_use" || evs[0].ToolName != "Bash" || evs[0].ToolUseID != "t1" {
+		t.Fatalf("tool_use event: %+v", evs[0])
+	}
+	if evs[1].Type != "tool_result" || evs[1].ToolUseID != "t1" || evs[1].IsError {
+		t.Fatalf("tool_result event: %+v", evs[1])
+	}
+}
+
+func TestApplyToolResultIsErrorFlagged(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{
+		Type:      event.ToolUse,
+		ToolName:  "Bash",
+		ToolInput: `{"command":"bad"}`,
+		ToolUseID: "t2",
+	})
+	st.Apply(event.AgentEvent{
+		Type:      event.ToolResult,
+		Text:      "command not found",
+		ToolUseID: "t2",
+		IsError:   true,
+	})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "sorry"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	evs := lines[0].Events
+	if len(evs) != 2 {
+		t.Fatalf("events: %d", len(evs))
+	}
+	if !evs[1].IsError {
+		t.Fatal("expected IsError=true on tool_result")
+	}
+}
+
+func TestEventBufferClearedBetweenTurns(t *testing.T) {
+	// Events from turn 1 must not bleed into turn 2.
+	st, layout := newStore(t, "backend", false)
+	// turn 1
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "turn1 thought"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "reply1"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	// turn 2 — no events, just text
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "reply2"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if len(lines[0].Events) != 1 {
+		t.Fatalf("turn1 events: %d", len(lines[0].Events))
+	}
+	if len(lines[1].Events) != 0 {
+		t.Fatalf("turn2 should have no events, got: %+v", lines[1].Events)
+	}
+}

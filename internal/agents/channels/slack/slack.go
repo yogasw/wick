@@ -87,22 +87,43 @@ type turn struct {
 type Channel struct {
 	sendFn agentchannels.SendFunc
 
-	cfgMu  sync.Mutex
-	cfg    agentconfig.SlackChannelConfig
-	pubURL string
-	api    *slackgo.Client
-	socket *socketmode.Client
+	cfgMu          sync.Mutex
+	cfg            agentconfig.SlackChannelConfig
+	pubURL         string
+	api            *slackgo.Client
+	socket         *socketmode.Client
+	botUserID      string           // Slack user ID of the bot itself (U...), resolved via auth.test
+	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
 
 	mu    sync.Mutex
 	turns map[string]*turn
+
+	// userTokenCache maps Slack user ID → resolved xoxp token.
+	// Avoids repeated connectorToken lookups on every send call.
+	userTokenMu    sync.RWMutex
+	userTokenCache map[string]string
+
+	// tokenRefreshFn rebuilds the full userID→token map from connector rows.
+	// Wired at startup via SetTokenRefreshFn; triggered on-demand when a
+	// lookup misses and on a 5-minute background ticker.
+	tokenRefreshFn   func(ctx context.Context) map[string]string
+	tokenRefreshedAt time.Time
+	tokenRefreshMu   sync.Mutex
 
 	approveFn      agentchannels.ApproveFn
 	sessions       agentchannels.SessionChecker
 	onSessionStart agentchannels.SessionStartHook
 
+	// workflowEmit fires for every inbound Slack event the operator
+	// might wire as a workflow trigger (messages, interactions, slash
+	// commands, view submissions, …). nil when no workflow router is
+	// attached; channel-only deployments leave it nil with no overhead.
+	workflowEmit WorkflowEventSink
+
 	runMu     sync.Mutex
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
+
 }
 
 // New builds a Slack Channel from the operator-supplied config alone.
@@ -110,7 +131,8 @@ type Channel struct {
 // corresponding Set* setters before Start.
 func New(cfg agentconfig.SlackChannelConfig) *Channel {
 	ch := &Channel{
-		turns: make(map[string]*turn),
+		turns:          make(map[string]*turn),
+		userTokenCache: make(map[string]string),
 	}
 	ch.applyConfig(cfg, "")
 	return ch
@@ -118,6 +140,16 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 
 // SetSendFunc satisfies channels.SendFuncSetter.
 func (s *Channel) SetSendFunc(fn agentchannels.SendFunc) { s.sendFn = fn }
+
+// API returns the live Slack web-API client. Returns nil when the
+// channel isn't configured yet — callers must nil-check before use.
+// The workflow action subpackage (slack/workflow) uses this to invoke
+// chat.postMessage, views.open, reactions.add, etc.
+func (s *Channel) API() *slackgo.Client {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.api
+}
 
 // SetPublicURL satisfies channels.PublicURLSetter.
 func (s *Channel) SetPublicURL(u string) {
@@ -141,18 +173,70 @@ func (s *Channel) SetSessionStartHook(fn agentchannels.SessionStartHook) {
 	s.onSessionStart = fn
 }
 
-// HTTPPath returns the mux path for the Slack webhook (channels.HTTPHandlerProvider).
-func (s *Channel) HTTPPath() string { return "POST /integrations/slack/events" }
+// SetTokenRefreshFn wires a function that rebuilds the full userID→token map.
+// Called at startup and triggered on-demand when a lookup misses.
+func (s *Channel) SetTokenRefreshFn(fn func(ctx context.Context) map[string]string) {
+	s.cfgMu.Lock()
+	s.tokenRefreshFn = fn
+	s.cfgMu.Unlock()
+}
+
+// RefreshTokenMap rebuilds the userID→token map from connector rows.
+// Debounced: skips if called within 60s of last refresh.
+func (s *Channel) RefreshTokenMap(ctx context.Context) {
+	s.tokenRefreshMu.Lock()
+	defer s.tokenRefreshMu.Unlock()
+	if time.Since(s.tokenRefreshedAt) < 60*time.Second {
+		return
+	}
+	s.cfgMu.Lock()
+	fn := s.tokenRefreshFn
+	s.cfgMu.Unlock()
+	if fn == nil {
+		return
+	}
+	newMap := fn(ctx)
+	s.userTokenMu.Lock()
+	s.userTokenCache = newMap
+	s.userTokenMu.Unlock()
+	s.tokenRefreshedAt = time.Now()
+	log.Info().Int("users", len(newMap)).Msg("slack: user token map refreshed")
+}
+
+// HTTPHandlers satisfies channels.MultiHTTPHandlerProvider.
+// Returns two routes:
+//   - POST /integrations/slack/events — inbound Slack webhook
+//   - POST /integrations/slack/send   — local agent proxy, no external auth
+//
+// OAuth routes (start/callback) have moved to the generic connector manager
+// at /manager/connectors/slack/oauth/* and are no longer registered here.
+func (s *Channel) HTTPHandlers() map[string]http.Handler {
+	return map[string]http.Handler{
+		"POST /integrations/slack/events": s.HTTPHandler(),
+		"POST /integrations/slack/send":   s.sendHandler(),
+	}
+}
 
 // applyConfig replaces cfg/pubURL/api/socket atomically.
+// Also resolves the bot's own Slack user ID via auth.test so the footer
+// can render as a proper @mention ("Sent using <@UBOT123>").
 func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string) {
 	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
 	socket := socketmode.New(api)
+
+	botUserID := ""
+	if cfg.BotToken != "" {
+		if resp, err := api.AuthTest(); err == nil {
+			botUserID = resp.UserID
+		}
+	}
+
 	s.cfgMu.Lock()
 	s.cfg = cfg
 	s.pubURL = pubURL
 	s.api = api
 	s.socket = socket
+	s.botUserID = botUserID
 	s.cfgMu.Unlock()
 }
 
@@ -281,6 +365,18 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 			return
 		}
 		go s.handleInteraction(ctx, cb)
+	case socketmode.EventTypeSlashCommand:
+		// Slash commands need an immediate ack so the user doesn't see
+		// "operation_timeout" in Slack. Pass-through response goes via
+		// the response_url which the workflow can post to via the
+		// slack.respond_url action.
+		cmd, ok := evt.Data.(slackgo.SlashCommand)
+		if !ok {
+			s.socket.Ack(*evt.Request)
+			return
+		}
+		s.socket.Ack(*evt.Request)
+		go s.handleSlashCommand(ctx, cmd)
 	case socketmode.EventTypeConnecting:
 		log.Debug().Str("channel", "slack").Msg("connecting")
 	case socketmode.EventTypeConnected:
@@ -288,6 +384,21 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 	case socketmode.EventTypeConnectionError:
 		log.Warn().Str("channel", "slack").Msg("connection error, will retry")
 	}
+}
+
+// handleSlashCommand fires the workflow trigger for a slash command.
+// The Slack channel itself has no agent-session role for slash
+// commands — they exist purely to be workflow-driven.
+func (s *Channel) handleSlashCommand(ctx context.Context, cmd slackgo.SlashCommand) {
+	s.emitWorkflow(ctx, "command", map[string]any{
+		"user":         cmd.UserID,
+		"command":      cmd.Command,
+		"text":         cmd.Text,
+		"channel_id":   cmd.ChannelID,
+		"team_id":      cmd.TeamID,
+		"trigger_id":   cmd.TriggerID,
+		"response_url": cmd.ResponseURL,
+	})
 }
 
 func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsAPIEvent) {
@@ -298,10 +409,21 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			if ev.BotID != "" {
 				return
 			}
+			cleanText := stripBotMention(ev.Text)
+			// Workflow surface first — emit the typed app_mention event
+			// before the legacy session dispatch so workflows can route
+			// mentions independently of the agent session machinery.
+			s.emitWorkflow(ctx, "app_mention", map[string]any{
+				"user":       ev.User,
+				"text":       cleanText,
+				"channel_id": ev.Channel,
+				"thread":     threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
+				"ts":         ev.TimeStamp,
+			})
 			s.handleMessage(ctx, &slackevents.MessageEvent{
 				Type:            ev.Type,
 				User:            ev.User,
-				Text:            stripBotMention(ev.Text),
+				Text:            cleanText,
 				TimeStamp:       ev.TimeStamp,
 				ThreadTimeStamp: ev.ThreadTimeStamp,
 				Channel:         ev.Channel,
@@ -311,13 +433,40 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			if ev.BotID != "" || ev.SubType != "" {
 				return
 			}
-			// only handle DMs without mention requirement
+			// Workflow surface gets every non-bot message regardless of
+			// channel type — operators can scope via channel_id /
+			// channel_type match keys. Agent session dispatch below
+			// stays DM-only to preserve existing UX.
+			s.emitWorkflow(ctx, "message", map[string]any{
+				"user":         ev.User,
+				"text":         ev.Text,
+				"channel_id":   ev.Channel,
+				"channel_type": ev.ChannelType,
+				"thread":       threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
+				"ts":           ev.TimeStamp,
+				"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
+			})
 			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
 				return
 			}
 			s.handleMessage(ctx, ev)
+		case *slackevents.AppHomeOpenedEvent:
+			s.emitWorkflow(ctx, "app_home_opened", map[string]any{
+				"user": ev.User,
+				"tab":  ev.Tab,
+			})
 		}
 	}
+}
+
+// threadKey returns the conversation thread key: parent thread_ts when
+// the message is a reply, otherwise the message's own ts (which is how
+// new threads boot — replying to a top-level message uses that ts).
+func threadKey(threadTS, msgTS string) string {
+	if threadTS != "" {
+		return threadTS
+	}
+	return msgTS
 }
 
 // stripBotMention removes the leading <@BOTID> mention Slack prepends to app_mention text.
@@ -694,30 +843,21 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 		return ""
 	}
 
+	// Resolve channel info.
 	channelName := ev.Channel
-	channelType := ""
 	if info, err := api.GetConversationInfo(&slackgo.GetConversationInfoInput{ChannelID: ev.Channel}); err == nil && info != nil {
 		if info.Name != "" {
-			channelName = "#" + info.Name
-		}
-		switch {
-		case info.IsIM:
-			channelType = "direct message"
-		case info.IsMpIM:
-			channelType = "group DM"
-		case info.IsPrivate:
-			channelType = "private channel"
-		default:
-			channelType = "channel"
+			channelName = info.Name
 		}
 	}
 
+	// Resolve user info.
 	userHandle := ev.User
 	userReal := ""
 	teamName := ""
 	if u, err := api.GetUserInfo(ev.User); err == nil && u != nil {
 		if u.Name != "" {
-			userHandle = "@" + u.Name
+			userHandle = u.Name
 		}
 		userReal = u.RealName
 	}
@@ -730,27 +870,98 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 		permalink = pl
 	}
 
-	channelLine := channelName
-	if channelType != "" {
-		channelLine = fmt.Sprintf("%s (%s)", channelName, channelType)
-	}
-	userLine := userHandle
-	if userReal != "" && userReal != strings.TrimPrefix(userHandle, "@") {
-		userLine = fmt.Sprintf("%s (%s)", userHandle, userReal)
+	// Pre-resolve the DM channel so Claude can send DMs without an extra API call.
+	// 3-second timeout; failure is non-fatal — section is omitted.
+	dmChannelID := ""
+	dmCtx, dmCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer dmCancel()
+	if ch, _, _, err := api.OpenConversationContext(dmCtx, &slackgo.OpenConversationParameters{
+		Users:    []string{ev.User},
+		ReturnIM: true,
+	}); err == nil && ch != nil {
+		dmChannelID = ch.ID
+	} else if err != nil {
+		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).
+			Msg("buildSessionContext: conversations.open failed; omitting DM channel ID")
 	}
 
-	lines := []string{"[Slack thread context — sent automatically by wick]"}
+	// Check if the mentioning user has a connector user token configured.
+	// If yes, DMs sent via the proxy will automatically appear as from them.
+	s.cfgMu.Lock()
+	connTokFn := s.connectorToken
+	s.cfgMu.Unlock()
+	hasUserToken := false
+	if connTokFn != nil {
+		tok := s.resolveUserToken(dmCtx, ev.User, connTokFn)
+		hasUserToken = tok != ""
+	}
+
+	// Fetch first 50 workspace members for a username→user_id directory.
+	// 3-second timeout; failure is non-fatal — section is omitted.
+	var memberEntries []string
+	membersCtx, membersCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer membersCancel()
+	if members, err := api.GetUsersContext(membersCtx, slackgo.GetUsersOptionLimit(50)); err == nil {
+		for _, m := range members {
+			if m.Deleted || m.IsBot {
+				continue
+			}
+			memberEntries = append(memberEntries, fmt.Sprintf("@%s (%s)", m.Name, m.ID))
+		}
+	} else {
+		log.Warn().Str("channel", "slack").Err(err).
+			Msg("buildSessionContext: users.list failed; omitting member directory")
+	}
+
+	lines := []string{"[Slack thread context — injected by wick]"}
 	if teamName != "" {
 		lines = append(lines, "Workspace: "+teamName)
 	}
 	lines = append(lines,
-		fmt.Sprintf("Channel: %s [%s]", channelLine, ev.Channel),
-		fmt.Sprintf("User: %s [%s]", userLine, ev.User),
-		"Thread: "+threadTS,
+		fmt.Sprintf("Channel: #%s [%s]", channelName, ev.Channel),
+		fmt.Sprintf("User: @%s (%s) [%s]", userHandle, userReal, ev.User),
 	)
+	if dmChannelID != "" {
+		lines = append(lines, "DM channel: "+dmChannelID)
+	}
+	lines = append(lines, "Thread: "+threadTS)
 	if permalink != "" {
 		lines = append(lines, "Link: "+permalink)
 	}
+
+	if len(memberEntries) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("Workspace members (first %d): %s", len(memberEntries), strings.Join(memberEntries, " | ")))
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "IMPORTANT: To send Slack messages, use wick proxy only — do NOT use Slack MCP tools.")
+
+	// Shared curl base — always include X-Wick-Session-User so the proxy
+	// can auto-inject sender_user_id without Claude needing to specify it.
+	curlBase := fmt.Sprintf(
+		`curl -s -X POST "http://localhost:$WICK_PORT/integrations/slack/send" -H "Content-Type: application/json" -H "X-Wick-Session-User: %s"`,
+		ev.User,
+	)
+
+	if hasUserToken {
+		lines = append(lines, fmt.Sprintf("Your user token is configured — messages will appear as from @%s.", userHandle))
+		lines = append(lines, "To send to any channel or thread (appears from you):")
+		lines = append(lines, fmt.Sprintf(`  %s -d '{"channel_id":"CHANNEL_ID","text":"YOUR MESSAGE"}'`, curlBase))
+		lines = append(lines, "To DM another user (appears from you):")
+		lines = append(lines, fmt.Sprintf(`  %s -d '{"target_user_id":"THEIR_USER_ID","text":"YOUR MESSAGE"}'`, curlBase))
+		lines = append(lines, "  Replace THEIR_USER_ID with the ID from the member directory above.")
+		lines = append(lines, "If DM fails with open_dm_failed/missing_scope: post to the original channel thread instead:")
+		lines = append(lines, fmt.Sprintf(`  %s -d '{"channel_id":"%s","text":"<@THEIR_USER_ID> YOUR MESSAGE"}'`, curlBase, ev.Channel))
+	} else {
+		lines = append(lines, "To send to any channel or thread (appears from bot):")
+		lines = append(lines, fmt.Sprintf(`  %s -d '{"channel_id":"CHANNEL_ID","text":"YOUR MESSAGE"}'`, curlBase))
+		lines = append(lines, "To DM another user (appears from bot):")
+		lines = append(lines, fmt.Sprintf(`  %s -d '{"target_user_id":"THEIR_USER_ID","text":"YOUR MESSAGE"}'`, curlBase))
+		lines = append(lines, "If DM fails: post to original channel thread with mention instead:")
+		lines = append(lines, fmt.Sprintf(`  %s -d '{"channel_id":"%s","text":"<@THEIR_USER_ID> YOUR MESSAGE"}'`, curlBase, ev.Channel))
+	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -851,7 +1062,12 @@ func (s *Channel) OnApprovalResolved(sessionID, requestID, decision string) {
 	}
 }
 
-func (s *Channel) handleInteraction(_ context.Context, cb slackgo.InteractionCallback) {
+func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionCallback) {
+	// Workflow surface first — emit a typed event for every interaction
+	// type so workflows can route by callback_id / action_id without
+	// caring about the gate-approval channel-side hijack below.
+	s.emitInteractionWorkflow(ctx, cb)
+
 	if len(cb.ActionCallback.BlockActions) == 0 {
 		return
 	}
@@ -951,19 +1167,6 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 	})
 }
 
-func (s *Channel) postReply(channelID, threadTS, text string) {
-	s.cfgMu.Lock()
-	api := s.api
-	s.cfgMu.Unlock()
-	s.withBackoff(func() error {
-		_, _, err := api.PostMessage(
-			channelID,
-			slackgo.MsgOptionText(text, false),
-			slackgo.MsgOptionTS(threadTS),
-		)
-		return err
-	})
-}
 
 func (s *Channel) postChunked(channelID, threadTS, text string) {
 	chunks := chunkText(text, maxSlackChunk)
@@ -975,6 +1178,7 @@ func (s *Channel) postChunked(channelID, threadTS, text string) {
 		s.postReply(channelID, threadTS, msg)
 	}
 }
+
 
 func chunkText(s string, max int) []string {
 	if len(s) <= max {

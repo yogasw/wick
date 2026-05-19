@@ -28,6 +28,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/tools/agents/view"
+	wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/all"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -122,8 +124,11 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
 	r.Static("/static/", StaticFS)
+	r.Static("/static/nodes/", wfnodes.StaticFS)
 
-	r.GET("/", overviewPage)
+	r.GET("/", newSessionCompose)
+	r.POST("/", startNewSession)
+	r.GET("/overview", overviewPage)
 
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
@@ -163,6 +168,7 @@ func Register(r tool.Router) {
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
 	r.POST("/providers/gate/toggle", toggleGate)
+	r.POST("/providers/gate/modes", saveGateModes)
 	r.POST("/providers/rescan", rescanAllProviders)
 	r.POST("/providers/rescan/{type}/{name}", rescanOneProvider)
 	r.POST("/providers/probe-gate/{type}/{name}", probeProviderGate)
@@ -170,6 +176,9 @@ func Register(r tool.Router) {
 	r.POST("/providers/{type}/{name}/hooks/{event}/enable", enableProviderHook)
 	r.POST("/providers/{type}/{name}/hooks/{event}/disable", disableProviderHook)
 	r.POST("/providers/auto-rescan/toggle", toggleAutoRescan)
+
+	r.POST("/providers/mcp/{clientID}/install", mcpInstallClient)
+	r.POST("/providers/mcp/{clientID}/uninstall", mcpUninstallClient)
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
@@ -191,6 +200,36 @@ func Register(r tool.Router) {
 
 	r.GET("/settings", settingsPage)
 
+	// Workflows tab — visual DAG editor (mockup §3).
+	r.GET("/workflows", workflowsPage)
+	r.POST("/workflows", createWorkflow)
+	r.POST("/workflows/import", importWorkflow)
+	r.GET("/workflows/edit/{id}/download", downloadWorkflowYAML)
+	// ID-bound routes live under /edit/ so Go 1.22's mux doesn't
+	// flag a conflict with /static/{path}. The ID is the folder name
+	// (UUID for canvas-created workflows) — stable across name renames.
+	r.GET("/workflows/edit/{id}", workflowEditor)
+	r.POST("/workflows/edit/{id}/save", saveWorkflow)
+	r.POST("/workflows/edit/{id}/rename", renameWorkflow)
+	r.POST("/workflows/edit/{id}/publish", publishWorkflow)
+	r.POST("/workflows/edit/{id}/discard", discardWorkflowDraft)
+	r.POST("/workflows/edit/{id}/toggle", toggleWorkflow)
+	r.POST("/workflows/edit/{id}/run", runWorkflowNow)
+	r.POST("/workflows/edit/{id}/exec-node", execNodeStep)
+	r.GET("/workflows/edit/{id}/runs/{runID}/state", workflowRunStateAPI)
+	r.POST("/workflows/edit/{id}/runs/{runID}/copy-to-editor", copyRunToEditor)
+	r.POST("/workflows/edit/{id}/delete", deleteWorkflow)
+	r.GET("/workflows/edit/{id}/runs/{runID}", workflowRunDetail)
+	r.GET("/workflows/edit/{id}/executions", executionsPanel)
+	r.GET("/workflows/edit/{id}/executions/{runID}", executionDetail)
+	r.GET("/workflows/api/registry", workflowRegistryAPI)
+	r.GET("/workflows/api/lookup", workflowLookupAPI)
+	r.POST("/workflows/edit/{id}/test", runWorkflowTests)
+	r.GET("/workflows/edit/{id}/test-cases", listTestCases)
+	r.POST("/workflows/edit/{id}/test-cases", saveTestCase)
+	r.POST("/workflows/edit/{id}/test-cases/{name}/run", runOneTestCase)
+	r.DELETE("/workflows/edit/{id}/test-cases/{name}", deleteTestCase)
+
 	r.GET("/stream", streamSSE)
 }
 
@@ -201,9 +240,14 @@ func settingsPage(c *tool.Ctx) {
 	rows := globalConfigs.ListOwned("agents")
 	// Split system_prompt_append out — rendered in its own panel with a
 	// Reset button. The rest fall through to the generic ConfigsTable.
+	// Skip Hidden rows — those belong to dedicated pages (Channels,
+	// Providers, Workspaces) and must not leak onto generic Settings.
 	current := ""
 	rest := rows[:0:len(rows)]
 	for _, r := range rows {
+		if r.Hidden {
+			continue
+		}
 		if r.Key == "system_prompt" {
 			current = r.Value
 			continue
@@ -296,6 +340,94 @@ func notReady(c *tool.Ctx) bool {
 		return true
 	}
 	return false
+}
+
+// newSessionCompose renders the compose page: provider/preset/workspace
+// pickers + a textarea for the first message. No session is persisted
+// here — that only happens in startNewSession when the form posts back
+// with a non-empty message.
+func newSessionCompose(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	renderCompose(c, "", "")
+}
+
+// startNewSession is the compose form's POST target. It creates the
+// session, attaches the agent with the chosen provider, and queues the
+// first message in one go — matching ChatGPT/Claude's "session exists
+// only after first send" UX.
+func startNewSession(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	text := strings.TrimSpace(c.Form("message"))
+	if text == "" {
+		renderCompose(c, "", "Type a message to start the session.")
+		return
+	}
+	prov := c.Form("provider")
+	if prov == "" {
+		prov = "claude"
+		if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+			prov = ps[0].Type
+		}
+	}
+	ws := c.Form("workspace")
+	presetName := c.Form("preset")
+	if presetName == "" {
+		presetName = "default"
+		if ws != "" {
+			if wsData, werr := workspace.Load(globalLayout, ws); werr == nil && wsData.Meta.DefaultPreset != "" {
+				presetName = wsData.Meta.DefaultPreset
+			}
+		}
+	}
+	id := uuid.New().String()
+	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
+		ID:        id,
+		Workspace: ws,
+		Origin:    session.OriginUI,
+		Preset:    presetName,
+	}); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose create session: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	if err := globalMgr.AddAgent(id, "main", prov); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose add agent: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	if err := globalPool.Send(context.Background(), id, "main", "ui", "user", text); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
+}
+
+// renderCompose is the shared body of newSessionCompose / startNewSession's
+// validation branches. message and errMsg are round-tripped so a failed
+// submit keeps the user's text and surfaces the reason inline.
+func renderCompose(c *tool.Ctx, message, errMsg string) {
+	providers := providerChoicesCached(c.Context())
+	defaultProv := ""
+	if len(providers) > 0 {
+		defaultProv = providers[0].Type
+	}
+	layout := sidebarVM(c, "new", "")
+	layout.FullBleed = true
+	c.HTML(view.NewSessionCompose(view.NewSessionComposeVM{
+		Layout:          layout,
+		Base:            c.Base(),
+		Providers:       providers,
+		Presets:         globalMgr.Registry().PresetNames(),
+		Workspaces:      globalMgr.Registry().WorkspaceNames(),
+		DefaultProvider: defaultProv,
+		Message:         message,
+		Error:           errMsg,
+	}))
 }
 
 // ── Overview ──────────────────────────────────────────────────────────
@@ -458,13 +590,24 @@ func sessionDetail(c *tool.Ctx) {
 			log.Ctx(c.Context()).Error().Msgf("load conversation %s: %s", id, err.Error())
 		}
 		for _, t := range raw {
-			turns = append(turns, view.TurnVM{
+			vm := view.TurnVM{
 				Role:      t.Role,
 				Agent:     t.Agent,
 				Text:      t.Text,
 				Truncated: t.Truncated,
 				Time:      t.Timestamp,
-			})
+			}
+			for _, e := range t.Events {
+				vm.Events = append(vm.Events, view.TurnEventVM{
+					Type:      e.Type,
+					ToolName:  e.ToolName,
+					ToolInput: e.ToolInput,
+					ToolUseID: e.ToolUseID,
+					IsError:   e.IsError,
+					Text:      e.Text,
+				})
+			}
+			turns = append(turns, vm)
 		}
 	case "commands":
 		lines, err := loadCommands(globalLayout, id)

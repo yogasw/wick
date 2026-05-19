@@ -1,0 +1,87 @@
+package workflow
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	fieldtype "github.com/yogasw/wick/internal/manager/view/type"
+)
+
+// ArgField is the workflow-side wrapper for one arg row. It calls the
+// existing admin widget (fieldtype.Text / Dropdown / Secret / …) but
+// adds workflow-specific chrome around it:
+//
+//   - Label + required asterisk
+//   - Fixed | Expression toggle pill (default = Fixed)
+//   - Live-template preview slot (filled by JS when mode = Expression)
+//   - Description text
+//
+// Widget HTML stays untouched — admin keeps its w-72 / w-96 / w-40
+// intentional widths. The .wf-arg-field parent scopes a CSS override
+// in editor.css to stretch every widget to full width in the inspector
+// without modifying the widget itself.
+//
+// Add a new widget type = add a `case` to the switch below. The
+// fieldtype package owns the widget HTML; this template owns the
+// workflow chrome.
+templ ArgField(row entity.Config) {
+	<div
+		class="wf-arg-field"
+		data-field-key={ row.Key }
+		data-cfg-visible-when={ row.VisibleWhen }
+	>
+		<div class="wf-arg-field-head">
+			<label class="wf-arg-field-label">
+				{ row.Key }
+				if row.Required {
+					<span class="wf-arg-field-required">*</span>
+				}
+			</label>
+			<div class="wf-arg-mode">
+				<button type="button" data-arg-mode="fixed">Fixed</button>
+				<button type="button" data-arg-mode="expression">Expression</button>
+			</div>
+		</div>
+		switch row.Type {
+			case "textarea":
+				@fieldtype.Textarea(row)
+			case "dropdown":
+				@fieldtype.Dropdown(row)
+			case "number":
+				@fieldtype.Number(row)
+			case "checkbox":
+				@fieldtype.Checkbox(row)
+			case "email":
+				@fieldtype.Email(row)
+			case "url":
+				@fieldtype.URL(row)
+			case "color":
+				@fieldtype.Color(row)
+			case "date":
+				@fieldtype.Date(row)
+			case "datetime":
+				@fieldtype.Datetime(row)
+			case "kvlist":
+				@fieldtype.KVList(row)
+			case "picker":
+				@fieldtype.Picker(row)
+			default:
+				if row.IsSecret {
+					@fieldtype.Secret(row)
+				} else {
+					@fieldtype.Text(row)
+				}
+		}
+		<div data-arg-preview class="wf-arg-preview"></div>
+		if row.Description != "" {
+			<p class="wf-arg-field-desc">{ row.Description }</p>
+		}
+	</div>
+}
+
+// ArgForm renders the full args block for one connector op or channel
+// action — one ArgField per row.Type. Returns no-op when rows is
+// empty so the inspector shows its own "No args required" empty state.
+templ ArgForm(rows []entity.Config) {
+	for _, row := range rows {
+		@ArgField(row)
+	}
+}

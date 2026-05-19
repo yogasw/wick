@@ -100,6 +100,58 @@ type ApprovalReceiver interface {
 	OnApprovalResolved(sessionID, requestID, decision string)
 }
 
+// ── Workflow integration (opt-in) ─────────────────────────────────────
+// Channels that want to be usable from the workflow editor implement
+// these interfaces. Channels that don't (UI, API, REST one-shot) are
+// invisible to the workflow channel/trigger pickers. Single source of
+// truth — workflow package does not declare its own channel surface.
+
+// WorkflowTriggerSpec describes one inbound event class the channel can
+// fire as a workflow trigger. Surfaced via MCP for AI introspection +
+// the editor's trigger-channel dropdown.
+type WorkflowTriggerSpec struct {
+	Type          string         `json:"type"` // always "channel"
+	Events        []string       `json:"events"`
+	Description   string         `json:"description"`
+	MatchSchema   map[string]any `json:"match_schema,omitempty"`
+	PayloadSchema map[string]any `json:"payload_schema,omitempty"`
+}
+
+// WorkflowActionSpec describes one outbound op a workflow channel-action
+// node can invoke. Mirrors the input/output schema convention used by
+// connector ops so the editor can render a typed args form.
+type WorkflowActionSpec struct {
+	ID           string         `json:"id"`
+	Description  string         `json:"description"`
+	Destructive  bool           `json:"destructive,omitempty"`
+	InputSchema  map[string]any `json:"input_schema"`
+	OutputSchema map[string]any `json:"output_schema,omitempty"`
+}
+
+// WorkflowTriggerProvider is implemented by channels that can fire
+// workflow triggers (Slack, Telegram, …). Channels that only accept
+// outbound calls (REST one-shot) skip this.
+type WorkflowTriggerProvider interface {
+	WorkflowTriggerSpecs() []WorkflowTriggerSpec
+}
+
+// WorkflowActionProvider is implemented by channels that expose
+// outbound operations (Send, react, open_modal, …) to workflow action
+// nodes.
+type WorkflowActionProvider interface {
+	WorkflowActionSpecs() []WorkflowActionSpec
+	WorkflowSend(ctx context.Context, op string, args map[string]any) (any, error)
+}
+
+// WorkflowSessionOriginator reports whether this channel can be the
+// origin of a multi-turn agent session. UI/Slack/Telegram return true;
+// stateless transports (REST, one-shot webhook) return false. Workflow
+// validator rejects channel triggers that need a reply path on
+// channels that don't support sessions.
+type WorkflowSessionOriginator interface {
+	SupportsSession() bool
+}
+
 // LookupItem is one row returned by a picker lookup. ID is the stable
 // identifier stored in the config; Name is the human label shown to the
 // operator.
@@ -143,6 +195,13 @@ type LookupProvider interface {
 type HTTPHandlerProvider interface {
 	HTTPPath() string
 	HTTPHandler() http.Handler
+}
+
+// MultiHTTPHandlerProvider extends HTTPHandlerProvider for channels
+// that need to register more than one HTTP route (e.g. Slack registers
+// both the inbound event webhook and a local send-message proxy).
+type MultiHTTPHandlerProvider interface {
+	HTTPHandlers() map[string]http.Handler
 }
 
 // ConfigSource is per-channel hot-reload glue. Hash returns a stable
