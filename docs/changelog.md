@@ -4,6 +4,42 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [v0.13.0](https://github.com/yogasw/wick/compare/v0.12.2...v0.13.0) — Workflows
+
+_Released on 2026-05-19_
+
+### Added
+- **Workflows** — multi-step YAML DAG automations under `<BaseDir>/workflows/<id>/`, with typed nodes (`classify`, `agent`, `connector`, `channel`, `http`, `shell`, `db_query`, `transform`, `go_script`, `branch`, `switch`, `parallel`, `merge`, `dataset_*`, `session_init`, `end`) and triggers (`cron`, `channel`, `webhook`, `manual`, `schedule_at`, `error`). See [Workflows guide](/workflow/).
+- **Canvas editor** at `/tools/agents/workflows/<id>` — Drawflow-based visual editor with palette, per-field inspector reflected from each executor's `Describe()`, top-down auto-layout, marquee select, fit-to-view, node search (Ctrl+K), and a run timeline that replays each run node-by-node.
+- **MCP workflow surface** — self-documenting catalog (`workflow_list`, `workflow_describe`, `workflow_node_types`, `workflow_node_detail`, `workflow_diagnose`, `workflow_watch`, `workflow_scaffold`, `workflow_connect`, `workflow_patch`, `workflow_delete`) so LLMs can author and inspect workflows over MCP.
+- **Slack channel actions** as workflow nodes — `send_message`, `add_reaction`, `open_dm`, `open_modal`, `push_modal`, `update_modal`, `send_ephemeral`, `publish_home`, `respond_url`, `update_message` — plus typed event triggers (`event_message`, `event_app_mention`, `event_command`, `event_block_action`, `event_view_submission`, `event_shortcut`, `event_app_home_opened`, `event_view_closed`).
+- **Gate umbrella policy** — `GateConfig` now carries `PermissionMode` (per-tool prompts) + `AskUserMode` (MCP `ask_user`) sub-policies. Master switch snaps both to their unguarded defaults when off. MCP `ask_user` short-circuits with a clean tool error when disabled instead of stalling the run. See [Command Gate ▶ Umbrella policy](/guide/command-gate#umbrella-policy).
+- **Slack OAuth on the connector row** — global OAuth credentials moved to a Slack connector row with a "Connect with Slack" button; user-token auto-detected in `buildSessionContext`; DM via connector user token with signed footer.
+- **Live agent streaming trace** — tool calls, thinking, and history are streamed into the session detail page in real time.
+- **MCP provider UI** + session full-height layout + markdown table rendering.
+- **Provider-storage sync** — exclude-mode rows, glob matcher, folder cascade, retention recompute, repair tree.
+- **Loki push adapter** for async run events.
+- **Self-updater + build metadata** baked into `wick_info`.
+
+### Changed
+- Workflow `slug` field renamed to `id` across the codebase.
+- Channel config layer — manual field mapping replaced with `MapToStruct`; `decryptFn` callback removed from `GetChannelConfigMap`; `wick_cenc_` tokens decrypted in-place; channel configs hidden from settings page and encrypted at rest.
+- Gate `AppName` derives from the binary stem only when it ends in `-gate`, otherwise the ldflag is the single source of truth.
+
+### Fixed
+- Slack bot replies no longer carry a duplicate signed footer (only `sendHandler` signs).
+- Slack `cannot_dm_bot` — detect bot users before calling `conversations.open`.
+- Slack: post with `xoxp` token without overriding the username, so the real user identity is preserved.
+- Slack: auto-promote `U...` channel IDs to `target_user_id` for session headers; init `userTokenCache` and pre-build the token map at startup.
+- Canvas: reject duplicate edges in `Connect`; guard against deleting the entry node.
+- `wick_info` uses the baked app name instead of the cwd basename.
+- Provider-storage: `strings.ReplaceAll` for cross-platform backslash normalisation.
+
+### Migration notes
+- The legacy `agents.bypass_permissions` checkbox is gone. Its value is one-shot migrated to `gate.permission_mode` at boot — no operator action required.
+
+---
+
 ## [v0.12.2](https://github.com/yogasw/wick/compare/v0.12.1...v0.12.2) — Release Infrastructure
 
 _Released on 2026-05-14_

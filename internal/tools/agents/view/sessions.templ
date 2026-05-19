@@ -297,7 +297,9 @@ templ SessionDetail(vm SessionDetailVM) {
 					</button>
 				</div>
 			</div>
-			@GateDisabledBanner(vm.Gate)
+			<div class="absolute top-12 left-4 right-4 z-10">
+				@GateDisabledBanner(vm.Gate)
+			</div>
 			<!-- Zone 2: scroll area full width, content centered -->
 			<div class="flex-1 overflow-y-auto" data-chat-panel>
 				@sessionDetailContent(vm)

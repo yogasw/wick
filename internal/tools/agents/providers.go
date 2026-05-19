@@ -111,7 +111,6 @@ func gateStatusVM() view.GateStatusVM {
 	s := GetGateStatus()
 	configEnabled := masterGateEnabled()
 	permMode := currentPermissionMode()
-	askMode := currentAskUserMode()
 	// Permission bypass trumps the per-provider hook — spawner strips
 	// the hook config when mode=bypass, so the gate cannot enforce
 	// regardless of per-provider intent.
@@ -123,16 +122,15 @@ func gateStatusVM() view.GateStatusVM {
 		Source:         s.Source,
 		Reason:         s.Reason,
 		PermissionMode: permMode,
-		AskUserMode:    askMode,
 		BypassLocked:   bypass,
 	}
 	switch {
 	case !configEnabled:
-		vm.Note = "Gate is off — every sub-policy snaps to its unguarded default (permission bypass, ask_user off). Turn the master switch on to honour the modes below."
+		vm.Note = "Gate is off — permission prompts skipped, spawns run unguarded. Turn the master switch on to honour the permission policy below."
 	case bypass:
 		vm.Note = "Permission policy is set to bypass — spawns run unguarded so non-interactive channels (Slack/HTTP) don't hang on permission prompts. Switch to 'on' to gate per-provider hooks."
 	case enabled:
-		vm.Note = "Gate is on. Permission prompts route through the per-provider hook below; ask_user routes to the web UI when set to 'on'."
+		vm.Note = "Gate is on. Permission prompts route through the per-provider hook below."
 	case configEnabled && s.Binary == "":
 		vm.Note = "Gate is on in config but the gate binary did not resolve. Run `wick build` so the sibling sidecar or embedded fallback is available."
 	default:
@@ -149,19 +147,6 @@ func currentPermissionMode() string {
 		return "on"
 	}
 	v := globalConfigs.GetOwned("agents", "permission_mode")
-	if v == "" {
-		return "on"
-	}
-	return v
-}
-
-// currentAskUserMode returns the active GateConfig.AskUserMode,
-// defaulting to "on" when the row is empty.
-func currentAskUserMode() string {
-	if globalConfigs == nil {
-		return "on"
-	}
-	v := globalConfigs.GetOwned("agents", "ask_user_mode")
 	if v == "" {
 		return "on"
 	}
@@ -230,10 +215,13 @@ func toggleGate(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
-// saveGateModes writes GateConfig.PermissionMode + GateConfig.AskUserMode
-// from the gate card form. Both fields constrained to a known enum;
-// unknown values fall back to "on" so a malformed POST never bricks
-// the gate into an unknown state.
+// saveGateModes writes GateConfig.PermissionMode from the gate card form.
+// Constrained to a known enum; unknown values fall back to "on" so a
+// malformed POST never bricks the gate into an unknown state.
+//
+// AskUserMode is not surfaced in the UI — the policy is controlled via
+// system prompt instead. The field remains on GateConfig and respects
+// whatever the config layer has stored (default "on").
 func saveGateModes(c *tool.Ctx) {
 	if globalConfigs == nil {
 		c.Error(http.StatusServiceUnavailable, "configs service not wired")
@@ -243,15 +231,7 @@ func saveGateModes(c *tool.Ctx) {
 	if perm != "bypass" {
 		perm = "on"
 	}
-	ask := strings.TrimSpace(c.Form("ask_user_mode"))
-	if ask != "off" {
-		ask = "on"
-	}
 	if err := globalConfigs.SetOwned(c.Context(), "agents", "permission_mode", perm); err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := globalConfigs.SetOwned(c.Context(), "agents", "ask_user_mode", ask); err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}

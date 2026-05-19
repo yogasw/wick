@@ -240,10 +240,6 @@ type GateStatusVM struct {
 	// config and runs unguarded — UI surfaces that as a locked badge
 	// so operators can't toggle individual provider hooks (no-op).
 	PermissionMode string
-	// AskUserMode is the active value of GateConfig.AskUserMode
-	// ("on" | "off"). "off" causes the MCP ask_user tool to short-
-	// circuit with a policy error so the agent picks a default.
-	AskUserMode string
 
 	// BypassLocked is true when PermissionMode=="bypass". Retained for
 	// templ branches that already key off this flag; equivalent to
