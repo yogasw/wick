@@ -16,8 +16,8 @@ Outbound HTTP request. URL / headers / query / body rendered as Go templates. Re
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `method` | dropdown | ✅ | `GET` / `POST` / `PUT` / `PATCH` / `DELETE`. |
-| `url` | template | ✅ | Full URL. Rendered as Go template — pull values from upstream nodes via `{{.Node.x.y}}` or `{{.Event.Payload.z}}`. |
-| `headers` | kvlist (templated) | | Each value is rendered as a Go template — e.g. `Authorization: Bearer {{.Node.login.token}}`. |
+| `url` | template | ✅ | Full URL. Rendered as Go template — pull values from upstream nodes via <code v-pre>{{.Node.x.y}}</code> or <code v-pre>{{.Event.Payload.z}}</code>. |
+| `headers` | kvlist (templated) | | Each value is rendered as a Go template — e.g. <code v-pre>Authorization: Bearer {{.Node.login.token}}</code>. |
 | `query` | kvlist (templated) | | Query string parameters. Each value templated. |
 | `body` | textarea (template) | | Request body as string. Use YAML block scalar `\|` for multiline JSON. Visible only for `POST`/`PUT`/`PATCH`/`DELETE`. |
 | `parse_response` | dropdown | | `raw` (default) / `json` / `bytes`. |
@@ -27,10 +27,10 @@ Outbound HTTP request. URL / headers / query / body rendered as Go templates. Re
 
 | Field | Type | What |
 |---|---|---|
-| `status` | int | HTTP status code. Branch on it via a downstream `branch` node (`{{.Node.x.status}} >= 400`). |
+| `status` | int | HTTP status code. Branch on it via a downstream `branch` node (<code v-pre>{{.Node.x.status}} >= 400</code>). |
 | `body` | string | Response body as string. Always populated regardless of `parse_response`. |
 | `headers` | map | Flat map of response headers — first value per key. |
-| `json` | any | Parsed JSON body. Populated when `parse_response: json` or unset and the body is valid JSON. Use `{{.Node.x.json.<field>}}`. |
+| `json` | any | Parsed JSON body. Populated when `parse_response: json` or unset and the body is valid JSON. Use <code v-pre>{{.Node.x.json.&lt;field&gt;}}</code>. |
 | `bytes` | bytes | Raw bytes — populated only when `parse_response: bytes`. |
 
 ## Example

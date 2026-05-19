@@ -50,7 +50,7 @@ graph:
         - '{{index .Event.Payload "user_id"}}'
 ```
 
-Downstream nodes reach `{{index (index .Node.lookup_user.rows 0) "plan"}}` (or `{{.Node.lookup_user.row_count}}` for a quick existence check).
+Downstream nodes reach <code v-pre>{{index (index .Node.lookup_user.rows 0) "plan"}}</code> (or <code v-pre>{{.Node.lookup_user.row_count}}</code> for a quick existence check).
 
 ## Read-only, by convention
 

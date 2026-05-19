@@ -4,7 +4,7 @@ outline: deep
 
 # `end`
 
-Terminator. Captures a final result template so `{{.Run.final_result}}`-style reads can pick it up.
+Terminator. Captures a final result template so <code v-pre>{{.Run.final_result}}</code>-style reads can pick it up.
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ Terminator. Captures a final result template so `{{.Run.final_result}}`-style re
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `result` | template | | Final result expression. Rendered and stored in `{{.Run.final_result}}` on `meta.json`. |
+| `result` | template | | Final result expression. Rendered and stored in <code v-pre>{{.Run.final_result}}</code> on `meta.json`. |
 
 ## Output
 

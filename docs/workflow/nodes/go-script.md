@@ -43,7 +43,7 @@ Run a Go program under the [yaegi](https://github.com/traefik/yaegi) interpreter
     }
 ```
 
-Downstream nodes can then reach `{{.Node.shape_payload.upper}}`.
+Downstream nodes can then reach <code v-pre>{{.Node.shape_payload.upper}}</code>.
 
 ## Why yaegi, not exec
 
