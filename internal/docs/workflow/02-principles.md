@@ -8,7 +8,7 @@
    AI-first dgn checklist berikut sebelum impl ship:
 
    - **Schema fully introspectable via MCP.** Setiap node type, trigger
-     type, channel, connector op, skill, dataset, dan provider tersedia
+     type, channel, connector op, skill, data table, dan provider tersedia
      via MCP introspection op (`workflow_node_types`, `workflow_trigger_types`,
      `workflow_channels`, `workflow_connectors`, `workflow_skills`,
      `workflow_providers`). Tiap return JSON schema + description +
@@ -33,7 +33,7 @@
      Desktop, ChatGPT) ga punya file tool — pakai `workflow_add_node`,
      `workflow_connect`, etc. Same outcome (file di folder), beda channel.
    - **Composition over invention.** AI compose dari building blocks yang
-     sudah ada (connector ops, channel actions, skills, dataset). Ga
+     sudah ada (connector ops, channel actions, skills, data tables). Ga
      perlu mikir "gimana cara call GitHub API" — connector existing handle.
      Adding new integration = bikin connector module (existing pattern,
      well-documented).

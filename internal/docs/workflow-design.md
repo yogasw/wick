@@ -56,7 +56,7 @@ Update terakhir: 2026-05-16.
 
 | # | File | Status | Catatan |
 |---|---|---|---|
-| 12 | [Datasets](workflow/12-datasets.md) | 🟡 partial | In-mem ✅; Postgres backend masih deferred |
+| 12 | [Data Tables](workflow/12-data-tables.md) | 🟡 partial | In-mem ✅; Postgres backend masih deferred |
 | 13 | [State persistence](workflow/13-state-persistence.md) | 🟢 current | Sharded index, runs/, events.jsonl |
 
 ### Operations
