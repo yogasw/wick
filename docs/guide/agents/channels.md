@@ -314,11 +314,11 @@ Channels participate in workflows two ways:
 - **Inbound events** — a `channel` trigger fires a workflow when an event matches `source` + `match.event` (Slack `app_mention`, `message`, `block_action`, `view_submission`, …). The full payload lands in `.Event.Payload`.
 - **Outbound actions** — a `channel` node calls registered actions (Slack `send_message`, `add_reaction`, `open_dm`, `open_modal`, `push_modal`, `update_modal`, `send_ephemeral`, `publish_home`, `respond_url`, `update_message`, …) without spawning an agent turn.
 
-See [Workflows ▶ Channel actions inside a workflow](./workflow#channel-actions-inside-a-workflow) for the full surface.
+See [Workflows ▶ channel node](/workflow/nodes/channel) for the full surface.
 
 ## See also
 
 - [Pool & Sessions](./pool) — how `SendFunc` actually does the dispatch.
 - [Workspaces](./workspaces) — per-channel `Workspace` config field.
-- [Workflows](./workflow) — typed channel events + outbound actions inside a workflow DAG.
+- [Workflows](/workflow/) — typed channel events + outbound actions inside a workflow DAG.
 - [Command Gate](../command-gate) — the approval modal in the web UI is the same approval Slack/Telegram render.
