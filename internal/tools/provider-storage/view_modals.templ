@@ -59,6 +59,23 @@ templ storageModals() {
 					Detect
 				</button>
 			</div>
+			<!-- Custom path input -->
+			<div class="flex flex-col gap-1 pt-1 border-t border-white-300 dark:border-navy-600">
+				<label class="text-[0.75rem] font-medium text-black-800 dark:text-black-500">Custom path</label>
+				<div class="flex items-stretch gap-2">
+					<input id="custom-path" type="text" placeholder="/absolute/path/to/file-or-folder"
+						onkeydown="if(event.key==='Enter'){event.preventDefault();addCustomPath();}"
+						class="flex-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] font-mono text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					<select id="custom-mode" class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none">
+						<option value="folder">folder</option>
+						<option value="single">single</option>
+					</select>
+					<button onclick="addCustomPath()" class="shrink-0 inline-flex items-center gap-1 rounded-lg bg-green-500 px-3 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600">
+						<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></svg>
+						Add
+					</button>
+				</div>
+			</div>
 			<!-- Detected paths checklist -->
 			<div id="detect-list-wrap" style="display:none" class="flex flex-col gap-1">
 				<p class="text-[0.75rem] text-black-700 dark:text-black-500 mb-1">Detected paths — click to browse, or Add directly:</p>
@@ -77,6 +94,26 @@ templ storageModals() {
 					<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
 					Save All
 				</button>
+			</div>
+		</div>
+	</div>
+	<!-- Retention Modal -->
+	<div id="retention-modal" style="display:none" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-xs rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-xl">
+			<h3 class="mb-1 text-[0.9375rem] font-semibold text-black-900 dark:text-white-100">Edit Retention</h3>
+			<p id="retention-modal-label" class="mb-3 text-[0.75rem] text-black-700 dark:text-black-500 font-mono truncate"></p>
+			<label class="block text-[0.75rem] font-medium text-black-800 dark:text-black-500 mb-1">Retention</label>
+			<select id="retention-modal-select" onchange="onRetentionModalSelect()" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300">
+				<option value="0">Lifetime</option>
+				<option value="7">7 days</option>
+				<option value="30">30 days</option>
+				<option value="90">90 days</option>
+				<option value="_custom">Custom…</option>
+			</select>
+			<input id="retention-modal-custom" type="number" min="1" placeholder="days" style="display:none" class="mt-2 w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+			<div class="mt-4 flex justify-end gap-2">
+				<button type="button" onclick="closeRetentionModal()" class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
+				<button type="button" onclick="saveRetentionModal()" class="rounded-lg bg-green-500 px-3 py-1.5 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600">Save</button>
 			</div>
 		</div>
 	</div>

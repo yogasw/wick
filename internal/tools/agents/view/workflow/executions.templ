@@ -1,0 +1,343 @@
+package workflow
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	wf "github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/mcp"
+)
+
+// ExecutionsVM is the view model for the Executions panel.
+type ExecutionsVM struct {
+	Base        string
+	ID          string
+	Runs        []mcp.RunSummary
+	RunsHasMore bool
+	ActiveRun   *ExecutionDetailVM
+}
+
+// ExecutionDetailVM carries one run's detail for the right pane.
+type ExecutionDetailVM struct {
+	RunID  string
+	State  wf.RunState
+	Events []wf.RunEvent
+}
+
+// ── Status helpers (reuse wf-run-status CSS already in editor.css) ─────
+
+func exStatusKey(status string) string {
+	switch status {
+	case "completed":
+		return "success"
+	case "failed", "error":
+		return "failed"
+	case "running":
+		return "running"
+	default:
+		return "queued"
+	}
+}
+
+func exStatusLabel(status string) string {
+	if status == "" {
+		return "queued"
+	}
+	return status
+}
+
+func exStatusIcon(status string) string {
+	switch status {
+	case "completed", "success":
+		return "✓"
+	case "failed", "error":
+		return "✗"
+	case "running":
+		return "⟳"
+	default:
+		return "○"
+	}
+}
+
+func exStatusTextClass(status string) string {
+	switch status {
+	case "completed", "success":
+		return "text-green-600 dark:text-green-400"
+	case "failed", "error":
+		return "text-red-600 dark:text-red-400"
+	case "running":
+		return "text-amber-600 dark:text-amber-400"
+	default:
+		return "text-black-500 dark:text-black-600"
+	}
+}
+
+func exDuration(r mcp.RunSummary) string {
+	if r.EndedAt == nil || r.StartedAt.IsZero() {
+		return ""
+	}
+	d := r.EndedAt.Sub(r.StartedAt)
+	if d < time.Second {
+		return d.Truncate(time.Millisecond).String()
+	}
+	return d.Truncate(time.Second).String()
+}
+
+func exDetailDuration(state wf.RunState) string {
+	if state.EndedAt == nil || state.StartedAt.IsZero() {
+		return ""
+	}
+	d := state.EndedAt.Sub(state.StartedAt)
+	if d < time.Second {
+		return d.Truncate(time.Millisecond).String()
+	}
+	return d.Truncate(time.Second).String()
+}
+
+func exTimeShort(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	return t.Local().Format("15:04:05")
+}
+
+func exTimeDate(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	return t.Local().Format("2006-01-02")
+}
+
+func exShortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func exOutputKeys(out any) string {
+	if m, ok := out.(map[string]any); ok && len(m) > 0 {
+		return fmt.Sprintf("%d keys", len(m))
+	}
+	return ""
+}
+
+func evClass(event string) string {
+	switch {
+	case strings.Contains(event, "completed"):
+		return "wf-log-status-completed"
+	case strings.Contains(event, "failed"), strings.Contains(event, "error"):
+		return "wf-log-status-failed"
+	case strings.Contains(event, "started"):
+		return "wf-log-status-started"
+	case strings.Contains(event, "skipped"):
+		return "wf-log-status-skipped"
+	default:
+		return ""
+	}
+}
+
+// ── ExecutionsPanel ────────────────────────────────────────────────────
+
+templ ExecutionsPanel(vm ExecutionsVM) {
+	<div class="wf-ex-panel" id="wf-executions-panel">
+
+		<!-- ── Left sidebar: run list ──────────────────────── -->
+		<div class="wf-ex-sidebar">
+
+			<!-- Header bar -->
+			<div class="wf-ex-sidebar-head">
+				<span class="wf-ex-sidebar-title">
+					if len(vm.Runs) > 0 {
+						{ fmt.Sprintf("%d runs", len(vm.Runs)) }
+					} else {
+						Executions
+					}
+				</span>
+				<div class="wf-ex-sidebar-controls">
+					<button type="button" id="wf-ex-refresh" class="wf-ex-icon-btn" title="Refresh">
+						<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+					</button>
+					<label class="wf-ex-autorefresh-label" title="Auto-refresh every 5 seconds">
+						<input type="checkbox" id="wf-ex-autorefresh" checked/>
+						<span>auto</span>
+					</label>
+				</div>
+			</div>
+
+			<!-- Run list -->
+			<div class="wf-ex-list" id="wf-ex-list">
+				if len(vm.Runs) == 0 {
+					<div class="wf-ex-empty">
+						<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mx-auto mb-3 opacity-30"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+						<div class="wf-ex-empty-title">No runs yet</div>
+						<div class="wf-ex-empty-hint">Click the Execute pill on the canvas to trigger a run.</div>
+					</div>
+				} else {
+					for _, r := range vm.Runs {
+						<button
+							type="button"
+							class="wf-ex-row"
+							data-run-id={ r.ID }
+							data-ex-load={ vm.Base + "/workflows/edit/" + vm.ID + "/executions/" + r.ID }
+						>
+							<!-- Status indicator bar on left -->
+							<span class={ "wf-ex-row-bar wf-ex-bar-" + exStatusKey(r.Status) }></span>
+
+							<!-- Content -->
+							<div class="wf-ex-row-body">
+								<div class="wf-ex-row-top">
+									<!-- Status badge -->
+									<span class={ "wf-run-status wf-run-status-" + exStatusKey(r.Status) }>
+										{ exStatusIcon(r.Status) } { strings.ToUpper(exStatusLabel(r.Status)) }
+									</span>
+									<!-- Duration -->
+									if exDuration(r) != "" {
+										<span class="wf-ex-row-dur">{ exDuration(r) }</span>
+									}
+								</div>
+								<div class="wf-ex-row-meta">
+									<span class="wf-ex-row-id">{ exShortID(r.ID) }</span>
+									<span class="wf-ex-row-date">{ exTimeDate(r.StartedAt) } { exTimeShort(r.StartedAt) }</span>
+								</div>
+							</div>
+						</button>
+					}
+
+					if vm.RunsHasMore {
+						<div class="wf-ex-load-more-wrap">
+							<button
+								type="button"
+								id="wf-ex-load-more"
+								class="wf-ex-load-more"
+								data-ex-more={ vm.Base + "/workflows/edit/" + vm.ID + "/executions?page=2" }
+							>Load older runs ↓</button>
+						</div>
+					}
+				}
+			</div>
+		</div>
+
+		<!-- ── Right pane: run detail ───────────────────────── -->
+		<div class="wf-ex-detail" id="wf-ex-detail">
+			if vm.ActiveRun == nil {
+				<div class="wf-ex-select-hint">
+					<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mb-3 opacity-20"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+					<div class="font-medium text-black-800 dark:text-black-300 mb-1">Select a run</div>
+					<div class="text-[11px]">Click any execution on the left to inspect its output.</div>
+				</div>
+			} else {
+				@ExecutionDetail(vm.Base, vm.ID, *vm.ActiveRun)
+			}
+		</div>
+	</div>
+}
+
+// ExecutionDetail is the right-pane content for one run.
+// Also returned as a raw fragment by GET /executions/{runID}.
+templ ExecutionDetail(base, id string, vm ExecutionDetailVM) {
+	<div class="wf-ex-detail-inner" id="wf-ex-detail-inner">
+
+		<!-- Run header -->
+		<div class="wf-ex-detail-head">
+			<span class={ "wf-run-status wf-run-status-" + exStatusKey(vm.State.Status) + " text-sm" }>
+				{ exStatusIcon(vm.State.Status) } { strings.ToUpper(exStatusLabel(vm.State.Status)) }
+			</span>
+			<div class="flex-1 min-w-0">
+				<div class="font-mono text-[11px] text-black-500 dark:text-black-600 truncate" title={ vm.RunID }>
+					{ vm.RunID }
+				</div>
+				<div class="text-[11px] text-black-500 dark:text-black-600">
+					{ exTimeDate(vm.State.StartedAt) } { exTimeShort(vm.State.StartedAt) }
+					if exDetailDuration(vm.State) != "" {
+						<span class="ml-2 font-mono font-medium text-black-700 dark:text-black-400">{ exDetailDuration(vm.State) }</span>
+					}
+				</div>
+			</div>
+			<a
+				href={ templ.SafeURL(base + "/workflows/edit/" + id + "/runs/" + vm.RunID) }
+				class="wf-ex-open-link"
+				title="Open full run detail page"
+			>Full detail ↗</a>
+		</div>
+
+		<!-- Body: 2 columns -->
+		<div class="wf-ex-detail-body">
+
+			<!-- Left: node list -->
+			<div class="wf-ex-nodes">
+				<div class="wf-ex-section-head">
+					Nodes
+					<span class="wf-ex-section-count">
+						{ fmt.Sprintf("%d", len(vm.State.Completed)+len(vm.State.Failed)) } ran
+					</span>
+				</div>
+				if len(vm.State.Completed) == 0 && len(vm.State.Failed) == 0 {
+					<div class="wf-ex-nodes-empty">No nodes ran.</div>
+				}
+				<!-- Completed nodes -->
+				for _, id := range vm.State.Completed {
+					<div class="wf-ex-node-row wf-ex-node-row--success" data-node-id={ id }>
+						<span class="wf-ex-node-icon wf-ex-node-icon--success">✓</span>
+						<span class="wf-ex-node-id" title={ id }>{ id }</span>
+						if out, ok := vm.State.Outputs[id]; ok {
+							<span class="wf-ex-node-hint">{ exOutputKeys(out) }</span>
+						}
+					</div>
+				}
+				<!-- Failed nodes -->
+				for _, id := range vm.State.Failed {
+					<div class="wf-ex-node-row wf-ex-node-row--failed" data-node-id={ id }>
+						<span class="wf-ex-node-icon wf-ex-node-icon--failed">✗</span>
+						<span class="wf-ex-node-id" title={ id }>{ id }</span>
+					</div>
+				}
+				<!-- Skipped nodes -->
+				for _, id := range vm.State.Skipped {
+					<div class="wf-ex-node-row wf-ex-node-row--skipped">
+						<span class="wf-ex-node-icon wf-ex-node-icon--skipped">○</span>
+						<span class="wf-ex-node-id" title={ id }>{ id }</span>
+					</div>
+				}
+			</div>
+
+			<!-- Right: events + output drawer -->
+			<div class="wf-ex-events-col">
+
+				<!-- Output drawer (hidden until node clicked) -->
+				<div id="wf-ex-output" class="wf-ex-output hidden">
+					<div class="wf-ex-output-head">
+						<span id="wf-ex-output-label" class="wf-ex-output-title">Output</span>
+						<button type="button" id="wf-ex-output-close" class="wf-ex-output-close">×</button>
+					</div>
+					<pre id="wf-ex-output-json" class="wf-ex-output-body"></pre>
+				</div>
+
+				<!-- Events log -->
+				<div class="wf-ex-section-head wf-ex-events-head">
+					Events
+					<span class="wf-ex-section-count">{ fmt.Sprintf("%d", len(vm.Events)) }</span>
+				</div>
+				if len(vm.Events) == 0 {
+					<div class="wf-ex-events-empty">No events recorded.</div>
+				} else {
+					<ol class="wf-ex-events-list">
+						for _, ev := range vm.Events {
+							<li class="wf-ex-event">
+								<span class="wf-ex-event-ts">{ ev.TS.Format("15:04:05.000") }</span>
+								<span class={ "wf-ex-event-type " + evClass(ev.Event) }>{ ev.Event }</span>
+								if ev.Node != "" {
+									<span class="wf-ex-event-node">{ ev.Node }</span>
+								}
+								if ev.Case != "" {
+									<span class="wf-ex-event-case">→ { ev.Case }</span>
+								}
+							</li>
+						}
+					</ol>
+				}
+			</div>
+		</div>
+	</div>
+}

@@ -1,0 +1,153 @@
+package workflow
+
+import "encoding/json"
+
+// EditorPalette renders the palette as a right slide-in drawer with
+// two levels: level-1 lists sections (Triggers, AI, Action, Logic) with
+// generic node types plus drillable rows for each registered channel
+// and connector; level-2 lists per-integration operations. The user
+// clicks a drillable row to dive into its ops, drags any op onto the
+// canvas to spawn a pre-configured node, and clicks "←" to come back.
+// Mirrors n8n's two-step "Slack → Send message" pattern so the level-1
+// list stays short regardless of how many integrations are registered.
+templ EditorPalette(sections []PaletteSection) {
+	<aside class="wf-palette-drawer wf-palette-drawer-closed" id="wf-palette">
+		<div class="wf-palette-shell">
+			<div class="wf-palette-header">
+				<button type="button" class="wf-palette-back hidden" data-palette-back aria-label="Back to all nodes">←</button>
+				<div class="text-sm font-semibold text-black-900 dark:text-white-100" data-palette-title>Add node</div>
+				<button type="button" class="wf-palette-close" data-palette-close aria-label="Close palette">×</button>
+			</div>
+			<input type="text" id="wf-palette-search" placeholder="Search nodes…" class="wf-palette-search"/>
+			// Level-1 list — generic node types + drillable integration rows.
+			<div class="wf-palette-list" data-palette-level="1">
+				for _, section := range sections {
+					if len(section.Items) > 0 {
+						<div class="text-[11px] uppercase tracking-wider text-black-700 dark:text-black-600 font-semibold mb-2 mt-2" data-palette-section>{ section.Title }</div>
+						<div class="space-y-1 mb-4">
+							for _, item := range section.Items {
+								@paletteRow(item)
+							}
+						</div>
+					}
+				}
+			</div>
+			// Level-2 lists — one hidden panel per drillable item. JS swaps
+			// visibility on drill-in / back. Rendering server-side keeps the
+			// op catalogue authoritative in Go and means search can filter
+			// across both levels without an extra fetch.
+			for _, section := range sections {
+				for _, item := range section.Items {
+					if len(item.Subitems) > 0 {
+						@paletteSubPanel(item)
+					}
+				}
+			}
+		</div>
+	</aside>
+}
+
+// paletteRow is one level-1 entry. Items with Subitems render as
+// drill-targets (no drag, click → level-2); flat items stay draggable.
+templ paletteRow(item PaletteItem) {
+	if len(item.Subitems) > 0 {
+		<div
+			class="wf-palette-item wf-palette-drill flex items-center gap-2 px-3 py-2 bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg text-black-900 dark:text-white-100 hover:border-green-500/40 dark:hover:border-green-500/40 transition-colors cursor-pointer"
+			data-palette-drill={ item.Group }
+		>
+			<span class={ "h-2 w-2 rounded-full", item.Dot }></span>
+			<span class="text-sm">{ item.Label }</span>
+			if item.Hint != "" {
+				<span class="ml-auto text-[10px] text-black-600 dark:text-black-700">{ item.Hint }</span>
+				<span class="text-black-600 dark:text-black-700 text-xs">›</span>
+			} else {
+				<span class="ml-auto text-black-600 dark:text-black-700 text-xs">›</span>
+			}
+		</div>
+	} else {
+		<div
+			class="wf-palette-item flex items-center gap-2 px-3 py-2 bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg text-black-900 dark:text-white-100 hover:border-green-500/40 dark:hover:border-green-500/40 transition-colors"
+			draggable="true"
+			data-node-type={ item.Type }
+		>
+			<span class={ "h-2 w-2 rounded-full", item.Dot }></span>
+			<span class="text-sm">{ item.Label }</span>
+			if item.Hint != "" {
+				<span class="ml-auto text-[10px] text-black-600 dark:text-black-700">{ item.Hint }</span>
+			}
+		</div>
+	}
+}
+
+// paletteSubPanel is the level-2 list for one drillable integration.
+// Triggers / actions are split into their own groups so the user sees
+// the same shape as in n8n (triggers up top, actions below).
+templ paletteSubPanel(item PaletteItem) {
+	<div class="wf-palette-list hidden" data-palette-level="2" data-palette-group={ item.Group } data-palette-title-text={ item.Label }>
+		if hasOpKind(item.Subitems, "trigger") {
+			<div class="text-[11px] uppercase tracking-wider text-black-700 dark:text-black-600 font-semibold mb-2 mt-2" data-palette-section>Triggers</div>
+			<div class="space-y-1 mb-4">
+				for _, op := range item.Subitems {
+					if op.Kind == "trigger" {
+						@paletteOpRow(item, op)
+					}
+				}
+			</div>
+		}
+		if hasOpKind(item.Subitems, "action") {
+			<div class="text-[11px] uppercase tracking-wider text-black-700 dark:text-black-600 font-semibold mb-2 mt-2" data-palette-section>Actions</div>
+			<div class="space-y-1 mb-4">
+				for _, op := range item.Subitems {
+					if op.Kind == "action" {
+						@paletteOpRow(item, op)
+					}
+				}
+			</div>
+		}
+	</div>
+}
+
+// paletteOpRow is one draggable level-2 op. Defaults travel on the
+// element as JSON so the drop handler can merge them into the new
+// node's data block without a second lookup.
+templ paletteOpRow(item PaletteItem, op PaletteOp) {
+	<div
+		class="wf-palette-item flex items-start gap-2 px-3 py-2 bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg text-black-900 dark:text-white-100 hover:border-green-500/40 dark:hover:border-green-500/40 transition-colors"
+		draggable="true"
+		data-node-type={ op.NodeType }
+		data-node-defaults={ paletteDefaultsJSON(op.Defaults) }
+	>
+		<span class={ "h-2 w-2 rounded-full mt-1.5", item.Dot }></span>
+		<div class="min-w-0">
+			<div class="text-sm">{ op.Label }</div>
+			if op.Desc != "" {
+				<div class="text-[11px] text-black-600 dark:text-black-700 truncate">{ op.Desc }</div>
+			}
+		</div>
+	</div>
+}
+
+// hasOpKind reports whether any op in subitems matches kind. Used by
+// the level-2 template to suppress an empty Triggers/Actions heading.
+func hasOpKind(ops []PaletteOp, kind string) bool {
+	for _, op := range ops {
+		if op.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// paletteDefaultsJSON encodes the op defaults as JSON for the
+// data-node-defaults attribute. Returns "{}" on marshal failure so the
+// attribute always parses cleanly client-side.
+func paletteDefaultsJSON(d map[string]any) string {
+	if len(d) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}

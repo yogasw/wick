@@ -25,6 +25,60 @@ func NewLayout(baseDir string) Layout { return Layout{BaseDir: baseDir} }
 func (l Layout) PresetsDir() string    { return filepath.Join(l.BaseDir, "presets") }
 func (l Layout) WorkspacesDir() string { return filepath.Join(l.BaseDir, "workspaces") }
 func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessions") }
+func (l Layout) WorkflowsDir() string  { return filepath.Join(l.BaseDir, "workflows") }
+func (l Layout) DatasetsDir() string   { return filepath.Join(l.BaseDir, "datasets") }
+
+// WorkflowDir is the folder for one workflow (`workflows/<id>/`).
+func (l Layout) WorkflowDir(id string) string {
+	return filepath.Join(l.WorkflowsDir(), id)
+}
+func (l Layout) WorkflowFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "workflow.yaml")
+}
+
+// WorkflowDraftFile is the in-progress copy edited by the canvas. Save
+// from the UI always writes here, never to workflow.yaml. Publish
+// promotes this file to workflow.yaml and deletes the draft.
+func (l Layout) WorkflowDraftFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "workflow.draft.yaml")
+}
+func (l Layout) WorkflowRunsDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "runs")
+}
+func (l Layout) WorkflowRunDir(id, runID string) string {
+	return filepath.Join(l.WorkflowRunsDir(id), runID)
+}
+func (l Layout) WorkflowRunState(id, runID string) string {
+	return filepath.Join(l.WorkflowRunDir(id, runID), "state.json")
+}
+func (l Layout) WorkflowRunEvents(id, runID string) string {
+	return filepath.Join(l.WorkflowRunDir(id, runID), "events.jsonl")
+}
+// WorkflowIndexDir holds the sharded run-summary index files
+// (YYYY-MM-DD-NN.jsonl, max 100 lines each) — sibling to runs/.
+// Lets the Runs panel paginate cheaply without scanning every
+// per-run subdir.
+func (l Layout) WorkflowIndexDir(id string) string {
+	return filepath.Join(l.WorkflowRunsDir(id), "index")
+}
+func (l Layout) WorkflowEnvFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "env.yaml")
+}
+func (l Layout) WorkflowStateFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "state.json")
+}
+func (l Layout) WorkflowNodesDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "nodes")
+}
+func (l Layout) WorkflowTestsDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "__tests__")
+}
+func (l Layout) DatasetDir(slug string) string {
+	return filepath.Join(l.DatasetsDir(), slug)
+}
+func (l Layout) DatasetFile(slug string) string {
+	return filepath.Join(l.DatasetDir(slug), "dataset.yaml")
+}
 
 func (l Layout) PresetDir(name string) string  { return filepath.Join(l.PresetsDir(), name) }
 func (l Layout) PresetFile(name string) string { return filepath.Join(l.PresetDir(name), "agent.md") }
@@ -69,7 +123,7 @@ func (l Layout) SessionRaw(id string) string {
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {
-	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir()} {
+	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir(), l.WorkflowsDir(), l.DatasetsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

@@ -44,13 +44,26 @@ When you enable it, wick runs a **capability probe**: it spawns the provider wit
 
 The master gate switch on the Providers page fans out — toggle ON sets every instance's per-instance flag and kicks off background probes; toggle OFF clears all flags. Single source of truth is always the per-instance `Hooks["PreToolUse"].Enabled` field on disk.
 
-**Bypass lock**: if `bypass_permissions` is set in agents config (non-interactive channels), the master switch shows a `locked (bypass)` badge and refuses toggles. Turn bypass off first.
+**Bypass lock**: if the gate's `PermissionMode` is set to `bypass` (non-interactive channels), the master switch shows a `locked (bypass)` badge and refuses toggles. Switch `PermissionMode` back to `on` first.
+
+### Umbrella policy
+
+The gate config is the umbrella for **every user-facing prompt** an agent might issue, not just shell approval. It carries two sub-modes:
+
+| Field | What it gates | Values |
+|---|---|---|
+| `PermissionMode` | Per-tool permission prompts (the `PreToolUse` hook on each provider) | `on` (install hook) / `bypass` (skip — for Slack / HTTP / cron channels where no human can answer) |
+| `AskUserMode` | The `ask_user` MCP tool the agent calls mid-turn | `on` (route question to the web UI) / `off` (return a clean error to the LLM so it picks a default instead of hanging) |
+
+The master `GateEnabled` flag is the global kill-switch — off snaps every sub-mode to its unguarded default (`PermissionMode: bypass`, `AskUserMode: off`). On honors each sub-mode independently.
+
+Defaults on fresh install: gate on, permission prompts on, ask_user routed to the UI. The legacy `bypass_permissions` checkbox was retired in v0.13.0 — its value is one-shot migrated to `PermissionMode` at boot.
 
 ### Capability badges per provider card
 
 | State | Badge |
 |---|---|
-| `bypass_permissions` on | `locked (bypass)` |
+| `PermissionMode: bypass` | `locked (bypass)` |
 | Master off | `locked` |
 | Master on + probe in flight | `testing…` |
 | Master on + intent on + verified | `enabled ✓` |

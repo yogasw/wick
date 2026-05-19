@@ -20,7 +20,9 @@ import (
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
@@ -53,10 +55,21 @@ import (
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
+	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
+	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
+	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
+	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
+	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
+	"github.com/yogasw/wick/internal/agents/workflow/wftest"
+	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -87,6 +100,15 @@ func NewServer() *Server {
 	postgres.Migrate(db)
 
 	syncMgr := providersync.New(db)
+
+	// Legacy wipe + orphan repair run inside postgres.Migrate above as
+	// one-shot DB migrations; the startup path only re-captures disk →
+	// DB so users see populated rows without waiting for the cron tick.
+	if n, err := syncMgr.SyncAll(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("providersync: startup sync failed")
+	} else {
+		log.Info().Int("sources", n).Msg("providersync: startup sync done")
+	}
 
 	// Restore all provider files from DB to filesystem on startup.
 	if err := syncMgr.RestoreAll(context.Background()); err != nil {
@@ -142,6 +164,15 @@ func NewServer() *Server {
 	}
 	if err := configsSvc.Bootstrap(context.Background(), extraConfigs...); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
+	}
+	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
+	// The manager reads/writes these at owner="connector_oauth:slack" so they
+	// are namespaced per-connector and don't collide with other connectors.
+	if err := configsSvc.EnsureOwned(context.Background(), "connector_oauth:slack",
+		entity.Config{Key: "client_id", Description: "Slack OAuth app Client ID"},
+		entity.Config{Key: "client_secret", IsSecret: true, Description: "Slack OAuth app Client Secret"},
+	); err != nil {
+		log.Warn().Err(err).Msg("configs: seed connector_oauth:slack rows failed")
 	}
 	// Seed from env on first boot only — once the row exists in the DB
 	// the admin UI is the only way to change it.
@@ -252,6 +283,25 @@ func NewServer() *Server {
 	agentsBcast := agentstool.NewBroadcaster()
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
 
+	// One-shot migration: the deprecated agents.bypass_permissions checkbox
+	// folded into the new GateConfig.PermissionMode dropdown. When the
+	// legacy row exists, map its boolean into the new key and drop the
+	// old one so the UI only shows the current control.
+	if legacy := configsSvc.GetOwned("agents", "bypass_permissions"); legacy != "" {
+		mode := "on"
+		if legacy == "true" {
+			mode = "bypass"
+		}
+		if cur := configsSvc.GetOwned("agents", "permission_mode"); cur == "" {
+			if err := configsSvc.SetOwned(context.Background(), "agents", "permission_mode", mode); err != nil {
+				log.Warn().Err(err).Msg("agents: migrate bypass_permissions → permission_mode")
+			}
+		}
+		if err := configsSvc.DeleteOwnedKey(context.Background(), "agents", "bypass_permissions"); err != nil {
+			log.Warn().Err(err).Msg("agents: drop legacy bypass_permissions row")
+		}
+	}
+
 	// Resolve the gate binary up front: sibling-of-executable first, embedded
 	// extract as backup, PATH lookup as last resort. Failure is non-fatal —
 	// gate stays disabled and pool falls back to whitelist-only mode.
@@ -305,8 +355,17 @@ func NewServer() *Server {
 		killAfterIdleSec = n
 	}
 
-	agentsFactory.BypassPermissionsLoader = func() bool {
-		return configsSvc.GetOwned("agents", "bypass_permissions") == "true"
+	agentsFactory.PermissionModeLoader = func() string {
+		// Gate master switch off → every sub-policy snaps to its
+		// unguarded default; for permission that means "bypass".
+		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
+			return "bypass"
+		}
+		mode := configsSvc.GetOwned("agents", "permission_mode")
+		if mode == "" {
+			mode = "on"
+		}
+		return mode
 	}
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
@@ -317,10 +376,14 @@ func NewServer() *Server {
 	// AutoApproved entries are preserved from disk.
 	syncSharedSpec := func() error {
 		rules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
-		spec, _ := agentgate.LoadSpec(agentgate.AppName())
+		spec, _ := agentgate.LoadSpec(appname.Resolve())
 		spec.Rules = rules
-		return agentgate.WriteSharedSpec(agentgate.AppName(), spec)
+		return agentgate.WriteSharedSpec(appname.Resolve(), spec)
 	}
+	// gateSocketOK is set to true only after approvalMgr.Start() succeeds.
+	// GateLoader checks this so a failed socket bind doesn't let spawns
+	// write hooks that would later fail-open on every tool call.
+	var gateSocketOK bool
 	agentsFactory.GateLoader = func() *agentpool.GateConfig {
 		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
 			return nil
@@ -328,11 +391,14 @@ func NewServer() *Server {
 		if resolvedGateBin == "" {
 			return nil
 		}
+		if !gateSocketOK {
+			return nil
+		}
 		_ = syncSharedSpec()
 		log.Debug().Int("rules", 0).Msg("agents: gate active for spawn")
 		return &agentpool.GateConfig{
 			GateBinary:   resolvedGateBin,
-			AppName:      agentgate.AppName(),
+			AppName:      appname.Resolve(),
 			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}
 	}
@@ -372,6 +438,86 @@ func NewServer() *Server {
 	agentstool.SetDB(db)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
+
+	// ask_user Manager: blocks the calling agent over MCP until the
+	// user clicks an option / types an answer in the web UI. SSE
+	// fan-out goes through the broadcaster (one event per request +
+	// one on resolve) so every open tab updates without polling.
+	askUsersMgr := askuser.NewManager(askuser.Options{
+		OnRequest: func(req askuser.AskRequest) {
+			payload, _ := json.Marshal(req)
+			agentsBcast.PublishAskUser(req.SessionID, req.AgentName, payload)
+		},
+		OnResolved: func(sessionID, requestID string) {
+			agentsBcast.PublishAskUserResolved(sessionID, requestID)
+		},
+	})
+	agentstool.SetAskUsers(askUsersMgr)
+
+	// Workflow stack — bundles every workflow subpkg into one Manager
+	// and bootstraps the router with every workflow folder found on disk.
+	wfMgr := wfsetup.New(agentsLayout)
+	// Wire live registries — workflow nodes need real providers +
+	// connectors to dispatch through, not empty registries. Skipping
+	// these means `type: classify`/`type: connector` nodes fail at
+	// runtime with "not registered".
+	wfsetup.RegisterLiveConnectors(wfMgr.Connectors)
+	// Channels are owned by the base channelReg — workflow registry just
+	// wraps it and filters to channels that opt into the workflow surface
+	// (Slack today; Telegram/REST nyusul). No duplicate registration.
+	wfsetup.RegisterLiveChannels(wfMgr.Channels, channelReg)
+	// Workflow guard mode — admin-configurable via agents settings.
+	// off (default) skips Guard.Review entirely; warn surfaces
+	// violations without blocking; block rejects Publish/Run.
+	if mode := configsSvc.GetOwned("agents", "workflow_guard_mode"); mode != "" {
+		wfMgr.WithGuardConfig(wfguard.Config{Mode: mode})
+	}
+	// connectorsSvc is constructed further down (line ~517) — the
+	// creds adapter is wired after that block so RowCreds can resolve
+	// rows from the live connectors service. Search for
+	// "SetRowCreds" below.
+	if provs, perr := wfsetup.NewCLIProviders(); perr == nil {
+		for _, p := range provs {
+			wfMgr.WithProvider(p)
+		}
+	} else {
+		log.Warn().Err(perr).Msg("workflow: provider adapter init failed")
+	}
+	// Bridge engine run events → SSE broadcaster so the editor can paint
+	// per-node progress without polling state.json. The broadcaster
+	// session key is "wf:<id>"; client opens
+	// /stream?session=wf:<id>.
+	// Optionally mirror events to Loki when workflow_loki_url is set.
+	sseHook := agentstool.WorkflowEventHook(agentsBcast)
+	lokiURL := configsSvc.GetOwned("agents", "workflow_loki_url")
+	lokiLabels := configsSvc.GetOwned("agents", "workflow_loki_labels")
+	lokiPusher := wfstate.NewLokiPusher(lokiURL, lokiLabels)
+	wfMgr.Engine.SetEventHook(func(id, runID string, ev wf.RunEvent) {
+		sseHook(id, runID, ev)
+		if lokiPusher != nil {
+			lokiPusher.Push(id, runID, ev)
+		}
+	})
+	// Wire the shared agent pool + an adapter that translates
+	// tools/agents.Broadcaster events into the slim AgentEvent the
+	// workflow executor consumes. Pool-routed agent nodes go through
+	// the FIFO queue + session reuse machinery — see
+	// internal/docs/workflow/pool.md.
+	wfMgr.WithAgentRuntime(agentsPool, func(sessionID string) (<-chan wfnodes.AgentEvent, func()) {
+		raw, unsub := agentsBcast.Subscribe(sessionID)
+		out := make(chan wfnodes.AgentEvent, 256)
+		go func() {
+			defer close(out)
+			for ev := range raw {
+				out <- wfnodes.AgentEvent{Type: ev.Type, Data: ev.Data}
+			}
+		}()
+		return out, unsub
+	})
+	if err := wfMgr.Start(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
+	}
+	agentstool.SetWorkflowManager(wfMgr)
 	providerstoragetool.SetSyncManager(syncMgr)
 	provider.AppName = appname.Resolve()
 	// Wire the auto-rescan toggle: provider package consults this
@@ -395,7 +541,7 @@ func NewServer() *Server {
 	// RouteByCWD maps the gate binary's working directory to the wick
 	// session that owns that workspace so SSE events land in the right tab.
 	approvalMgr, amErr := gate.NewApprovalManager(gate.ApprovalManagerOptions{
-		AppName: agentgate.AppName(),
+		AppName: appname.Resolve(),
 		// Route by active pool sessions only — multiple sessions can share the
 		// same workspace name, so iterating the registry (which includes idle
 		// sessions) is non-deterministic and picks the wrong session. The active
@@ -431,10 +577,11 @@ func NewServer() *Server {
 		gateStatus.Enabled = false
 		gateStatus.Reason = "listener start: " + err.Error()
 	} else {
+		gateSocketOK = true
 		// Write initial spec.json so the gate binary finds the whitelist
 		// rules on the very first spawn before any agent has started.
 		initialRules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
-		if wsErr := gate.WriteSharedSpec(agentgate.AppName(), gate.Spec{
+		if wsErr := gate.WriteSharedSpec(appname.Resolve(), gate.Spec{
 			Rules:        initialRules,
 			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
 		}); wsErr != nil {
@@ -486,7 +633,16 @@ func NewServer() *Server {
 	// config load, NewChannel, setters, and registry.Add per transport.
 	// Adding a new channel = subpackage + composer in channels/setup; this
 	// line never changes.
-	channelsetup.All(channelReg, agentchannels.NewDBStore(db), sendFnFor, tokensSvc)
+	channelStore := agentchannels.NewDBStore(db)
+	channelStore.Configs = configsSvc
+	channelsetup.All(channelReg, channelStore, sendFnFor, tokensSvc)
+
+	// Wire each channel's workflow integration surface — registers
+	// per-event + per-action descriptors and attaches the inbound
+	// event sink that fires router.Dispatch. Per-channel calls so
+	// telegram/rest can opt in independently as they grow workflow
+	// surfaces.
+	wfsetup.RegisterSlackIntegration(wfMgr.Integration, channelReg, wfMgr.Router, wfMgr.MCP.Pickers)
 
 	// ── Connectors (LLM-facing via MCP) ──────────────────────────
 	// Register the code-side definitions for dispatch and auto-seed
@@ -498,6 +654,10 @@ func NewServer() *Server {
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
 
+	// Workflow connector executor needs row credentials resolved
+	// from the connectors service — wire after the service is built.
+	wfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connectorsSvc))
+
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to. (Earlier here than in
 	// past versions: wickmanager.Module needs the resolved tool list
@@ -508,6 +668,17 @@ func NewServer() *Server {
 		meta := m.Meta
 		meta.Path = "/tools/" + meta.Key
 		allItems = append(allItems, meta)
+	}
+
+	// workflow is a built-in single-instance connector that exposes the
+	// workflow engine's full Tier 1/2/3 MCP surface. Lets any AI client
+	// (Claude Desktop, ChatGPT, Gemini) create/edit/test/run workflows
+	// over MCP without native file access. Late-bound here because it
+	// needs wfMgr.MCP — the resolved Ops bundle built during workflow
+	// bootstrap above.
+	if wfMgr != nil && wfMgr.MCP != nil {
+		wfRunner := wftest.New(wfMgr.Engine, wfMgr.Service, wfMgr.Layout)
+		connectors.Register(wfconn.ModuleWithRunner(wfMgr.MCP, wfRunner))
 	}
 
 	// wickmanager is a built-in single-instance connector that exposes
@@ -529,6 +700,47 @@ func NewServer() *Server {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
 
+	// Wire Slack user-token lookup via the connectors service.
+	// SetTokenRefreshFn + RefreshTokenMap seeds the initial userID→token cache
+	// by calling auth.test once per Slack connector row configured in
+	// user_token mode. A background ticker keeps the cache fresh every 5
+	// minutes so new connector rows are picked up without a restart.
+	//
+	// Note: OAuth flow (start/callback) has moved to the generic connector
+	// manager at /manager/connectors/{key}/oauth/*. The Slack channel only
+	// needs token-refresh wiring for the send-proxy feature.
+	for _, ch := range channelReg.Channels() {
+		if slackCh, ok := ch.(*slackch.Channel); ok {
+			// Wire the refresh function so RefreshTokenMap can rebuild the map
+			// from connector rows without a server restart.
+			slackCh.SetTokenRefreshFn(func(ctx context.Context) map[string]string {
+				return buildSlackUserTokenMap(ctx, connectorsSvc)
+			})
+
+			// Seed the initial cache synchronously (same behaviour as before,
+			// but now stored in userTokenCache instead of a closed-over map).
+			slackCh.RefreshTokenMap(context.Background())
+
+			// ConnectorTokenFn is called on every cache miss. Returning false
+			// signals resolveUserToken to trigger a background RefreshTokenMap
+			// so subsequent requests will find the token in cache.
+			slackCh.SetConnectorTokenFn(func(_ context.Context, _ string) (string, bool) {
+				return "", false
+			})
+
+			// Background ticker: refresh every 5 minutes.
+			go func(ch *slackch.Channel) {
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				for range ticker.C {
+					ch.RefreshTokenMap(context.Background())
+				}
+			}(slackCh)
+
+			break
+		}
+	}
+
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	// tokensSvc instantiated earlier so the REST channel can reuse it.
 	tokensHandler := accesstoken.NewHandler(tokensSvc, configsSvc)
@@ -544,7 +756,25 @@ func NewServer() *Server {
 	// Bearer auth in front, connector dispatch behind. PAT and
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
-	mcpHandler := mcp.NewHandler(connectorsSvc).WithAppURL(configsSvc.AppURL)
+	mcpHandler := mcp.NewHandler(connectorsSvc).
+		WithAppURL(configsSvc.AppURL).
+		WithAskUser(askUsersMgr).
+		WithAskUserPolicy(func() (bool, string) {
+			// Master gate off → ask_user short-circuits along with every
+			// other sub-policy. Slack/HTTP installs that disable the gate
+			// don't want the LLM hanging on a prompt no one will answer.
+			if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
+				return false, "master gate is off"
+			}
+			mode := configsSvc.GetOwned("agents", "ask_user_mode")
+			if mode == "" {
+				mode = "on"
+			}
+			if mode != "on" {
+				return false, "ask_user_mode=" + mode
+			}
+			return true, ""
+		})
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -725,6 +955,14 @@ func NewServer() *Server {
 		r.Handle(path, h)
 	}
 
+	// Workflow webhook triggers — public path /hooks/<...>. The handler
+	// inspects path + body, dispatches matching workflow triggers via
+	// the router. Each trigger spec can carry HMAC `secret_ref` for
+	// integrity check; otherwise plain POST.
+	if wfMgr != nil && wfMgr.Router != nil {
+		r.Handle("/hooks/", wftrigger.NewWebhookHandler(wfMgr.Router))
+	}
+
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
 	// authorize, token} (public) + /profile/connections (auth-gated
 	// inside, per-user grant dashboard).
@@ -755,7 +993,7 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr}
 }
 
 type Server struct {
@@ -767,6 +1005,7 @@ type Server struct {
 	db         *gorm.DB
 	gateBin    string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc    *manager.Service
+	wfMgr      *wfsetup.Manager
 }
 
 // JobsSvc returns the manager.Service the API server owns. Exposed so
@@ -782,6 +1021,9 @@ func (s *Server) JobsSvc() *manager.Service { return s.jobsSvc }
 func (s *Server) startChannels(ctx context.Context) {
 	s.channelReg.StartAll(ctx)
 	go s.channelReg.WatchConfigs(ctx, 30*time.Second)
+	if s.wfMgr != nil {
+		go wfsetup.WatchWorkflows(ctx, s.wfMgr.Layout.WorkflowsDir(), s.wfMgr.Service, s.wfMgr.Router, s.wfMgr.Cron, s.wfMgr.ScheduleAt)
+	}
 }
 
 // appNameHandler injects the configurable app name into every request
@@ -793,6 +1035,40 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+// buildSlackUserTokenMap scans Slack connector rows configured in user_token
+// mode, calls auth.test once per token to resolve the Slack user ID, and
+// returns a map[slackUserID]xoxpToken. Called once at startup so live
+// requests never pay an auth.test round-trip.
+func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[string]string {
+	out := map[string]string{}
+	rows, err := svc.ListByKey(ctx, "slack")
+	if err != nil {
+		log.Warn().Err(err).Msg("buildSlackUserTokenMap: ListByKey failed")
+		return out
+	}
+	for _, row := range rows {
+		cfgs := svc.LoadConfigs(row)
+		if strings.TrimSpace(cfgs["auth_mode"]) != "user_token" {
+			continue
+		}
+		token := strings.TrimSpace(cfgs["user_token"])
+		if token == "" {
+			continue
+		}
+		userID, err := slackch.AuthTestWithToken(ctx, token)
+		if err != nil {
+			log.Warn().Err(err).Str("connector_id", row.ID).
+				Msg("buildSlackUserTokenMap: auth.test failed for row")
+			continue
+		}
+		out[userID] = token
+		log.Info().Str("user_id", userID).Str("connector_id", row.ID).
+			Msg("slack: user token registered")
+	}
+	return out
+}
+
 
 // hostAllowlistHandler rejects requests whose Host header doesn't match
 // the host of the configured app_url. The /health endpoint is exempt
@@ -854,6 +1130,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	}
 	logger := zerolog.Ctx(ctx)
 	addr := fmt.Sprintf(":%d", port)
+
+	// Expose the server port to agent subprocesses via WICK_PORT so they
+	// can reach wick's local proxy endpoints (e.g. /integrations/slack/send)
+	// without needing any credentials injected into their environment.
+	os.Setenv("WICK_PORT", fmt.Sprintf("%d", port)) //nolint:errcheck
 
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)
@@ -943,6 +1224,8 @@ func RunMCPStdio(version, commit, buildTime string) {
 		projectRoot := filepath.Dir(filepath.Dir(filepath.Clean(exe)))
 		if err := os.Chdir(projectRoot); err == nil {
 			_ = godotenv.Load()
+			name := appname.ResolveAfterChdir()
+			userconfig.ResolveDBPath(name, "")
 		}
 	}
 
@@ -984,6 +1267,37 @@ func RunMCPStdio(version, commit, buildTime string) {
 		Login:      authSvc,
 		AppName:    appname.Resolve(),
 	}))
+
+	// Workflow connector — bootstrap minimal workflow manager so MCP
+	// clients (Claude Desktop, Cursor) can introspect / create / edit /
+	// test workflows. Engine has no live channel / provider wiring here
+	// so type:channel + type:agent nodes will fail at run time; everything
+	// else (validate/simulate/test/file ops/canvas mutations) works.
+	stdioAgentsCfg := agentconfig.WorkspaceConfig{
+		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
+		DefaultWorkspace: configsSvc.GetOwned("agents", "default_workspace"),
+	}
+	stdioWfLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(stdioAgentsCfg))
+	stdioWfMgr := wfsetup.New(stdioWfLayout)
+	wfsetup.RegisterLiveConnectors(stdioWfMgr.Connectors)
+	stdioWfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connSvc))
+	// Register Slack workflow descriptors into the integration registry
+	// so workflow_integration / workflow_channels can surface full
+	// MatchSchema + InputSchema metadata. Execute closures bind to a
+	// stub Slack channel (no live API) — they error at runtime if a node
+	// actually fires, but AI discovery + workflow_validate work fully.
+	stdioStubSlack := agentslack.New(agentconfig.SlackChannelConfig{})
+	slackwf.RegisterAll(stdioWfMgr.Integration, stdioStubSlack)
+	// stdio path: register pickers too, even though the stub channel
+	// has no live API — calls will surface the configuration error
+	// rather than silently returning empty lists.
+	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubSlack)
+	if err := stdioWfMgr.Start(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("stdio: workflow bootstrap failed; workflow_* ops unavailable")
+	} else {
+		stdioRunner := wftest.New(stdioWfMgr.Engine, stdioWfMgr.Service, stdioWfMgr.Layout)
+		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
+	}
 
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())

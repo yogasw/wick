@@ -1,6 +1,44 @@
 (function () {
   "use strict";
 
+  // Shared trace toggle — wired by inline onclick on both top and
+  // bottom toggle buttons inside an assistant turn. Reads the wrap's
+  // hidden state, flips it, then syncs label + chevron + bottom-button
+  // visibility so the user can collapse from either end without
+  // scrolling.
+  window.wickToggleTrace = function (btn) {
+    var section = btn.closest("[data-turn-events]");
+    if (!section) return;
+    var wrap = section.querySelector("[data-trace-wrap]");
+    var top = section.querySelector("[data-trace-toggle]");
+    var bottom = section.querySelector("[data-trace-toggle-bottom]");
+    if (!wrap || !top) return;
+    var willOpen = wrap.classList.contains("hidden");
+    if (willOpen) { wrap.classList.remove("hidden"); wrap.classList.add("flex", "flex-col"); }
+    else { wrap.classList.add("hidden"); wrap.classList.remove("flex", "flex-col"); }
+    var chev = top.querySelector("[data-chevron]");
+    if (chev) chev.style.transform = willOpen ? "" : "rotate(-90deg)";
+    var loading = top.dataset.loading === "1";
+    var lbl = top.querySelector("[data-trace-label]");
+    if (lbl) lbl.textContent = willOpen ? "hide trace" : (loading ? "working…" : "show trace");
+    if (bottom) {
+      if (willOpen) { bottom.classList.remove("hidden"); bottom.classList.add("flex"); }
+      else { bottom.classList.add("hidden"); bottom.classList.remove("flex"); }
+      var bspin = bottom.querySelector("[data-trace-spin-bottom]");
+      var bicon = bottom.querySelector("[data-trace-icon-bottom]");
+      var blbl = bottom.querySelector("[data-trace-label-bottom]");
+      if (bspin) bspin.classList.toggle("hidden", !loading);
+      if (bicon) bicon.classList.toggle("hidden", loading);
+      if (blbl) blbl.textContent = loading ? "working… (hide)" : "hide trace";
+    }
+    if (willOpen) {
+      var target = bottom && !bottom.classList.contains("hidden") ? bottom : wrap;
+      if (target && target.scrollIntoView) {
+        target.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
+    }
+  };
+
   // ── Minimal markdown renderer ─────────────────────────────────────────
   // No external deps — handles bold, italic, inline code, fenced code
   // blocks, headers, bullet lists, numbered lists, blockquotes, and
@@ -11,6 +49,7 @@
     var out = [];
     var inCode = false, codeLang = "", codeLines = [];
     var inList = false, listOl = false;
+    var inTable = false, tableHeader = false;
 
     function flushList() {
       if (!inList) return;
@@ -20,6 +59,11 @@
         : 'class="list-disc list-inside space-y-0.5 my-1"';
       out.push("<" + tag + " " + cls + ">" + listItems.join("") + "</" + tag + ">");
       inList = false; listOl = false; listItems = [];
+    }
+    function flushTable() {
+      if (!inTable) return;
+      out.push("</tbody></table>");
+      inTable = false; tableHeader = false;
     }
     var listItems = [];
 
@@ -94,9 +138,34 @@
         continue;
       }
 
+      // Table
+      if (line.trim().startsWith("|")) {
+        var trimmed = line.trim();
+        // separator row |---|---| → marks end of header
+        if (/^\|[-:\s|]+\|?$/.test(trimmed)) {
+          if (inTable && !tableHeader) { out.push("</thead><tbody>"); tableHeader = true; }
+          continue;
+        }
+        var cells = trimmed.replace(/^\||\|$/g, "").split("|");
+        if (!inTable) {
+          flushList();
+          out.push('<div class="overflow-x-auto my-2"><table class="w-full text-xs border-collapse">');
+          out.push("<thead><tr>" + cells.map(function(c) {
+            return '<th class="border border-white-300 dark:border-navy-600 px-3 py-1.5 text-left font-semibold text-black-900 dark:text-white-100 bg-white-300 dark:bg-navy-700">' + inlineMarkdown(c.trim()) + "</th>";
+          }).join("") + "</tr>");
+          inTable = true; tableHeader = false;
+        } else {
+          out.push("<tr>" + cells.map(function(c) {
+            return '<td class="border border-white-300 dark:border-navy-600 px-3 py-1.5 text-black-900 dark:text-white-100">' + inlineMarkdown(c.trim()) + "</td>";
+          }).join("") + "</tr>");
+        }
+        continue;
+      }
+      flushTable();
       flushList();
       out.push('<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">' + inlineMarkdown(line) + '</p>');
     }
+    flushTable();
     flushList();
     if (inCode && codeLines.length) {
       out.push('<pre class="text-xs font-mono bg-white-200 dark:bg-navy-800 px-4 py-3 rounded-lg overflow-x-auto"><code>' + esc(codeLines.join("\n")) + '</code></pre>');
@@ -187,6 +256,10 @@
       var pendingTurnEl = null;
       var pendingRawText = "";
       var typingIndicatorEl = null;
+      // keyed by tool_use_id → the card element, so tool_result can attach to it
+      var pendingToolCards = {};
+      // true once first text_delta arrives in this turn — used to auto-collapse event cards
+      var turnHasText = false;
 
       var ssePort = null;
       if (typeof SharedWorker !== "undefined") {
@@ -271,12 +344,171 @@
           hideTypingIndicator();
           finalizeAssistantTurn();
           applyLifecycle("idle", 0);
-        } else if (
-          ev.type === "thinking" || ev.type === "tool_use" || ev.type === "tool_result"
-        ) {
-          showTypingIndicator();
+        } else if (ev.type === "thinking") {
+          hideTypingIndicator();
+          appendThinkingCard(ev.data || "");
           applyLifecycle("working", 0);
+        } else if (ev.type === "tool_use") {
+          hideTypingIndicator();
+          appendToolUseCard(ev);
+          applyLifecycle("working", 0);
+        } else if (ev.type === "tool_result") {
+          hideTypingIndicator();
+          appendToolResultCard(ev);
+          applyLifecycle("working", 0);
+          if (!turnHasText) showTypingIndicator();
         }
+      }
+
+      // ── Event card helpers ────────────────────────────────────────────
+
+      // Returns the outer turn body div (data-turn-events), creating the
+      // bubble if it doesn't exist yet.
+      function ensurePendingTurn() {
+        var container = document.querySelector("[data-turns]");
+        if (!container) return null;
+        if (!pendingTurnEl) {
+          pendingTurnEl = document.createElement("div");
+          pendingTurnEl.className = "flex justify-start gap-3 group";
+          pendingTurnEl.innerHTML =
+            '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">' +
+            '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg></div>' +
+            '<div class="flex flex-col gap-1.5 max-w-[80%] min-w-0" data-turn-events>' +
+            '</div>';
+          var bottom = document.getElementById("chat-bottom");
+          if (bottom) container.insertBefore(pendingTurnEl, bottom);
+          else container.appendChild(pendingTurnEl);
+        }
+        return pendingTurnEl.querySelector("[data-turn-events]");
+      }
+
+      // Returns data-trace-wrap, creating the trace section (toggle btn +
+      // wrap div) inside the turn body if it doesn't exist yet.
+      function ensureTraceWrap() {
+        var body = ensurePendingTurn();
+        if (!body) return null;
+        var wrap = body.querySelector("[data-trace-wrap]");
+        if (!wrap) {
+          var traceSection = document.createElement("div");
+          traceSection.className = "flex flex-col gap-1";
+          traceSection.innerHTML =
+            '<button type="button" data-trace-toggle data-loading="1" ' +
+            'onclick="window.wickToggleTrace(this);" ' +
+            'class="self-start flex items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5">' +
+            '<svg data-trace-spin viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
+            '<svg data-trace-icon viewBox="0 0 16 16" class="h-3 w-3 shrink-0 hidden" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>' +
+            '<span data-trace-label class="italic">working…</span>' +
+            '<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+            '</button>' +
+            '<div data-trace-wrap class="hidden gap-1"></div>' +
+            '<button type="button" data-trace-toggle-bottom ' +
+            'onclick="window.wickToggleTrace(this);" ' +
+            'class="hidden self-start items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5">' +
+            '<svg data-trace-spin-bottom viewBox="0 0 16 16" class="h-3 w-3 shrink-0 animate-spin hidden" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
+            '<svg data-trace-icon-bottom viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>' +
+            '<span data-trace-label-bottom>hide trace</span>' +
+            '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+            '</button>';
+          body.appendChild(traceSection);
+          wrap = traceSection.querySelector("[data-trace-wrap]");
+        }
+        return wrap;
+      }
+
+      function appendThinkingCard(text) {
+        var body = ensureTraceWrap();
+        if (!body) return;
+        var card = document.createElement("div");
+        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+        card.innerHTML =
+          '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-thinking-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\';" ' +
+          'class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-600 dark:text-black-700">' +
+          '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5.5v3l1.5 1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+          '<span class="italic">thinking</span>' +
+          '<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+          '</button>' +
+          '<div data-thinking-body class="border-t border-white-300 dark:border-navy-600 px-3 py-2 italic text-black-600 dark:text-black-700 leading-relaxed break-words">' +
+          esc(text) +
+          '</div>';
+        body.appendChild(card);
+        scrollToBottom();
+      }
+
+      function appendToolUseCard(ev) {
+        var body = ensureTraceWrap();
+        if (!body) return;
+        var toolName = ev.tool_name || ev.data || "tool";
+        var inputRaw = ev.tool_input || "";
+        var prettyInput = "";
+        if (inputRaw) {
+          try { prettyInput = JSON.stringify(JSON.parse(inputRaw), null, 2); }
+          catch (_) { prettyInput = inputRaw; }
+        }
+        var id = "tc-" + (ev.tool_use_id || Date.now());
+        var card = document.createElement("div");
+        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+        card.setAttribute("data-tool-card", ev.tool_use_id || "");
+        card.innerHTML =
+          '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-tool-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\';" ' +
+          'class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">' +
+          '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path><path d="M6 8h4" stroke-linecap="round"></path></svg>' +
+          '<span class="font-mono font-medium text-black-900 dark:text-white-100">' + esc(toolName) + '</span>' +
+          '<span class="ml-auto text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide shrink-0">tool call</span>' +
+          '<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-500 transition-transform" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+          '</button>' +
+          '<div data-tool-body class="border-t border-white-300 dark:border-navy-600">' +
+          (prettyInput
+            ? '<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">' + esc(prettyInput) + '</pre>'
+            : '<p class="px-3 py-2 text-black-500 dark:text-black-600 italic">no input</p>') +
+          '</div>';
+        if (ev.tool_use_id) pendingToolCards[ev.tool_use_id] = card;
+        body.appendChild(card);
+        scrollToBottom();
+      }
+
+      function appendToolResultCard(ev) {
+        var body = ensureTraceWrap();
+        if (!body) return;
+        var resultText = ev.data || "";
+        var isError = ev.is_error === true || ev.is_error === "true";
+        // Try to find the matching tool_use card to append inline; else append standalone.
+        var parent = ev.tool_use_id ? pendingToolCards[ev.tool_use_id] : null;
+        var resultEl = document.createElement("div");
+        if (parent) {
+          // Attach result section to the existing tool card.
+          resultEl.className = "border-t border-white-300 dark:border-navy-600";
+          resultEl.innerHTML =
+            '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-result-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\';" ' +
+            'class="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors ' +
+            (isError ? 'text-red-600 dark:text-red-400' : 'text-black-600 dark:text-black-700') + '">' +
+            '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">' +
+            (isError
+              ? '<circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v4M8 11v.5" stroke-linecap="round"></path>'
+              : '<path d="M3 8l3 3 7-7" stroke-linecap="round" stroke-linejoin="round"></path>') +
+            '</svg>' +
+            '<span class="text-[10px] uppercase tracking-wide shrink-0">' + (isError ? 'error' : 'result') + '</span>' +
+            '<span class="ml-2 truncate font-mono opacity-60">' + esc(resultText.slice(0, 80).replace(/\n/g, " ")) + (resultText.length > 80 ? "…" : "") + '</span>' +
+            '<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+            '</button>' +
+            '<div data-result-body class="border-t border-white-300 dark:border-navy-600">' +
+            '<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">' + esc(resultText) + '</pre>' +
+            '</div>';
+          parent.appendChild(resultEl);
+          if (ev.tool_use_id) delete pendingToolCards[ev.tool_use_id];
+        } else {
+          // Standalone result (no matching tool_use card).
+          resultEl.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+          resultEl.innerHTML =
+            '<div class="flex items-center gap-2 px-3 py-2 ' + (isError ? 'text-red-600 dark:text-red-400' : 'text-black-600 dark:text-black-700') + '">' +
+            '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">' +
+            (isError
+              ? '<circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v4M8 11v.5" stroke-linecap="round"></path>'
+              : '<path d="M3 8l3 3 7-7" stroke-linecap="round" stroke-linejoin="round"></path>') +
+            '</svg><span class="text-[10px] uppercase tracking-wide">' + (isError ? 'error' : 'result') + '</span></div>' +
+            '<pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words border-t border-white-300 dark:border-navy-600">' + esc(resultText) + '</pre>';
+          body.appendChild(resultEl);
+        }
+        scrollToBottom();
       }
 
       function scrollToBottom() {
@@ -287,32 +519,63 @@
       }
 
       function appendDelta(text) {
-        var container = document.querySelector("[data-turns]");
-        if (!container) return;
         pendingRawText += text;
-        if (!pendingTurnEl) {
-          pendingTurnEl = document.createElement("div");
-          pendingTurnEl.className = "flex justify-start gap-3 group";
-          pendingTurnEl.innerHTML =
-            '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">' +
-            '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg></div>' +
-            '<div class="flex flex-col gap-1 max-w-[80%] min-w-0">' +
-            '<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">' +
-            '<div data-stream-content></div>' +
-            '</div></div>';
-          // Insert before #chat-bottom sentinel
-          var bottom = document.getElementById("chat-bottom");
-          if (bottom) container.insertBefore(pendingTurnEl, bottom);
-          else container.appendChild(pendingTurnEl);
+        if (!turnHasText) {
+          turnHasText = true;
+          collapseAllEventCards();
         }
-        var content = pendingTurnEl.querySelector("[data-stream-content]");
-        if (content) content.innerHTML = renderMarkdown(pendingRawText);
+        var body = ensurePendingTurn(); // data-turn-events
+        if (!body) return;
+        // Find or create the text bubble directly inside data-turn-events.
+        var textBubble = body.querySelector("[data-stream-content]");
+        if (!textBubble) {
+          var wrapper = document.createElement("div");
+          wrapper.className = "rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm";
+          wrapper.innerHTML = '<div data-stream-content></div>';
+          body.appendChild(wrapper);
+          textBubble = wrapper.querySelector("[data-stream-content]");
+        }
+        textBubble.innerHTML = renderMarkdown(pendingRawText);
         scrollToBottom();
       }
 
       function finalizeAssistantTurn() {
+        collapseAllEventCards();
         pendingTurnEl = null;
         pendingRawText = "";
+        pendingToolCards = {};
+        turnHasText = false;
+      }
+
+      // Collapse the trace wrap and update the toggle button label.
+      // Called on first text_delta so the trace folds away cleanly.
+      function collapseAllEventCards() {
+        if (!pendingTurnEl) return;
+        var wrap = pendingTurnEl.querySelector("[data-trace-wrap]");
+        if (!wrap) return;
+        var open = !wrap.classList.contains("hidden");
+        var traceSection = wrap.parentElement;
+        if (!traceSection) return;
+        var btn = traceSection.querySelector("button[data-trace-toggle]");
+        if (!btn) return;
+        btn.dataset.loading = "0";
+        var spin = btn.querySelector("[data-trace-spin]");
+        if (spin) spin.classList.add("hidden");
+        var icon = btn.querySelector("[data-trace-icon]");
+        if (icon) icon.classList.remove("hidden");
+        var lbl = btn.querySelector("[data-trace-label]");
+        if (lbl) { lbl.classList.remove("italic"); lbl.textContent = open ? "hide trace" : "show trace"; }
+        var bottom = traceSection.querySelector("button[data-trace-toggle-bottom]");
+        if (bottom) {
+          if (open) { bottom.classList.remove("hidden"); bottom.classList.add("flex"); }
+          else { bottom.classList.add("hidden"); bottom.classList.remove("flex"); }
+          var bspin = bottom.querySelector("[data-trace-spin-bottom]");
+          if (bspin) bspin.classList.add("hidden");
+          var bicon = bottom.querySelector("[data-trace-icon-bottom]");
+          if (bicon) bicon.classList.remove("hidden");
+          var blbl = bottom.querySelector("[data-trace-label-bottom]");
+          if (blbl) blbl.textContent = "hide trace";
+        }
       }
     }
 
@@ -957,9 +1220,19 @@
           match_key: approvalCurrent.match_key || "",
         }),
       }).then(function (r) {
-        // approval_resolved SSE dismisses the modal. Re-enable button
-        // defensively in case SSE is slow / dropped.
-        if (!r.ok && btn) btn.disabled = false;
+        if (!r.ok) {
+          if (btn) btn.disabled = false;
+          r.json().catch(function () { return {}; }).then(function (body) {
+            var msg = (body && body.error) ? body.error : ("request failed (" + r.status + ")");
+            var modal = document.getElementById("approval-modal");
+            if (!modal) return;
+            var err = modal.querySelector("[data-approval-error]");
+            if (!err) return;
+            err.textContent = msg;
+            err.classList.remove("hidden");
+            setTimeout(function () { err.classList.add("hidden"); }, 5000);
+          });
+        }
       }).catch(function () {
         if (btn) btn.disabled = false;
       });

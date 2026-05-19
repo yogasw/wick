@@ -610,6 +610,16 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // their own session ID (thread_ts) without going through the UI create flow.
 // Concurrent calls for the same ID are safe — session.Create returns a
 // benign "already exists" error that we suppress.
+
+// EnsureSession is the public wrapper for ensureSession. Workflow's
+// session_init executor calls this to materialize the registry entry +
+// sidebar row up-front, before any agent node actually dispatches a
+// message. Idempotent — a second call for the same sessionID is a
+// no-op (or backfills workspace).
+func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, workspace string) error {
+	return p.ensureSession(ctx, sessionID, source, workspace)
+}
+
 func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace string) error {
 	existing, err := session.Load(p.cfg.Layout, sessionID)
 	if err == nil {

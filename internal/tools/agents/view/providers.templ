@@ -38,75 +38,83 @@ templ ProvidersPage(vm ProvidersVM) {
 				@statCard("Queued", fmt.Sprintf("%d", vm.PoolQueueLen), "amber")
 				@statCard("Configured", fmt.Sprintf("%d", len(vm.Statuses)), "default")
 			</div>
-			<!-- Command Gate master switch -->
-			@gateStatusCard(vm.Gate, vm.Base)
 			<!-- Provider cards -->
-			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2 overflow-x-clip">
 				for _, st := range vm.Statuses {
 					@providerCard(vm.Base, st, vm.Gate)
 				}
 			</div>
+			<!-- Command Gate master switch -->
+			@gateStatusCard(vm.Gate, vm.Base)
+			<!-- MCP Wick install status -->
+			@mcpWickCard(vm.MCP, vm.Base)
 			<!-- Recent spawns -->
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
-				<div class="border-b border-white-300 dark:border-navy-600 px-5 py-3">
+			<details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
+				<summary class="px-5 py-3 flex items-center gap-2 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+					<svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
 					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
-					<p class="text-xs text-black-700 dark:text-black-600 mt-0.5">One file per spawn under <code class="font-mono">~/.wick/agents/backends/spawns/</code></p>
-				</div>
-				if len(vm.Spawns) == 0 {
-					<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
-				} else {
-					<table class="w-full text-sm">
-						<thead>
-							<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-								<th class="px-5 py-2.5 text-left">Started</th>
-								<th class="px-5 py-2.5 text-left">Provider</th>
-								<th class="px-5 py-2.5 text-left">PID</th>
-								<th class="px-5 py-2.5 text-left">First Message</th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, f := range vm.Spawns {
-								<tr
-									data-row-link={ vm.Base + "/providers/spawns/" + filenameOf(f.Path) }
-									class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-								>
-									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
-									<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
-									<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
-										if f.PID > 0 {
-											{ fmt.Sprintf("%d", f.PID) }
-										} else {
-											<span class="text-black-600 dark:text-black-700">—</span>
-										}
-									</td>
-									<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600 max-w-xs truncate">
-										if f.FirstUserMessage != "" {
-											{ f.FirstUserMessage }
-										} else {
-											<span class="text-black-600 dark:text-black-700">—</span>
-										}
-									</td>
-								</tr>
-							}
-						</tbody>
-					</table>
-					if vm.Page > 1 || vm.HasNext {
-						<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
-							if vm.Page > 1 {
-								<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
-							} else {
-								<span></span>
-							}
-							<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
-							if vm.HasNext {
-								<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
-							} else {
-								<span></span>
-							}
-						</div>
+					if len(vm.Spawns) > 0 {
+						<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", len(vm.Spawns)) }</span>
 					}
-				}
-			</div>
+					<span class="text-xs text-black-700 dark:text-black-600 ml-1">one file per spawn under <code class="font-mono">~/.wick/agents/backends/spawns/</code></span>
+				</summary>
+				<div class="border-t border-white-300 dark:divide-navy-600">
+					if len(vm.Spawns) == 0 {
+						<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
+					} else {
+						<table class="w-full text-sm">
+							<thead>
+								<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+									<th class="px-5 py-2.5 text-left">Started</th>
+									<th class="px-5 py-2.5 text-left">Provider</th>
+									<th class="px-5 py-2.5 text-left">PID</th>
+									<th class="px-5 py-2.5 text-left">First Message</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, f := range vm.Spawns {
+									<tr
+										data-row-link={ vm.Base + "/providers/spawns/" + filenameOf(f.Path) }
+										class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+									>
+										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
+										<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
+										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
+											if f.PID > 0 {
+												{ fmt.Sprintf("%d", f.PID) }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
+										<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600 max-w-xs truncate">
+											if f.FirstUserMessage != "" {
+												{ f.FirstUserMessage }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+						if vm.Page > 1 || vm.HasNext {
+							<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
+								if vm.Page > 1 {
+									<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
+								} else {
+									<span></span>
+								}
+								<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
+								if vm.HasNext {
+									<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
+								} else {
+									<span></span>
+								}
+							</div>
+						}
+					}
+				</div>
+			</details>
 			<!-- Add custom modal -->
 			@addProviderModal(vm)
 		</div>
@@ -153,21 +161,112 @@ templ gateStatusCard(g GateStatusVM, base string) {
 				}
 			</div>
 		</div>
-		<div class="px-5 py-3 space-y-2 text-xs">
+		<div class="px-5 py-3 space-y-3 text-xs">
 			if g.Enabled {
 				<div class="flex gap-2">
-					<dt class="w-20 shrink-0 text-black-700 dark:text-black-600">binary</dt>
+					<dt class="w-24 shrink-0 text-black-700 dark:text-black-600">binary</dt>
 					<dd class="font-mono text-black-900 dark:text-white-100 break-all">{ g.Binary }</dd>
 				</div>
 			} else if g.Reason != "" {
 				<div class="flex gap-2">
-					<dt class="w-20 shrink-0 text-black-700 dark:text-black-600">error</dt>
+					<dt class="w-24 shrink-0 text-black-700 dark:text-black-600">error</dt>
 					<dd class="font-mono text-red-600 dark:text-red-400 break-all">{ g.Reason }</dd>
 				</div>
 			}
+			<form method="POST" action={ templ.SafeURL(base + "/providers/gate/modes") } class="flex items-center justify-between gap-3 pt-1">
+				<div class="flex flex-col">
+					<span class="text-xs font-medium text-black-900 dark:text-white-100">Prompt per tool call</span>
+					<span class="text-xs text-black-700 dark:text-black-600">Off = run unguarded (Slack / HTTP)</span>
+				</div>
+				if g.PermissionMode == "bypass" {
+					<input type="hidden" name="permission_mode" value="on"/>
+					<button type="submit" role="switch" aria-checked="false" class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-white-400 dark:bg-navy-600 transition-colors hover:bg-white-500 dark:hover:bg-navy-500">
+						<span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white-100 shadow ring-0 transition translate-x-0"></span>
+					</button>
+				} else {
+					<input type="hidden" name="permission_mode" value="bypass"/>
+					<button type="submit" role="switch" aria-checked="true" class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-green-500 transition-colors hover:bg-green-600">
+						<span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white-100 shadow ring-0 transition translate-x-4"></span>
+					</button>
+				}
+			</form>
 			<p class="pt-1 text-black-800 dark:text-black-600 leading-relaxed">{ g.Note }</p>
 		</div>
 	</div>
+}
+
+// mcpWickCard renders the MCP Wick install status card. Collapsed by
+// default — header shows aggregate dot counts. Expand to see per-client
+// rows with Install / Uninstall buttons.
+templ mcpWickCard(mcp MCPStatusVM, base string) {
+	{{ installed, detected := mcpCounts(mcp.Clients) }}
+	<details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
+		<summary class="px-5 py-3 flex items-center justify-between gap-3 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+			<div class="flex items-center gap-2 flex-wrap">
+				<svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+				<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">MCP Wick</h2>
+				<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600 font-mono">{ mcp.AppName }</span>
+				if installed == detected && detected > 0 {
+					<span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100">{ fmt.Sprintf("%d / %d installed", installed, detected) }</span>
+				} else if installed > 0 {
+					<span class="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white-100">{ fmt.Sprintf("%d / %d installed", installed, detected) }</span>
+				} else if detected > 0 {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{ fmt.Sprintf("0 / %d installed", detected) }</span>
+				} else {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">no clients detected</span>
+				}
+				<span class="text-xs text-black-700 dark:text-black-600">— registers this app as an MCP server so AI clients can call its tools directly. Auto-installs once on first load.</span>
+			</div>
+		</summary>
+		<div class="border-t border-white-300 dark:border-navy-600 divide-y divide-white-300 dark:divide-navy-600">
+			for _, cl := range mcp.Clients {
+				<div class="px-5 py-3 flex items-center justify-between gap-3">
+					<div class="flex items-center gap-3 min-w-0">
+						if cl.Installed {
+							<span class="inline-flex h-2 w-2 rounded-full bg-green-500 shrink-0"></span>
+						} else {
+							<span class="inline-flex h-2 w-2 rounded-full bg-amber-500 animate-pulse shrink-0"></span>
+						}
+						<div class="min-w-0">
+							<span class="text-xs font-medium text-black-900 dark:text-white-100">{ cl.Label }</span>
+							if cl.Installed {
+								<span class="ml-2 text-xs text-green-600 dark:text-green-400">installed</span>
+							} else if cl.Blocklisted {
+								<span class="ml-2 text-xs text-black-600 dark:text-black-700">skipped (manually uninstalled)</span>
+							} else {
+								<span class="ml-2 text-xs text-amber-600 dark:text-amber-400">not installed</span>
+							}
+							<p class="font-mono text-xs text-black-600 dark:text-black-700 truncate mt-0.5" data-tooltip={ cl.ConfigPath }>{ cl.ConfigPath }</p>
+						</div>
+					</div>
+					<div class="flex items-center gap-1 shrink-0">
+						if cl.Installed {
+							<form method="POST" action={ templ.SafeURL(base + "/providers/mcp/" + cl.ID + "/uninstall") }>
+								<button type="submit" class="rounded-lg border border-red-400 dark:border-red-700 px-2 py-1 text-xs text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20" data-tooltip="Remove wick from this client's mcpServers (won't auto-reinstall)">Uninstall</button>
+							</form>
+						} else {
+							<form method="POST" action={ templ.SafeURL(base + "/providers/mcp/" + cl.ID + "/install") }>
+								<button type="submit" class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600" data-tooltip="Write wick entry into this client's mcpServers">Install</button>
+							</form>
+						}
+					</div>
+				</div>
+			}
+		</div>
+	</details>
+}
+
+// mcpCounts returns (installed, detected) counts across all clients.
+func mcpCounts(clients []MCPClientStatusVM) (installed, detected int) {
+	for _, c := range clients {
+		if c.Detected {
+			detected++
+			if c.Installed {
+				installed++
+			}
+		}
+	}
+	return
 }
 
 templ providerCard(base string, st provider.Status, gate GateStatusVM) {
@@ -397,7 +496,7 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 					<pre class="font-mono text-xs bg-white-200 dark:bg-navy-800 rounded-md p-3 text-black-900 dark:text-white-100 whitespace-pre-wrap break-all select-all">{ shellCommand(vm.File.Binary, vm.File.Argv) }</pre>
 				</div>
 			}
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-visible">
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
 				if len(vm.Events) == 0 {
 					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No events.</div>
 				} else {

@@ -1,7 +1,7 @@
 # Agents — Desain
 
 Status: draft.
-Update terakhir: 2026-05-10.
+Update terakhir: 2026-05-16.
 
 > **⚠️ Refactor in flight: Project → Workspace** + **Backend → Provider**.
 >
@@ -117,7 +117,7 @@ Status: **planning**. Mulai 2026-05-09. Target: phase R1-R5 selesai sebelum Slac
 
 Bug awal: session tanpa project gagal spawn (`chdir sessions/<id>/workspace: file not found`) karena workspace dir cuma dibuat saat `addWorktree` jalan. Penyelidikan ungkap mismatch fundamental dengan use case nyata user:
 
-> "Aku minta claude clone repoA, minta claude clone repoB. Numpuk di workspace `soluport-ops`. Jadi dia bisa pakai ulang."
+> "Aku minta claude clone repoA, minta claude clone repoB. Numpuk di workspace `team-ops`. Jadi dia bisa pakai ulang."
 
 Use case = **shared folder berisi banyak repo, dipakai berulang oleh banyak session**. Bukan **1 project = 1 repo, session = worktree branch**.
 
@@ -1202,7 +1202,7 @@ Queue FIFO di `pool.Pool.queue`. Saat semua slot penuh, Send append ke queue. Po
 
 User ngga boleh bisa pilih provider yg ngga sehat (binary ngga ditemu di PATH, version probe gagal, atau `Disabled`). Solusi: helper `providerChoices(ctx)` di `tools/agents/providers.go` yg probe semua via `provider.ProbeAll`, filter `PathFound && VersionErr == "" && !Disabled`, return `[]ProviderChoiceVM{Type, Name, Version}`.
 
-New Session modal sekarang render `<option value=type>type/name — version</option>` per healthy provider. Kalau kosong → pesan link ke `/providers` buat setup. Reusable: bisa dipake dimanapun "user pick a provider".
+Compose page (`/tools/agents/`) dan modal di `/sessions` keduanya consume helper yang sama — render `<option value=type>type/name — version</option>` per healthy provider. Kosong → pesan link ke `/providers` buat setup. Reusable: bisa dipake dimanapun "user pick a provider".
 
 #### 4.6.5 UI patterns (Backends pages)
 
@@ -1225,6 +1225,53 @@ Overview dipotong jadi 3 zona:
 3. **Active Sessions** (reuse `SessionsTable`): top 5 session yg subprocess-nya masih hidup di pool (lifecycle ∈ {spawning, working, idle}; killed BUKAN active). View All link ke `/sessions` untuk full history.
 
 `Active Sessions` BEDA dari "Recent Sessions" lama: dulu sort by `last_active desc` apapun status, sekarang strict filter via `pool.ActiveSnapshot()`. Killed sessions ngga muncul di Overview — operator ke `/sessions` kalau mau scroll history.
+
+Overview pindah dari `/` ke `/overview` per **§4.6.7** — root path sekarang dipake compose landing. Nav link "Overview" di sidebar pointer ke `/overview`; ActivePage="overview" tetap match di handler `overviewPage`.
+
+#### 4.6.7 Full-screen shell + compose-first landing (2026-05-16)
+
+Agents UI di-mount sebagai `FullScreen` tool (`tool.Tool.FullScreen=true`). `internal/pkg/render/render.go` cek flag itu dan **skip global Navbar entirely** — `AgentsLayout` jadi shell yang ngerender chrome sendiri (workspace strip + profile dropdown), bukan duduk di bawah navbar dgn `height:calc(100vh - 4rem)` lagi. Konsekuensi: tiap tool yang opt-in `FullScreen` wajib render user widgets sendiri (sebelumnya cuma skip ToolHeader+banner).
+
+Sidebar 240px (`internal/tools/agents/view/layout.templ`):
+
+1. **Top strip**: `[✦] <app-name>` kiri + `[A▼]` (UserMenu) kanan. App name dari `ui.AppNameFromContext(ctx)`. Link ke `/` (home), bukan ke `/tools/agents`. Search + ThemePicker globalnya dropped dari strip (Ctrl+K shortcut tetap jalan via hidden trigger `<button onclick="openPalette()">` yg cuma di-detect `paletteEnabled()` di palette.js).
+2. **Nav links**: `New session` row di paling atas (ChatGPT pattern) → `<a href="/tools/agents">`, bukan tombol POST. Followed by Overview/Workflows/Workspaces/Presets/Providers/Channels.
+3. **Recent sessions**: scrollable list, max 15 dari `Registry().SessionIDs()`.
+4. **Bottom**: Settings nav row, pakai cog icon proper (sebelumnya stitched-tick gear yg keliatan rusak).
+
+**Compose-first landing**: `GET /tools/agents` (handler `newSessionCompose`) render `view.NewSessionCompose` — kartu center-of-viewport dgn:
+- Textarea `name="message"` (Enter submit, Shift+Enter newline via inline keydown script; placeholder copy English).
+- Selects: provider (default = healthy[0]), preset (optional, blank = "default"), workspace (optional).
+- Send button POST balik ke path yg sama (`vm.Base` tanpa trailing slash — important, toolrouter cuma register `POST /tools/agents`, slash variant ngehasilin 405).
+- Fade-up entrance animation (CSS keyframe `ns-fade-up`, 320ms, respect `prefers-reduced-motion`).
+
+`POST /tools/agents` (handler `startNewSession`) — gabungin tiga step dalam 1 request:
+1. `globalMgr.CreateSession(...)` — persist session folder + meta.
+2. `globalMgr.AddAgent(id, "main", provider)` — attach agent dgn provider pilihan.
+3. `globalPool.Send(ctx, id, "main", "ui", "user", text)` — queue first message.
+4. `c.Redirect(...sessions/{id})`.
+
+Kalau message kosong atau salah satu step gagal: re-render compose page dgn `Message` (round-trip) + `Error` inline. **No empty session persisted from stray visit** — beda dari `createSessionQuick` lama yang bikin folder duluan walau user belum ngetik.
+
+Overview dashboard pindah ke `/tools/agents/overview` — same handler, different mount.
+
+Routes (`internal/tools/agents/handler.go::Register`):
+
+```go
+r.GET("/",  newSessionCompose)  // compose-first landing
+r.POST("/", startNewSession)    // create + send + redirect in one shot
+r.GET("/overview", overviewPage) // stats dashboard
+```
+
+**Files touched**:
+- `internal/pkg/render/render.go` — FullScreen branch skip Navbar
+- `internal/tools/agents/view/layout.templ` — sidebar shell
+- `internal/tools/agents/view/new_session.templ` — compose card (new)
+- `internal/tools/agents/view/models.go::NewSessionComposeVM`
+- `internal/tools/agents/handler.go::newSessionCompose/startNewSession/renderCompose`
+- `internal/tools/agents/view/sessions.templ` — drop ‹Sessions back link di session detail header (sidebar udah jadi nav primary, link redundant)
+
+**Decision: kenapa GET / = compose, bukan resume-last-session**: ChatGPT-style "fresh slate every visit" lebih clear buat user. Resume-last sempat dipertimbangkan tapi bikin user keder kalau buka tab agents → langsung masuk session lama. New session itu cheap (compose card cuma render, ngga create row sampai user submit), jadi default ke "new" aman.
 
 **Step 4 — Slack handler (`slack.go`) — minimal di Slack, detail di dashboard:**
 

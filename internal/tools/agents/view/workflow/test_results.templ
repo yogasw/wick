@@ -1,0 +1,93 @@
+package workflow
+
+import (
+	"fmt"
+	"github.com/yogasw/wick/internal/agents/workflow/wftest"
+)
+
+// TestResultsVM carries the data for the test results panel.
+type TestResultsVM struct {
+	ID       string
+	Results  []wftest.Result
+	Coverage wftest.Coverage
+}
+
+// passCount / failCount helpers.
+func testPassCount(results []wftest.Result) int {
+	n := 0
+	for _, r := range results {
+		if r.Pass {
+			n++
+		}
+	}
+	return n
+}
+
+func testFailCount(results []wftest.Result) int {
+	return len(results) - testPassCount(results)
+}
+
+// TestResultsPanel renders the HTMX-swappable test result fragment
+// loaded into the bottom panel's Tests tab.
+templ TestResultsPanel(vm TestResultsVM) {
+	<div class="p-4 space-y-3 text-sm">
+		if len(vm.Results) == 0 {
+			<p class="text-black-600 dark:text-black-700 italic">
+				No test cases found. Add <code>.json</code> fixtures to <code>__tests__/</code> in your workflow folder.
+			</p>
+		} else {
+			<!-- summary bar -->
+			<div class="flex items-center gap-4 mb-2">
+				<span class="font-semibold text-black-800 dark:text-black-200">
+					{ fmt.Sprintf("%d/%d passed", testPassCount(vm.Results), len(vm.Results)) }
+				</span>
+				if vm.Coverage.TotalNodes > 0 {
+					<span class="text-black-500 dark:text-black-600 text-xs">
+						{ fmt.Sprintf("Coverage: %d/%d nodes (%d%%)", vm.Coverage.HitCount(), vm.Coverage.TotalNodes, vm.Coverage.Percent()) }
+					</span>
+				}
+			</div>
+			<!-- per-case rows -->
+			<div class="space-y-1">
+				for _, r := range vm.Results {
+					if r.Pass {
+						<div class="flex items-start gap-2 p-2 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded">
+							<span class="text-green-600 dark:text-green-400 font-bold shrink-0">✓</span>
+							<span class="font-mono text-xs flex-1 text-black-700 dark:text-black-300">{ r.Name }</span>
+							<span class="text-xs text-green-700 dark:text-green-400 shrink-0">
+								{ fmt.Sprintf("%dms", r.Duration.Milliseconds()) }
+							</span>
+						</div>
+					} else {
+						<div class="p-2 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded space-y-1">
+							<div class="flex items-center gap-2">
+								<span class="text-red-600 dark:text-red-400 font-bold shrink-0">✗</span>
+								<span class="font-mono text-xs flex-1 text-black-700 dark:text-black-300">{ r.Name }</span>
+								<span class="text-xs text-black-400 shrink-0">
+									{ fmt.Sprintf("%dms", r.Duration.Milliseconds()) }
+								</span>
+							</div>
+							for _, f := range r.Failures {
+								<p class="ml-5 text-xs text-red-600 dark:text-red-400 font-mono">{ f }</p>
+							}
+						</div>
+					}
+				}
+			</div>
+			<!-- untested nodes warning -->
+			if len(vm.Coverage.Untested) > 0 {
+				<div class="mt-3 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded text-xs">
+					<strong class="text-amber-700 dark:text-amber-400">Untested nodes:</strong>
+					<span class="text-black-600 dark:text-black-500 ml-1">
+						for i, id := range vm.Coverage.Untested {
+							if i > 0 {
+								{ ", " }
+							}
+							<code>{ id }</code>
+						}
+					</span>
+				</div>
+			}
+		}
+	</div>
+}

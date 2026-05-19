@@ -27,14 +27,27 @@ import (
 // note pointing at raw.jsonl. Matches §13 cap.
 const MaxAssistantTurnBytes = 32 * 1024
 
+// TurnEvent is one tool_use, tool_result, or thinking event recorded
+// within an assistant turn. Stored alongside the text so the UI can
+// replay the full trace on reload.
+type TurnEvent struct {
+	Type      string `json:"type"`                 // "tool_use" | "tool_result" | "thinking"
+	ToolName  string `json:"tool_name,omitempty"`  // tool_use only
+	ToolInput string `json:"tool_input,omitempty"` // tool_use only
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"` // tool_result only
+	Text      string `json:"text,omitempty"`     // tool_result body / thinking text
+}
+
 // ConversationTurn is the on-disk shape of one user/assistant turn.
 type ConversationTurn struct {
-	Timestamp time.Time `json:"ts"`
-	Role      string    `json:"role"`            // "user" | "assistant" | "system"
-	Agent     string    `json:"agent,omitempty"` // assistant turn only
-	Source    string    `json:"source,omitempty"`
-	Text      string    `json:"text"`
-	Truncated bool      `json:"truncated,omitempty"`
+	Timestamp time.Time   `json:"ts"`
+	Role      string      `json:"role"`            // "user" | "assistant" | "system"
+	Agent     string      `json:"agent,omitempty"` // assistant turn only
+	Source    string      `json:"source,omitempty"`
+	Text      string      `json:"text"`
+	Truncated bool        `json:"truncated,omitempty"`
+	Events    []TurnEvent `json:"events,omitempty"` // tool/thinking trace
 }
 
 // Store collects events for one session+agent and persists them.
@@ -45,6 +58,10 @@ type Store struct {
 
 	// turnBuf accumulates TextDelta chunks; flushed on Done.
 	turnBuf strings.Builder
+
+	// eventBuf collects tool_use/tool_result/thinking events within the
+	// current turn so they can be stored alongside the text.
+	eventBuf []TurnEvent
 
 	// recordRaw mirrors every event line into raw.jsonl. Off by
 	// default per design (raw is opt-in, retention agressive).
@@ -134,6 +151,31 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		s.turnBuf.WriteString(ev.Text)
 		return false, nil
 
+	case event.Thinking:
+		s.eventBuf = append(s.eventBuf, TurnEvent{
+			Type: "thinking",
+			Text: ev.Text,
+		})
+		return false, nil
+
+	case event.ToolUse:
+		s.eventBuf = append(s.eventBuf, TurnEvent{
+			Type:      "tool_use",
+			ToolName:  ev.ToolName,
+			ToolInput: ev.ToolInput,
+			ToolUseID: ev.ToolUseID,
+		})
+		return false, nil
+
+	case event.ToolResult:
+		s.eventBuf = append(s.eventBuf, TurnEvent{
+			Type:      "tool_result",
+			ToolUseID: ev.ToolUseID,
+			IsError:   ev.IsError,
+			Text:      ev.Text,
+		})
+		return false, nil
+
 	case event.Done:
 		if err := s.flushAssistantTurn(false); err != nil {
 			return false, err
@@ -181,8 +223,10 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Agent:     s.agentName,
 		Text:      body,
 		Truncated: truncated,
+		Events:    s.eventBuf,
 	}
 	s.turnBuf.Reset()
+	s.eventBuf = nil
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
 		"wick-conv-v1",

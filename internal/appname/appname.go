@@ -31,15 +31,38 @@ import (
 // Empty when not built via `wick build` (e.g. `go run`, VSCode debug).
 var BuildAppName = ""
 
+// BuildAppVersion is the ldflag injection target for the downstream app version.
+// Injected via `-X github.com/yogasw/wick/internal/appname.BuildAppVersion=<ver>`.
+// Falls back to "dev" when not injected.
+var BuildAppVersion = "dev"
+
 var (
 	resolveOnce sync.Once
 	resolved    string
+	mu          sync.Mutex
 )
 
 // Resolve returns the active app name. Result is cached for the
 // process lifetime — chain inputs (BuildAppName, env, yml) don't
 // change at runtime, so we resolve exactly once.
 func Resolve() string {
+	resolveOnce.Do(func() {
+		resolved = resolve()
+	})
+	return resolved
+}
+
+// ResolveAfterChdir re-runs resolution from scratch and re-caches the result.
+// Call this once after os.Chdir to the project root so that wick.yml-based
+// names are picked up even when Resolve() fired before the chdir (e.g. MCP stdio).
+// No-op if BuildAppName is already baked via ldflags (ldflag always wins).
+func ResolveAfterChdir() string {
+	if BuildAppName != "" {
+		return BuildAppName
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	resolveOnce = sync.Once{}
 	resolveOnce.Do(func() {
 		resolved = resolve()
 	})

@@ -44,12 +44,12 @@ type ClaudeFactory struct {
 	// over Gate when non-nil. This lets operators toggle gate_enabled
 	// or edit AllowedCmds in the UI without restarting the server.
 	GateLoader func() *GateConfig
-	// BypassPermissionsLoader (optional) is called on every Build to
-	// check whether --permission-mode bypassPermissions should be added
-	// when no gate is active. Useful for non-interactive channels
-	// (Slack, HTTP) where the operator wants to skip prompts without
-	// enabling the full command gate.
-	BypassPermissionsLoader func() bool
+	// PermissionModeLoader (optional) is called on every Build to read
+	// the current GateConfig.PermissionMode value. Return "bypass" to
+	// force --permission-mode bypassPermissions on Claude (and the
+	// equivalent on codex/gemini) when no gate hook is installed.
+	// Any other value (including empty) means "prompt as normal".
+	PermissionModeLoader func() string
 
 	// SystemPromptLoader (optional) returns a global system prompt
 	// fragment appended to the loaded preset body on every spawn.
@@ -98,24 +98,27 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		RecordRaw: f.RecordRaw,
 	})
 
-	var presetContent string
+	// Layered system prompt (top wins on conflict):
+	//   1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+	//   2. preset body (per-preset persona)
+	//   3. operator-edited `system_prompt` config row
+	// Layer 1 must lead so its guards override anything the preset /
+	// config below tries to relax.
+	presetContent := config.ImmutableSystemPrompt()
 	if opt.PresetName != "" {
-		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
-			presetContent = p.Body
+		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
+			presetContent += "\n\n" + p.Body
 		}
 	}
 	if f.SystemPromptLoader != nil {
 		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
-			if presetContent != "" {
-				presetContent += "\n\n"
-			}
-			presetContent += extra
+			presetContent += "\n\n" + extra
 		}
 	}
 
 	bypassPerms := false
-	if f.BypassPermissionsLoader != nil {
-		bypassPerms = f.BypassPermissionsLoader()
+	if f.PermissionModeLoader != nil {
+		bypassPerms = f.PermissionModeLoader() == "bypass"
 	}
 
 	// Normalize provider keys once — used by spawner dispatch, instance

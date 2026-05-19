@@ -12,6 +12,7 @@ package httprest
 
 import (
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Key is the connector definition slug used in the registry and in
@@ -21,10 +22,10 @@ const Key = "httprest"
 // Configs is the per-instance credential and endpoint set. Every field is
 // reflected by entity.StructToConfigs into the admin form and MCP schema.
 type Configs struct {
-	BaseURL    string `wick:"url;required;desc=Base URL of the target API. Example: https://api.example.com/v1"`
-	AuthHeader string `wick:"desc=Header name used for authentication. Example: Authorization or X-API-Key. Leave empty to skip auth."`
-	AuthValue  string `wick:"secret;desc=Value for the auth header. Example: Bearer mytoken or myapikey123"`
-	TimeoutSecs int   `wick:"desc=Per-request timeout in seconds. Default: 30"`
+	BaseURL     string `wick:"url;required;desc=Base URL of the target API. Example: https://api.example.com/v1"`
+	AuthHeader  string `wick:"desc=Header name used for authentication. Example: Authorization or X-API-Key. Leave empty to skip auth."`
+	AuthValue   string `wick:"secret;desc=Value for the auth header. Example: Bearer mytoken or myapikey123"`
+	TimeoutSecs int    `wick:"desc=Per-request timeout in seconds. Default: 30"`
 }
 
 // GetInput is the argument schema for the GET operation.
@@ -78,35 +79,35 @@ func Operations() []connector.Operation {
 			"GET Request",
 			"Send an HTTP GET request to {base_url}/{path}. Optionally append query parameters. Returns the parsed JSON response.",
 			GetInput{},
-			getOp,
+			getOp, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"post",
 			"POST Request",
 			"Send an HTTP POST request with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
 			PostInput{},
-			postOp,
+			postOp, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"put",
 			"PUT Request",
 			"Send an HTTP PUT request (full replacement) with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
 			PutInput{},
-			putOp,
+			putOp, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"patch",
 			"PATCH Request",
 			"Send an HTTP PATCH request (partial update) with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
 			PatchInput{},
-			patchOp,
+			patchOp, wickdocs.Docs{},
 		),
 		connector.OpDestructive(
 			"delete",
 			"DELETE Request",
 			"Send an HTTP DELETE request to {base_url}/{path}. Returns status confirmation.",
 			DeleteInput{},
-			deleteOp,
+			deleteOp, wickdocs.Docs{},
 		),
 	}
 }

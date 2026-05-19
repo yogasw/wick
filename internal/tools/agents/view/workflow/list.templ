@@ -1,0 +1,247 @@
+package workflow
+
+import (
+	"fmt"
+
+	"github.com/yogasw/wick/internal/tools/agents/view"
+)
+
+// List renders the workflow index page — every workflow + scaffold
+// form. Theme tokens match the agents tab: white/navy surfaces,
+// black text, green primary action. No slate-* — only the design
+// system palette.
+templ List(vm ListVM) {
+	@view.AgentsLayout(vm.Layout) {
+		@Shell(vm.Base)
+		<div class="max-w-6xl mx-auto px-6 py-8">
+			@listHeader(vm.Base)
+			@listTable(vm)
+		</div>
+		@listScripts()
+	}
+}
+
+// listScripts wires import interactions (file upload + paste modal).
+templ listScripts() {
+	<script>
+	(function () {
+		// ── Import dropdown toggle ──
+		const importBtn  = document.getElementById('wf-import-btn');
+		const importMenu = document.getElementById('wf-import-menu');
+		importBtn?.addEventListener('click', (e) => {
+			e.stopPropagation();
+			importMenu?.classList.toggle('hidden');
+		});
+		document.addEventListener('click', () => importMenu?.classList.add('hidden'));
+
+		// ── Upload file → auto-submit form ──
+		const fileInput = document.getElementById('wf-import-file');
+		fileInput?.addEventListener('change', function () {
+			if (!fileInput.files || fileInput.files.length === 0) return;
+			const url = fileInput.dataset.importUrl;
+			const form = document.createElement('form');
+			form.method = 'POST';
+			form.action = url;
+			form.enctype = 'multipart/form-data';
+			form.style.display = 'none';
+			const clone = document.createElement('input');
+			clone.type = 'file';
+			clone.name = 'file';
+			const dt = new DataTransfer();
+			dt.items.add(fileInput.files[0]);
+			clone.files = dt.files;
+			form.appendChild(clone);
+			document.body.appendChild(form);
+			form.submit();
+		});
+
+		// ── Paste YAML modal ──
+		const pasteBtn    = document.getElementById('wf-import-paste-btn');
+		const pasteModal  = document.getElementById('wf-paste-modal');
+		const pasteClose  = document.getElementById('wf-paste-close');
+		const pasteCancel = document.getElementById('wf-paste-cancel');
+		const pasteBack   = document.getElementById('wf-paste-backdrop');
+		const pasteSubmit = document.getElementById('wf-paste-submit');
+		const pasteArea   = document.getElementById('wf-paste-content');
+		const pasteError  = document.getElementById('wf-paste-error');
+
+		function openPasteModal() { pasteModal?.classList.remove('hidden'); pasteArea?.focus(); }
+		function closePasteModal() { pasteModal?.classList.add('hidden'); }
+
+		pasteBtn?.addEventListener('click', openPasteModal);
+		pasteClose?.addEventListener('click', closePasteModal);
+		pasteCancel?.addEventListener('click', closePasteModal);
+		pasteBack?.addEventListener('click', closePasteModal);
+		document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePasteModal(); });
+
+		pasteSubmit?.addEventListener('click', async () => {
+			const yaml = pasteArea?.value?.trim();
+			if (!yaml) { showErr('YAML content is empty'); return; }
+			const url = pasteSubmit.dataset.importUrl;
+			pasteSubmit.disabled = true;
+			pasteSubmit.textContent = 'Importing…';
+			try {
+				const blob = new Blob([yaml], { type: 'application/x-yaml' });
+				const fd = new FormData();
+				fd.append('file', blob, 'workflow.yaml');
+				const resp = await fetch(url, { method: 'POST', body: fd });
+				if (resp.redirected) { window.location.href = resp.url; return; }
+				if (!resp.ok) { showErr(await resp.text()); return; }
+				window.location.reload();
+			} catch (err) {
+				showErr(err.message);
+			} finally {
+				pasteSubmit.disabled = false;
+				pasteSubmit.textContent = 'Import';
+			}
+		});
+
+		function showErr(msg) {
+			if (!pasteError) return;
+			pasteError.textContent = msg;
+			pasteError.classList.remove('hidden');
+		}
+	})();
+	</script>
+}
+
+templ listHeader(base string) {
+	<div class="mb-8">
+		<div class="flex items-start justify-between mb-4">
+			<div>
+				<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">Workflows</h1>
+				<p class="mt-1 text-sm text-black-700 dark:text-black-600">DAG-based automations — drag-drop editor, AI-buildable, run-tracked.</p>
+			</div>
+			<!-- Import YAML dropdown -->
+			<div class="relative" id="wf-import-wrap">
+				<button
+					type="button"
+					id="wf-import-btn"
+					class="flex items-center gap-2 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-sm font-medium text-black-700 dark:text-black-400 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+				>
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+					Import YAML ▾
+				</button>
+				<div id="wf-import-menu" class="hidden absolute right-0 top-full mt-1 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md z-20 text-sm overflow-hidden">
+					<label class="flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-800 dark:text-black-300">
+						<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+						Upload file
+						<input type="file" accept=".yaml,.yml" class="hidden" id="wf-import-file" data-import-url={ base + "/workflows/import" }/>
+					</label>
+					<button type="button" id="wf-import-paste-btn" class="flex w-full items-center gap-2 px-3 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-800 dark:text-black-300">
+						<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+						Paste YAML text
+					</button>
+				</div>
+			</div>
+
+			<!-- Paste YAML modal -->
+			<div id="wf-paste-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+				<div class="absolute inset-0 bg-black/40 backdrop-blur-sm" id="wf-paste-backdrop"></div>
+				<div class="relative w-full max-w-xl mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl overflow-hidden">
+					<div class="flex items-center gap-2 px-4 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+						<span class="font-semibold text-sm text-black-900 dark:text-white-100">Paste workflow YAML</span>
+						<button type="button" id="wf-paste-close" class="ml-auto text-black-600 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 text-xl leading-none">×</button>
+					</div>
+					<div class="p-4">
+						<textarea
+							id="wf-paste-content"
+							class="w-full h-64 font-mono text-xs rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 text-black-900 dark:text-white-100 p-3 focus:border-green-500 focus:outline-none resize-none"
+							placeholder={ "name: My Workflow\ntriggers:\n  - type: manual\ngraph:\n  entry: start\n  nodes:\n    - id: start\n      type: end\n      result: done" }
+						></textarea>
+						<div id="wf-paste-error" class="hidden mt-2 text-xs text-red-600 dark:text-red-400"></div>
+					</div>
+					<div class="flex justify-end gap-2 px-4 py-3 border-t border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+						<button type="button" id="wf-paste-cancel" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-1.5 text-sm text-black-700 dark:text-black-400 hover:bg-white-300 dark:hover:bg-navy-700 transition-colors">Cancel</button>
+						<button type="button" id="wf-paste-submit" data-import-url={ base + "/workflows/import" } class="rounded-lg bg-green-500 px-4 py-1.5 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors">Import</button>
+					</div>
+				</div>
+			</div>
+		</div>
+		<!-- New workflow form -->
+		<form method="POST" action={ templ.SafeURL(base + "/workflows") } class="flex items-center gap-2">
+			<input
+				name="name"
+				required
+				maxlength="80"
+				placeholder="Workflow name"
+				class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder:text-black-600 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+			/>
+			<select
+				name="template"
+				class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
+			>
+				<option value="empty">empty</option>
+				<option value="support-triage">support-triage</option>
+				<option value="incident-response">incident-response</option>
+				<option value="daily-digest">daily-digest</option>
+			</select>
+			<button
+				type="submit"
+				class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+			>New workflow</button>
+		</form>
+	</div>
+}
+
+templ listTable(vm ListVM) {
+	<div class="overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+		if len(vm.Workflows) == 0 {
+			<p class="p-8 text-center text-sm text-black-700 dark:text-black-600">
+				No workflows yet. Create one above to open the canvas editor.
+			</p>
+		} else {
+			<table class="w-full text-sm">
+				<thead class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-left text-xs font-semibold uppercase tracking-wider text-black-700 dark:text-black-600">
+					<tr>
+						<th class="px-4 py-3">Name</th>
+						<th class="px-4 py-3">Version</th>
+						<th class="px-4 py-3">Status</th>
+						<th class="px-4 py-3"></th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-white-300 dark:divide-navy-600">
+					for _, w := range vm.Workflows {
+						<tr class="hover:bg-white-200 dark:hover:bg-navy-800/60 transition-colors">
+							<td class="px-4 py-3">
+								<div class="font-medium text-black-900 dark:text-white-100">{ w.Name }</div>
+								<div class="font-mono text-xs text-black-600 dark:text-black-600">{ w.ID }</div>
+							</td>
+							<td class="px-4 py-3 text-black-700 dark:text-black-600">{ fmt.Sprintf("v%d", w.Version) }</td>
+							<td class="px-4 py-3">
+								if w.Enabled {
+									<span class="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-700 dark:text-green-400">
+										<span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+										enabled
+									</span>
+								} else {
+									<span class="inline-flex items-center gap-1 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-semibold text-black-700 dark:text-black-600">
+										<span class="h-1.5 w-1.5 rounded-full bg-black-500 dark:bg-black-600"></span>
+										disabled
+									</span>
+								}
+							</td>
+							<td class="px-4 py-3 text-right">
+								<div class="flex items-center justify-end gap-4">
+									<a
+										href={ templ.SafeURL(vm.Base + "/workflows/edit/" + w.ID + "/download") }
+										class="inline-flex items-center gap-1 text-xs text-black-600 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+										title="Download workflow.yaml"
+									>
+										<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+										YAML
+									</a>
+									<a
+										href={ templ.SafeURL(vm.Base + "/workflows/edit/" + w.ID) }
+										class="text-sm font-semibold text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300"
+									>Open editor →</a>
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
+}
+

@@ -172,6 +172,42 @@ func goValueToString(v reflect.Value) string {
 	}
 }
 
+// MapToStruct fills dst (pointer to struct) from m using each field's
+// wick tag. key= picks the map key; default= is used when the map value
+// is empty or absent. Fields without a wick tag or key are ignored.
+func MapToStruct(m map[string]string, dst any) {
+	v := reflect.ValueOf(dst)
+	for v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		raw := f.Tag.Get("wick")
+		if raw == "" {
+			continue
+		}
+		tag := parseWickTag(raw)
+		key := tag["key"]
+		if key == "" {
+			key = toSnakeCase(f.Name)
+		}
+		val := m[key]
+		if val == "" {
+			val = tag["default"]
+		}
+		if val != "" {
+			v.Field(i).SetString(val)
+		}
+	}
+}
+
 // toSnakeCase converts CamelCase/PascalCase to snake_case. Runs of
 // uppercase letters stay together until the final boundary
 // (APIBaseURL → api_base_url).

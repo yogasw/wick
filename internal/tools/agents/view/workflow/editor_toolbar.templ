@@ -1,0 +1,153 @@
+package workflow
+
+import "fmt"
+
+// EditorToolbar is the header strip — workflow identity + action
+// buttons. Layout mirrors n8n: identity + status badges on the left,
+// run/save controls + publish-with-dropdown + history + 3-dot menu
+// on the right. Destructive items (Delete, Rollback) live inside
+// the 3-dot menu so they don't sit one click away from a misclick.
+templ EditorToolbar(vm EditorVM) {
+	<div class="flex items-center justify-between px-6 py-3 border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+		<div class="flex items-center gap-3">
+			<nav class="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
+				<a href={ templ.SafeURL(vm.Base + "/workflows") } class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-colors">Workflows</a>
+				<span class="text-black-600 dark:text-black-700">›</span>
+				// Click-to-edit display name. Default = heading; click swaps
+				// to an input. Enter/blur posts to /rename and swaps back.
+				// JS in editor.js (wf-name-display / wf-name-input) drives the
+				// toggle so the page paints with no flash on cold load.
+				<button
+					type="button"
+					id="wf-name-display"
+					class="rounded px-1 py-0.5 text-sm font-semibold text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+					title="Click to rename (URL stays the same)"
+					data-rename-url={ vm.Base + "/workflows/edit/" + vm.ID + "/rename" }
+				>{ vm.Workflow.Name }</button>
+				<input
+					type="text"
+					id="wf-name-input"
+					value={ vm.Workflow.Name }
+					maxlength="80"
+					class="hidden bg-transparent border border-green-500 rounded px-1 py-0.5 text-sm font-semibold text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-green-500/30 min-w-[12ch]"
+				/>
+			</nav>
+			<!-- Editor / Executions top-level tabs -->
+			<div class="flex items-center border border-white-400 dark:border-navy-600 rounded-lg overflow-hidden text-xs">
+				<button
+					type="button"
+					id="wf-view-editor"
+					class="px-3 py-1.5 font-medium bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100 border-r border-white-400 dark:border-navy-600"
+					data-wf-view="editor"
+				>Editor</button>
+				<button
+					type="button"
+					id="wf-view-executions"
+					class="px-3 py-1.5 font-medium text-black-600 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+					data-wf-view="executions"
+					data-ex-url={ vm.Base + "/workflows/edit/" + vm.ID + "/executions" }
+				>Executions</button>
+			</div>
+			if vm.Approved {
+				<span class="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:text-blue-400">
+					{ fmt.Sprintf("approved v%d", vm.Workflow.Version) }
+				</span>
+			}
+		</div>
+		<div class="flex items-center gap-2 text-sm" id="wf-toolbar-actions">
+			<span id="wf-save-status" class="self-center text-xs text-black-600 dark:text-black-600 italic" data-state="idle"></span>
+			if vm.HasDraft {
+				<span class="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300" title="Unpublished edits exist in workflow.draft.yaml">
+					<span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+					draft
+				</span>
+			}
+
+			// Active toggle — switch shape mirrors n8n's "Save & active"
+			// pill. The form posts to /toggle which flips the flag on
+			// whichever copy (draft or published) the editor opened.
+			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.ID + "/toggle") } class="inline flex items-center gap-2" title={ "Workflow is " + boolLabel(vm.Workflow.Enabled, "active", "inactive") }>
+				<span class="text-xs text-black-700 dark:text-black-600">
+					if vm.Workflow.Enabled {
+						Active
+					} else {
+						Inactive
+					}
+				</span>
+				<button type="submit" class={ "toggle-track", templ.KV("is-on", vm.Workflow.Enabled) } aria-label="Toggle workflow active">
+					<span class="toggle-knob"></span>
+				</button>
+			</form>
+
+			// Run trigger lives on the canvas (Execute workflow pill) —
+			// it picks which trigger to fire when more than one is
+			// wired. The toolbar only keeps Save + Publish here so
+			// "what fires now" is anchored visually next to the graph.
+
+			<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.ID + "/save") } class="inline" id="save-form">
+				<input type="hidden" name="body" id="save-body"/>
+				<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" title="Save to workflow.draft.yaml (not published)">Save</button>
+			</form>
+
+			// Publish split-button: the main button publishes (no-op
+			// when there's no draft); the caret opens a menu with
+			// "Discard draft" / "Unpublish" so all publish-lifecycle
+			// actions live in one place.
+			<div class="relative inline-flex">
+				if vm.HasDraft {
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.ID + "/publish") } class="inline">
+						<button type="submit" class="rounded-l-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-blue-600 active:bg-blue-700 transition-colors" title="Promote draft to live workflow.yaml">Publish</button>
+					</form>
+				} else {
+					<button type="button" disabled class="rounded-l-lg bg-blue-500/40 px-3 py-1.5 text-xs font-medium text-white-100 cursor-not-allowed" title="No draft to publish">Publish</button>
+				}
+				<button type="button" id="wf-publish-menu-btn" class="rounded-r-lg bg-blue-500 px-2 py-1.5 text-xs font-medium text-white-100 hover:bg-blue-600 active:bg-blue-700 transition-colors border-l border-blue-700" aria-label="Publish menu">▾</button>
+				<div id="wf-publish-menu" class="hidden absolute right-0 top-full mt-1 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md z-20 text-xs">
+					if vm.HasDraft {
+						<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.ID + "/discard") } onsubmit="return confirm('Rollback to last published version? All draft changes will be lost.')">
+							<button type="submit" class="block w-full text-left px-3 py-2 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20">Discard draft</button>
+						</form>
+					}
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.ID + "/toggle") }>
+						<button type="submit" class="block w-full text-left px-3 py-2 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">
+							if vm.Workflow.Enabled {
+								Unpublish (deactivate)
+							} else {
+								Activate
+							}
+						</button>
+					</form>
+				</div>
+			</div>
+
+			// History — opens the runs panel at the bottom of the editor.
+			<button type="button" id="wf-history-btn" class="rounded-lg border border-white-400 dark:border-navy-600 p-1.5 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" title="Show execution history">
+				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 3"/></svg>
+			</button>
+
+			// 3-dot menu — destructive + secondary actions live here
+			// so they can't be misclicked from the primary row.
+			<div class="relative inline-flex">
+				<button type="button" id="wf-more-btn" class="rounded-lg border border-white-400 dark:border-navy-600 p-1.5 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" title="More actions" aria-label="More actions">
+					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+				</button>
+				<div id="wf-more-menu" class="hidden absolute right-0 top-full mt-1 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md z-20 text-xs">
+					<form method="POST" action={ templ.SafeURL(vm.Base + "/workflows/edit/" + vm.ID + "/delete") } onsubmit="return confirm('Delete this workflow?')">
+						<button type="submit" class="block w-full text-left px-3 py-2 text-red-600 dark:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">Delete workflow</button>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// boolLabel picks one of two strings — keeps the templ template free
+// of inline ternaries (templ doesn't support them at expression
+// position) without an extra helper file.
+func boolLabel(b bool, ifTrue, ifFalse string) string {
+	if b {
+		return ifTrue
+	}
+	return ifFalse
+}
+

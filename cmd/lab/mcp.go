@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/yogasw/wick/app"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp"
@@ -27,7 +28,13 @@ func mcpServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Run MCP server over stdio (no auth, local admin)",
 		Run: func(cmd *cobra.Command, args []string) {
-			api.RunMCPStdio("dev", "", "unknown")
+			// Read build metadata from app.* vars — populated by ldflags
+			// at release builds, or auto-filled from debug.ReadBuildInfo()
+			// VCS settings for plain `go build`. Hardcoding "dev"/""/
+			// "unknown" here makes `wick_info` always look like an
+			// unstamped build even when the binary was built with VCS
+			// info available.
+			api.RunMCPStdio(app.BuildAppVersion, app.BuildCommit, app.BuildTime)
 		},
 	}
 }
@@ -47,8 +54,9 @@ func mcpSmokeCmd() *cobra.Command {
 				`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`,
 				`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
 				`{"jsonrpc":"2.0","id":3,"method":"ping"}`,
+				`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wick_info","arguments":{}}}`,
 				`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-				`{"jsonrpc":"2.0","id":4,"method":"unknown/method"}`,
+				`{"jsonrpc":"2.0","id":5,"method":"unknown/method"}`,
 			}, "\n")
 
 			ctx := login.WithUser(
@@ -58,7 +66,7 @@ func mcpSmokeCmd() *cobra.Command {
 			)
 			// nil connectors service: initialize / tools/list / ping all work
 			// without a DB; wick_list / wick_execute would return an error.
-			h := mcp.NewHandler(nil)
+			h := mcp.NewHandler(nil).WithBuildInfo(app.BuildAppVersion, app.BuildCommit, app.BuildTime)
 			h.ServeStdio(ctx, strings.NewReader(messages), cmd.OutOrStdout())
 		},
 	}

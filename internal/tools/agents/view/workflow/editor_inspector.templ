@@ -1,0 +1,288 @@
+package workflow
+
+import wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
+
+// EditorInspector — full-screen overlay modal that pops on top of the
+// editor when a node is selected. Mirrors n8n's debug experience: three
+// columns (Input | Parameters | Output) so the operator can iterate on
+// node params while seeing live input + last output side by side. ESC
+// or the close button hides it; the canvas underneath stays editable.
+//
+// Theme-aware: every utility uses `text-black-900 dark:text-white-100`
+// style pairs so the modal follows the page's light/dark toggle. The
+// wf-inspector-* CSS classes carry their own light/dark variants too.
+templ EditorInspector(vm EditorVM) {
+	<div class="wf-inspector-modal hidden" id="wf-inspector">
+		<div class="wf-inspector-backdrop"></div>
+		<div class="wf-inspector-shell">
+			// Header — node title, docs link, close.
+			<div class="wf-inspector-header">
+				<div class="flex items-center gap-2">
+					<span class="wf-inspector-icon" id="ins-icon">●</span>
+					<span class="font-semibold text-black-900 dark:text-white-100" id="ins-label-head">Node</span>
+					<span class="text-xs text-black-700 dark:text-black-600 font-mono" id="ins-type-head"></span>
+				</div>
+				<div class="flex items-center gap-3">
+					<button type="button" id="ins-close" class="wf-inspector-close" aria-label="Close inspector">×</button>
+				</div>
+			</div>
+
+			<div id="inspector-empty" class="hidden p-6 text-sm text-black-700 dark:text-black-600 italic">
+				Click a node to edit its fields.
+			</div>
+
+			<div id="inspector-node" class="wf-inspector-body">
+				// ── Input pane ─────────────────────────────────────
+				<div class="wf-inspector-col wf-inspector-input">
+					<div class="wf-inspector-col-head">INPUT</div>
+					// Single unified input panel — dropdown selects which upstream
+					// node's output to preview. Default = direct parent. Trigger
+					// nodes show "No input data" (no parent exists).
+					<div id="ins-input-empty" class="wf-inspector-empty">
+						<div class="text-3xl mb-2">⤓</div>
+						<div class="font-medium text-black-900 dark:text-white-100">No input data</div>
+						<button type="button" id="ins-input-from-parent" class="mt-3 rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-600">Execute previous nodes</button>
+						<div class="mt-2 text-[11px] text-black-700 dark:text-black-600">to view input data</div>
+					</div>
+					<div id="ins-input-data" class="hidden flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+						<div class="flex items-center gap-2">
+							<select id="ins-allnodes-select" class="wf-input text-xs flex-1">
+								<option value="">— select node —</option>
+							</select>
+						</div>
+						<div class="flex items-center gap-2 text-[11px]">
+							<button type="button" data-input-view="json" class="px-2 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-300 font-medium">JSON</button>
+							<button type="button" data-input-view="schema" class="px-2 py-0.5 rounded text-black-700 dark:text-black-600">Schema</button>
+						</div>
+						<pre id="ins-input-json" class="font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap"></pre>
+						<pre id="ins-input-schema" class="hidden font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap"></pre>
+					</div>
+				</div>
+
+				// ── Parameters pane (centre) ──────────────────────
+				<div class="wf-inspector-col wf-inspector-params">
+					<div class="wf-inspector-tabs">
+						<button type="button" data-param-tab="parameters" class="wf-inspector-tab is-on">Parameters</button>
+						<button type="button" data-param-tab="settings" class="wf-inspector-tab">Settings</button>
+						<button type="button" id="ins-exec-btn" class="wf-inspector-exec-btn ml-auto" title="Run this node only">
+							<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="inline-block align-[-2px] mr-1"><path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>
+							Execute step
+						</button>
+					</div>
+					<div data-param-panel="parameters" class="wf-inspector-form">
+						<div class="mb-3">
+							<div class="text-[11px] uppercase tracking-wider text-black-700 dark:text-black-600 mb-1">Node id</div>
+							<div class="font-mono text-xs text-black-900 dark:text-white-100" id="ins-id"></div>
+						</div>
+						<input id="ins-type" type="hidden"/>
+
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Label</label>
+						<input id="ins-label" type="text" class="wf-input"/>
+
+						<div id="ins-prompt-panel" class="hidden mt-3">
+							<div class="wf-arg-field" data-field-key="prompt">
+								<div class="wf-arg-field-head">
+									<label class="wf-arg-field-label">Prompt</label>
+									<div class="wf-arg-mode">
+										<button type="button" data-arg-mode="fixed">Fixed</button>
+										<button type="button" data-arg-mode="expression">Expression</button>
+									</div>
+								</div>
+								<textarea id="ins-prompt" name="value" data-field-key="prompt" class="wf-input font-mono" rows="6"></textarea>
+								<div data-arg-preview class="wf-arg-preview"></div>
+							</div>
+						</div>
+
+						<div id="ins-cases-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Cases (branches)</label>
+							<div id="ins-cases" class="space-y-1 text-xs"></div>
+							<button type="button" id="ins-add-case" class="mt-1 text-xs text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300">+ add case</button>
+						</div>
+
+						<div id="ins-preset-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Provider</label>
+							<select id="ins-provider" class="wf-input">
+								<option value="">(default)</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Preset</label>
+							<input id="ins-preset" type="text" placeholder="(default)" class="wf-input"/>
+						</div>
+
+						<div id="ins-command-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Command (one arg per line)</label>
+							<textarea id="ins-command" class="wf-input font-mono" rows="3"></textarea>
+						</div>
+
+						<div id="ins-transform-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Engine</label>
+							<select id="ins-transform-engine" class="wf-input">
+								<option value="gotemplate">gotemplate</option>
+								<option value="jsonpath">jsonpath</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Expression</label>
+							<textarea id="ins-transform-expression" class="wf-input font-mono" rows="6" placeholder="Go template expression…"></textarea>
+						</div>
+
+						@nodeModulePartials()
+
+						<div id="ins-agent-session-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Session override</label>
+							<select id="ins-agent-session" class="wf-input">
+								<option value="">(use default from session_init or engine)</option>
+								<option value="new">new — fresh subprocess per call</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Reuse session from node</label>
+							<input id="ins-agent-session-from" type="text" placeholder="(node id of an upstream agent/session_init)" class="wf-input font-mono"/>
+						</div>
+
+						<div id="ins-channel-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Channel</label>
+							<select id="ins-channel" class="wf-input">
+								<option value="">(select channel)</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Op</label>
+							<select id="ins-op" class="wf-input">
+								<option value="">(select op)</option>
+							</select>
+							<div id="ins-channel-empty" class="hidden mt-2 text-xs text-amber-600 dark:text-amber-400">No channel registered. Configure one in Channels tab first.</div>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Args</label>
+							<div id="ins-channel-args" class="space-y-2"></div>
+						</div>
+
+						<div id="ins-connector-panel" class="hidden">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Module</label>
+							<select id="ins-module" class="wf-input">
+								<option value="">(select module)</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Op</label>
+							<select id="ins-conn-op" class="wf-input">
+								<option value="">(select op)</option>
+							</select>
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Args</label>
+							<div id="ins-conn-args" class="space-y-2"></div>
+						</div>
+
+						// Trigger node panel — content swaps based on triggerKind.
+						// Channel triggers show channel + event picker + match
+						// filter form. Cron / webhook / manual / schedule_at /
+						// error each get their own sub-panel; only the matching
+						// section is unhidden when the inspector opens.
+						<div id="ins-trigger-panel" class="hidden">
+							// Channel-trigger subpanel.
+							<div id="ins-trig-channel-section" class="hidden">
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Channel</label>
+								<select id="ins-trig-channel" class="wf-input">
+									<option value="">(select channel)</option>
+								</select>
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Event</label>
+								<select id="ins-trig-event" class="wf-input">
+									<option value="">(select event)</option>
+								</select>
+								<div id="ins-trig-event-desc" class="mt-1 text-[11px] text-black-700 dark:text-black-600"></div>
+								<div id="ins-trig-match-wrap" class="hidden mt-3">
+									<label class="inline-flex items-center gap-2 cursor-pointer mb-2">
+										<input id="ins-trig-match-enabled" type="checkbox" class="w-4 h-4 accent-green-500 cursor-pointer rounded"/>
+										<span class="text-xs font-medium text-black-800 dark:text-black-600">Filter events (whitelist)</span>
+									</label>
+									<div id="ins-trig-match" class="hidden"></div>
+								</div>
+							</div>
+							// Cron-trigger subpanel.
+							<div id="ins-trig-cron-section" class="hidden">
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Schedule (cron)</label>
+								<input id="ins-trig-schedule" type="text" placeholder="0 */15 * * * *" class="wf-input font-mono"/>
+								<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">6-field cron: sec min hour dom mon dow</div>
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Timezone</label>
+								<input id="ins-trig-timezone" type="text" placeholder="Asia/Jakarta" class="wf-input font-mono"/>
+							</div>
+							// Webhook-trigger subpanel.
+							<div id="ins-trig-webhook-section" class="hidden">
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Path</label>
+								<input id="ins-trig-path" type="text" placeholder="/hooks/my-hook" class="wf-input font-mono"/>
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Method</label>
+								<select id="ins-trig-method" class="wf-input">
+									<option value="">(any)</option>
+									<option>GET</option>
+									<option>POST</option>
+									<option>PUT</option>
+									<option>DELETE</option>
+									<option>PATCH</option>
+								</select>
+							</div>
+							// Manual-trigger subpanel.
+							<div id="ins-trig-manual-section" class="hidden">
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Button label</label>
+								<input id="ins-trig-manual-label" type="text" placeholder="Run now" class="wf-input"/>
+							</div>
+							// Default fallback (no extra fields).
+							<div id="ins-trig-empty-section" class="hidden mt-3 text-[11px] italic text-black-700 dark:text-black-600">
+								No extra configuration for this trigger type.
+							</div>
+						</div>
+
+						<div class="mt-4 p-3 bg-green-500/10 dark:bg-green-500/15 border border-green-500/30 dark:border-green-500/20 rounded-lg text-xs text-green-800 dark:text-green-300">
+							<strong>Output refs available:</strong>
+							<div id="ins-refs" class="mt-1 space-y-0.5 font-mono text-green-700 dark:text-green-400"></div>
+						</div>
+
+						<button type="button" id="ins-delete" class="mt-4 w-full text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 border border-red-300 dark:border-red-700 rounded-lg py-1.5 transition-colors">Delete node</button>
+					</div>
+
+					// Settings tab — mock data + execution policy.
+					<div data-param-panel="settings" class="wf-inspector-form hidden">
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-1">Mock input (JSON, used when Execute step has no parent output)</label>
+						<textarea id="ins-exec-input" class="wf-input font-mono" rows="6" placeholder='{ "text": "hello" }'></textarea>
+					</div>
+				</div>
+
+				// ── Output pane ───────────────────────────────────
+				<div class="wf-inspector-col wf-inspector-output">
+					<div class="wf-inspector-col-head">
+						OUTPUT
+						<span id="ins-exec-latency" class="ml-2 text-[11px] text-black-700 dark:text-black-600"></span>
+					</div>
+					<div id="ins-exec-status" class="px-3 py-2 text-xs italic text-black-700 dark:text-black-600 border-b border-white-300 dark:border-navy-700 break-words whitespace-pre-wrap overflow-hidden"></div>
+					<div id="ins-output-empty" class="wf-inspector-empty">
+						<div class="text-3xl mb-2">⤒</div>
+						<div class="font-medium text-black-900 dark:text-white-100">No output data</div>
+						<button type="button" id="ins-output-exec" class="mt-3 rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-red-600">Execute step</button>
+						<div class="mt-2 text-[11px] text-black-700 dark:text-black-600">
+							or <button type="button" id="ins-output-mock" class="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 underline">set mock data</button>
+						</div>
+					</div>
+					<div id="ins-exec-output" class="hidden flex-1 overflow-y-auto p-3">
+						<div class="flex items-center gap-2 mb-2 text-[11px]">
+							<button type="button" data-exec-tab="json" class="px-2 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-300 font-medium">JSON</button>
+							<button type="button" data-exec-tab="schema" class="px-2 py-0.5 rounded text-black-700 dark:text-black-600">Schema</button>
+						</div>
+						<pre id="ins-exec-json" class="font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap"></pre>
+						<pre id="ins-exec-schema" class="hidden font-mono text-xs text-black-900 dark:text-white-100 whitespace-pre-wrap"></pre>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// nodeModulePartials iterates the per-node registry and emits each
+// module's inspector partial. The partials are sibling div blocks
+// inside the parameters tab — editor.js shows/hides them based on
+// the selected node's data-node-type attribute. Empty registry =
+// nothing emitted.
+templ nodeModulePartials() {
+	for _, m := range wfnodes.All() {
+		@m.InspectorPartial()
+	}
+}
+
+// NodeModuleScripts emits <script> tags for every per-node module
+// that declares an InspectorScript path. Called from editor.templ
+// next to the main editor.js load so the per-node modules attach
+// before the user opens the inspector.
+templ NodeModuleScripts(base string) {
+	for _, m := range wfnodes.All() {
+		if path := m.InspectorScript(); path != "" {
+			<script src={ base + "/static/nodes/" + path } defer></script>
+		}
+	}
+}

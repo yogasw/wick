@@ -1,0 +1,42 @@
+package workflow
+
+import "github.com/yogasw/wick/internal/tools/agents/view"
+
+// Editor is the main canvas page — toolbar + 3-column flex (palette /
+// canvas / inspector) + bottom tabs. Mirrors mockup §3 with the
+// agents tab's theme palette (white/navy/black/green).
+templ Editor(vm EditorVM) {
+	@view.AgentsLayout(vm.Layout) {
+		@Shell(vm.Base)
+		<div class="flex flex-col bg-white-100 dark:bg-navy-700" data-wf-base={ vm.Base + "/workflows" } style="height:100vh">
+			@EditorToolbar(vm)
+			<!-- Editor view (canvas + inspector + bottom panel) -->
+			<div class="flex flex-1 min-h-0 relative" id="wf-view-editor-body">
+				@EditorPalette(vm.Palette)
+				@EditorCanvas(vm)
+				@EditorInspector(vm)
+			</div>
+			<div id="wf-editor-bottom-wrap">
+				@EditorBottom(vm)
+			</div>
+			<!-- Executions view — hidden until tab clicked, loaded on demand -->
+			<div class="flex-1 min-h-0 hidden overflow-hidden" id="wf-view-executions-body">
+				<div id="wf-executions-content" class="h-full w-full"></div>
+			</div>
+			<div id="wf-toast-host" class="wf-toast-host" aria-live="polite"></div>
+			@editorBootstrap(vm)
+		</div>
+	}
+}
+
+// editorBootstrap injects the graph JSON via a hidden data attribute
+// (templ blocks raw <script> bodies, so we round-trip through a div
+// dataset) and loads editor.js + the standalone widget scripts the
+// inspector hydrate flow calls into (picker.js exposes
+// wickInitPickers; future widgets land alongside).
+templ editorBootstrap(vm EditorVM) {
+	<div id="wf-graph-data" class="hidden" data-graph={ vm.GraphJSON } data-validation={ vm.ValidationJSON }></div>
+	<script src={ vm.Base + "/static/js/widgets/picker.js" } defer></script>
+	@NodeModuleScripts(vm.Base)
+	<script src={ vm.Base + "/static/js/workflow/editor.js" } defer></script>
+}

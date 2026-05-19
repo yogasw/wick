@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -58,6 +59,12 @@ type Handler struct {
 	// agent until the user answers via the web UI. nil = tool
 	// returns an error pointing the agent at the dashboard.
 	askUsers *askuser.Manager
+	// askUserAllowed is the gate-policy check evaluated on every
+	// ask_user call. Returns (true, "") when the tool should run,
+	// (false, reason) when the agent should be told to pick a default
+	// instead of waiting on the user. nil = always allowed (fallback
+	// for tests / stdio where there is no gate config).
+	askUserAllowed func() (bool, string)
 }
 
 func NewHandler(c *connectors.Service) *Handler {
@@ -87,6 +94,16 @@ func (h *Handler) WithWickRoot(root string) *Handler {
 // error (used in tests / read-only deployments).
 func (h *Handler) WithAskUser(m *askuser.Manager) *Handler {
 	h.askUsers = m
+	return h
+}
+
+// WithAskUserPolicy installs a gate-policy hook evaluated on every
+// ask_user call. The hook returns (true, "") to allow the tool to
+// block on the user, or (false, reason) to short-circuit and surface
+// reason to the agent so it picks a sensible default. nil means
+// "always allowed" — used by stdio mode where no gate is wired.
+func (h *Handler) WithAskUserPolicy(fn func() (bool, string)) *Handler {
+	h.askUserAllowed = fn
 	return h
 }
 
@@ -354,7 +371,7 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 		},
 		{
 			Name: "wick_info",
-			Description: "Return wick server info. Fields: wick_version, server_build_time, server_commit, " +
+			Description: "Return wick server info. Fields: app_name, app_version, wick_version, server_build_time, server_commit, " +
 				"access_type ('cli' when running as a local stdio process with filesystem access, 'http' when running as a remote HTTP server), " +
 				"wick_root (absolute path to the project directory — only set for 'cli', empty for 'http'). " +
 				"Use access_type and wick_root to decide whether you can edit connector config files directly or must redirect the user to the Wick UI.",
@@ -393,7 +410,10 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 				"choices and an optional freeform field; their answer is returned as JSON {\"value\":\"...\",\"text\":\"...\"}. " +
 				"Default timeout is 5 minutes; on timeout the tool returns an error and you should choose a sensible " +
 				"default rather than retrying immediately. session_id is required and must match the active wick agent " +
-				"session — pass the value the user mentioned or that you saw in the conversation context.",
+				"session — pass the value the user mentioned or that you saw in the conversation context. " +
+				"This tool may also return an error 'blocked by gate policy' when the operator disabled ask_user " +
+				"for the current channel (e.g. Slack/HTTP runs where no human can answer); on that error, pick a " +
+				"sensible default and proceed without retrying.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -564,6 +584,21 @@ func (h *Handler) handleAskUser(w http.ResponseWriter, r *http.Request, req rpcR
 			"ask_user disabled — wick is not running with the agents UI", nil)
 		return
 	}
+	if h.askUserAllowed != nil {
+		if ok, reason := h.askUserAllowed(); !ok {
+			// Surface the policy as a tool error so the LLM sees the
+			// `isError: true` envelope and decides on a default instead
+			// of retrying. Wording matters: callers tune their prompt
+			// around this string, so keep it stable + actionable.
+			msg := "ask_user blocked by gate policy"
+			if strings.TrimSpace(reason) != "" {
+				msg += " (" + reason + ")"
+			}
+			msg += " — pick a sensible default and proceed without prompting the user."
+			writeToolError(w, req.ID, msg, "ask_user")
+			return
+		}
+	}
 
 	type optionIn struct {
 		Label string `json:"label"`
@@ -647,6 +682,8 @@ func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
 		accessType = "cli"
 	}
 	info := map[string]string{
+		"app_name":          appname.Resolve(),
+		"app_version":       appname.BuildAppVersion,
 		"wick_version":      h.version,
 		"server_build_time": h.buildTime,
 		"server_commit":     h.commit,

@@ -737,9 +737,13 @@ templ configsSaveScript() {
 				var idx=rule.indexOf(':');
 				if(idx<0){el.style.display='';return;}
 				var key=rule.slice(0,idx).trim();
-				var want=rule.slice(idx+1).trim();
+				// Value half supports a|b|c (pipe-separated OR) so a
+				// field can be gated on a set of allowed dependency
+				// values. Single value still works because split returns
+				// a one-element array.
+				var allowed=rule.slice(idx+1).split('|').map(function(s){return s.trim();});
 				var have=currentFieldValue(form,key);
-				el.style.display=(have===want)?'':'none';
+				el.style.display=(allowed.indexOf(have)>=0)?'':'none';
 			});
 		}
 

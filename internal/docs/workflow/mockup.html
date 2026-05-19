@@ -1,0 +1,2854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workflow — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
+<script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+  .yaml-key   { color: #7dd3fc; }
+  .yaml-str   { color: #fde68a; }
+  .yaml-num   { color: #f0abfc; }
+  .yaml-cmt   { color: #6b7280; font-style: italic; }
+  .yaml-bool  { color: #f0abfc; }
+  .arrow-dn::after { content: "↓"; display:block; text-align:center; color:#6b7280; font-size:1.5rem; line-height:1; margin: -.2rem 0; }
+  .grid-bg { background-image: radial-gradient(circle, #e5e7eb 1px, transparent 1px); background-size: 16px 16px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:999px; }
+
+  /* Custom Drawflow nodes */
+  #canvas-demo { height: 520px; background: #f8fafc; background-image: radial-gradient(circle, #e2e8f0 1px, transparent 1px); background-size: 18px 18px; }
+  .drawflow .drawflow-node {
+    border-radius: 12px;
+    padding: 0;
+    background: white;
+    border: 2px solid transparent;
+    min-width: 200px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .drawflow .drawflow-node.selected {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 4px rgba(99,102,241,0.15);
+  }
+  .drawflow .drawflow-node .node-head {
+    padding: 8px 12px;
+    border-radius: 10px 10px 0 0;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: white;
+  }
+  .drawflow .drawflow-node .node-body {
+    padding: 10px 12px;
+  }
+  .drawflow .drawflow-node.node-trigger .node-head { background: #6366f1; }
+  .drawflow .drawflow-node.node-classify .node-head { background: #ec4899; }
+  .drawflow .drawflow-node.node-agent .node-head { background: #8b5cf6; }
+  .drawflow .drawflow-node.node-connector .node-head { background: #14b8a6; }
+  .drawflow .drawflow-node.node-channel .node-head { background: #6366f1; }
+  .drawflow .drawflow-node.node-shell .node-head { background: #64748b; }
+  .drawflow .drawflow-node.node-http .node-head { background: #f59e0b; }
+  .drawflow .drawflow-node.node-db .node-head { background: #0ea5e9; }
+  .drawflow .drawflow-node.node-branch .node-head { background: #f43f5e; }
+  .drawflow .drawflow-node.node-parallel .node-head { background: #a3e635; color: #1a2e05; }
+  .drawflow .drawflow-node.node-end .node-head { background: #475569; }
+  .drawflow .drawflow-node .node-body .meta { font-size: 11px; color: #64748b; }
+  .drawflow .drawflow-node .node-body .title { font-weight: 600; font-size: 13px; color: #1e293b; }
+  .drawflow .connection .main-path { stroke: #94a3b8; stroke-width: 2; }
+  .drawflow .connection.case-bug .main-path { stroke: #ef4444; }
+  .drawflow .input, .drawflow .output { width: 14px; height: 14px; border-color: #94a3b8; }
+
+  .palette-item {
+    cursor: grab;
+    user-select: none;
+    transition: all 0.15s;
+  }
+  .palette-item:hover { transform: translateX(2px); }
+  .palette-item:active { cursor: grabbing; }
+
+  .canvas-controls { position: absolute; right: 12px; top: 12px; z-index: 10; display: flex; flex-direction: column; gap: 6px; }
+  .canvas-controls button { background: white; border: 1px solid #e2e8f0; width: 32px; height: 32px; border-radius: 6px; font-weight: 600; color: #475569; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+  .canvas-controls button:hover { background: #f1f5f9; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+<!-- HERO -->
+<header class="bg-gradient-to-br from-indigo-700 via-purple-800 to-slate-900 text-white py-16">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="badge bg-amber-400 text-amber-900">proposed</span>
+      <span class="text-indigo-200 text-sm">internal/docs/workflow-design.md</span>
+    </div>
+    <h1 class="text-5xl font-bold tracking-tight">Workflow</h1>
+    <p class="text-xl text-indigo-100 mt-4 max-w-3xl leading-relaxed">
+      Multi-step automation graph yang bisa dibuat admin atau AI tanpa recompile.
+      Drag-drop canvas + node-based: klasifikasi AI, skill, shell, HTTP, DB query,
+      branch. Trigger cron / channel / webhook / manual. State file-based + resume-able.
+    </p>
+    <div class="mt-6 flex gap-2 flex-wrap text-sm">
+      <span class="badge bg-indigo-500/30 border border-indigo-300/30">canvas editor</span>
+      <span class="badge bg-indigo-500/30 border border-indigo-300/30">DAG-capable engine</span>
+      <span class="badge bg-indigo-500/30 border border-indigo-300/30">AI-editable via MCP</span>
+      <span class="badge bg-indigo-500/30 border border-indigo-300/30">test mode + fixtures</span>
+      <span class="badge bg-indigo-500/30 border border-indigo-300/30">resume on crash</span>
+      <span class="badge bg-indigo-500/30 border border-indigo-300/30">AI guard</span>
+    </div>
+  </div>
+</header>
+
+<!-- ANATOMY -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">1. Anatomi sebuah workflow</h2>
+  <p class="text-slate-600 mb-8">Empat sisi: trigger (kapan), action (apa), env (config + secret), datasets (state lookup). Notifikasi success/failure = explicit action node di graph (tidak ada field <code>notify:</code> terpisah). Plus governance (approve, guard). Engine impl pakai istilah "graph" / "node" / "DAG" — accurate di technical level (lihat §6).</p>
+
+  <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-indigo-500">
+      <div class="text-indigo-600 text-xs font-bold uppercase tracking-wide mb-2">1 — Trigger</div>
+      <h3 class="text-base font-bold mb-2">Kapan jalan</h3>
+      <ul class="text-xs text-slate-600 space-y-1">
+        <li><code class="text-indigo-700">cron</code></li>
+        <li><code class="text-indigo-700">channel</code></li>
+        <li><code class="text-indigo-700">webhook</code></li>
+        <li><code class="text-indigo-700">manual</code></li>
+        <li><code class="text-indigo-700">schedule_at</code></li>
+        <li><code class="text-rose-700">error</code> <span class="text-slate-400">n8n-style</span></li>
+      </ul>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-purple-500">
+      <div class="text-purple-600 text-xs font-bold uppercase tracking-wide mb-2">2 — Action</div>
+      <h3 class="text-base font-bold mb-2">Apa yg dilakukan (node types)</h3>
+      <ul class="text-xs text-slate-600 space-y-1">
+        <li><span class="dot bg-pink-500"></span> <code class="text-pink-700">classify</code> (AI)</li>
+        <li><span class="dot bg-violet-500"></span> <code class="text-violet-700">agent</code> (skills inside)</li>
+        <li><span class="dot bg-indigo-500"></span> <code class="text-indigo-700">channel</code> — outbound (reply/send/react)</li>
+        <li><span class="dot bg-teal-500"></span> <code class="text-teal-700">connector</code> — external API</li>
+        <li><span class="dot bg-slate-500"></span> <code class="text-slate-700">shell</code> / <code class="text-slate-700">python</code></li>
+        <li><span class="dot bg-amber-500"></span> <code class="text-amber-700">http</code> / <code class="text-amber-700">db_query</code></li>
+        <li><span class="dot bg-emerald-500"></span> <code class="text-emerald-700">dataset_*</code> — wick internal</li>
+        <li><span class="dot bg-rose-500"></span> <code class="text-rose-700">branch</code> / <code class="text-rose-700">parallel</code></li>
+      </ul>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-pink-500">
+      <div class="text-pink-600 text-xs font-bold uppercase tracking-wide mb-2">3 — Env &amp; Secret</div>
+      <h3 class="text-base font-bold mb-2">Config (§8)</h3>
+      <ul class="text-xs text-slate-600 space-y-1">
+        <li><code class="text-pink-700">text</code> / <code class="text-pink-700">textarea</code></li>
+        <li><code class="text-rose-700">secret</code> (encrypted)</li>
+        <li><code class="text-pink-700">number</code> / <code class="text-pink-700">checkbox</code></li>
+        <li><code class="text-pink-700">dropdown</code> / <code class="text-emerald-700">kvlist</code> / <code class="text-violet-700">picker</code></li>
+        <li class="text-slate-500 italic">reuse config-tags vocab</li>
+      </ul>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-emerald-500">
+      <div class="text-emerald-600 text-xs font-bold uppercase tracking-wide mb-2">4 — Datasets</div>
+      <h3 class="text-base font-bold mb-2">Data store binding (§9)</h3>
+      <ul class="text-xs text-slate-600 space-y-1">
+        <li><code class="text-emerald-700">datasets:</code> field declare alias</li>
+        <li>shared <code>wick_datasets_rows</code> table</li>
+        <li>schema di <code>dataset.yaml</code></li>
+        <li>UI tab terpisah (table view)</li>
+        <li class="text-slate-500 italic">akses via <code>dataset_*</code> node di Action</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="mt-6 p-4 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-900">
+    <strong>Notifikasi via action node, bukan field terpisah.</strong> Workflow yang mau post Slack on-success: tambah <code>type: channel</code> atau <code>type: connector</code> action node di akhir graph. Branching success/failure pakai <code>on_failure: fallback</code> + fallback node. Implicit reply-to-source thread untuk trigger channel masih ada (engine convenience).
+  </div>
+
+  <div class="mt-3 p-4 bg-rose-50 border-l-4 border-rose-400 rounded text-sm text-rose-900">
+    <strong>Error handling cross-workflow (n8n-style).</strong> Workflow declare <code>on_error: { trigger_workflow: "error-handler" }</code> → kalau fail, engine fire workflow "error-handler" yg subscribe <code>type: error</code> trigger. Error-handler dapet payload (source workflow, failed node, error msg, state snapshot). Loop protection: max 3 nested error workflows. Cocok buat centralized escalation + auto-retry pattern.
+  </div>
+
+  <!-- Folder anatomy -->
+  <div class="mt-8 grid md:grid-cols-2 gap-4">
+    <div class="bg-slate-900 text-slate-100 p-6 rounded-xl mono text-sm leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Workflow folder</div>
+<pre>&lt;BaseDir&gt;/workflows/<span class="text-emerald-300">support-triage/</span>
+├─ <span class="text-amber-300">workflow.yaml</span>           <span class="yaml-cmt"># graph + triggers + env schema</span>
+├─ <span class="text-amber-300">env.yaml</span>                <span class="yaml-cmt"># values (UI-managed, secret encrypted)</span>
+├─ <span class="text-amber-300">README.md</span>
+├─ <span class="text-emerald-300">nodes/</span>                <span class="yaml-cmt"># per-node assets (opsional)</span>
+│  ├─ <span class="text-amber-300">classify-intent.md</span>   <span class="yaml-cmt"># prompt buat classify node</span>
+│  ├─ <span class="text-amber-300">format-answer.md</span>     <span class="yaml-cmt"># prompt buat agent node</span>
+│  └─ <span class="text-amber-300">enrich-user.sql</span>      <span class="yaml-cmt"># query buat db_query node</span>
+├─ <span class="text-emerald-300">__tests__/</span>            <span class="yaml-cmt"># fixture per node</span>
+│  └─ <span class="text-amber-300">classify-intent.json</span>
+└─ <span class="text-emerald-300">runs/</span>                 <span class="yaml-cmt"># state per run (auto-managed)</span>
+   └─ <span class="text-emerald-300">01938...uuid/</span>
+      ├─ <span class="text-amber-300">state.json</span>        <span class="yaml-cmt"># snapshot</span>
+      ├─ <span class="text-amber-300">events.jsonl</span>      <span class="yaml-cmt"># append-only log</span>
+      └─ <span class="text-emerald-300">nodes/</span>          <span class="yaml-cmt"># output cache per node</span></pre>
+    </div>
+    <div class="bg-slate-900 text-slate-100 p-6 rounded-xl mono text-sm leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Dataset (schema in file, data in DB)</div>
+<pre>&lt;BaseDir&gt;/datasets/<span class="text-emerald-300">processed-events/</span>
+├─ <span class="text-amber-300">dataset.yaml</span>            <span class="yaml-cmt"># current schema (active)</span>
+└─ <span class="text-emerald-300">history/</span>              <span class="yaml-cmt"># version snapshots (gitops)</span>
+   ├─ <span class="text-amber-300">v1.yaml</span>
+   ├─ <span class="text-amber-300">v2.yaml</span>
+   └─ <span class="text-amber-300">v3.yaml</span>
+
+<span class="yaml-cmt"># Data di 1 shared Postgres table:</span>
+<span class="text-cyan-300">TABLE</span> wick_datasets_rows
+  WHERE dataset_slug = 'processed-events'
+</pre>
+      <p class="text-xs text-slate-400 mt-3">Versioning via file (gitops, <code>git log</code> = audit gratis). Data di wick Postgres. Workflow link via alias di <code>datasets:</code> field. Lihat §9.</p>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section class="bg-white py-16 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2">2. Use cases yang dicover</h2>
+    <p class="text-slate-600 mb-8">Empat pattern konkret. Workflow yang ga muat ke salah satunya = scope creep.</p>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <!-- UC1 -->
+      <div class="bg-slate-50 rounded-xl p-6 border border-slate-200">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-emerald-100 text-emerald-700">tree</span>
+          <h3 class="text-lg font-bold">1. Slack support triage</h3>
+        </div>
+        <p class="text-sm text-slate-600 mb-4">Pesan masuk #support → klasifikasi bug/question/feature → route ke connector / agent.</p>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed">trigger: channel #support
+  ↓
+classify (AI): bug | question | feature | other
+  ├─ bug      → connector: linear · create_issue   → channel reply
+  ├─ question → agent: lookup docs + reply         → channel reply
+  ├─ feature  → connector: airtable · append_row   → channel reply
+  └─ other    → agent: friendly bounce</pre>
+      </div>
+
+      <!-- UC2 -->
+      <div class="bg-slate-50 rounded-xl p-6 border border-slate-200">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-purple-100 text-purple-700">DAG</span>
+          <h3 class="text-lg font-bold">2. Incident response (paralel + merge)</h3>
+        </div>
+        <p class="text-sm text-slate-600 mb-4">Pager fires → fetch 3 sumber paralel → gabung → analisis AI → escalate/heal.</p>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed">trigger: webhook /hooks/pagerduty
+  ↓
+parallel:
+  ├─ http: grafana dashboard
+  ├─ shell: ssh prod "df -h"
+  └─ db_query: recent errors
+  ↓ merge
+agent: analisis
+  ↓
+classify: needs_human | self_heal
+  ├─ human    → connector: pagerduty · escalate
+  └─ self_heal → shell: runbook.sh</pre>
+      </div>
+
+      <!-- UC3 -->
+      <div class="bg-slate-50 rounded-xl p-6 border border-slate-200">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-purple-100 text-purple-700">DAG</span>
+          <h3 class="text-lg font-bold">3. Daily digest</h3>
+        </div>
+        <p class="text-sm text-slate-600 mb-4">Cron pagi → fetch 3 sumber paralel → AI summarize → post Slack.</p>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed">trigger: cron "0 8 * * *" Asia/Jakarta
+  ↓
+parallel:
+  ├─ connector: github · list_issues (24h)
+  ├─ connector: linear · list_issues (24h)
+  └─ channel: slack · summarize #product-feedback
+  ↓ merge
+agent: bikin digest markdown
+  ↓
+channel: slack · send_message → #leadership</pre>
+      </div>
+
+      <!-- UC4 -->
+      <div class="bg-slate-50 rounded-xl p-6 border border-slate-200">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-purple-100 text-purple-700">3 trigger → 1 workflow</span>
+          <h3 class="text-lg font-bold">4. Multi-stage interactive (ticket flow)</h3>
+        </div>
+        <p class="text-sm text-slate-600 mb-4">Inquiry → button → AI summary modal → submit ticket. <strong>1 workflow, 3 trigger, 3 entry_node</strong>. Tidak ada engine pause — chain via channel interaction events.</p>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed">triggers:
+  - { type: channel, event: message,    entry_node: post-button }
+  - { type: channel, event: action,     entry_node: fetch-thread }
+  - { type: channel, event: submission, entry_node: create-ticket }
+
+graph (3 stage chains):
+  STAGE 1 (message → button):
+    post-button (connector: chat.post_with_button)  [run #1 ends]
+
+  STAGE 2 (action → AI + modal):
+    fetch-thread → summarize (agent + skill) → show-modal  [run #2]
+
+  STAGE 3 (submission → ticket + reply):
+    create-ticket → confirm-reply  [run #3]</pre>
+      </div>
+
+      <!-- UC5 -->
+      <div class="bg-slate-50 rounded-xl p-6 border border-slate-200 md:col-span-2">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge bg-emerald-100 text-emerald-700">tree (nested)</span>
+          <h3 class="text-lg font-bold">5. Nested classification</h3>
+        </div>
+        <p class="text-sm text-slate-600 mb-4">Pesan → "ini pertanyaan?" → "topiknya apa?" → "open/closed?" → handler tepat.</p>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed">trigger: channel chat #support
+  ↓
+classify-1: question | statement
+  └─ question →
+       classify-2: product-A | product-B | other
+       └─ product-A →
+            classify-3: how-to | bug-report
+            ├─ how-to     → agent skills=[product-A-docs] → reply
+            └─ bug-report → connector tracker.create + reply</pre>
+      </div>
+    </div>
+
+    <div class="mt-8 p-4 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-900">
+      <strong>Tree vs DAG.</strong> Tree (single parent, no merge) cukup buat 80% kasus AI orchestration.
+      DAG (parallel + merge) perlu pas fan-out → gabung → process. Engine support keduanya; canvas bebas.
+    </div>
+  </div>
+</section>
+
+<!-- CANVAS DEMO -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">3. Canvas editor — live demo</h2>
+  <p class="text-slate-600 mb-8">Drag node dari palette, sambungin edge, klik node buat edit. <em>Drawflow</em> (vanilla JS, ~28KB) cocok dengan stack wick (templ + tailwind + vanilla JS).</p>
+
+  <div class="bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden">
+    <!-- Header toolbar -->
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50">
+      <div class="flex items-center gap-3">
+        <h3 class="font-bold text-slate-800">support-triage</h3>
+        <span class="badge bg-emerald-100 text-emerald-700">enabled</span>
+        <span class="badge bg-blue-100 text-blue-700">approved v3</span>
+      </div>
+      <!-- Toolbar: Save + Publish only. The Execute workflow trigger
+           lives on the canvas (floating pill) so the user picks which
+           trigger to fire from a menu next to the graph itself. -->
+      <div class="flex gap-2 text-sm">
+        <button class="px-3 py-1.5 bg-white border border-slate-300 rounded hover:bg-slate-100">YAML</button>
+        <button class="px-3 py-1.5 bg-white border border-slate-300 rounded hover:bg-slate-100">Test</button>
+        <button class="px-3 py-1.5 bg-white border border-slate-300 rounded hover:bg-slate-100 font-medium">Save</button>
+        <button class="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium">Publish</button>
+      </div>
+    </div>
+
+    <div class="flex">
+      <!-- Palette -->
+      <aside class="w-48 border-r border-slate-200 bg-slate-50 p-3 text-sm">
+        <div class="text-xs uppercase tracking-wide text-slate-500 font-bold mb-2 mt-1">Triggers</div>
+        <div class="space-y-1 mb-4">
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-indigo-500"></span> cron</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-indigo-500"></span> channel</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-indigo-500"></span> webhook</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-rose-500"></span> error <span class="ml-auto text-slate-400 text-xs">on fail</span></div>
+        </div>
+
+        <div class="text-xs uppercase tracking-wide text-slate-500 font-bold mb-2">AI</div>
+        <div class="space-y-1 mb-4">
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-pink-500"></span> classify</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-violet-500"></span> agent</div>
+        </div>
+
+        <div class="text-xs uppercase tracking-wide text-slate-500 font-bold mb-2">Action</div>
+        <div class="space-y-1 mb-4">
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-indigo-500"></span> channel <span class="ml-auto text-slate-400 text-xs">action</span></div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-teal-500"></span> connector</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-slate-500"></span> shell</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-amber-500"></span> http</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-sky-500"></span> db_query</div>
+        </div>
+
+        <div class="text-xs uppercase tracking-wide text-slate-500 font-bold mb-2">Logic</div>
+        <div class="space-y-1">
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-rose-500"></span> branch</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-lime-500"></span> parallel</div>
+          <div class="palette-item px-3 py-2 bg-white border border-slate-200 rounded flex items-center gap-2"><span class="dot bg-slate-700"></span> end</div>
+        </div>
+      </aside>
+
+      <!-- Canvas -->
+      <div class="flex-1 relative">
+        <!-- Zoom controls live bottom-left so they don't fight the
+             top-right Add-node button and the bottom-centre Execute pill. -->
+        <!-- Canvas controls (bottom-left stack):
+             +/−  : zoom
+             ⤢    : fit-to-view (re-runs the same routine that auto-
+                    centres on page load with [zoom_min..1.0] clamp)
+             ⇒    : auto-format (layered T→B topological)
+             🔒   : lock toggle — drawflow switches to fixed mode,
+                    nodes can still be clicked (inspector opens) but
+                    not dragged/deleted/connected. State persists via
+                    localStorage. -->
+        <div class="canvas-controls" style="bottom:12px;left:12px;top:auto;right:auto;flex-direction:column-reverse;">
+          <button title="Zoom in (Ctrl + Scroll)">+</button>
+          <button title="Zoom out (Ctrl + Scroll)">−</button>
+          <button title="Reset view (fit to canvas)">⤢</button>
+          <button title="Auto-format (layered T→B)">⇒</button>
+          <button title="Lock canvas — disable node edits">🔒</button>
+        </div>
+        <!-- Add-node floating button — opens the palette as a right
+             slide-in drawer. Replaces the always-on sidebar so the
+             canvas can use the full viewport by default. -->
+        <button title="Add node" style="position:absolute;top:12px;right:12px;width:38px;height:38px;border-radius:50%;background:#fff;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 10px rgba(0,0,0,0.08);">+</button>
+        <div id="canvas-demo"></div>
+        <!-- Floating Execute workflow pill. Click opens a menu listing
+             every trigger on the canvas with its wired target node; user
+             picks which trigger to fire. Multi-trigger workflows route
+             via Trigger.Type → engine.pickEntry. -->
+        <div style="position:absolute;bottom:24px;left:50%;transform:translateX(-50%);">
+          <button style="display:inline-flex;align-items:center;gap:6px;background:#ef4444;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 20px rgba(239,68,68,0.35);">
+            🧪 Execute workflow <span style="font-size:10px;opacity:0.85;">▾</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Inspector -->
+      <aside class="w-80 border-l border-slate-200 bg-slate-50 p-4 text-sm">
+        <div class="text-xs uppercase tracking-wide text-slate-500 font-bold mb-3">Inspector</div>
+        <div class="bg-white border border-slate-200 rounded p-3 mb-3">
+          <div class="text-xs text-slate-500 mb-1">Selected node</div>
+          <div class="font-bold text-pink-600">classify-intent</div>
+          <div class="text-xs text-slate-500 mt-0.5">type: classify</div>
+        </div>
+
+        <label class="block text-xs font-medium text-slate-600 mb-1 mt-3">Prompt</label>
+        <textarea class="w-full bg-white border border-slate-300 rounded p-2 mono text-xs" rows="4">Klasifikasi pesan support berikut.
+Pesan: {{.Event.Payload.text}}
+Jawab: bug | question | feature | other</textarea>
+
+        <label class="block text-xs font-medium text-slate-600 mb-1 mt-3">Cases (branches)</label>
+        <div class="space-y-1 text-xs">
+          <div class="flex gap-1"><input value="bug" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1"><input value="handle-bug" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1 text-slate-600"></div>
+          <div class="flex gap-1"><input value="question" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1"><input value="handle-question" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1 text-slate-600"></div>
+          <div class="flex gap-1"><input value="feature_request" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1"><input value="handle-feature" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1 text-slate-600"></div>
+          <div class="flex gap-1"><input value="default" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1 italic"><input value="silent-end" class="flex-1 bg-white border border-slate-300 rounded px-2 py-1 text-slate-600"></div>
+        </div>
+
+        <label class="block text-xs font-medium text-slate-600 mb-1 mt-3">Preset</label>
+        <select class="w-full bg-white border border-slate-300 rounded p-1.5 text-xs">
+          <option>classifier-cheap</option>
+          <option>classifier</option>
+          <option>support-responder</option>
+        </select>
+
+        <div class="mt-4 p-3 bg-indigo-50 border border-indigo-200 rounded text-xs text-indigo-900">
+          <strong>Output refs available:</strong><br>
+          <code class="text-indigo-700">{{.Event.Payload.text}}</code><br>
+          <code class="text-indigo-700">{{.Event.Payload.user}}</code><br>
+          <code class="text-indigo-700">{{.Node.classify-intent.verdict}}</code>
+        </div>
+
+        <div class="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-900">
+          <strong>Per-arg Fixed | Expression toggle</strong><br>
+          Inspector args punya pill toggle: <strong>Fixed</strong> (default, literal) vs <strong>Expression</strong> (Go template). Drop draggable dari INPUT pane → auto-flip ke Expression. Mode tersimpan di <code>arg_modes</code> YAML.
+        </div>
+
+        <div class="mt-2 p-3 bg-cyan-50 border border-cyan-200 rounded text-xs text-cyan-900">
+          <strong>Replay debug (no-fire)</strong><br>
+          <code>↻ Replay in editor</code> di tiap Runs row → state + events di-load ke editor, badge node + Logs + INPUT/OUTPUT cache. Trigger event juga ke-cache jadi drag-drop bisa langsung dari payload Slack history.
+        </div>
+      </aside>
+    </div>
+
+    <!-- Bottom panel. Logs is the default — SSE live-tails every
+         node event as the run executes. Runs tab uses the sharded
+         index file so pagination is constant-time at any history
+         size; Newer / Older buttons drive `?runs_page=N`. -->
+    <div class="border-t border-slate-200 bg-slate-50">
+      <div class="flex border-b border-slate-200 bg-white text-sm">
+        <button class="px-4 py-2 border-b-2 border-indigo-500 text-indigo-700 font-medium">Logs <span class="text-xs text-slate-500 ml-1">(0)</span></button>
+        <button class="px-4 py-2 text-slate-600 hover:text-slate-900">YAML preview</button>
+        <button class="px-4 py-2 text-slate-600 hover:text-slate-900">Runs (8)</button>
+        <button class="px-4 py-2 text-slate-600 hover:text-slate-900">Guard</button>
+      </div>
+      <pre class="p-4 mono text-xs text-slate-200 bg-slate-900 overflow-x-auto leading-relaxed"><span class="yaml-key">id</span>: <span class="yaml-str">0193e2b4-6c20-7a5f-...</span>
+<span class="yaml-key">name</span>: <span class="yaml-str">Slack Support Triage</span>
+<span class="yaml-key">enabled</span>: <span class="yaml-bool">true</span>
+
+<span class="yaml-key">triggers</span>:
+  - <span class="yaml-key">id</span>: <span class="yaml-str">trigger-channel-slack</span>
+    <span class="yaml-key">type</span>: <span class="yaml-str">channel</span>
+    <span class="yaml-key">entry_node</span>: <span class="yaml-str">classify-intent</span>
+    <span class="yaml-key">channel</span>: <span class="yaml-str">slack</span>
+    <span class="yaml-key">target</span>: <span class="yaml-str">"#support"</span>
+    <span class="yaml-key">match</span>:
+      <span class="yaml-key">mention_bot</span>: <span class="yaml-bool">true</span>
+
+<span class="yaml-key">graph</span>:
+  <span class="yaml-cmt"># entry/edges populated by canvas; graph.entry is a legacy
+  # fallback only for hand-edited YAML without per-trigger entry_node.</span>
+  <span class="yaml-key">nodes</span>:
+    - <span class="yaml-key">id</span>: <span class="yaml-str">classify-intent</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">classify</span>
+      <span class="yaml-key">preset</span>: <span class="yaml-str">classifier-cheap</span>
+      <span class="yaml-key">prompt</span>: |
+        Klasifikasi pesan support berikut.
+        Pesan: {{.Event.Payload.text}}
+        Jawab: bug | question | feature | other
+      <span class="yaml-key">cases</span>:
+        <span class="yaml-key">bug</span>: <span class="yaml-str">handle-bug</span>
+        <span class="yaml-key">question</span>: <span class="yaml-str">handle-question</span>
+        <span class="yaml-key">feature_request</span>: <span class="yaml-str">handle-feature</span>
+        <span class="yaml-key">default</span>: <span class="yaml-str">silent-end</span>
+
+    - <span class="yaml-key">id</span>: <span class="yaml-str">handle-bug</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">skill</span>
+      <span class="yaml-key">skill</span>: <span class="yaml-str">create-linear-ticket</span>
+      <span class="yaml-key">args</span>:
+        <span class="yaml-key">title</span>: <span class="yaml-str">"{{.Event.Payload.text | truncate 80}}"</span>
+        <span class="yaml-key">project</span>: <span class="yaml-str">SUPPORT</span>
+      <span class="yaml-key">next</span>: <span class="yaml-str">reply-link</span></pre>
+    </div>
+  </div>
+
+  <p class="mt-4 text-sm text-slate-600 italic">↑ Live Drawflow demo. Drag node, drag dari satu output ke input lain. (Read-only di mockup ini — production version full editable.)</p>
+</section>
+
+<!-- NODE CATALOG -->
+<section class="bg-white py-16 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2">4. Katalog node types</h2>
+    <p class="text-slate-600 mb-8">Tiap node punya schema spesifik. Output di-stamp ke <code class="bg-slate-100 px-1.5 py-0.5 rounded text-pink-700">{{.Node.&lt;id&gt;.&lt;field&gt;}}</code>, downstream consume via template.</p>
+
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+      <!-- classify -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-pink-500 flex items-center justify-center text-white font-bold text-xs">CLS</div>
+          <h3 class="font-bold">classify</h3>
+          <span class="badge bg-pink-100 text-pink-700 ml-auto">AI</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">LLM klasifikasi → verdict enum. 6-layer reliability (lihat §5).</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: classify
+provider: claude       # optional
+preset: classifier-cheap
+prompt: |
+  Klasifikasi: {{.Event.Payload.text}}
+output_cases: [bug, question]
+
+# edges in graph.edges[]:
+# - { from: <this>, case: bug,     to: handle-bug }
+# - { from: <this>, case: default, to: end }</pre>
+      </div>
+
+      <!-- agent -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-violet-500 flex items-center justify-center text-white font-bold text-xs">AGT</div>
+          <h3 class="font-bold">agent</h3>
+          <span class="badge bg-violet-100 text-violet-700 ml-auto">provider-aware</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Agent reasoning, skills inside (provider-specific bundle). Session: new / root / persistent.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: agent
+provider: claude          # claude|codex|gemini
+preset: support-responder
+session: new              # new|root|persistent
+skills: [docs-search]
+prompt: |
+  Q: {{.Event.Payload.text}}
+max_turns: 5</pre>
+      </div>
+
+      <!-- channel (action) -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-indigo-500 flex items-center justify-center text-white font-bold text-xs">CHN</div>
+          <h3 class="font-bold">channel</h3>
+          <span class="badge bg-indigo-100 text-indigo-700 ml-auto">agent domain</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Outbound action via channel module (reply/send/react). Symmetric dgn trigger.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: channel
+channel: slack
+op: reply_thread
+args:
+  channel: "{{.Event.Payload.channel_id}}"
+  thread: "{{.Event.Payload.thread}}"
+  text: "Tracked: {{.Node.t.html_url}}"</pre>
+      </div>
+
+      <!-- connector -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-teal-500 flex items-center justify-center text-white font-bold text-xs">CON</div>
+          <h3 class="font-bold">connector</h3>
+          <span class="badge bg-teal-100 text-teal-700 ml-auto">reuse existing</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Invoke connector module op. Full reuse <code>connectors/&lt;name&gt;/</code>.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: connector
+module: github
+op: create_issue
+args:
+  repo: "acme/inbox"
+  title: "{{.Event.Payload.text}}"
+# edge: { from: <this>, to: reply-link }</pre>
+      </div>
+
+      <!-- shell -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-slate-500 flex items-center justify-center text-white font-bold text-xs">SH</div>
+          <h3 class="font-bold">shell</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Bash/sh exec. Output: <code>.stdout</code>, <code>.exit_code</code>, parse JSON optional.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: shell
+command: [bash, nodes/check.sh]
+env:
+  HOST: prod-1.abc.com
+parse_output: json
+timeout_sec: 30</pre>
+      </div>
+
+      <!-- http -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-amber-500 flex items-center justify-center text-white font-bold text-xs">HTP</div>
+          <h3 class="font-bold">http</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">HTTP request dgn header/body template. SSRF allowlist enforced.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: http
+method: GET
+url: https://api.github.com/...
+headers:
+  Authorization: "Bearer {{.Secret.GH}}"
+parse_response: json
+retry: {max: 3}</pre>
+      </div>
+
+      <!-- db_query -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-sky-500 flex items-center justify-center text-white font-bold text-xs">DB</div>
+          <h3 class="font-bold">db_query</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Parameterized SQL only. Output: <code>.rows</code>, <code>.row_count</code>.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: db_query
+database: main
+query: |
+  SELECT id, email FROM users
+  WHERE last_active &gt; $1
+args:
+  - "{{.Event.At}}"</pre>
+      </div>
+
+      <!-- branch -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-rose-500 flex items-center justify-center text-white font-bold text-xs">BR</div>
+          <h3 class="font-bold">branch</h3>
+          <span class="badge bg-emerald-100 text-emerald-700 ml-auto">if · switch</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Deterministic routing, no LLM. Boolean → if/else, string → switch.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: branch
+expr: '{{.Node.t.severity}}'
+
+# edges:
+# - { from: <this>, case: critical, to: page-oncall }
+# - { from: <this>, case: high,     to: notify-team }
+# - { from: <this>, case: default,  to: silent }</pre>
+      </div>
+
+      <!-- parallel -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-lime-500 flex items-center justify-center text-slate-900 font-bold text-xs">PAR</div>
+          <h3 class="font-bold">parallel</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Fan-out N branches, wait-for-all. Output keyed per branch.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: parallel
+branches:
+  - grafana-fetch
+  - db-fetch
+  - shell-check
+# edge: { from: <this>, to: merge-results }</pre>
+      </div>
+
+      <!-- transform -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-cyan-500 flex items-center justify-center text-white font-bold text-xs">TFM</div>
+          <h3 class="font-bold">transform</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">jq / gotemplate / jsonpath. Reshape data antar node.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: transform
+engine: jq
+input: "{{.Node.users.rows}}"
+expression: "[.[] | .id]"
+# edge: { from: <this>, to: enrich }</pre>
+      </div>
+
+      <!-- python -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-yellow-500 flex items-center justify-center text-slate-900 font-bold text-xs">PY</div>
+          <h3 class="font-bold">python</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">venv per workflow, hash-validated. Output JSON parse optional.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: python
+script: nodes/process.py
+requirements: requirements.txt
+env:
+  DATA: "{{.Node.fetch.json}}"
+parse_output: json</pre>
+      </div>
+
+      <!-- merge -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-emerald-500 flex items-center justify-center text-white font-bold text-xs">MRG</div>
+          <h3 class="font-bold">merge</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Explicit fan-in. Wait listed nodes, combine output.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: merge
+inputs: [a, b, c]
+strategy: object
+# edge: { from: <this>, to: process }</pre>
+      </div>
+
+      <!-- dataset_exists -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-emerald-400 flex items-center justify-center text-white font-bold text-xs">DSX</div>
+          <h3 class="font-bold">dataset_exists</h3>
+          <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">"Ada row yang match?" 1 node check + branch. Dedup pattern terpendek.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_exists
+dataset: events
+where:
+  id: "{{.Event.Payload.event_id}}"
+  is_processed: true
+
+# edges:
+# - { from: <this>, case: "true",  to: skip }
+# - { from: <this>, case: "false", to: process }</pre>
+      </div>
+
+      <!-- dataset_get -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-emerald-500 flex items-center justify-center text-white font-bold text-xs">DSG</div>
+          <h3 class="font-bold">dataset_get</h3>
+          <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Load 1 row by primary key. Branch via found / not_found.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_get
+dataset: users
+key:
+  id: "{{.Event.Payload.user}}"
+
+# edges:
+# - { from: <this>, case: found,     to: enrich }   # .row avail
+# - { from: <this>, case: not_found, to: create }</pre>
+      </div>
+
+      <!-- dataset_query -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">DSQ</div>
+          <h3 class="font-bold">dataset_query</h3>
+          <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Multi-row search. Filter, sort, paginate.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_query
+dataset: tickets
+where: { status: pending }
+order_by:
+  - { column: created_at, direction: desc }
+limit: 50</pre>
+      </div>
+
+      <!-- dataset_insert / upsert -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-emerald-700 flex items-center justify-center text-white font-bold text-xs">DSU</div>
+          <h3 class="font-bold">dataset_insert / upsert</h3>
+          <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Insert fresh atau insert-or-update (idempotent).</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_upsert
+dataset: events
+key: [id]
+row:
+  id: "{{.Event.Payload.event_id}}"
+  status: received
+  is_processed: false</pre>
+      </div>
+
+      <!-- end -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded bg-slate-700 flex items-center justify-center text-white font-bold text-xs">END</div>
+          <h3 class="font-bold">end</h3>
+        </div>
+        <p class="text-xs text-slate-600 mb-3">Terminator. Optional <code>result</code> as final workflow output.</p>
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: end
+result: "{{.Node.summary.text}}"</pre>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- CLASSIFY RELIABILITY -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">5. Reliable AI classification</h2>
+  <p class="text-slate-600 mb-8">LLM ga deterministik — output bisa "Bug.", "I think this is bug", atau "bug_report". Wick handle lewat 6 lapis defense. Default sudah agresif (layer 1-3 active), sisanya opt-in.</p>
+
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold w-12">#</th>
+          <th class="text-left p-3 font-semibold">Layer</th>
+          <th class="text-left p-3 font-semibold">Apa yg dilakukan</th>
+          <th class="text-left p-3 font-semibold">Default</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-bold text-pink-600">1</td>
+          <td class="p-3 font-medium"><code class="text-pink-700">structured_output</code></td>
+          <td class="p-3 text-slate-600">AI di-prompt return JSON schema <code>{verdict, confidence, reasoning}</code>. CLI output di-parse + validate. Provider abstract per impl (lihat §5.1 CLI vs API SDK).</td>
+          <td class="p-3"><span class="badge bg-emerald-100 text-emerald-700">ON</span></td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-bold text-pink-600">2</td>
+          <td class="p-3 font-medium"><code class="text-pink-700">normalize</code></td>
+          <td class="p-3 text-slate-600">Lowercase, trim, strip <code>.</code>/<code>,</code>/<code>"</code>/<code>'</code>. "Bug." → "bug".</td>
+          <td class="p-3"><span class="badge bg-emerald-100 text-emerald-700">ON</span></td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-bold text-pink-600">3</td>
+          <td class="p-3 font-medium">exact match</td>
+          <td class="p-3 text-slate-600">Cek <code>cases</code> keys. Found? Route. Skip ke layer 4.</td>
+          <td class="p-3"><span class="badge bg-emerald-100 text-emerald-700">ON</span></td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-bold text-pink-600">4</td>
+          <td class="p-3 font-medium"><code class="text-pink-700">fuzzy_match</code></td>
+          <td class="p-3 text-slate-600">Levenshtein &lt; 3 ke key terdekat. "bug_report" → "bug", "kestion" → "question".</td>
+          <td class="p-3"><span class="badge bg-slate-200 text-slate-600">opt-in</span></td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-bold text-pink-600">5</td>
+          <td class="p-3 font-medium"><code class="text-pink-700">retry_on_mismatch</code></td>
+          <td class="p-3 text-slate-600">Output ga match? Re-prompt dgn pesan lebih strict ("JAWAB CUMA satu dari: ..."). Retry N kali.</td>
+          <td class="p-3"><span class="badge bg-amber-100 text-amber-700">1×</span></td>
+        </tr>
+        <tr>
+          <td class="p-3 font-bold text-pink-600">6</td>
+          <td class="p-3 font-medium"><code class="text-pink-700">confidence_threshold</code></td>
+          <td class="p-3 text-slate-600">AI return <code>{verdict, confidence}</code>. Kalau confidence &lt; threshold → fire <code>default</code> case + audit warn.</td>
+          <td class="p-3"><span class="badge bg-slate-200 text-slate-600">0.0</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6">
+    <div>
+      <h3 class="font-bold mb-3">Schema-enforced output</h3>
+      <p class="text-sm text-slate-600 mb-3">Engine derive JSON schema dari <code>cases</code> keys. Prompt builder kirim schema ke CLI sebagai instruksi, parser validate stdout:</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed">{
+  <span class="yaml-key">"name"</span>: <span class="yaml-str">"classify_response"</span>,
+  <span class="yaml-key">"input_schema"</span>: {
+    <span class="yaml-key">"type"</span>: <span class="yaml-str">"object"</span>,
+    <span class="yaml-key">"properties"</span>: {
+      <span class="yaml-key">"verdict"</span>: {
+        <span class="yaml-key">"type"</span>: <span class="yaml-str">"string"</span>,
+        <span class="yaml-key">"enum"</span>: [<span class="yaml-str">"bug"</span>, <span class="yaml-str">"question"</span>,
+                 <span class="yaml-str">"feature_request"</span>, <span class="yaml-str">"other"</span>]
+      },
+      <span class="yaml-key">"confidence"</span>: {<span class="yaml-key">"type"</span>: <span class="yaml-str">"number"</span>},
+      <span class="yaml-key">"reasoning"</span>: {<span class="yaml-key">"type"</span>: <span class="yaml-str">"string"</span>}
+    },
+    <span class="yaml-key">"required"</span>: [<span class="yaml-str">"verdict"</span>]
+  }
+}</pre>
+    </div>
+    <div>
+      <h3 class="font-bold mb-3">Few-shot boost (optional)</h3>
+      <p class="text-sm text-slate-600 mb-3">Embed sample input → output di prompt, reliability naik signifikan:</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">examples</span>:
+  - <span class="yaml-key">input</span>: <span class="yaml-str">"ada bug di chat widget"</span>
+    <span class="yaml-key">output</span>: <span class="yaml-str">bug</span>
+  - <span class="yaml-key">input</span>: <span class="yaml-str">"gimana cara connect?"</span>
+    <span class="yaml-key">output</span>: <span class="yaml-str">question</span>
+  - <span class="yaml-key">input</span>: <span class="yaml-str">"tolong tambahin dark mode"</span>
+    <span class="yaml-key">output</span>: <span class="yaml-str">feature_request</span></pre>
+    </div>
+  </div>
+
+  <div class="mt-6 p-4 bg-emerald-50 border-l-4 border-emerald-400 rounded text-sm text-emerald-900">
+    <strong>End-state guarantee:</strong> Habis 6 layer masih mismatch → fire <code>default</code> case + audit log warning. <code>default</code> ga ada di <code>cases</code> = config bug, validator reject di parse time.
+  </div>
+
+  <!-- 5.1 CLI vs API SDK -->
+  <h3 class="text-2xl font-bold mt-12 mb-2">5.1 Structured output via CLI (bukan API SDK)</h3>
+  <p class="text-slate-600 mb-6">Wick agent jalan via subprocess <a href="#" class="text-indigo-600 hover:underline"><code>internal/agents/provider/</code></a> — <code>claude</code>, <code>codex</code>, <code>gemini</code> adalah CLI binary, bukan API SDK call. Beda penting buat reliability strategy.</p>
+
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold"></th>
+          <th class="text-left p-3 font-semibold text-amber-700">API SDK (n8n / direct integration)</th>
+          <th class="text-left p-3 font-semibold text-indigo-700">CLI subprocess (wick)</th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Schema enforcement</td>
+          <td class="p-3"><code>tool_use</code> / <code>response_format</code> di API call — provider-level</td>
+          <td class="p-3">Prompt-based + parse stdout — application-level</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Output channel</td>
+          <td class="p-3">JSON response body</td>
+          <td class="p-3">stdout (text atau <code>--output-format json</code> kalau CLI support)</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Latency</td>
+          <td class="p-3">~200-1000ms</td>
+          <td class="p-3">~500-2000ms (proc spawn overhead)</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Tool ecosystem</td>
+          <td class="p-3">per node config</td>
+          <td class="p-3 text-emerald-700">inherit dari agent session (file/bash/MCP) — built-in</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Cost predictability</td>
+          <td class="p-3">tinggi (token count langsung)</td>
+          <td class="p-3">indirect (parse CLI usage report)</td>
+        </tr>
+        <tr>
+          <td class="p-3 font-medium">Streaming</td>
+          <td class="p-3">server-sent events</td>
+          <td class="p-3">stdin/stdout stream</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Provider interface (extension)</div>
+<pre class="mono text-xs leading-relaxed"><span class="text-cyan-300">type</span> Provider <span class="text-cyan-300">interface</span> {
+  <span class="text-amber-200">Name</span>() <span class="text-cyan-300">string</span>
+  <span class="yaml-cmt">// ... existing agent methods</span>
+
+  <span class="yaml-cmt">// New for classify-style nodes:</span>
+  <span class="text-amber-200">StructuredCall</span>(ctx, prompt, schema, opts)
+    (StructuredResult, error)
+}
+
+<span class="text-cyan-300">type</span> StructuredResult <span class="text-cyan-300">struct</span> {
+  Raw    <span class="text-cyan-300">string</span>          <span class="yaml-cmt">// stdout CLI</span>
+  Parsed map[<span class="text-cyan-300">string</span>]<span class="text-cyan-300">any</span>  <span class="yaml-cmt">// JSON-parsed</span>
+  OK     <span class="text-cyan-300">bool</span>            <span class="yaml-cmt">// parse + validate</span>
+  Error  <span class="text-cyan-300">string</span>
+  Usage  Usage                <span class="yaml-cmt">// tokens, cost</span>
+}</pre>
+    </div>
+
+    <div>
+      <h3 class="font-bold mb-3">Per-provider implementation</h3>
+      <div class="space-y-3">
+        <div class="bg-slate-50 border border-slate-200 rounded p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="badge bg-violet-100 text-violet-700">Claude Code CLI</span>
+          </div>
+          <p class="text-xs text-slate-600 mt-1"><code>claude --output-format json --print &lt;prompt&gt;</code> + system prompt yang minta JSON shape. Parse stdout.</p>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 rounded p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="badge bg-blue-100 text-blue-700">Codex CLI</span>
+            <span class="badge bg-amber-100 text-amber-700">TBD</span>
+          </div>
+          <p class="text-xs text-slate-600 mt-1">Cek CLI capabilities, kemungkinan prompt-only + parse fallback.</p>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 rounded p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="badge bg-emerald-100 text-emerald-700">Gemini CLI</span>
+            <span class="badge bg-amber-100 text-amber-700">TBD</span>
+          </div>
+          <p class="text-xs text-slate-600 mt-1">Cek CLI capabilities, kemungkinan prompt-only + parse fallback.</p>
+        </div>
+      </div>
+      <p class="text-xs text-slate-500 mt-3 italic">CLI ga support strict JSON mode → fallback prompt-only + agresif layer 4-5 (fuzzy + retry).</p>
+      <div class="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-900">
+        <strong>Universal baseline.</strong> Prompt-based JSON shape + parser (layer 1) bekerja di semua CLI. Per-provider <code>Capabilities()</code> interface declare structured mode support — engine pilih path optimal. Layer 4-5 tetep aktif sebagai safety net.
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-indigo-50 border-l-4 border-indigo-400 rounded p-4 text-sm text-indigo-900 mb-6">
+    <strong>Trade-off accepted:</strong> wick ~1-2s per classify call (vs ~500ms API SDK), tapi agent dapet tool ecosystem (Read/Edit/Bash/MCP) built-in untuk node <code>agent</code> complex. Cocok untuk wick's domain: AI orchestration, bukan high-throughput API gateway.
+  </div>
+
+  <!-- Reasoning visibility -->
+  <h3 class="text-2xl font-bold mt-12 mb-2">5.2 Result inspection — "AI bilang apa, kenapa?"</h3>
+  <p class="text-slate-600 mb-6">User butuh tau alasan AI mutusin verdict tertentu. <code>confidence</code> + <code>reasoning</code> wajib di-surface di UI run timeline + audit page.</p>
+
+  <div class="grid md:grid-cols-2 gap-6">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Output structure</div>
+<pre class="mono text-xs leading-relaxed">{
+  <span class="yaml-key">"verdict"</span>: <span class="yaml-str">"bug"</span>,
+  <span class="yaml-key">"confidence"</span>: <span class="yaml-num">0.92</span>,
+  <span class="yaml-key">"reasoning"</span>: <span class="yaml-str">"mentions production error
+                 and widget breakage"</span>
+}</pre>
+      <p class="text-xs text-slate-400 mt-3"><code>confidence</code> + <code>reasoning</code> opt-out via <code>output_fields: [verdict]</code> kalau pengen minimal.</p>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-bold mb-3">UI run timeline display</h3>
+      <div class="bg-slate-50 border border-slate-200 rounded p-3 mono text-xs leading-relaxed">
+        <div class="text-slate-400">[10:00:03]</div>
+        <div class="mt-1">  ├─ <span class="text-pink-600 font-bold">classify-intent</span></div>
+        <div>  │    ├─ <span class="text-slate-600">input:</span> "ada bug di widget production"</div>
+        <div>  │    ├─ <span class="text-slate-600">verdict:</span> <span class="text-emerald-600 font-bold">bug</span> · <span class="text-slate-500">confidence 0.92</span></div>
+        <div>  │    ├─ <span class="text-amber-600">reasoning:</span> mentions production error</div>
+        <div>  │    │              and widget breakage</div>
+        <div>  │    └─ <span class="text-slate-500">2.1s · 245 tok · $0.0008</span></div>
+      </div>
+      <p class="text-xs text-slate-500 mt-3 italic">Reasoning expandable per click. Audit page indexed by verdict + confidence range untuk trace pattern.</p>
+    </div>
+  </div>
+
+  <!-- 5.3 Cost cap -->
+  <h3 class="text-2xl font-bold mt-12 mb-2">5.3 Cost cap — defense terhadap channel spam</h3>
+  <p class="text-slate-600 mb-6">Classify call = subprocess CLI + LLM tokens. Channel-rame workflow bisa nuclear cost. Three-layer defense:</p>
+
+  <div class="grid md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-rose-50 border border-rose-200 rounded-xl p-5">
+      <div class="text-rose-700 text-xs font-bold uppercase mb-2">1 — Rate limit</div>
+      <h4 class="font-bold mb-1">60/min hard cap</h4>
+      <p class="text-xs text-slate-600">Per workflow, existing §14 Security. Hit cap → trigger queue overflow per workflow config.</p>
+    </div>
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-5">
+      <div class="text-amber-700 text-xs font-bold uppercase mb-2">2 — Daily token budget</div>
+      <h4 class="font-bold mb-1"><code>MAX_DAILY_CLASSIFY_TOKENS</code></h4>
+      <p class="text-xs text-slate-600">Env field (widget: <code>number</code>, default 0=unlimited). Engine track running sum per UTC day. Hit cap → reject classify, fire <code>default</code> case if exists.</p>
+    </div>
+    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-5">
+      <div class="text-emerald-700 text-xs font-bold uppercase mb-2">3 — Input cache (opt-in)</div>
+      <h4 class="font-bold mb-1"><code>cache_ttl_sec</code></h4>
+      <p class="text-xs text-slate-600">Per-node field. Hash <code>Event.Text</code> + prompt template, cache verdict. Saves N calls untuk pesan identik berulang. Reset on prompt change.</p>
+    </div>
+  </div>
+
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed mb-6"><span class="yaml-cmt"># workflow.yaml — apply cost cap</span>
+<span class="yaml-key">env</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">MAX_DAILY_CLASSIFY_TOKENS</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">number</span>
+    <span class="yaml-key">default</span>: <span class="yaml-num">100000</span>      <span class="yaml-cmt"># cap budget for spam protection</span>
+
+<span class="yaml-key">graph</span>:
+  <span class="yaml-key">nodes</span>:
+    - <span class="yaml-key">id</span>: <span class="yaml-str">classify-intent</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">classify</span>
+      <span class="yaml-key">cache_ttl_sec</span>: <span class="yaml-num">3600</span>           <span class="yaml-cmt"># reuse classification 1h</span>
+      <span class="yaml-key">prompt</span>: |
+        ...
+      <span class="yaml-key">cases</span>:
+        ...
+        <span class="yaml-key">default</span>: <span class="yaml-str">silent-end</span>     <span class="yaml-cmt"># fires kalau budget exceeded</span></pre>
+
+  <!-- 5.4 Skill discovery per provider -->
+  <h3 class="text-2xl font-bold mt-12 mb-2">5.4 Skill discovery per provider</h3>
+  <p class="text-slate-600 mb-6">Skill = capability bundle spesifik per provider (Claude Code skill, Codex skill, Gemini skill). Wick query provider buat list, AI/UI tampilin sebagai checklist di agent node Inspector.</p>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mono text-xs leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Provider interface extension</div>
+<pre><span class="text-cyan-300">type</span> Provider <span class="text-cyan-300">interface</span> {
+  <span class="text-amber-200">Name</span>() <span class="text-cyan-300">string</span>
+  <span class="text-amber-200">Capabilities</span>() Capabilities
+  <span class="text-amber-200">StructuredCall</span>(...) (...)
+
+  <span class="yaml-cmt">// NEW: skill catalog discovery</span>
+  <span class="text-amber-200">ListSkills</span>(ctx) ([]Skill, error)
+}
+
+<span class="text-cyan-300">type</span> Skill <span class="text-cyan-300">struct</span> {
+  Name        <span class="text-cyan-300">string</span>     <span class="yaml-cmt">// "weekly-sync"</span>
+  Description <span class="text-cyan-300">string</span>
+  InputSchema map[<span class="text-cyan-300">string</span>]<span class="text-cyan-300">any</span>
+  Source      <span class="text-cyan-300">string</span>     <span class="yaml-cmt">// builtin | bundle</span>
+}</pre>
+    </div>
+
+    <div>
+      <h4 class="font-bold mb-3">Per-provider impl</h4>
+      <div class="space-y-3">
+        <div class="bg-violet-50 border border-violet-200 rounded p-3 text-xs">
+          <strong class="text-violet-700">Claude Code CLI</strong>
+          <p class="text-slate-700 mt-1"><code>claude --list-skills --output-format json</code> atau parse <code>~/.claude/skills/</code> directory. Cache di <code>status_cache</code>.</p>
+        </div>
+        <div class="bg-blue-50 border border-blue-200 rounded p-3 text-xs">
+          <strong class="text-blue-700">Codex CLI · TBD</strong>
+          <p class="text-slate-700 mt-1">Cek CLI capability di impl time, fallback empty list kalau ga support.</p>
+        </div>
+        <div class="bg-emerald-50 border border-emerald-200 rounded p-3 text-xs">
+          <strong class="text-emerald-700">Gemini CLI · TBD</strong>
+          <p class="text-slate-700 mt-1">Cek CLI capability di impl time.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-indigo-50 border-l-4 border-indigo-400 rounded p-4 text-sm text-indigo-900 mb-6">
+    <strong>UI Inspector flow.</strong> User pilih <code>provider: claude</code> di agent node → UI panggil <code>Provider.ListSkills()</code> (cached) → checklist muncul → user pilih → write ke <code>skills: [...]</code>. Validator workflow load reject kalau skill ga match provider (Claude skill di-pair dgn Gemini provider).
+  </div>
+
+  <!-- 5.5 Session management -->
+  <h3 class="text-2xl font-bold mt-12 mb-2">5.5 Session management — CLI subprocess reuse</h3>
+  <p class="text-slate-600 mb-6">CLI spawn ~500ms-1s overhead. Workflow dgn 5 agent node = 5× spawn kalau setiap node fresh. Field <code>session:</code> per node control behavior.</p>
+
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold">Mode</th>
+          <th class="text-left p-3 font-semibold">Behavior</th>
+          <th class="text-left p-3 font-semibold">Use case</th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100">
+          <td class="p-3"><code class="text-emerald-700">new</code> <span class="badge bg-emerald-100 text-emerald-700 ml-1">default</span></td>
+          <td class="p-3">Fresh subprocess per node, ga share context</td>
+          <td class="p-3">Isolation, deterministic, paralel-safe</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3"><code class="text-amber-700">root</code></td>
+          <td class="p-3">Share single subprocess di-spawn di awal workflow run, semua <code>root</code>-session node lewat proses sama. Sequential dalam run.</td>
+          <td class="p-3">Multi-turn reasoning across nodes, faster (1× spawn)</td>
+        </tr>
+        <tr>
+          <td class="p-3"><code class="text-rose-700">persistent</code></td>
+          <td class="p-3">Subprocess persist across <strong>workflow runs</strong>, session ID = workflow slug. Context inherit dari run sebelumnya</td>
+          <td class="p-3">Long-running assistant pattern, learn-from-history</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div>
+      <h4 class="font-bold mb-2">YAML example</h4>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">- id</span>: <span class="yaml-str">classify-intent</span>
+  <span class="yaml-key">type</span>: <span class="yaml-str">classify</span>
+  <span class="yaml-key">session</span>: <span class="yaml-str">new</span>           <span class="yaml-cmt"># default, classify independent</span>
+
+<span class="yaml-key">- id</span>: <span class="yaml-str">deep-analysis</span>
+  <span class="yaml-key">type</span>: <span class="yaml-str">agent</span>
+  <span class="yaml-key">session</span>: <span class="yaml-str">root</span>          <span class="yaml-cmt"># share context dgn root nodes lain</span>
+  ...
+
+<span class="yaml-key">- id</span>: <span class="yaml-str">ongoing-monitor</span>
+  <span class="yaml-key">type</span>: <span class="yaml-str">agent</span>
+  <span class="yaml-key">session</span>: <span class="yaml-str">persistent</span>    <span class="yaml-cmt"># context bawa dari run sebelumnya</span>
+  ...</pre>
+    </div>
+
+    <div>
+      <h4 class="font-bold mb-2">Engine behavior</h4>
+      <ul class="text-sm text-slate-700 space-y-2 list-disc list-inside">
+        <li><code>state.json</code> map: <code>{sessions: {root: &lt;proc_id&gt;, persistent: &lt;proc_id&gt;}}</code></li>
+        <li>Root spawn lazy (saat node pertama dgn <code>session: root</code> run)</li>
+        <li>Workflow end → kill <code>new</code> + <code>root</code> sessions, detach <code>persistent</code></li>
+        <li>Crash mid-run: state.json resume dari <code>current</code>, root re-spawn (lose intermediate context dari mode root — known trade-off, documented)</li>
+        <li><strong>Parallel + root = serialize.</strong> Engine queue root-session nodes sequentially (1 proc, no concurrent prompts)</li>
+      </ul>
+      <div class="mt-3 p-3 bg-amber-50 border-l-4 border-amber-400 rounded text-xs text-amber-900">
+        <strong>Default:</strong> <code>classify</code> = <code>new</code> (independent), <code>agent</code> = <code>new</code> (isolation safe). Opt-in <code>root</code> kalau butuh shared context, <code>persistent</code> selalu explicit.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BRANCH IF/SWITCH -->
+<section class="bg-white py-16 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2">6. <code>branch</code> — switch & if/else</h2>
+    <p class="text-slate-600 mb-8">Routing deterministik tanpa LLM. Sama node, dua pattern. Pakai ini dulu kalau aturan bisa di-encode pasti — <strong>1ms latency, no cost</strong>.</p>
+
+    <div class="grid md:grid-cols-2 gap-6 mb-8">
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-6">
+        <h3 class="font-bold mb-3 text-slate-800">if / else (boolean expr)</h3>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed"><span class="yaml-key">- id</span>: <span class="yaml-str">check-priority</span>
+  <span class="yaml-key">type</span>: <span class="yaml-str">branch</span>
+  <span class="yaml-key">expr</span>: <span class="yaml-str">'{{.Node.t.priority}} == "p0"'</span>
+  <span class="yaml-key">cases</span>:
+    <span class="yaml-str">"true"</span>: <span class="yaml-str">page-oncall</span>
+    <span class="yaml-str">"false"</span>: <span class="yaml-str">queue-normal</span></pre>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-6">
+        <h3 class="font-bold mb-3 text-slate-800">switch (string expr)</h3>
+<pre class="mono text-xs bg-white p-4 rounded border border-slate-200 leading-relaxed"><span class="yaml-key">- id</span>: <span class="yaml-str">route-severity</span>
+  <span class="yaml-key">type</span>: <span class="yaml-str">branch</span>
+  <span class="yaml-key">expr</span>: <span class="yaml-str">'{{.Node.t.severity}}'</span>
+  <span class="yaml-key">cases</span>:
+    <span class="yaml-key">critical</span>: <span class="yaml-str">page-oncall</span>
+    <span class="yaml-key">high</span>: <span class="yaml-str">notify-team</span>
+    <span class="yaml-key">medium</span>: <span class="yaml-str">queue-normal</span>
+    <span class="yaml-key">default</span>: <span class="yaml-str">queue-low</span></pre>
+      </div>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="text-left p-3 font-semibold"></th>
+            <th class="text-left p-3 font-semibold text-rose-600"><code>branch</code></th>
+            <th class="text-left p-3 font-semibold text-pink-600"><code>classify</code></th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-700">
+          <tr class="border-b border-slate-100"><td class="p-3 font-medium">Latency</td><td class="p-3">&lt; 1ms</td><td class="p-3">200-2000ms (LLM call)</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3 font-medium">Cost</td><td class="p-3">gratis</td><td class="p-3">per-token</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3 font-medium">Determinism</td><td class="p-3">100%</td><td class="p-3">95%+ (dgn 6 layer)</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3 font-medium">Input</td><td class="p-3">structured / typed</td><td class="p-3">natural language</td></tr>
+          <tr><td class="p-3 font-medium">When</td><td class="p-3 text-rose-700">aturan jelas</td><td class="p-3 text-pink-700">text ambiguous</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- CHANNEL REGISTRY -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">7. Channel registry — generic interface</h2>
+  <p class="text-slate-600 mb-8">Channel (slack/telegram/rest/whatsapp/email) bukan hardcoded di workflow. Workflow konsumsi lewat registry self-describing — channel daftarin <strong>trigger spec</strong> + <strong>action spec</strong>, workflow auto-discover.</p>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Channel interface</div>
+<pre class="mono text-xs leading-relaxed"><span class="text-cyan-300">type</span> Channel <span class="text-cyan-300">interface</span> {
+  <span class="text-amber-200">Name</span>() <span class="text-cyan-300">string</span>
+  <span class="text-amber-200">IsConfigured</span>() <span class="text-cyan-300">bool</span>
+
+  <span class="yaml-cmt">// Inbound: trigger schema</span>
+  <span class="text-amber-200">TriggerSpecs</span>() []TriggerSpec
+
+  <span class="yaml-cmt">// Outbound: invoked via workflow node type: channel</span>
+  <span class="text-amber-200">Actions</span>() []ActionSpec
+  <span class="text-amber-200">Send</span>(ctx, action, args) (any, error)
+
+  <span class="yaml-cmt">// Event push to router</span>
+  <span class="text-amber-200">Subscribe</span>(handler EventHandler)
+}</pre>
+    </div>
+
+    <div>
+      <h3 class="font-bold mb-3">Action via <code>type: channel</code> (symmetric)</h3>
+      <p class="text-sm text-slate-600 mb-3">Channel <code>Actions()</code> diakses langsung via node <code>type: channel</code>. <strong>Ga auto-promote ke skill registry</strong> — channel = own domain (agent conversation), skill reserved untuk Claude Code skill bundle.</p>
+      <div class="bg-slate-50 border border-slate-200 rounded p-3 mono text-xs space-y-0.5">
+        <div><span class="text-indigo-700">slack</span> · reply_thread <span class="text-slate-400">← slack channel</span></div>
+        <div><span class="text-indigo-700">slack</span> · send_dm</div>
+        <div><span class="text-indigo-700">slack</span> · react</div>
+        <div><span class="text-indigo-700">slack</span> · create_canvas</div>
+        <div><span class="text-indigo-700">telegram</span> · send_message <span class="text-slate-400">← telegram</span></div>
+        <div><span class="text-indigo-700">telegram</span> · send_photo</div>
+        <div><span class="text-indigo-700">rest</span> · post <span class="text-slate-400">← rest channel</span></div>
+        <div><span class="text-indigo-700">rest</span> · put</div>
+      </div>
+      <p class="text-xs text-slate-500 mt-3 italic">Workflow consume: <code>type: channel</code> + <code>channel: slack</code> + <code>op: reply_thread</code>. AI discover via <code>workflow_channels()</code> MCP op.</p>
+    </div>
+  </div>
+
+  <div class="mb-8 p-4 bg-emerald-50 border-l-4 border-emerald-400 rounded text-sm text-emerald-900">
+    <strong>For non-channel external API (GitHub, Stripe, Notion, ...) = pakai connector module.</strong> Beda domain (channel = agent conversation, connector = generic API). Workflow node <code>type: connector</code> + <code>module: github</code> + <code>op: create_issue</code>. Reuse 100% <a href="../../docs/guide/connector-module.md" class="underline">existing connector pattern</a>.
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-bold mb-3">Channel trigger with MatchSchema filter</h3>
+<pre class="mono text-xs bg-slate-50 p-4 rounded border border-slate-200 leading-relaxed"><span class="yaml-key">triggers</span>:
+  - <span class="yaml-key">type</span>: <span class="yaml-str">channel</span>
+    <span class="yaml-key">channel</span>: <span class="yaml-str">slack</span>
+    <span class="yaml-key">event</span>: <span class="yaml-str">message</span>
+    <span class="yaml-key">match_enabled</span>: <span class="yaml-bool">true</span>   <span class="yaml-cmt"># gate; false = dump-all</span>
+    <span class="yaml-key">match</span>:
+      <span class="yaml-key">mode</span>: <span class="yaml-str">whitelist</span>
+      <span class="yaml-key">channel_id</span>: <span class="yaml-str">'[{"id":"C123","name":"general"}]'</span>
+      <span class="yaml-key">text_contains</span>: <span class="yaml-str">"support"</span></pre>
+      <p class="text-xs text-slate-600 mt-3">Form rendered from <code>EventDescriptor.MatchSchema</code> — each event declares a wick-tagged Go struct via <code>entity.StructToConfigs</code>. Picker chips serialize as <code>[{id,name}]</code> JSON; router does id-membership at dispatch time.</p>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-bold mb-3">Channel action node (symmetric trigger)</h3>
+<pre class="mono text-xs bg-slate-50 p-4 rounded border border-slate-200 leading-relaxed"><span class="yaml-key">- id</span>: <span class="yaml-str">reply-with-link</span>
+  <span class="yaml-key">type</span>: <span class="yaml-str">channel</span>            <span class="yaml-cmt"># same module as trigger</span>
+  <span class="yaml-key">channel</span>: <span class="yaml-str">slack</span>
+  <span class="yaml-key">op</span>: <span class="yaml-str">reply_thread</span>     <span class="yaml-cmt"># one of channel.Actions()</span>
+  <span class="yaml-key">args</span>:
+    <span class="yaml-key">channel</span>: <span class="yaml-str">"{{.Event.Payload.channel_id}}"</span>
+    <span class="yaml-key">thread</span>:  <span class="yaml-str">"{{.Event.Payload.thread}}"</span>
+    <span class="yaml-key">text</span>: <span class="yaml-str">"Tracked: {{.Node.ticket.url}}"</span></pre>
+      <p class="text-xs text-slate-600 mt-3">UI Inspector: pilih channel dropdown → op dropdown auto-populate dari <code>Channel.Actions()</code>. AI discover via <code>workflow_channels()</code>.</p>
+    </div>
+  </div>
+
+  <div class="bg-indigo-50 border-l-4 border-indigo-400 rounded p-4 text-sm text-indigo-900">
+    <strong>Implicit reply-to-source.</strong> Kalau trigger dari channel dan workflow ga punya explicit <code>type: channel</code> action ke source thread, engine inject synthetic node di akhir flow dgn <code>{{.Run.final_result}}</code> ke thread asal. Override via <code>reply_source: false</code> di trigger spec.
+  </div>
+
+  <div class="mt-6 p-4 bg-emerald-50 border-l-4 border-emerald-400 rounded text-sm text-emerald-900">
+    <strong>Adding new channel.</strong> Bikin <code>internal/agents/channels/&lt;name&gt;/</code>, implement <code>Channel</code> interface (<code>TriggerSpecs</code> + <code>Actions</code> + <code>Send</code>), register di <code>setup.Compose</code>. Trigger router + action dispatcher otomatis pick up. Workflow engine + UI tidak butuh perubahan.
+  </div>
+</section>
+
+<!-- ENVIRONMENT & SECRETS -->
+<section class="bg-white py-16 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2">8. Environment &amp; secrets — reuse config-tags vocab</h2>
+    <p class="text-slate-600 mb-3">Workflow butuh config: Slack channel target, GitHub PAT, retry, feature flag. <strong>Schema</strong> di <code>workflow.yaml</code> (developer contract, version-controlled). <strong>Values</strong> di <code>&lt;slug&gt;/env.yaml</code> (UI-managed, secrets encrypted dgn <code>wick_enc_</code>).</p>
+    <p class="text-slate-600 mb-8"><strong>Reuse vocabulary <code>wick:"..."</code> config-tag</strong> yang sudah ada (<a href="../../docs/reference/config-tags.md" class="text-indigo-600 underline">docs/reference/config-tags.md</a>) — same widget + modifier names, same form renderer, same secret/kvlist/picker UI behavior. Beda cuma: Go module schema di struct tag, workflow schema di YAML.</p>
+
+    <div class="grid md:grid-cols-2 gap-6 mb-8">
+      <div>
+        <h3 class="font-bold mb-3 text-slate-800">Schema di workflow.yaml</h3>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">env</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">SLACK_CHANNEL</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">text</span>
+    <span class="yaml-key">desc</span>: <span class="yaml-str">"Where to post notifications"</span>
+    <span class="yaml-key">default</span>: <span class="yaml-str">"#support"</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">GITHUB_PAT</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">secret</span>          <span class="yaml-cmt"># encrypted; UI ••• when set</span>
+    <span class="yaml-key">desc</span>: <span class="yaml-str">"GitHub PAT"</span>
+    <span class="yaml-key">required</span>: <span class="yaml-bool">true</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">MAX_DAILY_RUNS</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">number</span>          <span class="yaml-cmt"># auto for int/float</span>
+    <span class="yaml-key">default</span>: <span class="yaml-num">100</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">ESCALATION_MODE</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">dropdown</span>
+    <span class="yaml-key">options</span>: [<span class="yaml-str">pager</span>, <span class="yaml-str">slack</span>, <span class="yaml-str">email</span>]
+    <span class="yaml-key">default</span>: <span class="yaml-str">slack</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">GUARD_PROMPT_EXTRA</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">textarea</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">ENABLE_AUTO_TRIAGE</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">checkbox</span>        <span class="yaml-cmt"># auto for bool</span>
+    <span class="yaml-key">default</span>: <span class="yaml-bool">true</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">ALLOWED_CHANNELS</span>      <span class="yaml-cmt"># multi-row table</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">kvlist</span>
+    <span class="yaml-key">columns</span>: [<span class="yaml-str">id</span>, <span class="yaml-str">name</span>]
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">ALLOWED_USERS</span>         <span class="yaml-cmt"># typeahead from Slack</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">picker</span>
+    <span class="yaml-key">source</span>: <span class="yaml-str">slack.users</span>
+    <span class="yaml-key">visible_when</span>: <span class="yaml-str">ENABLE_AUTO_TRIAGE:true</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">GITHUB_WEBHOOK_URL</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">url</span>
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">NOTIFY_EMAIL</span>
+    <span class="yaml-key">widget</span>: <span class="yaml-str">email</span></pre>
+      </div>
+
+      <div>
+        <h3 class="font-bold mb-3 text-slate-800">Values di env.yaml (UI-managed)</h3>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># Schema dari workflow.yaml authoritative.</span>
+<span class="yaml-cmt"># Storage identik dgn configs.value column.</span>
+<span class="yaml-key">SLACK_CHANNEL</span>: <span class="yaml-str">"#support-prod"</span>
+<span class="yaml-key">GITHUB_PAT</span>: <span class="yaml-str">wick_enc_aGVsbG8gd29ybGQ=</span>
+<span class="yaml-key">MAX_DAILY_RUNS</span>: <span class="yaml-num">500</span>
+<span class="yaml-key">ESCALATION_MODE</span>: <span class="yaml-str">pager</span>
+<span class="yaml-key">GUARD_PROMPT_EXTRA</span>: |
+  Reject if notify ke #leadership tanpa approval.
+<span class="yaml-key">ENABLE_AUTO_TRIAGE</span>: <span class="yaml-bool">true</span>
+<span class="yaml-key">ALLOWED_CHANNELS</span>:               <span class="yaml-cmt"># kvlist = JSON array</span>
+  - { <span class="yaml-key">id</span>: <span class="yaml-str">"C123"</span>, <span class="yaml-key">name</span>: <span class="yaml-str">"#support"</span> }
+  - { <span class="yaml-key">id</span>: <span class="yaml-str">"C456"</span>, <span class="yaml-key">name</span>: <span class="yaml-str">"#support-prod"</span> }
+<span class="yaml-key">ALLOWED_USERS</span>:                  <span class="yaml-cmt"># picker same shape</span>
+  - { <span class="yaml-key">id</span>: <span class="yaml-str">"U100"</span>, <span class="yaml-key">name</span>: <span class="yaml-str">"Yoga"</span> }
+<span class="yaml-key">GITHUB_WEBHOOK_URL</span>: <span class="yaml-str">"https://hooks.example.com/gh"</span>
+<span class="yaml-key">NOTIFY_EMAIL</span>: <span class="yaml-str">"alerts@abc.com"</span></pre>
+
+        <h3 class="font-bold mt-6 mb-2 text-slate-800">Reference di node</h3>
+<pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed"><span class="yaml-key">- type</span>: <span class="yaml-str">skill</span>
+  <span class="yaml-key">skill</span>: <span class="yaml-str">slack.send_dm</span>
+  <span class="yaml-key">args</span>:
+    <span class="yaml-key">channel</span>: <span class="yaml-str">"{{.Env.SLACK_CHANNEL}}"</span>
+
+<span class="yaml-key">- type</span>: <span class="yaml-str">http</span>
+  <span class="yaml-key">headers</span>:
+    <span class="yaml-key">Authorization</span>: <span class="yaml-str">"Bearer {{.Secret.GITHUB_PAT}}"</span></pre>
+        <p class="text-xs text-slate-500 mt-2 italic"><code>{{.Env.X}}</code> = non-secret. <code>{{.Secret.X}}</code> = encrypted, auto-decrypt runtime. Engine reject mixing — secret ga bisa render via <code>.Env.</code> (prevent log leak).</p>
+      </div>
+    </div>
+
+    <h3 class="font-bold mb-3">Widget vocabulary (mirror <code>config-tags.md</code>)</h3>
+    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="text-left p-3 font-semibold">Widget</th>
+            <th class="text-left p-3 font-semibold">YAML literal</th>
+            <th class="text-left p-3 font-semibold">UI form</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-700">
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">text</code> (default)</td><td class="p-3">string</td><td class="p-3">single-line input</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">textarea</code></td><td class="p-3">string</td><td class="p-3">multi-line textarea</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-rose-700">secret</code></td><td class="p-3">string (encrypted on disk)</td><td class="p-3">password input + Reveal/Rotate</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">number</code></td><td class="p-3">int/float</td><td class="p-3">number input</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">checkbox</code></td><td class="p-3">bool</td><td class="p-3">toggle</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">dropdown</code></td><td class="p-3">string</td><td class="p-3">select (needs <code>options:</code>)</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">email</code> / <code class="text-pink-700">url</code></td><td class="p-3">string</td><td class="p-3">HTML <code>type="email"</code>/<code>"url"</code></td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-pink-700">color</code> / <code class="text-pink-700">date</code> / <code class="text-pink-700">datetime</code></td><td class="p-3">string</td><td class="p-3">native HTML pickers</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code class="text-emerald-700">kvlist</code></td><td class="p-3">JSON array of objects</td><td class="p-3">editable inline table (needs <code>columns:</code>)</td></tr>
+          <tr><td class="p-3"><code class="text-violet-700">picker</code></td><td class="p-3">JSON array <code>[{id,name}]</code></td><td class="p-3">searchable typeahead (needs <code>source:</code> registered <code>LookupProvider</code>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="font-bold mb-3">Modifiers (mirror <code>config-tags.md</code>)</h3>
+    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-8">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="text-left p-3 font-semibold">YAML key</th>
+            <th class="text-left p-3 font-semibold">Effect</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-700">
+          <tr class="border-b border-slate-100"><td class="p-3"><code>desc</code></td><td class="p-3">help text below field</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code>default</code></td><td class="p-3">seed value kalau ga di-set</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code>required: true</code></td><td class="p-3">block save kalau kosong; <code>c.Missing()</code> flag</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code>locked: true</code></td><td class="p-3">read-only — set once at boot</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code>regen: true</code></td><td class="p-3">regenerate button (need registered generator)</td></tr>
+          <tr class="border-b border-slate-100"><td class="p-3"><code>hidden: true</code></td><td class="p-3">seed di DB tapi ga muncul di form</td></tr>
+          <tr><td class="p-3"><code>visible_when: field:value</code></td><td class="p-3">conditional show — tampil cuma kalau field lain == value</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="bg-white border border-slate-200 rounded-xl p-6">
+        <h3 class="font-bold mb-3 text-slate-800">UI Settings tab mockup</h3>
+        <p class="text-xs text-slate-500 mb-3 italic">Same components as configs page existing — reuse, ga bikin renderer baru. Auto-save 800ms after last keystroke.</p>
+        <div class="space-y-3 text-sm">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">SLACK_CHANNEL <span class="badge bg-pink-100 text-pink-700 text-xs">text</span></label>
+            <input value="#support-prod" class="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 mono text-xs">
+            <p class="text-xs text-slate-500 mt-1">Where to post notifications</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">GITHUB_PAT <span class="badge bg-rose-100 text-rose-700 text-xs">secret</span> <span class="text-rose-500">*</span></label>
+            <div class="flex gap-1">
+              <input value="••••••••••••••••" class="flex-1 bg-slate-50 border border-slate-300 rounded px-2 py-1.5 mono text-xs">
+              <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded text-xs">Reveal</button>
+              <button class="px-3 py-1 bg-amber-50 border border-amber-300 rounded text-xs text-amber-700">Rotate</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">MAX_DAILY_RUNS <span class="badge bg-pink-100 text-pink-700 text-xs">number</span></label>
+            <input type="number" value="500" class="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 mono text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ESCALATION_MODE <span class="badge bg-pink-100 text-pink-700 text-xs">dropdown</span></label>
+            <select class="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 text-xs">
+              <option>pager</option>
+              <option selected>slack</option>
+              <option>email</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ENABLE_AUTO_TRIAGE <span class="badge bg-pink-100 text-pink-700 text-xs">checkbox</span></label>
+            <div class="flex items-center gap-2">
+              <div class="w-9 h-5 bg-indigo-600 rounded-full relative">
+                <div class="w-4 h-4 bg-white rounded-full absolute top-0.5 right-0.5"></div>
+              </div>
+              <span class="text-xs text-slate-600">Allow LLM to triage without admin approval</span>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ALLOWED_CHANNELS <span class="badge bg-emerald-100 text-emerald-700 text-xs">kvlist</span></label>
+            <div class="bg-slate-50 border border-slate-300 rounded text-xs">
+              <table class="w-full mono">
+                <thead class="border-b border-slate-200"><tr><th class="text-left p-1.5">id</th><th class="text-left p-1.5">name</th><th class="w-6"></th></tr></thead>
+                <tbody>
+                  <tr class="border-b border-slate-100"><td class="p-1"><input value="C123" class="w-full bg-transparent"></td><td class="p-1"><input value="#support" class="w-full bg-transparent"></td><td class="p-1 text-slate-400 text-center">✕</td></tr>
+                  <tr><td class="p-1"><input value="C456" class="w-full bg-transparent"></td><td class="p-1"><input value="#support-prod" class="w-full bg-transparent"></td><td class="p-1 text-slate-400 text-center">✕</td></tr>
+                </tbody>
+              </table>
+              <button class="w-full p-1 text-xs text-indigo-600 hover:bg-slate-100">+ Add Row</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ALLOWED_USERS <span class="badge bg-violet-100 text-violet-700 text-xs">picker</span></label>
+            <div class="flex flex-wrap gap-1 mb-1 p-2 bg-slate-50 border border-slate-300 rounded">
+              <span class="badge bg-violet-100 text-violet-700">Yoga ✕</span>
+              <span class="badge bg-violet-100 text-violet-700">Deva ✕</span>
+            </div>
+            <input placeholder="Search Slack users..." class="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">GITHUB_WEBHOOK_URL <span class="badge bg-pink-100 text-pink-700 text-xs">url</span></label>
+            <input type="url" value="https://hooks.example.com/gh" class="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 mono text-xs">
+          </div>
+          <div class="pt-2 text-xs text-emerald-700 italic">✓ Auto-saved 2s ago</div>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="font-bold mb-3 text-slate-800">MCP ops</h3>
+        <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
+<pre><span class="text-cyan-300">workflow_get_env_schema</span>(slug)
+  → [{name, type, default,
+      description, required}]
+
+<span class="text-cyan-300">workflow_get_env_values</span>(slug,
+  reveal_secrets=false)
+  → {SLACK_CHANNEL: <span class="yaml-str">"#support"</span>,
+     GITHUB_PAT: <span class="yaml-str">"wick_enc_..."</span>}
+  reveal_secrets=true →
+    require admin token
+
+<span class="text-cyan-300">workflow_set_env_values</span>(slug, values)
+  → atomic write env.yaml,
+    secret auto-encrypt</pre>
+        </div>
+        <div class="mt-4 p-3 bg-amber-50 border-l-4 border-amber-400 rounded text-xs text-amber-900">
+          <strong>AI ga lihat plaintext secret.</strong> MCP server-side encrypt; AI cuma kasih plaintext sekali ke <code>workflow_set_env_values</code>, hasilnya stored encrypted. Future read default return ciphertext.
+        </div>
+        <div class="mt-3 p-3 bg-indigo-50 border-l-4 border-indigo-400 rounded text-xs text-indigo-900">
+          <strong>Zero-config OK.</strong> Workflow tanpa <code>env:</code> field = ga butuh config. Settings tab show "No config required".
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DATASETS -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">9. Datasets — cross-workflow data store</h2>
+  <p class="text-slate-600 mb-8">Workflow butuh state lookup beyond single run: "udah handle event ini?", "user opt-out?", "cache enrichment yang masih fresh?". Datasets = <strong>wick-native data tables</strong>, user-defined schema, schema-aware, MCP-discoverable, UI table view built-in.</p>
+
+  <div class="grid md:grid-cols-4 gap-4 mb-8">
+    <div class="bg-rose-50 border-l-4 border-rose-400 rounded p-4">
+      <div class="text-rose-700 text-xs font-bold uppercase mb-1">Dedup</div>
+      <p class="text-sm text-slate-700">"udah pernah handle event_id X?" — query by primary key</p>
+    </div>
+    <div class="bg-blue-50 border-l-4 border-blue-400 rounded p-4">
+      <div class="text-blue-700 text-xs font-bold uppercase mb-1">State machine</div>
+      <p class="text-sm text-slate-700">tickets pending escalation, users opted-out, pending approvals</p>
+    </div>
+    <div class="bg-amber-50 border-l-4 border-amber-400 rounded p-4">
+      <div class="text-amber-700 text-xs font-bold uppercase mb-1">Cache</div>
+      <p class="text-sm text-slate-700">enriched data dgn TTL, avoid re-fetch external API</p>
+    </div>
+    <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-4">
+      <div class="text-emerald-700 text-xs font-bold uppercase mb-1">Audit</div>
+      <p class="text-sm text-slate-700">records arbitrary (mis. "tickets bulan Mei"), beyond JobRun</p>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mono text-sm leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Schema — file (gitops)</div>
+<pre>&lt;BaseDir&gt;/datasets/<span class="text-emerald-300">processed-events/</span>
+├─ <span class="text-amber-300">dataset.yaml</span>          <span class="yaml-cmt"># current schema, active</span>
+└─ <span class="text-emerald-300">history/</span>            <span class="yaml-cmt"># version snapshots</span>
+   ├─ <span class="text-amber-300">v1.yaml</span>
+   ├─ <span class="text-amber-300">v2.yaml</span>
+   └─ <span class="text-amber-300">v3.yaml</span>
+
+<span class="yaml-cmt"># Audit:</span>
+<span class="text-cyan-300">git log</span> datasets/processed-events/
+  → who changed what when, free.</pre>
+    </div>
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mono text-sm leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Data — 1 shared Postgres table</div>
+<pre><span class="text-emerald-300">wick database</span> (existing, same as
+configs / jobs / sessions / connectors)
+
+<span class="text-cyan-300">TABLE</span> wick_datasets_rows (
+  dataset_slug  <span class="text-amber-300">TEXT</span> NOT NULL,
+  pk            <span class="text-amber-300">TEXT</span> NOT NULL,
+  data          <span class="text-amber-300">JSONB</span> NOT NULL,
+  created_at    <span class="text-amber-300">TIMESTAMPTZ</span> DEFAULT now(),
+  updated_at    <span class="text-amber-300">TIMESTAMPTZ</span> DEFAULT now(),
+  <span class="text-cyan-300">PRIMARY KEY</span> (dataset_slug, pk)
+);
+
+<span class="yaml-cmt">-- Partial functional index per dataset:</span>
+<span class="text-cyan-300">CREATE INDEX</span> idx_events_status
+  ON wick_datasets_rows ((data->>'status'))
+  <span class="text-cyan-300">WHERE</span> dataset_slug = 'events';</pre>
+    </div>
+  </div>
+
+  <div class="bg-indigo-50 border-l-4 border-indigo-400 rounded p-4 text-sm text-indigo-900 mb-6">
+    <strong>Schema in file, data in DB.</strong> Schema versioning via file snapshots (gitops, <code>git log</code> = audit). Data via shared Postgres table (<code>wick_datasets_rows</code>) dgn composite PK <code>(dataset_slug, pk)</code>. JSONB validated app-layer. Indexes = partial functional, scoped per dataset.
+  </div>
+
+  <h3 class="font-bold mb-3">Schema versioning &amp; migration</h3>
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div>
+      <p class="text-sm text-slate-600 mb-3">Setiap schema edit → bump <code>version</code>, snapshot lama ke <code>history/v&lt;N&gt;.yaml</code>, new schema active di <code>dataset.yaml</code>. Atomic write.</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># history/v3.yaml</span>
+<span class="yaml-key">id</span>: <span class="yaml-str">0193e2b4-...</span>
+<span class="yaml-key">slug</span>: <span class="yaml-str">processed-events</span>
+<span class="yaml-key">version</span>: <span class="yaml-num">3</span>
+<span class="yaml-key">columns</span>:
+  - { <span class="yaml-key">name</span>: <span class="yaml-str">event_id</span>, <span class="yaml-key">type</span>: <span class="yaml-str">string</span>, <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span> }
+  - { <span class="yaml-key">name</span>: <span class="yaml-str">status</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }
+  - { <span class="yaml-key">name</span>: <span class="yaml-str">priority</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }  <span class="yaml-cmt"># NEW</span>
+
+<span class="yaml-key">_version_meta</span>:
+  <span class="yaml-key">changed_from</span>: <span class="yaml-num">2</span>
+  <span class="yaml-key">changed_by</span>: <span class="yaml-str">yoga@abc.com</span>
+  <span class="yaml-key">changed_at</span>: <span class="yaml-str">2026-05-14T08:00:00Z</span>
+  <span class="yaml-key">reason</span>: <span class="yaml-str">"Added priority for routing"</span>
+  <span class="yaml-key">data_migration</span>:
+    <span class="yaml-key">required</span>: <span class="yaml-bool">false</span>  <span class="yaml-cmt"># add column = no row touch</span></pre>
+    </div>
+
+    <div>
+      <h4 class="font-bold mb-2 text-slate-800">Schema op → data migration?</h4>
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr><th class="text-left p-2">Op</th><th class="text-left p-2">Data touch?</th></tr>
+          </thead>
+          <tbody class="text-slate-700">
+            <tr class="border-b border-slate-100"><td class="p-2">Add column</td><td class="p-2 text-emerald-700">✗ default applies</td></tr>
+            <tr class="border-b border-slate-100"><td class="p-2">Drop column (soft)</td><td class="p-2 text-emerald-700">✗ key tetep di JSONB</td></tr>
+            <tr class="border-b border-slate-100"><td class="p-2">Drop column (hard)</td><td class="p-2 text-rose-700">✓ batch UPDATE strip key</td></tr>
+            <tr class="border-b border-slate-100"><td class="p-2">Rename column</td><td class="p-2 text-rose-700">✓ batch UPDATE rename key</td></tr>
+            <tr class="border-b border-slate-100"><td class="p-2">Change type</td><td class="p-2 text-amber-700">maybe — kalau lossy</td></tr>
+            <tr class="border-b border-slate-100"><td class="p-2">Add index</td><td class="p-2 text-emerald-700">✗ CONCURRENTLY</td></tr>
+            <tr><td class="p-2">Drop index</td><td class="p-2 text-emerald-700">✗</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-3 p-3 bg-amber-50 border-l-4 border-amber-400 rounded text-xs text-amber-900">
+        <strong>Data migration = JobRun.</strong> Kalau schema change butuh sentuh JSONB rows (rename key, strip key, transform), engine create one-shot Job (reuse existing runner). Progress visible di JobRun history. Engine reject mutate ops di dataset selama job running. Rollback via swap <code>dataset.yaml</code> dgn old version + reverse migration.
+      </div>
+    </div>
+  </div>
+
+  <h3 class="font-bold mb-3">UI History tab</h3>
+  <div class="bg-white border border-slate-200 rounded-xl p-4 mb-6">
+    <div class="font-bold text-slate-700 mb-2">Dataset: events</div>
+    <div class="space-y-2 text-xs font-mono">
+      <div class="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded">
+        <span class="badge bg-emerald-100 text-emerald-700">v4 active</span>
+        <span class="text-slate-500">2026-05-15 10:30</span>
+        <span>yoga@abc.com</span>
+        <span class="italic text-slate-600">"rollback to v2"</span>
+      </div>
+      <div class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded">
+        <span class="badge bg-slate-200 text-slate-700">v3</span>
+        <span class="text-slate-500">2026-05-14 16:20</span>
+        <span>yoga@abc.com</span>
+        <span class="italic text-slate-600">"added priority"</span>
+        <span class="ml-auto text-emerald-700">+ priority (enum)</span>
+      </div>
+      <div class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded">
+        <span class="badge bg-slate-200 text-slate-700">v2</span>
+        <span class="text-slate-500">2026-05-14 14:00</span>
+        <span>ai-token-X</span>
+        <span class="italic text-slate-600">"renamed event_name → name"</span>
+        <span class="ml-auto text-amber-700">~ rename (migrated 12,847 rows)</span>
+      </div>
+      <div class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded">
+        <span class="badge bg-slate-200 text-slate-700">v1</span>
+        <span class="text-slate-500">2026-05-13 09:00</span>
+        <span>yoga@abc.com</span>
+        <span class="italic text-slate-600">"created"</span>
+      </div>
+    </div>
+    <div class="mt-3 flex gap-2 text-xs">
+      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Rollback to v2</button>
+      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Compare v2 ↔ v4</button>
+      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Export schema</button>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm">
+      <strong class="text-emerald-700">No DDL per dataset</strong>
+      <p class="text-xs text-slate-700 mt-1">Schema change = update YAML, validator update. Ga ada CREATE TABLE atau ALTER TABLE per dataset. 100 dataset = 1 table.</p>
+    </div>
+    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm">
+      <strong class="text-emerald-700">Hot path fast</strong>
+      <p class="text-xs text-slate-700 mt-1">Composite PK natural index buat <code>dataset_get</code>/<code>dataset_exists</code> by primary key. Sub-ms lookup.</p>
+    </div>
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
+      <strong class="text-amber-700">Tradeoff</strong>
+      <p class="text-xs text-slate-700 mt-1">Native column CHECK constraint ga ada (validate app-layer). Type-strict B-tree index = bikin partial functional index per kebutuhan.</p>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div>
+      <h3 class="font-bold mb-3 text-slate-800">dataset.yaml</h3>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">id</span>: <span class="yaml-str">0193e2b4-...</span>
+<span class="yaml-key">slug</span>: <span class="yaml-str">processed-events</span>
+<span class="yaml-key">name</span>: <span class="yaml-str">"Processed channel events"</span>
+
+<span class="yaml-key">columns</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">event_id</span>
+    <span class="yaml-key">type</span>: <span class="yaml-str">string</span>
+    <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span>
+  - <span class="yaml-key">name</span>: <span class="yaml-str">workflow_slug</span>
+    <span class="yaml-key">type</span>: <span class="yaml-str">string</span>
+    <span class="yaml-key">indexed</span>: <span class="yaml-bool">true</span>
+  - <span class="yaml-key">name</span>: <span class="yaml-str">handled_at</span>
+    <span class="yaml-key">type</span>: <span class="yaml-str">timestamp</span>
+    <span class="yaml-key">indexed</span>: <span class="yaml-bool">true</span>
+  - <span class="yaml-key">name</span>: <span class="yaml-str">result</span>
+    <span class="yaml-key">type</span>: <span class="yaml-str">json</span>
+
+<span class="yaml-key">indexes</span>:
+  - [<span class="yaml-str">workflow_slug</span>, <span class="yaml-str">handled_at</span>]
+
+<span class="yaml-key">retention</span>:
+  <span class="yaml-key">ttl_days</span>: <span class="yaml-num">90</span>
+  <span class="yaml-key">by_column</span>: <span class="yaml-str">handled_at</span>
+
+<span class="yaml-key">access</span>:
+  <span class="yaml-key">workflows</span>: [<span class="yaml-str">support-triage</span>]
+  <span class="yaml-key">ui_editable</span>: <span class="yaml-bool">true</span>
+  <span class="yaml-key">mcp_writable</span>: <span class="yaml-bool">true</span></pre>
+    </div>
+
+    <div>
+      <h3 class="font-bold mb-3 text-slate-800">Dedup pattern — 1 node check</h3>
+      <p class="text-xs text-slate-500 mb-2">Pakai <code>dataset_exists</code> — sebelumnya butuh query + branch (2 nodes), sekarang cukup 1.</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">datasets</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">events</span>            <span class="yaml-cmt"># alias</span>
+    <span class="yaml-key">ref</span>: <span class="yaml-str">events</span>
+    <span class="yaml-key">mode</span>: <span class="yaml-str">read_write</span>
+
+<span class="yaml-key">graph</span>:
+  <span class="yaml-key">entry</span>: <span class="yaml-str">check-handled</span>
+  <span class="yaml-key">nodes</span>:
+    - <span class="yaml-key">id</span>: <span class="yaml-str">check-handled</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">dataset_exists</span>
+      <span class="yaml-key">dataset</span>: <span class="yaml-str">events</span>
+      <span class="yaml-key">where</span>:
+        <span class="yaml-key">id</span>: <span class="yaml-str">"{{.Event.Payload.event_id}}"</span>
+        <span class="yaml-key">is_processed</span>: <span class="yaml-bool">true</span>
+      <span class="yaml-key">cases</span>:
+        <span class="yaml-str">"true"</span>: <span class="yaml-str">end</span>           <span class="yaml-cmt"># already done</span>
+        <span class="yaml-str">"false"</span>: <span class="yaml-str">process</span>
+
+    - <span class="yaml-key">id</span>: <span class="yaml-str">process</span>
+      ...
+      <span class="yaml-key">next</span>: <span class="yaml-str">mark-done</span>
+
+    - <span class="yaml-key">id</span>: <span class="yaml-str">mark-done</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">dataset_upsert</span>
+      <span class="yaml-key">dataset</span>: <span class="yaml-str">events</span>
+      <span class="yaml-key">key</span>: [<span class="yaml-str">id</span>]
+      <span class="yaml-key">row</span>:
+        <span class="yaml-key">id</span>: <span class="yaml-str">"{{.Event.Payload.event_id}}"</span>
+        <span class="yaml-key">status</span>: <span class="yaml-str">done</span>
+        <span class="yaml-key">is_processed</span>: <span class="yaml-bool">true</span>
+        <span class="yaml-key">handled_at</span>: <span class="yaml-str">"{{.Run.StartedAt}}"</span></pre>
+    </div>
+  </div>
+
+  <h3 class="font-bold mb-3 mt-8">UI Datasets tab — 3-panel</h3>
+  <div class="grid md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-sky-600 font-bold mb-2">1. Schema editor</div>
+      <p class="text-xs text-slate-600 mb-2">Column list, add/remove/rename. Schema change → migration confirmation modal. Old version saved di <code>history/</code>.</p>
+      <div class="text-xs space-y-1 mt-2 font-mono">
+        <div class="flex items-center gap-2"><span class="badge bg-amber-100 text-amber-700">PK</span> <span>event_id (string)</span></div>
+        <div class="flex items-center gap-2"><span class="badge bg-blue-100 text-blue-700">IDX</span> <span>workflow_slug</span></div>
+        <div class="flex items-center gap-2"><span class="badge bg-blue-100 text-blue-700">IDX</span> <span>handled_at</span></div>
+        <div class="flex items-center gap-2"><span>result (json)</span></div>
+        <button class="text-sky-600 text-xs">+ Add column</button>
+      </div>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-sky-600 font-bold mb-2">2. Rows view</div>
+      <p class="text-xs text-slate-600 mb-2">Paginated, sortable, filterable. Inline edit kalau <code>ui_editable</code>. Bulk delete + CSV/JSON export.</p>
+      <table class="w-full text-xs font-mono mt-2">
+        <thead class="bg-slate-50"><tr><th class="text-left p-1">event_id</th><th class="text-left p-1">workflow</th><th class="text-left p-1">handled_at</th></tr></thead>
+        <tbody>
+          <tr class="border-t border-slate-100"><td class="p-1">E-001</td><td class="p-1">support-triage</td><td class="p-1 text-slate-500">10:05</td></tr>
+          <tr class="border-t border-slate-100"><td class="p-1">E-002</td><td class="p-1">support-triage</td><td class="p-1 text-slate-500">10:08</td></tr>
+          <tr class="border-t border-slate-100"><td class="p-1">E-003</td><td class="p-1">incident-resp</td><td class="p-1 text-slate-500">10:12</td></tr>
+        </tbody>
+      </table>
+      <p class="text-xs text-slate-400 mt-2">~ 1,247 rows</p>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="text-xs uppercase tracking-wide text-sky-600 font-bold mb-2">3. Query console</div>
+      <p class="text-xs text-slate-600 mb-2">Ad-hoc WHERE/select, execute, show result. Schema-aware autocomplete.</p>
+      <pre class="text-xs font-mono bg-slate-50 border border-slate-200 rounded p-2 mt-2">where workflow_slug = 'support-triage'
+order_by handled_at desc
+limit 100</pre>
+      <button class="mt-2 px-3 py-1 bg-sky-600 text-white rounded text-xs font-medium">Execute</button>
+    </div>
+  </div>
+
+  <h3 class="font-bold mb-3">Akses lewat expose function only — no raw SQL</h3>
+  <p class="text-slate-600 text-sm mb-3">Dataset di wick's DB tapi ga di-query bebas via <code>db_query</code>. Akses cuma lewat <code>dataset_*</code> node types, MCP ops, UI Datasets tab, atau Service interface internal Go.</p>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">MCP ops — schema</div>
+<pre><span class="text-cyan-300">dataset_list</span>()
+<span class="text-cyan-300">dataset_get</span>(slug)
+<span class="text-cyan-300">dataset_create</span>(slug, schema)
+<span class="text-cyan-300">dataset_update_schema</span>(slug, patch)
+<span class="text-cyan-300">dataset_drop</span>(slug)</pre>
+    </div>
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">MCP ops — rows</div>
+<pre><span class="text-cyan-300">dataset_query</span>(slug, where, ...)
+<span class="text-cyan-300">dataset_insert</span>(slug, row)
+<span class="text-cyan-300">dataset_upsert</span>(slug, row)
+<span class="text-cyan-300">dataset_delete</span>(slug, where)
+<span class="text-cyan-300">dataset_count</span>(slug, where)</pre>
+    </div>
+  </div>
+
+  <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mb-6">
+    <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Service interface (Go, engine internal)</div>
+<pre class="mono text-xs leading-relaxed"><span class="text-cyan-300">type</span> Service <span class="text-cyan-300">interface</span> {
+  <span class="text-amber-200">List</span>() ([]Dataset, error)
+  <span class="text-amber-200">Get</span>(slug <span class="text-cyan-300">string</span>) (Dataset, error)
+  <span class="text-amber-200">Create</span>(d Dataset) error              <span class="yaml-cmt">// create table via DDL</span>
+  <span class="text-amber-200">UpdateSchema</span>(slug, patch SchemaPatch) error <span class="yaml-cmt">// migrate</span>
+
+  <span class="text-amber-200">Query</span>(slug, q Query) (QueryResult, error)
+  <span class="text-amber-200">Insert</span>(slug, row map[<span class="text-cyan-300">string</span>]<span class="text-cyan-300">any</span>) (<span class="text-cyan-300">any</span>, error)
+  <span class="text-amber-200">Upsert</span>(slug, key []<span class="text-cyan-300">string</span>, row ...) (UpsertResult, error)
+  <span class="text-amber-200">Delete</span>(slug, where Where) (<span class="text-cyan-300">int64</span>, error)
+  <span class="text-amber-200">Count</span>(slug, where Where) (<span class="text-cyan-300">int64</span>, error)
+}</pre>
+    <p class="text-xs text-slate-400 mt-3">Service translate ke parameterized SQL. Kontrak: no string concat, no raw SQL passthrough, no <code>OR 1=1</code> injection bisa lewat.</p>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="bg-rose-50 border-l-4 border-rose-400 rounded p-4 text-sm text-rose-900">
+      <strong>Why no raw SQL?</strong>
+      <ul class="mt-2 space-y-1 list-disc list-inside text-xs">
+        <li><strong>Safety</strong> — workflow author bisa AI, ga trust raw SQL ke prod DB</li>
+        <li><strong>Schema enforcement</strong> — query divalidasi terhadap <code>dataset.yaml</code></li>
+        <li><strong>Access control</strong> — per-dataset allowlist enforceable di Service layer</li>
+        <li><strong>Index hint</strong> — Service tau index relevan, bisa optimize</li>
+        <li><strong>Audit</strong> — tiap call log-able dgn structured args</li>
+        <li><strong>Future-proof</strong> — kalau pindah ke Mongo/Redis, Service hide impl</li>
+      </ul>
+    </div>
+    <div class="bg-amber-50 border-l-4 border-amber-400 rounded p-4 text-sm text-amber-900">
+      <strong>Power user butuh raw SQL?</strong>
+      <ul class="mt-2 space-y-1 list-disc list-inside text-xs">
+        <li>UI Query Console — audit-able, schema-aware, scoped ke 1 dataset</li>
+        <li><code>db_query</code> node ke external read-replica DB</li>
+        <li>Direct DB access lewat connector — outside workflow scope</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Sharing + safety -->
+  <h3 class="font-bold mb-3 mt-12 text-xl">Sharing antar workflow — norm, bukan exception</h3>
+  <p class="text-slate-600 text-sm mb-6">Share dataset = use case utama (dedup events, cross-workflow state, shared lookup). Safety bukan dari no-share, tapi dari <strong>explicit contract</strong>.</p>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div>
+      <h4 class="font-bold mb-2 text-slate-800">dataset.yaml — shared, safe pattern</h4>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">slug</span>: <span class="yaml-str">events</span>
+<span class="yaml-key">strictness</span>: <span class="yaml-str">strict</span>             <span class="yaml-cmt"># layer 1: contract</span>
+
+<span class="yaml-key">columns</span>:
+  - { <span class="yaml-key">name</span>: <span class="yaml-str">id</span>, <span class="yaml-key">type</span>: <span class="yaml-str">string</span>, <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span> }
+  - { <span class="yaml-key">name</span>: <span class="yaml-str">source</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }
+  - { <span class="yaml-key">name</span>: <span class="yaml-str">status</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }
+
+<span class="yaml-key">access</span>:
+  <span class="yaml-key">workflows</span>:                  <span class="yaml-cmt"># layer 2: explicit allowlist</span>
+    - <span class="yaml-str">webhook-handler</span>
+    - <span class="yaml-str">calendar-poller</span>
+    - <span class="yaml-str">slack-monitor</span>
+  <span class="yaml-key">read_only_workflows</span>:
+    - <span class="yaml-str">audit-monthly</span>
+  <span class="yaml-key">row_filter</span>: <span class="yaml-str">none</span>             <span class="yaml-cmt"># layer 3: 'by_creator' kalau perlu</span></pre>
+    </div>
+
+    <div>
+      <h4 class="font-bold mb-2 text-slate-800">workflow.yaml — binding dgn version pin</h4>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">datasets</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">events</span>
+    <span class="yaml-key">ref</span>: <span class="yaml-str">events</span>
+    <span class="yaml-key">mode</span>: <span class="yaml-str">read_write</span>
+    <span class="yaml-key">expected_version</span>: <span class="yaml-num">1</span>      <span class="yaml-cmt"># layer 4: break loud kalau drift</span></pre>
+      <p class="text-xs text-slate-500 mt-3"><strong>4 safety layers buat shared dataset.</strong> Strictness, allowlist, row_filter, version pin. Default safe (strict + explicit). Power user opt-out kalau benar2 butuh JSONB flexibility.</p>
+    </div>
+  </div>
+
+  <!-- Strictness modes -->
+  <h4 class="font-bold mb-3">Strictness modes</h4>
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold">Mode</th>
+          <th class="text-left p-3 font-semibold">Behavior</th>
+          <th class="text-left p-3 font-semibold">Use case</th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100">
+          <td class="p-3"><code class="text-emerald-700">strict</code> <span class="badge bg-emerald-100 text-emerald-700 ml-1">default</span></td>
+          <td class="p-3">Reject insert kalau ada extra key di luar <code>columns</code>. Workflow harus declare semua fields</td>
+          <td class="p-3">Production, critical data, multi-workflow share</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3"><code class="text-amber-700">lax</code></td>
+          <td class="p-3">Accept extra keys, simpan ke JSONB. Warn di UI saat read kalau ada key tak dikenal. Query by extra key = full scan</td>
+          <td class="p-3">Dev iteration, exploration, ad-hoc data</td>
+        </tr>
+        <tr>
+          <td class="p-3"><code class="text-blue-700">extensible</code></td>
+          <td class="p-3">Per-workflow boleh tambah column. Schema = union. Engine track <code>_meta.added_by_workflow</code></td>
+          <td class="p-3">Federation pattern, plug-in workflows</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Migration safety -->
+  <h3 class="font-bold mb-3 mt-12 text-xl">Migration safety — preview, dry-run, atomic, rollback</h3>
+  <p class="text-slate-600 text-sm mb-6">Schema change yg sentuh existing rows = formal flow dgn manual user trigger di tiap step. Never auto-magic.</p>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h4 class="font-bold mb-3 text-slate-800">Flow</h4>
+      <ol class="text-sm text-slate-700 space-y-2 list-decimal list-inside">
+        <li>User edit <code>dataset.yaml</code> (UI form atau hand-edit)</li>
+        <li>Engine compute diff vs current active version</li>
+        <li>UI <strong>Preview panel</strong> — schema diff color-coded + data impact estimate ("1,247 rows touched")</li>
+        <li><strong>[Dry-run]</strong> — validate di shadow, report rows yg ga fit. No data touched</li>
+        <li><strong>[Apply]</strong> — typed confirmation kalau destructive ("type DROP to confirm")</li>
+        <li>Migration job spawn (reuse JobRun runner), snapshot ke <code>history/v&lt;N+1&gt;.yaml</code> first</li>
+        <li>Atomic per-batch (1000 rows default) dlm transaction, throttle 100ms</li>
+        <li>Progress visible di JobRun + dataset detail. Pause/resume support</li>
+        <li>Done → schema active, history snapshot final, audit log entry</li>
+      </ol>
+    </div>
+
+    <div>
+      <h4 class="font-bold mb-3 text-slate-800">Safety properties</h4>
+      <div class="space-y-2 text-xs">
+        <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
+          <strong class="text-emerald-700">Idempotent</strong>
+          <p class="text-slate-700 mt-1">Engine stamp <code>_meta.migrated_to: v&lt;N&gt;</code> per row. Re-run skip rows already migrated. Crash mid-job → restart aman.</p>
+        </div>
+        <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
+          <strong class="text-emerald-700">Atomic per-batch</strong>
+          <p class="text-slate-700 mt-1">Partial fail rollback batch transaction. Mark migration <code>failed</code> di JobRun, user retry atau revert.</p>
+        </div>
+        <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
+          <strong class="text-emerald-700">Rollback via snapshot</strong>
+          <p class="text-slate-700 mt-1">Sebelum apply, snapshot ke <code>history/v&lt;N+1&gt;.yaml</code>. Revert = swap <code>dataset.yaml</code> dgn old version + reverse migration job.</p>
+        </div>
+        <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
+          <strong class="text-emerald-700">Throttle + observable</strong>
+          <p class="text-slate-700 mt-1">100ms between batches avoid lock contention. Pause/resume mid-flight. JobRun page show progress.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Adoption + import -->
+  <h3 class="font-bold mb-3 mt-12 text-xl">Adoption + import flows</h3>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h4 class="font-bold mb-2 text-slate-800">Adoption — data exists, no dataset.yaml yet</h4>
+      <p class="text-xs text-slate-600 mb-3">Rows orphan di <code>wick_datasets_rows</code> tapi folder dataset ga ada.</p>
+<pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed">Engine detect orphan rows
+  ↓
+UI list page: "Orphan dataset" badge + row count
+  ↓
+Klik → adoption modal:
+  ├─ [Adopt] → sample N rows, infer schema dari
+  │            JSONB keys, generate dataset.yaml v1
+  │            draft. User review + edit + save.
+  └─ [Drop] → DELETE rows (typed confirmation)</pre>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h4 class="font-bold mb-2 text-slate-800">Import — bundle dari instance lain</h4>
+<pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed mb-3">wick dataset import events.tar.gz \
+  --on-conflict abort
+  # abort | overwrite | skip | merge</pre>
+      <ul class="text-xs text-slate-700 space-y-1 list-disc list-inside">
+        <li><strong>Ga ada existing</strong> → straight import</li>
+        <li><strong>Schema hash sama</strong> → append (skip dup pk)</li>
+        <li><strong>Schema diff</strong> → prompt: abort (default) / overwrite / skip / merge (dry-run dulu)</li>
+        <li>History merged timestamp-ordered, conflict pk per <code>--on-conflict</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Schema mismatch runtime -->
+  <div class="mb-6 p-4 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-900">
+    <strong>Schema mismatch runtime.</strong> Rows existing punya field tak match schema (mis. <code>priority: "1"</code> tapi schema expect enum <code>[low|medium|high]</code>):
+    <ul class="mt-2 list-disc list-inside text-xs">
+      <li><strong>Read</strong> — engine return rows as-is, surface validation warning di run logs</li>
+      <li><strong>Write strict mode</strong> — reject insert</li>
+      <li><strong>Write lax mode</strong> — accept + warn</li>
+      <li>Handle dgn <code>transform</code> node, migration job, atau <code>expected_version</code> pin (workflow refuse jalan sampai diadaptasi)</li>
+    </ul>
+  </div>
+
+  <!-- Critical safety opt-in -->
+  <div class="mb-8 p-4 bg-rose-50 border-l-4 border-rose-400 rounded text-sm text-rose-900">
+    <strong>Critical dataset extra safety (opt-in).</strong> Untuk compliance/financial/audit:
+<pre class="mono text-xs bg-white border border-rose-200 p-3 rounded mt-2 leading-relaxed"><span class="yaml-key">critical_safety</span>:
+  <span class="yaml-key">append_only</span>: <span class="yaml-bool">true</span>              <span class="yaml-cmt"># block UPDATE/DELETE</span>
+  <span class="yaml-key">require_review</span>: <span class="yaml-bool">true</span>           <span class="yaml-cmt"># schema change butuh 2-person approval</span>
+  <span class="yaml-key">backup_before_migration</span>: <span class="yaml-bool">true</span>  <span class="yaml-cmt"># dump rows ke external storage</span></pre>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
+    <div class="bg-slate-50 px-4 py-2 border-b border-slate-200 text-sm font-bold text-slate-700">Differentiator: <code>db_query</code> vs <code>dataset_*</code></div>
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold"></th>
+          <th class="text-left p-3 font-semibold text-sky-700"><code>db_query</code></th>
+          <th class="text-left p-3 font-semibold text-emerald-700"><code>dataset_*</code></th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Schema source</td><td class="p-3">external system</td><td class="p-3">wick <code>dataset.yaml</code></td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Storage</td><td class="p-3">user-configured DSN</td><td class="p-3">wick's Postgres (same DB)</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Discovery</td><td class="p-3">manual</td><td class="p-3 text-emerald-700">MCP <code>dataset_list</code> + UI</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">UI</td><td class="p-3">none</td><td class="p-3 text-emerald-700">3-panel table view</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Migration</td><td class="p-3">user's responsibility</td><td class="p-3 text-emerald-700">wick-managed + history log</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">TTL cleanup</td><td class="p-3">external</td><td class="p-3 text-emerald-700">built-in</td></tr>
+        <tr><td class="p-3 font-medium">When</td><td class="p-3 text-sky-700">data hidup di sistem lain</td><td class="p-3 text-emerald-700">data lahir dari workflow operation</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- TEST MODE -->
+<section class="bg-white py-16 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6">
+  <h2 class="text-3xl font-bold mb-2">10. Test framework — unit + integration</h2>
+  <p class="text-slate-600 mb-6">AI-first mandate (§2 #0): workflow yang dibuat AI dari prompt <strong>harus testable</strong> sebelum deploy. 2 layer: <strong>unit test</strong> (single node + mock) + <strong>integration test</strong> (full flow + scripted events + mock external).</p>
+
+  <!-- Folder layout -->
+  <div class="bg-slate-900 text-slate-100 p-6 rounded-xl mono text-sm leading-relaxed mb-6">
+<pre>&lt;BaseDir&gt;/workflows/<span class="text-emerald-300">support-triage/</span>
+└─ <span class="text-emerald-300">__tests__/</span>
+   ├─ <span class="text-emerald-300">nodes/</span>                    <span class="yaml-cmt"># unit tests — 1 file per node</span>
+   │  ├─ <span class="text-amber-300">classify-intent.test.yaml</span>
+   │  ├─ <span class="text-amber-300">handle-bug.test.yaml</span>
+   │  └─ <span class="text-amber-300">summarize.test.yaml</span>
+   ├─ <span class="text-emerald-300">integration/</span>              <span class="yaml-cmt"># integration tests — full flow</span>
+   │  ├─ <span class="text-amber-300">bug-flow.test.yaml</span>
+   │  ├─ <span class="text-amber-300">feature-flow.test.yaml</span>
+   │  └─ <span class="text-amber-300">multi-stage.test.yaml</span>
+   ├─ <span class="text-emerald-300">fixtures/</span>                 <span class="yaml-cmt"># reusable input data</span>
+   └─ <span class="text-emerald-300">mocks/</span>                    <span class="yaml-cmt"># reusable mock responses</span></pre>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div>
+      <h3 class="font-bold mb-3 text-slate-800">Unit test (1 node + mocks)</h3>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># __tests__/nodes/classify-intent.test.yaml</span>
+<span class="yaml-key">node</span>: <span class="yaml-str">classify-intent</span>
+
+<span class="yaml-key">cases</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">"bug pattern → verdict bug"</span>
+    <span class="yaml-key">input</span>:
+      <span class="yaml-key">Event</span>: { <span class="yaml-key">Text</span>: <span class="yaml-str">"production error di checkout"</span> }
+    <span class="yaml-key">mocks</span>:
+      <span class="yaml-key">provider_response</span>:
+        <span class="yaml-key">verdict</span>: <span class="yaml-str">bug</span>
+        <span class="yaml-key">confidence</span>: <span class="yaml-num">0.92</span>
+    <span class="yaml-key">expect</span>:
+      <span class="yaml-key">output.verdict</span>: <span class="yaml-str">bug</span>
+      <span class="yaml-key">output.confidence</span>: <span class="yaml-str">">= 0.5"</span>
+      <span class="yaml-key">assertions</span>:
+        - { <span class="yaml-key">type</span>: <span class="yaml-str">case_fired</span>, <span class="yaml-key">value</span>: <span class="yaml-str">bug</span> }
+
+  - <span class="yaml-key">name</span>: <span class="yaml-str">"low confidence → default"</span>
+    <span class="yaml-key">input</span>:
+      <span class="yaml-key">Event</span>: { <span class="yaml-key">Text</span>: <span class="yaml-str">"lorem ipsum"</span> }
+    <span class="yaml-key">mocks</span>:
+      <span class="yaml-key">provider_response</span>: { <span class="yaml-key">verdict</span>: <span class="yaml-str">unclear</span>, <span class="yaml-key">confidence</span>: <span class="yaml-num">0.3</span> }
+    <span class="yaml-key">expect</span>:
+      <span class="yaml-key">output.verdict</span>: <span class="yaml-str">"default"</span>     <span class="yaml-cmt"># layer 6 defends</span>
+      <span class="yaml-key">runtime_warnings</span>:
+        - <span class="yaml-str">"below confidence threshold"</span></pre>
+    </div>
+
+    <div>
+      <h3 class="font-bold mb-3 text-slate-800">Integration test (full flow)</h3>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># __tests__/integration/bug-flow.test.yaml</span>
+<span class="yaml-key">name</span>: <span class="yaml-str">"bug inquiry → ticket + reply"</span>
+
+<span class="yaml-key">trigger</span>:
+  <span class="yaml-key">type</span>: <span class="yaml-str">channel</span>
+  <span class="yaml-key">event</span>:
+    <span class="yaml-key">Type</span>: <span class="yaml-str">channel</span>
+    <span class="yaml-key">Text</span>: <span class="yaml-str">"production error di checkout"</span>
+    <span class="yaml-key">Channel</span>: <span class="yaml-str">C123</span>
+    <span class="yaml-key">Thread</span>: <span class="yaml-num">1234567.89</span>
+
+<span class="yaml-key">mocks</span>:
+  <span class="yaml-key">nodes</span>:
+    - <span class="yaml-key">node</span>: <span class="yaml-str">classify-intent</span>
+      <span class="yaml-key">response</span>: { <span class="yaml-key">verdict</span>: <span class="yaml-str">bug</span>, <span class="yaml-key">confidence</span>: <span class="yaml-num">0.9</span> }
+  <span class="yaml-key">connectors</span>:
+    - <span class="yaml-key">module</span>: <span class="yaml-str">tracker</span>
+      <span class="yaml-key">op</span>: <span class="yaml-str">create_issue</span>
+      <span class="yaml-key">args_match</span>: { <span class="yaml-key">title</span>: <span class="yaml-str">contains "checkout"</span> }
+      <span class="yaml-key">response</span>: { <span class="yaml-key">number</span>: <span class="yaml-num">42</span>, <span class="yaml-key">url</span>: <span class="yaml-str">"https://..."</span> }
+  <span class="yaml-key">channels</span>:
+    - <span class="yaml-key">channel</span>: <span class="yaml-str">chat</span>
+      <span class="yaml-key">op</span>: <span class="yaml-str">reply_thread</span>
+      <span class="yaml-key">capture</span>: <span class="yaml-bool">true</span>
+
+<span class="yaml-key">assertions</span>:
+  - <span class="yaml-key">path_taken</span>: [<span class="yaml-str">classify-intent</span>, <span class="yaml-str">handle-bug</span>, <span class="yaml-str">reply</span>]
+  - <span class="yaml-key">node</span>: <span class="yaml-str">reply</span>
+    <span class="yaml-key">args.text</span>: <span class="yaml-str">contains "issues/42"</span>
+  - <span class="yaml-key">final_status</span>: <span class="yaml-str">success</span>
+  - <span class="yaml-key">duration_ms</span>: <span class="yaml-str">"< 2000"</span>
+  - <span class="yaml-key">cost_usd</span>: <span class="yaml-str">"< 0.01"</span></pre>
+    </div>
+  </div>
+
+  <h3 class="font-bold mb-3">Mock layer — what gets intercepted</h3>
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold">Type</th>
+          <th class="text-left p-3 font-semibold">Real call</th>
+          <th class="text-left p-3 font-semibold">Mocked when test mode</th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100"><td class="p-3"><strong>Provider</strong> (classify, agent)</td><td class="p-3">CLI subprocess</td><td class="p-3 text-emerald-700">Engine bypass, return scripted</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3"><strong>Connector</strong> (type: connector)</td><td class="p-3">Operation.Execute()</td><td class="p-3 text-emerald-700">Engine bypass, scripted response per args_match</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3"><strong>Channel</strong> (type: channel)</td><td class="p-3">Channel.Send()</td><td class="p-3 text-emerald-700">Capture call (record args), scripted response</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3"><strong>HTTP</strong> (type: http)</td><td class="p-3">http.Do()</td><td class="p-3 text-emerald-700">Match URL pattern + method</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3"><strong>Dataset</strong> (dataset_*)</td><td class="p-3">Postgres query</td><td class="p-3 text-emerald-700">In-memory test DB atau scripted rows</td></tr>
+        <tr><td class="p-3"><strong>Shell</strong> (type: shell)</td><td class="p-3">exec.Cmd</td><td class="p-3 text-emerald-700">Skip exec, scripted stdout/exit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-6">
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-bold mb-3 text-slate-800">CLI + MCP</h3>
+<pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed">wick workflow test &lt;slug&gt;
+  --filter node:classify
+  --integration
+  --watch
+  --coverage
+  --record &lt;run-id&gt;
+
+# MCP ops:
+workflow_test(slug, filter?)
+workflow_record_test(slug, run_id)
+workflow_test_coverage(slug)
+workflow_simulate(slug, event, mocks)</pre>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <h3 class="font-bold mb-3 text-slate-800">AI-first test workflow</h3>
+      <ol class="text-sm text-slate-700 space-y-1 list-decimal list-inside">
+        <li>User prompt → AI compose workflow.yaml + edges</li>
+        <li>AI auto-compose <code>__tests__/nodes/*.test.yaml</code></li>
+        <li>AI auto-compose <code>__tests__/integration/*.test.yaml</code></li>
+        <li>AI panggil <code>workflow_test(slug)</code></li>
+        <li>Engine return per-case pass/fail + diff</li>
+        <li>AI debug → adjust prompt/edge → re-test</li>
+        <li>All pass → AI panggil <code>workflow_request_review</code></li>
+      </ol>
+      <p class="text-xs text-slate-500 mt-3 italic">Tests = AI's verification loop sebelum admin review. Reduce back-and-forth.</p>
+    </div>
+  </div>
+
+  <h3 class="font-bold mb-3">Test result UI</h3>
+  <div class="bg-white border border-slate-200 rounded-xl p-6 mb-6">
+    <div class="space-y-2 text-sm">
+      <div class="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded">
+        <span class="text-emerald-600 font-bold">✓</span>
+        <span class="font-mono text-xs flex-1">nodes/classify-intent.test.yaml</span>
+        <span class="text-xs text-emerald-700">3/3 pass</span>
+        <span class="text-xs text-slate-500">2.1s</span>
+      </div>
+      <div class="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded">
+        <span class="text-emerald-600 font-bold">✓</span>
+        <span class="font-mono text-xs flex-1">integration/bug-flow.test.yaml</span>
+        <span class="text-xs text-emerald-700">pass</span>
+        <span class="text-xs text-slate-500">4.1s · $0.0008 (mocked)</span>
+      </div>
+      <div class="flex items-center gap-2 p-2 bg-rose-50 border border-rose-200 rounded">
+        <span class="text-rose-600 font-bold">✗</span>
+        <span class="font-mono text-xs flex-1">integration/feature-flow.test.yaml</span>
+        <span class="text-xs text-rose-700">fail: expected case bug got case other</span>
+        <span class="text-xs text-slate-500">2.3s</span>
+      </div>
+      <div class="flex items-center gap-2 p-2 bg-slate-100 border border-slate-200 rounded">
+        <span class="text-slate-400 font-bold">○</span>
+        <span class="font-mono text-xs flex-1">integration/multi-stage.test.yaml</span>
+        <span class="text-xs text-slate-500">untouched (no mock for action event)</span>
+      </div>
+      <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded text-xs">
+        <strong class="text-amber-700">Coverage:</strong> 7/9 nodes hit during tests. Untested: <code>handle-feature</code>, <code>silent-end</code>. Suggest adding test cases.
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+
+<!-- RUN TIMELINE -->
+<section class="bg-slate-900 text-slate-100 py-16">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2 text-white">11. Run timeline + state persistence</h2>
+    <p class="text-slate-400 mb-8">Tiap run = folder dengan <code class="bg-slate-800 px-1.5 rounded">state.json</code> (snapshot) + <code class="bg-slate-800 px-1.5 rounded">events.jsonl</code> (append-only). Crash mid-flow = resume dari node terakhir sukses.</p>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div>
+        <h3 class="font-bold mb-3 text-slate-200">events.jsonl</h3>
+<pre class="mono text-xs bg-slate-800 p-4 rounded border border-slate-700 leading-relaxed">{"ts":"10:00:01","event":"<span class="text-cyan-300">started</span>","trigger":"channel"}
+{"ts":"10:00:01","event":"<span class="text-blue-300">node_started</span>","node":"classify-intent"}
+{"ts":"10:00:03","event":"<span class="text-emerald-300">node_completed</span>","node":"classify-intent",
+ "output":{"verdict":"bug"},"duration_ms":2100,"tokens":245}
+{"ts":"10:00:03","event":"<span class="text-blue-300">node_started</span>","node":"handle-bug"}
+{"ts":"10:00:04","event":"<span class="text-emerald-300">node_completed</span>","node":"handle-bug",
+ "output":{"ticket_id":"LINEAR-123"},"duration_ms":1800}
+{"ts":"10:00:04","event":"<span class="text-blue-300">node_started</span>","node":"reply-link"}
+{"ts":"10:00:05","event":"<span class="text-emerald-300">node_completed</span>","node":"reply-link"}
+{"ts":"10:00:05","event":"<span class="text-emerald-300">completed</span>",
+ "duration_ms":4100,"cost_usd":0.0008}</pre>
+      </div>
+
+      <div>
+        <h3 class="font-bold mb-3 text-slate-200">UI run timeline view</h3>
+        <div class="bg-slate-800 rounded border border-slate-700 p-4 mono text-xs leading-relaxed">
+<span class="text-slate-400">[10:00:01]</span> <span class="text-cyan-400">▶</span> Started <span class="text-slate-500">(trigger: channel #support)</span>
+<span class="text-slate-400">[10:00:01]</span>   ├─ <span class="text-pink-400">classify-intent</span>
+<span class="text-slate-400">[10:00:03]</span>   │    ├─ input: <span class="yaml-str">"ada bug di widget"</span>
+<span class="text-slate-400">[10:00:03]</span>   │    ├─ output: <span class="text-emerald-300">{verdict: "bug"}</span>
+<span class="text-slate-400">[10:00:03]</span>   │    └─ 2.1s · 245 tok · $0.0008
+<span class="text-slate-400">[10:00:03]</span>   ├─ <span class="text-teal-400">handle-bug</span>
+<span class="text-slate-400">[10:00:04]</span>   │    ├─ connector: linear · create_issue
+<span class="text-slate-400">[10:00:04]</span>   │    └─ output: <span class="text-emerald-300">{ticket_id: "LINEAR-123"}</span>
+<span class="text-slate-400">[10:00:04]</span>   └─ <span class="text-violet-400">reply-link</span>
+<span class="text-slate-400">[10:00:05]</span>        └─ posted to thread
+<span class="text-slate-400">[10:00:05]</span> <span class="text-emerald-400">✓</span> Completed <span class="text-slate-500">(4.1s · $0.0008)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-8 grid md:grid-cols-3 gap-4">
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
+        <div class="text-cyan-400 text-xs font-bold uppercase mb-1">Resume</div>
+        <p class="text-sm text-slate-300">Worker crash → next start baca state.current, lanjut dari sana. Run ID sama.</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
+        <div class="text-emerald-400 text-xs font-bold uppercase mb-1">Inline Replay</div>
+        <p class="text-sm text-slate-300">Klik <code>↻ Replay in editor</code> di Runs panel → state + events loaded ke editor (badge node, Logs, INPUT/OUTPUT cache). Tidak fire run baru. Buat debug step-by-step.</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
+        <div class="text-amber-400 text-xs font-bold uppercase mb-1">Manual Replay</div>
+        <p class="text-sm text-slate-300">Run selesai → fire run baru dgn event yg sama via <code>?prefill=&lt;runID&gt;</code>. Skip dedup, audit log catat origin.</p>
+      </div>
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-4">
+        <div class="text-rose-400 text-xs font-bold uppercase mb-1">Re-run from node</div>
+        <p class="text-sm text-slate-300">Debug: state restore sampai node X, lanjut dari sana dgn output baru. <em>Belum impl.</em></p>
+      </div>
+    </div>
+
+    <!-- Retention -->
+    <h3 class="text-xl font-bold mt-12 mb-2 text-white">Retention &mdash; channel-rame workflow bisa 1000s of runs/day</h3>
+    <p class="text-slate-400 mb-6">Daily cleanup job (reuse <code>connector-runs-purge</code> pattern) prune <code>runs/&lt;id&gt;/</code> folder + JobRun row.</p>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div>
+        <h4 class="font-bold mb-3 text-slate-200">Config di workflow.yaml</h4>
+<pre class="mono text-xs bg-slate-800 p-4 rounded border border-slate-700 leading-relaxed"><span class="yaml-key">retention</span>:
+  <span class="yaml-key">success_days</span>: <span class="yaml-num">30</span>          <span class="yaml-cmt"># default</span>
+  <span class="yaml-key">failure_days</span>: <span class="yaml-num">90</span>          <span class="yaml-cmt"># keep longer for debug</span>
+  <span class="yaml-key">keep_max</span>: <span class="yaml-num">10000</span>           <span class="yaml-cmt"># absolute cap</span></pre>
+        <p class="text-xs text-slate-400 mt-3 italic">Default applied kalau ga ada <code>retention:</code> field. Override per workflow sesuai pattern usage.</p>
+      </div>
+
+      <div>
+        <h4 class="font-bold mb-3 text-slate-200">Hot path: pakai dataset, bukan JobRun</h4>
+        <p class="text-sm text-slate-300 mb-3">Workflow yg cuma butuh "did this event get handled?" → simpan ke <strong>dataset</strong> (small, queryable, dedup-friendly). JobRun = audit/debug, bukan source of truth.</p>
+        <div class="bg-slate-800 border border-slate-700 rounded p-3 text-xs text-slate-300">
+          <strong class="text-amber-400">Warning auto-emit</strong> kalau workflow accumulate &gt; 50% dari <code>keep_max</code> → engine suggest dataset approach + tighter retention.
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-6 grid md:grid-cols-3 gap-3 text-xs">
+      <div class="bg-emerald-900/30 border border-emerald-700 rounded p-3">
+        <strong class="text-emerald-300">Success run</strong>
+        <p class="text-slate-300 mt-1">30 hari default · prune oldest first kalau hit <code>keep_max</code></p>
+      </div>
+      <div class="bg-rose-900/30 border border-rose-700 rounded p-3">
+        <strong class="text-rose-300">Failed run</strong>
+        <p class="text-slate-300 mt-1">90 hari default · debug-friendly window</p>
+      </div>
+      <div class="bg-amber-900/30 border border-amber-700 rounded p-3">
+        <strong class="text-amber-300">Stuck (mid-run crash)</strong>
+        <p class="text-slate-300 mt-1">Reaper tandain Failed kalau <code>now − updated_at &gt; 2× max_duration</code></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AI FLOW -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">12. AI bikin workflow — local vs remote</h2>
+  <p class="text-slate-600 mb-8">Workflow editing dirancang biar AI dari <strong>mana saja</strong> bisa bikin/edit, ga peduli punya file tool atau tidak. MCP server di <code>/mcp</code> (HTTP + bearer) = single source of truth.</p>
+
+  <!-- Env matrix -->
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-8">
+    <div class="bg-slate-50 px-4 py-2 border-b border-slate-200 text-sm font-bold text-slate-700">Akses environment matrix</div>
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold">Env</th>
+          <th class="text-left p-3 font-semibold">File access</th>
+          <th class="text-left p-3 font-semibold">MCP transport</th>
+          <th class="text-left p-3 font-semibold">Pattern</th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Claude Code, Cursor (local CLI)</td>
+          <td class="p-3 text-emerald-700">✓ native</td>
+          <td class="p-3">stdio (local)</td>
+          <td class="p-3">File tool + thin MCP introspection</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Claude Desktop</td>
+          <td class="p-3 text-rose-600">✗</td>
+          <td class="p-3">stdio atau HTTP/SSE ke wick</td>
+          <td class="p-3 text-amber-700"><strong>Full MCP ops</strong> (tier 1+2+3)</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">ChatGPT (custom GPT, plugin)</td>
+          <td class="p-3 text-rose-600">✗</td>
+          <td class="p-3">HTTP <code>/mcp</code> + bearer</td>
+          <td class="p-3 text-amber-700">Full MCP ops</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3 font-medium">Gemini Gems / custom action</td>
+          <td class="p-3 text-rose-600">✗</td>
+          <td class="p-3">HTTP <code>/mcp</code> + bearer</td>
+          <td class="p-3 text-amber-700">Full MCP ops</td>
+        </tr>
+        <tr>
+          <td class="p-3 font-medium">Wick built-in UI assistant</td>
+          <td class="p-3 text-emerald-700">✓ (server-side proxy)</td>
+          <td class="p-3">in-process</td>
+          <td class="p-3">File tool internal</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="bg-indigo-50 border-l-4 border-indigo-400 rounded p-4 text-sm text-indigo-900 mb-8">
+    <strong>Kunci:</strong> tanpa file tool, MCP harus self-sufficient. Semua yang AI butuh — read state, write state, action, file CRUD — semua ada di MCP. AI di Claude Code <em>boleh</em> pakai file tool; AI di Claude Desktop <em>wajib</em> pakai MCP.
+  </div>
+
+  <!-- 3-tier ops -->
+  <h3 class="text-xl font-bold mb-4">Tier 1 — Introspection (read-only)</h3>
+  <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mb-6 mono text-xs leading-relaxed grid md:grid-cols-2 gap-4">
+    <div>
+<pre><span class="text-cyan-300">workflow_workspace</span>()
+  → entry point, base_dir, schemas
+<span class="text-cyan-300">workflow_node_types</span>()
+  → [{type, schema, example, when_to_use}]
+<span class="text-cyan-300">workflow_trigger_types</span>()
+  → trigger schema catalog
+<span class="text-cyan-300">workflow_channels</span>()
+  → channel registry self-describe
+<span class="text-cyan-300">workflow_connectors</span>()
+  → connector modules + rows + ops
+<span class="text-cyan-300">workflow_skills</span>()
+  → local Claude Code skill bundles only</pre>
+    </div>
+    <div>
+<pre><span class="text-cyan-300">workflow_list</span>(filter)
+  → [{slug, id, name, enabled, approved}]
+<span class="text-cyan-300">workflow_get</span>(slug)
+  → full workflow definition
+<span class="text-cyan-300">workflow_list_files</span>(slug)
+  → [{path, size, modified}]
+<span class="text-cyan-300">workflow_read_file</span>(slug, path)
+  → content (replace Read tool for remote AI)</pre>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-bold mb-4">Tier 2 — Write (state-mutating)</h3>
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
+      <div class="text-pink-300 font-bold uppercase tracking-wide text-xs mb-2">File ops (replace native file tool)</div>
+<pre><span class="text-pink-300">workflow_create</span>(slug, template?)
+<span class="text-pink-300">workflow_write_file</span>(slug, path, content)
+<span class="text-pink-300">workflow_delete_file</span>(slug, path)
+<span class="text-pink-300">workflow_delete</span>(slug)</pre>
+    </div>
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
+      <div class="text-amber-300 font-bold uppercase tracking-wide text-xs mb-2">Canvas ops (deklaratif)</div>
+<pre><span class="text-amber-300">workflow_add_node</span>(slug, node)
+<span class="text-amber-300">workflow_update_node</span>(slug, id, patch)
+<span class="text-amber-300">workflow_delete_node</span>(slug, id)
+<span class="text-amber-300">workflow_connect</span>(slug, from, to, case?)
+<span class="text-amber-300">workflow_disconnect</span>(slug, from, to)
+<span class="text-amber-300">workflow_move_node</span>(slug, id, x, y)
+<span class="text-amber-300">workflow_set_triggers</span>(slug, triggers[])
+<span class="text-amber-300">workflow_toggle</span>(slug, enabled)</pre>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-bold mb-4">Tier 3 — Action (validate, simulate, test, run, approve)</h3>
+  <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mb-8 mono text-xs leading-relaxed grid md:grid-cols-2 gap-4">
+    <div>
+<pre><span class="text-emerald-300">workflow_validate</span>(slug)
+<span class="text-emerald-300">workflow_simulate</span>(slug, event)
+<span class="text-emerald-300">workflow_test</span>(slug)
+<span class="text-emerald-300">workflow_run_now</span>(slug, event?)</pre>
+    </div>
+    <div>
+<pre><span class="text-emerald-300">workflow_get_runs</span>(slug, limit)
+<span class="text-emerald-300">workflow_get_run</span>(slug, run_id)
+<span class="text-emerald-300">workflow_request_review</span>(slug, msg)
+<span class="text-emerald-300">workflow_capture_fixture</span>(slug, run_id, node)</pre>
+    </div>
+  </div>
+
+  <!-- Local vs remote flow -->
+  <h3 class="text-xl font-bold mb-4">Pattern per environment</h3>
+  <div class="grid md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white border border-slate-200 rounded-xl p-6">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="badge bg-emerald-100 text-emerald-700">local + file tool</span>
+        <h4 class="font-bold text-slate-800">Claude Code, Cursor</h4>
+      </div>
+      <ol class="text-sm text-slate-700 space-y-2">
+        <li><strong>1.</strong> <code class="text-cyan-700">workflow_workspace()</code></li>
+        <li><strong>2.</strong> <code class="text-pink-700">workflow_create(slug)</code></li>
+        <li><strong>3.</strong> Edit workflow.yaml via <em>Write/Edit native</em></li>
+        <li><strong>4.</strong> Edit nodes/*.md, script.sh native</li>
+        <li><strong>5.</strong> <code class="text-emerald-700">workflow_validate(slug)</code></li>
+        <li><strong>6.</strong> <code class="text-emerald-700">workflow_simulate(slug, evt)</code></li>
+        <li><strong>7.</strong> <code class="text-emerald-700">workflow_request_review(slug)</code></li>
+      </ol>
+    </div>
+
+    <div class="bg-white border border-amber-300 rounded-xl p-6">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="badge bg-amber-100 text-amber-700">remote, no file tool</span>
+        <h4 class="font-bold text-slate-800">Claude Desktop, ChatGPT, Gemini</h4>
+      </div>
+      <ol class="text-sm text-slate-700 space-y-2">
+        <li><strong>1.</strong> <code class="text-cyan-700">workflow_workspace()</code></li>
+        <li><strong>2.</strong> <code class="text-cyan-700">workflow_node_types()</code> ← discover</li>
+        <li><strong>3.</strong> <code class="text-pink-700">workflow_create(slug)</code></li>
+        <li><strong>4.</strong> <code class="text-amber-700">workflow_add_node(slug, ...)</code> ×N</li>
+        <li><strong>5.</strong> <code class="text-amber-700">workflow_connect(slug, ...)</code> ×N</li>
+        <li><strong>6.</strong> <code class="text-pink-700">workflow_write_file(slug, "nodes/prompt.md", content)</code></li>
+        <li><strong>7.</strong> <code class="text-emerald-700">workflow_validate</code> / <code class="text-emerald-700">simulate</code></li>
+        <li><strong>8.</strong> <code class="text-emerald-700">workflow_request_review(slug)</code></li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="bg-slate-50 border-l-4 border-slate-400 rounded p-4 text-sm text-slate-700 mb-8">
+    Dua flow output sama — file di folder yang sama, approval flow sama. Diferensiator cuma channel komunikasi: native file tool vs MCP write op.
+  </div>
+
+  <!-- HTTP transport setup -->
+  <h3 class="text-xl font-bold mb-4">HTTP MCP transport — setup buat remote AI</h3>
+  <div class="grid md:grid-cols-2 gap-6">
+    <div>
+      <p class="text-sm text-slate-600 mb-3">Wick MCP server udah ada di <code>/mcp</code>. Workflow ops register ke existing server. Call:</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed">POST https://wick.your-host.com/mcp
+Authorization: Bearer wick_token_...
+Content-Type: application/json
+
+{
+  <span class="yaml-key">"jsonrpc"</span>: <span class="yaml-str">"2.0"</span>,
+  <span class="yaml-key">"method"</span>: <span class="yaml-str">"tools/call"</span>,
+  <span class="yaml-key">"params"</span>: {
+    <span class="yaml-key">"name"</span>: <span class="yaml-str">"workflow_add_node"</span>,
+    <span class="yaml-key">"arguments"</span>: {
+      <span class="yaml-key">"slug"</span>: <span class="yaml-str">"support-triage"</span>,
+      <span class="yaml-key">"node"</span>: {...}
+    }
+  },
+  <span class="yaml-key">"id"</span>: <span class="yaml-num">1</span>
+}</pre>
+    </div>
+
+    <div>
+      <h4 class="font-bold mb-3">Setup AI client</h4>
+      <div class="space-y-3">
+        <div class="bg-violet-50 border border-violet-200 rounded p-3">
+          <div class="text-violet-700 text-xs font-bold uppercase mb-1">Claude Desktop</div>
+<pre class="mono text-xs text-slate-700"><span class="yaml-key">mcpServers</span>:
+  <span class="yaml-key">wick</span>:
+    <span class="yaml-key">url</span>: <span class="yaml-str">https://wick.host.com/mcp</span>
+    <span class="yaml-key">headers</span>:
+      <span class="yaml-key">Authorization</span>: <span class="yaml-str">Bearer wick_token_...</span></pre>
+        </div>
+        <div class="bg-emerald-50 border border-emerald-200 rounded p-3">
+          <div class="text-emerald-700 text-xs font-bold uppercase mb-1">ChatGPT custom GPT</div>
+          <p class="text-xs text-slate-600">Action dgn OpenAPI spec reference <code>/mcp</code>. Bearer di Action authentication.</p>
+        </div>
+        <div class="bg-blue-50 border border-blue-200 rounded p-3">
+          <div class="text-blue-700 text-xs font-bold uppercase mb-1">Gemini Gems</div>
+          <p class="text-xs text-slate-600">Function calling dgn HTTP action ke <code>/mcp</code>.</p>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 rounded p-3">
+          <div class="text-slate-700 text-xs font-bold uppercase mb-1">Wick UI assistant</div>
+          <p class="text-xs text-slate-600">In-process MCP client, ga butuh auth (authenticated session).</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth / permission -->
+  <div class="mt-8 grid md:grid-cols-2 gap-6">
+    <div class="bg-amber-50 border-l-4 border-amber-400 rounded p-4 text-sm text-amber-900">
+      <strong>Auth + permission scoping</strong>
+      <p class="text-xs mt-1">Token punya 3 scope dimension: workflow allowlist, op allowlist, approval cap. Audit log catat tiap call.</p>
+    </div>
+    <div class="bg-rose-50 border-l-4 border-rose-400 rounded p-4 text-sm text-rose-900">
+      <strong>Limit MCP tanpa file tool</strong>
+      <ul class="mt-2 space-y-1 list-disc list-inside text-xs">
+        <li><strong>Long file edit</strong> — full-replace via <code>write_file</code>, ga ada Edit/PartialEdit. Engine atomic tmp+rename.</li>
+        <li><strong>Browse files</strong> — <code>list_files</code> cuma path; isi besar harus <code>read_file</code> per-file (lebih round trip)</li>
+        <li><strong>Search</strong> — ga ada Grep equivalent V1. <code>workflow_grep</code> future kalau perlu</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Token scoping matrix -->
+  <h3 class="text-xl font-bold mt-12 mb-3">Token scoping per use case</h3>
+  <p class="text-slate-600 text-sm mb-4">Scope di-assign saat token issuance. Default <strong>AI assistant</strong> = write-without-enable + wajib panggil <code>workflow_request_review</code>. Admin approve via UI (lihat §13 AI guard).</p>
+
+  <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left p-3 font-semibold">Use case</th>
+          <th class="text-center p-3 font-semibold">Read</th>
+          <th class="text-center p-3 font-semibold">File CRUD</th>
+          <th class="text-center p-3 font-semibold">Canvas ops</th>
+          <th class="text-center p-3 font-semibold">Toggle enable</th>
+          <th class="text-center p-3 font-semibold">Approve</th>
+        </tr>
+      </thead>
+      <tbody class="text-slate-700">
+        <tr class="border-b border-slate-100 bg-amber-50">
+          <td class="p-3"><strong>AI assistant</strong> <span class="badge bg-amber-100 text-amber-700 ml-1">default for MCP tokens</span></td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3"><strong>Admin user</strong></td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+        </tr>
+        <tr class="border-b border-slate-100">
+          <td class="p-3"><strong>Read-only viewer</strong></td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+        </tr>
+        <tr>
+          <td class="p-3"><strong>CI/CD push</strong></td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓</td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+          <td class="p-3 text-center text-emerald-600 font-bold">✓ <span class="text-xs text-slate-500">(post-CI)</span></td>
+          <td class="p-3 text-center text-rose-500 font-bold">✗</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-3 mb-4">
+    <div class="bg-slate-50 border border-slate-200 rounded p-3 text-xs">
+      <strong class="text-slate-700">Workflow allowlist</strong>
+      <p class="text-slate-600 mt-1">Per-token: <code>["*"]</code> atau specific slugs. Reject MCP call ke workflow di luar allowlist.</p>
+    </div>
+    <div class="bg-slate-50 border border-slate-200 rounded p-3 text-xs">
+      <strong class="text-slate-700">Op allowlist</strong>
+      <p class="text-slate-600 mt-1">Per-token: list MCP ops yang allowed. Default sesuai use-case template.</p>
+    </div>
+    <div class="bg-slate-50 border border-slate-200 rounded p-3 text-xs">
+      <strong class="text-slate-700">Audit log</strong>
+      <p class="text-slate-600 mt-1">Tiap call: token ID, user, op, args hash, result, timestamp. Reuse infra audit existing.</p>
+    </div>
+  </div>
+</section>
+
+<!-- GUARD -->
+<section class="bg-white py-16 border-y border-slate-200">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2">13. AI guard sebelum publish</h2>
+    <p class="text-slate-600 mb-8">Ephemeral reviewer agent baca semua node + script + prompt, banding dgn rule. Block / warn / off per config.</p>
+
+    <div class="grid md:grid-cols-3 gap-6 mb-8">
+      <div class="bg-rose-50 border-l-4 border-rose-400 rounded p-4">
+        <div class="text-rose-700 text-xs font-bold uppercase mb-1">Destructive</div>
+        <p class="text-sm text-slate-700">No <code>rm -rf</code>, <code>dd</code>, <code>mkfs</code>, fork bombs.</p>
+      </div>
+      <div class="bg-amber-50 border-l-4 border-amber-400 rounded p-4">
+        <div class="text-amber-700 text-xs font-bold uppercase mb-1">Injection</div>
+        <p class="text-sm text-slate-700">classify prompt ga passthrough <code>{{.Event.Payload.text}}</code> ke shell raw. db_query parameterized only.</p>
+      </div>
+      <div class="bg-blue-50 border-l-4 border-blue-400 rounded p-4">
+        <div class="text-blue-700 text-xs font-bold uppercase mb-1">Network</div>
+        <p class="text-sm text-slate-700">HTTP host allowlist. No local IP (SSRF defense). Secret tag (<code>wick_enc_</code>) wajib.</p>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mono text-sm leading-relaxed">
+<pre>User klik <span class="text-amber-300">"Enable"</span> di UI
+       │
+       ▼
+Guard enabled? ──no──► commit
+       │ yes
+       ▼
+Spawn reviewer (preset: guard)
+       │
+       ▼
+Prompt: "Review workflow. Rules: ...
+         Graph: ${yaml.graph}.
+         Files: ${all_files}.
+         Return: {ok, violations[]}"
+       │
+       ▼
+Parse JSON response
+  ├── ok=true ─────────► <span class="text-emerald-300">commit + audit "guard passed"</span>
+  ├── ok=false, warn ──► <span class="text-amber-300">commit + warning banner</span>
+  ├── ok=false, block ─► <span class="text-rose-300">reject + show violations</span>
+  └── timeout ─────────► <span class="text-rose-300">block (fail-closed)</span>
+
+Override: button "Override Guard" + mandatory reasoning → audit log</pre>
+    </div>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section class="max-w-6xl mx-auto px-6 py-16">
+  <h2 class="text-3xl font-bold mb-2">14. Security model</h2>
+  <p class="text-slate-600 mb-8">Workflow boleh exec arbitrary code dan call external — surface area besar. Multi-layer defense.</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="bg-rose-50 border border-rose-200 rounded p-4">
+      <strong class="text-rose-700">Shell / Python — arbitrary exec</strong>
+      <ul class="text-sm text-slate-700 mt-2 space-y-1">
+        <li>AI-generated → <code>approved=false</code> by default</li>
+        <li>UI Create wajib role admin</li>
+        <li>Approval modal show diff command + script</li>
+        <li>AI guard scan destructive pattern</li>
+      </ul>
+    </div>
+    <div class="bg-amber-50 border border-amber-200 rounded p-4">
+      <strong class="text-amber-700">Prompt injection via channel</strong>
+      <ul class="text-sm text-slate-700 mt-2 space-y-1">
+        <li>Wrap user input dgn <code>&lt;user_input&gt;</code> tag</li>
+        <li>Whitelist user/group per trigger</li>
+        <li>Guard flag direct passthrough ke shell</li>
+      </ul>
+    </div>
+    <div class="bg-blue-50 border border-blue-200 rounded p-4">
+      <strong class="text-blue-700">DB / HTTP — injection &amp; SSRF</strong>
+      <ul class="text-sm text-slate-700 mt-2 space-y-1">
+        <li>db_query PAKSA parameterized (<code>$1</code>, <code>$2</code>)</li>
+        <li>HTTP host allowlist, block local IPs by default</li>
+        <li>Rate limit per workflow (60/min default)</li>
+      </ul>
+    </div>
+    <div class="bg-emerald-50 border border-emerald-200 rounded p-4">
+      <strong class="text-emerald-700">Webhook / Manual</strong>
+      <ul class="text-sm text-slate-700 mt-2 space-y-1">
+        <li>HMAC SHA-256 mandatory di webhook</li>
+        <li>IP CIDR allowlist optional</li>
+        <li><code>require_role: admin</code> di manual trigger</li>
+        <li>Audit log catat clicker + replay actor</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP -->
+<section class="bg-slate-900 text-slate-100 py-16">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-bold mb-2 text-white">15. Differentiator vs n8n</h2>
+    <p class="text-slate-400 mb-8">Bukan kompetitor — pendekatan AI fundamentally beda. n8n = API SDK approach; wick = CLI subprocess approach.</p>
+
+    <div class="overflow-x-auto mb-6">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left border-b border-slate-700">
+            <th class="py-3 pr-4 text-slate-300">Aspect</th>
+            <th class="py-3 pr-4 text-slate-300">n8n</th>
+            <th class="py-3 pr-4 text-slate-300">Wick Workflow</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-300">
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">Decision logic</td>
+            <td class="py-3 pr-4">If/Switch dgn expression</td>
+            <td class="py-3 pr-4 text-emerald-300"><code>branch</code> (if/switch) + <code>classify</code> (AI natural lang) — dua-duanya tersedia</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">AI integration</td>
+            <td class="py-3 pr-4">API SDK per node (OpenAI/Anthropic) — 1 node = 1 API call</td>
+            <td class="py-3 pr-4 text-emerald-300">CLI subprocess (<code>claude</code>/<code>codex</code>/<code>gemini</code>) — AI = agent dgn tool ecosystem built-in (Read/Edit/Bash/MCP)</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">Output reliability</td>
+            <td class="py-3 pr-4"><code>tool_use</code> schema enforcement di API level</td>
+            <td class="py-3 pr-4 text-emerald-300">Prompt-based JSON + parser + 5-layer fallback (§5.1)</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">AI nodes</td>
+            <td class="py-3 pr-4">Add-on, generic LLM call</td>
+            <td class="py-3 pr-4 text-emerald-300">First-class, pool + session reuse, share state antar node</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">Editor</td>
+            <td class="py-3 pr-4">UI wajib</td>
+            <td class="py-3 pr-4 text-emerald-300">UI <em>atau</em> YAML <em>atau</em> AI-via-MCP</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">Storage</td>
+            <td class="py-3 pr-4">DB</td>
+            <td class="py-3 pr-4 text-emerald-300">File-based, gitops-friendly</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">Skill orchestration</td>
+            <td class="py-3 pr-4">Generic webhook</td>
+            <td class="py-3 pr-4 text-emerald-300">Skill registry first-class — channel actions auto-registered</td>
+          </tr>
+          <tr class="border-b border-slate-800">
+            <td class="py-3 pr-4 font-medium">Deployment</td>
+            <td class="py-3 pr-4">Hosted / self-host k8s</td>
+            <td class="py-3 pr-4 text-emerald-300">Embedded di wick binary</td>
+          </tr>
+          <tr>
+            <td class="py-3 pr-4 font-medium">Latency per AI node</td>
+            <td class="py-3 pr-4">~200-1000ms (API direct)</td>
+            <td class="py-3 pr-4 text-amber-300">~500-2000ms (proc spawn overhead) — accepted trade-off</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 text-sm">
+      <div class="bg-slate-800/50 border border-slate-700 rounded p-4">
+        <div class="text-amber-300 font-bold mb-2">n8n approach</div>
+        <p class="text-slate-300">Call OpenAI API per node, tiap call independen. Cocok buat <em>"LLM as one of many service integrations"</em>.</p>
+      </div>
+      <div class="bg-slate-800/50 border border-emerald-700 rounded p-4">
+        <div class="text-emerald-300 font-bold mb-2">Wick approach</div>
+        <p class="text-slate-300">Spawn agent CLI yang punya tool ecosystem (file/bash/MCP) inheriting dari agent session. Cocok buat <em>"AI orchestration dgn skill + file manipulation + MCP tools"</em>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="bg-slate-950 text-slate-400 py-8">
+  <div class="max-w-6xl mx-auto px-6 text-center text-sm">
+    <p>Workflow design — kontrak developer · <code>internal/docs/workflow-design.md</code></p>
+    <p class="mt-2 text-xs text-slate-500">Mockup pakai Drawflow (vanilla JS, ~28KB) + Tailwind CDN. Match wick stack.</p>
+  </div>
+</footer>
+
+<script>
+// Drawflow demo — support-triage workflow
+const container = document.getElementById('canvas-demo');
+const editor = new Drawflow(container);
+editor.editor_mode = 'view'; // read-only in mockup
+editor.reroute = true;
+editor.start();
+
+// Custom node renderer
+function nodeHTML(kind, title, meta) {
+  return `
+    <div class="node-head">${kind}</div>
+    <div class="node-body">
+      <div class="title">${title}</div>
+      <div class="meta">${meta}</div>
+    </div>
+  `;
+}
+
+// Layout (x, y positions)
+const trig = editor.addNode('trigger', 0, 1, 30, 40, 'node-trigger', { kind: 'trigger', label: 'channel' }, nodeHTML('trigger', 'channel', '#support · mention_bot'));
+const cls = editor.addNode('classify-intent', 1, 4, 320, 40, 'node-classify', { kind: 'classify' }, nodeHTML('classify', 'classify-intent', 'bug | question | feature | other'));
+
+const bug = editor.addNode('handle-bug', 1, 1, 650, -40, 'node-connector', {}, nodeHTML('connector', 'handle-bug', 'linear · create_issue'));
+const qst = editor.addNode('handle-question', 1, 1, 650, 80, 'node-agent', {}, nodeHTML('agent', 'handle-question', 'lookup docs + reply'));
+const ftr = editor.addNode('handle-feature', 1, 1, 650, 200, 'node-connector', {}, nodeHTML('connector', 'handle-feature', 'airtable · append_row'));
+const oth = editor.addNode('silent-end', 1, 0, 650, 320, 'node-end', {}, nodeHTML('end', 'silent-end', 'no reply'));
+
+const reply = editor.addNode('reply-link', 1, 0, 960, 40, 'node-channel', {}, nodeHTML('channel', 'reply-link', 'slack · reply_thread'));
+
+editor.addConnection(trig, cls, 'output_1', 'input_1');
+editor.addConnection(cls, bug, 'output_1', 'input_1');
+editor.addConnection(cls, qst, 'output_2', 'input_1');
+editor.addConnection(cls, ftr, 'output_3', 'input_1');
+editor.addConnection(cls, oth, 'output_4', 'input_1');
+editor.addConnection(bug, reply, 'output_1', 'input_1');
+editor.addConnection(qst, reply, 'output_1', 'input_1');
+editor.addConnection(ftr, reply, 'output_1', 'input_1');
+
+// Zoom out a bit for initial view
+editor.zoom_out();
+</script>
+
+</body>
+</html>

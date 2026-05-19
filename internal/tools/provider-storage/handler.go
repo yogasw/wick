@@ -41,6 +41,7 @@ func Register(r tool.Router) {
 	// Sync sources (Settings tab)
 	r.GET("/sources", listSources)
 	r.POST("/sources", saveSource)
+	r.POST("/sources/{sid}/retention", setSourceRetention)
 	r.DELETE("/sources/{sid}", deleteSource)
 	r.GET("/sources/check", checkSource)
 	r.GET("/sources/ls", lsDir)
@@ -48,6 +49,7 @@ func Register(r tool.Router) {
 	r.GET("/sources/detect", detectPaths)
 	r.GET("/sources/presets", listPresets)
 	r.POST("/restore-now", restoreNow)
+	r.POST("/repair-tree", repairTree)
 	// Adjacency-list explorer
 	r.GET("/tree", treeChildren)
 	r.GET("/roots", listRoots)
@@ -83,6 +85,9 @@ func listFiles(c *tool.Ctx) {
 
 	out := make([]fileRow, 0, len(rows))
 	for _, r := range rows {
+		if r.IsDir {
+			continue
+		}
 		if providerFilter != "" && r.ProviderType != providerFilter {
 			continue
 		}
@@ -298,7 +303,7 @@ func syncNow(c *tool.Ctx) {
 	}
 	synced := 0
 	for _, src := range sources {
-		if !src.Enabled {
+		if !src.Enabled || src.Mode == "exclude" {
 			continue
 		}
 		ins := provider.Instance{
@@ -356,6 +361,35 @@ func saveSource(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, saved)
+}
+
+func setSourceRetention(c *tool.Ctx) {
+	if globalSyncMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
+		return
+	}
+	idStr := c.PathValue("sid")
+	n, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	days, err := strconv.Atoi(c.Form("days"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid days"})
+		return
+	}
+	src, err := globalSyncMgr.GetSource(c.Context(), uint(n))
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	src.RetentionDays = days
+	if _, err := globalSyncMgr.SaveSource(c.Context(), src); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func deleteSource(c *tool.Ctx) {
@@ -566,15 +600,56 @@ func listRoots(c *tool.Ctx) {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
 		return
 	}
-	roots, err := globalSyncMgr.ListRoots(c.Context())
+	rows, err := globalSyncMgr.ListRoots(c.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, roots)
+	type rootRow struct {
+		ID            uint   `json:"id"`
+		ProviderType  string `json:"provider_type"`
+		InstanceName  string `json:"instance_name"`
+		Name          string `json:"name"`
+		RelPath       string `json:"rel_path"`
+		IsDir         bool   `json:"is_dir"`
+		Size          int    `json:"size"`
+		SyncedAt      string `json:"synced_at"`
+		RetentionDays int    `json:"retention_days"`
+	}
+	out := make([]rootRow, 0, len(rows))
+	for _, r := range rows {
+		row := rootRow{
+			ID:            r.ID,
+			ProviderType:  r.ProviderType,
+			InstanceName:  r.InstanceName,
+			Name:          r.Name,
+			RelPath:       r.RelPath,
+			IsDir:         r.IsDir,
+			RetentionDays: r.RetentionDays,
+		}
+		if !r.IsDir {
+			row.Size = len(r.Content)
+			row.SyncedAt = r.SyncedAt.Format("2006-01-02 15:04:05")
+		}
+		out = append(out, row)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // ── Global Settings ───────────────────────────────────────────────────
+
+func repairTree(c *tool.Ctx) {
+	if globalSyncMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
+		return
+	}
+	n, err := globalSyncMgr.RepairTree(c.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]int{"fixed": n})
+}
 
 func restoreNow(c *tool.Ctx) {
 	if globalSyncMgr == nil {

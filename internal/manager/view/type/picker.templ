@@ -1,0 +1,52 @@
+package fieldtype
+
+import "github.com/yogasw/wick/internal/entity"
+
+// Picker renders an inline-chip multi-select.
+//
+// Single input box — chips appear inline as the operator commits each
+// token. Behaviour:
+//
+//   - Type → debounced lookup against
+//     <data-picker-lookup-url>?source=<data-picker-source>&q=<text>.
+//     Dropdown of {id, name} candidates; click a row to add the chip.
+//   - Press comma, Enter, or paste a comma/newline-separated blob →
+//     each non-empty token becomes a chip with id = name (fallback
+//     when the lookup endpoint can't resolve / isn't wired).
+//   - Backspace at empty input pops the last chip. Matches Gmail /
+//     Slack recipient field UX.
+//
+// Value lives on the hidden <input data-field-key> as JSON
+// `[{id, name}, ...]`. Mutations fire `input` + `change` on the
+// hidden input so DOM-polling consumers catch the edit.
+//
+// Init JS at internal/tools/agents/js/widgets/picker.js — load it
+// once per page (the workflow editor does so via editor.templ). The
+// script auto-wires every .wf-picker on DOMContentLoaded and
+// exposes window.wickInitPickers(root) for hydrate flows that
+// inject pickers via innerHTML.
+templ Picker(row entity.Config) {
+	<div
+		class="wf-picker"
+		data-picker-source={ row.Options }
+		data-picker-key={ row.Key }
+	>
+		<input
+			type="hidden"
+			data-field-key={ row.Key }
+			name="value"
+			value={ row.Value }
+		/>
+		<div class="wf-picker-shell">
+			<div data-picker-chips class="wf-picker-chips"></div>
+			<input
+				type="text"
+				data-picker-input
+				placeholder="Search or type IDs, comma to add…"
+				autocomplete="off"
+				class="wf-picker-input"
+			/>
+		</div>
+		<div data-picker-results class="wf-picker-results hidden"></div>
+	</div>
+}

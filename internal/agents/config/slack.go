@@ -28,6 +28,7 @@ type SlackChannelConfig struct {
 	GateApproverGroups string `wick:"picker=slack.usergroups;hidden;key=gate_approver_groups;visible_when=gate_approvers:custom;desc=Custom approver user groups."`
 
 	Workspace string `wick:"dropdown;hidden;key=workspace;desc=Workspace to use for sessions from this Slack channel. Leave empty to use the global default."`
+	PublicURL string `wick:"hidden;key=public_url;desc=Public URL for Slack HTTP mode webhooks."`
 }
 
 // DefaultSlackChannelConfig returns the empty Slack defaults. Slack stays off

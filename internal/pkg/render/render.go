@@ -32,16 +32,13 @@ func NewToolRenderer(hasConfigs bool) tool.RenderFunc {
 		meta := c.Meta()
 
 		if meta.FullScreen {
-			// Full-screen tools own their layout — wrap with Navbar only,
-			// skip ToolHeader and setup banner.
-			inner := templ.ComponentFunc(func(ctx context.Context, out io.Writer) error {
-				if err := ui.Navbar(user).Render(ctx, out); err != nil {
-					return err
-				}
-				return body.Render(ctx, out)
-			})
+			// Full-screen tools own their layout — no Navbar, no
+			// ToolHeader, no setup banner. Tool body is responsible for
+			// rendering its own chrome (workspace name, profile menu,
+			// theme picker) within its viewport.
+			_ = user
 			c.W.Header().Set("Content-Type", "text/html; charset=utf-8")
-			ctx := templ.WithChildren(c.R.Context(), inner)
+			ctx := templ.WithChildren(c.R.Context(), body)
 			_ = ui.Layout(meta.Name).Render(ctx, c.W)
 			return
 		}
