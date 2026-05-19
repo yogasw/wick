@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +14,13 @@ import (
 // watchStore is a stub state.Store carrying pre-canned index rows +
 // per-run state lookups. Only methods Watch hits are populated; the
 // rest return defaults so accidental misuse stays loud.
+//
+// mu guards the two maps so the long-poll tests (TestWatchLongPoll*)
+// can fire addRun from a goroutine while the main test goroutine is
+// inside Watch → watchPeek/IndexList. Without it -race trips on map
+// reads/writes the moment the goroutine wins a race against peek.
 type watchStore struct {
+	mu     sync.Mutex
 	index  map[string][]state.IndexEntry  // workflow-id → rows (newest first)
 	states map[[2]string]workflow.RunState // (wfID, runID) → state
 }
@@ -27,6 +34,8 @@ func newWatchStore() *watchStore {
 
 func (s *watchStore) addRun(wfID, runID, status string, triggerID string, started time.Time, nodes []string) {
 	end := started.Add(time.Second)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.index[wfID] = append(s.index[wfID], state.IndexEntry{
 		ID: runID, Status: status, StartedAt: started, EndedAt: &end,
 	})
@@ -41,19 +50,23 @@ func (s *watchStore) addRun(wfID, runID, status string, triggerID string, starte
 	}
 }
 
-func (s *watchStore) Save(string, string, workflow.RunState) error             { return nil }
+func (s *watchStore) Save(string, string, workflow.RunState) error { return nil }
 func (s *watchStore) Load(id, runID string) (workflow.RunState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	st, ok := s.states[[2]string{id, runID}]
 	if !ok {
 		return workflow.RunState{}, nil
 	}
 	return st, nil
 }
-func (s *watchStore) AppendEvent(string, string, workflow.RunEvent) error      { return nil }
-func (s *watchStore) ListEvents(string, string) ([]workflow.RunEvent, error)   { return nil, nil }
-func (s *watchStore) ListRuns(string) ([]string, error)                        { return nil, nil }
-func (s *watchStore) IndexAppend(string, state.IndexEntry) error               { return nil }
+func (s *watchStore) AppendEvent(string, string, workflow.RunEvent) error    { return nil }
+func (s *watchStore) ListEvents(string, string) ([]workflow.RunEvent, error) { return nil, nil }
+func (s *watchStore) ListRuns(string) ([]string, error)                      { return nil, nil }
+func (s *watchStore) IndexAppend(string, state.IndexEntry) error             { return nil }
 func (s *watchStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rows := s.index[id]
 	if pageSize <= 0 {
 		pageSize = 50
@@ -66,7 +79,12 @@ func (s *watchStore) IndexList(id string, page, pageSize int) ([]state.IndexEntr
 	if to > len(rows) {
 		to = len(rows)
 	}
-	return rows[from:to], to < len(rows), nil
+	// Return a copy so callers iterate the snapshot without touching
+	// the shared backing array — otherwise a follow-up addRun could
+	// realloc the slice underneath them.
+	out := make([]state.IndexEntry, to-from)
+	copy(out, rows[from:to])
+	return out, to < len(rows), nil
 }
 
 func TestWatchPeekStatus(t *testing.T) {
