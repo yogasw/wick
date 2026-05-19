@@ -1,17 +1,18 @@
 # Skill: node-builder
 
-Status: **template** — spec doc only. Skill belum dibuat (butuh
-`~/.claude/skills/node-builder/SKILL.md` actual). Doc ini blueprint
-biar pas siap, user copy-paste ke skill file langsung jadi.
-Update terakhir: 2026-05-16.
+Status: **superseded** — pattern node creation sekarang udah live di
+[`.claude/skills/workflow-node-module/SKILL.md`](../../../.claude/skills/workflow-node-module/SKILL.md)
+(project-scoped skill, auto-trigger). Doc ini tetap disimpan sebagai
+blueprint historis + tracker untuk skill `workflow-builder` companion.
+Update terakhir: 2026-05-18.
 
 ---
 
 ## TODO
 
-- [ ] Buat actual skill file `~/.claude/skills/node-builder/SKILL.md` dari spec di bawah
+- [x] Skill aktif → `.claude/skills/workflow-node-module/SKILL.md` (project-scoped, full UI+engine pattern). Sumber kebenaran.
 - [ ] Tambah skill `workflow-builder` (sibling) — bantu compose multi-node workflow dari natural language
-- [ ] Validate skill: 1 sample run end-to-end (drop "build a node that calls Stripe API" → AI hasilkan folder lengkap)
+- [ ] Validate workflow-builder: 1 sample run end-to-end (drop "build a workflow that triggers on Slack, classifies intent, routes to GitHub" → AI hasilkan workflow.yaml lengkap)
 - [ ] Iterate trigger phrases setelah real-world usage
 
 ---
@@ -19,18 +20,18 @@ Update terakhir: 2026-05-16.
 ## Konteks
 
 Wick workflow editor pakai plugin arch
-([plugin-arch.md](plugin-arch.md)): 1 node baru = 1 folder berisi
-`meta.go` + `inspector.templ` + `inspector.js`. Pattern stable, tapi
-boilerplate per-node masih ~150 baris (3 file).
+([plugin-arch.md](plugin-arch.md)): 1 node baru = sepasang folder:
 
-User mau Claude Code skill yg:
-1. Ngerti pattern node-builder
-2. Bisa generate boilerplate dari deskripsi natural language
-3. Hasil drop-in ready — `templ generate && go build`
+1. **Engine** (`internal/agents/workflow/nodes/<type>.go`) — executor + exported schema struct + `Descriptor()`.
+2. **UI plugin** (`internal/tools/agents/workflow/nodes/<type>/`) — `meta.go` + `inspector.templ` (one-liner `ArgForm`) + `inspector.js`.
 
-Skill juga jadi reference dokumentasi terpadu: kalau user pengen tau
-"gimana cara nambah node X", panggil skill, dapat instruksi
-step-by-step.
+Schema reflected via `entity.StructToConfigs(<Type>Schema{})` di kedua sisi — single source of truth.
+
+Reference lengkap step-by-step ada di
+[workflow-node-module SKILL.md](../../../.claude/skills/workflow-node-module/SKILL.md).
+Skill aktif sebagai auto-trigger pas user touch path
+`internal/agents/workflow/nodes/**` atau
+`internal/tools/agents/workflow/nodes/**`.
 
 ---
 
@@ -240,6 +241,9 @@ Lalu refresh editor browser, drop node dari palette.
 ## Common patterns
 
 - **Templated args**: use `template.Render(n.<Field>, rc.RenderCtx())` di executor
+- **Fixed vs Expression toggle**: honor `n.ArgModes[<key>] == "fixed"` di executor — skip `template.Render`, pass value verbatim. Pattern di [`nodes/http.go::renderHTTPField`](../../agents/workflow/nodes/http.go)
+- **Conditional inspector fields**: pakai `visible_when=field:value` (single) atau `visible_when=field:a|b|c` (pipe-separated OR) di tag schema — UI hide row sampai dependency match
+- **Map-shaped fields (headers, query)**: tag `kvlist=name|value` → row editor table. Inspector glue convert kvlist JSON ↔ `map[string]string`. Per-value selalu di-template-render (no per-row toggle)
 - **Secret field**: kalau field perlu encryption, refer `internal/docs/encrypted-fields.md`
 - **Branching**: if node outputs verdict for case-based routing, implement `IsBranchSource()` di NodeType + return `Verdict` di NodeOutput
 - **Long-running**: use `ctx` cascade; engine wraps with `MaxDurationSec` (see [pool.md](pool.md) timeout strategy)

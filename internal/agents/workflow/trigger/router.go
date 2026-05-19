@@ -258,7 +258,7 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 				return false
 			}
 		}
-		if tr.MatchEnabled && !matchEventPayload(tr.Match, evt.Payload) {
+		if tr.MatchEnabled && !matchEventPayload(filterMatchSpec(tr.Match), evt.Payload) {
 			return false
 		}
 		return true
@@ -290,6 +290,34 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 		return true
 	}
 	return true
+}
+
+// filterMatchSpec strips UI-control keys from a match spec before the
+// router evaluates it against event payload. The "mode" key is a
+// MatchSchema UI convention (dropdown: all|whitelist) — its value
+// ("all", "whitelist") is never present in event payloads, so passing
+// it through matchEventPayload causes a false-negative: mode=whitelist
+// vs payload["mode"]=nil → always rejects.
+//
+// Rule: if mode=all → return empty spec (no filter). If mode=whitelist
+// (or absent) → return spec minus the "mode" key so only real payload
+// keys (channel_id, user, text_contains, …) are evaluated.
+func filterMatchSpec(spec map[string]any) map[string]any {
+	if len(spec) == 0 {
+		return spec
+	}
+	mode, _ := spec["mode"].(string)
+	if mode == "all" {
+		return nil
+	}
+	out := make(map[string]any, len(spec))
+	for k, v := range spec {
+		if k == "mode" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // matchEventPayload evaluates the trigger's Match map against the

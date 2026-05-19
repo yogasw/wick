@@ -9,14 +9,23 @@
 package parse
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
+
+// IdentRe is the Go-template identifier pattern. Used for node ids,
+// trigger ids, and labels — anything that will appear as a key in
+// `{{.Node.<key>.…}}`. Letters/digits/underscore, must start with
+// letter or underscore. Dashes are banned so the template parser
+// doesn't choke with "bad character U+002D".
+var IdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // IDRe is the canonical id pattern. Folder names and trigger
 // path templates must match.
@@ -54,13 +63,26 @@ func ValidateID(id string) error {
 	return nil
 }
 
-// ValidateNodeID rejects bad node IDs.
+// ValidateNodeID rejects bad node IDs. Strict identifier rule — must
+// work as a Go-template path segment in `{{.Node.<id>.…}}`.
 func ValidateNodeID(id string) error {
 	if id == "" {
 		return Error{Path: "node.id", Message: "is empty"}
 	}
-	if !NodeIDRe.MatchString(id) {
-		return Error{Path: "node.id", Message: fmt.Sprintf("%q is not [a-z0-9_-]+", id)}
+	if !IdentRe.MatchString(id) {
+		return Error{Path: "node.id", Message: fmt.Sprintf("%q must be a Go identifier ([A-Za-z_][A-Za-z0-9_]*) — no dash, dot, or space", id)}
+	}
+	return nil
+}
+
+// ValidateLabel rejects bad labels. Same rule as ValidateNodeID since
+// labels are how operators reference nodes in templates.
+func ValidateLabel(label string) error {
+	if label == "" {
+		return nil // optional field
+	}
+	if !IdentRe.MatchString(label) {
+		return Error{Path: "node.label", Message: fmt.Sprintf("%q must be a Go identifier ([A-Za-z_][A-Za-z0-9_]*) — no dash, dot, or space", label)}
 	}
 	return nil
 }
@@ -147,6 +169,9 @@ func Validate(w workflow.Workflow) *Result {
 
 	seen := map[string]int{}
 	nodesByID := map[string]workflow.Node{}
+	// labelOwner tracks which path first claimed each label (own id
+	// counts when label is empty so id↔label collisions also surface).
+	labelOwner := map[string]string{}
 	for i, n := range w.Graph.Nodes {
 		// Use the node ID in the path so the UI can index errors per
 		// node element. Fall back to numeric index when the ID itself
@@ -160,9 +185,21 @@ func Validate(w workflow.Workflow) *Result {
 			r.Errors = append(r.Errors, Error{Path: path + ".id", Message: err.(Error).Message})
 			continue
 		}
+		if err := ValidateLabel(n.Label); err != nil {
+			r.Errors = append(r.Errors, Error{Path: path + ".label", Message: err.(Error).Message})
+		}
 		if prev, dup := seen[n.ID]; dup {
 			r.Errors = append(r.Errors, Error{Path: path + ".id", Message: fmt.Sprintf("duplicate node ID %q (first at graph.nodes[%d])", n.ID, prev)})
 			continue
+		}
+		key := n.Label
+		if key == "" {
+			key = n.ID
+		}
+		if owner, dup := labelOwner[key]; dup {
+			r.Errors = append(r.Errors, Error{Path: path + ".label", Message: fmt.Sprintf("label/id %q collides with %s — labels must be unique within a workflow", key, owner)})
+		} else {
+			labelOwner[key] = path
 		}
 		seen[n.ID] = i
 		nodesByID[n.ID] = n
@@ -280,6 +317,12 @@ func Validate(w workflow.Workflow) *Result {
 }
 
 func validateTrigger(r *Result, path string, tr workflow.Trigger) {
+	if tr.ID != "" && !IdentRe.MatchString(tr.ID) {
+		r.Errors = append(r.Errors, Error{Path: path + ".id", Message: fmt.Sprintf("%q must be a Go identifier ([A-Za-z_][A-Za-z0-9_]*) — no dash, dot, or space", tr.ID)})
+	}
+	if err := ValidateLabel(tr.Label); err != nil {
+		r.Errors = append(r.Errors, Error{Path: path + ".label", Message: err.(Error).Message})
+	}
 	switch tr.Type {
 	case workflow.TriggerCron:
 		if tr.Schedule == "" {
@@ -289,6 +332,7 @@ func validateTrigger(r *Result, path string, tr workflow.Trigger) {
 		if tr.ChannelName == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".channel", Message: "is required for channel trigger"})
 		}
+		validateMatchSpec(r, path+".match", tr.Match)
 	case workflow.TriggerWebhook:
 		if tr.Path == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".path", Message: "is required for webhook trigger"})
@@ -307,6 +351,53 @@ func validateTrigger(r *Result, path string, tr workflow.Trigger) {
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: "is required"})
 	default:
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: fmt.Sprintf("unknown trigger type %q", tr.Type)})
+	}
+}
+
+// validateMatchSpec warns when a match value looks like a plain string
+// array (["C0ABC"]) — the router's idMembership checks .id inside each
+// element, so plain strings never match. The correct picker format is
+// a JSON array of {id,name} objects, e.g. [{"id":"C0ABC","name":"#ch"}].
+// Plain string equality ("C0ABC") is also valid and is left as-is.
+func validateMatchSpec(r *Result, path string, spec map[string]any) {
+	for k, v := range spec {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if !strings.HasPrefix(s, "[") {
+			continue
+		}
+		// Looks like a JSON array — check whether elements are plain
+		// strings instead of {id,name} objects.
+		var arr []json.RawMessage
+		if err := json.Unmarshal([]byte(s), &arr); err != nil {
+			r.Warnings = append(r.Warnings, Error{
+				Path:    path + "." + k,
+				Message: "value looks like JSON but failed to parse — use plain string equality or picker format [{\"id\":\"...\",\"name\":\"...\"}]",
+			})
+			continue
+		}
+		for i, elem := range arr {
+			var obj map[string]any
+			if json.Unmarshal(elem, &obj) != nil {
+				// Element is not an object (likely a plain string like "C0ABC")
+				r.Warnings = append(r.Warnings, Error{
+					Path: fmt.Sprintf("%s.%s[%d]", path, k, i),
+					Message: "picker array element must be an object {\"id\":\"...\",\"name\":\"...\"}, not a plain string — " +
+						"plain string arrays never match; use [{\"id\":\"C0ABC\",\"name\":\"#channel\"}] or a bare string for single-value equality",
+				})
+				break
+			}
+			if _, hasID := obj["id"]; !hasID {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.%s[%d]", path, k, i),
+					Message: "picker array element missing \"id\" field — router matches on id, not name",
+				})
+				break
+			}
+		}
 	}
 }
 
@@ -361,6 +452,14 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 	case workflow.NodeBranch:
 		if n.Expr == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".expr", Message: "is required"})
+		}
+	case workflow.NodeSwitch:
+		if len(n.Cases) == 0 {
+			r.Errors = append(r.Errors, Error{Path: path + ".cases", Message: "is required"})
+		}
+	case workflow.NodeGoScript:
+		if n.Code == "" {
+			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required"})
 		}
 	case workflow.NodeParallel:
 		if len(n.Branches) == 0 {

@@ -46,8 +46,9 @@ Engine inject `workflow.Event` ke setiap run. Field yang tersedia di template:
 {{.Event.Payload}}    — map[string]any — semua field event asli ada di sini
 ```
 
-**Penting:** `Event.Thread`, `Event.User`, `Event.Text` TIDAK ADA. Semua ada di
-`{{.Event.Payload}}`. Akses via:
+**PENTING — field shorthand tidak ada di struct.** `workflow.Event` hanya punya: `Type`, `Subtype`, `Channel`, `At`, `Payload map[string]any`.
+
+Field `Event.User`, `Event.Text`, `Event.Ts`, `Event.TriggerId`, `Event.Message.*` **tidak ada**. Semua ada di `{{.Event.Payload}}`. Akses via:
 
 ```
 {{index .Event.Payload "ts"}}          — timestamp pesan (Slack message)
@@ -330,11 +331,21 @@ Isi dengan entry node trigger pertama.
 ## 8. Trigger Match Filter
 
 ```yaml
+# String equality — paling simple, pakai untuk 1 value
 match:
-  channel_id: ["C0ASUHYCRNU"]     # whitelist channel
-  action_id: ["create_tiket"]     # whitelist action (block_action)
+  channel_id: C0ASUHYCRNU
+  action_id: create_tiket
   text_contains: "bug"            # substring match pada message text
 match_enabled: true               # WAJIB true, default false = no filter
+
+# Picker JSON string — format yang UI canvas pakai (multi-value whitelist)
+# id = Slack channel/user ID, name = display label
+match:
+  channel_id: '[{"id":"C0ASUHYCRNU","name":"#support"}]'
+match_enabled: true
+
+# JANGAN pakai array plain strings — tidak di-support:
+# channel_id: ["C0ASUHYCRNU"]   ← SALAH, tidak match
 ```
 
 ---
@@ -433,5 +444,9 @@ Lihat trigger payload lewat dropdown INPUT dari node downstream.
 | `workflow_node_types` schema null | Schema field belum di-populate |
 | Agent node gagal di simulate | Provider tidak di-wire ke stdio MCP |
 | Node ID dengan `-` | Go template reject, pakai `_` atau camelCase |
-| `.Event.Thread` / `.Event.User` tidak ada | Semua ada di `{{index .Event.Payload "..."}}` |
+| `.Event.User` / `.Event.Text` / `.Event.Ts` dll tidak ada | `workflow.Event` hanya punya `Type, Subtype, Channel, At, Payload`. Semua field lain di `{{index .Event.Payload "key"}}` |
 | `trigger_id` expired | open_modal harus fire dalam 3s dari block_action — jangan LLM di antara |
+| AI tidak set `arg_modes` | Default expression di runtime aman, tapi inspector UI tampil Fixed → confusing. Selalu set `arg_modes` per field |
+| `match` value format | String equality: `channel_id: C0ABC`. Picker multi-value: `channel_id: '[{"id":"C0ABC","name":"#ch"}]'`. Array plain strings `["C0ABC"]` **tidak di-support** — tidak pernah match |
+| `match_enabled` default false | Tanpa `match_enabled: true` trigger fire semua event tanpa filter |
+| `view: fixed` template tidak di-render | Template di dalam `view` arg (termasuk `private_metadata`) tidak di-render karena mode fixed. Gunakan dataset atau simpan context di button `value` |

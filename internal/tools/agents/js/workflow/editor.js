@@ -183,8 +183,6 @@
     provider: document.getElementById('ins-provider'),
     preset: document.getElementById('ins-preset'),
     command: document.getElementById('ins-command'),
-    url: document.getElementById('ins-url'),
-    method: document.getElementById('ins-method'),
     channel: document.getElementById('ins-channel'),
     op: document.getElementById('ins-op'),
     module: document.getElementById('ins-module'),
@@ -320,11 +318,21 @@
       const editable = argEditable(wrap);
       if (!editable) return;
       // Restore stored value. Checkboxes use .checked from "true"/"false".
-      const stored = (args && args[key] != null) ? String(args[key]) : '';
+      // Arrays (picker native YAML format) must be JSON-stringified so the
+      // picker hidden input and chip renderer always see a JSON string.
+      const raw = args && args[key] != null ? args[key] : '';
+      const stored = Array.isArray(raw) ? JSON.stringify(raw) : String(raw);
       if (editable.type === 'checkbox') {
         editable.checked = stored === 'true';
       } else if (stored !== '' || editable.tagName === 'SELECT') {
         editable.value = stored;
+        // kvlist hidden inputs need the visible row table repainted
+        // after value restoration. The widget's own boot script ran
+        // before we set the value, so the rows still reflect the
+        // initial server-rendered state (empty for a fresh node).
+        if (editable.type === 'hidden' && editable.closest('.kvlist-editor')) {
+          repaintKVList(editable.closest('.kvlist-editor'), editable.value);
+        }
         // Picker hidden inputs need chips re-rendered after value is set
         // because wickInitPickers ran before value restoration.
         if (editable.type === 'hidden' && editable.closest('.wf-picker')) {
@@ -379,8 +387,16 @@
       if (editable.tagName !== 'SELECT' && editable.type !== 'checkbox') {
         attachTemplateDropTarget(editable, () => setArgFieldMode(wrap, 'expression', true));
       }
-      // Live-template preview hook — fires for text-like inputs.
-      editable.addEventListener('input', () => updateArgPreview(wrap));
+      // Live-template preview hook — fires for text-like inputs. Also
+      // auto-flip the wrap into Expression mode the first time the
+      // operator types `{{` — Fixed-mode defaults bite users who paste
+      // a template ref and forget to toggle.
+      editable.addEventListener('input', () => {
+        if (wrap.dataset.argMode !== 'expression' && typeof editable.value === 'string' && editable.value.indexOf('{{') >= 0) {
+          setArgFieldMode(wrap, 'expression', true);
+        }
+        updateArgPreview(wrap);
+      });
       updateArgPreview(wrap);
     });
     // wireVisibleWhen runs after value restoration so initial evaluate()
@@ -395,13 +411,58 @@
   // selector skips hidden inputs so we always land on the visible
   // editable.
   //
-  // Picker is the exception: its value lives on a hidden input
-  // because the picker UI itself is a chip+search composite. Special-
-  // case so collectArgs / preview / visible_when still find it.
+  // Picker + kvlist are exceptions: their canonical value lives on a
+  // hidden input (chip composite for picker, JSON array for kvlist),
+  // not on any of the visible row inputs. Special-case both so
+  // collectArgs / preview / visible_when read the right place.
   function argEditable(wrap) {
     const picker = wrap.querySelector('.wf-picker > input[type="hidden"][data-field-key]');
     if (picker) return picker;
+    const kvHidden = wrap.querySelector('.kvlist-editor input[type="hidden"][data-field-key]');
+    if (kvHidden) return kvHidden;
     return wrap.querySelector('input:not([type="hidden"]), select, textarea');
+  }
+
+  // repaintKVList rebuilds the visible row table inside a kvlist
+  // editor from a saved JSON value (array of {col:value} objects).
+  // Used after node selection so the widget reflects the persisted
+  // map[string]string instead of the empty server-rendered table.
+  function repaintKVList(editor, jsonValue) {
+    if (!editor) return;
+    const cols = (editor.getAttribute('data-cols') || '').split('|').filter(Boolean);
+    const tbody = editor.querySelector('.kvlist-rows');
+    if (!tbody || cols.length === 0) return;
+    let rows = [];
+    try { rows = JSON.parse(jsonValue || '[]'); } catch (_) { rows = []; }
+    if (!Array.isArray(rows)) rows = [];
+    tbody.innerHTML = '';
+    const inputClass = 'w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-1 focus:ring-green-200 dark:focus:ring-green-800';
+    rows.forEach((entry) => {
+      const tr = document.createElement('tr');
+      tr.className = 'border-b border-white-300 dark:border-navy-600 last:border-0';
+      cols.forEach((c) => {
+        const td = document.createElement('td');
+        td.className = 'px-2 py-1';
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.setAttribute('data-col', c);
+        inp.value = (entry && entry[c]) || '';
+        inp.className = inputClass;
+        td.appendChild(inp);
+        tr.appendChild(td);
+      });
+      const td2 = document.createElement('td');
+      td2.className = 'px-2 py-1 text-center';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-kvlist-remove', '');
+      btn.className = 'text-black-700 dark:text-black-600 hover:text-neg-400 text-base leading-none';
+      btn.setAttribute('aria-label', 'Remove row');
+      btn.textContent = '×';
+      td2.appendChild(btn);
+      tr.appendChild(td2);
+      tbody.appendChild(tr);
+    });
   }
 
   // reExecInlineScripts re-creates every <script> tag inside the
@@ -422,8 +483,10 @@
 
   // wireVisibleWhen wires the conditional-field pattern: a wrapper
   // with `data-cfg-visible-when="otherKey:value"` only shows while
-  // the dependency wrapper's editable equals the named value. Fires
-  // initial evaluation + listens to the dependency for live toggle.
+  // the dependency wrapper's editable equals the named value. The
+  // value half supports `a|b|c` (pipe-separated OR) so a single field
+  // can be gated on a set of allowed values (e.g. method:POST|PUT|PATCH).
+  // Fires initial evaluation + listens to the dependency for live toggle.
   function wireVisibleWhen(container) {
     container.querySelectorAll('[data-cfg-visible-when]').forEach((wrap) => {
       const spec = wrap.dataset.cfgVisibleWhen;
@@ -431,7 +494,7 @@
       const sep = spec.indexOf(':');
       if (sep < 0) return;
       const depKey = spec.slice(0, sep);
-      const expected = spec.slice(sep + 1);
+      const allowed = spec.slice(sep + 1).split('|');
       const depWrap = container.querySelector(`.wf-arg-field[data-field-key="${CSS.escape(depKey)}"]`);
       const depEditable = depWrap && argEditable(depWrap);
       if (!depEditable) return;
@@ -439,7 +502,7 @@
         let cur;
         if (depEditable.type === 'checkbox') cur = depEditable.checked ? 'true' : 'false';
         else cur = depEditable.value;
-        wrap.classList.toggle('hidden', cur !== expected);
+        wrap.classList.toggle('hidden', !allowed.includes(cur));
       };
       evaluate();
       depEditable.addEventListener('input', evaluate);
@@ -482,6 +545,32 @@
     preview.classList.add('wf-arg-preview-active');
   }
 
+  // hydratePromptModeToggle wires the Fixed/Expression toggle that
+  // wraps the agent/classify ins-prompt textarea. Idempotent: rebinds
+  // each time the inspector opens for a different node so click
+  // handlers don't accumulate.
+  function hydratePromptModeToggle(inner) {
+    const wrap = document.querySelector('#ins-prompt-panel .wf-arg-field');
+    if (!wrap) return;
+    const initial = (inner && inner.__arg_modes && inner.__arg_modes.prompt) || 'fixed';
+    setArgFieldMode(wrap, initial, /*persist*/ false);
+    wrap.querySelectorAll('[data-arg-mode]').forEach((btn) => {
+      const fresh = btn.cloneNode(true);
+      btn.parentNode.replaceChild(fresh, btn);
+      fresh.addEventListener('click', () => setArgFieldMode(wrap, fresh.dataset.argMode, true));
+    });
+    const ta = wrap.querySelector('textarea');
+    if (ta) {
+      ta.addEventListener('input', () => {
+        if (wrap.dataset.argMode !== 'expression' && ta.value.indexOf('{{') >= 0) {
+          setArgFieldMode(wrap, 'expression', true);
+        }
+        updateArgPreview(wrap);
+      });
+    }
+    updateArgPreview(wrap);
+  }
+
   // collectArgs scans all wf-arg-field wrappers and returns the value
   // map the codec persists under node.data.args. Checkbox value is
   // emitted as "true"/"false" string to match how Go templates and
@@ -498,10 +587,17 @@
       let v;
       if (editable.type === 'checkbox') {
         v = editable.checked ? 'true' : 'false';
+      } else if (editable.type === 'hidden' && editable.closest('.wf-picker')) {
+        // Picker stores JSON string — parse to native array so canvas state
+        // and downstream YAML use native format, not escaped JSON string.
+        try {
+          const arr = JSON.parse(editable.value || '[]');
+          v = arr.length > 0 ? arr : '';
+        } catch (_) { v = editable.value; }
       } else {
         v = editable.value;
       }
-      if (v !== '') out[k] = v;
+      if (v !== '' && !(Array.isArray(v) && v.length === 0)) out[k] = v;
     });
     return out;
   }
@@ -519,6 +615,15 @@
     });
     return out;
   }
+
+  // Expose the args-form helpers so per-node modules (WickNodes) can
+  // reuse the Fixed/Expression chrome + value collection without
+  // duplicating the wiring. Used by /static/nodes/http/inspector.js.
+  window.wickEditorHelpers = window.wickEditorHelpers || {};
+  window.wickEditorHelpers.hydrateArgsForm = hydrateArgsForm;
+  window.wickEditorHelpers.collectArgs = collectArgs;
+  window.wickEditorHelpers.collectArgModes = collectArgModes;
+  window.wickEditorHelpers.setArgFieldMode = setArgFieldMode;
 
   // attachTemplateDropTarget wires an input/textarea as a drop target
   // for the INPUT pane's draggable JSON leaves. On drop, inserts the
@@ -617,7 +722,6 @@
     preset: document.getElementById('ins-preset-panel'),
     command: document.getElementById('ins-command-panel'),
     transform: document.getElementById('ins-transform-panel'),
-    url: document.getElementById('ins-url-panel'),
     channel: document.getElementById('ins-channel-panel'),
     connector: document.getElementById('ins-connector-panel'),
     trigger: document.getElementById('ins-trigger-panel'),
@@ -695,6 +799,20 @@
     el.addEventListener('input', () => { if (selectedID) updateNodeData(selectedID); });
     el.addEventListener('change', () => { if (selectedID) updateNodeData(selectedID); });
   });
+  // Label input — validate identifier + uniqueness on every keystroke
+  // so the operator sees the constraint without surprise rejection on
+  // save. Invalid labels paint a red ring; the save still goes through
+  // (no enforcement) but cascade rewrite is skipped to avoid corrupting
+  // refs with spaces or duplicate labels.
+  if (f.label) {
+    f.label.addEventListener('input', () => {
+      const v = f.label.value.trim();
+      const ok = !v || (isValidIdent(v) && !labelTakenByOther(v, selectedID));
+      f.label.classList.toggle('wf-input-error', !ok);
+      f.label.title = ok ? '' : 'Label must be a valid identifier (letters/digits/_, no spaces) and unique';
+      if (selectedID) updateNodeData(selectedID);
+    });
+  }
   // Per-node modules register their own input/change listeners via
   // attach() above — no global wiring needed for session_init or any
   // future module that owns its own inspector partial. We also
@@ -1826,7 +1944,11 @@
   }
 
   function addNodeOfType(type, x, y, defaults) {
-    const id = uniqueID(type);
+    // Sanitize prefix to underscore — Go templates reject `.Node.<id>`
+    // when id contains dashes. Palette items use kebab-case (`trigger-
+    // channel`); convert before passing to uniqueID.
+    const safePrefix = type.replace(/-/g, '_');
+    const id = uniqueID(safePrefix);
     const meta = nodeMeta(type);
     // Merge palette-supplied defaults (e.g. {channel:"slack",op:"send_message"})
     // over the generic kind defaults so level-2 drops land already wired.
@@ -1853,7 +1975,7 @@
 
   function uniqueID(prefix) {
     let i = 1, id = prefix;
-    while (idTaken(id)) { i++; id = `${prefix}-${i}`; }
+    while (idTaken(id)) { i++; id = `${prefix}_${i}`; }
     return id;
   }
   function idTaken(id) {
@@ -1939,6 +2061,7 @@
       f.prompt.value = inner.prompt || '';
       f.preset.value = inner.preset || '';
       if (f.provider) f.provider.value = inner.provider || '';
+      hydratePromptModeToggle(inner);
     }
     if (kind === 'agent') {
       panels.agentSession?.classList.remove('hidden');
@@ -1970,11 +2093,6 @@
       const tExpr = document.getElementById('ins-transform-expression');
       if (tEng) tEng.value = inner.engine || 'gotemplate';
       if (tExpr) tExpr.value = inner.expression || '';
-    }
-    if (kind === 'http') {
-      panels.url.classList.remove('hidden');
-      f.url.value = inner.url || '';
-      f.method.value = inner.method || 'GET';
     }
     if (kind === 'channel') {
       panels.channel.classList.remove('hidden');
@@ -2325,22 +2443,90 @@
 
 
   // inputPrefixForParent returns the template-path prefix for drags
-  // out of the INPUT pane based on what kind of node fed the data.
-  // Trigger nodes don't emit node_completed; their cached "output" is
-  // the raw workflow.Event so paths root at `.Event.…`. Every other
-  // node's output lives under `.Node.<id>.…`.
+  // out of the INPUT pane. Always rooted under `.Node.<label-or-id>.…`
+  // — the engine injects trigger nodes into the Node map alongside
+  // regular node outputs, so triggers and downstream nodes share the
+  // same access pattern. Falls back to id when the user hasn't named
+  // the node yet.
   function inputPrefixForParent(parentID) {
-    if (!parentID) return '.Event';
+    if (!parentID) return '.Node';
     const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
     if (!live) return '.Node.' + parentID;
     for (const k in live) {
       const n = live[k];
       if (!n || !n.data) continue;
       if ((n.data.id || n.name) !== parentID) continue;
-      if (n.data.type === 'trigger') return '.Event';
+      const inner = n.data.data || {};
+      const label = (inner.label || n.data.label || '').trim();
+      if (label && isValidIdent(label)) return '.Node.' + label;
       return '.Node.' + parentID;
     }
     return '.Node.' + parentID;
+  }
+
+  // isValidIdent reports whether a label can be used as a Go template
+  // field path segment — `{{.Node.<label>.x}}` only parses when label
+  // matches Go's identifier rule.
+  function isValidIdent(s) {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+  }
+
+  // cascadeRenameLabel rewrites every template ref + structural ref to
+  // oldLabel across the canvas after a node's label changes. Affected
+  // surfaces: any string-shaped field on every node's data
+  // (prompt/url/body/headers vals/query vals/args vals/expr/command
+  // items/session_from), graph edges (from/to), and trigger entry_node.
+  // The numeric Drawflow id stays the same; this only updates payloads.
+  function cascadeRenameLabel(oldLabel, newLabel, skipDrawflowID) {
+    const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+    if (!live) return;
+    // Match `.Node.oldLabel` followed by a non-identifier char so
+    // `oldLabel_v2` doesn't get rewritten. The trailing group is captured
+    // and re-emitted verbatim.
+    const dotRe = new RegExp('\\.Node\\.' + escapeRegExp(oldLabel) + '(?=[^A-Za-z0-9_]|$)', 'g');
+    const idxRe = new RegExp('(index\\s+\\.Node\\s+)"' + escapeRegExp(oldLabel) + '"', 'g');
+    const replace = (val) => {
+      if (typeof val !== 'string') return val;
+      return val.replace(dotRe, '.Node.' + newLabel).replace(idxRe, '$1"' + newLabel + '"');
+    };
+    const walk = (val) => {
+      if (typeof val === 'string') return replace(val);
+      if (Array.isArray(val)) return val.map(walk);
+      if (val && typeof val === 'object') {
+        const out = {};
+        for (const k in val) out[k] = walk(val[k]);
+        return out;
+      }
+      return val;
+    };
+    for (const k in live) {
+      if (String(k) === String(skipDrawflowID)) continue;
+      const n = live[k];
+      if (!n) continue;
+      if (n.data && n.data.data) n.data.data = walk(n.data.data);
+      // session_from + entry_node are stored on the inner data block
+      // already covered above; structural edges live on the data.data
+      // for trigger nodes ("entry_node" key). Nothing else to touch.
+    }
+  }
+
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // labelTakenByOther returns true when another canvas node already
+  // owns this label, scoped per-canvas (multiple workflows in tabs
+  // each get their own editor instance).
+  function labelTakenByOther(label, selfDrawflowID) {
+    const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+    if (!live) return false;
+    for (const k in live) {
+      if (String(k) === String(selfDrawflowID)) continue;
+      const n = live[k];
+      const lbl = (n && n.data && n.data.label) || (n && n.name) || '';
+      if (lbl === label) return true;
+    }
+    return false;
   }
 
   // canonicalEventKey maps a json key on the Event envelope to its
@@ -2471,12 +2657,61 @@
   function renderTemplatePreview(tpl) {
     if (typeof tpl !== 'string' || tpl === '') return '';
     return tpl.replace(/{{\s*([^}]+?)\s*}}/g, (_, raw) => {
-      const path = raw.trim();
-      const val = resolveTemplatePath(path);
+      const val = evalTemplateExpr(raw.trim());
       if (val === undefined) return '⟨unresolved⟩';
       if (typeof val === 'object') return JSON.stringify(val);
       return String(val);
     });
+  }
+
+  // evalTemplateExpr handles the small set of expression shapes the
+  // engine sees most often: dotted paths, pipe chains (`x | fromJson`,
+  // `x | toJson`), and the parenthesized `(x | fromJson).field` form
+  // where the operator pulls a field out of a parsed JSON string. Not
+  // a full Go-template evaluator — anything else still renders as
+  // ⟨unresolved⟩ until Execute step fires server-side.
+  function evalTemplateExpr(expr) {
+    // Strip outer parens and trailing `.field.path` for the
+    // `(inner).field` pattern.
+    let trailing = '';
+    if (expr.startsWith('(')) {
+      // Find matching closing paren at depth 0.
+      let depth = 0, end = -1;
+      for (let i = 0; i < expr.length; i++) {
+        if (expr[i] === '(') depth++;
+        else if (expr[i] === ')') {
+          depth--;
+          if (depth === 0) { end = i; break; }
+        }
+      }
+      if (end < 0) return undefined;
+      trailing = expr.slice(end + 1); // e.g. `.body_raw`
+      expr = expr.slice(1, end);
+    }
+    // Split by pipe, evaluate left-to-right with simple filters.
+    const segments = expr.split('|').map(s => s.trim());
+    let val = resolveTemplatePath(segments[0]);
+    for (let i = 1; i < segments.length; i++) {
+      const fn = segments[i];
+      if (val === undefined) return undefined;
+      if (fn === 'fromJson' || fn === 'fromJSON' || fn === 'fromjson') {
+        if (typeof val !== 'string') return val;
+        try { val = JSON.parse(val); } catch (_) { return undefined; }
+      } else if (fn === 'toJson' || fn === 'toJSON' || fn === 'tojson') {
+        try { val = JSON.stringify(val); } catch (_) { return undefined; }
+      } else {
+        // Unknown filter — bail; engine will still try at runtime.
+        return undefined;
+      }
+    }
+    if (trailing && trailing.startsWith('.')) {
+      const parts = trailing.slice(1).split('.');
+      for (const k of parts) {
+        if (val === null || val === undefined) return undefined;
+        val = val[k];
+      }
+    }
+    return val;
   }
 
   function resolveTemplatePath(path) {
@@ -2537,16 +2772,31 @@
     const d = node.data || {};
     const kind = d.type;
     const newLabel = f.label.value.trim() || (d.id || node.name);
+    const oldLabel = (d.label || '').trim();
     if (node.html) {
       node.html = node.html.replace(/<div class="title">[^<]*<\/div>/, `<div class="title">${escapeHTML(newLabel)}</div>`);
       const el = document.querySelector(`#node-${id} .title`);
       if (el) el.textContent = newLabel;
+    }
+    d.label = newLabel;
+    // Cascade label rename across the workflow when the new label is a
+    // valid Go-template identifier and actually changed. Rewrites every
+    // `{{...\.Node.<old>...}}` reference, `index .Node "<old>"` form,
+    // graph edges (from/to), trigger entry_node, and session_from. ID
+    // (d.id) stays stable so internal lookups don't break.
+    if (oldLabel && oldLabel !== newLabel && isValidIdent(oldLabel) && isValidIdent(newLabel)) {
+      cascadeRenameLabel(oldLabel, newLabel, id);
     }
     const inner = d.data || {};
     if (kind === 'classify' || kind === 'agent') {
       inner.prompt = f.prompt.value;
       inner.preset = f.preset.value;
       if (f.provider) inner.provider = f.provider.value;
+      const pwrap = f.prompt.closest('.wf-arg-field');
+      const mode = pwrap && pwrap.dataset.argMode;
+      inner.__arg_modes = inner.__arg_modes || {};
+      if (mode) inner.__arg_modes.prompt = mode;
+      else delete inner.__arg_modes.prompt;
     }
     if (kind === 'agent') {
       const sel = document.getElementById('ins-agent-session');
@@ -2569,10 +2819,6 @@
       const tExpr = document.getElementById('ins-transform-expression');
       if (tEng) inner.engine = tEng.value;
       if (tExpr) inner.expression = tExpr.value;
-    }
-    if (kind === 'http') {
-      inner.url = f.url.value;
-      inner.method = f.method.value;
     }
     if (kind === 'channel') {
       inner.channel = f.channel.value;
@@ -2798,18 +3044,31 @@
   function badgeFiringTrigger(data) {
     if (!data) return;
     const wantID = data.trigger_id || '';
+    const wantEntry = data.entry_node || '';
     const wantType = data.trigger_type || data.trigger || '';
     const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
     if (!live) return;
+    let entryDomID = null;
+    if (wantEntry) {
+      for (const k in live) {
+        if (live[k] && live[k].data && live[k].data.id === wantEntry) { entryDomID = String(k); break; }
+      }
+    }
     let matchKey = null;
+    const typeMatches = [];
     for (const k in live) {
       const n = live[k];
       if (!n || !n.data || n.data.type !== 'trigger') continue;
       const nid = n.data.id || n.name;
       if (wantID && nid === wantID) { matchKey = k; break; }
+      if (entryDomID) {
+        const outs = (n.outputs && n.outputs.output_1 && n.outputs.output_1.connections) || [];
+        if (outs.some((c) => String(c.node) === entryDomID)) { matchKey = k; break; }
+      }
       const kind = (n.data.data && n.data.data.triggerKind) || '';
-      if (!wantID && wantType && kind === wantType) { matchKey = k; }
+      if (wantType && kind === wantType) typeMatches.push(k);
     }
+    if (!matchKey && typeMatches.length === 1) matchKey = typeMatches[0];
     if (matchKey) setNodeBadge(matchKey, 'success');
   }
 

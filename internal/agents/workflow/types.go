@@ -11,6 +11,8 @@
 package workflow
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -18,27 +20,29 @@ import (
 type NodeType string
 
 const (
-	NodeClassify       NodeType = "classify"
-	NodeAgent          NodeType = "agent"
-	NodeChannel        NodeType = "channel"
-	NodeConnector      NodeType = "connector"
-	NodeShell          NodeType = "shell"
-	NodePython         NodeType = "python"
-	NodeHTTP           NodeType = "http"
-	NodeDBQuery        NodeType = "db_query"
-	NodeTransform      NodeType = "transform"
-	NodeBranch         NodeType = "branch"
-	NodeParallel       NodeType = "parallel"
-	NodeMerge          NodeType = "merge"
-	NodeEnd            NodeType = "end"
-	NodeDatasetGet     NodeType = "dataset_get"
-	NodeDatasetExists  NodeType = "dataset_exists"
-	NodeDatasetQuery   NodeType = "dataset_query"
-	NodeDatasetInsert  NodeType = "dataset_insert"
-	NodeDatasetUpsert  NodeType = "dataset_upsert"
-	NodeDatasetDelete  NodeType = "dataset_delete"
-	NodeDatasetCount   NodeType = "dataset_count"
-	NodeSessionInit    NodeType = "session_init"
+	NodeClassify      NodeType = "classify"
+	NodeAgent         NodeType = "agent"
+	NodeChannel       NodeType = "channel"
+	NodeConnector     NodeType = "connector"
+	NodeShell         NodeType = "shell"
+	NodeSwitch        NodeType = "switch"
+	NodeGoScript      NodeType = "go_script"
+	NodePython        NodeType = "python"
+	NodeHTTP          NodeType = "http"
+	NodeDBQuery       NodeType = "db_query"
+	NodeTransform     NodeType = "transform"
+	NodeBranch        NodeType = "branch"
+	NodeParallel      NodeType = "parallel"
+	NodeMerge         NodeType = "merge"
+	NodeEnd           NodeType = "end"
+	NodeDatasetGet    NodeType = "dataset_get"
+	NodeDatasetExists NodeType = "dataset_exists"
+	NodeDatasetQuery  NodeType = "dataset_query"
+	NodeDatasetInsert NodeType = "dataset_insert"
+	NodeDatasetUpsert NodeType = "dataset_upsert"
+	NodeDatasetDelete NodeType = "dataset_delete"
+	NodeDatasetCount  NodeType = "dataset_count"
+	NodeSessionInit   NodeType = "session_init"
 )
 
 // IsDatasetNode reports whether t is one of the dataset_* variants.
@@ -54,7 +58,7 @@ func (t NodeType) IsDatasetNode() bool {
 // IsBranchSource reports whether nodes of this type produce a verdict
 // that filters outgoing edges by `case:`.
 func (t NodeType) IsBranchSource() bool {
-	return t == NodeClassify || t == NodeBranch
+	return t == NodeClassify || t == NodeBranch || t == NodeSwitch
 }
 
 // TriggerType discriminator for the polymorphic Trigger body.
@@ -216,17 +220,30 @@ type Node struct {
 	Input      string `yaml:"input,omitempty"`
 	Expression string `yaml:"expression,omitempty"`
 
+	// go_script — full Go program. Engine pipes RenderCtx JSON to
+	// stdin, parses stdout as JSON for the result.
+	Code string `yaml:"code,omitempty"`
+
 	// branch
 	Expr string `yaml:"expr,omitempty"`
 
+	// switch — first-match-wins rule list. Each rule's `when` is a Go
+	// template that renders to a bool (supports the same binary ops as
+	// `branch`: ==, !=, <, <=, >, >=) or any non-empty string (truthy).
+	// First rule whose `when` evaluates true wins; engine emits
+	// Verdict=<rule.case> so the edge `case: <label>` filter routes
+	// downstream. DefaultCase fires when no rule matches.
+	Cases       []SwitchCase `yaml:"cases,omitempty"`
+	DefaultCase string       `yaml:"default_case,omitempty"`
+
 	// dataset_*
-	Dataset    string         `yaml:"dataset,omitempty"`
-	Where      map[string]any `yaml:"where,omitempty"`
-	Key        map[string]any `yaml:"key,omitempty"`
-	RowValues  map[string]any `yaml:"row,omitempty"`
-	OrderBy    []DatasetOrder `yaml:"order_by,omitempty"`
-	Limit      int            `yaml:"limit,omitempty"`
-	Offset     int            `yaml:"offset,omitempty"`
+	Dataset   string         `yaml:"dataset,omitempty"`
+	Where     map[string]any `yaml:"where,omitempty"`
+	Key       map[string]any `yaml:"key,omitempty"`
+	RowValues map[string]any `yaml:"row,omitempty"`
+	OrderBy   []DatasetOrder `yaml:"order_by,omitempty"`
+	Limit     int            `yaml:"limit,omitempty"`
+	Offset    int            `yaml:"offset,omitempty"`
 
 	// end
 	Result string `yaml:"result,omitempty"`
@@ -273,8 +290,8 @@ const (
 // means "use rc.DefaultAgentSessionID (or the engine fallback)".
 //
 //   - From  — copy the resolved sessionID from another node in this run
-//             (must be an upstream agent/session_init node, validator
-//             rejects forward refs + cycles)
+//     (must be an upstream agent/session_init node, validator
+//     rejects forward refs + cycles)
 //   - Mode  — "new" forces a fresh UUID per call; empty inherits
 type NodeSession struct {
 	From string `yaml:"from,omitempty"`
@@ -291,6 +308,16 @@ type RetryPolicy struct {
 type ClassifyExample struct {
 	Input  string `yaml:"input"`
 	Output string `yaml:"output"`
+}
+
+// SwitchCase is one rule row for `switch` nodes. `When` is a Go
+// template expression (e.g. `{{.Event.Payload.action}} == "approve"`)
+// rendered against the run context; `Case` is the verdict label the
+// engine emits when the rule wins, matched against outgoing edge
+// `case:` filters.
+type SwitchCase struct {
+	When string `yaml:"when"`
+	Case string `yaml:"case"`
 }
 
 // DatasetOrder is one order-by clause.
@@ -332,7 +359,7 @@ type DatasetBinding struct {
 // Trigger is one polymorphic trigger entry. Fields are a flat union
 // like Node — the validator gates each field to its Type.
 //
-// ID is the stable canvas identifier (e.g. "trigger-manual",
+// ID is the stable canvas identifier (e.g. "trigger_manual",
 // "trigger-cron-2"). The codec uses it to merge per-trigger
 // metadata (channel name, schedule, …) across save cycles so the
 // canvas can re-wire EntryNode without losing the config the user
@@ -383,6 +410,36 @@ type Trigger struct {
 	SourceWorkflow string   `yaml:"source_workflow,omitempty"`
 	Severity       []string `yaml:"severity,omitempty"`
 	NodeTypes      []string `yaml:"node_types,omitempty"`
+}
+
+// MarshalYAML normalizes Match before serialization — picker values stored as
+// JSON strings (`[{"id":"C1","name":"#ch"}]`) are expanded to native YAML
+// slices so the workflow.yaml is human-readable and AI-writable without
+// JSON escaping.
+func (tr Trigger) MarshalYAML() (any, error) {
+	type plain Trigger
+	p := plain(tr)
+	if len(p.Match) > 0 {
+		norm := make(map[string]any, len(p.Match))
+		for k, v := range p.Match {
+			s, ok := v.(string)
+			if !ok {
+				norm[k] = v
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if strings.HasPrefix(s, "[") {
+				var arr []map[string]any
+				if err := json.Unmarshal([]byte(s), &arr); err == nil {
+					norm[k] = arr
+					continue
+				}
+			}
+			norm[k] = v
+		}
+		p.Match = norm
+	}
+	return p, nil
 }
 
 // Whitelist filters who can fire a trigger.
@@ -478,14 +535,14 @@ type RunEvent struct {
 
 // Event types emitted to events.jsonl.
 const (
-	EventNodeStarted        = "node_started"
-	EventNodeCompleted      = "node_completed"
-	EventNodeFailed         = "node_failed"
-	EventNodeSkipped        = "node_skipped"
-	EventEdgeTraversed      = "edge_traversed"
-	EventWorkflowStarted    = "workflow_started"
-	EventWorkflowCompleted  = "workflow_completed"
-	EventWorkflowFailed     = "workflow_failed"
+	EventNodeStarted       = "node_started"
+	EventNodeCompleted     = "node_completed"
+	EventNodeFailed        = "node_failed"
+	EventNodeSkipped       = "node_skipped"
+	EventEdgeTraversed     = "edge_traversed"
+	EventWorkflowStarted   = "workflow_started"
+	EventWorkflowCompleted = "workflow_completed"
+	EventWorkflowFailed    = "workflow_failed"
 )
 
 // WorkflowState is the persisted approval/governance snapshot.

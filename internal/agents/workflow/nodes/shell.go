@@ -13,8 +13,31 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
+
+type shellSchema struct {
+	Command     string `wick:"required;key=command;desc=Shell command list (YAML sequence) or string, rendered as template"`
+	ShellEnv    string `wick:"key=env;desc=YAML map of environment variables"`
+	Cwd         string `wick:"key=cwd;desc=Working directory"`
+	ParseOutput string `wick:"key=parse_output;dropdown=raw|json|lines;desc=How to parse stdout"`
+	Timeout     string `wick:"key=timeout;desc=Execution timeout e.g. 30s"`
+}
+
+func (e *ShellExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Description: "Execute a local shell command. Captures stdout/stderr/exit_code.",
+		WhenToUse:   "Operating on local files or running a CLI tool.",
+		Schema:      integration.StructSchema(shellSchema{}),
+		Output: map[string]string{
+			"stdout":    "string",
+			"stderr":    "string",
+			"exit_code": "int",
+		},
+	}
+}
 
 // ShellExecutor runs a process and captures stdout/stderr/exit_code.
 // parse_output: raw (default) | json | lines.

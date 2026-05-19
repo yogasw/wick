@@ -31,14 +31,34 @@ import (
 // the StateStore. The UI subscribes via SSE to paint per-node
 // progress without polling state.json. Set via SetEventHook so
 // existing callers stay source-compatible.
+// NodeDescriptor bundles the schema + docs for a node type.
+// Populated via RegisterWithDesc — single source of truth lives in the
+// executor file itself (nodes/<type>.go Descriptor method).
+type NodeDescriptor struct {
+	Type        workflow.NodeType
+	Description string
+	WhenToUse   string
+	Example     string
+	Schema      map[string]any    // reflected from per-node schema struct
+	Output      map[string]string // field → description
+}
+
+// Describer is implemented by executors that want to expose schema +
+// docs to the MCP catalog. Optional — executor that does not implement
+// gets a bare descriptor with no schema.
+type Describer interface {
+	Descriptor() NodeDescriptor
+}
+
 type Engine struct {
-	Layout     config.Layout
-	Service    service.Service
-	StateStore state.Store
-	Executors  map[workflow.NodeType]workflow.Executor
-	Now        func() time.Time
-	IDGen      func() string
-	OnEvent    func(id, runID string, ev workflow.RunEvent)
+	Layout      config.Layout
+	Service     service.Service
+	StateStore  state.Store
+	Executors   map[workflow.NodeType]workflow.Executor
+	Descriptors map[workflow.NodeType]NodeDescriptor
+	Now         func() time.Time
+	IDGen       func() string
+	OnEvent     func(id, runID string, ev workflow.RunEvent)
 }
 
 // NewRunID returns a fresh run id. Plain UUID — chronological
@@ -53,18 +73,39 @@ func NewRunID() string {
 // Register at least the node types the workflow uses.
 func New(layout config.Layout, svc service.Service, ss state.Store) *Engine {
 	return &Engine{
-		Layout:     layout,
-		Service:    svc,
-		StateStore: ss,
-		Executors:  map[workflow.NodeType]workflow.Executor{},
-		Now:        func() time.Time { return time.Now().UTC() },
-		IDGen:      NewRunID,
+		Layout:      layout,
+		Service:     svc,
+		StateStore:  ss,
+		Executors:   map[workflow.NodeType]workflow.Executor{},
+		Descriptors: map[workflow.NodeType]NodeDescriptor{},
+		Now:         func() time.Time { return time.Now().UTC() },
+		IDGen:       NewRunID,
 	}
 }
 
-// Register attaches an executor for a node type.
+// Register attaches an executor for a node type. If the executor
+// implements Describer, its Descriptor is captured so MCP catalog
+// auto-reflects schema.
 func (e *Engine) Register(t workflow.NodeType, ex workflow.Executor) {
 	e.Executors[t] = ex
+	if d, ok := ex.(Describer); ok {
+		desc := d.Descriptor()
+		if desc.Type == "" {
+			desc.Type = t
+		}
+		e.Descriptors[t] = desc
+	}
+}
+
+// RegisterWithDesc attaches an executor + explicit descriptor. Used
+// when the same executor instance serves multiple node types (e.g.
+// dataset executor handles 7 types).
+func (e *Engine) RegisterWithDesc(t workflow.NodeType, ex workflow.Executor, desc NodeDescriptor) {
+	e.Executors[t] = ex
+	if desc.Type == "" {
+		desc.Type = t
+	}
+	e.Descriptors[t] = desc
 }
 
 // SetEventHook installs the broadcast callback. Fires after each
@@ -166,14 +207,23 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		return st, errors.New("no entry node (graph.entry + no trigger entry_node)")
 	}
 	envVals, _ := e.Service.LoadEnvValues(w.ID)
+	triggerNodeID := ""
+	if firedTrigger != nil {
+		if firedTrigger.ID != "" {
+			triggerNodeID = firedTrigger.ID
+		} else if firedTrigger.EntryNode != "" {
+			triggerNodeID = firedTrigger.EntryNode
+		}
+	}
 	rc := &workflow.RunContext{
-		Workflow:    w,
-		Event:       evt,
-		Outputs:     st.Outputs,
-		EnvValues:   envVals,
-		Secrets:     extractSecrets(w.Env, envVals),
-		RunID:       runID,
-		NodeOutputs: map[string]workflow.NodeOutput{},
+		Workflow:      w,
+		Event:         evt,
+		Outputs:       st.Outputs,
+		EnvValues:     envVals,
+		Secrets:       extractSecrets(w.Env, envVals),
+		RunID:         runID,
+		NodeOutputs:   map[string]workflow.NodeOutput{},
+		TriggerNodeID: triggerNodeID,
 	}
 	// Log which runID source we used so any future mismatch between
 	// the UI-issued ID and the engine's effective ID is grep-able.
@@ -185,6 +235,9 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	if firedTrigger != nil {
 		if firedTrigger.ID != "" {
 			startData["trigger_id"] = firedTrigger.ID
+		}
+		if firedTrigger.EntryNode != "" {
+			startData["entry_node"] = firedTrigger.EntryNode
 		}
 		startData["trigger_type"] = string(firedTrigger.Type)
 	} else if tid, _ := evt.Payload["trigger_id"].(string); tid != "" {
@@ -720,9 +773,13 @@ func pickEntry(w workflow.Workflow, evt workflow.Event) (string, *workflow.Trigg
 	}
 	for i := range w.Triggers {
 		tr := &w.Triggers[i]
-		if tr.EntryNode != "" && string(tr.Type) == evt.Type {
-			return tr.EntryNode, tr
+		if tr.EntryNode == "" || string(tr.Type) != evt.Type {
+			continue
 		}
+		if tr.Event != "" && evt.Subtype != "" && tr.Event != evt.Subtype {
+			continue
+		}
+		return tr.EntryNode, tr
 	}
 	return w.Graph.Entry, nil
 }

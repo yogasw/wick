@@ -79,9 +79,12 @@ func New(layout config.Layout) *Manager {
 
 	// Wire executors so the engine can dispatch every node type once
 	// registries have content.
+	// Executors with Descriptor() method auto-register schema via Engine.Register.
 	eng.Register(workflow.NodeShell, nodes.NewShellExecutor())
+	eng.Register(workflow.NodeGoScript, nodes.NewGoScriptExecutor())
 	eng.Register(workflow.NodeHTTP, nodes.NewHTTPExecutor())
 	eng.Register(workflow.NodeBranch, nodes.NewBranchExecutor())
+	eng.Register(workflow.NodeSwitch, nodes.NewSwitchExecutor())
 	eng.Register(workflow.NodeTransform, nodes.NewTransformExecutor())
 	eng.Register(workflow.NodeEnd, nodes.NewEndExecutor())
 	eng.Register(workflow.NodeClassify, nodes.NewClassifyExecutor(provReg))
@@ -90,13 +93,14 @@ func New(layout config.Layout) *Manager {
 	eng.Register(workflow.NodeChannel, nodes.NewChannelExecutor(intReg))
 	eng.Register(workflow.NodeConnector, nodes.NewConnectorExecutor(conReg))
 	eng.Register(workflow.NodeDBQuery, nodes.NewDBQueryExecutor())
+	// Dataset: one executor serves 7 node types — register each with its own descriptor.
 	dsExec := nodes.NewDatasetExecutor(dsSvc)
 	for _, t := range []workflow.NodeType{
 		workflow.NodeDatasetGet, workflow.NodeDatasetExists, workflow.NodeDatasetQuery,
 		workflow.NodeDatasetInsert, workflow.NodeDatasetUpsert, workflow.NodeDatasetDelete,
 		workflow.NodeDatasetCount,
 	} {
-		eng.Register(t, dsExec)
+		eng.RegisterWithDesc(t, dsExec, nodes.DatasetDescriptor(t))
 	}
 
 	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dsSvc, ss).WithIntegration(intReg)

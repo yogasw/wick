@@ -66,11 +66,36 @@ func StructSchema(v any) map[string]any {
 			prop["type"] = "string"
 		}
 
-		if desc := tag["desc"]; desc != "" {
+		desc := tag["desc"]
+		if desc != "" {
 			prop["description"] = desc
 		}
 		if _, ok := tag["textarea"]; ok {
 			prop["format"] = "textarea"
+		}
+		// picker → expose format + source + example so AI knows the
+		// exact JSON shape it must write, not just "type: string".
+		if src := tag["picker"]; src != "" {
+			prop["format"] = "picker"
+			prop["picker_source"] = src
+			prop["example"] = `[{"id":"<ID>","name":"<display>"}]`
+			if desc == "" {
+				prop["description"] = "JSON array of {id, name} objects. Use workflow_channels or lookup API to get valid IDs."
+			}
+		}
+		// dropdown → expose allowed values so AI writes one of them, not free text.
+		if opts := tag["dropdown"]; opts != "" {
+			prop["format"] = "dropdown"
+			prop["enum"] = strings.Split(opts, "|")
+			if def := tag["default"]; def != "" {
+				prop["default"] = def
+			}
+		}
+		// visible_when → expose condition so AI knows this field is
+		// conditional and only relevant when the controlling field equals
+		// the expected value.
+		if vw := tag["visible_when"]; vw != "" {
+			prop["visible_when"] = vw
 		}
 
 		props[key] = prop

@@ -7,12 +7,33 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 
 	// register drivers used by workflow db_query nodes
 	_ "github.com/glebarez/go-sqlite"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+type dbQuerySchema struct {
+	Database string `wick:"required;key=database;desc=DSN reference key configured in workspace"`
+	SQL      string `wick:"required;key=sql;textarea;desc=Parameterized SQL query"`
+	SQLArgs  string `wick:"key=sql_args;desc=YAML list of positional args for ? placeholders"`
+}
+
+func (e *DBQueryExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Description: "Run a parameterized SQL query against a configured DSN.",
+		WhenToUse:   "Reading from an external user database.",
+		Schema:      integration.StructSchema(dbQuerySchema{}),
+		Output: map[string]string{
+			"rows":      "[]map[string]any — result rows",
+			"row_count": "int — row count",
+			"columns":   "[]string — column names",
+		},
+	}
+}
 
 // DBQueryExecutor runs a parameterized SQL query against a named
 // database. The Database field resolves to an env key whose value is

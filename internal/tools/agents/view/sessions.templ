@@ -619,18 +619,29 @@ templ assistantTurn(t TurnVM) {
 				<div class="flex flex-col gap-1">
 					<button
 						type="button"
-						onclick="var c=this.closest('[data-turn-events]');var w=c.querySelector('[data-trace-wrap]');w.classList.toggle('hidden');var open=!w.classList.contains('hidden');this.querySelector('[data-chevron]').style.transform=open?'':'rotate(-90deg)';this.querySelector('[data-trace-label]').textContent=open?'hide trace':'show trace';"
+						data-trace-toggle
+						onclick="window.wickToggleTrace(this);"
 						class="self-start flex items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5"
 					>
 						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>
 						<span data-trace-label>show trace</span>
 						<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
 					</button>
-					<div data-trace-wrap class="hidden flex flex-col gap-1">
+					<div data-trace-wrap class="hidden gap-1">
 						for _, ev := range t.Events {
 							@turnEventCard(ev)
 						}
 					</div>
+					<button
+						type="button"
+						data-trace-toggle-bottom
+						onclick="window.wickToggleTrace(this);"
+						class="hidden self-start items-center gap-1.5 text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors py-0.5"
+					>
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path></svg>
+						<span>hide trace</span>
+						<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+					</button>
 				</div>
 			}
 			if t.Text != "" {

@@ -7,9 +7,34 @@ import (
 	"unicode"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
+
+type classifyNodeSchema struct {
+	OutputCases     string `wick:"required;key=output_cases;desc=Enum labels the LLM must pick from (YAML list)"`
+	Input           string `wick:"required;key=input;desc=Text to classify — use expression e.g. {{index .Event.Payload \"text\"}}"`
+	Provider        string `wick:"key=provider;desc=Provider name (optional, uses default)"`
+	PromptFile      string `wick:"key=prompt_file;desc=Optional prompt file path to override default classify prompt"`
+	FuzzyMatch      bool   `wick:"key=fuzzy_match;desc=Allow partial/fuzzy label matching"`
+	RetryOnMismatch int    `wick:"key=retry_on_mismatch;desc=Retry count when LLM returns unrecognized label"`
+}
+
+func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Description: "Classify natural-language input into an enum via LLM. Route downstream via case: labels matching verdict.",
+		WhenToUse:   "Input is free text and needs to be bucketed into a small set of cases.",
+		Example:     "- id: triage\n  type: classify\n  output_cases: [bug, feature, question]\n  input: '{{index .Event.Payload \"text\"}}'\n  provider: claude",
+		Schema:      integration.StructSchema(classifyNodeSchema{}),
+		Output: map[string]string{
+			"verdict":    "string — matched case label",
+			"confidence": "float — 0.0–1.0",
+			"reasoning":  "string — LLM explanation",
+		},
+	}
+}
 
 // ClassifyExecutor implements the 6-layer reliability stack:
 //

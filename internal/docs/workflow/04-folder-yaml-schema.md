@@ -62,7 +62,7 @@ triggers:                           # WAJIB minimal 1. Multi-trigger supported.
     match:
       mention_bot: true
     entry_node: classify-intent     # the node this trigger fires
-  - id: trigger-manual              # second trigger in the same workflow
+  - id: trigger_manual              # second trigger in the same workflow
     type: manual                    # fires a different chain
     entry_node: handle-question
 
@@ -319,7 +319,7 @@ etc. register their own.
 **`manual`** — UI button + MCP op. Fired via the Execute workflow
 picker on the canvas (or via the MCP `workflow_run` op).
 ```yaml
-- id: trigger-manual
+- id: trigger_manual
   type: manual
   entry_node: classify-intent
   label: "Run digest now"

@@ -23,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/scaffold"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
+	wftemplate "github.com/yogasw/wick/internal/agents/workflow/template"
 	"github.com/yogasw/wick/internal/agents/workflow/trigger"
 )
 
@@ -86,15 +87,90 @@ func (m *Ops) IntegrationActions() []integration.ActionDescriptor {
 // Workspace returns the entry-point response for `workflow_workspace`.
 func (m *Ops) Workspace() map[string]any {
 	return map[string]any{
-		"base_dir":      m.Service.BaseDir(),
-		"node_types":    NodeTypesCatalog(),
-		"trigger_types": TriggerTypesCatalog(),
-		"templates":     []string{"empty", "support-triage", "incident-response", "daily-digest"},
+		"base_dir":         m.Service.BaseDir(),
+		"node_types":       NodeTypesCatalog(m.Engine),
+		"trigger_types":    TriggerTypesCatalog(),
+		"templates":        []string{"empty", "support-triage", "incident-response", "daily-digest"},
+		"format_contracts": WorkspaceFormatContracts(),
+	}
+}
+
+// WorkspaceFormatContracts returns structured format rules AI must follow
+// when writing workflow YAML or trigger JSON. Exposed via workflow_workspace
+// so AI reads them once at session start instead of relying on prose descriptions.
+func WorkspaceFormatContracts() map[string]any {
+	return map[string]any{
+		"event_payload": map[string]any{
+			"rule":      "Every trigger and node lives under .Node.<label>. Trigger payload at .Node.<trigger-label>.payload.<key>. Use {{index .Node.<label>.payload \"key\"}} when the key has special chars; dotted form works for plain identifiers. Legacy .Event.Payload still resolves but new workflows should use .Node.<label>.",
+			"correct":   `{{.Node.<trigger-label>.payload.text}}  OR  {{index .Node.<trigger-label>.payload "channel_id"}}`,
+			"wrong":     []string{"{{.Event.User}}", "{{.Event.Text}}", "{{.Event.Ts}}", "{{.Event.TriggerId}}"},
+			"deprecated": []string{`{{index .Event.Payload "key"}}`},
+			"common_keys": map[string]any{
+				"message":      []string{"text", "ts", "user", "channel_id", "thread", "is_dm"},
+				"block_action": []string{"trigger_id", "action_id", "value", "user", "channel_id", "ts"},
+				"submission":   []string{"values", "user", "callback_id", "private_metadata"},
+			},
+		},
+		"match_filter": map[string]any{
+			"rule": "Picker fields (channel_id, user) use YAML native array of {id,name} objects. Never plain string arrays.",
+			"correct": map[string]any{
+				"mode":       "whitelist",
+				"channel_id": []map[string]any{{"id": "C123", "name": "#general"}},
+			},
+			"wrong": []string{
+				`channel_id: '[{"id":"C123"}]'`,
+				`channel_id: ["C123"]`,
+			},
+			"match_enabled": "MUST be true for filter to apply. Default false = no filter.",
+		},
+		"arg_modes": map[string]any{
+			"rule":   "Every channel/connector node arg should declare its mode.",
+			"values": []string{"fixed", "expression"},
+			"fixed":  "literal value, not rendered as template",
+			"expression": "Go template rendered with RenderCtx — use for {{...}} values",
+			"default": "absent key = expression mode (template render)",
+		},
+		"trigger_json": map[string]any{
+			"rule":    "workflow_set_triggers JSON uses Go PascalCase field names, not snake_case.",
+			"example": map[string]any{
+				"Type":         "channel",
+				"ChannelName":  "slack",
+				"Event":        "message",
+				"EntryNode":    "start",
+				"MatchEnabled": true,
+				"Match": map[string]any{
+					"mode":       "whitelist",
+					"channel_id": []map[string]any{{"id": "C123", "name": "#general"}},
+				},
+			},
+		},
+		"template_functions": map[string]any{
+			"available":     wftemplate.BuiltinFuncDocs,
+			"NOT available": []string{"js", "trunc", "date", "sprig functions"},
+			"usage": map[string]string{
+				"embed in JSON body":       `"title": "{{jsonEscape (index .Node.trigger.payload \"text\")}}"`,
+				"current timestamp":        `{{now "2006-01-02T15:04:05Z07:00"}}`,
+				"marshal map":              `{{toJSON .Node.somenode.row}}`,
+				"parse JSON string":        `{{(.Node.summarize.text | fromJson).title}}`,
+			},
+		},
+		"node_output": map[string]any{
+			"rule":    "Reference any node (triggers + downstream) via {{.Node.<label>.<field>}}. Label is the user-facing name in the inspector and MUST be a Go identifier (letters/digits/underscore, no spaces, no dash). When label is empty the engine falls back to the node id. Triggers expose {payload, type, subtype, channel, at}; regular nodes expose their declared output fields.",
+			"examples": map[string]string{
+				"trigger payload": "{{.Node.slack_msg.payload.text}}",
+				"trigger field":   `{{index .Node.slack_msg.payload "channel_id"}}`,
+				"transform":       "{{.Node.build.result}}",
+				"agent":           "{{.Node.summarize.text}}",
+				"send_message":    "{{.Node.sendmsg.ts}}",
+				"open_modal":      "{{.Node.openmodal.view_id}}",
+			},
+		},
 	}
 }
 
 // NodeTypes returns the catalog used by `workflow_node_types`.
-func (m *Ops) NodeTypes() []NodeTypeInfo { return NodeTypesCatalog() }
+// Built from Engine.Descriptors — populated by each executor's Descriptor().
+func (m *Ops) NodeTypes() []NodeTypeInfo { return NodeTypesCatalog(m.Engine) }
 
 // TriggerTypes returns the catalog used by `workflow_trigger_types`.
 func (m *Ops) TriggerTypes() []TriggerTypeInfo { return TriggerTypesCatalog() }
@@ -388,29 +464,31 @@ type TriggerTypeInfo struct {
 	Example     string         `json:"example,omitempty"`
 }
 
-// NodeTypesCatalog returns the AI-introspectable node type metadata.
-func NodeTypesCatalog() []NodeTypeInfo {
-	return []NodeTypeInfo{
-		{Type: "classify", Description: "Classify natural-language input into an enum via LLM. Returns verdict + confidence + reasoning. Route via case: labels.", WhenToUse: "Input is free text and needs to be bucketed into a small set of cases."},
-		{Type: "agent", Description: "Spawn an AI agent with prompt, optional skills, and tool allowlist. Returns last assistant text.", WhenToUse: "Multi-turn reasoning or skill-driven action."},
-		{Type: "channel", Description: "Invoke a channel module action (send_message, reply_thread, open_modal, ...).", WhenToUse: "Send messages out via Slack/Telegram/REST."},
-		{Type: "connector", Description: "Invoke a connector module operation. Reuses MCP audit, encrypted fields, destructive flag.", WhenToUse: "Call any registered external integration."},
-		{Type: "shell", Description: "Execute a local shell command. Captures stdout/stderr/exit_code.", WhenToUse: "Operating on local files or running a tool only available as a CLI."},
-		{Type: "http", Description: "Make an HTTP request. Supports retry policy, template-rendered URL/headers/query/body.", WhenToUse: "Direct external API calls outside a connector module."},
-		{Type: "db_query", Description: "Run a parameterized SQL query against a configured DSN.", WhenToUse: "Reading from an external user database."},
-		{Type: "transform", Description: "Pure-function transform via gotemplate / jsonpath / jq.", WhenToUse: "Reshape an upstream output for downstream consumption."},
-		{Type: "branch", Description: "Deterministic if/switch routing via Go template expression. Filters edges by case: label.", WhenToUse: "Routing logic is structured (no natural language)."},
-		{Type: "parallel", Description: "Fan out to N named branches; wait per on_failure policy.", WhenToUse: "Independent sub-flows that can run concurrently."},
-		{Type: "merge", Description: "Fan-in wait-for-all; composes outputs per strategy (object|array|first|last).", WhenToUse: "Diamond topology requiring all parents complete."},
-		{Type: "end", Description: "Terminator. Captures a final result template for {{.Run.final_result}}.", WhenToUse: "Explicit end-of-flow with a result payload."},
-		{Type: "dataset_get", Description: "Load one row by primary key. Branches on found/not_found.", WhenToUse: "Lookup a state row before deciding next action."},
-		{Type: "dataset_exists", Description: "Check whether any row matches. Branches on true/false.", WhenToUse: "Dedup webhook events or guard against duplicate work."},
-		{Type: "dataset_query", Description: "Multi-row search with where/order_by/limit.", WhenToUse: "List or paginate stored rows."},
-		{Type: "dataset_count", Description: "Count rows matching where without loading them.", WhenToUse: "Cheap statistic for decisions."},
-		{Type: "dataset_insert", Description: "Insert a new row; fails on PK conflict.", WhenToUse: "Idempotency-by-PK guard plus persistence."},
-		{Type: "dataset_upsert", Description: "Insert or update by primary key. Returns action: insert|update.", WhenToUse: "Idempotent record sync."},
-		{Type: "dataset_delete", Description: "Delete rows matching where.", WhenToUse: "Cleanup expired state."},
+// NodeTypesCatalog returns the AI-introspectable node type metadata,
+// built entirely from Engine.Descriptors — single source of truth lives
+// in each node executor's Descriptor() method.
+func NodeTypesCatalog(eng *engine.Engine) []NodeTypeInfo {
+	if eng == nil {
+		return nil
 	}
+	out := make([]NodeTypeInfo, 0, len(eng.Descriptors))
+	for t, desc := range eng.Descriptors {
+		schema := desc.Schema
+		if desc.Output != nil {
+			if schema == nil {
+				schema = map[string]any{}
+			}
+			schema["output"] = desc.Output
+		}
+		out = append(out, NodeTypeInfo{
+			Type:        string(t),
+			Description: desc.Description,
+			WhenToUse:   desc.WhenToUse,
+			Example:     desc.Example,
+			Schema:      schema,
+		})
+	}
+	return out
 }
 
 // TriggerTypesCatalog returns the trigger-type metadata.

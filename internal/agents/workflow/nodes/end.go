@@ -4,8 +4,22 @@ import (
 	"context"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
+
+type endSchema struct {
+	Result string `wick:"key=result;desc=Final result template expression stored in {{.Run.final_result}}"`
+}
+
+func (e *EndExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Description: "Terminator. Captures a final result template.",
+		WhenToUse:   "Explicit end-of-flow with a result payload.",
+		Schema:      integration.StructSchema(endSchema{}),
+	}
+}
 
 // EndExecutor is the terminator. Captures n.Result so downstream
 // {{.Run.final_result}}-style reads can pick it up.

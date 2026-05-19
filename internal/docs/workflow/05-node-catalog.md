@@ -48,6 +48,10 @@ declare description.
     backoff_sec: 5
   on_failure: halt                 # halt | skip | fallback (gotonode)
   fallback: end                    # if on_failure=fallback
+  arg_modes:                       # optional — per-field render mode for nodes
+    url: fixed                     # whose inspector uses the Fixed|Expression
+    body: expression               # toggle (channel, connector, http). Keys
+                                   # match the schema field. Missing = expression.
   output_schema:                   # optional, validator
     type: object
     properties:
@@ -528,20 +532,28 @@ Output: `{{.Node.check-disk.stdout}}`, `.stderr`, `.exit_code`,
   type: http
   method: GET
   url: https://api.github.com/repos/{{.Env.REPO}}/issues
-  headers:
+  headers:                          # map[string]string — each value template-rendered
     Authorization: "Bearer {{.Secret.GITHUB_PAT}}"
-  query:
+  query:                            # map[string]string — each value template-rendered
     since: "{{.Event.At | addHours -24}}"
-  body: ""                          # raw atau {{.Node.x.json}}
-  parse_response: json              # raw | json | bytes
+  body: ""                          # only used for POST/PUT/PATCH/DELETE
+  parse_response: json              # raw | json | bytes (default raw); ignored for GET
   timeout_sec: 30
   retry:
     max: 3
     backoff_sec: 2
+  arg_modes:                        # optional — per-field render mode
+    url: fixed                      # "fixed" = pass value verbatim, skip template render
+    body: expression                # "expression" = template.Render (default behaviour)
   # edge: { from: <this-id>, to: summarize }
 ```
 
 Output: `.status`, `.headers`, `.body`, `.json` (kalau parse).
+
+**Inspector UI:**
+- Headers / Query render sebagai `kvlist` row editor (one row per key/value pair, click `+ Add Row` to append). Each value is rendered as a Go template, so you can pull tokens from upstream nodes (e.g. `Authorization: Bearer {{.Node.login.token}}`).
+- `url`, `body`, `method`, `timeout_sec` each carry a `Fixed | Expression` toggle pill. Fixed = passed verbatim, Expression = `template.Render` against the run context (default for backward compat). State persists as `arg_modes` in YAML.
+- `body` + `parse_response` rows are hidden when `method = GET` (`visible_when=method:POST|PUT|PATCH|DELETE`).
 
 ### `db_query` — SQL query
 
@@ -736,15 +748,18 @@ errors awal.
 ### Output reference syntax
 
 Template var:
-- `{{.Node.<id>}}` — full output object
-- `{{.Node.<id>.<field>}}` — sub-field
-- `{{.Node.<id>.<field> | <filter>}}` — Go template pipe filter
-- `{{.Event.*}}` — trigger event
+- `{{.Node.<label>}}` — full output object (label is the user-facing name shown in the inspector; falls back to id when label empty)
+- `{{.Node.<label>.<field>}}` — sub-field
+- `{{.Node.<label>.<field> | <filter>}}` — Go template pipe filter
+- **Trigger nodes** also live under `.Node.<label>` — payload at `{{.Node.<trigger-label>.payload.<key>}}`, envelope keys `type/subtype/channel/at` directly under the trigger label
+- `{{.Event.*}}` — **legacy**, still resolved by the engine for older workflows; new workflows should use `{{.Node.<trigger-label>.payload.…}}` so triggers and regular nodes share the same access pattern
 - `{{.Env.<NAME>}}` — workflow env value, from `env.yaml` (UI-managed, hand-edit OK) — lihat §11
 - `{{.Secret.<NAME>}}` — encrypted secret, decrypt runtime. Schema declare `widget: secret` di workflow.yaml, value stored encrypted di `env.yaml` — lihat §11
 - `{{.Workflow.<field>}}` — workflow metadata (ID, Version, Name)
 - `{{.Run.<field>}}` — runtime metadata (ID, StartedAt)
 - `{{.Dataset.<alias>}}` — dataset binding from `datasets:` field — lihat §12
+
+**Label vs id:** Inspector exposes `label` (free-form, must be a Go identifier — letters/digits/underscore, no spaces, unique within workflow). Renaming a label cascades through every `{{.Node.<old>...}}` reference, `index .Node "<old>"` form, graph edges, trigger `entry_node`, and `session_from`. The internal numeric Drawflow id stays stable so saved YAML and runtime state survive renames. When label is empty or not a valid identifier the canvas falls back to id for the template path.
 
 ---
 

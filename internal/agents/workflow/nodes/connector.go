@@ -7,8 +7,25 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
+
+type connectorSchema struct {
+	Module   string `wick:"required;key=module;desc=Connector module key"`
+	Op       string `wick:"required;key=op;desc=Operation name — call workflow_integration for per-op schema"`
+	Args     string `wick:"key=args;desc=Op inputs as YAML map"`
+	ArgModes string `wick:"key=arg_modes;desc=Per-field mode: fixed=literal, expression=Go template render"`
+}
+
+func (e *ConnectorExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Description: "Invoke a registered connector operation. Call workflow_connectors for available modules.",
+		WhenToUse:   "Call any registered external integration via MCP connector.",
+		Schema:      integration.StructSchema(connectorSchema{}),
+	}
+}
 
 // ConnectorExecutor dispatches workflow connector nodes through the
 // existing connector module ExecuteFunc.

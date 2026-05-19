@@ -123,8 +123,8 @@ func TestTriggerDeletedFromCanvas(t *testing.T) {
 // fires nothing).
 func TestTriggerWithNoOutgoing(t *testing.T) {
 	body := `{"drawflow":{"Home":{"data":{
-	  "1":{"id":1,"name":"trigger-manual","class":"node-trigger","html":"",
-	       "data":{"id":"trigger-manual","type":"trigger","data":{"triggerKind":"manual"}},
+	  "1":{"id":1,"name":"trigger_manual","class":"node-trigger","html":"",
+	       "data":{"id":"trigger_manual","type":"trigger","data":{"triggerKind":"manual"}},
 	       "pos_x":0,"pos_y":0,
 	       "inputs":{},
 	       "outputs":{"output_1":{"connections":[]}}},
@@ -254,14 +254,14 @@ func TestMergeTriggersCanvasOverridesPrev(t *testing.T) {
 // honour the canvas as source of truth and drop the removed entry.
 func TestMergeTriggersDropsRemovedFromCanvas(t *testing.T) {
 	canvas := []wf.Trigger{
-		{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "x"},
+		{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "x"},
 	}
 	prev := []wf.Trigger{
-		{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "x"},
+		{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "x"},
 		{ID: "trigger-cron", Type: wf.TriggerCron, Schedule: "0 0 * * *", EntryNode: "y"},
 	}
 	got := mergeTriggers(canvas, prev)
-	if len(got) != 1 || got[0].ID != "trigger-manual" {
+	if len(got) != 1 || got[0].ID != "trigger_manual" {
 		t.Errorf("cron trigger should be dropped (no canvas counterpart); got %+v", got)
 	}
 }
@@ -273,7 +273,7 @@ func TestMergeTriggersDropsRemovedFromCanvas(t *testing.T) {
 //
 //   - empty id + zero triggers → error (no trigger to fire)
 //   - empty id + one trigger   → that one wins (legacy single-trigger
-//                                YAML keeps the no-arg behaviour)
+//     YAML keeps the no-arg behaviour)
 //   - empty id + many triggers → error (UI must show picker)
 //   - explicit id matches      → that one wins regardless of order
 //   - explicit id missing      → error (stale UI reference)
@@ -291,13 +291,13 @@ func TestPickTriggerByID(t *testing.T) {
 		},
 		{
 			name:     "empty id, one trigger — pick it",
-			triggers: []wf.Trigger{{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "x"}},
-			wantID:   "trigger-manual",
+			triggers: []wf.Trigger{{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "x"}},
+			wantID:   "trigger_manual",
 		},
 		{
 			name: "empty id, many triggers — refuse",
 			triggers: []wf.Trigger{
-				{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "x"},
+				{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "x"},
 				{ID: "trigger-cron", Type: wf.TriggerCron, EntryNode: "y"},
 			},
 			wantErr: true,
@@ -305,7 +305,7 @@ func TestPickTriggerByID(t *testing.T) {
 		{
 			name: "explicit id matches",
 			triggers: []wf.Trigger{
-				{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "x"},
+				{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "x"},
 				{ID: "trigger-cron", Type: wf.TriggerCron, EntryNode: "y"},
 			},
 			askID:  "trigger-cron",
@@ -313,7 +313,7 @@ func TestPickTriggerByID(t *testing.T) {
 		},
 		{
 			name:     "explicit id missing — refuse",
-			triggers: []wf.Trigger{{ID: "trigger-manual", Type: wf.TriggerManual}},
+			triggers: []wf.Trigger{{ID: "trigger_manual", Type: wf.TriggerManual}},
 			askID:    "trigger-cron",
 			wantErr:  true,
 		},
@@ -353,7 +353,7 @@ func TestDraftEntryWinsOverStalePublished(t *testing.T) {
 	draft := wf.Workflow{
 		ID: "t",
 		Triggers: []wf.Trigger{
-			{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "http"},
+			{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "http"},
 		},
 		Graph: wf.Graph{
 			Entry: "http",
@@ -371,7 +371,7 @@ func TestDraftEntryWinsOverStalePublished(t *testing.T) {
 	}
 	stale := draft
 	stale.Triggers = []wf.Trigger{
-		{ID: "trigger-manual", Type: wf.TriggerManual, EntryNode: "agent"},
+		{ID: "trigger_manual", Type: wf.TriggerManual, EntryNode: "agent"},
 	}
 	stale.Graph.Entry = "agent"
 	if got := pickGraphEntry(stale); got != "agent" {
@@ -385,8 +385,8 @@ func TestDraftEntryWinsOverStalePublished(t *testing.T) {
 // trigger sources would break the validator.
 func TestTriggerNodesNotInGraphEdges(t *testing.T) {
 	body := `{"drawflow":{"Home":{"data":{
-	  "1":{"id":1,"name":"trigger-manual","class":"node-trigger","html":"",
-	       "data":{"id":"trigger-manual","type":"trigger","data":{"triggerKind":"manual"}},
+	  "1":{"id":1,"name":"trigger_manual","class":"node-trigger","html":"",
+	       "data":{"id":"trigger_manual","type":"trigger","data":{"triggerKind":"manual"}},
 	       "pos_x":0,"pos_y":0,
 	       "inputs":{},
 	       "outputs":{"output_1":{"connections":[{"node":"2","output":"input_1"}]}}},
@@ -778,4 +778,3 @@ func TestWebhookTriggerFieldsRoundtrip(t *testing.T) {
 		t.Errorf("Method lost: %+v", tr)
 	}
 }
-

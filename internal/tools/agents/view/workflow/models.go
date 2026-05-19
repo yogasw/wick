@@ -5,9 +5,9 @@
 package workflow
 
 import (
+	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfchannel "github.com/yogasw/wick/internal/agents/workflow/channel"
 	wfconnector "github.com/yogasw/wick/internal/agents/workflow/connector"
-	wf "github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/guard"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -24,21 +24,21 @@ type ListVM struct {
 // EditorVM carries the editor page payload — full workflow body
 // serialized for both the Drawflow canvas and the YAML preview pane.
 type EditorVM struct {
-	Layout      view.AgentsLayoutVM
-	Base        string
-	ID          string
-	Workflow    wf.Workflow
-	HasDraft    bool
-	YAML        string
-	GraphJSON   string // serialized for Drawflow editor.import()
+	Layout         view.AgentsLayoutVM
+	Base           string
+	ID             string
+	Workflow       wf.Workflow
+	HasDraft       bool
+	YAML           string
+	GraphJSON      string // serialized for Drawflow editor.import()
 	ValidationJSON string // serialized validation report for initial paint
-	Approved    bool
-	GuardReport *guard.Report
-	NodeTypes   []mcp.NodeTypeInfo
-	Palette     []PaletteSection // level-1 palette built from live registry
-	Runs        []mcp.RunSummary
-	RunsPage    int  // current 1-based page rendered in the Runs panel
-	RunsHasMore bool // older pages still exist
+	Approved       bool
+	GuardReport    *guard.Report
+	NodeTypes      []mcp.NodeTypeInfo
+	Palette        []PaletteSection // level-1 palette built from live registry
+	Runs           []mcp.RunSummary
+	RunsPage       int  // current 1-based page rendered in the Runs panel
+	RunsHasMore    bool // older pages still exist
 }
 
 // RunVM carries the run-detail page payload.
@@ -66,12 +66,12 @@ type PaletteSection struct {
 // message" — keeps the level-1 list short while still surfacing every
 // integration's full op catalog.
 type PaletteItem struct {
-	Type     string        // node type id (classify, agent, shell, ...)
-	Label    string        // display label
-	Dot      string        // tailwind bg-* color class for the leading dot
-	Hint     string        // optional right-aligned hint
-	Group    string        // drill-key (e.g. "channel-slack") — set when Subitems != nil
-	Subitems []PaletteOp   // level-2 operations
+	Type     string      // node type id (classify, agent, shell, ...)
+	Label    string      // display label
+	Dot      string      // tailwind bg-* color class for the leading dot
+	Hint     string      // optional right-aligned hint
+	Group    string      // drill-key (e.g. "channel-slack") — set when Subitems != nil
+	Subitems []PaletteOp // level-2 operations
 }
 
 // PaletteOp is one operation under a drillable PaletteItem. The combo
@@ -102,7 +102,7 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 	triggers := []PaletteItem{
 		{Type: "trigger-cron", Label: "cron", Dot: "bg-indigo-500"},
 		{Type: "trigger-webhook", Label: "webhook", Dot: "bg-indigo-500"},
-		{Type: "trigger-manual", Label: "manual", Dot: "bg-indigo-500"},
+		{Type: "trigger_manual", Label: "manual", Dot: "bg-indigo-500"},
 		{Type: "trigger-error", Label: "error", Dot: "bg-red-500", Hint: "on fail"},
 	}
 	for _, ch := range channels {
@@ -140,7 +140,6 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 
 	actions := []PaletteItem{
 		{Type: "shell", Label: "shell", Dot: "bg-slate-500"},
-		{Type: "http", Label: "http", Dot: "bg-amber-500"},
 		{Type: "db_query", Label: "db_query", Dot: "bg-sky-500"},
 		{Type: "transform", Label: "transform", Dot: "bg-cyan-500"},
 	}
@@ -242,4 +241,3 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 	}
 	return sections
 }
-

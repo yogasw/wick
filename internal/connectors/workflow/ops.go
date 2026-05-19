@@ -100,7 +100,40 @@ func (h *handlers) list(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {
-	return h.ops.Get(c.Input("id"))
+	w, err := h.ops.Get(c.Input("id"))
+	if err != nil {
+		return nil, err
+	}
+	for i, tr := range w.Triggers {
+		w.Triggers[i].Match = normalizeMatch(tr.Match)
+	}
+	return w, nil
+}
+
+// normalizeMatch expands picker JSON strings to native slices so MCP
+// responses always show human-readable format and AI writes it back correctly.
+func normalizeMatch(m map[string]any) map[string]any {
+	if len(m) == 0 {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			out[k] = v
+			continue
+		}
+		s2 := strings.TrimSpace(s)
+		if strings.HasPrefix(s2, "[") {
+			var arr []map[string]any
+			if err := json.Unmarshal([]byte(s2), &arr); err == nil {
+				out[k] = arr
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func (h *handlers) checkName(c *connector.Ctx) (any, error) {

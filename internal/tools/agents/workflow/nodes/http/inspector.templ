@@ -1,0 +1,23 @@
+package http
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	engnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfview "github.com/yogasw/wick/internal/tools/agents/view/workflow"
+)
+
+// Inspector is the parameters-tab partial for the http node. Renders
+// the shared ArgForm chrome (Fixed | Expression toggle, live preview,
+// description) from engnodes.HTTPSchema — same struct the engine uses
+// for workflow_node_types, so AI + UI never drift.
+//
+// editor.js's hydrateArgsForm helper drives the form; the per-node JS
+// module in inspector.js maps each arg row back to the typed wf.Node
+// field (n.URL, n.Method, …) when saving.
+templ Inspector() {
+	<div class="wf-inspector-panel hidden" data-node-type="http">
+		<div id="ins-http-args" class="space-y-2">
+			@wfview.ArgForm(entity.StructToConfigs(engnodes.HTTPSchema{}))
+		</div>
+	</div>
+}

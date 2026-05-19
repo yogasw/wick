@@ -6,8 +6,95 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/dataset"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
+
+type datasetGetSchema struct {
+	Dataset string `wick:"required;key=dataset;desc=Dataset name"`
+	Key     string `wick:"required;key=key;desc=Primary key value (template expression)"`
+}
+
+type datasetUpsertSchema struct {
+	Dataset   string `wick:"required;key=dataset"`
+	Key       string `wick:"required;key=key;desc=Primary key value"`
+	RowValues string `wick:"required;key=row;desc=YAML map of fields to write"`
+}
+
+type datasetQuerySchema struct {
+	Dataset string `wick:"required;key=dataset"`
+	Where   string `wick:"key=where;desc=YAML map of field equality filters"`
+	OrderBy string `wick:"key=order_by"`
+	Limit   int    `wick:"key=limit"`
+	Offset  int    `wick:"key=offset"`
+}
+
+type datasetWhereSchema struct {
+	Dataset string `wick:"required;key=dataset"`
+	Where   string `wick:"required;key=where;desc=YAML map of field equality filters"`
+}
+
+type datasetCountSchema struct {
+	Dataset string `wick:"required;key=dataset"`
+	Where   string `wick:"key=where"`
+}
+
+// DatasetDescriptor returns the descriptor for one dataset_* node type.
+// Used by setup/manager.go RegisterWithDesc since one executor handles
+// all 7 dataset types.
+func DatasetDescriptor(t workflow.NodeType) engine.NodeDescriptor {
+	switch t {
+	case workflow.NodeDatasetGet:
+		return engine.NodeDescriptor{
+			Description: "Load one row by primary key. Branches on found/not_found.",
+			WhenToUse:   "Lookup a state row before deciding next action.",
+			Schema:      integration.StructSchema(datasetGetSchema{}),
+			Output:      map[string]string{"row": "map[string]any — loaded row (nil if not_found branch taken)"},
+		}
+	case workflow.NodeDatasetExists:
+		return engine.NodeDescriptor{
+			Description: "Check whether any row matches. Branches on true/false.",
+			WhenToUse:   "Dedup webhook events or guard against duplicate work.",
+			Schema:      integration.StructSchema(datasetWhereSchema{}),
+		}
+	case workflow.NodeDatasetQuery:
+		return engine.NodeDescriptor{
+			Description: "Multi-row search with where/order_by/limit.",
+			WhenToUse:   "List or paginate stored rows.",
+			Schema:      integration.StructSchema(datasetQuerySchema{}),
+			Output:      map[string]string{"rows": "[]map[string]any — matched rows", "count": "int"},
+		}
+	case workflow.NodeDatasetCount:
+		return engine.NodeDescriptor{
+			Description: "Count rows matching where without loading them.",
+			WhenToUse:   "Cheap statistic for decisions.",
+			Schema:      integration.StructSchema(datasetCountSchema{}),
+			Output:      map[string]string{"count": "int — matching row count"},
+		}
+	case workflow.NodeDatasetInsert:
+		return engine.NodeDescriptor{
+			Description: "Insert a new row; fails on PK conflict.",
+			WhenToUse:   "Idempotency-by-PK guard plus persistence.",
+			Schema:      integration.StructSchema(datasetUpsertSchema{}),
+			Output:      map[string]string{"key": "string — inserted primary key"},
+		}
+	case workflow.NodeDatasetUpsert:
+		return engine.NodeDescriptor{
+			Description: "Insert or update by primary key. Returns action: insert|update.",
+			WhenToUse:   "Idempotent record sync.",
+			Schema:      integration.StructSchema(datasetUpsertSchema{}),
+			Output:      map[string]string{"action": "string — insert|update"},
+		}
+	case workflow.NodeDatasetDelete:
+		return engine.NodeDescriptor{
+			Description: "Delete rows matching where.",
+			WhenToUse:   "Cleanup expired state.",
+			Schema:      integration.StructSchema(datasetWhereSchema{}),
+		}
+	}
+	return engine.NodeDescriptor{}
+}
 
 // DatasetExecutor handles all 7 dataset_* node types.
 type DatasetExecutor struct {

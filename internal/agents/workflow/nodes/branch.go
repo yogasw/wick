@@ -7,8 +7,23 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
+
+type branchSchema struct {
+	Expr string `wick:"required;key=expr;desc=Go template expression that returns a case label string matching downstream edge case: values"`
+}
+
+func (e *BranchExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Description: "Evaluates a Go template expression; routes to the edge whose case: label matches the result.",
+		WhenToUse:   "Routing logic is structured (no natural language).",
+		Example:     "- id: route\n  type: branch\n  expr: '{{index .Event.Payload \"action_id\"}}'",
+		Schema:      integration.StructSchema(branchSchema{}),
+	}
+}
 
 // BranchExecutor evaluates a Go-template expression and exposes the
 // result as Verdict so the engine filters outgoing edges by `case:`.
