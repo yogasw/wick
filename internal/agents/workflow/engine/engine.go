@@ -70,7 +70,17 @@ type Engine struct {
 	Triggers *TriggerRegistry
 	Now      func() time.Time
 	IDGen    func() string
-	OnEvent  func(id, runID string, ev workflow.RunEvent)
+	// OnEvent is the legacy single-slot broadcast hook (SSE owns it).
+	// Newer subscribers should use Engine.Subscribe — that registers
+	// against a fan-out broker. Both fire per event; legacy first,
+	// broker second.
+	OnEvent func(id, runID string, ev workflow.RunEvent)
+
+	// bus + busInitOnce back the multi-subscriber broker. Lazy: nil
+	// until the first Subscribe call, then non-nil for life. See
+	// broker.go.
+	bus         *broker
+	busInitOnce sync.Once
 }
 
 // NewRunID returns a fresh run id. Plain UUID — chronological
@@ -173,6 +183,7 @@ func (e *Engine) emit(ctx context.Context, id, runID string, ev workflow.RunEven
 	if e.OnEvent != nil {
 		e.OnEvent(id, runID, ev)
 	}
+	e.publishToBus(id, runID, ev)
 }
 
 // Run starts a fresh run. Blocking; returns the final state.
@@ -284,6 +295,7 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	if e.OnEvent != nil {
 		e.OnEvent(w.ID, runID, startEv)
 	}
+	e.publishToBus(w.ID, runID, startEv)
 	if err := e.StateStore.Save(w.ID, runID, st); err != nil {
 		return st, err
 	}
@@ -296,29 +308,27 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	defer cancel()
 
 	err := e.walk(cctx, w, st.Entry, rc, &st)
+	end := e.Now()
 	if err != nil {
 		st.Status = workflow.StatusFailed
 		if st.Error == nil {
 			st.Error = &workflow.NodeError{Message: err.Error()}
 		}
-		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
 	} else {
 		st.Status = workflow.StatusSuccess
-		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
 	}
-	end := e.Now()
 	st.EndedAt = &end
 	st.UpdatedAt = end
 	st.Current = nil
-	if err := e.StateStore.Save(w.ID, runID, st); err != nil {
-		return st, err
+	if serr := e.StateStore.Save(w.ID, runID, st); serr != nil {
+		return st, serr
 	}
-	// Persist a one-line summary to the sharded index file. The Runs
-	// panel reads from this index instead of scanning every run dir
-	// on disk, so listings stay constant-time as history grows. Log
-	// the failure (warn) so a broken index doesn't hide silently;
-	// don't return the error — the run itself already finished, and
-	// missing index rows are a UX degradation, not a data loss.
+	// Persist the one-line summary BEFORE we fire the terminal event.
+	// Watch / SSE subscribers wake up on that event and re-scan the
+	// index; flipping the order guarantees the new row is visible the
+	// instant the subscriber gets the wake-up, so a "wait then peek"
+	// pattern never misses the run that triggered it. Index failure is
+	// still soft — log + continue; the run itself already finished.
 	if ierr := e.StateStore.IndexAppend(w.ID, state.IndexEntry{
 		ID:         runID,
 		Status:     st.Status,
@@ -331,6 +341,11 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 			Str("wf_id", w.ID).
 			Str("wf_run_id", runID).
 			Msg("index append failed; Runs panel may drop this run")
+	}
+	if err != nil {
+		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
+	} else {
+		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
 	}
 	return st, err
 }

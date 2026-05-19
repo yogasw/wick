@@ -411,6 +411,14 @@ func (s *FileService) Publish(id string) (workflow.Workflow, error) {
 	if err != nil {
 		return workflow.Workflow{}, fmt.Errorf("draft parse: %w", err)
 	}
+	// Semantic validation (trigger ids, node ids, label, etc.) runs
+	// here so every caller — UI Publish form, MCP workflow_publish op,
+	// internal helpers — gets the same guarantees. Without it the MCP
+	// op could promote a draft with dash-id triggers that the UI form
+	// would have rejected upfront.
+	if r := parse.Validate(w); !r.Ok() {
+		return workflow.Workflow{}, fmt.Errorf("cannot publish — fix validation errors:\n%s", r.Error())
+	}
 	if err := WriteAtomic(s.Layout.WorkflowFile(id), data); err != nil {
 		return workflow.Workflow{}, err
 	}

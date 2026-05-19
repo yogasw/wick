@@ -516,6 +516,29 @@ AI clients reach your node via the workflow connector. Five ops to know:
 | `workflow_picker_resolve(source, query?, limit?)` | Resolve picker source (`slack.channels`, `slack.users`, `slack.usergroups`) to `[{id, name}]` | `mcp.PickerRegistry` — channels register backends at setup |
 | `workflow_validate(id)` | Parse + validate with did-you-mean / hint pointers on common error shapes | `parse.Validate` + `mcp.ValidateRich` |
 | `workflow_describe(id)` | Human summary: triggers, graph shape, deps, dangling-edge + template-ref warnings | walks workflow + honors declarer interfaces above |
+| `workflow_get_run_log(id, run_id, diagnose=true?)` | Default: status + per-node duration. With `diagnose=true`: classify error into one of 8 known classes (template_missing_key / channel_action_missing / connector_op_missing / secret_leak / branch_no_edge / agent_session_invalid / provider_skill_missing / unknown), surface `available_keys` + a `suggested_fix` with confidence level | `mcp.diagnose.go` rule registry |
+| `workflow_watch({workflow_id?, trigger_id?, node_id?, status?, since?, limit?, wait_seconds?, expect?, stop_on_first?})` | Bounded, filterable read over recent runs. Returns only `[run_id, workflow_id, status, started_at, ended_at, trigger_id]` — AI follows up with `workflow_get_run_log(diagnose=true)` per chosen id. `wait_seconds>0` subscribes to the live event stream and returns the moment `expect`/`stop_on_first` is met. Server caps `limit=50` + `wait_seconds=30`. | `mcp.watch.go` + `engine.broker.go` |
+
+**Watch usage patterns** (see [doc 25](../../../internal/docs/workflow/25-diagnose-watch.md)):
+
+- **Integration test, one trigger:** `wait_seconds=15, stop_on_first=true` — AI is blocked until run lands, returns in ~1s when user triggers.
+- **Test N triggers in one shot:** `wait_seconds=20, expect=2` — returns after the 2nd run, not after 20s.
+- **Negative case (filter should reject):** call after the negative trigger — `runs=[]` is the confirmation that the filter held.
+- **Prod debug, large history:** `status=failed, since=-1h, limit=20` — peek mode (wait=0), returns immediately; AI samples 1–2 IDs and diagnoses, never bulk-loads.
+
+**Why watch is cheap:** the body is loaded ONLY when AI explicitly picks a run via `workflow_get_run_log`. Watch itself reads the sharded index in constant time. Long-poll subscribes to the engine's multi-subscriber broker (drops on slow consumers; never back-pressures the engine).
+
+**Diagnose flag — what AI gets:** structured `error_class` + `suggested_fix { node_id, field, current, suggested, confidence, rationale }`. Per the no-auto-fix rule, AI surfaces the suggestion to the user and applies via existing `workflow_update_node` / `workflow_write_file` only after confirmation. Confidence levels:
+
+- `high` — Levenshtein ≤ 1 from the typo (e.g. `channel` → `channelx`) or exact case-fold match. Safe to suggest with high certainty.
+- `medium` — distance 2 (e.g. `sednmessage` → `send_message`). Likely-but-not-certain.
+- `low` — distance ≥ 3 or no good candidate. Surface as a hint only.
+
+**Extending the classifier:** drop a new entry into `errorRules` in
+`internal/agents/workflow/mcp/diagnose.go`. Each entry is a (regex, handler)
+pair; handlers receive a `DiagnoseCtx` carrying the run, the workflow, and
+the registries needed to suggest a fix. First matching rule wins — keep
+specific patterns before general ones.
 
 **Contract guarantees for the declarers:**
 

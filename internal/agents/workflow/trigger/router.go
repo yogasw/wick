@@ -215,7 +215,14 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 		if q == nil {
 			continue
 		}
-		_ = q.Enqueue(WorkItem{ID: id, Event: evt})
+		// Per-trigger event copy with the originating Trigger.ID
+		// stamped so workflow_watch(trigger_id=...) can filter back
+		// to the entry that fired. Original evt stays untouched —
+		// matters because a single inbound payload may fan out to
+		// multiple triggers across workflows.
+		perTrig := evt
+		perTrig.TriggerID = tr.ID
+		_ = q.Enqueue(WorkItem{ID: id, Event: perTrig})
 		matched++
 	}
 	return matched

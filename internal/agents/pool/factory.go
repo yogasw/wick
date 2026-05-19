@@ -98,18 +98,21 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		RecordRaw: f.RecordRaw,
 	})
 
-	var presetContent string
+	// Layered system prompt (top wins on conflict):
+	//   1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+	//   2. preset body (per-preset persona)
+	//   3. operator-edited `system_prompt` config row
+	// Layer 1 must lead so its guards override anything the preset /
+	// config below tries to relax.
+	presetContent := config.ImmutableSystemPrompt()
 	if opt.PresetName != "" {
-		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
-			presetContent = p.Body
+		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
+			presetContent += "\n\n" + p.Body
 		}
 	}
 	if f.SystemPromptLoader != nil {
 		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
-			if presetContent != "" {
-				presetContent += "\n\n"
-			}
-			presetContent += extra
+			presetContent += "\n\n" + extra
 		}
 	}
 

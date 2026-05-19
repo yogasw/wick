@@ -212,9 +212,12 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 		connector.Op("workflow_get_run_events", "Get Run Events",
 			"Get the raw events.jsonl stream for a run: every node_started / node_completed / node_failed / edge_traversed entry with timestamps and data payloads. Use this when workflow_get_run doesn't have enough detail — e.g. user gives you a failed run ID and asks why it broke.",
 			getRunInput{}, h.getRunEvents, wickdocs.Docs{}),
+		connector.Op("workflow_watch", "Watch Recent Runs",
+			"Bounded read over recent runs. Cheap by design: returns only [run_id, workflow_id, status, started_at, ended_at, trigger_id]. AI follows up with workflow_get_run_log(diagnose=true) per chosen id. wait_seconds>0 subscribes to the live event stream and returns the moment expect / stop_on_first is met, otherwise expires at wait_seconds (server caps at 30s, limit at 50). Multi-dim filter: workflow_id + trigger_id + node_id + status + since.",
+			watchInput{}, h.watch, wickdocs.Docs{}),
 		connector.Op("workflow_get_run_log", "Get Run Log",
-			"Combined debug view of a run: status + error + completed/failed/skipped nodes + per-node duration + total duration. One-shot summary for 'why did run X fail'.",
-			getRunInput{}, h.getRunLog, wickdocs.Docs{}),
+			"Combined debug view of a run: status + error + completed/failed/skipped nodes + per-node duration + total duration. One-shot summary for 'why did run X fail'. Pass diagnose=true to additionally classify the error (template_missing_key / channel_action_missing / connector_op_missing / secret_leak / branch_no_edge / agent_session_invalid / provider_skill_missing) and surface available_keys + a suggested fix.",
+			getRunLogInput{}, h.getRunLog, wickdocs.Docs{}),
 		connector.Op("workflow_copy_run_to_editor", "Copy Run to Editor",
 			"UI parity with 'Copy to editor' button. Loads run state, saves current published workflow as draft (for editing), and writes runs/<run_id>/mocks.json with the run's per-node outputs so Execute step can prefill from real data. Use when user says 'tadi run X gagal, kasih edit' — caller still needs to ask user before workflow_publish.",
 			copyRunInput{}, h.copyRunToEditor, wickdocs.Docs{}),
@@ -375,6 +378,24 @@ type getRunsInput struct {
 type getRunInput struct {
 	ID    string `wick:"required;desc=Workflow ID."`
 	RunID string `wick:"required;desc=Run ID from workflow_get_runs."`
+}
+
+type getRunLogInput struct {
+	ID       string `wick:"required;desc=Workflow ID."`
+	RunID    string `wick:"required;desc=Run ID from workflow_get_runs."`
+	Diagnose bool   `wick:"desc=When true, attach error classification + suggested fix + available_keys to the response. Default false."`
+}
+
+type watchInput struct {
+	WorkflowID  string `wick:"key=workflow_id;desc=Optional. Scope to one workflow id. Empty = every workflow Service knows about."`
+	TriggerID   string `wick:"key=trigger_id;desc=Optional. Filter by Trigger.ID stamped on the originating event."`
+	NodeID      string `wick:"key=node_id;desc=Optional. Filter to runs that reached / finished / skipped this node id."`
+	Status      string `wick:"dropdown=any|success|failed|running;default=any;desc=Filter by run status."`
+	Since       string `wick:"desc=RFC3339 absolute (2026-05-19T10:00:00Z) or relative (-15m / -1h). Default: now."`
+	Limit       int    `wick:"number;desc=Hard cap on returned rows. Default 10, server caps at 50."`
+	WaitSeconds int    `wick:"key=wait_seconds;number;desc=Upper bound for long-poll. 0 = non-blocking peek. Server caps at 30. Returns the moment target is met."`
+	Expect      int    `wick:"number;desc=Return as soon as N matching runs collected. Combine with wait_seconds for 'test N triggers then stop'."`
+	StopOnFirst bool   `wick:"key=stop_on_first;desc=Shortcut for expect=1. Default false."`
 }
 
 type requestReviewInput struct {

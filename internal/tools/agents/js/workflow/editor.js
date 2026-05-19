@@ -754,7 +754,20 @@
   // n8n's interaction model: clicking nodes to move/connect them
   // shouldn't pop a heavy debug shell every time).
   editor.on('nodeSelected', (id) => { selectedID = id; });
-  editor.on('nodeUnselected', () => { selectedID = null; });
+  editor.on('nodeUnselected', () => {
+    // Drawflow fires nodeUnselected the moment focus leaves the canvas
+    // — including when the user clicks into an inspector field. That
+    // would null out selectedID and silently disable every typing
+    // update listener (which all guard with `if (selectedID)`), so the
+    // form save / auto-save would serialise the node with its
+    // pre-edit data. Keep selectedID pinned while the inspector modal
+    // is visible; the explicit hideInspector() callers reset it.
+    const modal = document.getElementById('wf-inspector');
+    if (modal && !modal.classList.contains('hidden')) {
+      return;
+    }
+    selectedID = null;
+  });
   editor.on('nodeRemoved', () => { selectedID = null; hideInspector(); refreshOutputRefs(); });
   editor.on('connectionCreated', () => refreshOutputRefs());
 
@@ -2260,6 +2273,11 @@
     insNode.classList.add('hidden');
     const modal = document.getElementById('wf-inspector');
     if (modal) modal.classList.add('hidden');
+    // Flush any pending edit into drawflow BEFORE we drop selectedID
+    // so the in-progress field values aren't lost when the inspector
+    // closes (nodeUnselected pinned selectedID while the modal was up).
+    if (selectedID) updateNodeData(selectedID);
+    selectedID = null;
   }
 
   // hydrateOutputPane fills the right "OUTPUT" column from the node's

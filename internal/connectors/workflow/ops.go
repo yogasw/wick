@@ -345,6 +345,21 @@ func (h *handlers) describe(c *connector.Ctx) (any, error) {
 	return h.ops.Describe(c.Input("id"))
 }
 
+func (h *handlers) watch(c *connector.Ctx) (any, error) {
+	in := wfmcp.WatchInput{
+		WorkflowID:  c.Input("workflow_id"),
+		TriggerID:   c.Input("trigger_id"),
+		NodeID:      c.Input("node_id"),
+		Status:      c.Input("status"),
+		Since:       c.Input("since"),
+		Limit:       c.InputInt("limit"),
+		WaitSeconds: c.InputInt("wait_seconds"),
+		Expect:      c.InputInt("expect"),
+		StopOnFirst: c.InputBool("stop_on_first"),
+	}
+	return h.ops.Watch(ctxFrom(c), in)
+}
+
 func (h *handlers) simulate(c *connector.Ctx) (any, error) {
 	var evt wf.Event
 	if err := parseJSON(c.Input("event"), &evt); err != nil {
@@ -708,7 +723,7 @@ func (h *handlers) getRunLog(c *connector.Ctx) (any, error) {
 		totalDur = state.EndedAt.Sub(state.StartedAt).Milliseconds()
 	}
 
-	return map[string]any{
+	resp := map[string]any{
 		"run_id":        runID,
 		"workflow_id":   id,
 		"status":        state.Status,
@@ -723,7 +738,19 @@ func (h *handlers) getRunLog(c *connector.Ctx) (any, error) {
 		"node_timings":  timings,
 		"events_count":  len(events),
 		"trigger_event": state.Event,
-	}, nil
+	}
+
+	// Diagnose flag → classify error + propose fix. Cheap when the run
+	// succeeded (we only return Status + PathTaken) and bounded
+	// regardless of error class (rule table is finite).
+	if c.InputBool("diagnose") {
+		w, err := h.ops.Service.Load(id)
+		if err == nil {
+			diag := h.ops.Diagnose(ctxFrom(c), w, state)
+			resp["diagnosis"] = diag
+		}
+	}
+	return resp, nil
 }
 
 func (h *handlers) requestReview(c *connector.Ctx) (any, error) {

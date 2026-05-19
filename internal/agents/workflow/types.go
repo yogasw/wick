@@ -477,6 +477,12 @@ type Event struct {
 	Channel string         `json:"channel,omitempty"`
 	At      time.Time      `json:"at"`
 	Payload map[string]any `json:"payload,omitempty"`
+	// TriggerID is the workflow.Trigger.ID of the entry that matched
+	// this dispatch. Populated by the router immediately before
+	// enqueue; empty for manual / RunNow paths where no specific
+	// trigger fired. workflow_watch(trigger_id=...) reads this to
+	// filter runs back to the originating trigger.
+	TriggerID string `json:"trigger_id,omitempty"`
 }
 
 // RunStatus values.

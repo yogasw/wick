@@ -44,14 +44,32 @@
       }
     },
     {
-      "label": "debug: prep",
+      "label": "templ: generate",
       "type": "shell",
-      "command": "templ generate ./... && bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css && go build -o bin/wick-lab-gate.exe ./cmd/gate",
+      "command": "templ generate ./...",
+      "problemMatcher": []
+    },
+    {
+      "label": "css: build",
+      "type": "shell",
+      "command": "bin/tailwindcss.exe -i web/src/input.css -o web/public/css/app.css",
+      "problemMatcher": []
+    },
+    {
+      "label": "gate: build",
+      "type": "shell",
+      "command": "go build -o bin/wick-lab-gate.exe ./cmd/gate",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "debug: prep",
+      "dependsOn": ["templ: generate", "css: build", "gate: build"],
+      "dependsOrder": "parallel",
       "problemMatcher": []
     },
     {
       "label": "dev",
-      "dependsOn": ["css: watch", "templ: watch"],
+      "dependsOn": ["css: watch", "templ: watch", "gate: build"],
       "dependsOrder": "parallel",
       "group": {
         "kind": "build",
