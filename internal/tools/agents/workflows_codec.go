@@ -228,8 +228,11 @@ func workflowToDrawflowJSON(w wf.Workflow) (string, error) {
 				innerData["method"] = tr.Method
 			}
 		case wf.TriggerManual:
-			if tr.Label != "" {
-				innerData["label"] = tr.Label
+			// innerData["label"] feeds the inspector "Button label"
+			// field — keep it on ButtonLabel so it stays separate from
+			// the slug Label that gates template refs + validation.
+			if tr.ButtonLabel != "" {
+				innerData["label"] = tr.ButtonLabel
 			}
 		}
 		// Seed a Label for legacy triggers (`trigger-manual`, `trigger-cron`,
@@ -662,8 +665,12 @@ func drawflowJSONToWorkflow(id, body string) (wf.Workflow, error) {
 					tr.Method = v
 				}
 			case wf.TriggerManual:
+				// inner["label"] is the human-facing button caption
+				// ("Run") — distinct from tr.Label which is the slug
+				// identifier ("run") already lifted at the top of this
+				// loop from dn.Data["label"].
 				if v, ok := inner["label"].(string); ok {
-					tr.Label = v
+					tr.ButtonLabel = v
 				}
 			}
 			break
@@ -676,7 +683,7 @@ func drawflowJSONToWorkflow(id, body string) (wf.Workflow, error) {
 	// brick on first open. Triggers with no entry will still be
 	// blocked by triggerHasEntry at Run Now time.
 	if len(triggers) == 0 {
-		triggers = []wf.Trigger{{Type: wf.TriggerManual, Label: "run"}}
+		triggers = []wf.Trigger{{Type: wf.TriggerManual, Label: "run", ButtonLabel: "Run"}}
 	}
 
 	// graph.entry: pick the first trigger's EntryNode so legacy

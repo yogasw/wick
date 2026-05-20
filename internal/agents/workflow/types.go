@@ -414,6 +414,7 @@ type Trigger struct {
 
 	// manual
 	Label       string `yaml:"label,omitempty"`
+	ButtonLabel string `yaml:"button_label,omitempty"`
 	RequireRole string `yaml:"require_role,omitempty"`
 
 	// schedule_at
