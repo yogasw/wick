@@ -735,8 +735,13 @@
     return (window.WickNodes && window.WickNodes[kind]) || null;
   }
   function showModulePanelFor(kind) {
+    // data-node-type may be a space-separated list when one partial
+    // serves several node kinds (e.g. the datatable_* family). Match
+    // the selected kind against any token in the list so the right
+    // panel surfaces regardless of declaration shape.
     document.querySelectorAll('.wf-inspector-panel').forEach((el) => {
-      el.classList.toggle('hidden', el.dataset.nodeType !== kind);
+      const tokens = (el.dataset.nodeType || '').split(/\s+/);
+      el.classList.toggle('hidden', !tokens.includes(kind));
     });
   }
   // attach() on each module wires DOM listeners once at boot (regen
@@ -815,14 +820,27 @@
   // Label input — validate identifier + uniqueness on every keystroke
   // so the operator sees the constraint without surprise rejection on
   // save. Invalid labels paint a red ring; the save still goes through
-  // (no enforcement) but cascade rewrite is skipped to avoid corrupting
-  // refs with spaces or duplicate labels.
+  // (no enforcement) but cascade rewrite waits for blur so the chain
+  // doesn't fire on every intermediate keystroke (oldLabel='trigge',
+  // newLabel='trigger' would have already swept `trigge` across the
+  // graph).
+  //
+  // Two listeners:
+  //   input → live validation indicator only (no cascade, no data write)
+  //   change/blur → commit: store new label + cascade rename in one shot
   if (f.label) {
     f.label.addEventListener('input', () => {
       const v = f.label.value.trim();
       const ok = !v || (isValidIdent(v) && !labelTakenByOther(v, selectedID));
       f.label.classList.toggle('wf-input-error', !ok);
       f.label.title = ok ? '' : 'Label must be a valid identifier (letters/digits/_, no spaces) and unique';
+    });
+    f.label.addEventListener('change', () => {
+      if (selectedID) updateNodeData(selectedID);
+    });
+    // change fires on Enter or blur; we also want Tab-out and click-out
+    // to flush so the canvas always reflects the typed value.
+    f.label.addEventListener('blur', () => {
       if (selectedID) updateNodeData(selectedID);
     });
   }
@@ -846,14 +864,20 @@
     persistCases(selectedID);
   });
   document.getElementById('ins-delete').addEventListener('click', async () => {
-    if (!selectedID) return;
+    // Pin the id locally: between awaiting wickConfirm and the
+    // remove call, the modal's outside-click path can fire
+    // nodeUnselected which would null selectedID and leave us with a
+    // silent no-op. Capture once, use the captured value.
+    const targetID = selectedID;
+    if (!targetID) return;
     if (canvasLocked) {
       await wickAlert('Unlock the canvas to delete nodes.', { title: 'Canvas locked' });
       return;
     }
     const ok = await wickConfirm('Delete this node?', { title: 'Delete node', ok: 'Delete', danger: true });
     if (!ok) return;
-    editor.removeNodeId('node-' + selectedID);
+    editor.removeNodeId('node-' + targetID);
+    hideInspector();
   });
 
   // ── Zoom controls ──────────────────────────────────────────────
@@ -1551,9 +1575,15 @@
   }
 
   // ── Save: serialize Drawflow → JSON ────────────────────────────
-  // Manual click: classic form post (server redirects back).
-  document.getElementById('save-form').addEventListener('submit', () => {
-    document.getElementById('save-body').value = JSON.stringify(editor.export());
+  // Manual click: intercept the form submit so we POST via fetch +
+  // surface the response inline (autoSave() reuses the toolbar
+  // status badge + validation overlay). Without this the form would
+  // do a full page reload, losing canvas selection / scroll / live
+  // SSE subscriptions, and the user wouldn't see which validation
+  // errors fired the moment they hit save.
+  document.getElementById('save-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    autoSave();
   });
 
   // Auto-save: debounce 800ms after canvas mutations, POST JSON,
@@ -1602,6 +1632,7 @@
         const msg = (data && data.error) || `HTTP ${resp.status}`;
         setStatus('error', `✕ Save failed: ${msg}`);
         applyValidation(null);
+        toast('Save failed: ' + msg, 'error');
         return;
       }
       applyValidation((data && data.validation) || null);
@@ -1609,9 +1640,36 @@
       refreshSavedAge();
       if (savedRefreshTimer) clearInterval(savedRefreshTimer);
       savedRefreshTimer = setInterval(refreshSavedAge, 10000);
+      const v = data && data.validation;
+      if (v && !v.ok) {
+        const n = (v.errors || []).length;
+        toast(`Saved with ${n} validation error${n === 1 ? '' : 's'}`, 'warn');
+      } else {
+        toast('Saved', 'ok');
+      }
     } catch (err) {
       setStatus('error', `✕ Save failed: ${err.message || err}`);
+      toast('Save failed: ' + (err.message || err), 'error');
     }
+  }
+
+  // toast pops a transient notification into wf-toast-host. States
+  // map to the wf-toast-ok|warn|error classes already styled in
+  // editor.css. Auto-dismiss after 3.5s; click to dismiss early.
+  function toast(message, state) {
+    const host = document.getElementById('wf-toast-host');
+    if (!host) return;
+    const el = document.createElement('div');
+    el.className = 'wf-toast wf-toast-' + (state || 'ok');
+    el.textContent = message;
+    el.addEventListener('click', () => dismissToast(el));
+    host.appendChild(el);
+    setTimeout(() => dismissToast(el), 3500);
+  }
+  function dismissToast(el) {
+    if (!el || !el.parentNode) return;
+    el.style.opacity = '0';
+    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 250);
   }
 
   // applyValidation paints per-node error badges + a toolbar summary.
@@ -2011,9 +2069,17 @@
   }
 
   function nodeMeta(type) {
-    const t = type.startsWith('trigger-') ? 'trigger' : type;
+    // Trigger palette types are tagged `trigger-<kind>` (dash) or
+    // `trigger_<kind>` (underscore — the legacy shape that survived
+    // an earlier rename). Both must collapse to the "trigger" fixture
+    // so the inspector renders the right panel; without the
+    // underscore branch nodeMeta falls all the way through to
+    // fixtures.shell, which is why a `trigger_manual` node was
+    // showing the Command field.
+    const t = (type.startsWith('trigger-') || type.startsWith('trigger_')) ? 'trigger' : type;
+    const triggerKind = type.replace(/^trigger[_-]/, '');
     const fixtures = {
-      trigger:   { kind: 'trigger', head: 'trigger', hint: type.replace('trigger-', ''), cssType: 'trigger', inputs: 0, outputs: 1, defaults: { triggerKind: type.replace('trigger-', '') } },
+      trigger:   { kind: 'trigger', head: 'trigger', hint: triggerKind, cssType: 'trigger', inputs: 0, outputs: 1, defaults: { triggerKind: triggerKind } },
       classify:  { kind: 'classify', head: 'classify', hint: 'bug | question | feature', cssType: 'classify', inputs: 1, outputs: 3, defaults: { prompt: '', cases: ['bug', 'question', 'default'] } },
       agent:     { kind: 'agent', head: 'agent', hint: 'reasoning', cssType: 'agent', inputs: 1, outputs: 1, defaults: { prompt: '' } },
       channel:   { kind: 'channel', head: 'channel', hint: 'send_message', cssType: 'channel', inputs: 1, outputs: 1, defaults: { channel: 'slack', op: 'reply_thread' } },
@@ -2926,9 +2992,19 @@
     const all = editor.export();
     const nodes = all.drawflow.Home.data;
     Object.values(nodes).forEach((n) => {
-      const nid = (n.data && n.data.id) || n.name;
-      if (n.data && n.data.type === 'classify') refs.push(`{{.Node.${nid}.verdict}}`);
-      else refs.push(`{{.Node.${nid}.result}}`);
+      const id    = (n.data && n.data.id) || n.name;
+      const label = (n.data && n.data.label) || '';
+      // Prefer label when set; fall back to id. Non-identifier labels
+      // (dash, space) cannot be reached via the dotted form, so emit
+      // the `index .Node` syntax instead — the only shape Go's
+      // text/template parses for arbitrary map keys.
+      const key   = label || id;
+      const field = (n.data && n.data.type === 'classify') ? 'verdict' : 'result';
+      if (isValidIdent(key)) {
+        refs.push(`{{.Node.${key}.${field}}}`);
+      } else {
+        refs.push(`{{(index .Node "${key}").${field}}}`);
+      }
     });
     f.refs.innerHTML = refs.map((r) => `<div>${escapeHTML(r)}</div>`).join('');
   }
