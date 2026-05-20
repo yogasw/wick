@@ -60,7 +60,7 @@ agent: "Format digest markdown dari 3 sumber"
   ↓
 channel chat.send_message #leadership <digest>
   └─ parallel-fan-out:
-       → dataset_insert digest_archive (audit trail)
+       → datatable_insert digest_archive (audit trail)
 ```
 
 ### Use case 4: Multi-stage interactive flow (3 trigger, 1 workflow)

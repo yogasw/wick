@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
@@ -244,6 +245,11 @@ func (h *handlers) addNode(c *connector.Ctx) (any, error) {
 	var node wf.Node
 	if err := parseJSON(c.Input("node"), &node); err != nil {
 		return nil, fmt.Errorf("node: %w", err)
+	}
+	// ID is hidden UUID — caller pass Label only, server mint ID.
+	// Backward compat: explicit ID still accepted (legacy AI prompts).
+	if node.ID == "" {
+		node.ID = uuid.NewString()
 	}
 	return h.ops.AddNode(c.Input("id"), node)
 }

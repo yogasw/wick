@@ -15,7 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/canvas"
 	"github.com/yogasw/wick/internal/agents/workflow/channel"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
-	"github.com/yogasw/wick/internal/agents/workflow/dataset"
+	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
@@ -36,7 +36,7 @@ type Ops struct {
 	Channels    *channel.Registry
 	Connectors  *connector.Registry
 	Providers   *provider.Registry
-	Datasets    dataset.Service
+	DataTables  datatable.Service
 	StateStore  state.Store
 	Integration *integration.Registry
 	// Pickers maps picker source names (e.g. "slack.channels") to
@@ -47,7 +47,7 @@ type Ops struct {
 }
 
 // New wires the dispatcher.
-func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canvas.Canvas, channels *channel.Registry, connectors *connector.Registry, providers *provider.Registry, datasets dataset.Service, ss state.Store) *Ops {
+func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canvas.Canvas, channels *channel.Registry, connectors *connector.Registry, providers *provider.Registry, dataTables datatable.Service, ss state.Store) *Ops {
 	return &Ops{
 		Service:    svc,
 		Engine:     e,
@@ -56,7 +56,7 @@ func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canva
 		Channels:   channels,
 		Connectors: connectors,
 		Providers:  providers,
-		Datasets:   datasets,
+		DataTables: dataTables,
 		StateStore: ss,
 		Pickers:    NewPickerRegistry(),
 	}

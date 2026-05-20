@@ -42,13 +42,13 @@ When a new node type lands in `internal/agents/workflow/nodes/`, add a page unde
 
 | Type | What it does |
 |---|---|
-| [`dataset_get`](./nodes/dataset) | Load one row by primary key. Branches on found/not_found. |
-| [`dataset_exists`](./nodes/dataset) | Check whether any row matches. Branches on true/false. |
-| [`dataset_query`](./nodes/dataset) | Multi-row search with where / order_by / limit. |
-| [`dataset_count`](./nodes/dataset) | Count without loading. |
-| [`dataset_insert`](./nodes/dataset) | Insert; fail on PK conflict. |
-| [`dataset_upsert`](./nodes/dataset) | Insert or update; returns `action: insert|update`. |
-| [`dataset_delete`](./nodes/dataset) | Delete rows matching where. |
+| [`datatable_get`](./nodes/datatable) | Load one row by primary key. Branches on found/not_found. |
+| [`datatable_exists`](./nodes/datatable) | Check whether any row matches. Branches on true/false. |
+| [`datatable_query`](./nodes/datatable) | Multi-row search with where / order_by / limit. |
+| [`datatable_count`](./nodes/datatable) | Count without loading. |
+| [`datatable_insert`](./nodes/datatable) | Insert; fail on PK conflict. |
+| [`datatable_upsert`](./nodes/datatable) | Insert or update; returns `action: insert|update`. |
+| [`datatable_delete`](./nodes/datatable) | Delete rows matching where. |
 
 ## Render context
 

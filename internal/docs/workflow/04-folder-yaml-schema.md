@@ -81,11 +81,10 @@ env:                                # config schema (values di env.yaml; lihat �
     desc: "Token issue tracker"
     required: true
 
-datasets:                           # optional, link ke datasets (§12)
+data_tables:                        # optional, link ke data tables (§12)
   - name: handled
-    ref: inquiry-events             # dataset slug di <BaseDir>/datasets/
+    ref: inquiry-events             # data table slug di wick_data_tables
     mode: read_write
-    expected_version: 1             # break loud kalau dataset schema drift
 
 graph:
   entry: classify-intent            # default entry kalau trigger ga override
@@ -350,7 +349,7 @@ Use case:
 - Centralized error handler workflow yang catch failures dari workflow lain
 - Notify on-call team kalau workflow critical fail
 - Auto-retry pattern (error → wait → re-trigger original workflow)
-- Audit trail di dataset events untuk root-cause analysis
+- Audit trail di data-table events untuk root-cause analysis
 
 Source workflow `on_error` opt-in:
 ```yaml

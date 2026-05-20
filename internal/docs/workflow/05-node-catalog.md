@@ -572,30 +572,30 @@ Output: `.status`, `.headers`, `.body`, `.json` (kalau parse).
 
 Output: `.rows` (array of objects), `.row_count`.
 
-### `dataset_*` — wick-native data store
+### `datatable_*` — wick-native data store
 
-Wick-native data tables (lihat §12 Datasets). Single shared Postgres
-table `wick_datasets_rows`, schema YAML-defined, akses cuma lewat node
-types ini (no raw SQL).
+Wick-native data tables (lihat §12 Data Tables). Single shared Postgres
+table `wick_data_table_rows`, schema DB-defined (JSONB di
+`wick_data_tables.schema`), akses cuma lewat node types ini (no raw SQL).
 
-**6 variant:**
+**7 variant:**
 
 | Node | Use case | Output | Branching |
 |---|---|---|---|
-| `dataset_exists` | "ada row yang match `where`?" | `.found: bool` | `cases: {"true", "false"}` |
-| `dataset_get` | ambil 1 row by primary key | `.found: bool`, `.row: object/null` | `cases: {found, not_found}` |
-| `dataset_query` | multi-row search | `.rows: []`, `.row_count`, `.has_more` | `next:` atau branch eksternal |
-| `dataset_count` | count tanpa load row | `.count: int` | `next:` |
-| `dataset_insert` | INSERT row, fail kalau pk conflict | `.inserted_pk`, `.success` | `next:` |
-| `dataset_upsert` | INSERT atau UPDATE based on pk | `.action: "insert"\|"update"`, `.row` | `next:` |
-| `dataset_delete` | DELETE rows matching where | `.deleted_count` | `next:` |
+| `datatable_exists` | "ada row yang match `where`?" | `.found: bool` | `cases: {"true", "false"}` |
+| `datatable_get` | ambil 1 row by primary key | `.found: bool`, `.row: object/null` | `cases: {found, not_found}` |
+| `datatable_query` | multi-row search | `.rows: []`, `.row_count`, `.has_more` | `next:` atau branch eksternal |
+| `datatable_count` | count tanpa load row | `.count: int` | `next:` |
+| `datatable_insert` | INSERT row, fail kalau pk conflict | `.inserted_pk`, `.success` | `next:` |
+| `datatable_upsert` | INSERT atau UPDATE based on pk | `.action: "insert"\|"update"`, `.row` | `next:` |
+| `datatable_delete` | DELETE rows matching where | `.deleted_count` | `next:` |
 
 **Pattern: webhook dedup (1 node check, lebih ringkas dari query+branch):**
 
 ```yaml
 - id: check-handled
-  type: dataset_exists
-  dataset: events
+  type: datatable_exists
+  table: events
   where:
     id: "{{.Event.Payload.event_id}}"
     is_processed: true
@@ -609,8 +609,8 @@ types ini (no raw SQL).
 
 ```yaml
 - id: load-user-state
-  type: dataset_get
-  dataset: users
+  type: datatable_get
+  table: users
   key:
     id: "{{.Event.Payload.user}}"
 
@@ -629,8 +629,8 @@ types ini (no raw SQL).
 
 ```yaml
 - id: list-pending
-  type: dataset_query
-  dataset: tickets
+  type: datatable_query
+  table: tickets
   where:
     status: pending
     assignee: "{{.Event.Payload.user}}"
@@ -642,8 +642,8 @@ types ini (no raw SQL).
 **Pattern: idempotent upsert (cron poll):**
 
 ```yaml
-- type: dataset_upsert
-  dataset: events
+- type: datatable_upsert
+  table: events
   key: [id]                              # primary key columns
   row:
     id: "{{.Event.Payload.event_id}}"
@@ -657,20 +657,20 @@ types ini (no raw SQL).
 
 | Kasus | Node |
 |---|---|
-| Dedup webhook ("udah handle?") | `dataset_exists` |
-| Load row by PK terus pake fieldnya | `dataset_get` |
-| Cari multiple rows (filter, paginate, sort) | `dataset_query` |
-| Count tanpa load row | `dataset_count` |
-| Insert fresh, fail kalau ada conflict | `dataset_insert` |
-| Insert-or-update (idempotent) | `dataset_upsert` |
-| Hapus satu/banyak row | `dataset_delete` |
+| Dedup webhook ("udah handle?") | `datatable_exists` |
+| Load row by PK terus pake fieldnya | `datatable_get` |
+| Cari multiple rows (filter, paginate, sort) | `datatable_query` |
+| Count tanpa load row | `datatable_count` |
+| Insert fresh, fail kalau ada conflict | `datatable_insert` |
+| Insert-or-update (idempotent) | `datatable_upsert` |
+| Hapus satu/banyak row | `datatable_delete` |
 
 **Beda dari `db_query`:**
 - `db_query` = external SQL DB user-configured (`internal/connectors/`).
-- `dataset_*` = wick-internal table di wick's Postgres, schema-aware,
+- `datatable_*` = wick-internal table di wick's Postgres, schema-aware,
   MCP-discoverable, UI table view built-in, no raw SQL.
 
-Use `db_query` kalau data hidup di system lain. Use `dataset_*` kalau
+Use `db_query` kalau data hidup di system lain. Use `datatable_*` kalau
 data baru lahir dari workflow (state, dedup, cache, internal records).
 
 ### `transform` — jq / template / Go template

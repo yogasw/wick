@@ -239,6 +239,35 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 
 				// ── Input structs ──────────────────────────────────────────────────────
 			}),
+
+		// ── Data Tables (n8n-style shared key/value store) ───────────
+		connector.Op("datatable_list", "List Data Tables",
+			"List every registered data table with row count + column count. Use to discover what tables exist before referencing one in a workflow.",
+			emptyInput{}, h.datatableList, wickdocs.Docs{}),
+		connector.Op("datatable_get", "Get Data Table",
+			"Return one table's schema + row count. Use before workflow_add_node to see column names/types for datatable_* nodes.",
+			dtSlugInput{}, h.datatableGet, wickdocs.Docs{}),
+		connector.Op("datatable_create", "Create Data Table",
+			"Register a new data table. Slug must be lowercase a-z0-9-. Columns are app-validated against type (string/int/float/bool/timestamp/json/enum). Primary key defaults to the first column when omitted.",
+			dtCreateInput{}, h.datatableCreate, wickdocs.Docs{}),
+		connector.Op("datatable_drop", "Drop Data Table",
+			"Remove a table and all its rows. DESTRUCTIVE. Returns {ok}.",
+			dtSlugInput{}, h.datatableDrop, wickdocs.Docs{}),
+		connector.Op("datatable_query", "Query Data Table",
+			"Return rows matching filters. Use 'where' for simple equality, or 'conditions' (n8n parity) for richer ops (equals, not_equals, gt, gte, lt, lte, contains, in, is_empty, is_not_empty). Optional order_by + limit + offset.",
+			dtQueryInput{}, h.datatableQuery, wickdocs.Docs{}),
+		connector.Op("datatable_insert", "Insert Row",
+			"Insert a row. Fails on primary-key conflict. Row is validated against the table schema.",
+			dtRowInput{}, h.datatableInsert, wickdocs.Docs{}),
+		connector.Op("datatable_upsert", "Upsert Row",
+			"Insert when PK doesn't exist, update otherwise. Idempotent. Returns {action: insert|update}.",
+			dtRowInput{}, h.datatableUpsert, wickdocs.Docs{}),
+		connector.Op("datatable_delete", "Delete Rows",
+			"Delete rows matching 'where' equality or 'conditions' list (n8n parity ops). Returns {deleted_count}. DESTRUCTIVE.",
+			dtFilterInput{}, h.datatableDelete, wickdocs.Docs{}),
+		connector.Op("datatable_count", "Count Rows",
+			"Count rows matching 'where' equality or 'conditions'. Cheap statistic for decisions.",
+			dtFilterInput{}, h.datatableCount, wickdocs.Docs{}),
 	}
 }
 
@@ -254,7 +283,7 @@ type nodeDetailInput struct {
 
 type templateTestInput struct {
 	Template    string `wick:"required;textarea;desc=Go template snippet to render, e.g. {{.Node.trigger.payload.text}}."`
-	Context     string `wick:"textarea;desc=Optional JSON-encoded RenderCtx ({Event, Node, Env, Secret, Workflow, Run, Dataset})."`
+	Context     string `wick:"textarea;desc=Optional JSON-encoded RenderCtx ({Event, Node, Env, Secret, Workflow, Run, DataTable})."`
 	SampleEvent string `wick:"key=sample_event;desc=Optional preset event payload: slack.message, slack.block_action, slack.view_submission, cron."`
 }
 
@@ -287,6 +316,40 @@ type createInput struct {
 	Template string `wick:"desc=Starter template: empty (default), support-triage, incident-response, daily-digest."`
 }
 
+// Data Tables inputs ─────────────────────────────────────────────────
+
+type dtSlugInput struct {
+	Slug string `wick:"required;desc=Data table slug (the alias workflows reference)."`
+}
+
+type dtCreateInput struct {
+	Slug       string `wick:"required;desc=Lowercase a-z0-9- slug. Used as the alias workflows reference."`
+	Mode       string `wick:"desc=strict (default) rejects extra keys; lax accepts them."`
+	PrimaryKey string `wick:"desc=Comma-separated primary key column names. Defaults to the first column."`
+	Columns    string `wick:"required;textarea;desc=One column per line: name:type. Types: string, int, float, bool, timestamp, json, enum. Example:\\nid:string\\nstatus:enum\\ncreated_at:timestamp"`
+	Access     string `wick:"desc=Optional access JSON: {\"workflows\":[\"wf-id\"],\"row_filter\":\"by_creator\"}."`
+}
+
+type dtQueryInput struct {
+	Slug       string `wick:"required;desc=Data table slug."`
+	Where      string `wick:"textarea;desc=Optional equality JSON: {\"status\":\"open\"}."`
+	Conditions string `wick:"textarea;desc=Optional condition JSON array (n8n parity ops): [{\"column\":\"priority\",\"op\":\"gte\",\"value\":5}]. Wins over Where when both set."`
+	OrderBy    string `wick:"desc=Optional order JSON: [{\"column\":\"priority\",\"direction\":\"desc\"}]."`
+	Limit      int    `wick:"number;desc=Optional row cap. 0 = no limit."`
+	Offset     int    `wick:"number;desc=Optional row skip."`
+}
+
+type dtRowInput struct {
+	Slug string `wick:"required;desc=Data table slug."`
+	Row  string `wick:"required;textarea;desc=Row JSON: {\"id\":\"E1\",\"status\":\"open\"}."`
+}
+
+type dtFilterInput struct {
+	Slug       string `wick:"required;desc=Data table slug."`
+	Where      string `wick:"textarea;desc=Optional equality JSON."`
+	Conditions string `wick:"textarea;desc=Optional condition JSON array (n8n parity ops). Wins over Where when both set."`
+}
+
 type writeFileInput struct {
 	ID      string `wick:"required;desc=Workflow ID."`
 	Path    string `wick:"required;desc=Relative path inside workflow folder. Example: workflow.yaml"`
@@ -300,7 +363,7 @@ type deleteFileInput struct {
 
 type addNodeInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
-	Node string `wick:"textarea;required;desc=Node definition as JSON. Must include id and type. See workflow_node_types for schemas."`
+	Node string `wick:"textarea;required;desc=Node definition as JSON. Must include type + label. ID is auto-minted (UUID) when omitted — pass label (lowercase a-z/digits/underscore) as the user-facing handle. See workflow_node_types for schemas."`
 }
 
 type updateNodeInput struct {

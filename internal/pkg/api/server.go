@@ -514,10 +514,16 @@ func NewServer() *Server {
 		}()
 		return out, unsub
 	})
+	// Promote in-memory data tables to the Postgres backend so rows
+	// survive restart and multi-instance deploys see consistent state.
+	// Must run before Start so executors register against the Pg
+	// service, not MockService.
+	wfMgr.WithDataTablesDB(db)
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
 	agentstool.SetWorkflowManager(wfMgr)
+	agentstool.SetDataTables(wfMgr.DataTables)
 	providerstoragetool.SetSyncManager(syncMgr)
 	provider.AppName = appname.Resolve()
 	// Wire the auto-rescan toggle: provider package consults this

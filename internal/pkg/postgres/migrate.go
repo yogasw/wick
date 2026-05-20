@@ -52,6 +52,8 @@ func Migrate(db *gorm.DB) {
 		&entity.AgentChannel{},
 		&entity.ProviderStorage{},
 		&entity.ProviderStorageSource{},
+		&entity.DataTable{},
+		&entity.DataTableRow{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())

@@ -36,7 +36,7 @@ Algoritma (edge-first):
 ```yaml
 nodes:
   - { id: A, type: connector, module: store, op: fetch }
-  - { id: log, type: dataset_insert, dataset: audit }
+  - { id: log, type: datatable_insert, table: audit }
   - { id: notify, type: channel, op: send_message }
 edges:
   - { from: A, to: log }
