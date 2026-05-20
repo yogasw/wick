@@ -102,16 +102,10 @@ func NewServer() *Server {
 	syncMgr := providersync.New(db)
 
 	// Legacy wipe + orphan repair run inside postgres.Migrate above as
-	// one-shot DB migrations; the startup path only re-captures disk →
-	// DB so users see populated rows without waiting for the cron tick.
-	if n, err := syncMgr.SyncAll(context.Background()); err != nil {
-		log.Warn().Err(err).Msg("providersync: startup sync failed")
-	} else {
-		log.Info().Int("sources", n).Msg("providersync: startup sync done")
-	}
-
-	// Restore all provider files from DB to filesystem on startup.
-	if err := syncMgr.RestoreAll(context.Background()); err != nil {
+	// one-shot DB migrations. Boot force-overwrites disk from DB so a
+	// container restart in a no-volume env always lands at the DB-known
+	// state; the cron tick uses the guarded RestoreAll after that.
+	if err := syncMgr.RestoreAllForce(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("providersync: startup restore failed")
 	}
 
