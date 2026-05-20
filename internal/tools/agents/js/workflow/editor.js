@@ -130,6 +130,25 @@
     try { _initialValidation = JSON.parse(dataIsland.dataset.validation); }
     catch (err) { console.warn('[wf] validation json parse', err); }
   }
+  // Per-tab JS files (bottom_tab_*.js) subscribe to events on
+  // window.WfEditor. Phase A only emits `validation`; Phase B will
+  // add `run-event`, `node-selected`, etc. as we extract the other
+  // tabs out of editor.js. focusNode is the shared hook the
+  // validation tab uses to jump to an offending node.
+  window.__wfInitialValidation = _initialValidation;
+  if (!window.WfEditor) {
+    const listeners = {};
+    window.WfEditor = {
+      on(event, fn) {
+        (listeners[event] || (listeners[event] = [])).push(fn);
+      },
+      emit(event, payload) {
+        (listeners[event] || []).forEach((fn) => {
+          try { fn(payload); } catch (e) { console.warn('[wf] listener', event, e); }
+        });
+      },
+    };
+  }
 
   // ── Palette → canvas drop ──────────────────────────────────────
   // Two-level palette: each draggable row carries `data-node-type` plus
@@ -829,20 +848,40 @@
   //   input → live validation indicator only (no cascade, no data write)
   //   change/blur → commit: store new label + cascade rename in one shot
   if (f.label) {
-    f.label.addEventListener('input', () => {
+    const errEl = document.getElementById('ins-label-error');
+    const setLabelError = (msg) => {
+      f.label.classList.toggle('wf-input-error', !!msg);
+      f.label.title = msg || '';
+      if (errEl) {
+        errEl.textContent = msg || '';
+        errEl.classList.toggle('hidden', !msg);
+      }
+    };
+    const validateLabel = () => {
       const v = f.label.value.trim();
-      const ok = !v || (isValidIdent(v) && !labelTakenByOther(v, selectedID));
-      f.label.classList.toggle('wf-input-error', !ok);
-      f.label.title = ok ? '' : 'Label must be a valid identifier (letters/digits/_, no spaces) and unique';
-    });
-    f.label.addEventListener('change', () => {
-      if (selectedID) updateNodeData(selectedID);
-    });
-    // change fires on Enter or blur; we also want Tab-out and click-out
-    // to flush so the canvas always reflects the typed value.
-    f.label.addEventListener('blur', () => {
-      if (selectedID) updateNodeData(selectedID);
-    });
+      if (!v) { setLabelError(''); return true; }
+      if (!isValidIdent(v)) {
+        setLabelError('Lowercase a-z, digits, underscore only (e.g. fetch_user).');
+        return false;
+      }
+      if (labelTakenByOther(v, selectedID)) {
+        setLabelError(`"${v}" is already used by another node.`);
+        return false;
+      }
+      setLabelError('');
+      return true;
+    };
+    f.label.addEventListener('input', validateLabel);
+    // change/blur commit — but only when valid. Invalid input stays in
+    // the field with the error visible; no overwrite to node data, no
+    // cascade rename, no auto-save firing on broken state.
+    const commitIfValid = () => {
+      if (!selectedID) return;
+      if (!validateLabel()) return;
+      updateNodeData(selectedID);
+    };
+    f.label.addEventListener('change', commitIfValid);
+    f.label.addEventListener('blur', commitIfValid);
   }
   // Per-node modules register their own input/change listeners via
   // attach() above — no global wiring needed for session_init or any
@@ -863,19 +902,13 @@
     appendCaseRow('', '');
     persistCases(selectedID);
   });
-  document.getElementById('ins-delete').addEventListener('click', async () => {
-    // Pin the id locally: between awaiting wickConfirm and the
-    // remove call, the modal's outside-click path can fire
-    // nodeUnselected which would null selectedID and leave us with a
-    // silent no-op. Capture once, use the captured value.
+  document.getElementById('ins-delete').addEventListener('click', () => {
     const targetID = selectedID;
     if (!targetID) return;
     if (canvasLocked) {
-      await wickAlert('Unlock the canvas to delete nodes.', { title: 'Canvas locked' });
+      wickAlert('Unlock the canvas to delete nodes.', { title: 'Canvas locked' });
       return;
     }
-    const ok = await wickConfirm('Delete this node?', { title: 'Delete node', ok: 'Delete', danger: true });
-    if (!ok) return;
     editor.removeNodeId('node-' + targetID);
     hideInspector();
   });
@@ -1328,6 +1361,13 @@
   // ── Bottom tab toggle + collapse ───────────────────────────────
   const bottomBody = document.getElementById('wf-bottom-body');
   const bottomToggle = document.getElementById('wf-bottom-toggle');
+  // openBottomTab programmatically clicks a tab so other code can
+  // route the user there (e.g. Publish error → open Validation tab).
+  function openBottomTab(key) {
+    const btn = document.querySelector(`[data-bottom-tab="${key}"]`);
+    if (btn) btn.click();
+  }
+  window.openBottomTab = openBottomTab;
   document.querySelectorAll('[data-bottom-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.bottomTab;
@@ -1360,219 +1400,10 @@
     });
   }
 
-  // ── Test Case Manager ───────────────────────────────────────────
-  // Tests tab click → load manager panel (GET /test-cases)
-  const testsBtn = document.querySelector('[data-bottom-tab="tests"]');
-  if (testsBtn) {
-    testsBtn.addEventListener('click', () => {
-      const target = document.getElementById('wf-test-results');
-      if (!target) return;
-      const base = document.getElementById('wf-tc-modal')?.dataset.base || '';
-      const id = document.getElementById('wf-tc-modal')?.dataset.id || '';
-      if (!base || !id) return;
-      target.innerHTML = '<span class="p-3 italic text-xs text-black-600 dark:text-black-700">Loading…</span>';
-      fetch(`${base}/workflows/edit/${id}/test-cases`)
-        .then(r => r.text())
-        .then(html => { target.innerHTML = html; bindTestManager(base, id); })
-        .catch(err => { target.innerHTML = `<span class="text-red-600 text-xs p-3">${err.message}</span>`; });
-    });
-  }
-
-  // Run All (delegated — button is injected dynamically)
-  document.getElementById('wf-test-results')?.addEventListener('click', (e) => {
-    const runAll = e.target.closest('[data-wf-tc-run-all]');
-    if (runAll) {
-      const url = runAll.dataset.wfTcRunAll;
-      const target = document.getElementById('wf-test-results');
-      target.innerHTML = '<span class="p-3 italic text-xs text-black-600 dark:text-black-700">Running all tests…</span>';
-      fetch(url, { method: 'POST' })
-        .then(r => r.text())
-        .then(html => { target.innerHTML = html; })
-        .catch(err => { target.innerHTML = `<span class="text-red-600 text-xs p-3">${err.message}</span>`; });
-    }
-  });
-
-  function bindTestManager(base, id) {
-    const panel = document.getElementById('wf-test-results');
-    if (!panel) return;
-
-    // + New button
-    panel.querySelector('[data-wf-tc-new]')?.addEventListener('click', () => openTCModal());
-
-    // Run single (delegated)
-    panel.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-wf-tc-run]');
-      if (!btn) return;
-      const url = btn.dataset.wfTcRun;
-      const rowKey = btn.dataset.wfTcRow;
-      const row = document.getElementById('wf-tc-row-' + rowKey);
-      if (row) row.style.opacity = '0.5';
-      fetch(url, { method: 'POST' })
-        .then(r => r.text())
-        .then(html => {
-          if (row) row.outerHTML = html;
-        })
-        .catch(err => { if (row) row.style.opacity = '1'; console.warn(err); });
-    });
-
-    // Edit (delegated)
-    panel.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-wf-tc-edit]');
-      if (!btn) return;
-      const name = btn.dataset.wfTcEdit;
-      let tc = {};
-      try { tc = JSON.parse(btn.dataset.wfTcJson || '{}'); } catch (_) {}
-      openTCModal(name, tc);
-    });
-
-    // Delete (delegated)
-    panel.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-wf-tc-delete]');
-      if (!btn) return;
-      const rowKey = btn.dataset.wfTcRow;
-      if (!confirm(`Delete test case "${btn.dataset.wfTcDelete.split('/').pop()}"?`)) return;
-      fetch(btn.dataset.wfTcDelete, { method: 'DELETE' })
-        .then(r => r.json())
-        .then(d => {
-          if (d.ok) {
-            const row = document.getElementById('wf-tc-row-' + rowKey);
-            if (row) row.remove();
-          }
-        });
-    });
-  }
-
-  // ── Test Case Modal ───────────────────────────────────────────────
-  const tcModal   = document.getElementById('wf-tc-modal');
-  const tcSaveBtn = document.getElementById('wf-tc-save');
-  const tcAddAsrt = document.getElementById('wf-tc-add-assertion');
-  const tcAsrtBox = document.getElementById('wf-tc-assertions');
-  const tcEvtType = document.getElementById('wf-tc-evt-type');
-  const tcError   = document.getElementById('wf-tc-error');
-
-  function openTCModal(editName, tc) {
-    if (!tcModal) return;
-    const isEdit = !!editName;
-    document.getElementById('wf-tc-modal-title').textContent = isEdit ? 'Edit Test Case' : 'New Test Case';
-    document.getElementById('wf-tc-edit-name').value = editName || '';
-    document.getElementById('wf-tc-name').value = editName || '';
-    document.getElementById('wf-tc-name').disabled = isEdit;
-
-    // Fill event fields
-    const evt = tc?.input?.Event || {};
-    if (tcEvtType) tcEvtType.value = evt.type || 'manual';
-    const ch = document.getElementById('wf-tc-channel');
-    const st = document.getElementById('wf-tc-subtype');
-    if (ch) ch.value = evt.channel || 'slack';
-    if (st) st.value = evt.subtype || 'message';
-    tcUpdateChannelVis();
-    const payload = evt.payload || {};
-    const ta = document.getElementById('wf-tc-payload');
-    if (ta) ta.value = Object.keys(payload).length ? JSON.stringify(payload, null, 2) : '';
-
-    // Fill assertions
-    if (tcAsrtBox) {
-      tcAsrtBox.innerHTML = '';
-      (tc?.assertions || [{ subject: 'status', operator: '==', value: 'completed' }])
-        .forEach(a => tcAddAssertionRow(a));
-    }
-    if (tcError) { tcError.textContent = ''; tcError.classList.add('hidden'); }
-    tcModal.classList.remove('hidden');
-    document.getElementById('wf-tc-name')?.focus();
-  }
-
-  function closeTCModal() { tcModal?.classList.add('hidden'); }
-
-  // Cancel triggers
-  tcModal?.querySelectorAll('[data-wf-tc-cancel]').forEach(el =>
-    el.addEventListener('click', closeTCModal)
-  );
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTCModal(); });
-
-  // Channel/subtype visibility
-  function tcUpdateChannelVis() {
-    const isChannel = tcEvtType?.value === 'channel';
-    document.getElementById('wf-tc-channel-col')?.classList.toggle('hidden', !isChannel);
-    document.getElementById('wf-tc-subtype-col')?.classList.toggle('hidden', !isChannel);
-  }
-  tcEvtType?.addEventListener('change', tcUpdateChannelVis);
-  tcUpdateChannelVis();
-
-  // Add assertion row
-  function tcAddAssertionRow(a) {
-    if (!tcAsrtBox) return;
-    const row = document.createElement('div');
-    row.className = 'wf-tc-assertion-row';
-    const ops = ['==','!=','contains','case_fired','node_skipped','path_taken','edge_traversed'];
-    const sel = ops.map(o => `<option value="${o}"${a?.operator===o?' selected':''}>${o}</option>`).join('');
-    row.innerHTML = `
-      <input class="wf-input text-xs" placeholder="status or node.id.field" value="${a?.subject||''}"/>
-      <select class="wf-input text-xs">${sel}</select>
-      <input class="wf-input text-xs" placeholder="completed" value="${a?.value||''}"/>
-      <button type="button" class="text-red-500 hover:text-red-700 text-sm font-bold" data-remove-row>✕</button>`;
-    row.querySelector('[data-remove-row]').addEventListener('click', () => row.remove());
-    tcAsrtBox.appendChild(row);
-  }
-  tcAddAsrt?.addEventListener('click', () => tcAddAssertionRow(null));
-
-  // Save
-  tcSaveBtn?.addEventListener('click', async () => {
-    const base   = tcModal.dataset.base;
-    const id   = tcModal.dataset.id;
-    const name   = document.getElementById('wf-tc-name').value.trim();
-    if (!name) { showTCError('Name is required'); return; }
-
-    let payload = {};
-    const rawPayload = document.getElementById('wf-tc-payload').value.trim();
-    if (rawPayload) {
-      try { payload = JSON.parse(rawPayload); }
-      catch (_) { showTCError('Payload is not valid JSON'); return; }
-    }
-
-    const assertions = [];
-    tcAsrtBox?.querySelectorAll('.wf-tc-assertion-row').forEach(row => {
-      const [subj, op, val] = row.querySelectorAll('input, select');
-      if (subj.value.trim()) assertions.push({ subject: subj.value.trim(), operator: op.value, value: val.value.trim() });
-    });
-
-    const evt = {
-      type: tcEvtType?.value || 'manual',
-      payload,
-    };
-    if (evt.type === 'channel') {
-      evt.channel = document.getElementById('wf-tc-channel')?.value || 'slack';
-      evt.subtype = document.getElementById('wf-tc-subtype')?.value || 'message';
-    }
-
-    tcSaveBtn.disabled = true;
-    tcSaveBtn.textContent = 'Saving…';
-    try {
-      const resp = await fetch(`${base}/workflows/edit/${id}/test-cases`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, input: { Event: evt }, assertions }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) { showTCError(data.error || `HTTP ${resp.status}`); return; }
-      closeTCModal();
-      // Reload the manager panel
-      const target = document.getElementById('wf-test-results');
-      fetch(`${base}/workflows/edit/${id}/test-cases`)
-        .then(r => r.text())
-        .then(html => { if (target) { target.innerHTML = html; bindTestManager(base, id); } });
-    } catch (err) {
-      showTCError(err.message);
-    } finally {
-      tcSaveBtn.disabled = false;
-      tcSaveBtn.textContent = 'Save Test Case';
-    }
-  });
-
-  function showTCError(msg) {
-    if (!tcError) return;
-    tcError.textContent = msg;
-    tcError.classList.remove('hidden');
-  }
+  // Test Case Manager + modal moved to bottom_tab_tests.js (Phase B).
+  // The Tests tab is fully self-contained: it reads base+id from the
+  // server-rendered #wf-tc-modal dataset and handles its own fetch /
+  // delete / run / save flows without touching the editor state.
 
   // ── Save: serialize Drawflow → JSON ────────────────────────────
   // Manual click: intercept the form submit so we POST via fetch +
@@ -1631,18 +1462,19 @@
       if (!resp.ok) {
         const msg = (data && data.error) || `HTTP ${resp.status}`;
         setStatus('error', `✕ Save failed: ${msg}`);
-        applyValidation(null);
+        window.WfEditor.emit('validation', null);
         toast('Save failed: ' + msg, 'error');
         return;
       }
-      applyValidation((data && data.validation) || null);
+      const validation = (data && data.validation) || null;
+      window.WfEditor.emit('validation', validation);
       lastSavedAt = Date.now();
       refreshSavedAge();
       if (savedRefreshTimer) clearInterval(savedRefreshTimer);
       savedRefreshTimer = setInterval(refreshSavedAge, 10000);
-      const v = data && data.validation;
-      if (v && !v.ok) {
-        const n = (v.errors || []).length;
+      if (validation && !validation.ok) {
+        const n = (validation.errors || []).length;
+        setStatus('warn', `⚠ Saved — ${n} validation issue${n === 1 ? '' : 's'}`);
         toast(`Saved with ${n} validation error${n === 1 ? '' : 's'}`, 'warn');
       } else {
         toast('Saved', 'ok');
@@ -1672,48 +1504,11 @@
     setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 250);
   }
 
-  // applyValidation paints per-node error badges + a toolbar summary.
-  // Null clears all badges (used when the save errored out entirely).
-  function applyValidation(v) {
-    document.querySelectorAll('.drawflow-node').forEach((el) => {
-      el.classList.remove('wf-node-error');
-      const old = el.querySelector('.wf-error-badge');
-      if (old) old.remove();
-    });
-    if (!v || !v.by_node) return;
-    Object.entries(v.by_node).forEach(([nodeID, msgs]) => {
-      // Drawflow numeric ids vs workflow string ids — look up by data.id.
-      const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
-      if (!live) return;
-      let domID = null;
-      for (const k in live) {
-        if (live[k].data && live[k].data.id === nodeID) { domID = k; break; }
-        if (String(k) === nodeID) { domID = k; break; }
-      }
-      if (!domID) return;
-      const el = document.getElementById('node-' + domID);
-      if (!el) return;
-      el.classList.add('wf-node-error');
-      const badge = document.createElement('div');
-      badge.className = 'wf-error-badge';
-      badge.title = msgs.join('\n');
-      badge.textContent = '!';
-      el.appendChild(badge);
-    });
-    // Update toolbar — show counts so the user knows something needs
-    // attention without hunting the canvas.
-    if (statusEl && !v.ok) {
-      const count = (v.errors && v.errors.length) || 0;
-      setStatus('warn', `⚠ Saved — ${count} validation issue${count === 1 ? '' : 's'}`);
-    }
-  }
-
-  // Paint the server-rendered validation report once the editor has
-  // settled — applyValidation needs the nodes in the DOM, and import()
-  // populates them synchronously above. Without this badges only
-  // surfaced after the first auto-save, and disappeared on refresh.
+  // Initial validation paint — defer one tick so import() finishes
+  // populating Drawflow nodes before bottom_tab_guard.js queries the
+  // DOM for badge anchors. Emit-only; the per-tab JS owns the paint.
   if (_initialValidation) {
-    setTimeout(() => applyValidation(_initialValidation), 0);
+    setTimeout(() => window.WfEditor.emit('validation', _initialValidation), 0);
   }
 
   function scheduleAutoSave() {
@@ -2015,11 +1810,15 @@
   }
 
   function addNodeOfType(type, x, y, defaults) {
-    // Sanitize prefix to underscore — Go templates reject `.Node.<id>`
-    // when id contains dashes. Palette items use kebab-case (`trigger-
-    // channel`); convert before passing to uniqueID.
-    const safePrefix = type.replace(/-/g, '_');
-    const id = uniqueID(safePrefix);
+    // ID = UUID (never recycled, never user-visible). The legacy
+    // human-readable ID path is gone — templates reach for the node
+    // via its Label, struct refs (edges, entry_node) reach for it
+    // via the UUID. Mixed-state workflows still load: ValidateNodeID
+    // accepts the legacy ident shape too.
+    const id = uuid();
+    // Label seeds from the palette type (e.g. `trigger_manual`) and
+    // stays unique via the existing labelTakenByOther check.
+    const labelSeed = uniqueLabel(type.replace(/-/g, '_'));
     const meta = nodeMeta(type);
     // Merge palette-supplied defaults (e.g. {channel:"slack",op:"send_message"})
     // over the generic kind defaults so level-2 drops land already wired.
@@ -2037,22 +1836,41 @@
       else if (defaults.module && defaults.op) hint = `${defaults.module} · ${defaults.op}`;
       else if (defaults.channel && defaults.event) hint = `${defaults.channel} · ${defaults.event}`;
     }
-    const html = nodeHTML(meta.head, id, hint);
+    const html = nodeHTML(meta.head, labelSeed, hint);
     editor.addNode(id, meta.inputs, meta.outputs, x, y, 'node-' + meta.cssType, {
-      id, type: meta.kind, data,
+      id, type: meta.kind, label: labelSeed, data,
     }, html);
     refreshOutputRefs();
   }
 
-  function uniqueID(prefix) {
-    let i = 1, id = prefix;
-    while (idTaken(id)) { i++; id = `${prefix}_${i}`; }
-    return id;
+  // uuid mints a v4 identifier. crypto.randomUUID() is the fast path
+  // (every modern browser + Node 19+); the manual fallback keeps
+  // older WebViews happy without pulling a dependency.
+  function uuid() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
   }
-  function idTaken(id) {
+  // uniqueLabel returns `<seed>_<n>` with n auto-incremented past every
+  // taken label. Always suffixes so the first agent reads `agent_1`,
+  // matching n8n's "Agent1, Agent2…" convention.
+  function uniqueLabel(seed) {
+    let i = 1;
+    while (labelTakenByAny(`${seed}_${i}`)) i++;
+    return `${seed}_${i}`;
+  }
+  function labelTakenByAny(label) {
     const all = editor.export();
     const nodes = all.drawflow.Home.data;
-    return Object.values(nodes).some((n) => n.name === id);
+    return Object.values(nodes).some((n) => {
+      const l = (n.data && n.data.label) || n.name;
+      return l === label;
+    });
   }
   function nodeHTML(head, title, hint) {
     return `<div class="node-head">${head}</div><div class="node-body"><div class="title">${title}</div><div class="meta">${hint}</div></div>`;
@@ -2096,12 +1914,16 @@
   }
 
   function seedEmptyGraph() {
-    const trig = editor.addNode('trigger', 0, 1, 50, 200, 'node-trigger',
-      { id: 'trigger', type: 'trigger', data: { triggerKind: 'manual' } },
-      nodeHTML('trigger', 'trigger', 'manual'));
-    const end = editor.addNode('end', 1, 0, 420, 200, 'node-end',
-      { id: 'end', type: 'end', data: {} },
-      nodeHTML('end', 'end', 'terminator'));
+    const trigID = uuid();
+    const endID = uuid();
+    const trigLabel = uniqueLabel('trigger');
+    const endLabel = uniqueLabel('end');
+    const trig = editor.addNode(trigID, 0, 1, 50, 200, 'node-trigger',
+      { id: trigID, label: trigLabel, type: 'trigger', data: { triggerKind: 'manual' } },
+      nodeHTML('trigger', trigLabel, 'manual'));
+    const end = editor.addNode(endID, 1, 0, 420, 200, 'node-end',
+      { id: endID, label: endLabel, type: 'end', data: {} },
+      nodeHTML('end', endLabel, 'terminator'));
     editor.addConnection(trig, end, 'output_1', 'input_1');
   }
 
@@ -2122,9 +1944,13 @@
     if (f.type) f.type.value = kind;
     const headType = document.getElementById('ins-type-head');
     if (headType) headType.textContent = kind;
+    const displayLabel = d.label || node.name || d.id || '';
     const headLabel = document.getElementById('ins-label-head');
-    if (headLabel) headLabel.textContent = node.name || d.id || kind;
-    f.label.value = node.name || '';
+    if (headLabel) headLabel.textContent = displayLabel || kind;
+    f.label.value = displayLabel;
+    const labelErr = document.getElementById('ins-label-error');
+    if (labelErr) { labelErr.textContent = ''; labelErr.classList.add('hidden'); }
+    f.label.classList.remove('wf-input-error');
     // Hydrate the Input pane from the parent's last node output (if a
     // run has happened) so the operator sees the upstream payload
     // without having to mock it. OUTPUT pane is filled from the
@@ -2548,11 +2374,13 @@
     return '.Node.' + parentID;
   }
 
-  // isValidIdent reports whether a label can be used as a Go template
-  // field path segment — `{{.Node.<label>.x}}` only parses when label
-  // matches Go's identifier rule.
+  // isValidIdent reports whether a label is a safe template handle.
+  // Stricter than Go's identifier rule on purpose: lowercase letters,
+  // digits, and underscores only — no caps, no spaces, no dashes. Keeps
+  // {{.Node.<label>.x}} refs predictable across the team and avoids
+  // case-collision aliases like `User` vs `user`.
   function isValidIdent(s) {
-    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+    return /^[a-z_][a-z0-9_]*$/.test(s);
   }
 
   // cascadeRenameLabel rewrites every template ref + structural ref to
@@ -2952,7 +2780,7 @@
         inner.label = document.getElementById('ins-trig-manual-label')?.value || '';
       }
     }
-    editor.updateNodeDataFromId(id, { id: d.id, type: kind, data: inner });
+    editor.updateNodeDataFromId(id, { id: d.id, label: d.label, type: kind, data: inner });
     refreshOutputRefs();
   }
 
@@ -3870,18 +3698,30 @@
       try {
         const resp = await fetch(form.action, {
           method: form.method || 'POST',
-          headers: { 'Accept': 'text/plain' },
+          headers: { 'Accept': 'application/json, text/plain' },
           body: new URLSearchParams(new FormData(form)),
           redirect: 'manual',
         });
-        // 0 = opaque redirect (manual), 2xx = direct OK, 3xx not
-        // followed = also OK.
         if (resp.status === 0 || resp.type === 'opaqueredirect' || (resp.status >= 200 && resp.status < 400)) {
           showToast('ok', opts.okTitle, opts.okBody || '');
           opts.onOK?.();
           return;
         }
-        const text = await resp.text();
+        // Try JSON first; the publish handler returns a validation
+        // payload that lets us re-paint the validation tab + tab
+        // counter without a refresh.
+        let data = null;
+        const ct = resp.headers.get('Content-Type') || '';
+        if (ct.includes('application/json')) {
+          try { data = await resp.json(); } catch (_) {}
+        }
+        if (data && data.validation) {
+          window.WfEditor.emit('validation', data.validation);
+          openBottomTab('validation');
+          showToast('error', opts.errTitle || 'Request failed', data.error || 'Validation failed');
+          return;
+        }
+        const text = data ? (data.error || JSON.stringify(data)) : await resp.text();
         showToast('error', opts.errTitle || 'Request failed', text || `HTTP ${resp.status}`);
       } catch (err) {
         showToast('error', opts.errTitle || 'Request failed', String(err));
@@ -4387,5 +4227,67 @@
       }
     });
   })();
+
+  // ── window.WfEditor bus (full exposure) ──────────────────────────
+  // Per-tab JS files (bottom_tab_*.js) consume the bus to render
+  // bottom-panel UI without poking into editor.js internals. Refs +
+  // helpers are attached here, after every definition has settled,
+  // so tab files can rely on the surface being complete by the time
+  // their DOMContentLoaded fires.
+  //
+  // Contract:
+  //   bus.editor / .baseURL / .id     — stable refs
+  //   bus.state                       — shared mutable state object
+  //   bus.on / .emit                  — pub-sub
+  //   bus.setStatus / .toast / .showToast — toolbar feedback
+  //   bus.copyToClipboard             — system clipboard + button feedback
+  //   bus.openTab(key)                — programmatic tab switch
+  //   bus.flushAutosave               — force-write the draft now
+  //   bus.setPillState                — run-pill colour/label
+  //   bus.hydrateInputPane / Output   — re-render inspector panes
+  //   bus.focusNode(workflowID)       — scroll-into-view + pulse a node
+  //   bus.domIDFromWorkflowID         — translate workflow id → DOM key
+  Object.assign(window.WfEditor, {
+    editor,
+    baseURL,
+    id,
+    state: {
+      get selectedID() { return selectedID; },
+      get currentRunID() { return currentRunID; },
+      get runStarted() { return runStarted; },
+      get logCount() { return logCount; },
+      lastRunOutputs,
+      logsByNode,
+      seenEventKeys,
+    },
+    setStatus,
+    toast,
+    showToast,
+    copyToClipboard,
+    openTab: openBottomTab,
+    flushAutosave,
+    setPillState,
+    hydrateInputPane,
+    hydrateOutputPane,
+    domIDFromWorkflowID(workflowID) {
+      const live = editor.drawflow && editor.drawflow.drawflow.Home && editor.drawflow.drawflow.Home.data;
+      if (!live) return null;
+      for (const k in live) {
+        const n = live[k];
+        if (n && n.data && (n.data.id === workflowID || n.name === workflowID)) return k;
+      }
+      return null;
+    },
+    focusNode(workflowID) {
+      const k = window.WfEditor.domIDFromWorkflowID(workflowID);
+      if (!k) return false;
+      const el = document.getElementById('node-' + k);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('wf-node-pulse');
+      setTimeout(() => el.classList.remove('wf-node-pulse'), 1500);
+      return true;
+    },
+  });
 
 })();

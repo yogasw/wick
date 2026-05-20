@@ -550,6 +550,17 @@ func publishWorkflow(c *tool.Ctx) {
 		return
 	}
 	if r := parse.Validate(draft); !r.Ok() {
+		// Structured response for the canvas JS so it can open the
+		// Validation tab + highlight each error. Plain-text fallback
+		// for curl / non-JSON clients keeps the old contract.
+		if strings.Contains(c.R.Header.Get("Accept"), "application/json") {
+			c.JSON(http.StatusBadRequest, map[string]any{
+				"ok":         false,
+				"error":      "cannot publish — fix validation errors",
+				"validation": validationPayload(r),
+			})
+			return
+		}
 		c.Error(http.StatusBadRequest, "cannot publish — fix validation errors:\n"+r.Error())
 		return
 	}

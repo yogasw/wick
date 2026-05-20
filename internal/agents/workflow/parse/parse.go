@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	gotemplate "text/template"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,11 @@ import (
 // letter or underscore. Dashes are banned so the template parser
 // doesn't choke with "bad character U+002D".
 var IdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// LabelRe is stricter than IdentRe — lowercase only. Keeps node labels
+// predictable across the team (no `User` vs `user` aliases) and matches
+// the canvas-side isValidIdent rule.
+var LabelRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // IDRe is the canonical id pattern. Folder names and trigger
 // path templates must match.
@@ -63,14 +69,26 @@ func ValidateID(id string) error {
 	return nil
 }
 
-// ValidateNodeID rejects bad node IDs. Strict identifier rule — must
-// work as a Go-template path segment in `{{.Node.<id>.…}}`.
+// NodeIDLooseRe matches the two ID shapes wick currently accepts:
+//
+//   - Go identifier (legacy, hand-edited YAML)
+//   - UUID v4 (auto-minted by the canvas + MCP add_node)
+//
+// Templates can't reference a UUID ID via the dotted form (UUID dashes
+// break the parser) so when ID is a UUID the canvas falls back to the
+// label for `{{.Node.<label>.…}}` refs. The struct-level fields
+// (edges, entry_node, session_from) always use ID directly.
+var NodeIDLooseRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
+
+// ValidateNodeID rejects bad node IDs. Accepts both Go identifiers
+// (legacy human-typed) and UUID-shaped values (current default — UI
+// + MCP mint one on add) so existing workflows keep loading.
 func ValidateNodeID(id string) error {
 	if id == "" {
 		return Error{Path: "node.id", Message: "is empty"}
 	}
-	if !IdentRe.MatchString(id) {
-		return Error{Path: "node.id", Message: fmt.Sprintf("%q must be a Go identifier ([A-Za-z_][A-Za-z0-9_]*) — no dash, dot, or space", id)}
+	if !NodeIDLooseRe.MatchString(id) {
+		return Error{Path: "node.id", Message: fmt.Sprintf("%q must be letters/digits/underscore/dash, starting with letter/digit/underscore", id)}
 	}
 	return nil
 }
@@ -81,8 +99,8 @@ func ValidateLabel(label string) error {
 	if label == "" {
 		return nil // optional field
 	}
-	if !IdentRe.MatchString(label) {
-		return Error{Path: "node.label", Message: fmt.Sprintf("%q must be a Go identifier ([A-Za-z_][A-Za-z0-9_]*) — no dash, dot, or space", label)}
+	if !LabelRe.MatchString(label) {
+		return Error{Path: "node.label", Message: fmt.Sprintf("%q must be lowercase a-z, digits, or underscore (e.g. fetch_user) — no caps, dash, dot, or space", label)}
 	}
 	return nil
 }
@@ -317,8 +335,11 @@ func Validate(w workflow.Workflow) *Result {
 }
 
 func validateTrigger(r *Result, path string, tr workflow.Trigger) {
-	if tr.ID != "" && !IdentRe.MatchString(tr.ID) {
-		r.Errors = append(r.Errors, Error{Path: path + ".id", Message: fmt.Sprintf("%q must be a Go identifier ([A-Za-z_][A-Za-z0-9_]*) — no dash, dot, or space", tr.ID)})
+	// Trigger IDs follow the same loose rule as node IDs: UUIDs +
+	// dash-style legacy ids both pass. The user-facing handle lives
+	// in tr.Label (validated separately below).
+	if tr.ID != "" && !NodeIDLooseRe.MatchString(tr.ID) {
+		r.Errors = append(r.Errors, Error{Path: path + ".id", Message: fmt.Sprintf("%q must be letters/digits/underscore/dash, starting with letter/digit/underscore", tr.ID)})
 	}
 	if err := ValidateLabel(tr.Label); err != nil {
 		r.Errors = append(r.Errors, Error{Path: path + ".label", Message: err.(Error).Message})
@@ -409,6 +430,7 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Prompt == "" && n.PromptFile == "" {
 			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt or prompt_file"})
 		}
+		checkTemplate(r, path, "prompt", n.Prompt)
 		if len(n.OutputCases) == 0 {
 			r.Warnings = append(r.Warnings, Error{Path: path + ".output_cases", Message: "classify without output_cases will accept any verdict (defeats normalize/fuzzy)"})
 		}
@@ -416,6 +438,7 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Prompt == "" && n.PromptFile == "" {
 			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt or prompt_file"})
 		}
+		checkTemplate(r, path, "prompt", n.Prompt)
 	case workflow.NodeChannel:
 		if n.ChannelName == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".channel", Message: "is required"})
@@ -423,6 +446,7 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Op == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".op", Message: "is required"})
 		}
+		checkTemplateMap(r, path, "args", n.Args)
 	case workflow.NodeConnector:
 		if n.Module == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".module", Message: "is required"})
@@ -430,18 +454,27 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Op == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".op", Message: "is required"})
 		}
+		checkTemplateMap(r, path, "args", n.Args)
 	case workflow.NodeShell:
 		if len(n.Command) == 0 {
 			r.Errors = append(r.Errors, Error{Path: path + ".command", Message: "is required"})
+		}
+		for i, c := range n.Command {
+			checkTemplate(r, path, fmt.Sprintf("command[%d]", i), c)
 		}
 	case workflow.NodeHTTP:
 		if n.URL == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".url", Message: "is required"})
 		}
+		checkTemplate(r, path, "url", n.URL)
+		checkTemplate(r, path, "body", n.Body)
+		checkTemplateStringMap(r, path, "headers", n.Headers)
+		checkTemplateStringMap(r, path, "query", n.Query)
 	case workflow.NodeDBQuery:
 		if n.SQL == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".query", Message: "is required"})
 		}
+		checkTemplate(r, path, "query", n.SQL)
 	case workflow.NodeTransform:
 		if n.Engine == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".engine", Message: "is required"})
@@ -449,10 +482,12 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Expression == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".expression", Message: "is required"})
 		}
+		checkTemplate(r, path, "expression", n.Expression)
 	case workflow.NodeBranch:
 		if n.Expr == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".expr", Message: "is required"})
 		}
+		checkTemplate(r, path, "expr", n.Expr)
 	case workflow.NodeSwitch:
 		if len(n.Cases) == 0 {
 			r.Errors = append(r.Errors, Error{Path: path + ".cases", Message: "is required"})
@@ -484,6 +519,65 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 			return
 		}
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: fmt.Sprintf("unknown node type %q", n.Type)})
+	}
+}
+
+// checkTemplate parses s as a Go template (parse-only, no execute) and
+// appends an Error to r when the body is malformed. Empty actions
+// (`{{}}`), unbalanced delimiters, and bad function call syntax all
+// fail here without engaging the renderer's missing-key checks.
+// Funcs map declares the same callables the engine registers so the
+// parser knows their arity — keeps the check honest without pulling
+// the runtime template package and risking a cycle.
+//
+// Empty string skipped — callers gate on the field being optional.
+func checkTemplate(r *Result, path, field, s string) {
+	if s == "" {
+		return
+	}
+	if !strings.Contains(s, "{{") {
+		return // plain literal — nothing to parse
+	}
+	// Stub funcs match BuiltinFuncs by name so the parser accepts
+	// `{{ now "..." }}`, `{{ env "X" }}`, etc. Bodies don't matter —
+	// parse stage only validates syntax + arity.
+	funcs := gotemplate.FuncMap{
+		"now":     func(any) string { return "" },
+		"env":     func(any) string { return "" },
+		"secret":  func(any) string { return "" },
+		"toJson":  func(any) string { return "" },
+		"trim":    func(any) string { return "" },
+		"upper":   func(any) string { return "" },
+		"lower":   func(any) string { return "" },
+		"default": func(any, any) any { return nil },
+		"len":     func(any) int { return 0 },
+		"index":   func(any, ...any) any { return nil },
+		"printf":  func(string, ...any) string { return "" },
+	}
+	if _, err := gotemplate.New("check").Funcs(funcs).Option("missingkey=zero").Parse(s); err != nil {
+		r.Errors = append(r.Errors, Error{Path: path + "." + field, Message: fmt.Sprintf("template syntax error: %s", err.Error())})
+	}
+}
+
+// checkTemplateMap walks every string value in m and parse-checks it.
+// Used for channel/connector Args where each value carries an
+// independent template body. Non-string values skipped (numbers and
+// nested maps land in Args too).
+func checkTemplateMap(r *Result, path, field string, m map[string]any) {
+	for k, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		checkTemplate(r, path, field+"."+k, s)
+	}
+}
+
+// checkTemplateStringMap is the typed-map sibling for HTTP Headers /
+// Query — those land as map[string]string after YAML decode.
+func checkTemplateStringMap(r *Result, path, field string, m map[string]string) {
+	for k, v := range m {
+		checkTemplate(r, path, field+"."+k, v)
 	}
 }
 

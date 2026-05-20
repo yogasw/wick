@@ -363,7 +363,7 @@ type deleteFileInput struct {
 
 type addNodeInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
-	Node string `wick:"textarea;required;desc=Node definition as JSON. Must include id and type. See workflow_node_types for schemas."`
+	Node string `wick:"textarea;required;desc=Node definition as JSON. Must include type + label. ID is auto-minted (UUID) when omitted — pass label (lowercase a-z/digits/underscore) as the user-facing handle. See workflow_node_types for schemas."`
 }
 
 type updateNodeInput struct {

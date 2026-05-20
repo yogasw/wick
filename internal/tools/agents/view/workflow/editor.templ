@@ -39,4 +39,14 @@ templ editorBootstrap(vm EditorVM) {
 	<script src={ vm.Base + "/static/js/widgets/picker.js" } defer></script>
 	@NodeModuleScripts(vm.Base)
 	<script src={ vm.Base + "/static/js/workflow/editor.js" } defer></script>
+	// Per-tab scripts — each owns one bottom-panel tab and listens
+	// on window.WfEditor for events emitted by editor.js. Add new
+	// tabs by registering a sibling `bottom_tab_<name>.js` here.
+	// YAML tab has no JS today (server-rendered, no live updates).
+	// Logs + Runs JS still lives inside editor.js — Phase B extraction
+	// pending (their SSE machinery shares state with the run pill in
+	// the toolbar, so they need a coordinated refactor).
+	<script src={ vm.Base + "/static/js/workflow/bottom_tab_validation.js" } defer></script>
+	<script src={ vm.Base + "/static/js/workflow/bottom_tab_guard.js" } defer></script>
+	<script src={ vm.Base + "/static/js/workflow/bottom_tab_tests.js" } defer></script>
 }

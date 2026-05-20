@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
 )
@@ -149,10 +150,15 @@ func nodeDataFromWorkflow(n wf.Node) map[string]any {
 			}
 		}
 	}
+	label := n.Label
+	if label == "" {
+		label = n.ID
+	}
 	return map[string]any{
-		"id":   n.ID,
-		"type": string(n.Type),
-		"data": data,
+		"id":    n.ID,
+		"label": label,
+		"type":  string(n.Type),
+		"data":  data,
 	}
 }
 
@@ -226,15 +232,28 @@ func workflowToDrawflowJSON(w wf.Workflow) (string, error) {
 				innerData["label"] = tr.Label
 			}
 		}
+		// Seed a Label for legacy triggers (`trigger-manual`, `trigger-cron`,
+		// …) so template refs render as a clean identifier (`trigger_manual`)
+		// instead of leaking the dash-style ID. Fresh triggers get UUID for
+		// ID; Label still wins for display + template ref.
+		label := tr.Label
+		if label == "" && tr.ID != "" {
+			label = strings.ReplaceAll(strings.ToLower(tr.ID), "-", "_")
+		}
+		title := label
+		if title == "" {
+			title = string(tr.Type)
+		}
 		nodes[strconv.Itoa(nextID)] = drawflowNode{
 			ID:    nextID,
 			Name:  id,
 			Class: "node-trigger",
-			HTML:  drawflowHTML("trigger", string(tr.Type), hint),
+			HTML:  drawflowHTML("trigger", title, hint),
 			Data: map[string]any{
-				"id":   id,
-				"type": "trigger",
-				"data": innerData,
+				"id":    id,
+				"label": label,
+				"type":  "trigger",
+				"data":  innerData,
 			},
 			PosX:    x,
 			PosY:    y,
@@ -256,11 +275,15 @@ func workflowToDrawflowJSON(w wf.Workflow) (string, error) {
 			y = float64(80 + (i/4)*180)
 		}
 		meta := renderFor(n.Type)
+		title := n.Label
+		if title == "" {
+			title = n.ID
+		}
 		nodes[strconv.Itoa(nodeID)] = drawflowNode{
 			ID:      nodeID,
 			Name:    n.ID,
 			Class:   "node-" + meta.cssType,
-			HTML:    drawflowHTML(meta.head, n.ID, meta.hint),
+			HTML:    drawflowHTML(meta.head, title, meta.hint),
 			Data:    nodeDataFromWorkflow(n),
 			PosX:    x,
 			PosY:    y,
@@ -587,6 +610,13 @@ func drawflowJSONToWorkflow(id, body string) (wf.Workflow, error) {
 			if dn.Name != ct.NodeID {
 				continue
 			}
+			// Universal Label input persists at data.label for every
+			// trigger kind (cron, channel, webhook, manual). Lift it
+			// onto tr.Label so reload restores the user-typed name
+			// regardless of trigger type.
+			if v, ok := dn.Data["label"].(string); ok && v != "" {
+				tr.Label = v
+			}
 			inner, ok := dn.Data["data"].(map[string]any)
 			if !ok {
 				break
@@ -646,7 +676,7 @@ func drawflowJSONToWorkflow(id, body string) (wf.Workflow, error) {
 	// brick on first open. Triggers with no entry will still be
 	// blocked by triggerHasEntry at Run Now time.
 	if len(triggers) == 0 {
-		triggers = []wf.Trigger{{Type: wf.TriggerManual, Label: "Run"}}
+		triggers = []wf.Trigger{{Type: wf.TriggerManual, Label: "run"}}
 	}
 
 	// graph.entry: pick the first trigger's EntryNode so legacy
@@ -688,21 +718,14 @@ type canvasTrigger struct {
 
 // triggerNodeID returns the canvas node id used to render a Trigger
 // as a phantom node. Prefers the persisted Trigger.ID (round-tripped
-// from prior saves); falls back to `trigger-<type>-<idx>` so legacy
-// YAML without IDs still gets stable, collision-free names when
-// re-emitted to the canvas.
-func triggerNodeID(tr wf.Trigger, idx int) string {
+// from prior saves); falls back to a fresh UUID so trigger ids match
+// the hidden-UUID model used by graph nodes. The user-facing handle
+// lives in Trigger.Label, not the ID.
+func triggerNodeID(tr wf.Trigger, _ int) string {
 	if tr.ID != "" {
 		return tr.ID
 	}
-	t := string(tr.Type)
-	if t == "" {
-		t = "manual"
-	}
-	if idx == 0 {
-		return "trigger-" + t
-	}
-	return fmt.Sprintf("trigger-%s-%d", t, idx+1)
+	return uuid.NewString()
 }
 
 // triggerKindFromNode pulls the `triggerKind` field out of a
@@ -738,11 +761,34 @@ func triggerTypeFromKind(kind string) wf.TriggerType {
 }
 
 func workflowNodeFromDrawflow(dn drawflowNode) wf.Node {
-	wn := wf.Node{ID: dn.Name}
+	id := dn.Name
+	if id == "" {
+		if v, ok := dn.Data["id"].(string); ok && v != "" {
+			id = v
+		}
+	}
+	if id == "" {
+		id = uuid.NewString()
+	}
+	wn := wf.Node{ID: id}
 	if t, ok := dn.Data["type"].(string); ok {
 		wn.Type = wf.NodeType(t)
 	}
+	// Label is the user-facing handle (drives template refs + rename).
+	// ID is the hidden stable UUID. Older drafts had only ID; promote
+	// it to Label when missing so the UI keeps a sensible display.
+	if v, ok := dn.Data["label"].(string); ok && v != "" {
+		wn.Label = v
+	}
+	if wn.Label == "" {
+		wn.Label = wn.ID
+	}
 	inner, _ := dn.Data["data"].(map[string]any)
+	if inner != nil {
+		if v, ok := inner["label"].(string); ok && v != "" {
+			wn.Label = v
+		}
+	}
 	if inner == nil {
 		return wn
 	}

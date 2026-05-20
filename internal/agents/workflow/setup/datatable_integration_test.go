@@ -42,7 +42,7 @@ func TestDataTableIntegration_DedupWebhook(t *testing.T) {
 		Name:    "Dedup webhook",
 		Enabled: true,
 		Triggers: []workflow.Trigger{
-			{Type: workflow.TriggerManual, Label: "Run"},
+			{Type: workflow.TriggerManual, Label: "run"},
 		},
 		Graph: workflow.Graph{
 			Entry: "check",
@@ -119,7 +119,7 @@ func TestDataTableIntegration_InsertAndQuery(t *testing.T) {
 		Name:    "Insert + query",
 		Enabled: true,
 		Triggers: []workflow.Trigger{
-			{Type: workflow.TriggerManual, Label: "Run"},
+			{Type: workflow.TriggerManual, Label: "run"},
 		},
 		Graph: workflow.Graph{
 			Entry: "i1",
