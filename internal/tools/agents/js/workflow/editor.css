@@ -202,7 +202,7 @@
 
 /* ── Palette drawer (right slide-in) ──────────────────────────── */
 .wf-palette-drawer {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 45;
   display: flex;

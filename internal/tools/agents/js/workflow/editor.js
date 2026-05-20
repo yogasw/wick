@@ -166,6 +166,18 @@
       }
       e.dataTransfer.effectAllowed = 'copy';
     });
+    // Click-to-add: drop node at canvas centre when drag isn't viable.
+    el.addEventListener('click', () => {
+      if (canvasLocked) return;
+      const type = el.dataset.nodeType;
+      if (!type) return;
+      let defaults = null;
+      const raw = el.dataset.nodeDefaults || '';
+      if (raw) { try { defaults = JSON.parse(raw); } catch (_) {} }
+      const rect = canvasEl.getBoundingClientRect();
+      const pos = canvasToFlow(rect.width / 2, rect.height / 2);
+      addNodeOfType(type, pos.x, pos.y, defaults);
+    });
   });
   canvasEl.addEventListener('dragover', (e) => {
     e.preventDefault();

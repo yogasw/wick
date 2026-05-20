@@ -33,9 +33,18 @@ self.onconnect = function (e) {
       if (!ports[sid]) ports[sid] = new Set();
       ports[sid].add(port);
 
-      // Reuse existing EventSource if already open.
+      // Reuse existing EventSource if already open — but still fetch
+      // a fresh snapshot for this new port so it gets current state.
       if (sources[sid] && sources[sid].readyState !== EventSource.CLOSED) {
         port.postMessage({ type: "status", sessionID: sid, status: "connected" });
+        fetch(base + "/stream/snapshot?session=" + encodeURIComponent(sid), { credentials: "include" })
+          .then(function (r) { return r.json(); })
+          .then(function (events) {
+            events.forEach(function (ev) {
+              port.postMessage({ type: "event", sessionID: sid, event: ev });
+            });
+          })
+          .catch(function () {});
         return;
       }
 

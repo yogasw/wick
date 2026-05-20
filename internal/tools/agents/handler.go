@@ -231,6 +231,7 @@ func Register(r tool.Router) {
 	r.DELETE("/workflows/edit/{id}/test-cases/{name}", deleteTestCase)
 
 	r.GET("/stream", streamSSE)
+	r.GET("/stream/snapshot", streamSnapshot)
 
 	// Data Tables tab — n8n-style standalone shared key/value store.
 	// Schema + rows live in-memory (Postgres backend deferred); shared
@@ -1052,6 +1053,16 @@ func streamSSE(c *tool.Ctx) {
 	fmt.Fprintf(w, ": connected\n\n")
 	flush()
 
+	// Snapshot: emit the current lifecycle + substate for every active
+	// agent in this session so the UI recovers state immediately on
+	// refresh without waiting for the next real event.
+	if sessionID != "" && globalPool != nil {
+		for _, ev := range snapshotEvents(sessionID) {
+			fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ev.JSON())
+		}
+		flush()
+	}
+
 	for {
 		select {
 		case ev, open := <-ch:
@@ -1067,4 +1078,74 @@ func streamSSE(c *tool.Ctx) {
 			return
 		}
 	}
+}
+
+// snapshotEvents builds the lifecycle + in-flight event list for sessionID
+// from the current pool state. Used by both streamSSE (SSE replay on fresh
+// connect) and streamSnapshot (JSON endpoint for SharedWorker reuse path).
+func snapshotEvents(sessionID string) []Event {
+	var out []Event
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.SessionID != sessionID {
+			continue
+		}
+		out = append(out, Event{
+			SessionID: e.SessionID,
+			AgentName: e.AgentName,
+			Type:      "lifecycle",
+			Lifecycle: e.Lifecycle,
+			Data:      e.Substate,
+			PID:       e.PID,
+		})
+		for _, te := range e.InFlightEvents {
+			ev := Event{
+				SessionID: e.SessionID,
+				AgentName: e.AgentName,
+			}
+			switch te.Type {
+			case "thinking":
+				ev.Type = "thinking"
+				ev.Data = te.Text
+				ev.At = te.At.UnixMilli()
+			case "tool_use":
+				ev.Type = "tool_use"
+				ev.ToolName = te.ToolName
+				ev.ToolInput = te.ToolInput
+				ev.ToolUseID = te.ToolUseID
+				ev.At = te.At.UnixMilli()
+				ev.EndAt = te.EndAt.UnixMilli()
+			case "tool_result":
+				ev.Type = "tool_result"
+				ev.ToolUseID = te.ToolUseID
+				ev.IsError = te.IsError
+				ev.Data = te.Text
+				ev.At = te.At.UnixMilli()
+			default:
+				continue
+			}
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// streamSnapshot returns the current lifecycle + in-flight events for a
+// session as JSON. Called by the SharedWorker whenever a new page subscribes
+// (even when the EventSource is already open) so the UI can replay trace
+// cards without waiting for the next real event.
+func streamSnapshot(c *tool.Ctx) {
+	if globalPool == nil {
+		c.JSON(http.StatusOK, []Event{})
+		return
+	}
+	sessionID := c.Query("session")
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "session required"})
+		return
+	}
+	out := snapshotEvents(sessionID)
+	if out == nil {
+		out = []Event{}
+	}
+	c.JSON(http.StatusOK, out)
 }

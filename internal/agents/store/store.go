@@ -14,6 +14,7 @@ package store
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -31,12 +32,14 @@ const MaxAssistantTurnBytes = 32 * 1024
 // within an assistant turn. Stored alongside the text so the UI can
 // replay the full trace on reload.
 type TurnEvent struct {
-	Type      string `json:"type"`                 // "tool_use" | "tool_result" | "thinking"
-	ToolName  string `json:"tool_name,omitempty"`  // tool_use only
-	ToolInput string `json:"tool_input,omitempty"` // tool_use only
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"` // tool_result only
-	Text      string `json:"text,omitempty"`     // tool_result body / thinking text
+	Type      string    `json:"type"`                 // "tool_use" | "tool_result" | "thinking"
+	ToolName  string    `json:"tool_name,omitempty"`  // tool_use only
+	ToolInput string    `json:"tool_input,omitempty"` // tool_use only
+	ToolUseID string    `json:"tool_use_id,omitempty"`
+	IsError   bool      `json:"is_error,omitempty"` // tool_result only
+	Text      string    `json:"text,omitempty"`     // tool_result body / thinking text
+	At        time.Time `json:"at,omitempty"`       // when this event arrived
+	EndAt     time.Time `json:"end_at,omitempty"`   // tool_result: when tool finished
 }
 
 // ConversationTurn is the on-disk shape of one user/assistant turn.
@@ -61,6 +64,9 @@ type Store struct {
 
 	// eventBuf collects tool_use/tool_result/thinking events within the
 	// current turn so they can be stored alongside the text.
+	// mu guards eventBuf only — Apply is single-goroutine but
+	// InFlightEvents is called from HTTP handler goroutines.
+	mu       sync.RWMutex
 	eventBuf []TurnEvent
 
 	// recordRaw mirrors every event line into raw.jsonl. Off by
@@ -152,28 +158,44 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return false, nil
 
 	case event.Thinking:
+		s.mu.Lock()
 		s.eventBuf = append(s.eventBuf, TurnEvent{
 			Type: "thinking",
 			Text: ev.Text,
+			At:   s.now().UTC(),
 		})
+		s.mu.Unlock()
 		return false, nil
 
 	case event.ToolUse:
+		s.mu.Lock()
 		s.eventBuf = append(s.eventBuf, TurnEvent{
 			Type:      "tool_use",
 			ToolName:  ev.ToolName,
 			ToolInput: ev.ToolInput,
 			ToolUseID: ev.ToolUseID,
+			At:        s.now().UTC(),
 		})
+		s.mu.Unlock()
 		return false, nil
 
 	case event.ToolResult:
+		now := s.now().UTC()
+		s.mu.Lock()
+		for i := range s.eventBuf {
+			if s.eventBuf[i].Type == "tool_use" && s.eventBuf[i].ToolUseID == ev.ToolUseID {
+				s.eventBuf[i].EndAt = now
+				break
+			}
+		}
 		s.eventBuf = append(s.eventBuf, TurnEvent{
 			Type:      "tool_result",
 			ToolUseID: ev.ToolUseID,
 			IsError:   ev.IsError,
 			Text:      ev.Text,
+			At:        now,
 		})
+		s.mu.Unlock()
 		return false, nil
 
 	case event.Done:
@@ -194,11 +216,28 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 	return false, nil
 }
 
+// InFlightEvents returns a snapshot of events buffered in the current
+// turn that have not yet been flushed to disk (no Done received yet).
+// Safe to call from any goroutine — returns a copy.
+func (s *Store) InFlightEvents() []TurnEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.eventBuf) == 0 {
+		return nil
+	}
+	out := make([]TurnEvent, len(s.eventBuf))
+	copy(out, s.eventBuf)
+	return out
+}
+
 // Flush is the explicit drain hook for callers that want to write
 // whatever's buffered (e.g. subprocess crashed mid-stream, no Done
 // arrived). Marks the turn as truncated since it didn't end naturally.
 func (s *Store) Flush() error {
-	if s.turnBuf.Len() == 0 {
+	s.mu.RLock()
+	evEmpty := len(s.eventBuf) == 0
+	s.mu.RUnlock()
+	if s.turnBuf.Len() == 0 && evEmpty {
 		return nil
 	}
 	return s.flushAssistantTurn(true)
@@ -208,7 +247,7 @@ func (s *Store) Flush() error {
 // and resets the buffer. wasInterrupted=true sets Truncated on the
 // turn — used by Flush when there was no Done event.
 func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
-	if s.turnBuf.Len() == 0 {
+	if s.turnBuf.Len() == 0 && len(s.eventBuf) == 0 {
 		return nil
 	}
 	body := s.turnBuf.String()
@@ -217,16 +256,19 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		body = body[:MaxAssistantTurnBytes] + "\n…(truncated, see raw.jsonl)"
 		truncated = true
 	}
+	s.mu.Lock()
+	evSnap := s.eventBuf
+	s.eventBuf = nil
+	s.mu.Unlock()
 	turn := ConversationTurn{
 		Timestamp: s.now().UTC(),
 		Role:      "assistant",
 		Agent:     s.agentName,
 		Text:      body,
 		Truncated: truncated,
-		Events:    s.eventBuf,
+		Events:    evSnap,
 	}
 	s.turnBuf.Reset()
-	s.eventBuf = nil
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
 		"wick-conv-v1",
