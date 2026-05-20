@@ -293,9 +293,24 @@
 
   // ── WickNodes module ───────────────────────────────────────────
 
+  const outputsOf = {
+    datatable_get: 2, datatable_exists: 2,
+    datatable_query: 1, datatable_count: 1,
+    datatable_insert: 1, datatable_upsert: 1, datatable_delete: 1,
+  };
+
   function buildModule(kind) {
     const op = opOf[kind];
     return {
+      meta: {
+        kind,
+        head: kind.replace('datatable_', 'datatable '),
+        hint: { get: 'load by id', exists: 'row match?', query: 'multi-row search', count: 'count rows', insert: 'new row', upsert: 'insert/update', delete: 'drop rows' }[op] || '',
+        cssType: 'datatable',
+        inputs: 1,
+        outputs: outputsOf[kind] || 1,
+        defaults: { table: '' },
+      },
       attach({ requestUpdate }) {
         _requestSave = requestUpdate;
         wireButtons();

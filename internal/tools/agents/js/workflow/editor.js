@@ -1988,7 +1988,7 @@
     const node = editor.getNodeFromId(id);
     if (!node) return;
     const d = node.data || {};
-    const kind = d.type || 'shell';
+    const kind = d.type || '';
     f.id.textContent = d.id || node.name;
     // ins-type is a hidden input now (used by save), ins-type-head is
     // the visible chip in the modal header.
@@ -4182,7 +4182,7 @@
         return {
           dfId,
           id: d.id || n.name || dfId,
-          type: d.type || n.name || 'shell',
+          type: d.type || n.name || '',
           label: n.name || d.id || dfId,
         };
       });
