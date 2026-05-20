@@ -50,7 +50,7 @@ type GoScriptSchema struct {
 // Contract:
 //
 //	Input  : os.Stdin = JSON-encoded RenderCtx
-//	         (keys: Event, Node, Env, Secret, Workflow, Run, Dataset)
+//	         (keys: Event, Node, Env, Secret, Workflow, Run, DataTable)
 //	Output : os.Stdout = JSON value of any shape; engine parses it and
 //	         exposes as Node.<id>.result + merges top-level keys when
 //	         the value is a JSON object so {{.Node.<id>.foo}} works.
@@ -165,7 +165,7 @@ func parseScriptResult(b []byte) (any, error) {
 
 // marshalRenderCtx flattens RenderCtx into a stable JSON shape the
 // script can decode. Mirrors the namespace user templates see —
-// Event/Node/Env/Secret/Workflow/Run/Dataset as top-level keys.
+// Event/Node/Env/Secret/Workflow/Run/DataTable as top-level keys.
 func marshalRenderCtx(rctx workflow.RenderCtx) ([]byte, error) {
 	payload := map[string]any{
 		"Event": map[string]any{
@@ -180,7 +180,7 @@ func marshalRenderCtx(rctx workflow.RenderCtx) ([]byte, error) {
 		"Secret":   rctx.Secret,
 		"Workflow": map[string]any{"ID": rctx.Workflow.ID, "Version": rctx.Workflow.Version, "Name": rctx.Workflow.Name},
 		"Run":      map[string]any{"ID": rctx.Run.ID, "StartedAt": rctx.Run.StartedAt},
-		"Dataset":  rctx.Dataset,
+		"DataTable": rctx.DataTable,
 	}
 	return json.Marshal(payload)
 }

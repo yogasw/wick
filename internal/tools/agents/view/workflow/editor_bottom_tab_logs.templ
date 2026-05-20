@@ -1,0 +1,11 @@
+package workflow
+
+// Logs is the default bottom-panel tab — empty state until a run kicks
+// off, then SSE events fill it in as nodes complete. Each row expands
+// to show input/output JSON + latency. Owned by bottom_tab_logs.js.
+templ bottomTabLogs() {
+	<div data-bottom-panel="logs" class="p-3 max-h-72 overflow-y-auto text-xs">
+		<div id="wf-logs-list" class="space-y-1"></div>
+		<p id="wf-logs-empty" class="text-black-600 dark:text-black-700 italic">No run yet. Click Run Now to execute the workflow.</p>
+	</div>
+}

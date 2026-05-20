@@ -115,7 +115,7 @@ export default withMermaid(defineConfig({
           { text: 'channel', link: '/workflow/nodes/channel' },
           { text: 'classify', link: '/workflow/nodes/classify' },
           { text: 'connector', link: '/workflow/nodes/connector' },
-          { text: 'dataset_*', link: '/workflow/nodes/dataset' },
+          { text: 'datatable_*', link: '/workflow/nodes/datatable' },
           { text: 'db_query', link: '/workflow/nodes/db-query' },
           { text: 'end', link: '/workflow/nodes/end' },
           { text: 'go_script', link: '/workflow/nodes/go-script' },

@@ -1,0 +1,10 @@
+package workflow
+
+// YAML preview tab — static read-only view of the persisted workflow
+// YAML. No JS today; if a future tab wants live updates, hook into the
+// save callback and rewrite the pre block.
+templ bottomTabYAML(yaml string) {
+	<div data-bottom-panel="yaml" class="hidden">
+		<pre id="wf-yaml" class="p-4 font-mono text-xs text-white-100 bg-navy-800 dark:bg-black-900 overflow-x-auto leading-relaxed max-h-48">{ yaml }</pre>
+	</div>
+}

@@ -14,7 +14,7 @@ scripted events + mock external).
 | CLI `wick workflow test <id> [--filter X]` | wired | [`cmd/cli/workflow.go`](../../../cmd/cli/workflow.go) |
 | Editor "Tests" tab + TestResults panel | wired | [`view/workflow/test_results.templ`](../../tools/agents/view/workflow/test_results.templ) |
 | Test case manager UI (CRUD + modal) | wired | [`view/workflow/test_manager.templ`](../../tools/agents/view/workflow/test_manager.templ) |
-| Mock interception (provider/connector/channel/HTTP/dataset/shell) | designed, partial | spec below |
+| Mock interception (provider/connector/channel/HTTP/datatable/shell) | designed, partial | spec below |
 | `workflow_test` / `workflow_simulate` MCP ops | designed | §9 |
 | `--watch` / `--record` flags | not yet | CLI subcommand only does run-all + --filter |
 | 6-layer reliability mocks (run layer 2–5 over mocked provider response) | designed | spec below |
@@ -116,8 +116,8 @@ mocks:                            # mock setiap external call
     - url_pattern: "*.example.com/*"
       method: GET
       response: { status: 200, body: { ok: true } }
-  datasets:
-    - dataset: handled
+  data_tables:
+    - table: handled
       ops: [exists]
       response: { found: false }   # first time → process
 
@@ -143,7 +143,7 @@ assertions:
 | Channel (`type: channel`) | `Channel.Send(action, args)` | Capture call (record args), return scripted response |
 | HTTP node (`type: http`) | `http.Do(req)` | Match URL pattern + method, return scripted response |
 | DB query (`type: db_query`) | `db.Query(...)` | Return scripted rows |
-| Dataset (`type: dataset_*`) | Postgres `wick_datasets_rows` | In-memory test DB (default) atau scripted rows kalau explicit mock |
+| Data table (`type: datatable_*`) | Postgres `wick_data_table_rows` | In-memory test DB (default) atau scripted rows kalau explicit mock |
 | Shell (`type: shell`) | `exec.Cmd` | Skip exec, return scripted stdout/exit_code |
 | Implicit reply-to-source | `Channel.Send` synthetic | Captured like channel mock |
 
@@ -165,7 +165,7 @@ type MockRegistry struct {
     Connector  map[string]ConnectorMock    // "module.op" → mock + args match
     Channel    map[string]ChannelMock      // "channel.op" → capture + response
     HTTP       []HTTPMock                  // url pattern + method match
-    Dataset    DatasetMockMode             // inmemory | scripted
+    DataTable  DataTableMockMode           // inmemory | scripted
     Shell      map[string]ShellMock        // node ID → stdout/exit
 }
 
@@ -189,7 +189,7 @@ func (e *Engine) resolveProvider(ctx EngineContext, nodeID string) Provider {
     return e.providerRegistry.Get(...)             // real provider
 }
 
-// Sama pattern untuk Connector, Channel, HTTP, Dataset, Shell.
+// Sama pattern untuk Connector, Channel, HTTP, DataTable, Shell.
 ```
 
 **Mock fallback policy** (no mock declared untuk a node):

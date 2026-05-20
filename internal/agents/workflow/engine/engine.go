@@ -129,7 +129,7 @@ func (e *Engine) Register(t workflow.NodeType, ex workflow.Executor) {
 
 // RegisterWithDesc attaches an executor + explicit descriptor. Used
 // when the same executor instance serves multiple node types (e.g.
-// dataset executor handles 7 types).
+// datatable executor handles 7 types).
 func (e *Engine) RegisterWithDesc(t workflow.NodeType, ex workflow.Executor, desc NodeDescriptor) {
 	e.Executors[t] = ex
 	if desc.Type == "" {

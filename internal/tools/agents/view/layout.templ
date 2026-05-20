@@ -54,6 +54,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
 				@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
 				@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+				@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
 			</nav>
 			<!-- Recent sessions list (scrollable, fills remaining height) -->
 			<div class="flex flex-col flex-1 overflow-hidden">
@@ -95,6 +96,11 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			}
 		</main>
 	</div>
+	<!-- Shared confirm/alert modal shell. wickConfirm() / wickAlert()
+	     in web/public/js/dialog.js drive this; pages that opt into
+	     wickConfirm just include the script below and the shell above. -->
+	@ui.Dialog()
+	<script src="/public/js/dialog.js"></script>
 }
 
 templ sidebarSessionRow(base, id string, sess session.Session, label string, lc SessionLifecycleVM, active bool) {
@@ -423,6 +429,11 @@ templ agentsNavIcon(label string) {
 				<circle cx="8" cy="8" r="5.5"></circle>
 				<circle cx="8" cy="8" r="2"></circle>
 				<path d="M8 2.5V4M8 12v1.5M2.5 8H4M12 8h1.5" stroke-linecap="round"></path>
+			</svg>
+		case "Data Tables":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<rect x="2" y="3" width="12" height="10" rx="1.5"></rect>
+				<path d="M2 6h12M2 9.5h12M6 6v7" stroke-linecap="round"></path>
 			</svg>
 		case "Channels":
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">

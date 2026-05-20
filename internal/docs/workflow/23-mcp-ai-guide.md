@@ -449,4 +449,4 @@ Lihat trigger payload lewat dropdown INPUT dari node downstream.
 | AI tidak set `arg_modes` | Default expression di runtime aman, tapi inspector UI tampil Fixed → confusing. Selalu set `arg_modes` per field |
 | `match` value format | String equality: `channel_id: C0ABC`. Picker multi-value: `channel_id: '[{"id":"C0ABC","name":"#ch"}]'`. Array plain strings `["C0ABC"]` **tidak di-support** — tidak pernah match |
 | `match_enabled` default false | Tanpa `match_enabled: true` trigger fire semua event tanpa filter |
-| `view: fixed` template tidak di-render | Template di dalam `view` arg (termasuk `private_metadata`) tidak di-render karena mode fixed. Gunakan dataset atau simpan context di button `value` |
+| `view: fixed` template tidak di-render | Template di dalam `view` arg (termasuk `private_metadata`) tidak di-render karena mode fixed. Gunakan data table atau simpan context di button `value` |

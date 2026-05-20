@@ -49,13 +49,13 @@ const (
     NodeParallel    NodeType = "parallel"
     NodeMerge       NodeType = "merge"
     NodeEnd         NodeType = "end"
-    NodeDatasetGet     NodeType = "dataset_get"
-    NodeDatasetExists  NodeType = "dataset_exists"
-    NodeDatasetQuery   NodeType = "dataset_query"
-    NodeDatasetInsert  NodeType = "dataset_insert"
-    NodeDatasetUpsert  NodeType = "dataset_upsert"
-    NodeDatasetDelete  NodeType = "dataset_delete"
-    NodeDatasetCount   NodeType = "dataset_count"
+    NodeDataTableGet     NodeType = "datatable_get"
+    NodeDataTableExists  NodeType = "datatable_exists"
+    NodeDataTableQuery   NodeType = "datatable_query"
+    NodeDataTableInsert  NodeType = "datatable_insert"
+    NodeDataTableUpsert  NodeType = "datatable_upsert"
+    NodeDataTableDelete  NodeType = "datatable_delete"
+    NodeDataTableCount   NodeType = "datatable_count"
 )
 
 type Workflow struct {
@@ -115,7 +115,7 @@ type Node struct {
     DBQuery   *DBQueryNode
     Transform *TransformNode
     Branch    *BranchNode
-    Dataset   *DatasetNode                    // unified for dataset_get/exists/query/insert/upsert/delete/count
+    DataTable *DataTableNode                  // unified for datatable_get/exists/query/insert/upsert/delete/count
 }
 
 // Trigger ditambah entry_node (override Graph.Entry per-trigger)

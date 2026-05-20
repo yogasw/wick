@@ -203,6 +203,21 @@
       el.innerHTML = renderMarkdown(raw);
       el.removeAttribute("data-md");
     });
+    document.querySelectorAll("[data-linkify]").forEach(function (el) {
+      var raw = el.textContent;
+      el.innerHTML = linkifyText(raw);
+      el.removeAttribute("data-linkify");
+    });
+  }
+
+  // Lightweight: escape HTML + turn bare/markdown URLs into anchors.
+  // Used for user bubble where we don't want full markdown parsing
+  // (so `**foo**` typed by the user stays literal).
+  function linkifyText(s) {
+    s = esc(s);
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" class="underline break-all" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="underline break-all" target="_blank" rel="noopener">$2</a>');
+    return s;
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -262,6 +277,39 @@
       var turnHasText = false;
 
       var ssePort = null;
+      var sseConnectedHideTimer = null;
+      // Render the SSE connection pill in the header. state: "" = hide,
+      // "connected" = green dot (auto-hide 2s), "reconnecting" = amber spinner.
+      function setSseStatus(state) {
+        var pill = document.querySelector("[data-sse-status]");
+        if (!pill) return;
+        if (sseConnectedHideTimer) { clearTimeout(sseConnectedHideTimer); sseConnectedHideTimer = null; }
+        var spin = pill.querySelector("[data-sse-spin]");
+        var dot = pill.querySelector("[data-sse-dot]");
+        var lbl = pill.querySelector("[data-sse-label]");
+        pill.classList.remove(
+          "border-green-300","dark:border-green-700","bg-green-50","dark:bg-green-900/20","text-green-700","dark:text-green-300",
+          "border-amber-300","dark:border-amber-700","bg-amber-50","dark:bg-amber-900/20","text-amber-700","dark:text-amber-300"
+        );
+        if (state === "connected") {
+          pill.classList.remove("hidden");
+          pill.classList.add("border-green-300","dark:border-green-700","bg-green-50","dark:bg-green-900/20","text-green-700","dark:text-green-300");
+          if (spin) spin.classList.add("hidden");
+          if (dot) dot.classList.remove("hidden");
+          if (lbl) lbl.textContent = "connected";
+          sseConnectedHideTimer = setTimeout(function () { pill.classList.add("hidden"); }, 2000);
+        } else if (state === "reconnecting") {
+          pill.classList.remove("hidden");
+          pill.classList.add("border-amber-300","dark:border-amber-700","bg-amber-50","dark:bg-amber-900/20","text-amber-700","dark:text-amber-300");
+          if (spin) spin.classList.remove("hidden");
+          if (dot) dot.classList.add("hidden");
+          if (lbl) lbl.textContent = "reconnecting…";
+        } else {
+          pill.classList.add("hidden");
+        }
+        pill.dataset.state = state || "";
+      }
+
       if (typeof SharedWorker !== "undefined") {
         var worker = new SharedWorker(base + "/static/js/sse-worker.js");
         ssePort = worker.port;
@@ -274,6 +322,10 @@
           var data = msg.data;
           if (!data) return;
           if (data.type === "event") handleAgentEvent(data.event);
+          else if (data.type === "status") {
+            if (data.status === "connected") setSseStatus("connected");
+            else if (data.status === "error") setSseStatus("reconnecting");
+          }
         };
       } else {
         // Fallback for browsers without SharedWorker support.
@@ -282,6 +334,11 @@
           var ev; try { ev = JSON.parse(e.data); } catch(_) { return; }
           handleAgentEvent(ev);
         });
+        es.onopen = function () { setSseStatus("connected"); };
+        es.onerror = function () {
+          // EventSource auto-reconnects unless readyState === CLOSED.
+          if (es.readyState !== EventSource.CLOSED) setSseStatus("reconnecting");
+        };
       }
 
       function showTypingIndicator() {
@@ -832,10 +889,10 @@
           var wrap = document.createElement("div");
           wrap.className = "flex justify-end gap-2 group";
           var col = document.createElement("div");
-          col.className = "flex flex-col items-end gap-1 max-w-[80%]";
+          col.className = "flex flex-col items-end gap-1 max-w-[80%] min-w-0";
           var bubble = document.createElement("div");
-          bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm";
-          bubble.textContent = text;
+          bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble";
+          bubble.innerHTML = linkifyText(text);
           col.appendChild(bubble);
           wrap.appendChild(col);
           var bottom = document.getElementById("chat-bottom");

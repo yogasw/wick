@@ -147,15 +147,15 @@ func (e *ExecError) Unwrap() error { return e.Wrapped }
 //	{{.Secret.X}}       — encrypted secret, decrypted on lookup
 //	{{.Workflow.X}}     — workflow metadata
 //	{{.Run.X}}          — runtime metadata
-//	{{.Dataset.<alias>}} — dataset binding from datasets: list
+//	{{.DataTable.<alias>}} — data table binding from data_tables: list
 type RenderCtx struct {
-	Event    Event
-	Node     map[string]any
-	Env      map[string]string
-	Secret   map[string]string
-	Workflow WorkflowRef
-	Run      RunRef
-	Dataset  map[string]any
+	Event     Event
+	Node      map[string]any
+	Env       map[string]string
+	Secret    map[string]string
+	Workflow  WorkflowRef
+	Run       RunRef
+	DataTable map[string]any
 }
 
 // WorkflowRef is the small subset of Workflow accessible to templates.

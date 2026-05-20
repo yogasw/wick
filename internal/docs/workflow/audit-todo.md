@@ -68,8 +68,8 @@ Mockup §3 (baris 1255–1452) + design §11.4 wajib dropdown + typeahead. Inspe
 - [ ] **Skill multi-select**: skills agent node — multi-pick dari `provider.ListSkills(ctx)`.
 - [ ] **Workspace dropdown**: agent node — dari registry `internal/agents/workspace`.
 - [ ] **Trigger kind dropdown + form per-kind**: trigger node sekarang cuma `triggerKind` data attr. Bikin form bertipe: cron→schedule + timezone; channel→channel+event+target; webhook→path+method.
-- [ ] **Dataset dropdown**: node dataset_* — dari `workflow.Datasets[]` yang dideklarasi di workflow, bukan free text.
-- [ ] **JS endpoint**: tambah `GET /tools/agents/workflows/api/registry` return JSON `{channels, connectors, providers, presets, datasets, skills}` supaya editor.js bisa hydrate select pas load + abis save.
+- [ ] **Data table dropdown**: node datatable_* — dari `workflow.DataTables[]` yang dideklarasi di workflow, bukan free text.
+- [ ] **JS endpoint**: tambah `GET /tools/agents/workflows/api/registry` return JSON `{channels, connectors, providers, presets, data_tables, skills}` supaya editor.js bisa hydrate select pas load + abis save.
 
 ### P1 — save background (no full reload, error inline)
 

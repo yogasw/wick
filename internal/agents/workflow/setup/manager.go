@@ -14,7 +14,9 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/channel"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/cost"
-	"github.com/yogasw/wick/internal/agents/workflow/dataset"
+	"gorm.io/gorm"
+
+	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/guard"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
@@ -41,7 +43,7 @@ type Manager struct {
 	Integration *integration.Registry
 	Connectors  *connector.Registry
 	Providers  *provider.Registry
-	Datasets   dataset.Service
+	DataTables datatable.Service
 	Guard      *guard.Guard
 	Cost       *cost.Tracker
 	MCP        *mcp.Ops
@@ -69,7 +71,7 @@ func New(layout config.Layout) *Manager {
 	intReg := integration.New()
 	conReg := connector.NewRegistry(nil, nil)
 	provReg := provider.NewRegistry()
-	dsSvc := dataset.NewMem()
+	dtSvc := datatable.NewMock()
 	// Guard default = off. Admin enables per-install via the agents
 	// settings page (mode = warn|block). Keep the package alive so the
 	// rule surface stays available — only the Apply gate is skipped
@@ -93,17 +95,17 @@ func New(layout config.Layout) *Manager {
 	eng.Register(workflow.NodeChannel, nodes.NewChannelExecutor(intReg))
 	eng.Register(workflow.NodeConnector, nodes.NewConnectorExecutor(conReg))
 	eng.Register(workflow.NodeDBQuery, nodes.NewDBQueryExecutor())
-	// Dataset: one executor serves 7 node types — register each with its own descriptor.
-	dsExec := nodes.NewDatasetExecutor(dsSvc)
+	// DataTable: one executor serves 7 node types — register each with its own descriptor.
+	dtExec := nodes.NewDataTableExecutor(dtSvc)
 	for _, t := range []workflow.NodeType{
-		workflow.NodeDatasetGet, workflow.NodeDatasetExists, workflow.NodeDatasetQuery,
-		workflow.NodeDatasetInsert, workflow.NodeDatasetUpsert, workflow.NodeDatasetDelete,
-		workflow.NodeDatasetCount,
+		workflow.NodeDataTableGet, workflow.NodeDataTableExists, workflow.NodeDataTableQuery,
+		workflow.NodeDataTableInsert, workflow.NodeDataTableUpsert, workflow.NodeDataTableDelete,
+		workflow.NodeDataTableCount,
 	} {
-		eng.RegisterWithDesc(t, dsExec, nodes.DatasetDescriptor(t))
+		eng.RegisterWithDesc(t, dtExec, nodes.DataTableDescriptor(t))
 	}
 
-	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dsSvc, ss).WithIntegration(intReg)
+	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dtSvc, ss).WithIntegration(intReg)
 
 	return &Manager{
 		Layout:      layout,
@@ -118,11 +120,35 @@ func New(layout config.Layout) *Manager {
 		Integration: intReg,
 		Connectors:  conReg,
 		Providers:   provReg,
-		Datasets:    dsSvc,
+		DataTables:  dtSvc,
 		Guard:       g,
 		Cost:        c,
 		MCP:         ops,
 	}
+}
+
+// WithDataTablesDB swaps the in-memory data table store for the
+// Postgres-backed PgService. Re-registers the datatable_* executors so
+// downstream Engine.Run calls hit the new backend. Idempotent; pass nil
+// to revert to the in-memory store (test path).
+func (m *Manager) WithDataTablesDB(db *gorm.DB) *Manager {
+	if db == nil {
+		return m
+	}
+	pg := datatable.NewPg(db)
+	m.DataTables = pg
+	dtExec := nodes.NewDataTableExecutor(pg)
+	for _, t := range []workflow.NodeType{
+		workflow.NodeDataTableGet, workflow.NodeDataTableExists, workflow.NodeDataTableQuery,
+		workflow.NodeDataTableInsert, workflow.NodeDataTableUpsert, workflow.NodeDataTableDelete,
+		workflow.NodeDataTableCount,
+	} {
+		m.Engine.RegisterWithDesc(t, dtExec, nodes.DataTableDescriptor(t))
+	}
+	if m.MCP != nil {
+		m.MCP.DataTables = pg
+	}
+	return m
 }
 
 // WithChannels registers one or more channels.

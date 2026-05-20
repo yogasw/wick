@@ -231,6 +231,22 @@ func Register(r tool.Router) {
 	r.DELETE("/workflows/edit/{id}/test-cases/{name}", deleteTestCase)
 
 	r.GET("/stream", streamSSE)
+
+	// Data Tables tab — n8n-style standalone shared key/value store.
+	// Schema + rows live in-memory (Postgres backend deferred); shared
+	// with the workflow engine so datatable_* nodes see the same data.
+	r.GET("/data-tables", dataTablesPage)
+	r.POST("/data-tables", createDataTable)
+	r.POST("/data-tables/import-csv", importDataTableCSV)
+	r.GET("/data-tables/{slug}", dataTableDetail)
+	r.POST("/data-tables/{slug}/delete", dropDataTable)
+	r.POST("/data-tables/{slug}/rows", insertDataTableRow)
+	r.POST("/data-tables/{slug}/rows/bulk-delete", bulkDeleteDataTableRows)
+	r.POST("/data-tables/{slug}/rows/{pk}/delete", deleteDataTableRow)
+	r.POST("/data-tables/{slug}/columns", addDataTableColumn)
+	r.POST("/data-tables/{slug}/columns/{col}/rename", renameDataTableColumn)
+	r.POST("/data-tables/{slug}/columns/{col}/delete", dropDataTableColumn)
+	r.GET("/data-tables/{slug}/export.csv", exportDataTableCSV)
 }
 
 func settingsPage(c *tool.Ctx) {

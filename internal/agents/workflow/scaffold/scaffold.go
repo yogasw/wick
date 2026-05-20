@@ -88,7 +88,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	default:
 		base.Name = "Untitled workflow"
 		base.Description = "Empty workflow scaffold. Add nodes via canvas or YAML."
-		base.Triggers = []workflow.Trigger{{Type: workflow.TriggerManual, Label: "Run", EntryNode: "start"}}
+		base.Triggers = []workflow.Trigger{{Type: workflow.TriggerManual, Label: "run", EntryNode: "start"}}
 		base.Graph = workflow.Graph{
 			Entry: "start",
 			Nodes: []workflow.Node{{ID: "start", Type: workflow.NodeEnd, Result: "ok"}},
