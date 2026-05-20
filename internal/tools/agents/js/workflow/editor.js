@@ -1101,6 +1101,13 @@
     if (el.closest('.drawflow-node')) return false;
     if (el.closest('.input') || el.closest('.output')) return false;
     if (el.closest('svg.connection')) return false;
+    // Drawflow renders its own `.drawflow-delete` X chip for the
+    // currently selected node OR connection. Without this guard the
+    // capture-phase mousedown below treats the chip as canvas
+    // background, starts a marquee, stopImmediatePropagation()s — and
+    // drawflow's own click handler that does the actual deletion
+    // never runs.
+    if (el.closest('.drawflow-delete')) return false;
     return !!el.closest('#wf-canvas');
   }
 
