@@ -687,6 +687,8 @@
   window.wickEditorHelpers.collectArgs = collectArgs;
   window.wickEditorHelpers.collectArgModes = collectArgModes;
   window.wickEditorHelpers.setArgFieldMode = setArgFieldMode;
+  window.wickEditorHelpers.updateArgPreview = updateArgPreview;
+  window.wickEditorHelpers.attachTemplateDropTarget = attachTemplateDropTarget;
 
   // attachTemplateDropTarget wires an input/textarea as a drop target
   // for the INPUT pane's draggable JSON leaves. On drop, inserts the

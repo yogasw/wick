@@ -2,6 +2,7 @@
 // row fields, and order-by. Table dropdown populated from
 // GET /api/data-tables. Insert/upsert auto-populates columns from
 // GET /api/data-tables/{slug}/columns when table is selected.
+// Expression mode per-value field persisted in __dt_modes map.
 (function () {
   'use strict';
 
@@ -19,6 +20,8 @@
     'equals', 'not_equals', 'gt', 'gte', 'lt', 'lte',
     'contains', 'in', 'is_empty', 'is_not_empty',
   ];
+
+  // ── panel helpers ──────────────────────────────────────────────
 
   function panel() {
     return document.querySelector('.wf-inspector-panel[data-node-type~="datatable_get"]');
@@ -45,6 +48,14 @@
 
   // ── table dropdown ─────────────────────────────────────────────
 
+  function agentsBase() {
+    const el = document.querySelector('[data-wf-base]');
+    if (el && el.dataset.wfBase) return el.dataset.wfBase.replace(/\/workflows$/, '');
+    const m = location.pathname.match(/^(.*?)\/workflows\b/);
+    if (m) return m[1];
+    return '';
+  }
+
   let tablesCache = null;
   function loadTables(currentSlug, callback) {
     const sel = field('table');
@@ -54,7 +65,7 @@
       if (callback) callback(currentSlug);
       return;
     }
-    const base = (window.wickBase || '').replace(/\/$/, '');
+    const base = agentsBase();
     fetch(base + '/api/data-tables', { credentials: 'include' })
       .then(r => r.ok ? r.json() : [])
       .then(tables => {
@@ -76,49 +87,205 @@
     if (currentSlug) sel.value = currentSlug;
   }
 
-  // ── column loader for insert/upsert ───────────────────────────
+  // ── column loader ──────────────────────────────────────────────
 
-  function loadColumnsForInsert(slug, existingRow) {
+  const columnsCache = {};
+  let _colNames = [];
+
+  function loadColumns(slug, callback) {
     if (!slug) return;
-    const base = (window.wickBase || '').replace(/\/$/, '');
+    if (columnsCache[slug]) { callback(columnsCache[slug]); return; }
+    const base = agentsBase();
     fetch(base + '/api/data-tables/' + encodeURIComponent(slug) + '/columns', { credentials: 'include' })
       .then(r => r.ok ? r.json() : [])
-      .then(cols => {
-        const l = lst('row');
-        if (!l) return;
-        // Only auto-populate when list is empty (don't overwrite user edits)
-        const hasRows = l.querySelectorAll('div.flex').length > 0;
-        if (hasRows) return;
-        cols.forEach(c => {
-          const existing = existingRow ? (existingRow[c.name] || '') : '';
-          l.appendChild(rowFieldRow(c.name, existing));
-        });
-      })
+      .then(cols => { columnsCache[slug] = cols; callback(cols); })
       .catch(() => {});
+  }
+
+  function loadColumnsForInsert(slug, existingRow) {
+    loadColumns(slug, cols => {
+      _colNames = cols.map(c => c.name);
+      const l = lst('row');
+      if (!l) return;
+      const hasRows = l.querySelectorAll('[data-dt-col]').length > 0;
+      if (hasRows) return;
+      cols.forEach(c => {
+        const existing = existingRow ? (existingRow[c.name] || '') : '';
+        l.appendChild(rowFieldRow(c.name, existing, 'fixed'));
+      });
+    });
+  }
+
+  function loadColumnsForHints(slug) {
+    loadColumns(slug, cols => { _colNames = cols.map(c => c.name); });
+  }
+
+  // ── column combobox ────────────────────────────────────────────
+
+  function makeColCombobox(initialValue) {
+    const wrap = document.createElement('div');
+    wrap.className = 'relative w-full min-w-0';
+    wrap.dataset.dtColCombo = '1';
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.placeholder = 'column';
+    inp.className = 'wf-input font-mono w-full';
+    inp.setAttribute('data-dt-col', '');
+    inp.value = initialValue || '';
+    inp.autocomplete = 'off';
+
+    const drop = document.createElement('div');
+    drop.className = 'absolute z-50 left-0 right-0 bg-white dark:bg-navy-800 border border-white-300 dark:border-navy-600 rounded shadow-lg max-h-48 overflow-y-auto hidden';
+    drop.style.top = '100%';
+
+    function showDrop(filter) {
+      const names = filter
+        ? _colNames.filter(n => n.toLowerCase().includes(filter.toLowerCase()))
+        : _colNames;
+      if (!names.length) { drop.classList.add('hidden'); return; }
+      drop.innerHTML = '';
+      names.forEach(name => {
+        const item = document.createElement('div');
+        item.className = 'px-3 py-1.5 text-sm font-mono cursor-pointer hover:bg-green-50 dark:hover:bg-navy-700 text-black-900 dark:text-white-100';
+        item.textContent = name;
+        item.addEventListener('mousedown', e => {
+          e.preventDefault();
+          inp.value = name;
+          drop.classList.add('hidden');
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        drop.appendChild(item);
+      });
+      drop.classList.remove('hidden');
+    }
+
+    inp.addEventListener('focus', () => showDrop(inp.value));
+    inp.addEventListener('input', () => showDrop(inp.value));
+    inp.addEventListener('blur', () => setTimeout(() => drop.classList.add('hidden'), 150));
+
+    wrap.appendChild(inp);
+    wrap.appendChild(drop);
+    return wrap;
+  }
+
+  // ── value field with Fixed/Expression toggle ───────────────────
+  // Uses .wf-arg-field structure so wickEditorHelpers.setArgFieldMode,
+  // preview rendering, and drag-drop from INPUT pane all work natively.
+
+  function makeValWithToggle(initialVal, initialMode) {
+    const wrap = document.createElement('div');
+    wrap.className = 'wf-arg-field flex-1 min-w-0';
+    wrap.setAttribute('data-field-key', '_dt_val');
+
+    const head = document.createElement('div');
+    head.className = 'wf-arg-field-head';
+    const modeDiv = document.createElement('div');
+    modeDiv.className = 'wf-arg-mode';
+    const fixedBtn = document.createElement('button');
+    fixedBtn.type = 'button';
+    fixedBtn.setAttribute('data-arg-mode', 'fixed');
+    fixedBtn.textContent = 'Fixed';
+    const exprBtn = document.createElement('button');
+    exprBtn.type = 'button';
+    exprBtn.setAttribute('data-arg-mode', 'expression');
+    exprBtn.textContent = 'Expression';
+    modeDiv.appendChild(fixedBtn);
+    modeDiv.appendChild(exprBtn);
+    head.appendChild(modeDiv);
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'wf-input w-full';
+    inp.setAttribute('data-dt-val', '');
+    inp.value = initialVal || '';
+
+    const preview = document.createElement('div');
+    preview.setAttribute('data-arg-preview', '');
+    preview.className = 'wf-arg-preview';
+
+    wrap.appendChild(head);
+    wrap.appendChild(inp);
+    wrap.appendChild(preview);
+
+    inp.addEventListener('input', () => {
+      if (window.wickEditorHelpers && window.wickEditorHelpers.updateArgPreview) {
+        window.wickEditorHelpers.updateArgPreview(wrap);
+      }
+      requestSave();
+    });
+
+    function wireArgField() {
+      const helpers = window.wickEditorHelpers;
+      if (!helpers || wrap._argModeWired) return;
+      wrap._argModeWired = true;
+      const mode = initialMode || ((initialVal || '').includes('{{') ? 'expression' : 'fixed');
+      helpers.setArgFieldMode(wrap, mode, false);
+      wrap.querySelectorAll('[data-arg-mode]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          helpers.setArgFieldMode(wrap, btn.dataset.argMode, true);
+          requestSave();
+        });
+      });
+      if (typeof helpers.attachTemplateDropTarget === 'function') {
+        helpers.attachTemplateDropTarget(inp, () => {
+          helpers.setArgFieldMode(wrap, 'expression', true);
+          requestSave();
+        });
+      }
+    }
+
+    if (window.wickEditorHelpers) {
+      wireArgField();
+    } else {
+      setTimeout(wireArgField, 0);
+    }
+
+    return wrap;
   }
 
   // ── condition builder ──────────────────────────────────────────
 
-  function conditionRow(col, op, val) {
+  function conditionRow(col, op, val, valMode) {
     const div = document.createElement('div');
-    div.className = 'flex items-center gap-1';
-    div.innerHTML =
-      '<input type="text" placeholder="column" class="wf-input font-mono flex-1 min-w-0" data-dt-col/>' +
-      '<select class="wf-input w-32 shrink-0" data-dt-op>' +
-        CONDITION_OPS.map(o => '<option value="' + o + '"' + (o === op ? ' selected' : '') + '>' + o + '</option>').join('') +
-      '</select>' +
-      '<input type="text" placeholder="value" class="wf-input font-mono flex-1 min-w-0" data-dt-val/>' +
-      '<button type="button" class="text-black-600 dark:text-black-700 hover:text-rose-500 shrink-0 px-1 text-base leading-none" data-dt-rm>×</button>';
-    div.querySelector('[data-dt-col]').value = col || '';
-    div.querySelector('[data-dt-val]').value = val != null ? String(val) : '';
-    div.querySelector('[data-dt-rm]').addEventListener('click', () => { div.remove(); requestSave(); });
-    div.querySelectorAll('input,select').forEach(el => el.addEventListener('input', requestSave));
-    // hide value input for no-arg ops
-    const opSel = div.querySelector('[data-dt-op]');
-    const valIn = div.querySelector('[data-dt-val]');
+    div.className = 'dt-row';
+
+    const colBox = makeColCombobox(col);
+    const opSel = document.createElement('select');
+    opSel.className = 'wf-input';
+    opSel.setAttribute('data-dt-op', '');
+    CONDITION_OPS.forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o; opt.textContent = o;
+      if (o === (op || 'equals')) opt.selected = true;
+      opSel.appendChild(opt);
+    });
+
+    const valWrap = makeValWithToggle(val != null ? String(val) : '', valMode);
+    const valIn = valWrap.querySelector('[data-dt-val]');
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'text-black-600 dark:text-black-700 hover:text-rose-500 px-1 text-base leading-none self-start pt-1 shrink-0';
+    rmBtn.setAttribute('data-dt-rm', '');
+    rmBtn.textContent = '×';
+
+    const grid = document.createElement('div');
+    grid.className = 'grid gap-1 items-start';
+    grid.style.gridTemplateColumns = '2fr 2fr 3fr auto';
+    grid.appendChild(colBox);
+    grid.appendChild(opSel);
+    grid.appendChild(valWrap);
+    grid.appendChild(rmBtn);
+    div.appendChild(grid);
+
+    rmBtn.addEventListener('click', () => { div.remove(); requestSave(); });
+    colBox.querySelector('input').addEventListener('input', requestSave);
+    opSel.addEventListener('input', requestSave);
+
     function syncValVisibility() {
       const noVal = opSel.value === 'is_empty' || opSel.value === 'is_not_empty';
-      valIn.classList.toggle('hidden', noVal);
+      valWrap.classList.toggle('hidden', noVal);
     }
     syncValVisibility();
     opSel.addEventListener('change', syncValVisibility);
@@ -129,7 +296,7 @@
     const l = lst('condition');
     if (!l) return '';
     const rows = [];
-    l.querySelectorAll('div.flex').forEach(row => {
+    l.querySelectorAll('.dt-row').forEach(row => {
       const col = (row.querySelector('[data-dt-col]') || {}).value || '';
       const op  = (row.querySelector('[data-dt-op]')  || {}).value || 'equals';
       const val = (row.querySelector('[data-dt-val]') || {}).value || '';
@@ -140,13 +307,26 @@
     return rows.join('\n');
   }
 
-  function renderConditions(yaml) {
+  function readConditionModes() {
+    const l = lst('condition');
+    if (!l) return {};
+    const modes = {};
+    let i = 0;
+    l.querySelectorAll('.wf-arg-field').forEach(wrap => {
+      const m = wrap.dataset.argMode;
+      if (m === 'expression') modes['c' + i] = 'expression';
+      i++;
+    });
+    return modes;
+  }
+
+  function renderConditions(yaml, modes) {
     const l = lst('condition');
     if (!l) return;
     l.innerHTML = '';
     if (!yaml) return;
     const blocks = yaml.split(/\n(?=-)/).map(s => s.trim()).filter(Boolean);
-    blocks.forEach(block => {
+    blocks.forEach((block, i) => {
       const colM = block.match(/column:\s*(.+)/);
       const opM  = block.match(/op:\s*(.+)/);
       const valM = block.match(/value:\s*([\s\S]+)/);
@@ -154,23 +334,32 @@
         colM ? colM[1].trim() : '',
         opM  ? opM[1].trim()  : 'equals',
         valM ? valM[1].trim() : '',
+        modes && modes['c' + i],
       ));
     });
   }
 
   // ── row (field) builder ────────────────────────────────────────
 
-  function rowFieldRow(col, val) {
+  function rowFieldRow(col, val, valMode) {
     const div = document.createElement('div');
-    div.className = 'flex items-center gap-1';
-    div.innerHTML =
-      '<input type="text" placeholder="column" class="wf-input font-mono w-28 shrink-0" data-dt-col/>' +
-      '<input type="text" placeholder="value / template" class="wf-input font-mono flex-1 min-w-0" data-dt-val/>' +
-      '<button type="button" class="text-black-600 dark:text-black-700 hover:text-rose-500 shrink-0 px-1 text-base leading-none" data-dt-rm>×</button>';
-    div.querySelector('[data-dt-col]').value = col || '';
-    div.querySelector('[data-dt-val]').value = val != null ? String(val) : '';
-    div.querySelector('[data-dt-rm]').addEventListener('click', () => { div.remove(); requestSave(); });
-    div.querySelectorAll('input').forEach(el => el.addEventListener('input', requestSave));
+    div.className = 'dt-row grid gap-1 items-start';
+    div.style.gridTemplateColumns = '2fr 4fr auto';
+
+    const colBox = makeColCombobox(col);
+    const valWrap = makeValWithToggle(val != null ? String(val) : '', valMode);
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'text-black-600 dark:text-black-700 hover:text-rose-500 shrink-0 px-1 text-base leading-none self-start pt-1';
+    rmBtn.setAttribute('data-dt-rm', '');
+    rmBtn.textContent = '×';
+    rmBtn.addEventListener('click', () => { div.remove(); requestSave(); });
+    colBox.querySelector('input').addEventListener('input', requestSave);
+
+    div.appendChild(colBox);
+    div.appendChild(valWrap);
+    div.appendChild(rmBtn);
     return div;
   }
 
@@ -178,7 +367,7 @@
     const l = lst('row');
     if (!l) return '';
     const lines = [];
-    l.querySelectorAll('div.flex').forEach(row => {
+    l.querySelectorAll('.dt-row').forEach(row => {
       const col = (row.querySelector('[data-dt-col]') || {}).value || '';
       const val = (row.querySelector('[data-dt-val]') || {}).value || '';
       if (!col) return;
@@ -187,7 +376,18 @@
     return lines.join('\n');
   }
 
-  // Parse "col: val" YAML lines into {col→val} map
+  function readRowModes() {
+    const l = lst('row');
+    if (!l) return {};
+    const modes = {};
+    let i = 0;
+    l.querySelectorAll('.wf-arg-field').forEach(wrap => {
+      if (wrap.dataset.argMode === 'expression') modes['r' + i] = 'expression';
+      i++;
+    });
+    return modes;
+  }
+
   function parseRowYAML(yaml) {
     const out = {};
     if (!yaml) return out;
@@ -198,31 +398,47 @@
     return out;
   }
 
-  function renderRow(yaml) {
+  function renderRow(yaml, modes) {
     const l = lst('row');
     if (!l) return;
     l.innerHTML = '';
     if (!yaml) return;
     const map = parseRowYAML(yaml);
-    Object.entries(map).forEach(([col, val]) => l.appendChild(rowFieldRow(col, val)));
+    Object.entries(map).forEach(([col, val], i) => {
+      l.appendChild(rowFieldRow(col, val, modes && modes['r' + i]));
+    });
   }
 
   // ── order builder ──────────────────────────────────────────────
 
   function orderRow(col, dir) {
     const div = document.createElement('div');
-    div.className = 'flex items-center gap-1';
-    div.innerHTML =
-      '<input type="text" placeholder="column" class="wf-input font-mono flex-1 min-w-0" data-dt-col/>' +
-      '<select class="wf-input w-24 shrink-0" data-dt-dir>' +
-        '<option value="asc">asc</option>' +
-        '<option value="desc">desc</option>' +
-      '</select>' +
-      '<button type="button" class="text-black-600 dark:text-black-700 hover:text-rose-500 shrink-0 px-1 text-base leading-none" data-dt-rm>×</button>';
-    div.querySelector('[data-dt-col]').value = col || '';
-    div.querySelector('[data-dt-dir]').value = dir || 'asc';
-    div.querySelector('[data-dt-rm]').addEventListener('click', () => { div.remove(); requestSave(); });
-    div.querySelectorAll('input,select').forEach(el => el.addEventListener('input', requestSave));
+    div.className = 'dt-row flex items-center gap-1';
+
+    const colBox = makeColCombobox(col);
+    colBox.classList.add('flex-1', 'min-w-0');
+
+    const dirSel = document.createElement('select');
+    dirSel.className = 'wf-input w-24 shrink-0';
+    dirSel.setAttribute('data-dt-dir', '');
+    ['asc', 'desc'].forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      if (d === (dir || 'asc')) opt.selected = true;
+      dirSel.appendChild(opt);
+    });
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'text-black-600 dark:text-black-700 hover:text-rose-500 shrink-0 px-1 text-base leading-none';
+    rmBtn.setAttribute('data-dt-rm', '');
+    rmBtn.textContent = '×';
+    rmBtn.addEventListener('click', () => { div.remove(); requestSave(); });
+
+    div.appendChild(colBox);
+    div.appendChild(dirSel);
+    div.appendChild(rmBtn);
+    [colBox.querySelector('input'), dirSel].forEach(el => el && el.addEventListener('input', requestSave));
     return div;
   }
 
@@ -230,7 +446,7 @@
     const l = lst('order');
     if (!l) return '';
     const lines = [];
-    l.querySelectorAll('div.flex').forEach(row => {
+    l.querySelectorAll('.dt-row').forEach(row => {
       const col = (row.querySelector('[data-dt-col]') || {}).value || '';
       const dir = (row.querySelector('[data-dt-dir]') || {}).value || 'asc';
       if (!col) return;
@@ -255,7 +471,7 @@
     });
   }
 
-  // ── add-button + table-change wiring ──────────────────────────
+  // ── wiring ─────────────────────────────────────────────────────
 
   let _requestSave = null;
   function requestSave() { if (_requestSave) _requestSave(); }
@@ -267,11 +483,15 @@
     if (!root || root._dtWired) return;
     root._dtWired = true;
 
+    const base = agentsBase();
+    const link = root.querySelector('[data-dt-tables-link]');
+    if (link) link.href = base + '/data-tables';
+
     root.querySelectorAll('[data-dt-add]').forEach(btn => {
       btn.addEventListener('click', () => {
         const kind = btn.dataset.dtAdd;
-        if (kind === 'condition') lst('condition').appendChild(conditionRow('', 'equals', ''));
-        if (kind === 'row')       lst('row').appendChild(rowFieldRow('', ''));
+        if (kind === 'condition') lst('condition').appendChild(conditionRow('', 'equals', '', 'fixed'));
+        if (kind === 'row')       lst('row').appendChild(rowFieldRow('', '', 'fixed'));
         if (kind === 'order')     lst('order').appendChild(orderRow('', 'asc'));
         requestSave();
       });
@@ -281,17 +501,19 @@
     if (tblSel) {
       tblSel.addEventListener('change', () => {
         requestSave();
-        // Auto-populate columns for insert/upsert when table changes
+        const slug = tblSel.value;
         if (_currentOp === 'insert' || _currentOp === 'upsert') {
           const l = lst('row');
           if (l) l.innerHTML = '';
-          loadColumnsForInsert(tblSel.value, null);
+          loadColumnsForInsert(slug, null);
+        } else {
+          loadColumnsForHints(slug);
         }
       });
     }
   }
 
-  // ── WickNodes module ───────────────────────────────────────────
+  // ── WickNodes modules ──────────────────────────────────────────
 
   const outputsOf = {
     datatable_get: 2, datatable_exists: 2,
@@ -311,35 +533,35 @@
         outputs: outputsOf[kind] || 1,
         defaults: { table: '' },
       },
+
       attach({ requestUpdate }) {
         _requestSave = requestUpdate;
         wireButtons();
-        loadTables('');
       },
 
       hydrate(inner) {
         _currentOp = op;
         applyVisibility(op);
         const slug = inner.table || '';
+        const modes = inner.__dt_modes || {};
         loadTables(slug, (s) => {
-          // After table dropdown populated, auto-populate row fields
-          // for insert/upsert if no row data saved yet
-          if ((op === 'insert' || op === 'upsert') && !inner.row && s) {
-            loadColumnsForInsert(s, null);
+          if (!s) return;
+          if (op === 'insert' || op === 'upsert') {
+            if (!inner.row) loadColumnsForInsert(s, null);
+          } else {
+            loadColumnsForHints(s);
           }
         });
         const keyEl = field('key');
         if (keyEl) keyEl.value = inner.key || '';
-        // conditions may have been saved as YAML string or legacy "where" map string
-        renderConditions(inner.conditions || inner.where || '');
-        if (inner.row) renderRow(inner.row);
+        renderConditions(inner.conditions || inner.where || '', modes);
+        if (inner.row) renderRow(inner.row, modes);
         else if (op === 'insert' || op === 'upsert') {
-          // will be populated by loadColumnsForInsert callback above
           lst('row') && (lst('row').innerHTML = '');
         }
         renderOrder(inner.order_by || '');
-        const lim = field('limit');  if (lim)  lim.value  = inner.limit  || '';
-        const off = field('offset'); if (off)  off.value  = inner.offset || '';
+        const lim = field('limit');  if (lim) lim.value = inner.limit  || '';
+        const off = field('offset'); if (off) off.value = inner.offset || '';
       },
 
       save(target) {
@@ -356,11 +578,18 @@
           target.order_by = readOrder();
           const lim = field('limit');
           const off = field('offset');
-          target.limit  = lim  ? (parseInt(lim.value,  10) || 0) : 0;
+          target.limit  = lim ? (parseInt(lim.value,  10) || 0) : 0;
           target.offset = off ? (parseInt(off.value, 10) || 0) : 0;
         }
         if (op === 'insert' || op === 'upsert') {
           target.row = readRow();
+        }
+        // Persist expression modes so they survive refresh.
+        const modes = Object.assign({}, readConditionModes(), readRowModes());
+        if (Object.keys(modes).length > 0) {
+          target.__dt_modes = modes;
+        } else {
+          delete target.__dt_modes;
         }
       },
     };

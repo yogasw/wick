@@ -551,7 +551,7 @@
 .wf-inspector-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1.2fr 1fr;
+  grid-template-columns: 1.6fr 1.2fr 1fr;
   min-height: 0;
 }
 .wf-inspector-col {

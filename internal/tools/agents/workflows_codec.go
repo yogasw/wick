@@ -837,6 +837,7 @@ func workflowNodeFromDrawflow(dn drawflowNode) wf.Node {
 			fromMod := mod.YAMLFromDrawflowData(wn.ID, inner)
 			fromMod.ID = wn.ID
 			fromMod.Type = wn.Type
+			fromMod.Label = wn.Label
 			wn = fromMod
 		}
 	}

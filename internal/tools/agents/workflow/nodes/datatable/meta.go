@@ -67,11 +67,43 @@ func (m *module) NodeType() wf.NodeType  { return m.m.t }
 func (m *module) PaletteSection() string { return "Data" }
 
 func (m *module) PaletteItem() registry.PaletteItem {
+	// All datatable ops are surfaced via PaletteGroup() on datatable_get.
+	// Non-get modules return Skip so BuildPalette skips individual rows.
+	if m.m.t != wf.NodeDataTableGet {
+		return registry.PaletteItem{Skip: true}
+	}
 	return registry.PaletteItem{
-		Type:  string(m.m.t),
-		Label: m.m.label,
+		Type:  "datatable",
+		Label: "datatable",
 		Dot:   "bg-emerald-400",
-		Hint:  m.m.hint,
+		Hint:  "data tables",
+		Group: "datatable",
+	}
+}
+
+// PaletteGroup implements registry.PaletteGrouper for datatable_get,
+// contributing one drillable "datatable" row listing all 7 ops.
+func (m *module) PaletteGroup() registry.PaletteGroupEntry {
+	ops := make([]registry.PaletteOp, 0, len(allMeta))
+	for _, nm := range allMeta {
+		ops = append(ops, registry.PaletteOp{
+			NodeType: string(nm.t),
+			Label:    nm.label,
+			Desc:     nm.hint,
+			Kind:     "action",
+			Defaults: map[string]any{},
+		})
+	}
+	return registry.PaletteGroupEntry{
+		Section: "Data",
+		Item: registry.PaletteItem{
+			Type:  "datatable",
+			Label: "datatable",
+			Dot:   "bg-emerald-400",
+			Hint:  "data tables",
+			Group: "datatable",
+		},
+		Ops: ops,
 	}
 }
 
@@ -149,8 +181,21 @@ func (m *module) YAMLFromDrawflowData(id string, inner map[string]any) wf.Node {
 	return n
 }
 
-func (m *module) InspectorPartial() templ.Component { return Inspector() }
-func (m *module) InspectorScript() string           { return "datatable/inspector.js" }
+func (m *module) InspectorPartial() templ.Component {
+	// All 7 datatable types share one panel (data-node-type lists all).
+	// Only the first entry emits HTML; the rest return nil so
+	// nodeModulePartials() doesn't render 7 identical copies.
+	if m.m.t == wf.NodeDataTableGet {
+		return Inspector()
+	}
+	return nil
+}
+func (m *module) InspectorScript() string {
+	if m.m.t == wf.NodeDataTableGet {
+		return "datatable/inspector.js"
+	}
+	return ""
+}
 
 // ── codec helpers ───────────────────────────────────────────────────
 //
