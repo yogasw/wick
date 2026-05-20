@@ -2035,12 +2035,12 @@
     if (mod && typeof mod.hydrate === 'function') {
       mod.hydrate(inner);
     }
-    // Generic ArgForm hydration for registry-backed module panels.
-    // Panels built via ArgForm store their values in inner keyed by
-    // data-field-key. HTML is already server-rendered; just restore
-    // values and wire the Fixed/Expression toggle buttons.
+    // Generic ArgForm hydration for registry-backed module panels that
+    // have no inspector.js of their own. Skip when the module already
+    // owns hydrate (e.g. datatable inspector.js) — it handles its own
+    // fields and the generic pass would double-restore them.
     const activeModulePanel = document.querySelector(`.wf-inspector-panel[data-node-type="${CSS.escape(kind)}"]:not(.hidden)`);
-    if (activeModulePanel) {
+    if (activeModulePanel && !(mod && typeof mod.hydrate === 'function')) {
       hydrateServerRenderedArgForm(activeModulePanel, inner, inner.__arg_modes || {});
     }
     if (kind === 'classify') {
@@ -2782,9 +2782,11 @@
     if (mod && typeof mod.save === 'function') {
       mod.save(inner);
     }
-    // Generic save for registry-backed module panels (ArgForm fields).
+    // Generic save for registry-backed module panels that have no
+    // inspector.js. Skip when the module owns save() — it collects
+    // its own fields (e.g. datatable).
     const savePanel = document.querySelector(`.wf-inspector-panel[data-node-type="${CSS.escape(kind)}"]:not(.hidden)`);
-    if (savePanel && savePanel.querySelector('.wf-arg-field')) {
+    if (savePanel && savePanel.querySelector('.wf-arg-field') && !(mod && typeof mod.save === 'function')) {
       Object.assign(inner, collectArgs(savePanel));
       Object.assign(inner.__arg_modes = inner.__arg_modes || {}, collectArgModes(savePanel));
     }

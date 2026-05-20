@@ -237,6 +237,8 @@ func Register(r tool.Router) {
 	// Schema + rows live in-memory (Postgres backend deferred); shared
 	// with the workflow engine so datatable_* nodes see the same data.
 	r.GET("/data-tables", dataTablesPage)
+	r.GET("/api/data-tables", listDataTablesJSON)
+	r.GET("/api/data-tables/{slug}/columns", listDataTableColumnsJSON)
 	r.POST("/data-tables", createDataTable)
 	r.POST("/data-tables/import-csv", importDataTableCSV)
 	r.GET("/data-tables/{slug}", dataTableDetail)

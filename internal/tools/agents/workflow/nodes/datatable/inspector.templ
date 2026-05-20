@@ -1,70 +1,66 @@
 package datatable
 
 // Inspector is the parameters-tab partial shared by all seven
-// datatable_* node types. We tag the panel with every node type via
-// data-node-type so editor.js shows it whichever variant is
-// selected; per-op visibility happens inside the panel via
-// data-when-op (driven by inspector.js).
-//
-// Fields are name-keyed (caller-facing column names) — the server
-// translates to column ids before storing. That matches how every
-// other workflow node references columns (`{{.Node.X.priority}}`)
-// so the YAML reads naturally.
+// datatable_* node types. Per-op visibility via data-when-op.
+// Interactive builders replace raw YAML textareas.
 templ Inspector() {
 	<div
 		class="wf-inspector-panel hidden"
 		data-node-type="datatable_get datatable_exists datatable_query datatable_count datatable_insert datatable_upsert datatable_delete"
 	>
 		<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Data table</label>
-		<input
-			data-field="table"
-			type="text"
-			class="wf-input font-mono"
-			placeholder="events"
-		/>
-		<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">Slug of the table in Data Tables (lowercase a-z 0-9 -).</div>
+		<select data-field="table" class="wf-input">
+			<option value="">(select table)</option>
+		</select>
+		<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">Table from Data Tables. <a href="../data-tables" target="_blank" class="text-green-600 dark:text-green-400 hover:underline">Manage tables ↗</a></div>
 
 		<!-- key: get only -->
 		<div data-when-op="get" class="hidden">
-			<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Primary key value</label>
+			<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">
+				Primary key value
+				<span class="text-rose-500 ml-0.5">*</span>
+			</label>
 			<input data-field="key" type="text" class="wf-input font-mono" placeholder={ "{{.Event.Payload.id}}" }/>
-			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">YAML map literal — e.g. id: then a Go template referencing the event payload.</div>
+			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">Go template expression for the primary key.</div>
 		</div>
 
-		<!-- where: exists / query / count / delete -->
+		<!-- conditions builder: exists / query / count / delete -->
 		<div data-when-op="exists query count delete" class="hidden">
-			<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Where (equality, YAML map)</label>
-			<textarea data-field="where" rows="3" class="wf-input font-mono" placeholder={ "status: open\nuser_id: {{ .Event.Payload.user }}" }></textarea>
-		</div>
-
-		<!-- conditions: query / count / delete / exists (n8n parity ops) -->
-		<div data-when-op="exists query count delete" class="hidden">
-			<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Conditions (n8n ops, YAML list)</label>
-			<textarea data-field="conditions" rows="4" class="wf-input font-mono" placeholder={ "- column: priority\n  op: gte\n  value: 5\n- column: status\n  op: equals\n  value: open" }></textarea>
-			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">Wins over Where when both set. Ops: equals/not_equals/gt/gte/lt/lte/contains/in/is_empty/is_not_empty.</div>
+			<div class="flex items-center justify-between mb-1 mt-3">
+				<label class="text-xs font-medium text-black-800 dark:text-black-600">Filter conditions</label>
+				<button type="button" data-dt-add="condition" class="text-[11px] text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 font-medium">+ Add condition</button>
+			</div>
+			<div data-dt-list="condition" class="space-y-1.5"></div>
+			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">Ops: equals / not_equals / gt / gte / lt / lte / contains / in / is_empty / is_not_empty</div>
 		</div>
 
 		<!-- order + limit + offset: query only -->
-		<div data-when-op="query" class="hidden mt-3 grid grid-cols-2 gap-2">
-			<div class="col-span-2">
-				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Order by (YAML list)</label>
-				<textarea data-field="order_by" rows="2" class="wf-input font-mono" placeholder={ "- column: priority\n  direction: desc" }></textarea>
+		<div data-when-op="query" class="hidden">
+			<div class="flex items-center justify-between mb-1 mt-3">
+				<label class="text-xs font-medium text-black-800 dark:text-black-600">Order by</label>
+				<button type="button" data-dt-add="order" class="text-[11px] text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 font-medium">+ Add</button>
 			</div>
-			<div>
-				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Limit</label>
-				<input data-field="limit" type="number" class="wf-input font-mono" placeholder="25"/>
-			</div>
-			<div>
-				<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Offset</label>
-				<input data-field="offset" type="number" class="wf-input font-mono" placeholder="0"/>
+			<div data-dt-list="order" class="space-y-1.5"></div>
+			<div class="mt-3 grid grid-cols-2 gap-2">
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Limit</label>
+					<input data-field="limit" type="number" class="wf-input font-mono" placeholder="25"/>
+				</div>
+				<div>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Offset</label>
+					<input data-field="offset" type="number" class="wf-input font-mono" placeholder="0"/>
+				</div>
 			</div>
 		</div>
 
-		<!-- row body: insert / upsert -->
+		<!-- row builder: insert / upsert -->
 		<div data-when-op="insert upsert" class="hidden">
-			<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1 mt-3">Row (YAML map)</label>
-			<textarea data-field="row" rows="5" class="wf-input font-mono" placeholder={ "status: received\nuser_id: {{ .Event.Payload.user }}\nhandled_at: {{ now \"2006-01-02T15:04:05Z07:00\" }}" }></textarea>
-			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">id / created_at / updated_at are auto-managed by the data table.</div>
+			<div class="flex items-center justify-between mb-1 mt-3">
+				<label class="text-xs font-medium text-black-800 dark:text-black-600">Fields</label>
+				<button type="button" data-dt-add="row" class="text-[11px] text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 font-medium">+ Add field</button>
+			</div>
+			<div data-dt-list="row" class="space-y-1.5"></div>
+			<div class="mt-1 text-[11px] text-black-700 dark:text-black-600">id / created_at / updated_at are auto-managed.</div>
 		</div>
 	</div>
 }
