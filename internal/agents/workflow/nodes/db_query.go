@@ -146,3 +146,6 @@ func (e *DBQueryExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 		},
 	}, nil
 }
+
+// DBQuerySchema is the exported form of dbQuerySchema for the editor UI.
+type DBQuerySchema = dbQuerySchema

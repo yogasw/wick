@@ -647,6 +647,38 @@
     return out;
   }
 
+  // hydrateServerRenderedArgForm restores values + wires Fixed/Expression
+  // toggles on a panel whose HTML is already server-rendered in the DOM
+  // (registry module panels from nodeModulePartials()). Unlike
+  // hydrateArgsForm it never replaces innerHTML — it only reads/writes
+  // existing field elements and re-attaches button listeners.
+  function hydrateServerRenderedArgForm(container, args, modes) {
+    if (!container) return;
+    container.querySelectorAll('.wf-arg-field').forEach((wrap) => {
+      const key = wrap.dataset.fieldKey;
+      const editable = argEditable(wrap);
+      if (!editable || !key) return;
+      const raw = args && args[key] != null ? args[key] : '';
+      const stored = Array.isArray(raw) ? JSON.stringify(raw) : String(raw);
+      if (editable.type === 'checkbox') {
+        editable.checked = stored === 'true';
+      } else if (stored !== '' || editable.tagName === 'SELECT') {
+        editable.value = stored;
+      }
+      const initialMode = (modes && modes[key]) || 'fixed';
+      setArgFieldMode(wrap, initialMode, false);
+      // Re-attach toggle listeners (idempotent via cloneNode trick is
+      // overkill here; duplicates are harmless since setArgFieldMode is
+      // idempotent). Use a flag to skip panels already wired.
+      if (!wrap._argModeWired) {
+        wrap._argModeWired = true;
+        wrap.querySelectorAll('[data-arg-mode]').forEach((btn) => {
+          btn.addEventListener('click', () => setArgFieldMode(wrap, btn.dataset.argMode, true));
+        });
+      }
+    });
+  }
+
   // Expose the args-form helpers so per-node modules (WickNodes) can
   // reuse the Fixed/Expression chrome + value collection without
   // duplicating the wiring. Used by /static/nodes/http/inspector.js.
@@ -2003,6 +2035,14 @@
     if (mod && typeof mod.hydrate === 'function') {
       mod.hydrate(inner);
     }
+    // Generic ArgForm hydration for registry-backed module panels.
+    // Panels built via ArgForm store their values in inner keyed by
+    // data-field-key. HTML is already server-rendered; just restore
+    // values and wire the Fixed/Expression toggle buttons.
+    const activeModulePanel = document.querySelector(`.wf-inspector-panel[data-node-type="${CSS.escape(kind)}"]:not(.hidden)`);
+    if (activeModulePanel) {
+      hydrateServerRenderedArgForm(activeModulePanel, inner, inner.__arg_modes || {});
+    }
     if (kind === 'classify') {
       panels.cases.classList.remove('hidden');
       renderCaseRows(inner.cases || []);
@@ -2741,6 +2781,12 @@
     const mod = nodeModule(kind);
     if (mod && typeof mod.save === 'function') {
       mod.save(inner);
+    }
+    // Generic save for registry-backed module panels (ArgForm fields).
+    const savePanel = document.querySelector(`.wf-inspector-panel[data-node-type="${CSS.escape(kind)}"]:not(.hidden)`);
+    if (savePanel && savePanel.querySelector('.wf-arg-field')) {
+      Object.assign(inner, collectArgs(savePanel));
+      Object.assign(inner.__arg_modes = inner.__arg_modes || {}, collectArgModes(savePanel));
     }
     if (kind === 'shell') {
       inner.command = f.command.value.split('\n').filter(Boolean);

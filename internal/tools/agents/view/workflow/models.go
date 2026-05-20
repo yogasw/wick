@@ -138,11 +138,7 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 		})
 	}
 
-	actions := []PaletteItem{
-		{Type: "shell", Label: "shell", Dot: "bg-slate-500"},
-		{Type: "db_query", Label: "db_query", Dot: "bg-sky-500"},
-		{Type: "transform", Label: "transform", Dot: "bg-cyan-500"},
-	}
+	actions := []PaletteItem{}
 	for _, ch := range channels {
 		if len(ch.Actions) == 0 {
 			continue
@@ -201,7 +197,6 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 		{
 			Title: "AI",
 			Items: []PaletteItem{
-				{Type: "classify", Label: "classify", Dot: "bg-pink-500"},
 				{Type: "agent", Label: "agent", Dot: "bg-violet-500"},
 			},
 		},
@@ -209,9 +204,7 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 		{
 			Title: "Logic",
 			Items: []PaletteItem{
-				{Type: "branch", Label: "branch", Dot: "bg-red-500"},
 				{Type: "parallel", Label: "parallel", Dot: "bg-lime-500"},
-				{Type: "end", Label: "end", Dot: "bg-slate-700"},
 			},
 		},
 	}
