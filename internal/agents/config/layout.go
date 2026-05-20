@@ -26,7 +26,6 @@ func (l Layout) PresetsDir() string    { return filepath.Join(l.BaseDir, "preset
 func (l Layout) WorkspacesDir() string { return filepath.Join(l.BaseDir, "workspaces") }
 func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessions") }
 func (l Layout) WorkflowsDir() string  { return filepath.Join(l.BaseDir, "workflows") }
-func (l Layout) DatasetsDir() string   { return filepath.Join(l.BaseDir, "datasets") }
 
 // WorkflowDir is the folder for one workflow (`workflows/<id>/`).
 func (l Layout) WorkflowDir(id string) string {
@@ -73,12 +72,6 @@ func (l Layout) WorkflowNodesDir(id string) string {
 func (l Layout) WorkflowTestsDir(id string) string {
 	return filepath.Join(l.WorkflowDir(id), "__tests__")
 }
-func (l Layout) DatasetDir(slug string) string {
-	return filepath.Join(l.DatasetsDir(), slug)
-}
-func (l Layout) DatasetFile(slug string) string {
-	return filepath.Join(l.DatasetDir(slug), "dataset.yaml")
-}
 
 func (l Layout) PresetDir(name string) string  { return filepath.Join(l.PresetsDir(), name) }
 func (l Layout) PresetFile(name string) string { return filepath.Join(l.PresetDir(name), "agent.md") }
@@ -123,7 +116,7 @@ func (l Layout) SessionRaw(id string) string {
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {
-	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir(), l.WorkflowsDir(), l.DatasetsDir()} {
+	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir(), l.WorkflowsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

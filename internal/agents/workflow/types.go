@@ -1,7 +1,7 @@
 // Package workflow is the domain for AI-orchestrated multi-step
 // automations stored at `<BaseDir>/workflows/<id>/`. A workflow is a
 // directed acyclic graph of typed nodes (classify/agent/connector/
-// shell/http/branch/parallel/merge/dataset_*/transform/end) with one
+// shell/http/branch/parallel/merge/datatable_*/transform/end) with one
 // or more triggers (cron, channel, webhook, manual, schedule_at,
 // error). The engine walks the graph node-by-node, persists state per
 // run, and reuses existing wick infra (channels, connectors, providers,
@@ -35,21 +35,21 @@ const (
 	NodeParallel      NodeType = "parallel"
 	NodeMerge         NodeType = "merge"
 	NodeEnd           NodeType = "end"
-	NodeDatasetGet    NodeType = "dataset_get"
-	NodeDatasetExists NodeType = "dataset_exists"
-	NodeDatasetQuery  NodeType = "dataset_query"
-	NodeDatasetInsert NodeType = "dataset_insert"
-	NodeDatasetUpsert NodeType = "dataset_upsert"
-	NodeDatasetDelete NodeType = "dataset_delete"
-	NodeDatasetCount  NodeType = "dataset_count"
-	NodeSessionInit   NodeType = "session_init"
+	NodeDataTableGet    NodeType = "datatable_get"
+	NodeDataTableExists NodeType = "datatable_exists"
+	NodeDataTableQuery  NodeType = "datatable_query"
+	NodeDataTableInsert NodeType = "datatable_insert"
+	NodeDataTableUpsert NodeType = "datatable_upsert"
+	NodeDataTableDelete NodeType = "datatable_delete"
+	NodeDataTableCount  NodeType = "datatable_count"
+	NodeSessionInit     NodeType = "session_init"
 )
 
-// IsDatasetNode reports whether t is one of the dataset_* variants.
-func (t NodeType) IsDatasetNode() bool {
+// IsDataTableNode reports whether t is one of the datatable_* variants.
+func (t NodeType) IsDataTableNode() bool {
 	switch t {
-	case NodeDatasetGet, NodeDatasetExists, NodeDatasetQuery,
-		NodeDatasetInsert, NodeDatasetUpsert, NodeDatasetDelete, NodeDatasetCount:
+	case NodeDataTableGet, NodeDataTableExists, NodeDataTableQuery,
+		NodeDataTableInsert, NodeDataTableUpsert, NodeDataTableDelete, NodeDataTableCount:
 		return true
 	}
 	return false
@@ -57,8 +57,14 @@ func (t NodeType) IsDatasetNode() bool {
 
 // IsBranchSource reports whether nodes of this type produce a verdict
 // that filters outgoing edges by `case:`.
+//
+// datatable_exists and datatable_get emit verdicts ("true"/"false" and
+// "found"/"not_found") that engines + canvas treat as case keys so a
+// single node can branch dedup / lookup flows without a separate branch
+// node — matches the n8n Data Table "If exists" handler pattern.
 func (t NodeType) IsBranchSource() bool {
-	return t == NodeClassify || t == NodeBranch || t == NodeSwitch
+	return t == NodeClassify || t == NodeBranch || t == NodeSwitch ||
+		t == NodeDataTableExists || t == NodeDataTableGet
 }
 
 // TriggerType discriminator for the polymorphic Trigger body.
@@ -86,11 +92,11 @@ type Workflow struct {
 	Description    string           `yaml:"description,omitempty"`
 	Enabled        bool             `yaml:"enabled"`
 	MaxDurationSec int              `yaml:"max_duration_sec,omitempty"`
-	Triggers       []Trigger        `yaml:"triggers"`
-	Queue          QueuePolicy      `yaml:"queue,omitempty"`
-	Env            []EnvField       `yaml:"env,omitempty"`
-	Datasets       []DatasetBinding `yaml:"datasets,omitempty"`
-	Graph          Graph            `yaml:"graph"`
+	Triggers       []Trigger          `yaml:"triggers"`
+	Queue          QueuePolicy        `yaml:"queue,omitempty"`
+	Env            []EnvField         `yaml:"env,omitempty"`
+	DataTables     []DataTableBinding `yaml:"data_tables,omitempty"`
+	Graph          Graph              `yaml:"graph"`
 	OnError        *OnErrorBinding  `yaml:"on_error,omitempty"`
 	CreatedBy      string           `yaml:"created_by,omitempty"`
 	CreatedAt      time.Time        `yaml:"created_at,omitempty"`
@@ -192,7 +198,7 @@ type Node struct {
 	// here, matching pre-ArgModes workflows.
 	ArgModes map[string]string `yaml:"arg_modes,omitempty"`
 
-	// connector — uses row_id for instance (dataset_* nodes own `row:`)
+	// connector — uses row_id for instance (datatable_* nodes own `row:`)
 	Module string `yaml:"module,omitempty"`
 	Row    string `yaml:"row_id,omitempty"`
 
@@ -236,14 +242,15 @@ type Node struct {
 	Cases       []SwitchCase `yaml:"cases,omitempty"`
 	DefaultCase string       `yaml:"default_case,omitempty"`
 
-	// dataset_*
-	Dataset   string         `yaml:"dataset,omitempty"`
-	Where     map[string]any `yaml:"where,omitempty"`
-	Key       map[string]any `yaml:"key,omitempty"`
-	RowValues map[string]any `yaml:"row,omitempty"`
-	OrderBy   []DatasetOrder `yaml:"order_by,omitempty"`
-	Limit     int            `yaml:"limit,omitempty"`
-	Offset    int            `yaml:"offset,omitempty"`
+	// datatable_*
+	Table      string             `yaml:"table,omitempty"`
+	Where      map[string]any     `yaml:"where,omitempty"`
+	Conditions []DataTableCondYAML `yaml:"conditions,omitempty"`
+	Key        map[string]any     `yaml:"key,omitempty"`
+	RowValues  map[string]any     `yaml:"row,omitempty"`
+	OrderBy    []DataTableOrder   `yaml:"order_by,omitempty"`
+	Limit      int                `yaml:"limit,omitempty"`
+	Offset     int                `yaml:"offset,omitempty"`
 
 	// end
 	Result string `yaml:"result,omitempty"`
@@ -320,10 +327,18 @@ type SwitchCase struct {
 	Case string `yaml:"case"`
 }
 
-// DatasetOrder is one order-by clause.
-type DatasetOrder struct {
+// DataTableOrder is one order-by clause.
+type DataTableOrder struct {
 	Column    string `yaml:"column"`
 	Direction string `yaml:"direction,omitempty"`
+}
+
+// DataTableCondYAML is one condition row declared in workflow.yaml.
+// Mirrors the n8n Data Table node condition shape.
+type DataTableCondYAML struct {
+	Column string `yaml:"column"`
+	Op     string `yaml:"op"`              // equals|not_equals|gt|gte|lt|lte|contains|in|is_empty|is_not_empty
+	Value  any    `yaml:"value,omitempty"`
 }
 
 // EnvField is one entry of the workflow's env schema.
@@ -348,12 +363,11 @@ type EnvOption struct {
 	Name string `yaml:"name"`
 }
 
-// DatasetBinding wires a dataset alias to a dataset slug.
-type DatasetBinding struct {
-	Name            string `yaml:"name"`
-	Ref             string `yaml:"ref"`
-	Mode            string `yaml:"mode,omitempty"`
-	ExpectedVersion int    `yaml:"expected_version,omitempty"`
+// DataTableBinding wires a workflow-local alias to a data table slug.
+type DataTableBinding struct {
+	Name string `yaml:"name"`
+	Ref  string `yaml:"ref"`
+	Mode string `yaml:"mode,omitempty"`
 }
 
 // Trigger is one polymorphic trigger entry. Fields are a flat union

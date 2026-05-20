@@ -445,7 +445,7 @@ func saveWorkflow(c *tool.Ctx) {
 		w.Name = prev.Name
 		w.Description = prev.Description
 		w.Env = prev.Env
-		w.Datasets = prev.Datasets
+		w.DataTables = prev.DataTables
 		w.OnError = prev.OnError
 	}
 	// Validation is non-blocking on save — the canvas is allowed to

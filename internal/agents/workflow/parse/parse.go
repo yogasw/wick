@@ -32,7 +32,7 @@ var IdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var IDRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 // NodeIDRe accepts id charset plus underscore. Underscore is allowed
-// because palette node-type names (e.g. `session_init`, `dataset_query`)
+// because palette node-type names (e.g. `session_init`, `datatable_query`)
 // are reused as the seeded ID on drop — rejecting `_` here would force
 // every Go const to dual-spell as `session-init` solely for the
 // validator. Folder names still use IDRe (hyphen-only).
@@ -477,9 +477,9 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		// workflow_run; empty session_id falls back to preset. Engine
 		// resolves at runtime.
 	default:
-		if n.Type.IsDatasetNode() {
-			if n.Dataset == "" {
-				r.Errors = append(r.Errors, Error{Path: path + ".dataset", Message: "is required"})
+		if n.Type.IsDataTableNode() {
+			if n.Table == "" {
+				r.Errors = append(r.Errors, Error{Path: path + ".table", Message: "is required"})
 			}
 			return
 		}
