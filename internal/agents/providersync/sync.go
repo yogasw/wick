@@ -182,11 +182,21 @@ func (m *Manager) RestoreSelected(ctx context.Context, ids []uint, srcsByInstanc
 // SrcInfo holds mode and path for one configured sync source.
 type SrcInfo struct{ Mode, SyncPath string }
 
-// RestoreAll writes all DB file rows back to filesystem.
-// rel_path is now an absolute path; we only restore files whose absolute path
-// falls under at least one enabled source (file mode "single") or under an
-// enabled folder source's prefix. Call once at startup.
+// RestoreAll writes all DB file rows back to filesystem with the disk-wins
+// guard: missing → write, same hash → skip, diverged → keep disk + log.
+// Used by the cron tick and the /restore-now UI button.
 func (m *Manager) RestoreAll(ctx context.Context) error {
+	return m.restoreAll(ctx, false)
+}
+
+// RestoreAllForce overwrites every covered file on disk with the DB copy,
+// no hash check. Used at server boot so DB is the source of truth on the
+// first restore after a container restart (no-volume env).
+func (m *Manager) RestoreAllForce(ctx context.Context) error {
+	return m.restoreAll(ctx, true)
+}
+
+func (m *Manager) restoreAll(ctx context.Context, force bool) error {
 	// Legacy-row wipe is now a one-shot DB migration in postgres.Migrate;
 	// nothing to clean up here.
 	sources, err := m.store.listSources(ctx)
@@ -226,18 +236,18 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		if dst == "" {
 			continue
 		}
-		// Disk is source of truth at startup: only fill gaps.
-		// - missing on disk → write from DB
-		// - exists, same hash → no-op
-		// - exists, diverged → keep disk, log
-		if existing, err := os.ReadFile(dst); err == nil {
-			if hashBytes(existing) == row.ContentHash {
-				skippedExist++
+		// force = boot path: DB is source of truth, overwrite always.
+		// guard path: missing → write, same hash → skip, diverged → keep disk.
+		if !force {
+			if existing, err := os.ReadFile(dst); err == nil {
+				if hashBytes(existing) == row.ContentHash {
+					skippedExist++
+					continue
+				}
+				skippedDiverged++
+				log.Warn().Str("dst", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
 				continue
 			}
-			skippedDiverged++
-			log.Warn().Str("dst", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
-			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			log.Warn().Err(err).Str("dst", dst).Msg("providersync: restore mkdir failed")
@@ -323,7 +333,39 @@ func pickRetention(abs string, sources []entity.ProviderStorageSource) int {
 }
 
 // Upload stores file content directly into DB (manual upload).
+//
+// If relPath is already covered by an enabled include source whose
+// provider/instance differs from the caller's values, the upload is
+// re-tagged to that source. This stops a single physical path from
+// living under two (provider, instance) pairs — which would leave one
+// copy uncovered by RestoreAll and effectively unrestorable.
 func (m *Manager) Upload(ctx context.Context, providerType, instanceName, relPath string, content []byte) error {
+	if sources, err := m.store.listSources(ctx); err == nil {
+		// Pick the deepest covering enabled include source so nested
+		// sources (e.g. /a/b inside /a) win over the shallower one.
+		bestLen := -1
+		a := normAbs(relPath)
+		for _, s := range sources {
+			if !s.Enabled || s.Mode == "exclude" {
+				continue
+			}
+			sp := normAbs(s.SyncPath)
+			match := false
+			if s.Mode == "single" {
+				match = sp == a
+			} else {
+				match = a == sp || strings.HasPrefix(a, sp+"/")
+			}
+			if !match {
+				continue
+			}
+			if len(sp) > bestLen {
+				bestLen = len(sp)
+				providerType = s.ProviderType
+				instanceName = s.InstanceName
+			}
+		}
+	}
 	hash := hashBytes(content)
 	row := entity.ProviderStorage{
 		ProviderType: providerType,

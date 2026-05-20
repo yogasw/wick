@@ -4,10 +4,12 @@
 package providerstorage
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -34,6 +36,7 @@ func Register(r tool.Router) {
 	r.POST("/restore", restoreSelected)
 	r.POST("/delete-selected", deleteSelected)
 	r.GET("/{id}/preview", previewFile)
+	r.GET("/{id}/download", downloadEntry)
 	r.POST("/{id}/retention", setRetention)
 	r.DELETE("/{id}", deleteFile)
 	r.POST("/upload", uploadFile)
@@ -214,6 +217,80 @@ func previewFile(c *tool.Ctx) {
 		"content":  string(row.Content),
 		"size":     len(row.Content),
 	})
+}
+
+// downloadEntry streams a single file row as-is, or a folder row as a zip
+// containing every descendant file. rel_path is absolute on disk; zip
+// entries are made relative to the selected folder so unpacking yields the
+// same subtree shape the user sees in the explorer.
+func downloadEntry(c *tool.Ctx) {
+	if globalSyncMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
+		return
+	}
+	n, err := strconv.ParseUint(c.PathValue("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	row, err := globalSyncMgr.GetByID(c.Context(), uint(n))
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	if !row.IsDir {
+		name := row.Name
+		if name == "" {
+			name = filepath.Base(row.RelPath)
+		}
+		c.W.Header().Set("Content-Type", "application/octet-stream")
+		c.W.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(name)+`"`)
+		c.W.Header().Set("Content-Length", strconv.Itoa(len(row.Content)))
+		_, _ = c.W.Write(row.Content)
+		return
+	}
+
+	all, err := globalSyncMgr.ListAll(c.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	prefix := strings.TrimRight(filepath.ToSlash(row.RelPath), "/") + "/"
+	rootName := row.Name
+	if rootName == "" {
+		rootName = filepath.Base(row.RelPath)
+	}
+
+	c.W.Header().Set("Content-Type", "application/zip")
+	c.W.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(rootName)+`.zip"`)
+
+	zw := zip.NewWriter(c.W)
+	defer zw.Close()
+	for _, r := range all {
+		if r.IsDir || r.ProviderType != row.ProviderType || r.InstanceName != row.InstanceName {
+			continue
+		}
+		abs := filepath.ToSlash(r.RelPath)
+		if !strings.HasPrefix(abs, prefix) {
+			continue
+		}
+		rel := path.Join(rootName, strings.TrimPrefix(abs, prefix))
+		fw, err := zw.Create(rel)
+		if err != nil {
+			log.Warn().Err(err).Str("entry", rel).Msg("provider-storage: zip create")
+			return
+		}
+		if _, err := fw.Write(r.Content); err != nil {
+			log.Warn().Err(err).Str("entry", rel).Msg("provider-storage: zip write")
+			return
+		}
+	}
+}
+
+func sanitizeFilename(s string) string {
+	r := strings.NewReplacer(`"`, "", `\`, "_", "/", "_", "\r", "", "\n", "")
+	return r.Replace(s)
 }
 
 func setRetention(c *tool.Ctx) {
@@ -573,6 +650,7 @@ func treeChildren(c *tool.Ctx) {
 	type childRow struct {
 		ID            uint   `json:"id"`
 		Name          string `json:"name"`
+		RelPath       string `json:"rel_path"`
 		IsDir         bool   `json:"is_dir"`
 		Size          int    `json:"size"`
 		SyncedAt      string `json:"synced_at"`
@@ -583,6 +661,7 @@ func treeChildren(c *tool.Ctx) {
 		row := childRow{
 			ID:            r.ID,
 			Name:          r.Name,
+			RelPath:       r.RelPath,
 			IsDir:         r.IsDir,
 			RetentionDays: r.RetentionDays,
 		}

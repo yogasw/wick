@@ -7,21 +7,34 @@ templ storageModals() {
 			<h3 class="mb-4 text-[0.9375rem] font-semibold text-black-900 dark:text-white-100">Upload File</h3>
 			<form id="upload-form" onsubmit="submitUpload(event)">
 				<div class="space-y-3">
-					<div>
-						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Provider Type</label>
-						<input type="text" name="provider_type" required placeholder="e.g. claude" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					<!-- Contextual banner (shown when opened from explorer) -->
+					<div id="upload-context-banner" style="display:none" class="rounded-lg border border-green-200 dark:border-green-700 bg-green-50 dark:bg-navy-800 px-3 py-2">
+						<p class="text-[0.6875rem] font-medium text-black-800 dark:text-black-500">Saving to</p>
+						<p id="upload-context-path" class="font-mono text-[0.75rem] text-black-900 dark:text-white-100 break-all"></p>
 					</div>
-					<div>
-						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Instance Name</label>
-						<input type="text" name="instance_name" required placeholder="e.g. default" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					<!-- Manual fields (hidden in contextual mode) -->
+					<div id="upload-manual-fields" class="space-y-3">
+						<div>
+							<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Provider Type</label>
+							<input id="upload-provider" type="text" name="provider_type" placeholder="e.g. claude" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+						</div>
+						<div>
+							<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Instance Name</label>
+							<input id="upload-instance" type="text" name="instance_name" placeholder="e.g. default" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+						</div>
+						<div>
+							<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Relative Path</label>
+							<input id="upload-relpath" type="text" name="rel_path" placeholder="e.g. .credentials" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+						</div>
 					</div>
-					<div>
-						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Relative Path</label>
-						<input type="text" name="rel_path" required placeholder="e.g. .credentials" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
+					<!-- Filename input (contextual mode only) -->
+					<div id="upload-filename-wrap" style="display:none">
+						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">Filename</label>
+						<input id="upload-filename" type="text" placeholder="leave blank to use picked file's name" class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-[0.8125rem] text-black-900 dark:text-white-100 focus:outline-none focus:ring-2 focus:ring-prog-300"/>
 					</div>
 					<div>
 						<label class="block text-[0.8125rem] font-medium text-black-800 dark:text-black-500 mb-1">File</label>
-						<input type="file" name="file" required class="w-full text-[0.8125rem] text-black-900 dark:text-white-100"/>
+						<input id="upload-file" type="file" name="file" required class="w-full text-[0.8125rem] text-black-900 dark:text-white-100"/>
 					</div>
 				</div>
 				<div class="mt-5 flex justify-end gap-2">

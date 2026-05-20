@@ -68,13 +68,14 @@ postgres.Migrate(db)
   CREATE UNIQUE INDEX idx_storage_tree (soft-fail on duplicates)
 
 providersync.New(db)
-syncMgr.SyncAll(ctx)
-  for each enabled include source: SyncOne → backup → upsert files
-  for each (provider, instance) once: PurgeExcluded (self-heal pre-fix rows)
-
-syncMgr.RestoreAll(ctx)
+syncMgr.RestoreAllForce(ctx)       ← boot: DB is source of truth, overwrite all
   for each file row covered by enabled include sources:
-    read disk; skip if same hash; warn-skip if diverged; write if missing
+    write content from DB unconditionally
+
+(no SyncAll on boot — cron job tick handles capture)
+provider-storage-sync cron (*/1 * * * *):
+  RestoreAll (guarded: missing→write, same→skip, diverged→keep disk)
+  → SyncOne per enabled source
 ```
 
 `ensureFolderChain` is SELECT-then-INSERT (orphan-recovery fallback: if SELECT by `(parent_id, name)` misses but a row exists at the same `rel_path`, re-parent it). No `ON CONFLICT` is used because SQLite errors when the named conflict target is one of multiple unique indexes hit by the insert.
@@ -90,7 +91,8 @@ syncMgr.RestoreAll(ctx)
 | `ListSources(ctx)` | All source rows |
 | `SyncOne(ctx, ins)` | Backup pass for one include source |
 | `SyncAll(ctx)` | Iterate all enabled include sources + self-heal purge |
-| `RestoreAll(ctx)` | DB → disk with disk-wins guard |
+| `RestoreAll(ctx)` | DB → disk with disk-wins guard (cron + UI) |
+| `RestoreAllForce(ctx)` | DB → disk overwrite-all (boot only) |
 | `RestoreSelected(ctx, ids, _)` | Force-overwrite specified file rows |
 | `RecomputeRetention(ctx, p, i)` | Re-derive `retention_days` for every file row from the deepest covering source |
 | `PurgeExcluded(ctx, p, i)` | Delete file rows matching any enabled `Mode=exclude` row; prune empty folders |
@@ -105,6 +107,7 @@ GET    /tools/provider-storage/files                — flat file list (excludes
 GET    /tools/provider-storage/roots                — top-level rows across all instances
 GET    /tools/provider-storage/tree                 — ?provider=&instance=&parent_id=
 GET    /tools/provider-storage/{id}/preview
+GET    /tools/provider-storage/{id}/download         — file = raw bytes, folder = zip of subtree
 POST   /tools/provider-storage/restore              — body: ids[]
 POST   /tools/provider-storage/upload
 POST   /tools/provider-storage/sync-now
