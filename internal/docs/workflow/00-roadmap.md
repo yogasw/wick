@@ -15,7 +15,7 @@ Jangan skip — phase N+1 butuh phase N. Tiap phase **WAJIB include unit
 | 5. Channel integration | ✅ done | WorkflowChannel iface + registry + executor + implicit-reply injection |
 | 6. Connector integration | ✅ done | in-process Execute() dispatch + audit hook |
 | 7. Provider + AI nodes | ✅ done | 6-layer classify + agent + session ID derivation; provider impls deferred |
-| 8. Datasets | ✅ done | in-mem store + 7 dataset_* executors; Postgres impl deferred |
+| 8. Data Tables | ✅ done | in-mem store + 7 datatable_* executors; Postgres impl deferred |
 | 9. Env + secrets | ✅ done | schema/value resolver + secret leak guard |
 | 10. AI guard | ✅ done | 5 rule packs + ContentHash + override flow |
 | 11. Interactive + error trigger | ✅ done | Slack interactive Action specs + error router with depth guard |
@@ -33,7 +33,7 @@ Deferred from above (out-of-scope for the package, wire when concrete UIs land):
   [`setup/watcher.go`](../../agents/workflow/setup/watcher.go) (no
   new dep) — calls `HotReload` on mtime change, unregisters ids
   whose folder disappears. See §15.
-- Postgres-backed DatasetService + Postgres `wick_workflow_state` table
+- Postgres-backed DataTableService + Postgres `wick_workflow_state` table
   (in-memory + per-workflow `state.json` shim sudah jalan)
 - Per-provider impls (Claude Code / Codex / Gemini) — abstraction
   Provider tinggal di-implement di `internal/agents/provider/`
@@ -222,40 +222,38 @@ Integration test:
 - [ ] `integration_classify_test.go` — workflow dgn classify dgn 5 mock provider responses (success, fuzzy, default fallback, low confidence, retry)
 - [ ] `integration_agent_test.go` — agent dgn skill invocation, root session shared 2 agent nodes
 
-**Phase 8 — Datasets** ✅
+**Phase 8 — Data Tables** ✅
 
 Implementation:
-- [ ] `wick_datasets_rows` table migration (Postgres)
-- [ ] Dataset Service interface per §12: Create/UpdateSchema/Query/Insert/Upsert/Delete/Count/Get/Exists
-- [ ] Schema validation (strict/lax/extensible), JSONB shape enforcement
+- [ ] `wick_data_tables` + `wick_data_table_rows` table migration (Postgres)
+- [ ] DataTable Service interface per §12: Create/UpdateSchema/Query/Insert/Upsert/Delete/Count/Get/Exists
+- [ ] Schema validation (strict/lax), JSONB shape enforcement
 - [ ] Partial GIN index management per declared `indexed: true` columns
-- [ ] Node executors: `dataset_query`/`dataset_get`/`dataset_exists`/`dataset_insert`/`dataset_upsert`/`dataset_delete`/`dataset_count`
-- [ ] File-based versioning (`history/v<N>.yaml`), version pin enforcement
+- [ ] Node executors: `datatable_query`/`datatable_get`/`datatable_exists`/`datatable_insert`/`datatable_upsert`/`datatable_delete`/`datatable_count`
+- [ ] Audit table (`wick_data_table_audit`) opt-in via `access.audit_changes`
 - [ ] Adoption flow (orphan rows detect → schema infer)
 - [ ] Migration job (atomic batch + rollback)
 
 Unit tests:
-- [ ] `dataset_schema_test.go` — strict mode reject extra key, lax accept + warn
-- [ ] `dataset_schema_test.go` — column type validation (string, int, float, bool, timestamp, json, enum)
-- [ ] `dataset_schema_test.go` — primary_key extract to `pk` column
-- [ ] `dataset_service_test.go` — Query dgn structured where → parameterized SQL (no injection)
-- [ ] `dataset_service_test.go` — Insert reject schema mismatch (strict)
-- [ ] `dataset_service_test.go` — Upsert idempotent by pk
-- [ ] `dataset_service_test.go` — Delete dgn where filter
-- [ ] `executor_dataset_test.go` — all 7 dataset_* nodes, branching cases (`true/false`, `found/not_found`)
-- [ ] `dataset_versioning_test.go` — schema bump → snapshot `history/v<N>.yaml`, version increment
-- [ ] `dataset_versioning_test.go` — rollback swap files + version meta
-- [ ] `dataset_migration_test.go` — dry-run validate without write
-- [ ] `dataset_migration_test.go` — apply atomic per-batch (1000 rows), idempotent re-run skip migrated
-- [ ] `dataset_migration_test.go` — fail mid-batch → rollback transaction
-- [ ] `dataset_adoption_test.go` — orphan rows detect, infer schema from samples
-- [ ] `dataset_access_test.go` — workflow not in `access.workflows` → reject write
-- [ ] `dataset_access_test.go` — `row_filter: by_creator` enforce
-- [ ] `dataset_access_test.go` — `expected_version` pin mismatch → workflow load reject
+- [ ] `datatable_schema_test.go` — strict mode reject extra key, lax accept + warn
+- [ ] `datatable_schema_test.go` — column type validation (string, int, float, bool, timestamp, json, enum)
+- [ ] `datatable_schema_test.go` — primary_key extract to `pk` column
+- [ ] `datatable_service_test.go` — Query dgn structured where → parameterized SQL (no injection)
+- [ ] `datatable_service_test.go` — Insert reject schema mismatch (strict)
+- [ ] `datatable_service_test.go` — Upsert idempotent by pk
+- [ ] `datatable_service_test.go` — Delete dgn where filter
+- [ ] `executor_datatable_test.go` — all 7 datatable_* nodes, branching cases (`true/false`, `found/not_found`)
+- [ ] `datatable_audit_test.go` — schema change writes audit row when `audit_changes: true`
+- [ ] `datatable_migration_test.go` — dry-run validate without write
+- [ ] `datatable_migration_test.go` — apply atomic per-batch (1000 rows), idempotent re-run skip migrated
+- [ ] `datatable_migration_test.go` — fail mid-batch → rollback transaction
+- [ ] `datatable_adoption_test.go` — orphan rows detect, infer schema from samples
+- [ ] `datatable_access_test.go` — workflow not in `access.workflows` → reject write
+- [ ] `datatable_access_test.go` — `row_filter: by_creator` enforce
 
 Integration test:
-- [ ] `integration_dedup_test.go` — webhook dedup workflow (dataset_exists + branch + upsert)
-- [ ] `integration_sharing_test.go` — 2 workflows share dataset, strict schema enforced, both write OK
+- [ ] `integration_dedup_test.go` — webhook dedup workflow (datatable_exists + branch + upsert)
+- [ ] `integration_sharing_test.go` — 2 workflows share data table, strict schema enforced, both write OK
 
 **Phase 9 — Environment & secrets** ✅
 
@@ -351,14 +349,14 @@ Implementation:
   - Assertion DSL parser
 - [ ] CLI: `wick workflow test <id> --filter --integration --watch --coverage --record`
 - [ ] MCP ops: full set per §9 (introspection + write + canvas + action + test)
-- [ ] Datasets UI tab (table view, schema editor, query console)
+- [ ] Data Tables UI tab (table view, schema editor, query console)
 
 Unit tests:
 - [ ] `mcp_introspection_test.go` — `workflow_node_types`, `workflow_trigger_types`, `workflow_channels`, `workflow_connectors`, `workflow_skills`, `workflow_providers` return correct schemas
 - [ ] `mcp_canvas_test.go` — `workflow_add_node`, `workflow_connect`, `workflow_update_node`, `workflow_delete_node`, `workflow_move_node` atomic mutate YAML
 - [ ] `mcp_action_test.go` — `workflow_validate`, `workflow_simulate`, `workflow_test`, `workflow_run_now`, `workflow_request_review`
 - [ ] `mcp_test_test.go` — `workflow_test` runs test files, returns per-case result
-- [ ] `mockregistry_test.go` — Provider/Connector/Channel/HTTP/Dataset/Shell interception via service wrapping
+- [ ] `mockregistry_test.go` — Provider/Connector/Channel/HTTP/DataTable/Shell interception via service wrapping
 - [ ] `mockregistry_test.go` — strict mode (no mock → fail), permissive mode (`--allow-unmocked`)
 - [ ] `capturelog_test.go` — channel/connector outbound captured, assertions read
 - [ ] `determinism_test.go` — frozen clock `2026-05-14T10:00:00Z`, seeded random
@@ -373,7 +371,7 @@ Integration test:
 **Phase 13 — Polish + observability** ✅ *(Bootstrap/HotReload/Cleanup/Cost done; fsnotify watcher loop pending)*
 
 Implementation:
-- [ ] fsnotify watcher di `<BaseDir>/workflows/` + `<BaseDir>/datasets/`
+- [ ] fsnotify watcher di `<BaseDir>/workflows/` (data tables hidup di DB, ga butuh fsnotify)
 - [ ] Daily cleanup job (run retention per §4 5a)
 - [ ] Cost tracking aggregation (per-node + workflow rollup)
 - [ ] Audit log queryable (filter by workflow, user, op, date range)

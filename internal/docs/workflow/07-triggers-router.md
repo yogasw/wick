@@ -388,9 +388,9 @@ graph:
           Error: {{.Event.Payload.error}}
           Run ID: {{.Event.Payload.source_run_id}}
 
-    - id: log-to-dataset
-      type: dataset_insert
-      dataset: workflow_failures
+    - id: log-to-table
+      type: datatable_insert
+      table: workflow_failures
       row:
         run_id: "{{.Event.Payload.source_run_id}}"
         workflow: "{{.Event.Payload.source_workflow}}"
@@ -402,9 +402,9 @@ graph:
   edges:
     - { from: route-by-severity, case: critical, to: page-oncall }
     - { from: route-by-severity, case: high,     to: notify-slack }
-    - { from: route-by-severity, case: default,  to: log-to-dataset }
-    - { from: page-oncall,  to: log-to-dataset }                  # always log
-    - { from: notify-slack, to: log-to-dataset }
+    - { from: route-by-severity, case: default,  to: log-to-table }
+    - { from: page-oncall,  to: log-to-table }                    # always log
+    - { from: notify-slack, to: log-to-table }
 ```
 
 Source workflow opt-in via `on_error:`:

@@ -42,7 +42,7 @@ const (
 	DepKindChannel   = "channel"
 	DepKindConnector = "connector"
 	DepKindProvider  = "provider"
-	DepKindDataset   = "dataset"
+	DepKindDataTable = "datatable"
 	DepKindEnv       = "env"
 	DepKindSecret    = "secret"
 	DepKindWebhook   = "webhook"

@@ -105,7 +105,7 @@ func (m *Ops) resolveTemplateContext(in TemplateTestInput) (workflow.RenderCtx, 
 		}
 		raw["Event"] = sample
 	}
-	rctx := workflow.RenderCtx{Node: map[string]any{}, Env: map[string]string{}, Secret: map[string]string{}, Dataset: map[string]any{}}
+	rctx := workflow.RenderCtx{Node: map[string]any{}, Env: map[string]string{}, Secret: map[string]string{}, DataTable: map[string]any{}}
 	if ev, ok := raw["Event"].(map[string]any); ok {
 		rctx.Event = buildEventFromMap(ev)
 		// Also expose the trigger-as-node shape that real runs publish:
@@ -160,9 +160,9 @@ func (m *Ops) resolveTemplateContext(in TemplateTestInput) (workflow.RenderCtx, 
 	if r, ok := raw["Run"].(map[string]any); ok {
 		rctx.Run = workflow.RunRef{ID: pickString(r, "ID"), StartedAt: pickString(r, "StartedAt")}
 	}
-	if d, ok := raw["Dataset"].(map[string]any); ok {
+	if d, ok := raw["DataTable"].(map[string]any); ok {
 		for k, v := range d {
-			rctx.Dataset[k] = v
+			rctx.DataTable[k] = v
 		}
 	}
 	return rctx, raw, nil

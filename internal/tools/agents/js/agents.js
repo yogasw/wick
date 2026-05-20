@@ -203,6 +203,21 @@
       el.innerHTML = renderMarkdown(raw);
       el.removeAttribute("data-md");
     });
+    document.querySelectorAll("[data-linkify]").forEach(function (el) {
+      var raw = el.textContent;
+      el.innerHTML = linkifyText(raw);
+      el.removeAttribute("data-linkify");
+    });
+  }
+
+  // Lightweight: escape HTML + turn bare/markdown URLs into anchors.
+  // Used for user bubble where we don't want full markdown parsing
+  // (so `**foo**` typed by the user stays literal).
+  function linkifyText(s) {
+    s = esc(s);
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" class="underline break-all" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="underline break-all" target="_blank" rel="noopener">$2</a>');
+    return s;
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -874,10 +889,10 @@
           var wrap = document.createElement("div");
           wrap.className = "flex justify-end gap-2 group";
           var col = document.createElement("div");
-          col.className = "flex flex-col items-end gap-1 max-w-[80%]";
+          col.className = "flex flex-col items-end gap-1 max-w-[80%] min-w-0";
           var bubble = document.createElement("div");
-          bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm";
-          bubble.textContent = text;
+          bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble";
+          bubble.innerHTML = linkifyText(text);
           col.appendChild(bubble);
           wrap.appendChild(col);
           var bottom = document.getElementById("chat-bottom");

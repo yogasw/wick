@@ -599,12 +599,12 @@ templ conversationTurn(t TurnVM) {
 
 templ userTurn(t TurnVM) {
 	<div class="flex justify-end gap-2 group">
-		<div class="flex flex-col items-end gap-1 max-w-[80%]">
+		<div class="flex flex-col items-end gap-1 max-w-[80%] min-w-0">
 			if !t.Time.IsZero() {
 				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
 			}
-			<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm">
-				{ t.Text }
+			<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble">
+				<span data-linkify>{ t.Text }</span>
 			</div>
 		</div>
 	</div>

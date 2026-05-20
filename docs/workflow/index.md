@@ -4,9 +4,9 @@ outline: deep
 
 # Workflows
 
-A **workflow** is a multi-step automation stored on disk as a YAML graph of typed nodes (`classify`, `agent`, `connector`, `http`, `shell`, `branch`, `parallel`, `dataset_*`, …) and one or more triggers (cron, channel, webhook, manual, schedule_at). One inbound message — Slack mention, cron tick, webhook — kicks off a deterministic, replayable run that wick traces node-by-node.
+A **workflow** is a multi-step automation stored on disk as a YAML graph of typed nodes (`classify`, `agent`, `connector`, `http`, `shell`, `branch`, `parallel`, `datatable_*`, …) and one or more triggers (cron, channel, webhook, manual, schedule_at). One inbound message — Slack mention, cron tick, webhook — kicks off a deterministic, replayable run that wick traces node-by-node.
 
-Workflows reuse the same wick infrastructure you already configured for agents: provider pool, channel adapters, connectors, datasets. The workflow engine is the wiring that lets an LLM (or you, in the canvas editor) compose those primitives into something more structured than a free-form chat.
+Workflows reuse the same wick infrastructure you already configured for agents: provider pool, channel adapters, connectors, data tables. The workflow engine is the wiring that lets an LLM (or you, in the canvas editor) compose those primitives into something more structured than a free-form chat.
 
 ::: tip Where it sits
 A workflow is **not** an agent — it's the layer above. An [`agent`](./nodes/agent) node inside a workflow spawns an agent turn the same way a channel message would. The difference: a workflow controls *when* that turn fires, *what context* it receives, and *what happens to its output*.
