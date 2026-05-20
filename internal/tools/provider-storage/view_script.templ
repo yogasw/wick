@@ -100,6 +100,7 @@ templ storageScript() {
 						<td class="px-3 py-2">
 							<div class="flex gap-1.5">
 								<button onclick="previewFile(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
+								<button onclick="downloadEntry(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Download</button>
 								<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
 							</div>
 						</td>
@@ -307,20 +308,93 @@ templ storageScript() {
 			}).catch(e => toast('Error: ' + e, 'error'));
 		}
 
-		function openUploadModal() { document.getElementById('upload-modal').style.display = ''; }
-		function closeUploadModal() { document.getElementById('upload-modal').style.display = 'none'; }
+		// uploadContext = {provider, instance, parentPath} when opened from
+		// explorer (one or more fields known). null = manual mode (user types
+		// provider/instance/rel_path themselves).
+		let uploadContext = null;
+
+		function openUploadModal(ctx) {
+			uploadContext = ctx || null;
+			const banner = document.getElementById('upload-context-banner');
+			const manual = document.getElementById('upload-manual-fields');
+			const fnWrap = document.getElementById('upload-filename-wrap');
+			document.getElementById('upload-filename').value = '';
+			document.getElementById('upload-file').value = '';
+			if (uploadContext) {
+				banner.style.display = '';
+				manual.style.display = 'none';
+				fnWrap.style.display = '';
+				const parent = uploadContext.parentPath || '';
+				document.getElementById('upload-context-path').textContent =
+					uploadContext.provider + '/' + uploadContext.instance +
+					(parent ? ' — ' + parent + '/' : ' — /') + '<filename>';
+			} else {
+				banner.style.display = 'none';
+				manual.style.display = '';
+				fnWrap.style.display = 'none';
+				document.getElementById('upload-provider').value = '';
+				document.getElementById('upload-instance').value = '';
+				document.getElementById('upload-relpath').value = '';
+			}
+			document.getElementById('upload-modal').style.display = '';
+		}
+		function closeUploadModal() {
+			document.getElementById('upload-modal').style.display = 'none';
+			uploadContext = null;
+		}
 
 		function submitUpload(e) {
 			e.preventDefault();
-			const fd = new FormData(e.target);
+			const fd = new FormData();
+			const fileInp = document.getElementById('upload-file');
+			if (!fileInp.files || !fileInp.files[0]) { toast('Pick a file.', 'warn'); return; }
+			const file = fileInp.files[0];
+			fd.append('file', file);
+			if (uploadContext) {
+				const fnInp = document.getElementById('upload-filename').value.trim();
+				const name = fnInp || file.name;
+				const parent = (uploadContext.parentPath || '').replace(/\/+$/, '');
+				const relPath = parent ? parent + '/' + name : '/' + name;
+				fd.append('provider_type', uploadContext.provider);
+				fd.append('instance_name', uploadContext.instance);
+				fd.append('rel_path', relPath);
+			} else {
+				const p = document.getElementById('upload-provider').value.trim();
+				const i = document.getElementById('upload-instance').value.trim();
+				const r = document.getElementById('upload-relpath').value.trim();
+				if (!p || !i || !r) { toast('provider, instance, rel_path required.', 'warn'); return; }
+				fd.append('provider_type', p);
+				fd.append('instance_name', i);
+				fd.append('rel_path', r);
+			}
 			fetch(BASE + '/upload', {method:'POST', body: fd}).then(r => r.json()).then(d => {
 				if (d.error) { toast('Error: ' + d.error, 'error'); return; }
 				closeUploadModal();
-				e.target.reset();
 				toast('File uploaded.');
-				loadFiles();
+				// Refresh whichever view is active.
+				if (document.getElementById('view-explorer').style.display !== 'none') {
+					if (expState.provider) loadChildren(expState.provider, expState.instance, expState.parentID);
+					else loadRoots();
+				} else {
+					loadFiles();
+				}
 			}).catch(err => toast('Error: ' + err, 'error'));
 		}
+
+		function uploadHere() {
+			if (!expState.provider || !expState.instance) {
+				// At storage roots — fall back to manual.
+				openUploadModal(null);
+				return;
+			}
+			openUploadModal({
+				provider: expState.provider,
+				instance: expState.instance,
+				parentPath: expState.parentPath || '',
+			});
+		}
+
+		function downloadEntry(id) { window.location.href = BASE + '/' + id + '/download'; }
 
 		function syncNow() {
 			fetch(BASE + '/sync-now', {method:'POST'}).then(r => r.json()).then(d => {
@@ -354,8 +428,10 @@ templ storageScript() {
 
 		// ── Explorer mode ─────────────────────────────────────────────────
 		// State: null provider/instance = at roots level; parentID = current folder
-		let expState = { provider: null, instance: null, parentID: 0, stack: [] };
-		// stack entries: { label, provider, instance, parentID }
+		// parentPath = absolute rel_path of the current folder (for upload prefill);
+		// empty string at instance root.
+		let expState = { provider: null, instance: null, parentID: 0, parentPath: '', stack: [] };
+		// stack entries: { label, provider, instance, parentID, parentPath }
 
 		function setMode(m) {
 			const isExplorer = m === 'explorer';
@@ -387,12 +463,14 @@ templ storageScript() {
 				tbody.innerHTML = rows.map(r => {
 					const icon = r.is_dir ? '📁' : '📄';
 					const nameCell = r.is_dir
-						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDownFromRoot('${esc(r.provider_type)}','${esc(r.instance_name)}',${r.id},'${esc(r.rel_path)}')">${icon} <span class="font-mono">${esc(r.rel_path)}</span></span>`
+						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDownFromRoot('${esc(r.provider_type)}','${esc(r.instance_name)}',${r.id},'${esc(r.rel_path)}','${esc(r.rel_path)}')">${icon} <span class="font-mono">${esc(r.rel_path)}</span></span>`
 						: `${icon} <span class="font-mono">${esc(r.rel_path)}</span>`;
+					const dlBtn = `<button onclick="downloadEntry(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">${r.is_dir ? 'Download .zip' : 'Download'}</button>`;
 					const actions = r.is_dir
-						? `<button onclick="deleteFolder(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>`
+						? `<div class="flex gap-1.5">${dlBtn}<button onclick="deleteFolder(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button></div>`
 						: `<div class="flex gap-1.5">
 							<button onclick="previewFile(${r.id},'${esc(r.rel_path)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
+							${dlBtn}
 							<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
 						</div>`;
 					const cbCell = `<input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="${r.id}"/>`;
@@ -411,14 +489,15 @@ templ storageScript() {
 			});
 		}
 
-		function drillDownFromRoot(provider, instance, id, label) {
-			expState = { provider, instance, parentID: id, stack: [{ label, provider, instance, parentID: id }] };
+		function drillDownFromRoot(provider, instance, id, label, relPath) {
+			const pp = relPath || '';
+			expState = { provider, instance, parentID: id, parentPath: pp, stack: [{ label, provider, instance, parentID: id, parentPath: pp }] };
 			renderExpBreadcrumb();
 			loadChildren(provider, instance, id);
 		}
 
 		function enterInstance(provider, instance) {
-			expState = { provider, instance, parentID: 0, stack: [{ label: provider + '/' + instance, provider, instance, parentID: 0 }] };
+			expState = { provider, instance, parentID: 0, parentPath: '', stack: [{ label: provider + '/' + instance, provider, instance, parentID: 0, parentPath: '' }] };
 			renderExpBreadcrumb();
 			loadChildren(provider, instance, 0);
 		}
@@ -439,12 +518,14 @@ templ storageScript() {
 				tbody.innerHTML = rows.map(r => {
 					const icon = r.is_dir ? '📁' : '📄';
 					const nameCell = r.is_dir
-						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDown(${r.id},'${esc(r.name)}')">${icon} ${esc(r.name)}</span>`
+						? `<span class="cursor-pointer text-green-600 dark:text-green-400 hover:underline" onclick="drillDown(${r.id},'${esc(r.name)}','${esc(r.rel_path)}')">${icon} ${esc(r.name)}</span>`
 						: `${icon} <span class="font-mono">${esc(r.name)}</span>`;
+					const dlBtn = `<button onclick="downloadEntry(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">${r.is_dir ? 'Download .zip' : 'Download'}</button>`;
 					const actions = r.is_dir
-						? `<button onclick="deleteFolder(${r.id},'${esc(r.name)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>`
+						? `<div class="flex gap-1.5">${dlBtn}<button onclick="deleteFolder(${r.id},'${esc(r.name)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button></div>`
 						: `<div class="flex gap-1.5">
 							<button onclick="previewFile(${r.id},'${esc(r.name)}')" class="rounded px-2 py-0.5 text-[0.75rem] border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-500 hover:bg-white-200 dark:hover:bg-navy-800">Preview</button>
+							${dlBtn}
 							<button onclick="deleteFile(${r.id})" class="rounded px-2 py-0.5 text-[0.75rem] border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-navy-800">Delete</button>
 						</div>`;
 					const cbCell = `<input type="checkbox" class="exp-file-cb rounded border-white-400 dark:border-navy-600" value="${r.id}"/>`;
@@ -463,9 +544,10 @@ templ storageScript() {
 			});
 		}
 
-		function drillDown(id, name) {
-			expState.stack.push({ label: name, provider: expState.provider, instance: expState.instance, parentID: expState.parentID });
+		function drillDown(id, name, relPath) {
+			expState.stack.push({ label: name, provider: expState.provider, instance: expState.instance, parentID: expState.parentID, parentPath: expState.parentPath });
 			expState.parentID = id;
+			expState.parentPath = relPath || '';
 			renderExpBreadcrumb();
 			loadChildren(expState.provider, expState.instance, id);
 		}
@@ -493,6 +575,7 @@ templ storageScript() {
 						expState.provider = s.provider;
 						expState.instance = s.instance;
 						expState.parentID = s.parentID;
+						expState.parentPath = s.parentPath || '';
 						renderExpBreadcrumb();
 						if (s.parentID === 0 && i === 0) loadChildren(s.provider, s.instance, 0);
 						else loadChildren(s.provider, s.instance, s.parentID);
@@ -501,6 +584,29 @@ templ storageScript() {
 				bc.appendChild(crumb);
 			});
 		}
+
+		// ── Modal dismiss (backdrop click + Esc) ──────────────────────────
+		// Each modal root is `.fixed.inset-0` with z-50 and a centered card;
+		// clicking the backdrop (event.target === root) or pressing Esc
+		// dismisses whichever modal is currently visible.
+		const MODAL_CLOSERS = {
+			'preview-modal': closePreviewModal,
+			'upload-modal': closeUploadModal,
+			'retention-modal': closeRetentionModal,
+			'add-source-modal': closeAddSourceModal,
+		};
+		Object.entries(MODAL_CLOSERS).forEach(([id, fn]) => {
+			const el = document.getElementById(id);
+			if (!el) return;
+			el.addEventListener('mousedown', e => { if (e.target === el) fn(); });
+		});
+		document.addEventListener('keydown', e => {
+			if (e.key !== 'Escape') return;
+			for (const [id, fn] of Object.entries(MODAL_CLOSERS)) {
+				const el = document.getElementById(id);
+				if (el && el.style.display !== 'none') { fn(); break; }
+			}
+		});
 
 		// init: start in explorer mode
 		loadRoots();
