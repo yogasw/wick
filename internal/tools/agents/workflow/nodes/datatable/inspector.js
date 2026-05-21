@@ -235,6 +235,10 @@
       }
     }
 
+    // Set dataset.argMode immediately so readConditionModes/readRowModes
+    // can read the correct mode even before wickEditorHelpers wires the UI.
+    wrap.dataset.argMode = initialMode || ((initialVal || '').includes('{{') ? 'expression' : 'fixed');
+
     if (window.wickEditorHelpers) {
       wireArgField();
     } else {
@@ -324,9 +328,13 @@
     const l = lst('condition');
     if (!l) return;
     l.innerHTML = '';
-    if (!yaml) return;
-    const blocks = yaml.split(/\n(?=-)/).map(s => s.trim()).filter(Boolean);
-    blocks.forEach((block, i) => {
+    const blocks = yaml ? yaml.split(/\n(?=-)/).map(s => s.trim()).filter(Boolean) : [];
+    // If modes has entries but yaml is empty, render placeholder rows so
+    // the expression toggle state is not silently lost.
+    const modeCount = modes ? Object.keys(modes).length : 0;
+    const count = Math.max(blocks.length, modeCount);
+    for (let i = 0; i < count; i++) {
+      const block = blocks[i] || '';
       const colM = block.match(/column:\s*(.+)/);
       const opM  = block.match(/op:\s*(.+)/);
       const valM = block.match(/value:\s*([\s\S]+)/);
@@ -336,7 +344,7 @@
         valM ? valM[1].trim() : '',
         modes && modes['c' + i],
       ));
-    });
+    }
   }
 
   // ── row (field) builder ────────────────────────────────────────
@@ -591,6 +599,13 @@
         } else {
           delete target.__dt_modes;
         }
+      },
+
+      nodeHint(inner) {
+        const baseHint = { get: 'load by id', exists: 'row match?', query: 'multi-row search', count: 'count rows', insert: 'new row', upsert: 'insert/update', delete: 'drop rows' }[op] || '';
+        const modes = inner.__dt_modes || {};
+        const hasExpr = Object.values(modes).some(m => m === 'expression');
+        return hasExpr ? baseHint + ' ~ expr' : baseHint;
       },
     };
   }

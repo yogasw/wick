@@ -117,6 +117,20 @@
     requestAnimationFrame(() => {
       try { fitToView(); }
       catch (err) { console.warn('[wf] fit-to-view', err); }
+      // Refresh node meta hints after DOM is ready (WickNodes registered by now).
+      if (initialGraph && initialGraph.drawflow) {
+        const importedNodes = (initialGraph.drawflow.Home || {}).data || {};
+        Object.values(importedNodes).forEach(n => {
+          const kind = n.data && n.data.type;
+          const inner = (n.data && n.data.data) || {};
+          const mod = window.WickNodes && window.WickNodes[kind];
+          if (!mod || typeof mod.nodeHint !== 'function') return;
+          const hint = mod.nodeHint(inner);
+          if (hint === undefined) return;
+          const el = document.querySelector(`#node-${n.id} .meta`);
+          if (el) el.textContent = hint;
+        });
+      }
       if (editor.precanvas) editor.precanvas.classList.remove('wf-fitting');
     });
   });
@@ -2783,6 +2797,15 @@
     const mod = nodeModule(kind);
     if (mod && typeof mod.save === 'function') {
       mod.save(inner);
+    }
+    // Update node canvas meta text if the module provides a hint fn.
+    if (mod && typeof mod.nodeHint === 'function') {
+      const hint = mod.nodeHint(inner);
+      const metaEl = document.querySelector(`#node-${id} .meta`);
+      if (metaEl && hint !== undefined) {
+        metaEl.textContent = hint;
+        node.html = node.html.replace(/<div class="meta">[^<]*<\/div>/, `<div class="meta">${escapeHTML(hint)}</div>`);
+      }
     }
     // Generic save for registry-backed module panels that have no
     // inspector.js. Skip when the module owns save() — it collects

@@ -131,10 +131,16 @@ func (m *module) DrawflowDataFromYAML(n wf.Node) map[string]any {
 		if len(n.Conditions) > 0 {
 			out["conditions"] = stringifyConditions(n.Conditions)
 		}
+		if len(n.ConditionModes) > 0 {
+			out["__dt_modes"] = conditionModesToDTModes(n.ConditionModes)
+		}
 	case wf.NodeDataTableQuery:
 		out["where"] = stringifyMap(n.Where)
 		if len(n.Conditions) > 0 {
 			out["conditions"] = stringifyConditions(n.Conditions)
+		}
+		if len(n.ConditionModes) > 0 {
+			out["__dt_modes"] = conditionModesToDTModes(n.ConditionModes)
 		}
 		if len(n.OrderBy) > 0 {
 			out["order_by"] = stringifyOrder(n.OrderBy)
@@ -147,6 +153,9 @@ func (m *module) DrawflowDataFromYAML(n wf.Node) map[string]any {
 		}
 	case wf.NodeDataTableInsert, wf.NodeDataTableUpsert:
 		out["row"] = stringifyMap(n.RowValues)
+		if len(n.RowModes) > 0 {
+			out["__dt_modes"] = rowModesToDTModes(n.RowModes)
+		}
 	}
 	return out
 }
@@ -165,9 +174,11 @@ func (m *module) YAMLFromDrawflowData(id string, inner map[string]any) wf.Node {
 	case wf.NodeDataTableExists, wf.NodeDataTableDelete, wf.NodeDataTableCount:
 		n.Where = parseInspectorMap(inner["where"])
 		n.Conditions = parseInspectorConditions(inner["conditions"])
+		n.ConditionModes, _ = parseDTModes(inner["__dt_modes"])
 	case wf.NodeDataTableQuery:
 		n.Where = parseInspectorMap(inner["where"])
 		n.Conditions = parseInspectorConditions(inner["conditions"])
+		n.ConditionModes, _ = parseDTModes(inner["__dt_modes"])
 		n.OrderBy = parseInspectorOrder(inner["order_by"])
 		if v, ok := toInt(inner["limit"]); ok {
 			n.Limit = v
@@ -177,6 +188,7 @@ func (m *module) YAMLFromDrawflowData(id string, inner map[string]any) wf.Node {
 		}
 	case wf.NodeDataTableInsert, wf.NodeDataTableUpsert:
 		n.RowValues = parseInspectorMap(inner["row"])
+		_, n.RowModes = parseDTModes(inner["__dt_modes"])
 	}
 	return n
 }
@@ -383,4 +395,51 @@ func toInt(v any) (int, bool) {
 		return n, true
 	}
 	return 0, false
+}
+
+// conditionModesToDTModes converts ConditionModes (YAML key "c0","c1"...)
+// to the __dt_modes map the JS inspector expects.
+func conditionModesToDTModes(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// rowModesToDTModes converts RowModes (YAML key "r0","r1"...)
+// to the __dt_modes map the JS inspector expects.
+func rowModesToDTModes(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// parseDTModes reads __dt_modes from the inspector blob into separate
+// ConditionModes (keys "c*") and RowModes (keys "r*") maps.
+func parseDTModes(v any) (condModes, rowModes map[string]string) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	for k, val := range m {
+		s, _ := val.(string)
+		if s == "" {
+			continue
+		}
+		if len(k) > 0 && k[0] == 'c' {
+			if condModes == nil {
+				condModes = map[string]string{}
+			}
+			condModes[k] = s
+		} else if len(k) > 0 && k[0] == 'r' {
+			if rowModes == nil {
+				rowModes = map[string]string{}
+			}
+			rowModes[k] = s
+		}
+	}
+	return
 }
