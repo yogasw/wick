@@ -502,6 +502,7 @@ templ lifecycleBadge(lifecycle string, pid int, lastActiveMs int64, idleTimeoutM
 	>
 		@lifecycleRing()
 		<span data-lifecycle-label>{ lifecycleLabel(lifecycle) }</span>
+		<span data-lifecycle-substate class="opacity-75 text-[10px]"></span>
 		if lifecycle == "idle" {
 			<span data-lifecycle-countdown class="font-mono text-[10px] opacity-75"></span>
 		}

@@ -123,3 +123,6 @@ func (e *ShellExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	}
 	return out, nil
 }
+
+// ShellSchema is the exported form of shellSchema for the editor UI.
+type ShellSchema = shellSchema

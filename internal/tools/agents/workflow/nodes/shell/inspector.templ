@@ -1,0 +1,15 @@
+package shell
+
+import (
+	engnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	"github.com/yogasw/wick/internal/entity"
+	wfview "github.com/yogasw/wick/internal/tools/agents/view/workflow"
+)
+
+templ Inspector() {
+	<div class="wf-inspector-panel hidden" data-node-type="shell">
+		<div id="ins-shell-args" class="space-y-2">
+			@wfview.ArgForm(entity.StructToConfigs(engnodes.ShellSchema{}))
+		</div>
+	</div>
+}

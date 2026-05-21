@@ -171,3 +171,6 @@ func boolStr(b bool) string {
 	}
 	return "false"
 }
+
+// BranchSchema is the exported form of branchSchema for the editor UI.
+type BranchSchema = branchSchema

@@ -1292,6 +1292,7 @@ func RunMCPStdio(version, commit, buildTime string) {
 	// has no live API — calls will surface the configuration error
 	// rather than silently returning empty lists.
 	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubSlack)
+	stdioWfMgr.WithDataTablesDB(db)
 	if err := stdioWfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("stdio: workflow bootstrap failed; workflow_* ops unavailable")
 	} else {

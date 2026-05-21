@@ -138,11 +138,7 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 		})
 	}
 
-	actions := []PaletteItem{
-		{Type: "shell", Label: "shell", Dot: "bg-slate-500"},
-		{Type: "db_query", Label: "db_query", Dot: "bg-sky-500"},
-		{Type: "transform", Label: "transform", Dot: "bg-cyan-500"},
-	}
+	actions := []PaletteItem{}
 	for _, ch := range channels {
 		if len(ch.Actions) == 0 {
 			continue
@@ -201,7 +197,6 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 		{
 			Title: "AI",
 			Items: []PaletteItem{
-				{Type: "classify", Label: "classify", Dot: "bg-pink-500"},
 				{Type: "agent", Label: "agent", Dot: "bg-violet-500"},
 			},
 		},
@@ -209,9 +204,7 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 		{
 			Title: "Logic",
 			Items: []PaletteItem{
-				{Type: "branch", Label: "branch", Dot: "bg-red-500"},
 				{Type: "parallel", Label: "parallel", Dot: "bg-lime-500"},
-				{Type: "end", Label: "end", Dot: "bg-slate-700"},
 			},
 		},
 	}
@@ -219,13 +212,60 @@ func BuildPalette(channels []wfchannel.Info, connectors []wfconnector.Info) []Pa
 	// internal/tools/agents/workflow/nodes/). Each module declares its
 	// PaletteSection so the loop slots it into the existing section
 	// list — adding a new node = drop a folder, no edit here.
+	//
+	// Modules implementing PaletteGrouper contribute one drillable row
+	// (like connector/channel) instead of one flat row per type.
+	// Modules with PaletteItem().Skip=true are silently ignored.
+	groupSeen := map[string]bool{}
 	for _, m := range wfnodes.All() {
+		// Grouped entry — emit once per group key.
+		if pg, ok := m.(wfnodes.PaletteGrouper); ok {
+			entry := pg.PaletteGroup()
+			if groupSeen[entry.Item.Group] {
+				continue
+			}
+			groupSeen[entry.Item.Group] = true
+			ops := make([]PaletteOp, 0, len(entry.Ops))
+			for _, op := range entry.Ops {
+				ops = append(ops, PaletteOp{
+					NodeType: op.NodeType,
+					Label:    op.Label,
+					Desc:     op.Desc,
+					Kind:     op.Kind,
+					Defaults: op.Defaults,
+				})
+			}
+			item := PaletteItem{
+				Type:     entry.Item.Type,
+				Label:    entry.Item.Label,
+				Dot:      entry.Item.Dot,
+				Hint:     entry.Item.Hint,
+				Group:    entry.Item.Group,
+				Subitems: ops,
+			}
+			matched := false
+			for i := range sections {
+				if sections[i].Title == entry.Section {
+					sections[i].Items = append(sections[i].Items, item)
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				sections = append(sections, PaletteSection{Title: entry.Section, Items: []PaletteItem{item}})
+			}
+			continue
+		}
+		pi := m.PaletteItem()
+		if pi.Skip {
+			continue
+		}
 		item := PaletteItem{
-			Type:  m.PaletteItem().Type,
-			Label: m.PaletteItem().Label,
-			Dot:   m.PaletteItem().Dot,
-			Hint:  m.PaletteItem().Hint,
-			Group: m.PaletteItem().Group,
+			Type:  pi.Type,
+			Label: pi.Label,
+			Dot:   pi.Dot,
+			Hint:  pi.Hint,
+			Group: pi.Group,
 		}
 		matched := false
 		for i := range sections {
