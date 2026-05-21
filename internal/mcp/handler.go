@@ -745,13 +745,17 @@ func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpc
 		if count == 0 {
 			continue
 		}
+		status := h.connectors.Status(row)
+		if status == "needs_setup" {
+			continue
+		}
 		totalTools += count
 		summaries = append(summaries, connectorSummary{
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
 			TotalTools:  count,
-			Status:      h.connectors.Status(row),
+			Status:      status,
 		})
 	}
 	writeToolJSON(w, req.ID, listResult{
@@ -832,12 +836,16 @@ func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req r
 		if len(matched) == 0 {
 			continue
 		}
+		status := h.connectors.Status(row)
+		if status == "needs_setup" {
+			continue
+		}
 		total += len(matched)
 		groups = append(groups, searchGroup{
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
-			Status:      h.connectors.Status(row),
+			Status:      status,
 			Tools:       matched,
 		})
 	}
