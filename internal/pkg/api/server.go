@@ -1300,6 +1300,7 @@ func RunMCPStdio(version, commit, buildTime string) {
 		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
 	}
 
+	connectors.RegisterBuiltins()
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
