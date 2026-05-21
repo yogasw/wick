@@ -429,6 +429,7 @@ func NewServer() *Server {
 	agentstool.SetLayout(agentsLayout)
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
 	agentstool.SetConfigs(configsSvc)
+	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)

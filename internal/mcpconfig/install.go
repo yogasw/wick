@@ -137,7 +137,7 @@ func IsInstalled(c Client, name string) (present bool, installed bool) {
 		return false, false
 	}
 	if c.Format == "toml-codex" {
-		return true, bytes.Contains(data, []byte(fmt.Sprintf("name = %q", name)))
+		return true, codexTOMLHasServer(data, name)
 	}
 	var cfg map[string]any
 	if json.Unmarshal(data, &cfg) != nil {
@@ -319,7 +319,10 @@ func installJSON(path, name string, entry map[string]any) error {
 
 func installCodexTOML(path, name string, entry map[string]any) error {
 	existing, _ := os.ReadFile(path)
-	if bytes.Contains(existing, []byte(fmt.Sprintf("name = %q", name))) {
+	// Guard against both dotted-table format ([mcp_servers.<name>]) and
+	// array-of-tables format ([[mcp_servers]] + name = "...") so we never
+	// write a duplicate regardless of which format is already present.
+	if codexTOMLHasServer(existing, name) {
 		return nil
 	}
 	cmd, _ := entry["command"].(string)
@@ -328,7 +331,9 @@ func installCodexTOML(path, name string, entry map[string]any) error {
 	for i, a := range rawArgs {
 		quoted[i] = fmt.Sprintf("%q", a)
 	}
-	block := fmt.Sprintf("\n[[mcp_servers]]\nname = %q\ntype = \"stdio\"\ncmd = %q\nargs = [%s]\n",
+	// Use dotted-table format — matches what codex writes natively and
+	// avoids the duplicate-key error caused by [[mcp_servers]] array syntax.
+	block := fmt.Sprintf("\n[mcp_servers.%s]\ntype = \"stdio\"\ncommand = %q\nargs = [%s]\n",
 		name, cmd, strings.Join(quoted, ", "))
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -341,6 +346,39 @@ func installCodexTOML(path, name string, entry map[string]any) error {
 	defer f.Close()
 	_, err = f.WriteString(block)
 	return err
+}
+
+// codexTOMLHasServer reports whether raw TOML bytes already contain an
+// mcp_servers entry for target. Detects both formats codex uses:
+//
+//	dotted-table:       [mcp_servers.<name>]
+//	array-of-tables:    [[mcp_servers]] + name = "<name>"
+func codexTOMLHasServer(data []byte, target string) bool {
+	// dotted-table format: [mcp_servers.wick-lab]
+	if bytes.Contains(data, []byte(fmt.Sprintf("[mcp_servers.%s]", target))) {
+		return true
+	}
+	// array-of-tables format: scan [[mcp_servers]] blocks for name field
+	inBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "[[mcp_servers]]" {
+			inBlock = true
+			continue
+		}
+		if inBlock && strings.HasPrefix(t, "[") {
+			inBlock = false
+		}
+		if inBlock && strings.HasPrefix(t, "name") {
+			val := strings.TrimPrefix(t, "name")
+			val = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(val), "="))
+			val = strings.Trim(val, `"'`)
+			if val == target {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func uninstallJSON(path, name string) error {
@@ -396,23 +434,37 @@ func uninstallCodexTOML(path, name string) error {
 		drop = false
 		inBlock = false
 	}
-	target := fmt.Sprintf("name = %q", name)
+	dottedHeader := fmt.Sprintf("[mcp_servers.%s]", name)
+	arrayNameTarget := fmt.Sprintf("name = %q", name)
 	for _, l := range lines {
 		t := strings.TrimSpace(l)
 		isHeader := strings.HasPrefix(t, "[[") || strings.HasPrefix(t, "[")
 		if isHeader {
 			if inBlock {
 				flush()
+				// After flushing the previous block, fall through so
+				// this new header line is handled below (not lost).
 			}
+			// dotted-table format: [mcp_servers.<name>]
+			if t == dottedHeader {
+				inBlock = true
+				drop = true
+				block = append(block, l)
+				continue
+			}
+			// array-of-tables format: [[mcp_servers]]
 			if t == "[[mcp_servers]]" {
 				inBlock = true
 				block = append(block, l)
 				continue
 			}
+			// Any other header — not our block, emit directly.
+			out = append(out, l)
+			continue
 		}
 		if inBlock {
 			block = append(block, l)
-			if strings.Contains(l, target) {
+			if strings.Contains(l, arrayNameTarget) {
 				drop = true
 			}
 		} else {

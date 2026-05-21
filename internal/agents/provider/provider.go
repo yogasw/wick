@@ -55,6 +55,9 @@ type Instance struct {
 	ExtraArgs []string
 	Env       []string
 	Disabled  bool
+	// SandboxEnabled enables --sandbox workspace-write for codex spawns.
+	// false = no --sandbox flag (codex default). Only used by codex.
+	SandboxEnabled bool
 
 	// Hooks holds the user's enable/disable intent per hook event
 	// (PreToolUse, SessionStart, …). Spawners read this on every
@@ -519,14 +522,15 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 		}
 		for _, raw := range list {
 			out = append(out, Instance{
-				Type:      t,
-				Name:      raw.Name,
-				Binary:    raw.BinaryPath,
-				ExtraArgs: raw.ExtraArgs,
-				Env:       raw.Env,
-				Disabled:  raw.Disabled,
-				Hooks:     hooksFromUser(raw.Hooks),
-				Storage:   storageFromUser(raw.Storage),
+				Type:           t,
+				Name:           raw.Name,
+				Binary:         raw.BinaryPath,
+				ExtraArgs:      raw.ExtraArgs,
+				Env:            raw.Env,
+				Disabled:       raw.Disabled,
+				Hooks:          hooksFromUser(raw.Hooks),
+				Storage:        storageFromUser(raw.Storage),
+				SandboxEnabled: raw.SandboxEnabled,
 			})
 		}
 	}
@@ -559,13 +563,14 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 
 func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	return userconfig.ProviderInstance{
-		Name:       ins.Name,
-		BinaryPath: ins.Binary,
-		Disabled:   ins.Disabled,
-		ExtraArgs:  ins.ExtraArgs,
-		Env:        ins.Env,
-		Hooks:      hooksToUser(ins.Hooks),
-		Storage:    storageToUser(ins.Storage),
+		Name:           ins.Name,
+		BinaryPath:     ins.Binary,
+		Disabled:       ins.Disabled,
+		ExtraArgs:      ins.ExtraArgs,
+		Env:            ins.Env,
+		Hooks:          hooksToUser(ins.Hooks),
+		Storage:        storageToUser(ins.Storage),
+		SandboxEnabled: ins.SandboxEnabled,
 	}
 }
 

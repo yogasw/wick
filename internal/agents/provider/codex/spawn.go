@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/capability"
@@ -31,6 +32,8 @@ import (
 // builds).
 type Spawner struct {
 	Binary string // empty → "codex"
+	// SandboxEnabled enables --sandbox workspace-write. Default false.
+	SandboxEnabled bool
 	// AskForApproval mirrors codex's --ask-for-approval flag. The
 	// canonical "skip the terminal approval prompt" value is "never";
 	// leave empty to let codex use its own default. Set ONLY when there
@@ -71,6 +74,16 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		bin = "codex"
 	}
 
+	// Write AGENTS.md so codex picks up the immutable rules + preset as
+	// its system instructions. Fail-soft: a write error is logged but
+	// does not abort the spawn.
+	if opt.Workspace != "" && opt.Preset != "" {
+		agentsPath := filepath.Join(opt.Workspace, "AGENTS.md")
+		if err := os.WriteFile(agentsPath, []byte(opt.Preset), 0o644); err != nil {
+			log.Warn().Err(err).Str("path", agentsPath).Msg("agents.spawn: write AGENTS.md failed")
+		}
+	}
+
 	// Install / remove per-workspace hook config based on the user's
 	// per-instance intent. See claude/spawn.go applyHookConfig for the
 	// fail-soft rationale.
@@ -78,7 +91,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	args := []string{
 		"exec",
-		"--sandbox", "workspace-write",
+		"--json",
+		"--skip-git-repo-check",
+	}
+	if s.SandboxEnabled {
+		args = append(args, "--sandbox", "workspace-write")
 	}
 	// When gate is active for this instance, do NOT set
 	// --ask-for-approval to a bypass value — codex's approval flag
@@ -89,7 +106,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	if opt.ResumeID != "" {
-		args = append(args, "--resume", opt.ResumeID)
+		// codex exec resume <session_id> [prompt]
+		args = append(args, "resume", opt.ResumeID)
+	}
+	if opt.InitialMessage != "" {
+		args = append(args, opt.InitialMessage)
 	}
 
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -119,6 +140,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		log.Error().Err(err).Str("bin", bin).Msg("agents.spawn: codex start failed")
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
+	// Close stdin immediately — codex reads the prompt from argv, not stdin.
+	// Leaving stdin open causes codex to block on "Reading additional input from stdin".
+	_ = stdin.Close()
 	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (codex)")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
 }

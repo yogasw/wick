@@ -82,8 +82,6 @@ func providersPage(c *tool.Ctx) {
 	}
 
 	mcpVM := buildMCPStatusVM()
-	// Auto-install into detected clients that don't have wick yet.
-	go autoInstallMCP(mcpVM.AppName)
 
 	c.HTML(view.ProvidersPage(view.ProvidersVM{
 		Layout:        sidebarVM(c, "providers", ""),
@@ -409,11 +407,13 @@ func mcpAddBlocklist(ctx context.Context, clientID string) {
 	for id := range ids {
 		parts = append(parts, id)
 	}
-	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_uninstalled_clients", strings.Join(parts, ","))
+	err := globalConfigs.SetOwned(ctx, "agents", "mcp_uninstalled_clients", strings.Join(parts, ","))
+	if err != nil {
+		log.Ctx(ctx).Error().Msgf("mcp add blocklist: %s", err.Error())
+	}
 }
 
-// mcpRemoveBlocklist removes a client ID from the persistent blocklist
-// (called when user manually installs a previously-uninstalled client).
+// mcpRemoveBlocklist removes a client ID from the persistent blocklist.
 func mcpRemoveBlocklist(ctx context.Context, clientID string) {
 	if globalConfigs == nil {
 		return
@@ -440,14 +440,16 @@ func isDirPresent(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// autoInstallMCP installs wick into every detected client that doesn't
+// AutoInstallMCP installs wick into every detected MCP client that doesn't
 // have it yet, skipping blocklisted (manually-uninstalled) clients.
-// Only runs once per app lifetime — guarded by agents.mcp_auto_installed.
+// Called once at server startup; the mcp_auto_installed flag prevents
+// re-runs so page renders never trigger spurious re-installs.
+func AutoInstallMCP() {
+	autoInstallMCP(appname.Resolve())
+}
+
 func autoInstallMCP(name string) {
 	if globalConfigs == nil {
-		return
-	}
-	if globalConfigs.GetOwned("agents", "mcp_auto_installed") == "true" {
 		return
 	}
 	cwd, err := os.Getwd()
@@ -460,22 +462,25 @@ func autoInstallMCP(name string) {
 		return
 	}
 	blocklist := mcpBlocklist()
-	ctx := context.Background()
+	l := log.With().Str("func", "autoInstallMCP").Logger()
+	l.Debug().Interface("blocklist", blocklist).Msg("start")
 	for _, c := range mcpconfig.Detected(cwd) {
+		cl := l.With().Str("client", c.ID).Logger()
 		if blocklist[c.ID] {
+			cl.Debug().Msg("skipped: blocklisted")
 			continue
 		}
 		_, installed := mcpconfig.IsInstalled(c, name)
 		if installed {
+			cl.Debug().Msg("skipped: already installed")
 			continue
 		}
 		if err := mcpconfig.Install(c, name, entry); err != nil {
-			log.Warn().Err(err).Msgf("mcp auto-install: %s", c.ID)
+			cl.Warn().Err(err).Msg("install failed")
 		} else {
-			log.Info().Msgf("mcp auto-install: installed %q into %s", name, c.Label)
+			cl.Info().Str("label", c.Label).Msg("installed")
 		}
 	}
-	_ = globalConfigs.SetOwned(ctx, "agents", "mcp_auto_installed", "true")
 }
 
 // mcpInstallClient installs wick MCP entry into one client by ID and
@@ -579,7 +584,6 @@ func autoRescanEnabled() bool {
 	}
 	return globalConfigs.GetOwned("agents", "auto_rescan") != "false"
 }
-
 
 // rescanAllProviders forces a fresh path-scan + version probe for
 // every configured instance, persisting results to the cache. Used
