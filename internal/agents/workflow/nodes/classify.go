@@ -290,3 +290,6 @@ func levenshtein(a, b string) int {
 	}
 	return prev[lb]
 }
+
+// ClassifySchema is the exported form of classifyNodeSchema for the editor UI.
+type ClassifySchema = classifyNodeSchema

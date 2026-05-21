@@ -837,6 +837,7 @@ func workflowNodeFromDrawflow(dn drawflowNode) wf.Node {
 			fromMod := mod.YAMLFromDrawflowData(wn.ID, inner)
 			fromMod.ID = wn.ID
 			fromMod.Type = wn.Type
+			fromMod.Label = wn.Label
 			wn = fromMod
 		}
 	}
@@ -851,21 +852,43 @@ func caseFromOutput(portKey string, src drawflowNode, _ map[string]drawflowNode)
 		return ""
 	}
 	t, _ := src.Data["type"].(string)
-	if t != string(wf.NodeClassify) && t != string(wf.NodeBranch) {
-		return ""
-	}
 	idxStr := strings.TrimPrefix(portKey, "output_")
 	idx, _ := strconv.Atoi(idxStr)
 	if idx < 1 {
 		return ""
 	}
-	inner, _ := src.Data["data"].(map[string]any)
-	if inner == nil {
+
+	switch wf.NodeType(t) {
+	case wf.NodeDataTableExists:
+		// output_1 = true (row found), output_2 = false (not found), output_3+ = default
+		switch idx {
+		case 1:
+			return "true"
+		case 2:
+			return "false"
+		default:
+			return "default"
+		}
+	case wf.NodeDataTableGet:
+		// output_1 = found, output_2 = not_found
+		switch idx {
+		case 1:
+			return "found"
+		case 2:
+			return "not_found"
+		default:
+			return "default"
+		}
+	case wf.NodeClassify, wf.NodeBranch:
+		inner, _ := src.Data["data"].(map[string]any)
+		if inner == nil {
+			return ""
+		}
+		cases := stringSliceFromAny(inner["cases"])
+		if idx-1 < len(cases) {
+			return cases[idx-1]
+		}
 		return ""
-	}
-	cases := stringSliceFromAny(inner["cases"])
-	if idx-1 < len(cases) {
-		return cases[idx-1]
 	}
 	return ""
 }

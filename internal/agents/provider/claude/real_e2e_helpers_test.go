@@ -58,6 +58,29 @@ func (c *eventCollector) sessionStartCount() int {
 	return n
 }
 
+func (c *eventCollector) errorCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, e := range c.events {
+		if e.Type == event.Error {
+			n++
+		}
+	}
+	return n
+}
+
+func (c *eventCollector) firstError() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.events {
+		if e.Type == event.Error {
+			return e.Text
+		}
+	}
+	return ""
+}
+
 func (c *eventCollector) textPerTurn() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

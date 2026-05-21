@@ -244,6 +244,27 @@ func TestApplyToolResultIsErrorFlagged(t *testing.T) {
 	}
 }
 
+// TestThinkingOnlyTurnFlushed guards against the bug where a turn with
+// only Thinking events (no TextDelta) was silently dropped because
+// flushAssistantTurn bailed on turnBuf.Len()==0.
+func TestThinkingOnlyTurnFlushed(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "silent reasoning"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("want 1 turn, got %d (thinking-only turn was dropped)", len(lines))
+	}
+	if len(lines[0].Events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(lines[0].Events))
+	}
+	ev := lines[0].Events[0]
+	if ev.Type != "thinking" || ev.Text != "silent reasoning" {
+		t.Fatalf("unexpected event: %+v", ev)
+	}
+}
+
 func TestEventBufferClearedBetweenTurns(t *testing.T) {
 	// Events from turn 1 must not bleed into turn 2.
 	st, layout := newStore(t, "backend", false)

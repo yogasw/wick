@@ -311,7 +311,7 @@
       }
 
       if (typeof SharedWorker !== "undefined") {
-        var worker = new SharedWorker(base + "/static/js/sse-worker.js");
+        var worker = new SharedWorker(base + "/static/js/sse-worker.js?v=2");
         ssePort = worker.port;
         ssePort.start();
         ssePort.postMessage({ type: "subscribe", sessionID: sessionID, base: base });
@@ -341,6 +341,8 @@
         };
       }
 
+      var typingSubstate = "";
+
       function showTypingIndicator() {
         if (typingIndicatorEl) return;
         var container = document.querySelector("[data-turns]");
@@ -349,17 +351,30 @@
         typingIndicatorEl.className = "flex justify-start gap-3 items-end";
         typingIndicatorEl.innerHTML =
           '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800">' +
-          '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg></div>' +
-          '<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3">' +
-          '<div class="flex items-center gap-1">' +
-          '<span class="h-1.5 w-1.5 rounded-full bg-black-600 dark:bg-black-700 animate-bounce" style="animation-delay:0ms"></span>' +
-          '<span class="h-1.5 w-1.5 rounded-full bg-black-600 dark:bg-black-700 animate-bounce" style="animation-delay:150ms"></span>' +
-          '<span class="h-1.5 w-1.5 rounded-full bg-black-600 dark:bg-black-700 animate-bounce" style="animation-delay:300ms"></span>' +
+          '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg>' +
+          '</div>' +
+          '<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5">' +
+          '<div class="flex items-center gap-2 text-xs text-black-600 dark:text-black-700">' +
+          '<svg class="h-3 w-3 shrink-0 animate-spin text-green-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
+          '<span data-typing-label class="italic">' + typingLabel(typingSubstate) + '</span>' +
           '</div></div>';
         var bottom = document.getElementById("chat-bottom");
         if (bottom) container.insertBefore(typingIndicatorEl, bottom);
         else container.appendChild(typingIndicatorEl);
         scrollToBottom();
+      }
+
+      function typingLabel(substate) {
+        if (!substate) return "thinking…";
+        if (substate === "thinking") return "thinking…";
+        return "running " + substate + "…";
+      }
+
+      function updateTypingSubstate(substate) {
+        typingSubstate = substate || "";
+        if (!typingIndicatorEl) return;
+        var lbl = typingIndicatorEl.querySelector("[data-typing-label]");
+        if (lbl) lbl.textContent = typingLabel(typingSubstate);
       }
 
       function hideTypingIndicator() {
@@ -368,7 +383,21 @@
 
       function handleAgentEvent(ev) {
         if (ev.type === "lifecycle") {
-          applyLifecycle(ev.lifecycle, ev.pid || 0);
+          applyLifecycle(ev.lifecycle, ev.pid || 0, ev.data || "");
+          // Snapshot on reconnect: ensure turn bubble exists so trace
+          // cards replayed before this event have a container, and show
+          // typing indicator so user knows work is in progress.
+          if (ev.lifecycle === "working") {
+            ensurePendingTurn();
+            updateTypingSubstate(ev.data || "");
+            // Delay so in-flight event replay (thinking/tool cards) fires
+            // first — those call hideTypingIndicator then showTypingIndicator
+            // themselves. If nothing replayed, this fallback ensures the
+            // indicator appears.
+            setTimeout(function() {
+              if (!typingIndicatorEl) showTypingIndicator();
+            }, 0);
+          }
           return;
         }
         if (ev.type === "approval_request") {
@@ -393,26 +422,31 @@
           appendDelta(ev.data);
         } else if (ev.type === "done") {
           finalizeAssistantTurn();
-          applyLifecycle("idle", 0);
+          applyLifecycle("idle", 0, "");
         } else if (ev.type === "session_start") {
           showTypingIndicator();
-          applyLifecycle("working", 0);
+          applyLifecycle("working", 0, "");
         } else if (ev.type === "error") {
           hideTypingIndicator();
           finalizeAssistantTurn();
-          applyLifecycle("idle", 0);
+          applyLifecycle("idle", 0, "");
         } else if (ev.type === "thinking") {
           hideTypingIndicator();
           appendThinkingCard(ev.data || "");
-          applyLifecycle("working", 0);
+          applyLifecycle("working", 0, "thinking");
+          updateTypingSubstate("thinking");
+          showTypingIndicator();
         } else if (ev.type === "tool_use") {
           hideTypingIndicator();
           appendToolUseCard(ev);
-          applyLifecycle("working", 0);
+          applyLifecycle("working", 0, ev.tool_name || "tool");
+          updateTypingSubstate(ev.tool_name || "tool");
+          showTypingIndicator();
         } else if (ev.type === "tool_result") {
           hideTypingIndicator();
           appendToolResultCard(ev);
-          applyLifecycle("working", 0);
+          applyLifecycle("working", 0, "");
+          updateTypingSubstate("");
           if (!turnHasText) showTypingIndicator();
         }
       }
@@ -491,6 +525,19 @@
         scrollToBottom();
       }
 
+      function fmtTime(ms) {
+        if (!ms) return "";
+        var d = new Date(ms);
+        return d.toTimeString().slice(0, 8); // HH:MM:SS
+      }
+
+      function fmtDuration(startMs, endMs) {
+        if (!startMs || !endMs || endMs <= startMs) return "";
+        var s = Math.round((endMs - startMs) / 1000);
+        if (s < 60) return s + "s";
+        return Math.floor(s / 60) + "m " + (s % 60) + "s";
+      }
+
       function appendToolUseCard(ev) {
         var body = ensureTraceWrap();
         if (!body) return;
@@ -501,15 +548,18 @@
           try { prettyInput = JSON.stringify(JSON.parse(inputRaw), null, 2); }
           catch (_) { prettyInput = inputRaw; }
         }
-        var id = "tc-" + (ev.tool_use_id || Date.now());
+        var startLabel = ev.at ? fmtTime(ev.at) : "";
         var card = document.createElement("div");
         card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
         card.setAttribute("data-tool-card", ev.tool_use_id || "");
+        if (ev.at) card.setAttribute("data-tool-start-ms", ev.at);
         card.innerHTML =
           '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-tool-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\';" ' +
           'class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">' +
           '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path><path d="M6 8h4" stroke-linecap="round"></path></svg>' +
           '<span class="font-mono font-medium text-black-900 dark:text-white-100">' + esc(toolName) + '</span>' +
+          (startLabel ? '<span class="font-mono text-[10px] text-black-500 dark:text-black-600">' + startLabel + '</span>' : '') +
+          '<span data-tool-duration class="font-mono text-[10px] text-black-500 dark:text-black-600"></span>' +
           '<span class="ml-auto text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide shrink-0">tool call</span>' +
           '<svg data-chevron viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-500 transition-transform" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
           '</button>' +
@@ -519,6 +569,12 @@
             : '<p class="px-3 py-2 text-black-500 dark:text-black-600 italic">no input</p>') +
           '</div>';
         if (ev.tool_use_id) pendingToolCards[ev.tool_use_id] = card;
+        // Snapshot replay: end_at already known (tool finished before refresh).
+        if (ev.end_at && ev.at) {
+          var dur = fmtDuration(ev.at, ev.end_at);
+          var durEl = card.querySelector("[data-tool-duration]");
+          if (durEl && dur) durEl.textContent = "· " + dur;
+        }
         body.appendChild(card);
         scrollToBottom();
       }
@@ -530,6 +586,12 @@
         var isError = ev.is_error === true || ev.is_error === "true";
         // Try to find the matching tool_use card to append inline; else append standalone.
         var parent = ev.tool_use_id ? pendingToolCards[ev.tool_use_id] : null;
+        if (parent && ev.at) {
+          var startMs = parseInt(parent.getAttribute("data-tool-start-ms") || "0", 10);
+          var dur = fmtDuration(startMs, ev.at);
+          var durEl = parent.querySelector("[data-tool-duration]");
+          if (durEl && dur) durEl.textContent = "· " + dur;
+        }
         var resultEl = document.createElement("div");
         if (parent) {
           // Attach result section to the existing tool card.
@@ -708,13 +770,18 @@
       }
     }
 
-    function applyLifecycle(lifecycle, pid) {
+    function applyLifecycle(lifecycle, pid, substate) {
       // Session detail SSE only updates its own badge — list pages
       // have their own row each tied to a different session id, and
       // wiring them all to one EventSource would require per-row
       // subscribers (out of scope here).
       if (!primaryBadge) return;
       setBadgeLifecycle(primaryBadge, lifecycle, pid);
+      var sub = primaryBadge.querySelector("[data-lifecycle-substate]");
+      if (sub) {
+        var label = substate || "";
+        sub.textContent = label ? "· " + label : "";
+      }
     }
 
     // Initial paint for every badge on the page (list rows, spawn

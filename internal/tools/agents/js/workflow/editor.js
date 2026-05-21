@@ -117,6 +117,20 @@
     requestAnimationFrame(() => {
       try { fitToView(); }
       catch (err) { console.warn('[wf] fit-to-view', err); }
+      // Refresh node meta hints after DOM is ready (WickNodes registered by now).
+      if (initialGraph && initialGraph.drawflow) {
+        const importedNodes = (initialGraph.drawflow.Home || {}).data || {};
+        Object.values(importedNodes).forEach(n => {
+          const kind = n.data && n.data.type;
+          const inner = (n.data && n.data.data) || {};
+          const mod = window.WickNodes && window.WickNodes[kind];
+          if (!mod || typeof mod.nodeHint !== 'function') return;
+          const hint = mod.nodeHint(inner);
+          if (hint === undefined) return;
+          const el = document.querySelector(`#node-${n.id} .meta`);
+          if (el) el.textContent = hint;
+        });
+      }
       if (editor.precanvas) editor.precanvas.classList.remove('wf-fitting');
     });
   });
@@ -165,6 +179,18 @@
         e.dataTransfer.setData('node-defaults', defaults);
       }
       e.dataTransfer.effectAllowed = 'copy';
+    });
+    // Click-to-add: drop node at canvas centre when drag isn't viable.
+    el.addEventListener('click', () => {
+      if (canvasLocked) return;
+      const type = el.dataset.nodeType;
+      if (!type) return;
+      let defaults = null;
+      const raw = el.dataset.nodeDefaults || '';
+      if (raw) { try { defaults = JSON.parse(raw); } catch (_) {} }
+      const rect = canvasEl.getBoundingClientRect();
+      const pos = canvasToFlow(rect.width / 2, rect.height / 2);
+      addNodeOfType(type, pos.x, pos.y, defaults);
     });
   });
   canvasEl.addEventListener('dragover', (e) => {
@@ -635,6 +661,38 @@
     return out;
   }
 
+  // hydrateServerRenderedArgForm restores values + wires Fixed/Expression
+  // toggles on a panel whose HTML is already server-rendered in the DOM
+  // (registry module panels from nodeModulePartials()). Unlike
+  // hydrateArgsForm it never replaces innerHTML — it only reads/writes
+  // existing field elements and re-attaches button listeners.
+  function hydrateServerRenderedArgForm(container, args, modes) {
+    if (!container) return;
+    container.querySelectorAll('.wf-arg-field').forEach((wrap) => {
+      const key = wrap.dataset.fieldKey;
+      const editable = argEditable(wrap);
+      if (!editable || !key) return;
+      const raw = args && args[key] != null ? args[key] : '';
+      const stored = Array.isArray(raw) ? JSON.stringify(raw) : String(raw);
+      if (editable.type === 'checkbox') {
+        editable.checked = stored === 'true';
+      } else if (stored !== '' || editable.tagName === 'SELECT') {
+        editable.value = stored;
+      }
+      const initialMode = (modes && modes[key]) || 'fixed';
+      setArgFieldMode(wrap, initialMode, false);
+      // Re-attach toggle listeners (idempotent via cloneNode trick is
+      // overkill here; duplicates are harmless since setArgFieldMode is
+      // idempotent). Use a flag to skip panels already wired.
+      if (!wrap._argModeWired) {
+        wrap._argModeWired = true;
+        wrap.querySelectorAll('[data-arg-mode]').forEach((btn) => {
+          btn.addEventListener('click', () => setArgFieldMode(wrap, btn.dataset.argMode, true));
+        });
+      }
+    });
+  }
+
   // Expose the args-form helpers so per-node modules (WickNodes) can
   // reuse the Fixed/Expression chrome + value collection without
   // duplicating the wiring. Used by /static/nodes/http/inspector.js.
@@ -643,6 +701,8 @@
   window.wickEditorHelpers.collectArgs = collectArgs;
   window.wickEditorHelpers.collectArgModes = collectArgModes;
   window.wickEditorHelpers.setArgFieldMode = setArgFieldMode;
+  window.wickEditorHelpers.updateArgPreview = updateArgPreview;
+  window.wickEditorHelpers.attachTemplateDropTarget = attachTemplateDropTarget;
 
   // attachTemplateDropTarget wires an input/textarea as a drop target
   // for the INPUT pane's draggable JSON leaves. On drop, inserts the
@@ -1944,7 +2004,7 @@
     const node = editor.getNodeFromId(id);
     if (!node) return;
     const d = node.data || {};
-    const kind = d.type || 'shell';
+    const kind = d.type || '';
     f.id.textContent = d.id || node.name;
     // ins-type is a hidden input now (used by save), ins-type-head is
     // the visible chip in the modal header.
@@ -1990,6 +2050,14 @@
     const mod = nodeModule(kind);
     if (mod && typeof mod.hydrate === 'function') {
       mod.hydrate(inner);
+    }
+    // Generic ArgForm hydration for registry-backed module panels that
+    // have no inspector.js of their own. Skip when the module already
+    // owns hydrate (e.g. datatable inspector.js) — it handles its own
+    // fields and the generic pass would double-restore them.
+    const activeModulePanel = document.querySelector(`.wf-inspector-panel[data-node-type="${CSS.escape(kind)}"]:not(.hidden)`);
+    if (activeModulePanel && !(mod && typeof mod.hydrate === 'function')) {
+      hydrateServerRenderedArgForm(activeModulePanel, inner, inner.__arg_modes || {});
     }
     if (kind === 'classify') {
       panels.cases.classList.remove('hidden');
@@ -2729,6 +2797,23 @@
     const mod = nodeModule(kind);
     if (mod && typeof mod.save === 'function') {
       mod.save(inner);
+    }
+    // Update node canvas meta text if the module provides a hint fn.
+    if (mod && typeof mod.nodeHint === 'function') {
+      const hint = mod.nodeHint(inner);
+      const metaEl = document.querySelector(`#node-${id} .meta`);
+      if (metaEl && hint !== undefined) {
+        metaEl.textContent = hint;
+        node.html = node.html.replace(/<div class="meta">[^<]*<\/div>/, `<div class="meta">${escapeHTML(hint)}</div>`);
+      }
+    }
+    // Generic save for registry-backed module panels that have no
+    // inspector.js. Skip when the module owns save() — it collects
+    // its own fields (e.g. datatable).
+    const savePanel = document.querySelector(`.wf-inspector-panel[data-node-type="${CSS.escape(kind)}"]:not(.hidden)`);
+    if (savePanel && savePanel.querySelector('.wf-arg-field') && !(mod && typeof mod.save === 'function')) {
+      Object.assign(inner, collectArgs(savePanel));
+      Object.assign(inner.__arg_modes = inner.__arg_modes || {}, collectArgModes(savePanel));
     }
     if (kind === 'shell') {
       inner.command = f.command.value.split('\n').filter(Boolean);
@@ -4122,7 +4207,7 @@
         return {
           dfId,
           id: d.id || n.name || dfId,
-          type: d.type || n.name || 'shell',
+          type: d.type || n.name || '',
           label: n.name || d.id || dfId,
         };
       });

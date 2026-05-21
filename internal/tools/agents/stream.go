@@ -3,6 +3,7 @@ package agents
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -35,6 +36,10 @@ type Event struct {
 	IsError   bool   `json:"is_error,omitempty"`
 	PID       int    `json:"pid,omitempty"`
 	Lifecycle string `json:"lifecycle,omitempty"`
+	// At / EndAt carry Unix ms timestamps for tool_use/tool_result events
+	// so the UI can show "started HH:MM:SS, took Ns".
+	At    int64 `json:"at,omitempty"`
+	EndAt int64 `json:"end_at,omitempty"`
 }
 
 func (e Event) JSON() string {
@@ -90,15 +95,20 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		Type:      ev.Type.String(),
 		Data:      ev.Text,
 	}
+	now := time.Now().UnixMilli()
 	switch ev.Type {
 	case event.ToolUse:
 		payload.Data = ev.ToolName
 		payload.ToolName = ev.ToolName
 		payload.ToolInput = ev.ToolInput
 		payload.ToolUseID = ev.ToolUseID
+		payload.At = now
 	case event.ToolResult:
 		payload.ToolUseID = ev.ToolUseID
 		payload.IsError = ev.IsError
+		payload.At = now
+	case event.Thinking:
+		payload.At = now
 	case event.Error:
 		payload.Data = ev.ErrorMsg
 	}

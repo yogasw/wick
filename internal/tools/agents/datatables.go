@@ -65,6 +65,58 @@ func dataTablesPage(c *tool.Ctx) {
 	c.HTML(view.DataTablesPage(vm))
 }
 
+// listDataTablesJSON returns [{slug, name}] for the workflow inspector dropdown.
+func listDataTablesJSON(c *tool.Ctx) {
+	if dataTablesNotReady(c) {
+		return
+	}
+	type item struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	}
+	var out []item
+	for _, slug := range globalDataTables.ListTables() {
+		sc, err := globalDataTables.LoadSchema(slug)
+		if err != nil {
+			continue
+		}
+		out = append(out, item{Slug: slug, Name: sc.Name})
+	}
+	if out == nil {
+		out = []item{}
+	}
+	c.JSON(200, out)
+}
+
+// listDataTableColumnsJSON returns [{name, type}] for user-defined columns
+// of a table (system columns id/created_at/updated_at excluded).
+func listDataTableColumnsJSON(c *tool.Ctx) {
+	if dataTablesNotReady(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	sc, err := globalDataTables.LoadSchema(slug)
+	if err != nil {
+		c.JSON(200, []any{})
+		return
+	}
+	type col struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	var out []col
+	for _, column := range sc.Columns {
+		if column.System {
+			continue
+		}
+		out = append(out, col{Name: column.Name, Type: column.Type})
+	}
+	if out == nil {
+		out = []col{}
+	}
+	c.JSON(200, out)
+}
+
 // createDataTable handles POST /data-tables (new-table modal).
 // Supports two flows (n8n parity): scratch (name + optional advanced
 // columns) and csv (file upload, headers become columns).

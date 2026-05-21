@@ -274,11 +274,16 @@ func Validate(w workflow.Workflow) *Result {
 		}
 		cases := caseEdgesPerSource[n.ID]
 		if len(cases) == 0 {
-			r.Errors = append(r.Errors, Error{Path: "graph.nodes[" + n.ID + "]", Message: "classify/branch has no outgoing edges"})
+			r.Errors = append(r.Errors, Error{Path: "graph.nodes[" + n.ID + "]", Message: fmt.Sprintf("%s node %q has no outgoing edges", n.Type, n.ID)})
 			continue
 		}
-		if _, hasDefault := cases["default"]; !hasDefault {
-			r.Errors = append(r.Errors, Error{Path: "graph.edges", Message: fmt.Sprintf("classify/branch node %q missing default case edge", n.ID)})
+		// datatable_exists/get use explicit verdicts (true/false, found/not_found)
+		// instead of a default catch-all, so skip the default-edge requirement.
+		needsDefault := n.Type != workflow.NodeDataTableExists && n.Type != workflow.NodeDataTableGet
+		if needsDefault {
+			if _, hasDefault := cases["default"]; !hasDefault {
+				r.Errors = append(r.Errors, Error{Path: "graph.edges", Message: fmt.Sprintf("%s node %q missing default case edge", n.Type, n.ID)})
+			}
 		}
 		if n.Type == workflow.NodeClassify {
 			for _, oc := range n.OutputCases {

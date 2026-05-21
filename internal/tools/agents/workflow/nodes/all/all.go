@@ -5,9 +5,15 @@
 package all
 
 import (
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/branch"
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/classify"
 	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/datatable"
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/db_query"
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/end"
 	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/go_script"
 	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/http"
 	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/session_init"
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/shell"
 	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/switchnode"
+	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/transform"
 )

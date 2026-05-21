@@ -243,14 +243,16 @@ type Node struct {
 	DefaultCase string       `yaml:"default_case,omitempty"`
 
 	// datatable_*
-	Table      string             `yaml:"table,omitempty"`
-	Where      map[string]any     `yaml:"where,omitempty"`
-	Conditions []DataTableCondYAML `yaml:"conditions,omitempty"`
-	Key        map[string]any     `yaml:"key,omitempty"`
-	RowValues  map[string]any     `yaml:"row,omitempty"`
-	OrderBy    []DataTableOrder   `yaml:"order_by,omitempty"`
-	Limit      int                `yaml:"limit,omitempty"`
-	Offset     int                `yaml:"offset,omitempty"`
+	Table          string              `yaml:"table,omitempty"`
+	Where          map[string]any      `yaml:"where,omitempty"`
+	Conditions     []DataTableCondYAML `yaml:"conditions,omitempty"`
+	ConditionModes map[string]string   `yaml:"condition_modes,omitempty"`
+	RowModes       map[string]string   `yaml:"row_modes,omitempty"`
+	Key            map[string]any      `yaml:"key,omitempty"`
+	RowValues      map[string]any      `yaml:"row,omitempty"`
+	OrderBy        []DataTableOrder    `yaml:"order_by,omitempty"`
+	Limit          int                 `yaml:"limit,omitempty"`
+	Offset         int                 `yaml:"offset,omitempty"`
 
 	// end
 	Result string `yaml:"result,omitempty"`

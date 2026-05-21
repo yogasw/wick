@@ -265,6 +265,16 @@ func (a *Agent) Argv() []string {
 	return a.proc.Argv()
 }
 
+// InFlightEvents returns events buffered in the current in-progress turn
+// (tool_use, tool_result, thinking) that have not yet been flushed to
+// disk. Returns nil when no turn is active or store is not wired.
+func (a *Agent) InFlightEvents() []store.TurnEvent {
+	if a.store == nil {
+		return nil
+	}
+	return a.store.InFlightEvents()
+}
+
 // run is the reader goroutine. Reads lines from stdout, parses each,
 // applies to state + store, fires the OnEvent hook, resets the idle
 // timer, and detects subprocess exit. Stops when stdout returns EOF or
@@ -332,22 +342,16 @@ func (a *Agent) run(ctx context.Context) {
 		}
 	}()
 
+	// toolInFlight is true from ToolUse until the matching ToolResult.
+	// While a tool is running the subprocess stdout goes silent (the
+	// tool itself is executing), so we must not let the idle timer fire
+	// and kill the process. The timer is stopped on ToolUse and
+	// restarted on ToolResult so the normal idle-kill still applies once
+	// the tool finishes.
+	toolInFlight := false
+
 	for scanner.Scan() {
 		line := scanner.Text()
-
-		if !idle.Stop() {
-			// Drain the channel if the timer already fired.
-			select {
-			case <-idle.C:
-			default:
-			}
-		}
-		idle.Reset(a.cfg.IdleTimeout)
-		// Signal activity so any active grace period is cancelled.
-		select {
-		case a.activityCh <- struct{}{}:
-		default:
-		}
 
 		ev, err := a.parser.Parse(line)
 		if err != nil {
@@ -356,6 +360,69 @@ func (a *Agent) run(ctx context.Context) {
 			// event so the store + UI still see it.
 			ev = event.AgentEvent{Type: event.Error, ErrorMsg: err.Error(), Raw: line}
 		}
+
+		switch ev.Type {
+		case event.ToolUse:
+			// Tool about to execute — stdout will be silent. Stop the
+			// idle timer until the result comes back.
+			if !toolInFlight {
+				if !idle.Stop() {
+					select {
+					case <-idle.C:
+					default:
+					}
+				}
+				toolInFlight = true
+			}
+		case event.ToolResult:
+			// Tool finished — restart idle timer from now.
+			toolInFlight = false
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(a.cfg.IdleTimeout)
+			select {
+			case a.activityCh <- struct{}{}:
+			default:
+			}
+		case event.Done, event.Error:
+			// Turn ended (normally or via error) — always reset
+			// toolInFlight so a crash mid-tool doesn't leave the idle
+			// timer stopped forever.
+			toolInFlight = false
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(a.cfg.IdleTimeout)
+			select {
+			case a.activityCh <- struct{}{}:
+			default:
+			}
+		default:
+			// For every other line reset the idle timer only when no
+			// tool is in flight — tool execution keeps stdout silent
+			// and we must not accidentally restart the timer mid-tool.
+			if !toolInFlight {
+				if !idle.Stop() {
+					select {
+					case <-idle.C:
+					default:
+					}
+				}
+				idle.Reset(a.cfg.IdleTimeout)
+				select {
+				case a.activityCh <- struct{}{}:
+				default:
+				}
+			}
+		}
+
 		if ev.Type == event.SessionStart && ev.SessionID != "" {
 			a.mu.Lock()
 			a.resumeID = ev.SessionID

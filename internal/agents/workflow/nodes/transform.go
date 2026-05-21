@@ -62,3 +62,6 @@ func (e *TransformExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 		return workflow.NodeOutput{}, fmt.Errorf("transform: unknown engine %q", engine)
 	}
 }
+
+// TransformSchema is the exported form of transformSchema for the editor UI.
+type TransformSchema = transformSchema

@@ -39,3 +39,6 @@ func (e *EndExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflow
 	}
 	return workflow.NodeOutput{Result: out, Fields: map[string]any{"result": out}}, nil
 }
+
+// EndSchema is the exported form of endSchema for the editor UI.
+type EndSchema = endSchema
