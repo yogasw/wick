@@ -104,6 +104,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		payload.ToolUseID = ev.ToolUseID
 		payload.At = now
 	case event.ToolResult:
+		payload.Data = ev.Text
 		payload.ToolUseID = ev.ToolUseID
 		payload.IsError = ev.IsError
 		payload.At = now
@@ -112,6 +113,14 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 	case event.Error:
 		payload.Data = ev.ErrorMsg
 	}
+	log.Debug().
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("event_type", payload.Type).
+		Str("data", payload.Data).
+		Str("tool_name", payload.ToolName).
+		Str("tool_use_id", payload.ToolUseID).
+		Msg("sse.publish: broadcasting event")
 	b.fanout(sessionID, payload)
 }
 

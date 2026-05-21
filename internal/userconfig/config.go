@@ -158,6 +158,10 @@ type ProviderInstance struct {
 	// spawn.
 	Hooks map[string]HookInstanceConfig `json:"hooks,omitempty"`
 
+	// SandboxEnabled enables --sandbox workspace-write for codex spawns.
+	// Only meaningful for codex instances; ignored by claude/gemini.
+	SandboxEnabled bool `json:"sandbox_enabled,omitempty"`
+
 	// Storage configures credential/config file syncing for this
 	// instance. nil = sync disabled.
 	Storage *StorageConfig `json:"storage,omitempty"`
