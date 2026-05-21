@@ -272,7 +272,9 @@ templ EditorInspector(vm EditorVM) {
 // nothing emitted.
 templ nodeModulePartials() {
 	for _, m := range wfnodes.All() {
-		@m.InspectorPartial()
+		if p := m.InspectorPartial(); p != nil {
+			@p
+		}
 	}
 }
 

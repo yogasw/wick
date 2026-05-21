@@ -52,6 +52,34 @@ type PaletteItem struct {
 	Dot   string
 	Hint  string
 	Group string
+	// Skip signals BuildPalette to ignore this item. Modules that
+	// contribute a grouped entry via PaletteGrouper set this on all
+	// sibling items so only one collapsed row appears in the palette.
+	Skip bool
+}
+
+// PaletteOp is one operation inside a drillable palette group.
+type PaletteOp struct {
+	NodeType string
+	Label    string
+	Desc     string
+	Kind     string
+	Defaults map[string]any
+}
+
+// PaletteGrouper is an optional interface a Module may implement to
+// expose a single drillable palette row (like connector / channel)
+// instead of one flat row per node type. BuildPalette checks for this
+// interface via type assertion.
+type PaletteGrouper interface {
+	PaletteGroup() PaletteGroupEntry
+}
+
+// PaletteGroupEntry is the drillable palette row returned by PaletteGrouper.
+type PaletteGroupEntry struct {
+	Section string
+	Item    PaletteItem
+	Ops     []PaletteOp
 }
 
 // NodeRender holds the visual config for a canvas node card. Mirrors

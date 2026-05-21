@@ -802,6 +802,7 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 		}
 		if e.agent != nil {
 			entry.PID = e.agent.PID()
+			entry.InFlightEvents = e.agent.InFlightEvents()
 		}
 		out = append(out, entry)
 	}
@@ -817,13 +818,14 @@ func (p *Pool) IdleTimeout() time.Duration { return p.cfg.IdleTimeout }
 // pool can read them; older callers that only check SessionID + AgentName
 // keep working.
 type ActiveEntry struct {
-	SessionID  string
-	AgentName  string
-	CWD        string // resolved workspace path, used by RouteByCWD
-	PID        int
-	Lifecycle  string
-	Substate   string
-	LastActive time.Time
+	SessionID      string
+	AgentName      string
+	CWD            string // resolved workspace path, used by RouteByCWD
+	PID            int
+	Lifecycle      string
+	Substate       string
+	LastActive     time.Time
+	InFlightEvents []store.TurnEvent
 }
 
 // Kill stops the running agent for sessionID+agentName. Idempotent if
