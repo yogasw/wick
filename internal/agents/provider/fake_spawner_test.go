@@ -19,6 +19,7 @@ type fakeSpawner struct {
 	Lines [][]string // one slice per Spawn call (resume tests need 2)
 	Calls int        // how many spawns have happened
 	Last  *fakeProcess
+	Procs []*fakeProcess // all spawned processes in order
 }
 
 func (s *fakeSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process, error) {
@@ -42,6 +43,7 @@ func (s *fakeSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process, err
 		pid:      90000 + idx,
 	}
 	s.Last = proc
+	s.Procs = append(s.Procs, proc)
 
 	// Emit canned lines then close stdout. Tests that need to assert
 	// on cli_session_id / state changes rely on Done arriving in this

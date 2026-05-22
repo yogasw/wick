@@ -104,6 +104,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		payload.ToolUseID = ev.ToolUseID
 		payload.At = now
 	case event.ToolResult:
+		payload.Data = ev.Text
 		payload.ToolUseID = ev.ToolUseID
 		payload.IsError = ev.IsError
 		payload.At = now
@@ -112,6 +113,14 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 	case event.Error:
 		payload.Data = ev.ErrorMsg
 	}
+	log.Debug().
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("event_type", payload.Type).
+		Str("data", payload.Data).
+		Str("tool_name", payload.ToolName).
+		Str("tool_use_id", payload.ToolUseID).
+		Msg("sse.publish: broadcasting event")
 	b.fanout(sessionID, payload)
 }
 
@@ -187,6 +196,33 @@ func (b *Broadcaster) PublishAskUserResolved(sessionID, requestID string) {
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		Type:      "ask_user_resolved",
+		Data:      string(body),
+	})
+}
+
+// PublishRaw fires an arbitrary typed SSE event. Used to inject synthetic
+// agent events (e.g. text_delta + done for a switch confirmation reply).
+func (b *Broadcaster) PublishRaw(sessionID, agentName, evType, data string) {
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      evType,
+		Data:      data,
+	})
+}
+
+// PublishSystemTurn fires a system_turn event so the UI can append it
+// to the conversation without a page reload. Data is JSON with text +
+// steps so the front-end can render the pill + checklist inline.
+func (b *Broadcaster) PublishSystemTurn(sessionID, agentName, text string, steps []string) {
+	body, _ := json.Marshal(map[string]any{
+		"text":  text,
+		"steps": steps,
+	})
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      "system_turn",
 		Data:      string(body),
 	})
 }

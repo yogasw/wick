@@ -8,6 +8,7 @@ package providersync
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
@@ -54,11 +55,12 @@ func SourceToInstance(src entity.ProviderStorageSource) provider.Instance {
 }
 
 // SyncOne runs a single backup pass for one instance.
-func (m *Manager) SyncOne(ctx context.Context, ins provider.Instance) error {
+func (m *Manager) SyncOne(ctx context.Context, ins provider.Instance, verbose ...bool) error {
 	if ins.Storage == nil {
 		return nil
 	}
-	return m.backup(ctx, ins)
+	v := len(verbose) > 0 && verbose[0]
+	return m.backup(ctx, ins, v)
 }
 
 // PurgeExcluded walks every row for (providerType, instanceName) and deletes
@@ -185,18 +187,20 @@ type SrcInfo struct{ Mode, SyncPath string }
 // RestoreAll writes all DB file rows back to filesystem with the disk-wins
 // guard: missing → write, same hash → skip, diverged → keep disk + log.
 // Used by the cron tick and the /restore-now UI button.
-func (m *Manager) RestoreAll(ctx context.Context) error {
-	return m.restoreAll(ctx, false)
+func (m *Manager) RestoreAll(ctx context.Context, verbose ...bool) error {
+	return m.restoreAll(ctx, false, len(verbose) > 0 && verbose[0])
 }
 
 // RestoreAllForce overwrites every covered file on disk with the DB copy,
 // no hash check. Used at server boot so DB is the source of truth on the
 // first restore after a container restart (no-volume env).
-func (m *Manager) RestoreAllForce(ctx context.Context) error {
-	return m.restoreAll(ctx, true)
+func (m *Manager) RestoreAllForce(ctx context.Context, verbose ...bool) error {
+	return m.restoreAll(ctx, true, len(verbose) > 0 && verbose[0])
 }
 
-func (m *Manager) restoreAll(ctx context.Context, force bool) error {
+func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) error {
+
+	l := log.With().Str("component", "provider-storage").Str("op", "restore").Str("run_id", runID()).Logger()
 	// Legacy-row wipe is now a one-shot DB migration in postgres.Migrate;
 	// nothing to clean up here.
 	sources, err := m.store.listSources(ctx)
@@ -242,29 +246,51 @@ func (m *Manager) restoreAll(ctx context.Context, force bool) error {
 			if existing, err := os.ReadFile(dst); err == nil {
 				if hashBytes(existing) == row.ContentHash {
 					skippedExist++
+					if verbose {
+						l.Info().
+							Str("file", dst).
+							Str("hash", row.ContentHash[:8]).
+							Int("size_bytes", len(row.Content)).
+							Msg("providersync: restore skip (hash match)")
+					}
 					continue
 				}
 				skippedDiverged++
-				log.Warn().Str("dst", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
+				l.Warn().Str("file", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
 				continue
 			}
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			log.Warn().Err(err).Str("dst", dst).Msg("providersync: restore mkdir failed")
+			l.Warn().Err(err).Str("file", dst).Msg("providersync: restore mkdir failed")
 			continue
 		}
 		if err := os.WriteFile(dst, row.Content, 0o600); err != nil {
-			log.Warn().Err(err).Str("dst", dst).Msg("providersync: restore write failed")
+			l.Warn().Err(err).Str("file", dst).Msg("providersync: restore write failed")
 			continue
+		}
+		if verbose {
+			l.Info().
+				Str("file", dst).
+				Str("hash", row.ContentHash[:8]).
+				Int("size_bytes", len(row.Content)).
+				Msg("providersync: restore written")
 		}
 		count++
 	}
-	log.Info().
+	l.Info().
 		Int("restored", count).
 		Int("skipped_match", skippedExist).
 		Int("skipped_diverged", skippedDiverged).
 		Msg("providersync: RestoreAll done")
 	return nil
+}
+
+// runID returns a short random hex string for correlating log lines within
+// a single sync or restore run.
+func runID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // absToOS converts an absolute path stored in DB (slash-normalised) to the
@@ -549,12 +575,14 @@ func (m *Manager) RunRetention(ctx context.Context) {
 
 // ── internals ─────────────────────────────────────────────────────────
 
-func (m *Manager) backup(ctx context.Context, ins provider.Instance) error {
+func (m *Manager) backup(ctx context.Context, ins provider.Instance, verbose bool) error {
 	// Skip exclude-mode pseudo-sources here — only include-mode sources
 	// drive disk walks. Retention picking ignores them too.
 	if ins.Storage != nil && (ins.Storage.Mode == "exclude") {
 		return nil
 	}
+
+	l := log.With().Str("component", "provider-storage").Str("op", "sync").Str("run_id", runID()).Logger()
 
 	allSources, _ := m.store.listSourcesForInstance(ctx, string(ins.Type), ins.Name)
 	// stable order so retention pick is deterministic when two sources have
@@ -569,28 +597,47 @@ func (m *Manager) backup(ctx context.Context, ins provider.Instance) error {
 	}
 
 	now := time.Now().UTC()
+	changed, skipped := 0, 0
 	for abs, content := range files {
+		newHash := hashBytes(content)
+		retention := pickRetention(abs, allSources)
+
+		prevHash, prevRetention, exists := m.store.fileHash(ctx, string(ins.Type), ins.Name, abs)
+		if exists && prevHash == newHash && prevRetention == retention {
+			skipped++
+			continue
+		}
+
 		row := entity.ProviderStorage{
 			ProviderType:  string(ins.Type),
 			InstanceName:  ins.Name,
 			RelPath:       abs,
 			Content:       content,
-			ContentHash:   hashBytes(content),
+			ContentHash:   newHash,
 			SyncedAt:      now,
-			RetentionDays: pickRetention(abs, allSources),
+			RetentionDays: retention,
 		}
-		written, err := m.store.upsertFile(ctx, row)
-		if err != nil {
+		if err := m.store.upsertFile(ctx, row); err != nil {
 			return err
 		}
-		if written {
-			log.Debug().
-				Str("provider", string(ins.Type)).
-				Str("instance", ins.Name).
+		changed++
+		if verbose {
+			e := l.Info().
 				Str("file", abs).
-				Msg("providersync: stored")
+				Int("size_bytes", len(content)).
+				Str("hash", newHash[:8])
+			if prevHash != "" {
+				e = e.Str("prev_hash", prevHash[:8])
+			}
+			e.Msg("providersync: sync stored")
 		}
 	}
+	l.Debug().
+		Str("provider", string(ins.Type)).
+		Str("instance", ins.Name).
+		Int("changed", changed).
+		Int("skipped", skipped).
+		Msg("providersync: sync done")
 	return nil
 }
 

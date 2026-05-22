@@ -12,13 +12,18 @@ import (
 // the resume key — wick captures it from the first stream-json event
 // emitted by the CLI and persists it so subsequent spawns can pass
 // `--resume <id>`. See agents-design.md §5.2.
+//
+// ProviderSessions maps "type/name" provider keys to their last-known
+// CLI session ID. When switching providers, the outgoing resume ID is
+// saved here so switching back can resume the old conversation.
 type AgentEntry struct {
-	Name         string    `json:"name"`
-	Provider     string    `json:"provider"`
-	CLISessionID string    `json:"cli_session_id,omitempty"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	LastActive   time.Time `json:"last_active,omitempty"`
+	Name             string            `json:"name"`
+	Provider         string            `json:"provider"`
+	CLISessionID     string            `json:"cli_session_id,omitempty"`
+	Status           string            `json:"status"`
+	CreatedAt        time.Time         `json:"created_at"`
+	LastActive       time.Time         `json:"last_active,omitempty"`
+	ProviderSessions map[string]string `json:"provider_sessions,omitempty"`
 }
 
 // SaveAgents atomically rewrites sessions/<id>/agents.json. nil

@@ -91,4 +91,9 @@ type SpawnOptions struct {
 	// when non-empty. Each provider spawner decides how to pass it to the
 	// underlying CLI. The value is never written to spawn logs — Argv() strips it.
 	Preset string
+
+	// InitialMessage is the first user prompt for providers that take the
+	// prompt as a positional arg (codex) rather than via stdin after spawn.
+	// Empty = no positional prompt arg appended. claude ignores this field.
+	InitialMessage string
 }

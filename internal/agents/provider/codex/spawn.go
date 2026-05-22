@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/capability"
@@ -71,6 +72,22 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		bin = "codex"
 	}
 
+	// Write preset to .codex/soul.md and point codex at it via
+	// -c instructions_files so the instructions apply on both fresh and
+	// resumed sessions (AGENTS.md is ignored on resume).
+	soulPath := ""
+	if opt.Workspace != "" && opt.Preset != "" {
+		codexDir := filepath.Join(opt.Workspace, ".codex")
+		if err := os.MkdirAll(codexDir, 0o755); err == nil {
+			p := filepath.Join(codexDir, "soul.md")
+			if err := os.WriteFile(p, []byte(opt.Preset), 0o644); err == nil {
+				soulPath = p
+			} else {
+				log.Warn().Err(err).Str("path", p).Msg("agents.spawn: write soul.md failed")
+			}
+		}
+	}
+
 	// Install / remove per-workspace hook config based on the user's
 	// per-instance intent. See claude/spawn.go applyHookConfig for the
 	// fail-soft rationale.
@@ -78,8 +95,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	args := []string{
 		"exec",
-		"--sandbox", "workspace-write",
+		"--json",
+		"--skip-git-repo-check",
 	}
+	sandboxMode := provider.CodexSandboxFullAccess
+	if opt.Instance != nil && opt.Instance.CodexConfig != nil && opt.Instance.CodexConfig.SandboxMode != "" {
+		sandboxMode = opt.Instance.CodexConfig.SandboxMode
+	}
+	args = append(args, "--sandbox", string(sandboxMode))
 	// When gate is active for this instance, do NOT set
 	// --ask-for-approval to a bypass value — codex's approval flag
 	// generally skips PreToolUse under bypass modes, which would
@@ -88,8 +111,15 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--ask-for-approval", s.AskForApproval)
 	}
 	args = append(args, s.ExtraArgs...)
+	if soulPath != "" {
+		// Use JSON array syntax for TOML list value.
+		args = append(args, "-c", `instructions_files=["`+soulPath+`"]`)
+	}
 	if opt.ResumeID != "" {
-		args = append(args, "--resume", opt.ResumeID)
+		args = append(args, "resume", opt.ResumeID)
+	}
+	if opt.InitialMessage != "" {
+		args = append(args, opt.InitialMessage)
 	}
 
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -119,6 +149,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		log.Error().Err(err).Str("bin", bin).Msg("agents.spawn: codex start failed")
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
+	// Close stdin immediately — codex reads the prompt from argv, not stdin.
+	// Leaving stdin open causes codex to block on "Reading additional input from stdin".
+	_ = stdin.Close()
 	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (codex)")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
 }

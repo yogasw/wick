@@ -16,7 +16,8 @@ type GeneralConfig struct {
 	SystemPrompt string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
 	WorkflowGuardMode  string `wick:"dropdown=off|warn|block;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
 	WorkflowLokiURL    string `wick:"url;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
-	WorkflowLokiLabels string `wick:"text;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
+	WorkflowLokiLabels      string `wick:"text;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
+	MCPUninstalledClients string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs

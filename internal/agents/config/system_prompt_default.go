@@ -13,6 +13,12 @@ var defaultSystemPromptTemplate string
 //go:embed system_prompt_immutable.md
 var immutableSystemPromptTemplate string
 
+//go:embed system_prompt_immutable_claude.md
+var immutableSystemPromptClaudeTemplate string
+
+//go:embed system_prompt_immutable_codex.md
+var immutableSystemPromptCodexTemplate string
+
 // DefaultSystemPrompt is the baseline interaction policy embedded at
 // build time. Seeded into the `system_prompt` config row on fresh
 // installs and surfaced as the target of the Reset button on the
@@ -24,15 +30,23 @@ var immutableSystemPromptTemplate string
 // every reference to `~/.wick/` would otherwise be wrong). Resolved
 // once at call time via appname.Resolve.
 func DefaultSystemPrompt() string {
-	return strings.ReplaceAll(defaultSystemPromptTemplate, "{{app}}", appname.Resolve())
+	return resolve(defaultSystemPromptTemplate)
 }
 
-// ImmutableSystemPrompt is the wick-runtime rule set that wraps every
-// spawn — operator-uneditable, prepended above the preset + the
-// operator-customised system_prompt so it always wins on conflict.
-// Currently carries the "AskUserQuestion is disabled, use numbered
-// plain-text questions" guard so the headless picker bug can't reach
-// the user.
+// ImmutableSystemPrompt returns the global rules combined with
+// claude-specific rules. Passed via --append-system-prompt on every
+// claude spawn; operator-uneditable, always wins on conflict.
 func ImmutableSystemPrompt() string {
-	return strings.ReplaceAll(immutableSystemPromptTemplate, "{{app}}", appname.Resolve())
+	return resolve(immutableSystemPromptTemplate + "\n\n" + immutableSystemPromptClaudeTemplate)
+}
+
+// ImmutableSystemPromptCodex returns the global rules combined with
+// codex-specific rules. Written as AGENTS.md into the workspace so
+// codex picks it up automatically on every spawn.
+func ImmutableSystemPromptCodex() string {
+	return resolve(immutableSystemPromptTemplate + "\n\n" + immutableSystemPromptCodexTemplate)
+}
+
+func resolve(s string) string {
+	return strings.ReplaceAll(s, "{{app}}", appname.Resolve())
 }

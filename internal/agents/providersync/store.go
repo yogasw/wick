@@ -196,35 +196,34 @@ func (s *store) wipeLegacyRelPathRows(ctx context.Context) error {
 	return res.Error
 }
 
-// upsertFile writes a file row only when hash changed. Returns true if written.
-func (s *store) upsertFile(ctx context.Context, row entity.ProviderStorage) (bool, error) {
+// fileHash returns the stored content_hash and retention_days for a file row,
+// or ("", 0, false) when no row exists yet.
+func (s *store) fileHash(ctx context.Context, providerType, instanceName, relPath string) (hash string, retention int, ok bool) {
+	var row entity.ProviderStorage
+	err := s.db.WithContext(ctx).
+		Select("content_hash", "retention_days").
+		Where("provider_type = ? AND instance_name = ? AND rel_path = ?", providerType, instanceName, relPath).
+		First(&row).Error
+	if err != nil {
+		return "", 0, false
+	}
+	return row.ContentHash, row.RetentionDays, true
+}
+
+// upsertFile writes a file row unconditionally. Callers are responsible
+// for checking whether a write is necessary before calling.
+func (s *store) upsertFile(ctx context.Context, row entity.ProviderStorage) error {
 	parentID, err := s.ensureFolderChain(ctx, row.ProviderType, row.InstanceName, row.RelPath)
 	if err != nil {
-		return false, err
+		return err
 	}
 	row.ParentID = parentID
 	row.Name = filepath.Base(filepath.FromSlash(row.RelPath))
-
-	var existing entity.ProviderStorage
-	err = s.db.WithContext(ctx).
-		Where("provider_type = ? AND instance_name = ? AND rel_path = ?",
-			row.ProviderType, row.InstanceName, row.RelPath).
-		First(&existing).Error
-	if err == nil {
-		// Nothing meaningful changed → skip write (preserves synced_at
-		// so the hash-skip optimisation stays observable in tests).
-		if existing.ContentHash == row.ContentHash && existing.RetentionDays == row.RetentionDays {
-			return false, nil
-		}
-	}
-	if err := s.db.WithContext(ctx).
+	return s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "provider_type"}, {Name: "instance_name"}, {Name: "rel_path"}},
 			DoUpdates: clause.AssignmentColumns([]string{"content", "content_hash", "synced_at", "parent_id", "name", "retention_days"}),
-		}).Create(&row).Error; err != nil {
-		return false, err
-	}
-	return true, nil
+		}).Create(&row).Error
 }
 
 // listFiles returns all rows for a provider instance.

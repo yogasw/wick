@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -38,6 +39,9 @@ type Agent struct {
 	proc    Process
 	cancel  context.CancelFunc
 	running bool
+	// rootCtx is the context passed to Start; used by RespawnOnSend to
+	// re-spawn with a fresh subcontext without needing an external ctx arg.
+	rootCtx context.Context
 
 	// done is closed when the reader goroutine exits — Stop() waits on it.
 	done chan struct{}
@@ -112,6 +116,13 @@ type Options struct {
 	// per-channel transports (Slack, HTTP) that need to inject auth
 	// tokens or routing keys.
 	ExtraEnv []string
+	// MessageEncoder formats a user message before writing to stdin.
+	// nil = default Claude stream-json envelope. Ignored when RespawnOnSend=true.
+	MessageEncoder func(text string) string
+	// RespawnOnSend, when true, means Send() kills the current process and
+	// spawns a new one with the message as InitialMessage (positional arg).
+	// Used by codex which is one-shot per invocation, not long-lived.
+	RespawnOnSend bool
 }
 
 // New builds an Agent from Options. Doesn't spawn — call Start.
@@ -145,6 +156,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		a.mu.Unlock()
 		return errors.New("agent already running")
 	}
+	a.rootCtx = ctx
 	a.parser = a.cfg.ParserFactory()
 
 	subCtx, cancel := context.WithCancel(ctx)
@@ -180,17 +192,79 @@ func (a *Agent) Start(ctx context.Context) error {
 // conversation.jsonl reflects the message; we don't double-write here
 // because some transports (replay tests) skip storage.
 func (a *Agent) Send(text string) error {
+	if a.cfg.RespawnOnSend {
+		return a.respawnWithMessage(text)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.running || a.proc == nil {
 		return errors.New("agent not running")
 	}
-	payload := fmt.Sprintf(
-		`{"type":"user","message":{"role":"user","content":%s}}`,
-		jsonString(text),
-	)
+	var payload string
+	if a.cfg.MessageEncoder != nil {
+		payload = a.cfg.MessageEncoder(text)
+	} else {
+		payload = fmt.Sprintf(
+			`{"type":"user","message":{"role":"user","content":%s}}`,
+			jsonString(text),
+		)
+	}
+	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
 	_, err := a.proc.Stdin().Write([]byte(payload + "\n"))
 	return err
+}
+
+// respawnWithMessage stops the current process (if any) and spawns a new one
+// with text as the InitialMessage positional arg. Used by codex which is
+// one-shot per invocation.
+func (a *Agent) respawnWithMessage(text string) error {
+	a.mu.Lock()
+	ctx := a.rootCtx
+	resumeID := a.resumeID
+	// Kill current process if alive.
+	if a.running && a.proc != nil {
+		if a.cancel != nil {
+			a.cancel()
+		}
+		_ = a.proc.Stdin().Close()
+		_ = a.proc.Kill()
+		done := a.done
+		a.mu.Unlock()
+		<-done
+		a.mu.Lock()
+	}
+	if ctx == nil {
+		a.mu.Unlock()
+		return errors.New("agent not started")
+	}
+	a.parser = a.cfg.ParserFactory()
+	a.exitReasonSet = false
+
+	log.Debug().Str("message", text).Str("resume_id", resumeID).Msg("agent.respawn: spawning with initial message")
+
+	subCtx, cancel := context.WithCancel(ctx)
+	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
+		Workspace:      a.cfg.Workspace,
+		ResumeID:       resumeID,
+		ExtraEnv:       a.cfg.ExtraEnv,
+		Instance:       a.cfg.Instance,
+		GateBinary:     a.cfg.GateBinary,
+		Preset:         a.cfg.Preset,
+		InitialMessage: text,
+	})
+	if err != nil {
+		cancel()
+		a.mu.Unlock()
+		return err
+	}
+	a.proc = proc
+	a.cancel = cancel
+	a.running = true
+	a.done = make(chan struct{})
+	a.mu.Unlock()
+
+	go a.run(subCtx)
+	return nil
 }
 
 // Stop kills the subprocess and waits for the reader to exit.
