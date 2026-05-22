@@ -315,7 +315,7 @@ func (h *handlers) jobSetSchedule(c *connector.Ctx) (any, error) {
 		err = errAccessDenied
 		return nil, err
 	}
-	if err = h.deps.Jobs.UpdateSchedule(ctx, key, schedule, enabled, maxRuns); err != nil {
+	if err = h.deps.Jobs.UpdateSchedule(ctx, key, schedule, enabled, maxRuns, 0); err != nil {
 		return nil, err
 	}
 	return map[string]any{

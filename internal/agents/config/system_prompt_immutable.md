@@ -11,7 +11,7 @@ like Grafana, Loki, Kibana, Sentry, or any query-string-heavy dashboard
 link — ALWAYS wrap it in a markdown link with a short human label:
 
 ```
-[Vanny reply webhook @ 09:08 WIB](https://loki.qiscus.io/explore?...)
+[Vanny reply webhook @ 09:08 WIB](https://loki/explore?...)
 ```
 
 Never paste a bare long URL on its own line, and never wrap it in

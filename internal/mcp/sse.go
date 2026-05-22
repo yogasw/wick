@@ -14,6 +14,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/mcp/handlers"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -241,26 +242,29 @@ func (h *Handler) handleToolsCallSSE(w http.ResponseWriter, r *http.Request, req
 	}
 	defer sess.close()
 
+	rsp := h.responder()
+	hreq := handlers.RPCRequest{ID: req.ID, Params: req.Params}
+
 	switch p.Name {
 	case "wick_list":
 		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			h.handleWickList(buf, r, req, tagIDs, user.IsAdmin())
+			handlers.WickList(buf, r, hreq, rsp, h.connectors, tagIDs, user.IsAdmin())
 		})
 	case "wick_search":
 		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			h.handleWickSearch(buf, r, req, p.Arguments, tagIDs, user.IsAdmin())
+			handlers.WickSearch(buf, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
 		})
 	case "wick_get":
 		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			h.handleWickGet(buf, r, req, p.Arguments, tagIDs, user.IsAdmin())
+			handlers.WickGet(buf, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
 		})
 	case "wick_encrypt":
 		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			h.handleWickEncrypt(buf, req)
+			handlers.WickEncrypt(buf, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 		})
 	case "wick_decrypt":
 		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			h.handleWickDecrypt(buf, req)
+			handlers.WickDecrypt(buf, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 		})
 	case "wick_execute":
 		h.sseWickExecute(sess, r, req, p, user, tagIDs)
@@ -297,7 +301,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		return
 	}
 
-	connectorID, opKey, err := parseToolID(toolID)
+	connectorID, opKey, err := handlers.ParseToolID(toolID)
 	if err != nil {
 		sseWriteToolError(sess, req, err.Error(), toolID)
 		return
@@ -310,7 +314,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 	}
 
 	rawParams, _ := args["params"].(map[string]any)
-	input := stringifyArgs(rawParams)
+	input := handlers.StringifyArgs(rawParams)
 
 	// Only attach a reporter when the client supplied a progressToken.
 	// Without a token, the spec gives clients nothing to correlate
@@ -345,7 +349,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			Input:        input,
 			Source:       entity.ConnectorRunSourceMCP,
 			UserID:       user.ID,
-			IPAddress:    clientIP(r),
+			IPAddress:    handlers.ClientIP(r),
 			UserAgent:    r.Header.Get("User-Agent"),
 			Progress:     reporter,
 		})
@@ -409,8 +413,8 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			_ = sess.writeMessage(rpcResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Result: toolCallResult{
-					Content: []toolContent{{Type: "text", Text: out.res.ResponseJSON}},
+				Result: handlers.ToolCallResult{
+					Content: []handlers.ToolContent{{Type: "text", Text: out.res.ResponseJSON}},
 					IsError: false,
 				},
 			})
@@ -453,8 +457,8 @@ func sseWriteToolError(sess *sseSession, req rpcRequest, message, toolID string)
 	_ = sess.writeMessage(rpcResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result: toolCallResult{
-			Content: []toolContent{{Type: "text", Text: string(bodyBytes)}},
+		Result: handlers.ToolCallResult{
+			Content: []handlers.ToolContent{{Type: "text", Text: string(bodyBytes)}},
 			IsError: true,
 		},
 	})

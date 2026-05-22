@@ -390,7 +390,7 @@ func syncNow(c *tool.Ctx) {
 			Name:    src.InstanceName,
 			Storage: &provider.StorageConfig{Mode: src.Mode, SyncPath: src.SyncPath},
 		}
-		if err := globalSyncMgr.SyncOne(c.Context(), ins, verbose); err != nil {
+		if _, _, err := globalSyncMgr.SyncOne(c.Context(), ins, verbose); err != nil {
 			log.Warn().Err(err).Str("provider", src.ProviderType).Str("path", src.SyncPath).Msg("providersync: syncNow failed")
 		} else {
 			synced++

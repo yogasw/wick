@@ -55,9 +55,12 @@ func SourceToInstance(src entity.ProviderStorageSource) provider.Instance {
 }
 
 // SyncOne runs a single backup pass for one instance.
-func (m *Manager) SyncOne(ctx context.Context, ins provider.Instance, verbose ...bool) error {
+// SyncOne backs up one provider instance from disk to DB.
+// Returns (changed, skipped, error) — changed is the number of files
+// written/updated; skipped is files whose content hash was unchanged.
+func (m *Manager) SyncOne(ctx context.Context, ins provider.Instance, verbose ...bool) (int, int, error) {
 	if ins.Storage == nil {
-		return nil
+		return 0, 0, nil
 	}
 	v := len(verbose) > 0 && verbose[0]
 	return m.backup(ctx, ins, v)
@@ -124,7 +127,7 @@ func (m *Manager) SyncAll(ctx context.Context) (int, error) {
 		if !src.Enabled || src.Mode == "exclude" {
 			continue
 		}
-		if err := m.SyncOne(ctx, SourceToInstance(src)); err != nil {
+		if _, _, err := m.SyncOne(ctx, SourceToInstance(src)); err != nil {
 			log.Warn().Err(err).
 				Str("provider", src.ProviderType).
 				Str("path", src.SyncPath).
@@ -464,7 +467,7 @@ func (m *Manager) SaveSource(ctx context.Context, src entity.ProviderStorageSour
 			Name:    saved.InstanceName,
 			Storage: &provider.StorageConfig{Mode: saved.Mode, SyncPath: saved.SyncPath},
 		}
-		if syncErr := m.SyncOne(ctx, ins); syncErr != nil {
+		if _, _, syncErr := m.SyncOne(ctx, ins); syncErr != nil {
 			log.Warn().Err(syncErr).
 				Str("provider", saved.ProviderType).
 				Str("path", saved.SyncPath).
@@ -575,25 +578,23 @@ func (m *Manager) RunRetention(ctx context.Context) {
 
 // ── internals ─────────────────────────────────────────────────────────
 
-func (m *Manager) backup(ctx context.Context, ins provider.Instance, verbose bool) error {
+func (m *Manager) backup(ctx context.Context, ins provider.Instance, verbose bool) (int, int, error) {
 	// Skip exclude-mode pseudo-sources here — only include-mode sources
 	// drive disk walks. Retention picking ignores them too.
 	if ins.Storage != nil && (ins.Storage.Mode == "exclude") {
-		return nil
+		return 0, 0, nil
 	}
 
 	l := log.With().Str("component", "provider-storage").Str("op", "sync").Str("run_id", runID()).Logger()
 
 	allSources, _ := m.store.listSourcesForInstance(ctx, string(ins.Type), ins.Name)
-	// stable order so retention pick is deterministic when two sources have
-	// the same SyncPath length (shouldn't happen, but cheap insurance).
 	sort.SliceStable(allSources, func(i, j int) bool { return allSources[i].ID < allSources[j].ID })
 
 	excludes := collectExcludePatterns(allSources)
 
 	files, err := collectFiles(ins.Storage, excludes)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	now := time.Now().UTC()
@@ -618,7 +619,7 @@ func (m *Manager) backup(ctx context.Context, ins provider.Instance, verbose boo
 			RetentionDays: retention,
 		}
 		if err := m.store.upsertFile(ctx, row); err != nil {
-			return err
+			return changed, skipped, err
 		}
 		changed++
 		if verbose {
@@ -638,7 +639,7 @@ func (m *Manager) backup(ctx context.Context, ins provider.Instance, verbose boo
 		Int("changed", changed).
 		Int("skipped", skipped).
 		Msg("providersync: sync done")
-	return nil
+	return changed, skipped, nil
 }
 
 // collectFiles returns a map keyed by absolute (slash-normalised) path so the

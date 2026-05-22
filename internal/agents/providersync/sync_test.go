@@ -327,7 +327,7 @@ func TestBackup_StoresAbsolutePaths_DeduplicatesOverlap(t *testing.T) {
 
 	// SaveSource fires SyncOne; run one more for both to ensure idempotent
 	for _, s := range []entity.ProviderStorageSource{srcA, srcB} {
-		if err := mgr.SyncOne(ctx, SourceToInstance(s)); err != nil {
+		if _, _, err := mgr.SyncOne(ctx, SourceToInstance(s)); err != nil {
 			t.Fatalf("sync %s: %v", s.Label, err)
 		}
 	}
@@ -391,7 +391,7 @@ func TestBackup_HashUnchanged_NoRewrite(t *testing.T) {
 	}
 
 	// re-sync without modifying content
-	if err := mgr.SyncOne(ctx, SourceToInstance(src)); err != nil {
+	if _, _, err := mgr.SyncOne(ctx, SourceToInstance(src)); err != nil {
 		t.Fatalf("resync: %v", err)
 	}
 
@@ -470,7 +470,7 @@ func TestBackup_CountsChangedAndSkipped(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "a.yml"), "v2")
 
 	// re-sync: a.yml should be written, b.yml skipped.
-	if err := mgr.SyncOne(ctx, SourceToInstance(src)); err != nil {
+	if _, _, err := mgr.SyncOne(ctx, SourceToInstance(src)); err != nil {
 		t.Fatalf("resync: %v", err)
 	}
 
@@ -1375,7 +1375,7 @@ func TestNoStackingAfterRestoreSyncCycle(t *testing.T) {
 			t.Fatalf("restore[%d]: %v", i, err)
 		}
 		for _, p := range []string{support, agents} {
-			if err := mgr.SyncOne(ctx, provider.Instance{
+			if _, _, err := mgr.SyncOne(ctx, provider.Instance{
 				Type: "wick", Name: "wick",
 				Storage: &provider.StorageConfig{Mode: "folder", SyncPath: p},
 			}); err != nil {

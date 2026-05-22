@@ -43,7 +43,8 @@ type Job struct {
 	Icon        string    `gorm:"type:varchar(10)"`
 	Schedule    string    `gorm:"type:varchar(100)"` // cron expression
 	Enabled     bool      `gorm:"default:false"`
-	MaxRuns     int       `gorm:"default:0"` // 0 = unlimited, admin-managed
+	MaxRuns        int       `gorm:"default:0"`  // 0 = unlimited, admin-managed
+	MaxTimeoutMin  int       `gorm:"default:30"` // auto-cancel after N minutes; 0 = no timeout
 	TotalRuns   int       `gorm:"default:0"`
 	LastStatus  JobStatus `gorm:"type:varchar(20);default:'idle'"`
 	LastRunAt   *time.Time
