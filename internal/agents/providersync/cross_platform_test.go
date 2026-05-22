@@ -352,7 +352,7 @@ func TestConcurrent_SyncOne_NoDuplicateRows(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = mgr.SyncOne(context.Background(), ins)
+			_, _, _ = mgr.SyncOne(context.Background(), ins)
 		}()
 	}
 	wg.Wait()
@@ -392,7 +392,7 @@ func TestConcurrent_SaveSourceAndSyncOne(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			_ = mgr.SyncOne(context.Background(), provider.Instance{
+			_, _, _ = mgr.SyncOne(context.Background(), provider.Instance{
 				Type: "p", Name: "i",
 				Storage: &provider.StorageConfig{Mode: "folder", SyncPath: dir},
 			})
