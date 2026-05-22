@@ -41,19 +41,23 @@ func newRun(mgr *providersync.Manager) job.RunFunc {
 		if err != nil {
 			return "", err
 		}
-		synced := 0
+		sources_run := 0
+		total_changed, total_skipped := 0, 0
 		for _, src := range sources {
 			if ctx.Err() != nil {
-				return "", fmt.Errorf("sync timed out after 60s: synced %d/%d source(s)", synced, len(sources))
+				return "", fmt.Errorf("sync timed out: %d/%d source(s) done, %d file(s) changed", sources_run, len(sources), total_changed)
 			}
 			if !src.Enabled {
 				continue
 			}
-			if err := mgr.SyncOne(ctx, providersync.SourceToInstance(src)); err != nil {
+			changed, skipped, err := mgr.SyncOne(ctx, providersync.SourceToInstance(src))
+			if err != nil {
 				continue
 			}
-			synced++
+			sources_run++
+			total_changed += changed
+			total_skipped += skipped
 		}
-		return fmt.Sprintf("synced %d source(s)", synced), nil
+		return fmt.Sprintf("%d source(s): %d file(s) changed, %d skipped", sources_run, total_changed, total_skipped), nil
 	}
 }

@@ -21,6 +21,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 | **Workflows** — YAML DAG of classify / agent / connector / http / channel / datatable / branch / parallel nodes triggered by cron, channel events, webhooks, or manual runs; replayable per-run state on disk; visual canvas + MCP `workflow_*` ops | [Workflows](/workflow/) |
 | **Workspaces** — folders on disk (managed or any custom path) used as the agent's `cwd`. Multiple sessions can share one | [Workspaces](./agents/workspaces) |
 | **Multi-instance providers** — two `claude/...` profiles with different PATs, plus codex / gemini side-by-side | [Providers](./agents/providers) |
+| **Skills Manager** — browse, preview, sync, and delete skill `.md` files across all provider skill dirs (`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`) from one UI | [Skills Manager](./agents/skills-manager) |
 | **Command Gate** — `<app>-gate` sidecar binary intercepts every Bash command for whitelist + 4-mode interactive approval | [Command Gate](./command-gate) |
 | **AskUser MCP tool** — agent asks a question mid-turn, web UI renders a card, answer goes back as MCP tool result | (covered in [Channels ▶ Web UI](./agents/channels#web-ui)) |
 | **Persistent state on disk** — everything under `~/.<app>/agents/`. Backup is `tar`. Restart re-scans, no DB migration. | _below_ |
@@ -38,6 +39,7 @@ After boot, head to `/tools/agents`.
 | **Workspaces** | Create / delete workspaces. New = empty managed folder unless pointed at a custom path. |
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no workspace (or the workspace has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
+| **Skills** | Browse, preview, sync, and delete skill files across all provider skill dirs. |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default workspace). Web UI is always-on. |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.

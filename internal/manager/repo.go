@@ -61,14 +61,66 @@ func (r *repo) ForceEnable(ctx context.Context, key string) error {
 		}).Error
 }
 
-func (r *repo) UpdateSchedule(ctx context.Context, id string, schedule string, enabled bool, maxRuns int) error {
+func (r *repo) UpdateSchedule(ctx context.Context, id string, schedule string, enabled bool, maxRuns int, maxTimeoutMin int) error {
 	return r.db.WithContext(ctx).Model(&entity.Job{}).Where("id = ?", id).
 		Updates(map[string]any{
-			"schedule":   schedule,
-			"enabled":    enabled,
-			"max_runs":   maxRuns,
-			"updated_at": time.Now(),
+			"schedule":         schedule,
+			"enabled":          enabled,
+			"max_runs":         maxRuns,
+			"max_timeout_min":  maxTimeoutMin,
+			"updated_at":       time.Now(),
 		}).Error
+}
+
+// ResetStuckRuns resets only runs that have exceeded their job's max_timeout_min.
+// A run is considered stuck when ended_at IS NULL and
+// started_at < now - COALESCE(max_timeout_min, 30) minutes.
+// This preserves legitimately long-running jobs whose timeout has not elapsed.
+// Returns the number of jobs whose status was reset to idle.
+func (r *repo) ResetStuckRuns(ctx context.Context) (int, error) {
+	now := time.Now()
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Step 1: mark timed-out open runs as error.
+	if err := tx.Exec(`
+		UPDATE job_runs
+		SET status = ?, result = ?, ended_at = ?
+		WHERE ended_at IS NULL
+		  AND EXISTS (
+		    SELECT 1 FROM jobs
+		    WHERE jobs.id = job_runs.job_id
+		      AND job_runs.started_at < ? - (COALESCE(NULLIF(jobs.max_timeout_min, 0), 30) * interval '1 minute')
+		  )
+	`, entity.RunStatusError, "timed out (server restart)", now, now).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+
+	// Step 2: reset job status to idle where no open run remains.
+	res := tx.Exec(`
+		UPDATE jobs
+		SET last_status = ?, updated_at = ?
+		WHERE last_status = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM job_runs
+		    WHERE job_runs.job_id = jobs.id
+		      AND job_runs.ended_at IS NULL
+		  )
+	`, entity.JobStatusIdle, now, entity.JobStatusRunning)
+	if res.Error != nil {
+		tx.Rollback()
+		return 0, res.Error
+	}
+
+	return int(res.RowsAffected), tx.Commit().Error
 }
 
 func (r *repo) SetStatus(ctx context.Context, id string, status entity.JobStatus) error {

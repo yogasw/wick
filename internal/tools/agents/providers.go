@@ -342,7 +342,7 @@ func syncProviderStorage(c *tool.Ctx) {
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
 	defer cancel()
-	if err := globalSyncMgr.SyncOne(ctx, ins); err != nil {
+	if _, _, err := globalSyncMgr.SyncOne(ctx, ins); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("manual sync %s/%s: %s", t, name, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
