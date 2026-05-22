@@ -89,6 +89,7 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// (admins must be able to manage disabled jobs, so settings routes skip RequireJobAccess).
 	mux.Handle("GET /manager/jobs/{key}", authJob(h.jobDetailPage))
 	mux.Handle("POST /manager/jobs/{key}/run", authJob(h.runJob))
+	mux.Handle("POST /manager/jobs/{key}/cancel", authJob(h.cancelJob))
 	mux.Handle("POST /manager/jobs/{key}/settings", adminOnly(h.updateJobSettings))
 	mux.Handle("POST /manager/jobs/{key}/configs/{configKey}", adminOnly(h.setJobConfig))
 	mux.Handle("POST /manager/jobs/{key}/configs/{configKey}/regenerate", adminOnly(h.regenerateJobConfig))
@@ -160,6 +161,26 @@ func (h *Handler) updateJobSettings(w http.ResponseWriter, r *http.Request) {
 	maxRuns, _ := strconv.Atoi(r.FormValue("max_runs"))
 	if err := h.svc.UpdateSchedule(r.Context(), key, schedule, enabled, maxRuns); err != nil {
 		h.renderJobWithError(w, r, key, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/manager/jobs/"+key, http.StatusFound)
+}
+
+func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if err := h.svc.CancelJob(r.Context(), key); err != nil {
+		if wantsJSON(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		h.renderJobWithError(w, r, key, err.Error())
+		return
+	}
+	if wantsJSON(r) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
 		return
 	}
 	http.Redirect(w, r, "/manager/jobs/"+key, http.StatusFound)
