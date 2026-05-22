@@ -159,7 +159,11 @@ func (h *Handler) updateJobSettings(w http.ResponseWriter, r *http.Request) {
 	schedule := r.FormValue("schedule")
 	enabled := boolParam(r, "enabled")
 	maxRuns, _ := strconv.Atoi(r.FormValue("max_runs"))
-	if err := h.svc.UpdateSchedule(r.Context(), key, schedule, enabled, maxRuns); err != nil {
+	maxTimeoutMin, _ := strconv.Atoi(r.FormValue("max_timeout_min"))
+	if maxTimeoutMin <= 0 {
+		maxTimeoutMin = 30
+	}
+	if err := h.svc.UpdateSchedule(r.Context(), key, schedule, enabled, maxRuns, maxTimeoutMin); err != nil {
 		h.renderJobWithError(w, r, key, err.Error())
 		return
 	}
