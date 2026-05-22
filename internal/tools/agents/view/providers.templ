@@ -454,6 +454,66 @@ templ hookCapabilitySection(base string, st provider.Status, gate GateStatusVM) 
 	</div>
 }
 
+templ skillSyncCard(vm SkillSyncVM, base string) {
+	<details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
+		<summary class="px-5 py-3 flex items-center justify-between gap-3 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+			<div class="flex items-center gap-2 flex-wrap">
+				<svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+				<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Skills Sync</h2>
+				if len(vm.Files) > 0 {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", len(vm.Files)) }</span>
+				}
+				<span class="text-xs text-black-700 dark:text-black-600 ml-1">mirrors skills across <code class="font-mono">.claude/skills</code>, <code class="font-mono">.codex/skills</code>, <code class="font-mono">.gemini/skills</code>, <code class="font-mono">.agents/skills</code></span>
+			</div>
+			<form method="POST" action={ templ.SafeURL(base + "/providers/skills/sync") }>
+				<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Sync Skills</button>
+			</form>
+		</summary>
+		<div class="border-t border-white-300 dark:border-navy-600">
+			if len(vm.Dirs) == 0 {
+				<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No skill directories found. Create at least one of the skill dirs above.</div>
+			} else if len(vm.Files) == 0 {
+				<div class="px-5 py-4 text-sm text-black-700 dark:text-black-600">
+					<p>No skill files found. Directories detected:</p>
+					<ul class="mt-2 space-y-1">
+						for _, d := range vm.Dirs {
+							<li class="font-mono text-xs">{ d }</li>
+						}
+					</ul>
+				</div>
+			} else {
+				if vm.LastResult != "" {
+					<div class="px-5 py-2 text-xs text-green-600 dark:text-green-400 border-b border-white-300 dark:border-navy-600">{ vm.LastResult }</div>
+				}
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
+							<th class="px-5 py-2.5 text-left">Skill</th>
+							<th class="px-5 py-2.5 text-left">Present In</th>
+							<th class="px-5 py-2.5 text-left">Missing From</th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-white-300 dark:divide-navy-600">
+						for _, f := range vm.Files {
+							<tr class="hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+								<td class="px-5 py-2.5 font-mono text-xs text-black-900 dark:text-white-100">{ f.Name }</td>
+								<td class="px-5 py-2.5 text-xs text-black-700 dark:text-black-600">{ strings.Join(f.InDirs, ", ") }</td>
+								<td class="px-5 py-2.5 text-xs">
+									if len(f.Missing) == 0 {
+										<span class="text-green-600 dark:text-green-400">all synced</span>
+									} else {
+										<span class="text-amber-600 dark:text-amber-400">{ strings.Join(f.Missing, ", ") }</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</div>
+	</details>
+}
+
 templ addProviderModal(vm ProvidersVM) {
 	<div id="add-provider-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
 		<div class="w-full max-w-lg rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-xl mx-4">

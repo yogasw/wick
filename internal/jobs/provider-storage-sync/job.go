@@ -6,6 +6,7 @@ package providerstoragesync
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/jobs"
@@ -33,12 +34,18 @@ func Register(mgr *providersync.Manager) {
 
 func newRun(mgr *providersync.Manager) job.RunFunc {
 	return func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+
 		sources, err := mgr.ListSources(ctx)
 		if err != nil {
 			return "", err
 		}
 		synced := 0
 		for _, src := range sources {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("sync timed out after 60s: synced %d/%d source(s)", synced, len(sources))
+			}
 			if !src.Enabled {
 				continue
 			}
