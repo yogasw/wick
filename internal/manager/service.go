@@ -23,16 +23,18 @@ type cfgReader interface {
 // Service manages job lifecycle: bootstrap from code-defined jobs,
 // manual/scheduled execution, and result storage.
 type Service struct {
-	repo    *repo
-	mu      sync.RWMutex
-	runners map[string]job.RunFunc // key -> run func
-	cfg     cfgReader              // for injecting job.Ctx; may be nil in tests
+	repo      *repo
+	mu        sync.RWMutex
+	runners   map[string]job.RunFunc    // key -> run func
+	cancels   map[string]context.CancelFunc // key -> cancel for running job
+	cfg       cfgReader                 // for injecting job.Ctx; may be nil in tests
 }
 
 func NewService(r *repo) *Service {
 	return &Service{
 		repo:    r,
 		runners: make(map[string]job.RunFunc),
+		cancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -153,14 +155,26 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 
 	_ = s.repo.SetStatus(ctx, j.ID, entity.JobStatusRunning)
 
+	bgCtx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.cancels[j.Key] = cancel
+	s.mu.Unlock()
+
 	go func() {
-		bgCtx := context.Background()
+		defer func() {
+			s.mu.Lock()
+			delete(s.cancels, j.Key)
+			s.mu.Unlock()
+			cancel()
+		}()
+
+		runCtx := bgCtx
 		if s.cfg != nil {
-			bgCtx = job.WithCtx(bgCtx, job.NewCtx(j.Key, s.cfg))
+			runCtx = job.WithCtx(bgCtx, job.NewCtx(j.Key, s.cfg))
 		}
 		l := log.With().Str("job", j.Key).Str("run_id", run.ID).Logger()
 
-		result, runErr := runFn(bgCtx)
+		result, runErr := runFn(runCtx)
 
 		status := entity.RunStatusSuccess
 		if runErr != nil {
@@ -180,6 +194,23 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 	}()
 
 	return run.ID, nil
+}
+
+// CancelJob cancels a running job by key. Returns error if job not running.
+func (s *Service) CancelJob(ctx context.Context, key string) error {
+	s.mu.Lock()
+	cancel, ok := s.cancels[key]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("job %q is not running", key)
+	}
+	cancel()
+	j, err := s.repo.GetJobByKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	_ = s.repo.SetStatus(ctx, j.ID, entity.JobStatusIdle)
+	return nil
 }
 
 func (s *Service) GetRun(ctx context.Context, runID string) (*entity.JobRun, error) {

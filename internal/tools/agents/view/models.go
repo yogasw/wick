@@ -206,6 +206,74 @@ type ProvidersVM struct {
 	MCP           MCPStatusVM
 }
 
+// SkillSyncVM holds the current state of skill directories for the sync card on Providers page.
+type SkillSyncVM struct {
+	Dirs       []string
+	Files      []SkillFileVM
+	LastResult string
+}
+
+// SkillFileVM is one row in skills tables.
+type SkillFileVM struct {
+	Name    string
+	IsDir   bool
+	InDirs  []string
+	Missing []string
+}
+
+// SkillsPageVM is the view model for the dedicated Skills page.
+type SkillsPageVM struct {
+	Layout AgentsLayoutVM
+	Base   string
+	Dirs   []string
+	Files  []SkillFileVM
+	Flash  string
+	Error  string
+}
+
+// SkillDetailVM is the view model for a single skill file viewer.
+type SkillDetailVM struct {
+	Layout     AgentsLayoutVM
+	Base       string
+	Filename   string
+	Content    string
+	SourcePath string
+	InDirs     []string
+}
+
+// SkillFolderVM is the view model for the folder explorer page.
+type SkillFolderVM struct {
+	Layout     AgentsLayoutVM
+	Base       string
+	FolderName string
+	Entries    []SkillFileVM
+	InDirs     []string
+	Missing    []string
+}
+
+// SkillProviderFolderVM is the folder explorer scoped to one provider dir.
+type SkillProviderFolderVM struct {
+	Layout       AgentsLayoutVM
+	Base         string
+	Provider     string // dir label e.g. "claude"
+	FolderName   string
+	Entries      []SkillFileVM
+	AllProviders []string // all known dir labels for tab switching
+}
+
+// SkillProviderFileVM is the file viewer scoped to one provider dir.
+type SkillProviderFileVM struct {
+	Layout       AgentsLayoutVM
+	Base         string
+	Provider     string
+	FolderName   string
+	Filename     string
+	Content      string
+	SourcePath   string
+	AllProviders []string // for tab switching
+	HasFile      map[string]bool // provider label → file exists
+}
+
 // MCPClientStatusVM is one row in the MCP Wick card — one per detected
 // MCP client (Claude Desktop, Cursor, Gemini CLI, etc.).
 type MCPClientStatusVM struct {

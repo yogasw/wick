@@ -53,6 +53,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				@agentsNavLink(vm.Base+"/workspaces", "Workspaces", vm.ActivePage == "workspaces")
 				@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
 				@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+				@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
 				@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 				@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
 			</nav>
@@ -162,11 +163,13 @@ templ statusDot(status string) {
 // kebabAction is one item inside a kebabMenu dropdown. Variant
 // controls the colour scheme — "danger" gets red text + red hover;
 // anything else falls back to neutral.
+// Set Href for a plain link item (no JS/data-attr needed).
 type kebabAction struct {
 	Label    string
 	Variant  string
 	DataAttr string // e.g. "data-delete-session"
 	DataVal  string // value paired with DataAttr — usually the row's ID
+	Href     string // if set, renders as <a> instead of <button>
 }
 
 // kebabActionAttrs renders the per-action data-* attribute as a templ
@@ -204,6 +207,44 @@ templ kebabMenu(action kebabAction) {
 					templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", action.Variant != "danger"),
 				}
 			>{ action.Label }</button>
+		</div>
+	</details>
+}
+
+// kebabMenuMulti renders a 3-dot menu with multiple actions.
+templ kebabMenuMulti(actions []kebabAction) {
+	<details class="relative inline-block" data-row-action>
+		<summary
+			class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+			aria-label="More actions"
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor">
+				<circle cx="8" cy="3" r="1.5"></circle>
+				<circle cx="8" cy="8" r="1.5"></circle>
+				<circle cx="8" cy="13" r="1.5"></circle>
+			</svg>
+		</summary>
+		<div class="absolute right-0 mt-1 w-36 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg z-20 py-1">
+			for _, a := range actions {
+				if a.Href != "" {
+					<a
+						href={ templ.SafeURL(a.Href) }
+						class={ "block w-full text-left px-3 py-1.5 text-xs transition-colors",
+							templ.KV("text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20", a.Variant == "danger"),
+							templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", a.Variant != "danger"),
+						}
+					>{ a.Label }</a>
+				} else {
+					<button
+						type="button"
+						{ kebabActionAttrs(a)... }
+						class={ "block w-full text-left px-3 py-1.5 text-xs transition-colors",
+							templ.KV("text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20", a.Variant == "danger"),
+							templ.KV("text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800", a.Variant != "danger"),
+						}
+					>{ a.Label }</button>
+				}
+			}
 		</div>
 	</details>
 }
@@ -444,6 +485,12 @@ templ agentsNavIcon(label string) {
 			<svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>
 				<path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+			</svg>
+		case "Skills":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M3 4h10M3 8h7M3 12h5" stroke-linecap="round"></path>
+				<circle cx="13" cy="11" r="2.25"></circle>
+				<path d="M13 9.5V8" stroke-linecap="round"></path>
 			</svg>
 		default:
 			<span class="h-4 w-4 shrink-0"></span>

@@ -180,6 +180,21 @@ func Register(r tool.Router) {
 	r.POST("/providers/mcp/{clientID}/install", mcpInstallClient)
 	r.POST("/providers/mcp/{clientID}/uninstall", mcpUninstallClient)
 
+	r.GET("/skills", skillsPage)
+	r.POST("/skills/sync", skillsSync)
+	r.POST("/skills/upload", skillsUpload)
+	r.GET("/skills/{name}", skillDetail)
+	r.GET("/skills/{name}/download", skillDownload)
+	r.POST("/skills/{name}/delete", skillDelete)
+	r.POST("/skills/{name}/delete-from/{dirLabel}", skillDeleteFromDir)
+	r.GET("/skills/{folder}/files/{file}", skillFolderFileDetail)
+	r.GET("/skills/{folder}/files/{file}/download", skillFolderFileDownload)
+	r.POST("/skills/{folder}/files/{file}/delete", skillFolderFileDelete)
+	// provider-scoped views — {path...} matches arbitrary depth
+	r.GET("/skills/{provider}/{path...}", skillProviderPath)
+	r.POST("/skills-sync/{provider}/{path...}", skillProviderSync)
+	r.POST("/skills/{name}/sync", skillEntrySync)
+
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
 	r.POST("/providers/storage/restore", storageRestoreSelected)
