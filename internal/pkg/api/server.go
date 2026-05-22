@@ -101,13 +101,8 @@ func NewServer() *Server {
 
 	syncMgr := providersync.New(db)
 
-	// Legacy wipe + orphan repair run inside postgres.Migrate above as
-	// one-shot DB migrations. Boot force-overwrites disk from DB so a
-	// container restart in a no-volume env always lands at the DB-known
-	// state; the cron tick uses the guarded RestoreAll after that.
-	if err := syncMgr.RestoreAllForce(context.Background()); err != nil {
-		log.Warn().Err(err).Msg("providersync: startup restore failed")
-	}
+	// Startup restore is deferred to after configsSvc.Bootstrap so the
+	// verbose_logs config row exists when we read it (see below).
 
 	// Built-in maintenance jobs whose RunFunc captures *gorm.DB are
 	// registered here, after DB init, before validation + the jobs.All()
@@ -158,6 +153,16 @@ func NewServer() *Server {
 	}
 	if err := configsSvc.Bootstrap(context.Background(), extraConfigs...); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
+	}
+
+	// Boot force-restore: DB is source of truth on first start after a
+	// container restart (no-volume env). Runs after Bootstrap so the
+	// verbose_logs config row is already seeded and readable.
+	{
+		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
+		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
+			log.Warn().Err(err).Msg("providersync: startup restore failed")
+		}
 	}
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
 	// The manager reads/writes these at owner="connector_oauth:slack" so they

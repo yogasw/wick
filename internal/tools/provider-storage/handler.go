@@ -26,6 +26,7 @@ import (
 )
 
 var globalSyncMgr *providersync.Manager
+
 // SetSyncManager injects the shared Manager instance.
 func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
 
@@ -369,6 +370,7 @@ func uploadFile(c *tool.Ctx) {
 }
 
 func syncNow(c *tool.Ctx) {
+	verbose := c.CfgBool("verbose_logs")
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
 		return
@@ -388,7 +390,7 @@ func syncNow(c *tool.Ctx) {
 			Name:    src.InstanceName,
 			Storage: &provider.StorageConfig{Mode: src.Mode, SyncPath: src.SyncPath},
 		}
-		if err := globalSyncMgr.SyncOne(c.Context(), ins); err != nil {
+		if err := globalSyncMgr.SyncOne(c.Context(), ins, verbose); err != nil {
 			log.Warn().Err(err).Str("provider", src.ProviderType).Str("path", src.SyncPath).Msg("providersync: syncNow failed")
 		} else {
 			synced++
@@ -735,7 +737,7 @@ func restoreNow(c *tool.Ctx) {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
 		return
 	}
-	if err := globalSyncMgr.RestoreAll(c.Context()); err != nil {
+	if err := globalSyncMgr.RestoreAll(c.Context(), c.CfgBool("verbose_logs")); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
