@@ -22,23 +22,42 @@ func TestSpawnerArgv(t *testing.T) {
 		wantNoFlag string
 	}{
 		{
-			name:    "default headless — no sandbox",
+			name:    "default headless — danger-full-access sandbox",
 			spawner: Spawner{},
 			opt:     provider.SpawnOptions{Workspace: t.TempDir()},
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
 			},
-			wantNoFlag: "--sandbox",
 		},
 		{
-			name:    "sandbox enabled",
-			spawner: Spawner{SandboxEnabled: true},
-			opt:     provider.SpawnOptions{Workspace: t.TempDir()},
+			name:    "sandbox workspace-write via CodexConfig",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				Instance:  &provider.Instance{CodexConfig: &provider.CodexConfig{SandboxMode: provider.CodexSandboxWorkspaceWrite}},
+			},
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
 				"--sandbox", "workspace-write",
+			},
+		},
+		{
+			name:    "sandbox read-only via CodexConfig",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				Instance:  &provider.Instance{CodexConfig: &provider.CodexConfig{SandboxMode: provider.CodexSandboxReadOnly}},
+			},
+			wantArgs: []string{
+				"exec",
+				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "read-only",
 			},
 		},
 		{
@@ -51,6 +70,8 @@ func TestSpawnerArgv(t *testing.T) {
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
 				"hello codex",
 			},
 		},
@@ -64,6 +85,8 @@ func TestSpawnerArgv(t *testing.T) {
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
 				"resume", "abc-123",
 			},
 		},
@@ -78,6 +101,8 @@ func TestSpawnerArgv(t *testing.T) {
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
 				"resume", "abc-123",
 				"follow up",
 			},
@@ -92,6 +117,8 @@ func TestSpawnerArgv(t *testing.T) {
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
 				"--model", "o3",
 				"resume", "xyz",
 			},
@@ -103,6 +130,8 @@ func TestSpawnerArgv(t *testing.T) {
 			wantArgs: []string{
 				"exec",
 				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
 				"--ask-for-approval", "never",
 			},
 		},

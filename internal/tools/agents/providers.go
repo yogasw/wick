@@ -300,6 +300,11 @@ func saveProviderInstance(c *tool.Ctx) {
 		Env:       splitLines(c.Form("env")),
 		Disabled:  c.Form("disabled") == "on" || c.Form("disabled") == "true",
 	}
+	if t == provider.TypeCodex {
+		ins.CodexConfig = &provider.CodexConfig{
+			SandboxMode: provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode"))),
+		}
+	}
 	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" {
 		ins.Storage = &provider.StorageConfig{
 			Mode:            mode,

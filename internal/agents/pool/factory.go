@@ -170,7 +170,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			Msg("agents.spawn: resolve provider")
 		switch pType {
 		case provider.TypeCodex:
-			spawner = codexpkg.Spawner{Binary: bin, SandboxEnabled: resolvedIns.SandboxEnabled}
+			spawner = codexpkg.Spawner{Binary: bin}
 		case provider.TypeGemini:
 			spawner = geminipkg.Spawner{Binary: bin, YoloMode: bypassPerms}
 		default:
