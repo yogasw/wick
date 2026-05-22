@@ -6,6 +6,7 @@ package providerstoragesync
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/jobs"
@@ -33,12 +34,8 @@ func Register(mgr *providersync.Manager) {
 
 func newRun(mgr *providersync.Manager) job.RunFunc {
 	return func(ctx context.Context) (string, error) {
-		// Restore first so any file the user (or a container restart)
-		// removed between ticks gets refilled from DB before we capture
-		// disk state. Disk-wins guard keeps newer disk edits intact.
-		if err := mgr.RestoreAll(ctx); err != nil {
-			return "", fmt.Errorf("restore: %w", err)
-		}
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
 
 		sources, err := mgr.ListSources(ctx)
 		if err != nil {
@@ -46,6 +43,9 @@ func newRun(mgr *providersync.Manager) job.RunFunc {
 		}
 		synced := 0
 		for _, src := range sources {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("sync timed out after 60s: synced %d/%d source(s)", synced, len(sources))
+			}
 			if !src.Enabled {
 				continue
 			}
