@@ -32,8 +32,6 @@ import (
 // builds).
 type Spawner struct {
 	Binary string // empty → "codex"
-	// SandboxEnabled enables --sandbox workspace-write. Default false.
-	SandboxEnabled bool
 	// AskForApproval mirrors codex's --ask-for-approval flag. The
 	// canonical "skip the terminal approval prompt" value is "never";
 	// leave empty to let codex use its own default. Set ONLY when there
@@ -74,13 +72,19 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		bin = "codex"
 	}
 
-	// Write AGENTS.md so codex picks up the immutable rules + preset as
-	// its system instructions. Fail-soft: a write error is logged but
-	// does not abort the spawn.
+	// Write preset to .codex/soul.md and point codex at it via
+	// -c instructions_files so the instructions apply on both fresh and
+	// resumed sessions (AGENTS.md is ignored on resume).
+	soulPath := ""
 	if opt.Workspace != "" && opt.Preset != "" {
-		agentsPath := filepath.Join(opt.Workspace, "AGENTS.md")
-		if err := os.WriteFile(agentsPath, []byte(opt.Preset), 0o644); err != nil {
-			log.Warn().Err(err).Str("path", agentsPath).Msg("agents.spawn: write AGENTS.md failed")
+		codexDir := filepath.Join(opt.Workspace, ".codex")
+		if err := os.MkdirAll(codexDir, 0o755); err == nil {
+			p := filepath.Join(codexDir, "soul.md")
+			if err := os.WriteFile(p, []byte(opt.Preset), 0o644); err == nil {
+				soulPath = p
+			} else {
+				log.Warn().Err(err).Str("path", p).Msg("agents.spawn: write soul.md failed")
+			}
 		}
 	}
 
@@ -94,9 +98,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		"--json",
 		"--skip-git-repo-check",
 	}
-	if s.SandboxEnabled {
-		args = append(args, "--sandbox", "workspace-write")
+	sandboxMode := provider.CodexSandboxFullAccess
+	if opt.Instance != nil && opt.Instance.CodexConfig != nil && opt.Instance.CodexConfig.SandboxMode != "" {
+		sandboxMode = opt.Instance.CodexConfig.SandboxMode
 	}
+	args = append(args, "--sandbox", string(sandboxMode))
 	// When gate is active for this instance, do NOT set
 	// --ask-for-approval to a bypass value — codex's approval flag
 	// generally skips PreToolUse under bypass modes, which would
@@ -105,8 +111,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--ask-for-approval", s.AskForApproval)
 	}
 	args = append(args, s.ExtraArgs...)
+	if soulPath != "" {
+		// Use JSON array syntax for TOML list value.
+		args = append(args, "-c", `instructions_files=["`+soulPath+`"]`)
+	}
 	if opt.ResumeID != "" {
-		// codex exec resume <session_id> [prompt]
 		args = append(args, "resume", opt.ResumeID)
 	}
 	if opt.InitialMessage != "" {
