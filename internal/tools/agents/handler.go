@@ -773,6 +773,49 @@ func sendMessage(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "text required"})
 		return
 	}
+
+	// #<provider> prefix → switch provider before sending.
+	if r := agentchannels.ParseProviderTag(req.Text); r.HasTag {
+		sess, ok := globalMgr.Registry().Session(id)
+		if !ok {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		agentName := sess.Meta.ActiveAgent
+		if agentName == "" && len(sess.Agents) > 0 {
+			agentName = sess.Agents[0].Name
+		}
+		if agentName == "" {
+			c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
+			return
+		}
+		bcast := globalBcast
+		if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
+			Source:   "ui",
+			UserText: req.Text,
+			Notify: func(tag string, steps []string) {
+				if bcast != nil {
+					bcast.PublishRaw(id, agentName, "user_message", req.Text)
+					bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+				}
+			},
+			Reply: func(text string) {
+				if bcast != nil {
+					bcast.PublishRaw(id, agentName, "text_delta", text)
+					bcast.PublishRaw(id, agentName, "done", "")
+				}
+			},
+		}); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if r.Rest == "" {
+			c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
+			return
+		}
+		req.Text = r.Rest
+	}
+
 	sess, ok := globalMgr.Registry().Session(id)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})

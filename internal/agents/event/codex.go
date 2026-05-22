@@ -2,7 +2,6 @@ package event
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -72,10 +71,17 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 
 	log.Debug().Str("raw", trimmed).Msg("codex.parse: raw line")
 
+	// Non-JSON lines (startup messages, taskkill output, warnings) surface
+	// as Thinking events so they appear in the UI trace but are never
+	// forwarded to the provider or sent to Slack/REST channels.
+	if trimmed[0] != '{' && trimmed[0] != '[' {
+		log.Debug().Str("line", trimmed).Msg("codex.parse: non-JSON line → trace")
+		return AgentEvent{Type: Thinking, Text: trimmed, Raw: trimmed}, nil
+	}
 	var raw codexRaw
 	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
-		log.Debug().Str("line", trimmed).Err(err).Msg("codex.parse: unmarshal failed")
-		return AgentEvent{}, fmt.Errorf("codex parse: %w", err)
+		log.Warn().Str("line", trimmed).Err(err).Msg("codex.parse: unmarshal failed → trace")
+		return AgentEvent{Type: Thinking, Text: trimmed, Raw: trimmed}, nil
 	}
 
 	log.Debug().Str("type", raw.Type).Str("thread_id", raw.ThreadID).Msg("codex.parse: decoded")

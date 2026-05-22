@@ -123,6 +123,11 @@ func (c *Ctx) CfgBool(key string) bool {
 	return err == nil && b
 }
 
+// ConfigReader returns the underlying ConfigReader so callers that need
+// to capture it for use outside the request lifecycle (e.g. background
+// workers) can store it. Returns nil when no config service is wired.
+func (c *Ctx) ConfigReader() ConfigReader { return c.cfg }
+
 // Missing returns the names of Required Specs this tool declared that
 // have no stored value yet. Handlers call it at the top of a request
 // to decide whether to render the real view or a "setup required"

@@ -33,13 +33,6 @@ func Register(mgr *providersync.Manager) {
 
 func newRun(mgr *providersync.Manager) job.RunFunc {
 	return func(ctx context.Context) (string, error) {
-		// Restore first so any file the user (or a container restart)
-		// removed between ticks gets refilled from DB before we capture
-		// disk state. Disk-wins guard keeps newer disk edits intact.
-		if err := mgr.RestoreAll(ctx); err != nil {
-			return "", fmt.Errorf("restore: %w", err)
-		}
-
 		sources, err := mgr.ListSources(ctx)
 		if err != nil {
 			return "", err

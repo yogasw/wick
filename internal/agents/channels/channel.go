@@ -38,6 +38,12 @@ type ApproveFn func(sessionID, requestID, decision, matchKey string) error
 // a 4-arg signature.
 type RegistryApproveFn func(channelName, sessionID, requestID, decision, matchKey string) error
 
+// SwitchPool is the subset of pool.Pool needed for provider switching.
+type SwitchPool interface {
+	Kill(sessionID, agentName string) error
+	Send(ctx context.Context, sessionID, agentName, source, role, text string) error
+}
+
 // SessionChecker reports whether a sessionID already exists. Implemented
 // by *pool.Pool. Channels use it to decide whether the next inbound
 // message starts a brand-new session — if so they prepend a one-time
