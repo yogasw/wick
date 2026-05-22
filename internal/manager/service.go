@@ -58,6 +58,12 @@ func (s *Service) SetConfigReader(c cfgReader) {
 func (s *Service) Bootstrap(ctx context.Context, mods []job.Module) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Reset any runs that were left in running state by a previous crash/restart.
+	if n, err := s.repo.ResetStuckRuns(ctx); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Msg("bootstrap: failed to reset stuck running jobs")
+	} else if n > 0 {
+		log.Ctx(ctx).Warn().Int("count", n).Msg("bootstrap: reset stuck running jobs from previous session")
+	}
 	for _, mod := range mods {
 		m := mod.Meta
 		if _, dup := s.runners[m.Key]; dup {
@@ -95,12 +101,12 @@ func (s *Service) GetJob(ctx context.Context, key string) (*entity.Job, error) {
 	return s.repo.GetJobByKey(ctx, key)
 }
 
-func (s *Service) UpdateSchedule(ctx context.Context, key string, schedule string, enabled bool, maxRuns int) error {
+func (s *Service) UpdateSchedule(ctx context.Context, key string, schedule string, enabled bool, maxRuns int, maxTimeoutMin int) error {
 	j, err := s.repo.GetJobByKey(ctx, key)
 	if err != nil {
 		return err
 	}
-	return s.repo.UpdateSchedule(ctx, j.ID, schedule, enabled, maxRuns)
+	return s.repo.UpdateSchedule(ctx, j.ID, schedule, enabled, maxRuns, maxTimeoutMin)
 }
 
 // RunManual triggers a job run initiated by a user. Returns the run ID.
@@ -155,7 +161,11 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 
 	_ = s.repo.SetStatus(ctx, j.ID, entity.JobStatusRunning)
 
-	bgCtx, cancel := context.WithCancel(context.Background())
+	timeoutMin := j.MaxTimeoutMin
+	if timeoutMin <= 0 {
+		timeoutMin = 30
+	}
+	bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMin)*time.Minute)
 	s.mu.Lock()
 	s.cancels[j.Key] = cancel
 	s.mu.Unlock()

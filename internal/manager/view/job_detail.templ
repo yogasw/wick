@@ -65,6 +65,17 @@ templ JobDetailPage(j *entity.Job, configs []entity.Config, editConfigKey string
 							class="mt-1 w-40 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
 						/>
 					</div>
+					<div>
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Max timeout (minutes)</label>
+						<input
+							name="max_timeout_min"
+							type="number"
+							min="1"
+							value={ fmt.Sprintf("%d", maxTimeoutMin(j)) }
+							class="mt-1 w-40 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+						/>
+						<p class="mt-1 text-xs text-black-700 dark:text-black-600">Auto-cancel run if it exceeds this duration. Default 30.</p>
+					</div>
 					<div class="flex items-center gap-2">
 						if j.Enabled {
 							<input type="checkbox" id="enabled" name="enabled" value="true" checked class="h-5 w-5 rounded border-white-400 text-green-500 focus:ring-green-500"/>
@@ -84,4 +95,11 @@ templ JobDetailPage(j *entity.Job, configs []entity.Config, editConfigKey string
 			</section>
 		</main>
 	}
+}
+
+func maxTimeoutMin(j *entity.Job) int {
+	if j.MaxTimeoutMin <= 0 {
+		return 30
+	}
+	return j.MaxTimeoutMin
 }

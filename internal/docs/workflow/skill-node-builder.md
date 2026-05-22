@@ -255,7 +255,7 @@ Lalu refresh editor browser, drop node dari palette.
 - Engine concepts: `internal/docs/workflow/06-graph-engine.md`
 - Validator: `internal/agents/workflow/parse/parse.go`
 - Conventions:
-  - Generic naming (no "qiscus") — `internal/docs/workflow/02-principles.md`
+  - Generic naming — `internal/docs/workflow/02-principles.md`
   - No AI attribution in commits (per CLAUDE.md memory)
   - Use Bash tool first, PowerShell fallback (per CLAUDE.md memory)
 
