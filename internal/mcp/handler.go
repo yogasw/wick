@@ -10,6 +10,10 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	agentpool "github.com/yogasw/wick/internal/agents/pool"
+	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -65,6 +69,12 @@ type Handler struct {
 	// instead of waiting on the user. nil = always allowed (fallback
 	// for tests / stdio where there is no gate config).
 	askUserAllowed func() (bool, string)
+
+	// pool is wired for the wick_switch_provider and wick_kill_session
+	// tools. nil in stdio mode and tests that don't wire it — those tools
+	// return a clear error when nil.
+	pool   *agentpool.Pool
+	layout agentconfig.Layout
 }
 
 func NewHandler(c *connectors.Service) *Handler {
@@ -104,6 +114,15 @@ func (h *Handler) WithAskUser(m *askuser.Manager) *Handler {
 // "always allowed" — used by stdio mode where no gate is wired.
 func (h *Handler) WithAskUserPolicy(fn func() (bool, string)) *Handler {
 	h.askUserAllowed = fn
+	return h
+}
+
+// WithPool wires the agent pool so the wick_switch_provider and
+// wick_kill_session tools can control running agent processes.
+// layout must be the same Layout the pool uses for session storage.
+func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handler {
+	h.pool = p
+	h.layout = layout
 	return h
 }
 
@@ -471,6 +490,31 @@ func (h *Handler) metaToolDescriptors() []toolDescriptor {
 				ReadOnlyHint: ptrBool(true),
 			},
 		},
+		{
+			Name: "wick_list_providers",
+			Description: "List all configured AI provider instances (claude, codex, gemini). " +
+				"Returns each provider's type, name, disabled flag, and active flag. " +
+				"To switch provider: send a message starting with #<type> (e.g. #claude, #codex, #gemini). " +
+				"Example: '#claude' switches to claude. '#codex hello' switches to codex and sends 'hello'. " +
+				"Pass session_id to mark which provider is currently active in that session.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Optional session ID. When provided, marks the currently active provider for that session.",
+					},
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Agent name within the session. Defaults to 'main'.",
+					},
+				},
+			},
+			Annotations: &toolAnnotation{
+				Title:        "List AI providers",
+				ReadOnlyHint: ptrBool(true),
+			},
+		},
 	}
 }
 
@@ -554,6 +598,8 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		h.handleWickDecrypt(w, req)
 	case "ask_user":
 		h.handleAskUser(w, r, req, p.Arguments)
+	case "wick_list_providers":
+		h.handleWickListProviders(w, req, p.Arguments)
 	default:
 		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
 	}
@@ -696,6 +742,58 @@ func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
 	})
 }
 
+// ── wick_list_providers / wick_switch_provider / wick_kill_session ──
+
+func (h *Handler) handleWickListProviders(w http.ResponseWriter, req rpcRequest, args map[string]any) {
+	instances, err := provider.Load()
+	if err != nil {
+		writeToolError(w, req.ID, "load providers: "+err.Error(), "wick_list_providers")
+		return
+	}
+
+	// Resolve active provider for this session+agent if session_id given.
+	activeKey := "" // "type/name" of the current provider
+	sessionID, _ := args["session_id"].(string)
+	agentName, _ := args["agent_name"].(string)
+	if sessionID != "" {
+		if agentName == "" {
+			agentName = "main"
+		}
+		if sess, err := session.Load(h.layout, sessionID); err == nil {
+			for _, a := range sess.Agents {
+				if a.Name == agentName {
+					activeKey = a.Provider
+					break
+				}
+			}
+		}
+	}
+
+	type providerSummary struct {
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		Binary   string `json:"binary,omitempty"`
+		Disabled bool   `json:"disabled,omitempty"`
+		Active   bool   `json:"active,omitempty"`
+	}
+	out := make([]providerSummary, 0, len(instances))
+	for _, ins := range instances {
+		key := string(ins.Type) + "/" + ins.Name
+		out = append(out, providerSummary{
+			Type:     string(ins.Type),
+			Name:     ins.Name,
+			Binary:   ins.Binary,
+			Disabled: ins.Disabled,
+			Active:   activeKey != "" && key == activeKey,
+		})
+	}
+	b, _ := json.Marshal(map[string]any{"providers": out, "total": len(out)})
+	writeRPCResult(w, req.ID, toolCallResult{
+		Content: []toolContent{{Type: "text", Text: string(b)}},
+	})
+}
+
+
 // ── wick_list ───────────────────────────────────────────────────────
 
 // connectorSummary is one entry in the wick_list response.
@@ -745,13 +843,17 @@ func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpc
 		if count == 0 {
 			continue
 		}
+		status := h.connectors.Status(row)
+		if status == "needs_setup" {
+			continue
+		}
 		totalTools += count
 		summaries = append(summaries, connectorSummary{
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
 			TotalTools:  count,
-			Status:      h.connectors.Status(row),
+			Status:      status,
 		})
 	}
 	writeToolJSON(w, req.ID, listResult{
@@ -832,12 +934,16 @@ func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req r
 		if len(matched) == 0 {
 			continue
 		}
+		status := h.connectors.Status(row)
+		if status == "needs_setup" {
+			continue
+		}
 		total += len(matched)
 		groups = append(groups, searchGroup{
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
-			Status:      h.connectors.Status(row),
+			Status:      status,
 			Tools:       matched,
 		})
 	}

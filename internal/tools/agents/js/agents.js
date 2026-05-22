@@ -417,6 +417,11 @@
           hideAskUserCard(JSON.parse(ev.data));
           return;
         }
+        if (ev.type === "system_turn") {
+          var d = JSON.parse(ev.data || "{}");
+          appendSystemTurn(d.text || "", d.steps || []);
+          return;
+        }
         if (ev.type === "text_delta") {
           hideTypingIndicator();
           appendDelta(ev.data);
@@ -449,6 +454,39 @@
           updateTypingSubstate("");
           if (!turnHasText) showTypingIndicator();
         }
+      }
+
+      // ── System turn helper ────────────────────────────────────────────
+
+      function appendSystemTurn(text, steps) {
+        var container = document.querySelector("[data-turns]");
+        if (!container) return;
+        var stepsHtml = "";
+        if (steps && steps.length) {
+          stepsHtml = '<div class="flex flex-col items-center gap-0.5 mt-0.5">';
+          for (var i = 0; i < steps.length; i++) {
+            stepsHtml +=
+              '<div class="inline-flex items-center gap-1 text-xs text-black-600 dark:text-black-500">' +
+              '<svg viewBox="0 0 12 12" class="h-2.5 w-2.5 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6l3 3 5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+              escapeHtml(steps[i]) +
+              '</div>';
+          }
+          stepsHtml += '</div>';
+        }
+        var el = document.createElement("div");
+        el.className = "flex justify-center py-1";
+        el.innerHTML =
+          '<div class="flex flex-col items-center gap-1">' +
+          '<div class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600">' +
+          '<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M6 4v2l1 1" stroke-linecap="round"></path></svg>' +
+          escapeHtml(text) +
+          '</div>' +
+          stepsHtml +
+          '</div>';
+        var bottom = document.getElementById("chat-bottom");
+        if (bottom) container.insertBefore(el, bottom);
+        else container.appendChild(el);
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
 
       // ── Event card helpers ────────────────────────────────────────────

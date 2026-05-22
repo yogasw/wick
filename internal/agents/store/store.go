@@ -296,6 +296,11 @@ func (s *Store) persistCLISessionID(id string) error {
 		}
 		sess.Agents[i].CLISessionID = id
 		sess.Agents[i].LastActive = s.now().UTC()
+		// Keep ProviderSessions in sync so switch-back can resume.
+		if sess.Agents[i].ProviderSessions == nil {
+			sess.Agents[i].ProviderSessions = map[string]string{}
+		}
+		sess.Agents[i].ProviderSessions[sess.Agents[i].Provider] = id
 		updated = true
 		break
 	}

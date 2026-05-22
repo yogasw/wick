@@ -105,6 +105,7 @@ func RegisterBuiltins() {
 			DefaultVisibility: entity.VisibilityPrivate,
 			DefaultTags:       []tool.DefaultTag{tags.System},
 		},
+		Configs:  pkgentity.StructToConfigs(providerstorage.Config{}),
 		Register: providerstorage.Register,
 	})
 	registerOnce(tool.Module{
