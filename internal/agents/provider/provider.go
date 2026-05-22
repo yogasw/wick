@@ -65,6 +65,25 @@ type Instance struct {
 	// Storage configures credential-file syncing for this instance.
 	// nil = sync disabled.
 	Storage *StorageConfig
+
+	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
+	CodexConfig *CodexConfig
+}
+
+// CodexSandboxMode maps to codex's --sandbox flag values.
+type CodexSandboxMode string
+
+const (
+	CodexSandboxReadOnly       CodexSandboxMode = "read-only"
+	CodexSandboxWorkspaceWrite CodexSandboxMode = "workspace-write"
+	CodexSandboxFullAccess     CodexSandboxMode = "danger-full-access"
+)
+
+// CodexConfig holds codex-specific spawn configuration.
+// Populated only when Instance.Type == TypeCodex.
+type CodexConfig struct {
+	// SandboxMode sets --sandbox. Empty = CodexSandboxFullAccess.
+	SandboxMode CodexSandboxMode
 }
 
 // StorageConfig mirrors userconfig.StorageConfig in-memory.
@@ -518,7 +537,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			continue
 		}
 		for _, raw := range list {
-			out = append(out, Instance{
+			ins := Instance{
 				Type:      t,
 				Name:      raw.Name,
 				Binary:    raw.BinaryPath,
@@ -527,7 +546,13 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				Disabled:  raw.Disabled,
 				Hooks:     hooksFromUser(raw.Hooks),
 				Storage:   storageFromUser(raw.Storage),
-			})
+			}
+			if t == TypeCodex {
+				ins.CodexConfig = &CodexConfig{
+					SandboxMode: CodexSandboxMode(raw.SandboxMode),
+				}
+			}
+			out = append(out, ins)
 		}
 	}
 	return out
@@ -558,15 +583,19 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 }
 
 func toUserInstance(ins Instance) userconfig.ProviderInstance {
-	return userconfig.ProviderInstance{
-		Name:       ins.Name,
+	raw := userconfig.ProviderInstance{
+		Name:      ins.Name,
 		BinaryPath: ins.Binary,
-		Disabled:   ins.Disabled,
-		ExtraArgs:  ins.ExtraArgs,
-		Env:        ins.Env,
-		Hooks:      hooksToUser(ins.Hooks),
-		Storage:    storageToUser(ins.Storage),
+		Disabled:  ins.Disabled,
+		ExtraArgs: ins.ExtraArgs,
+		Env:       ins.Env,
+		Hooks:     hooksToUser(ins.Hooks),
+		Storage:   storageToUser(ins.Storage),
 	}
+	if ins.CodexConfig != nil {
+		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)
+	}
+	return raw
 }
 
 // hooksFromUser converts the persisted shape into the in-memory map.

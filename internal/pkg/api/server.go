@@ -28,6 +28,7 @@ import (
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/agentctl"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
@@ -101,13 +102,8 @@ func NewServer() *Server {
 
 	syncMgr := providersync.New(db)
 
-	// Legacy wipe + orphan repair run inside postgres.Migrate above as
-	// one-shot DB migrations. Boot force-overwrites disk from DB so a
-	// container restart in a no-volume env always lands at the DB-known
-	// state; the cron tick uses the guarded RestoreAll after that.
-	if err := syncMgr.RestoreAllForce(context.Background()); err != nil {
-		log.Warn().Err(err).Msg("providersync: startup restore failed")
-	}
+	// Startup restore is deferred to after configsSvc.Bootstrap so the
+	// verbose_logs config row exists when we read it (see below).
 
 	// Built-in maintenance jobs whose RunFunc captures *gorm.DB are
 	// registered here, after DB init, before validation + the jobs.All()
@@ -158,6 +154,16 @@ func NewServer() *Server {
 	}
 	if err := configsSvc.Bootstrap(context.Background(), extraConfigs...); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
+	}
+
+	// Boot force-restore: DB is source of truth on first start after a
+	// container restart (no-volume env). Runs after Bootstrap so the
+	// verbose_logs config row is already seeded and readable.
+	{
+		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
+		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
+			log.Warn().Err(err).Msg("providersync: startup restore failed")
+		}
 	}
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
 	// The manager reads/writes these at owner="connector_oauth:slack" so they
@@ -429,6 +435,7 @@ func NewServer() *Server {
 	agentstool.SetLayout(agentsLayout)
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
 	agentstool.SetConfigs(configsSvc)
+	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
@@ -610,7 +617,7 @@ func NewServer() *Server {
 	// from agent_channels on every send, so UI changes take effect without
 	// a restart. One closure per channel type so workspaces can differ.
 	sendFnFor := func(channelType string) agentchannels.SendFunc {
-		return func(ctx context.Context, sessionID, agentName, source, role, text string) error {
+		raw := agentchannels.SendFunc(func(ctx context.Context, sessionID, agentName, source, role, text string) error {
 			ws := ""
 			if m, err := agentchannels.GetChannelConfigMap(db, channelType); err == nil {
 				ws = m["workspace"]
@@ -621,7 +628,13 @@ func NewServer() *Server {
 				}
 			}
 			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
-		}
+		})
+		return agentchannels.WrapSendFunc(raw, agentsLayout, agentsPool, func(sessionID, agentName, source, text string) {
+			agentsBcast.PublishRaw(sessionID, agentName, "text_delta", text)
+			agentsBcast.PublishRaw(sessionID, agentName, "done", "")
+			channelReg.DispatchAgentEvent(sessionID, agentevent.AgentEvent{Type: agentevent.TextDelta, Text: text})
+			channelReg.DispatchAgentEvent(sessionID, agentevent.AgentEvent{Type: agentevent.Done})
+		})
 	}
 
 	// PAT service is needed by the REST channel (per-request Bearer auth).
@@ -774,7 +787,8 @@ func NewServer() *Server {
 				return false, "ask_user_mode=" + mode
 			}
 			return true, ""
-		})
+		}).
+		WithPool(agentsPool, agentsLayout)
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -993,19 +1007,20 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr}
 }
 
 type Server struct {
-	router     *http.ServeMux
-	configsSvc *configs.Service
-	authMidd   *login.Middleware
-	agentsPool *agentpool.Pool
-	channelReg *agentchannels.Registry
-	db         *gorm.DB
-	gateBin    string // resolved gate binary path; used for hook cleanup on shutdown
-	jobsSvc    *manager.Service
-	wfMgr      *wfsetup.Manager
+	router       *http.ServeMux
+	configsSvc   *configs.Service
+	authMidd     *login.Middleware
+	agentsPool   *agentpool.Pool
+	agentsLayout agentconfig.Layout
+	channelReg   *agentchannels.Registry
+	db           *gorm.DB
+	gateBin      string // resolved gate binary path; used for hook cleanup on shutdown
+	jobsSvc      *manager.Service
+	wfMgr        *wfsetup.Manager
 }
 
 // JobsSvc returns the manager.Service the API server owns. Exposed so
@@ -1135,6 +1150,17 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// can reach wick's local proxy endpoints (e.g. /integrations/slack/send)
 	// without needing any credentials injected into their environment.
 	os.Setenv("WICK_PORT", fmt.Sprintf("%d", port)) //nolint:errcheck
+
+	// Start agent control socket — lets stdio MCP processes send
+	// switch_provider / kill commands to this daemon's pool.
+	if s.agentsPool != nil {
+		agentctlSrv := agentctl.NewServer(s.agentsPool, s.agentsLayout)
+		go func() {
+			if err := agentctlSrv.Listen(ctx); err != nil {
+				log.Warn().Err(err).Msg("agentctl: socket closed")
+			}
+		}()
+	}
 
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)

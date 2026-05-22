@@ -310,6 +310,20 @@ templ providerCard(base string, st provider.Status, gate GateStatusVM) {
 							<input type="checkbox" name="disabled" value="on" checked?={ st.Instance.Disabled }/>
 							disabled
 						</label>
+						if st.Instance.Type == provider.TypeCodex {
+							{{ sandboxMode := string(provider.CodexSandboxFullAccess) }}
+							if st.Instance.CodexConfig != nil && st.Instance.CodexConfig.SandboxMode != "" {
+								{{ sandboxMode = string(st.Instance.CodexConfig.SandboxMode) }}
+							}
+							<label class="block">
+								<span class="text-xs text-black-800 dark:text-black-600">Sandbox mode</span>
+								<select name="sandbox_mode" class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100">
+									<option value="danger-full-access" selected?={ sandboxMode == "danger-full-access" }>danger-full-access</option>
+									<option value="workspace-write" selected?={ sandboxMode == "workspace-write" }>workspace-write</option>
+									<option value="read-only" selected?={ sandboxMode == "read-only" }>read-only</option>
+								</select>
+							</label>
+						}
 						<button type="submit" class="w-full rounded bg-green-500 px-2 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Save</button>
 					</div>
 				</details>

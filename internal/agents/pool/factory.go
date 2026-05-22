@@ -104,7 +104,18 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	//   3. operator-edited `system_prompt` config row
 	// Layer 1 must lead so its guards override anything the preset /
 	// config below tries to relax.
-	presetContent := config.ImmutableSystemPrompt()
+	// Normalize provider type early so immutable prompt selection is correct.
+	pTypeStrEarly := opt.ProviderType
+	if pTypeStrEarly == "" {
+		pTypeStrEarly = string(provider.TypeClaude)
+	}
+	var immutable string
+	if provider.Type(pTypeStrEarly) == provider.TypeCodex {
+		immutable = config.ImmutableSystemPromptCodex()
+	} else {
+		immutable = config.ImmutableSystemPrompt()
+	}
+	presetContent := immutable
 	if opt.PresetName != "" {
 		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
 			presetContent += "\n\n" + p.Body
@@ -123,10 +134,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 
 	// Normalize provider keys once — used by spawner dispatch, instance
 	// lookup, and spawn-log naming.
-	pTypeStr := opt.ProviderType
-	if pTypeStr == "" {
-		pTypeStr = string(provider.TypeClaude)
-	}
+	pTypeStr := pTypeStrEarly
 	pType := provider.Type(pTypeStr)
 	pName := opt.ProviderName
 	if pName == "" {
@@ -252,7 +260,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		ResumeID:      opt.ResumeID,
 		IdleTimeout:   opt.IdleTimeout,
 		KillAfterIdle: opt.KillAfterIdle,
-		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
+		ParserFactory: func() event.Parser {
+			if pType == provider.TypeCodex {
+				return event.NewCodexParser()
+			}
+			return event.NewClaudeParser()
+		},
 		Spawner:       spawner,
 		Store:         sto,
 		State:         st,
@@ -261,6 +274,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		Instance:      &insCopy,
 		GateBinary:    gateBin,
 		Preset:        presetContent,
+		RespawnOnSend: pType == provider.TypeCodex,
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }

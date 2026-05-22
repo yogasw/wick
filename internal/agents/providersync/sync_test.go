@@ -406,6 +406,93 @@ func TestBackup_HashUnchanged_NoRewrite(t *testing.T) {
 	}
 }
 
+// ─── fileHash ─────────────────────────────────────────────────────────
+
+func TestFileHash_MissingRow(t *testing.T) {
+	db := newDB(t)
+	s := newStore(db)
+	hash, ret, ok := s.fileHash(context.Background(), "p", "i", "/nonexistent")
+	if ok || hash != "" || ret != 0 {
+		t.Errorf("nonexistent row: got (%q, %d, %v), want (\"\", 0, false)", hash, ret, ok)
+	}
+}
+
+func TestFileHash_ReturnsStoredValues(t *testing.T) {
+	db := newDB(t)
+	mgr := New(db)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "creds.yml")
+	writeFile(t, file, "secret")
+
+	if _, err := mgr.SaveSource(ctx, entity.ProviderStorageSource{
+		ProviderType: "p", InstanceName: "i",
+		SyncPath: dir, Mode: "folder", RetentionDays: 7, Enabled: true,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	s := newStore(db)
+	abs := filepath.ToSlash(file)
+	hash, ret, ok := s.fileHash(ctx, "p", "i", abs)
+	if !ok {
+		t.Fatal("row should exist after save")
+	}
+	if hash == "" {
+		t.Error("hash should not be empty")
+	}
+	if ret != 7 {
+		t.Errorf("retention = %d, want 7", ret)
+	}
+}
+
+// ─── backup changed/skipped counting ──────────────────────────────────
+
+func TestBackup_CountsChangedAndSkipped(t *testing.T) {
+	db := newDB(t)
+	mgr := New(db)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.yml"), "v1")
+	writeFile(t, filepath.Join(dir, "b.yml"), "v1")
+
+	src := entity.ProviderStorageSource{
+		ProviderType: "p", InstanceName: "i",
+		SyncPath: dir, Mode: "folder", Enabled: true,
+	}
+	if _, err := mgr.SaveSource(ctx, src); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Modify only a.yml; b.yml unchanged.
+	writeFile(t, filepath.Join(dir, "a.yml"), "v2")
+
+	// re-sync: a.yml should be written, b.yml skipped.
+	if err := mgr.SyncOne(ctx, SourceToInstance(src)); err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+
+	s := newStore(db)
+	absA := filepath.ToSlash(filepath.Join(dir, "a.yml"))
+	absB := filepath.ToSlash(filepath.Join(dir, "b.yml"))
+
+	hashA, _, _ := s.fileHash(ctx, "p", "i", absA)
+	hashB, _, _ := s.fileHash(ctx, "p", "i", absB)
+
+	// a.yml must reflect new content
+	wantHashA := hashBytes([]byte("v2"))
+	if hashA != wantHashA {
+		t.Errorf("a.yml hash = %q, want %q", hashA, wantHashA)
+	}
+	// b.yml hash unchanged
+	wantHashB := hashBytes([]byte("v1"))
+	if hashB != wantHashB {
+		t.Errorf("b.yml hash = %q, want %q", hashB, wantHashB)
+	}
+}
+
 // ─── RestoreAll disk-wins guard ───────────────────────────────────────
 
 func TestRestoreAll_FillsMissingFiles(t *testing.T) {

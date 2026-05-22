@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -415,10 +416,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 	resumeID := ""
 	pType := ""
+	pName := ""
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
 			resumeID = a.CLISessionID
-			pType = a.Provider
+			// Provider field is stored as "type/name" (e.g. "claude/work").
+			// Fall back to bare type when no slash present.
+			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
+				pType = a.Provider[:idx]
+				pName = a.Provider[idx+1:]
+			} else {
+				pType = a.Provider
+				pName = a.Provider
+			}
 			break
 		}
 	}
@@ -432,7 +442,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		SessionID:    sessionID,
 		AgentName:    agentName,
 		ProviderType: pType,
-		ProviderName: pType, // default-name = type until per-instance pickers ship
+		ProviderName: pName,
 		Workspace:    cwd,
 		ResumeID:     resumeID,
 		IdleTimeout:   p.cfg.IdleTimeout,
