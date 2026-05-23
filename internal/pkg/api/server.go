@@ -630,6 +630,9 @@ func NewServer() *Server {
 			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
 		})
 		return agentchannels.WrapSendFunc(raw, agentsLayout, agentsPool, func(sessionID, agentName, source, text string) {
+			if err := agentsMgr.RefreshSession(sessionID); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("agents: refresh session after provider switch failed")
+			}
 			agentsBcast.PublishRaw(sessionID, agentName, "text_delta", text)
 			agentsBcast.PublishRaw(sessionID, agentName, "done", "")
 			channelReg.DispatchAgentEvent(sessionID, agentevent.AgentEvent{Type: agentevent.TextDelta, Text: text})

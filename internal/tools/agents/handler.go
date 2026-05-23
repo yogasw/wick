@@ -824,6 +824,10 @@ func sendMessage(c *tool.Ctx) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		if err := globalMgr.RefreshSession(id); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
+			return
+		}
 		if r.Rest == "" {
 			c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
 			return
