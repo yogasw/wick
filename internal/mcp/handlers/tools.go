@@ -140,8 +140,11 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Name: "wick_info",
 			Description: "Return wick server info. Fields: app_name, app_version, wick_version, server_build_time, server_commit, " +
 				"access_type ('cli' when running as a local stdio process with filesystem access, 'http' when running as a remote HTTP server), " +
-				"wick_root (absolute path to the project directory — only set for 'cli', empty for 'http'). " +
-				"Use access_type and wick_root to decide whether you can edit connector config files directly or must redirect the user to the Wick UI.",
+				"wick_root (absolute path to the project directory — only set for 'cli', empty for 'http'), " +
+				"db_type ('postgres' / 'sqlite' / 'none'), db_status ('connected', 'error: <err>', or 'disabled' when no DB is wired). " +
+				"DSN is intentionally not exposed — hostname/user are sensitive infra info. " +
+				"Use access_type and wick_root to decide whether you can edit connector config files directly or must redirect the user to the Wick UI. " +
+				"Use db_status to surface DB connectivity issues.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
