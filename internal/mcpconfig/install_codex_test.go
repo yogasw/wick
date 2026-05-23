@@ -103,6 +103,38 @@ args = []
 	}
 }
 
+func TestInstallCodexTOML_WritesEnvVars(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "config.toml")
+	entry := map[string]any{
+		"command":  "/usr/local/bin/app",
+		"args":     []string{"mcp", "serve"},
+		"env_vars": []string{"DATABASE_URL", "WICK_ENC_KEY"},
+	}
+	if err := installCodexTOML(f, "support-tools", entry); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, _ := os.ReadFile(f)
+	result := string(got)
+	if !strings.Contains(result, `env_vars = ["DATABASE_URL", "WICK_ENC_KEY"]`) {
+		t.Errorf("env_vars line missing or malformed:\n%s", result)
+	}
+}
+
+func TestInstallCodexTOML_OmitsEnvVarsWhenEmpty(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "config.toml")
+	entry := map[string]any{
+		"command": "/usr/local/bin/app",
+		"args":    []string{"mcp", "serve"},
+	}
+	if err := installCodexTOML(f, "support-tools", entry); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, _ := os.ReadFile(f)
+	if strings.Contains(string(got), "env_vars") {
+		t.Errorf("env_vars line present when entry omits it:\n%s", got)
+	}
+}
+
 func TestInstallCodexTOML_NoDuplicate(t *testing.T) {
 	input := `[mcp_servers.wick-lab]
 type = "stdio"
