@@ -1,11 +1,9 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -47,9 +45,9 @@ type Handler struct {
 	// nil in stdio mode and tests.
 	pool   *agentpool.Pool
 	layout agentconfig.Layout
-	// db surfaces DB status/type via wick_info. May be nil (tests, smoke
-	// mode); dbInfo() reports "disabled" in that case. DSN is never
-	// exposed — hostname/user are sensitive infra info.
+	// db is passed to wick_info so it can surface DB status/type.
+	// May be nil (tests, smoke mode); handlers.WickInfo reports
+	// "disabled" in that case. DSN is never exposed.
 	db *gorm.DB
 }
 
@@ -86,27 +84,6 @@ func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handle
 func (h *Handler) WithDB(db *gorm.DB) *Handler {
 	h.db = db
 	return h
-}
-
-// dbInfo returns (type, status) for wick_info. Type is the gorm
-// dialector name ("postgres" / "sqlite") or "none" when no DB is
-// wired. Status is "connected", "error: <err>", or "disabled".
-// DSN/source is intentionally never exposed.
-func (h *Handler) dbInfo() (dbType, dbStatus string) {
-	if h.db == nil {
-		return "none", "disabled"
-	}
-	dbType = h.db.Dialector.Name()
-	sqlDB, err := h.db.DB()
-	if err != nil {
-		return dbType, "error: " + err.Error()
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := sqlDB.PingContext(ctx); err != nil {
-		return dbType, "error: " + err.Error()
-	}
-	return dbType, "connected"
 }
 
 func (h *Handler) WithBuildInfo(version, commit, buildTime string) *Handler {
@@ -276,8 +253,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	case "wick_execute":
 		handlers.WickExecute(w, r, hreq, rsp, h.connectors, p.Arguments, user, tagIDs)
 	case "wick_info":
-		dbType, dbStatus := h.dbInfo()
-		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot, dbType, dbStatus)
+		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot, h.db)
 	case "wick_encrypt":
 		handlers.WickEncrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "wick_decrypt":
