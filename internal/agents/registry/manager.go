@@ -142,6 +142,18 @@ func (m *Manager) Register(s session.Session) {
 	m.reg.upsertSession(s)
 }
 
+// RefreshSession reloads one session from disk and updates the in-memory
+// registry cache. Use this after lower-level code mutates session files
+// directly.
+func (m *Manager) RefreshSession(id string) error {
+	s, err := session.Load(m.reg.layout, id)
+	if err != nil {
+		return err
+	}
+	m.reg.upsertSession(s)
+	return nil
+}
+
 // DeleteSession removes the session folder + cache entry.
 func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	if err := session.Delete(ctx, m.reg.layout, id); err != nil {
