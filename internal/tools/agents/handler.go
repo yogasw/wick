@@ -25,6 +25,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
+	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -433,7 +434,9 @@ func startNewSession(c *tool.Ctx) {
 		renderCompose(c, text, err.Error())
 		return
 	}
-	if err := globalPool.Send(context.Background(), id, "main", "ui", "user", text); err != nil {
+	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
+	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	if err := globalPool.Send(bgCtx, id, "main", "ui", "user", text); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
 		return
@@ -848,7 +851,11 @@ func sendMessage(c *tool.Ctx) {
 		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
 		return
 	}
-	if err := globalPool.Send(context.Background(), id, agentName, "ui", "user", req.Text); err != nil {
+	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
+	// inheriting c.Context() would SIGKILL claude.exe the moment the
+	// response returns. Copy request_id over so logs still correlate.
+	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	if err := globalPool.Send(bgCtx, id, agentName, "ui", "user", req.Text); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1147,11 +1154,27 @@ func streamSSE(c *tool.Ctx) {
 // snapshotEvents builds the lifecycle + in-flight event list for sessionID
 // from the current pool state. Used by both streamSSE (SSE replay on fresh
 // connect) and streamSnapshot (JSON endpoint for SharedWorker reuse path).
+//
+// Two sources, in order of preference:
+//  1. Live pool entry — turn is currently in flight, replay from RAM.
+//  2. On-disk inflight.jsonl — turn was mid-stream when the process died
+//     (server crash, agent killed before Done). Read the file and emit
+//     the same event sequence so the FE shows what was already streamed
+//     plus a stale "killed" lifecycle pill the operator can act on.
 func snapshotEvents(sessionID string) []Event {
 	var out []Event
+	matched := false
 	for _, e := range globalPool.ActiveSnapshot() {
 		if e.SessionID != sessionID {
 			continue
+		}
+		matched = true
+		// At = actual LastActive (when lifecycle last transitioned) so
+		// the FE can paint the right amount of idle-countdown burn on
+		// refresh instead of restarting from zero.
+		var lastActiveMs int64
+		if !e.LastActive.IsZero() {
+			lastActiveMs = e.LastActive.UnixMilli()
 		}
 		out = append(out, Event{
 			SessionID: e.SessionID,
@@ -1160,7 +1183,21 @@ func snapshotEvents(sessionID string) []Event {
 			Lifecycle: e.Lifecycle,
 			Data:      e.Substate,
 			PID:       e.PID,
+			At:        lastActiveMs,
 		})
+		// Replay the partial assistant text accumulated since the last
+		// flushed turn — needed for mid-stream refresh so the bubble
+		// repaints instead of going blank until Done arrives. The FE
+		// treats text_delta as append; sending the full partial here
+		// works because the FE clears any pending turn before replay.
+		if e.PartialText != "" {
+			out = append(out, Event{
+				SessionID: e.SessionID,
+				AgentName: e.AgentName,
+				Type:      "text_delta",
+				Data:      e.PartialText,
+			})
+		}
 		for _, te := range e.InFlightEvents {
 			ev := Event{
 				SessionID: e.SessionID,
@@ -1189,6 +1226,55 @@ func snapshotEvents(sessionID string) []Event {
 			}
 			out = append(out, ev)
 		}
+	}
+	if matched {
+		return out
+	}
+	// Pool has no live entry — fall back to inflight.jsonl on disk for
+	// the case where a turn was mid-stream when the process died. Emit
+	// the cached deltas + trace cards so the operator at least sees how
+	// far the agent got before the kill.
+	if globalLayout == (agentconfig.Layout{}) {
+		return out
+	}
+	entries, err := agentstore.LoadInflight(globalLayout, sessionID)
+	if err != nil || len(entries) == 0 {
+		return out
+	}
+	for _, e := range entries {
+		ev := Event{
+			SessionID: sessionID,
+		}
+		switch e.Type {
+		case "text_delta":
+			ev.Type = "text_delta"
+			ev.Data = e.Text
+		case "thinking":
+			ev.Type = "thinking"
+			ev.Data = e.Text
+			if !e.At.IsZero() {
+				ev.At = e.At.UnixMilli()
+			}
+		case "tool_use":
+			ev.Type = "tool_use"
+			ev.ToolName = e.ToolName
+			ev.ToolInput = e.ToolInput
+			ev.ToolUseID = e.ToolUseID
+			if !e.At.IsZero() {
+				ev.At = e.At.UnixMilli()
+			}
+		case "tool_result":
+			ev.Type = "tool_result"
+			ev.ToolUseID = e.ToolUseID
+			ev.IsError = e.IsError
+			ev.Data = e.Text
+			if !e.At.IsZero() {
+				ev.At = e.At.UnixMilli()
+			}
+		default:
+			continue
+		}
+		out = append(out, ev)
 	}
 	return out
 }

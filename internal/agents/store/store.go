@@ -13,6 +13,9 @@
 package store
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -155,28 +158,49 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 
 	case event.TextDelta:
 		s.turnBuf.WriteString(ev.Text)
-		return false, nil
-
-	case event.Thinking:
-		s.mu.Lock()
-		s.eventBuf = append(s.eventBuf, TurnEvent{
-			Type: "thinking",
+		_ = s.appendInflight(InflightEntry{
+			Type: "text_delta",
 			Text: ev.Text,
 			At:   s.now().UTC(),
 		})
+		return false, nil
+
+	case event.Thinking:
+		now := s.now().UTC()
+		te := TurnEvent{
+			Type: "thinking",
+			Text: ev.Text,
+			At:   now,
+		}
+		s.mu.Lock()
+		s.eventBuf = append(s.eventBuf, te)
 		s.mu.Unlock()
+		_ = s.appendInflight(InflightEntry{
+			Type: "thinking",
+			Text: ev.Text,
+			At:   now,
+		})
 		return false, nil
 
 	case event.ToolUse:
-		s.mu.Lock()
-		s.eventBuf = append(s.eventBuf, TurnEvent{
+		now := s.now().UTC()
+		te := TurnEvent{
 			Type:      "tool_use",
 			ToolName:  ev.ToolName,
 			ToolInput: ev.ToolInput,
 			ToolUseID: ev.ToolUseID,
-			At:        s.now().UTC(),
-		})
+			At:        now,
+		}
+		s.mu.Lock()
+		s.eventBuf = append(s.eventBuf, te)
 		s.mu.Unlock()
+		_ = s.appendInflight(InflightEntry{
+			Type:      "tool_use",
+			ToolName:  ev.ToolName,
+			ToolInput: ev.ToolInput,
+			ToolUseID: ev.ToolUseID,
+			At:        now,
+		})
 		return false, nil
 
 	case event.ToolResult:
@@ -196,6 +220,13 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			At:        now,
 		})
 		s.mu.Unlock()
+		_ = s.appendInflight(InflightEntry{
+			Type:      "tool_result",
+			ToolUseID: ev.ToolUseID,
+			IsError:   ev.IsError,
+			Text:      ev.Text,
+			At:        now,
+		})
 		return false, nil
 
 	case event.Done:
@@ -228,6 +259,24 @@ func (s *Store) InFlightEvents() []TurnEvent {
 	out := make([]TurnEvent, len(s.eventBuf))
 	copy(out, s.eventBuf)
 	return out
+}
+
+// PartialText returns the assistant text accumulated so far for the
+// in-flight turn (everything appended via TextDelta since the last
+// flushAssistantTurn). Empty string when no turn is in progress.
+//
+// Used by the SSE snapshot endpoint so a page refresh mid-stream can
+// repaint the partial bubble instead of waiting for the next delta or
+// losing the text entirely until Done writes it to conversation.jsonl.
+//
+// Safe to call from any goroutine — returns a defensive copy.
+func (s *Store) PartialText() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.turnBuf.Len() == 0 {
+		return ""
+	}
+	return s.turnBuf.String()
 }
 
 // Flush is the explicit drain hook for callers that want to write
@@ -269,12 +318,148 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Events:    evSnap,
 	}
 	s.turnBuf.Reset()
-	return storage.AppendJSONL(
+	if err := storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
 		"wick-conv-v1",
 		s.sessionID,
 		turn,
+	); err != nil {
+		return err
+	}
+	// Turn safely persisted in conversation.jsonl → drop the inflight
+	// mirror so a crash AFTER this point doesn't replay an already-saved
+	// turn on next boot. Missing-file is fine; ignore any other error
+	// (the canonical record is already on disk).
+	if err := os.Remove(s.layout.SessionInflight(s.sessionID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// non-fatal: log left to caller's discretion via raw.jsonl audit
+	}
+	return nil
+}
+
+// InflightEntry is one line of inflight.jsonl. Mirrors TurnEvent +
+// text_delta chunks so a crash mid-stream leaves a full replay log on
+// disk. Provider-agnostic — claude TextDelta, codex item.updated, and
+// future CLIs all serialise through the same shape via store.Apply.
+type InflightEntry struct {
+	Type      string    `json:"type"` // "text_delta" | "thinking" | "tool_use" | "tool_result"
+	Text      string    `json:"text,omitempty"`
+	ToolName  string    `json:"tool_name,omitempty"`
+	ToolInput string    `json:"tool_input,omitempty"`
+	ToolUseID string    `json:"tool_use_id,omitempty"`
+	IsError   bool      `json:"is_error,omitempty"`
+	At        time.Time `json:"at,omitempty"`
+}
+
+// appendInflight writes one entry to the session's inflight.jsonl.
+// Best-effort: a transient disk error here loses one replay frame on
+// crash but never blocks the live event pipeline. Caller passes the
+// already-built entry so the struct is identical to what consumers
+// see at replay time.
+func (s *Store) appendInflight(e InflightEntry) error {
+	return storage.AppendJSONL(
+		s.layout.SessionInflight(s.sessionID),
+		"wick-inflight-v1",
+		s.sessionID,
+		e,
 	)
+}
+
+// LoadInflight reads inflight.jsonl for a session and returns every
+// entry in order. Used at boot/snapshot time to repaint a turn that
+// was mid-stream when the process died. Missing file is treated as
+// "no inflight" (returns nil, nil) so callers don't need to stat.
+func LoadInflight(layout config.Layout, sessionID string) ([]InflightEntry, error) {
+	var out []InflightEntry
+	err := storage.ReadJSONL(layout.SessionInflight(sessionID), func(line []byte) bool {
+		var e InflightEntry
+		if jerr := json.Unmarshal(line, &e); jerr != nil {
+			return true // skip malformed lines, keep reading
+		}
+		if e.Type == "" {
+			return true
+		}
+		out = append(out, e)
+		return true
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RecoverInflight merges a leftover inflight.jsonl (turn was mid-stream
+// when the previous wick process died) into conversation.jsonl as one
+// truncated assistant turn, then deletes the inflight file. Called from
+// registry boot so the next chat continues from a consistent history
+// instead of branching off a partial turn.
+//
+// agentName goes onto the assistant turn record so the UI groups it
+// under the right agent; pass session.Meta.ActiveAgent or the first
+// entry of session.Agents.
+//
+// Returns true when a recovery write actually happened (caller may want
+// to log). Missing file or empty entries → (false, nil). Any disk error
+// in append OR delete propagates so the caller knows the file is still
+// there (registry boot can choose to keep going).
+func RecoverInflight(layout config.Layout, sessionID, agentName string, now func() time.Time) (bool, error) {
+	entries, err := LoadInflight(layout, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) == 0 {
+		// File missing or empty — clean up empty file if present and bail.
+		_ = os.Remove(layout.SessionInflight(sessionID))
+		return false, nil
+	}
+	if now == nil {
+		now = time.Now
+	}
+	var body strings.Builder
+	var events []TurnEvent
+	for _, e := range entries {
+		switch e.Type {
+		case "text_delta":
+			body.WriteString(e.Text)
+		case "thinking", "tool_use", "tool_result":
+			events = append(events, TurnEvent{
+				Type:      e.Type,
+				ToolName:  e.ToolName,
+				ToolInput: e.ToolInput,
+				ToolUseID: e.ToolUseID,
+				IsError:   e.IsError,
+				Text:      e.Text,
+				At:        e.At,
+			})
+		}
+	}
+	if body.Len() == 0 && len(events) == 0 {
+		_ = os.Remove(layout.SessionInflight(sessionID))
+		return false, nil
+	}
+	text := body.String()
+	if len(text) > MaxAssistantTurnBytes {
+		text = text[:MaxAssistantTurnBytes] + "\n…(truncated, see raw.jsonl)"
+	}
+	turn := ConversationTurn{
+		Timestamp: now().UTC(),
+		Role:      "assistant",
+		Agent:     agentName,
+		Text:      text,
+		Truncated: true,
+		Events:    events,
+	}
+	if err := storage.AppendJSONL(
+		layout.SessionConversation(sessionID),
+		"wick-conv-v1",
+		sessionID,
+		turn,
+	); err != nil {
+		return false, err
+	}
+	if err := os.Remove(layout.SessionInflight(sessionID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true, err
+	}
+	return true, nil
 }
 
 // persistCLISessionID writes the captured CLI session ID into the
