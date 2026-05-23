@@ -163,8 +163,9 @@ func SelfEntry() (map[string]any, error) {
 		exe = resolved
 	}
 	return map[string]any{
-		"command": exe,
-		"args":    []string{"mcp", "serve"},
+		"command":  exe,
+		"args":     []string{"mcp", "serve"},
+		"env_vars": WickEnvVars,
 	}, nil
 }
 
@@ -176,9 +177,10 @@ func SelfEntry() (map[string]any, error) {
 func WickEntry(cwd, mode string) map[string]any {
 	if mode == "dev" {
 		return map[string]any{
-			"command": "go",
-			"args":    []string{"run", ".", "mcp", "serve"},
-			"cwd":     cwd,
+			"command":  "go",
+			"args":     []string{"run", ".", "mcp", "serve"},
+			"cwd":      cwd,
+			"env_vars": WickEnvVars,
 		}
 	}
 	exe, err := os.Executable()
@@ -188,8 +190,9 @@ func WickEntry(cwd, mode string) map[string]any {
 		exe = resolved
 	}
 	return map[string]any{
-		"command": exe,
-		"args":    []string{"mcp", "serve", "--mode", mode, "--project", cwd},
+		"command":  exe,
+		"args":     []string{"mcp", "serve", "--mode", mode, "--project", cwd},
+		"env_vars": WickEnvVars,
 	}
 }
 
@@ -333,8 +336,20 @@ func installCodexTOML(path, name string, entry map[string]any) error {
 	}
 	// Use dotted-table format — matches what codex writes natively and
 	// avoids the duplicate-key error caused by [[mcp_servers]] array syntax.
-	block := fmt.Sprintf("\n[mcp_servers.%s]\ntype = \"stdio\"\ncommand = %q\nargs = [%s]\n",
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\n[mcp_servers.%s]\ntype = \"stdio\"\ncommand = %q\nargs = [%s]\n",
 		name, cmd, strings.Join(quoted, ", "))
+	// env_vars is a Codex-specific allowlist: at spawn time Codex
+	// forwards only names listed here from its own env to the MCP
+	// child (openai/codex#3064). Without it, env like DATABASE_URL
+	// stops at the Codex boundary and wick falls back to defaults.
+	if envVars, _ := entry["env_vars"].([]string); len(envVars) > 0 {
+		qv := make([]string, len(envVars))
+		for i, v := range envVars {
+			qv[i] = fmt.Sprintf("%q", v)
+		}
+		fmt.Fprintf(&sb, "env_vars = [%s]\n", strings.Join(qv, ", "))
+	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -344,7 +359,7 @@ func installCodexTOML(path, name string, entry map[string]any) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.WriteString(block)
+	_, err = f.WriteString(sb.String())
 	return err
 }
 

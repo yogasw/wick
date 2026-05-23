@@ -11,6 +11,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp/handlers"
+	"gorm.io/gorm"
 )
 
 // supportedProtocolVersions lists every MCP revision this server can speak,
@@ -44,6 +45,10 @@ type Handler struct {
 	// nil in stdio mode and tests.
 	pool   *agentpool.Pool
 	layout agentconfig.Layout
+	// db is passed to wick_info so it can surface DB status/type.
+	// May be nil (tests, smoke mode); handlers.WickInfo reports
+	// "disabled" in that case. DSN is never exposed.
+	db *gorm.DB
 }
 
 func NewHandler(c *connectors.Service) *Handler {
@@ -73,6 +78,11 @@ func (h *Handler) WithAskUserPolicy(fn func() (bool, string)) *Handler {
 func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handler {
 	h.pool = p
 	h.layout = layout
+	return h
+}
+
+func (h *Handler) WithDB(db *gorm.DB) *Handler {
+	h.db = db
 	return h
 }
 
@@ -243,7 +253,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	case "wick_execute":
 		handlers.WickExecute(w, r, hreq, rsp, h.connectors, p.Arguments, user, tagIDs)
 	case "wick_info":
-		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot)
+		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot, h.db)
 	case "wick_encrypt":
 		handlers.WickEncrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "wick_decrypt":
