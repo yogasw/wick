@@ -771,6 +771,7 @@ func NewServer() *Server {
 	// dispatch by prefix.
 	mcpHandler := mcp.NewHandler(connectorsSvc).
 		WithAppURL(configsSvc.AppURL).
+		WithDB(db).
 		WithAskUser(askUsersMgr).
 		WithAskUserPolicy(func() (bool, string) {
 			// Master gate off → ask_user short-circuits along with every
@@ -1348,6 +1349,7 @@ func RunMCPStdio(version, commit, buildTime string) {
 		WithBuildInfo(version, commit, buildTime).
 		WithWickRoot(root).
 		WithAppURL(configsSvc.AppURL).
+		WithDB(db).
 		ServeStdioOS(ctx)
 }
 

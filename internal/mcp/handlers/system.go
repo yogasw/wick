@@ -9,7 +9,12 @@ import (
 )
 
 // WickInfo handles the wick_info tool.
-func WickInfo(w http.ResponseWriter, req RPCRequest, rsp Responder, version, commit, buildTime, wickRoot string) {
+//
+// dbType is the gorm dialector name ("postgres" / "sqlite") or "none"
+// when no DB is wired. dbStatus is "connected", "error: <err>", or
+// "disabled" (no DB). The DSN is intentionally not exposed — hostname
+// and user are sensitive infra info.
+func WickInfo(w http.ResponseWriter, req RPCRequest, rsp Responder, version, commit, buildTime, wickRoot, dbType, dbStatus string) {
 	accessType := "http"
 	if wickRoot != "" {
 		accessType = "cli"
@@ -22,6 +27,8 @@ func WickInfo(w http.ResponseWriter, req RPCRequest, rsp Responder, version, com
 		"server_commit":     commit,
 		"access_type":       accessType,
 		"wick_root":         wickRoot,
+		"db_type":           dbType,
+		"db_status":         dbStatus,
 	}
 	b, _ := json.Marshal(info)
 	rsp.WriteResult(w, req.ID, ToolCallResult{

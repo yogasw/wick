@@ -261,6 +261,82 @@ func TestWickInfoHTTPMode(t *testing.T) {
 	if info["wick_version"] != "1.2.3" {
 		t.Fatalf("wick_version = %q, want 1.2.3", info["wick_version"])
 	}
+	// No DB wired → db_type=none, db_status=disabled.
+	if info["db_type"] != "none" {
+		t.Fatalf("db_type = %q, want none", info["db_type"])
+	}
+	if info["db_status"] != "disabled" {
+		t.Fatalf("db_status = %q, want disabled", info["db_status"])
+	}
+}
+
+// TestWickInfoDBConnected verifies db_type / db_status reflect a live DB.
+func TestWickInfoDBConnected(t *testing.T) {
+	db := newTestDB(t) // in-memory sqlite via gorm
+	h := NewHandler(nil).WithDB(db)
+
+	raw := dispatchJSON(t, h, "tools/call", map[string]any{
+		"name":      "wick_info",
+		"arguments": map[string]any{},
+	})
+	var resp struct {
+		Result struct {
+			Content []struct{ Text string `json:"text"` } `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var info map[string]string
+	if err := json.Unmarshal([]byte(resp.Result.Content[0].Text), &info); err != nil {
+		t.Fatalf("unmarshal info: %v", err)
+	}
+	if info["db_type"] != "sqlite" {
+		t.Fatalf("db_type = %q, want sqlite", info["db_type"])
+	}
+	if info["db_status"] != "connected" {
+		t.Fatalf("db_status = %q, want connected", info["db_status"])
+	}
+	if _, present := info["db_source"]; present {
+		t.Fatalf("db_source must not be exposed; got %q", info["db_source"])
+	}
+}
+
+// TestWickInfoDBError verifies db_status surfaces a ping error when the
+// underlying sql.DB is closed (simulating a runtime connection drop).
+func TestWickInfoDBError(t *testing.T) {
+	db := newTestDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sqlDB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	h := NewHandler(nil).WithDB(db)
+
+	raw := dispatchJSON(t, h, "tools/call", map[string]any{
+		"name":      "wick_info",
+		"arguments": map[string]any{},
+	})
+	var resp struct {
+		Result struct {
+			Content []struct{ Text string `json:"text"` } `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var info map[string]string
+	if err := json.Unmarshal([]byte(resp.Result.Content[0].Text), &info); err != nil {
+		t.Fatalf("unmarshal info: %v", err)
+	}
+	if info["db_type"] != "sqlite" {
+		t.Fatalf("db_type = %q, want sqlite", info["db_type"])
+	}
+	if !strings.HasPrefix(info["db_status"], "error:") {
+		t.Fatalf("db_status = %q, want error: prefix", info["db_status"])
+	}
 }
 
 func TestWickInfoCLIMode(t *testing.T) {
