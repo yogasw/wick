@@ -263,6 +263,45 @@
       resize();
     });
 
+    // ── Auto-focus composer when user starts typing anywhere ──────────
+    // If the user hits a printable key (or Backspace/Enter) while focus
+    // is on body / a non-editable element, jump focus into the composer
+    // textarea so they can type without clicking it first. Skips when
+    // modal/overlay is open, when modifier keys are involved, or when
+    // focus is already on an editable element.
+    var composerTA = document.querySelector("[data-send-form] textarea");
+    if (composerTA) {
+      document.addEventListener("keydown", function (e) {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === "Escape" || e.key === "Tab") return;
+        // Only act on single-char keys, Enter, Backspace, Space.
+        var isPrintable = e.key.length === 1;
+        if (!isPrintable && e.key !== "Enter" && e.key !== "Backspace") return;
+        var t = e.target;
+        if (!t) return;
+        var tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+        if (t.closest && t.closest("button, a, summary")) return;
+        // Skip when an overlay (modal/drawer) is visible above the chat.
+        var openModal = document.querySelector("[data-context-modal]:not(.hidden), [data-context-panel]:not(.hidden)");
+        if (openModal) return;
+        if (composerTA.disabled) return;
+        composerTA.focus();
+        // Don't synthesize the keystroke — letting the browser deliver
+        // it after focus is unreliable cross-browser. For printable
+        // keys, append manually so the first char isn't lost.
+        if (isPrintable) {
+          e.preventDefault();
+          var pos = composerTA.selectionStart;
+          var v = composerTA.value;
+          composerTA.value = v.slice(0, pos) + e.key + v.slice(pos);
+          var newPos = pos + e.key.length;
+          composerTA.setSelectionRange(newPos, newPos);
+          composerTA.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+    }
+
     // ── SSE via SharedWorker (session detail page only) ───────────────
     // SharedWorker holds EventSource connections across page navigations —
     // navigating to another session reuses the worker's existing socket
