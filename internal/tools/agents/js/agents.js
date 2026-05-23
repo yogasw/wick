@@ -551,7 +551,7 @@
         var body = ensureTraceWrap();
         if (!body) return;
         var card = document.createElement("div");
-        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
         card.innerHTML =
           '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-thinking-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\';" ' +
           'class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-600 dark:text-black-700">' +
@@ -591,7 +591,7 @@
         }
         var startLabel = ev.at ? fmtTime(ev.at) : "";
         var card = document.createElement("div");
-        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
         card.setAttribute("data-tool-card", ev.tool_use_id || "");
         if (ev.at) card.setAttribute("data-tool-start-ms", ev.at);
         card.innerHTML =
@@ -657,7 +657,7 @@
           if (ev.tool_use_id) delete pendingToolCards[ev.tool_use_id];
         } else {
           // Standalone result (no matching tool_use card).
-          resultEl.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+          resultEl.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
           resultEl.innerHTML =
             '<div class="flex items-center gap-2 px-3 py-2 ' + (isError ? 'text-red-600 dark:text-red-400' : 'text-black-600 dark:text-black-700') + '">' +
             '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">' +

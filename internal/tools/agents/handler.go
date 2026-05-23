@@ -142,6 +142,13 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
 
+	r.GET("/sessions/{id}/files", sessionContextList)
+	r.GET("/sessions/{id}/files/read", sessionContextRead)
+	r.GET("/sessions/{id}/files/download", sessionContextDownload)
+	r.POST("/sessions/{id}/files/save", sessionContextSave)
+	r.POST("/sessions/{id}/files/create", sessionContextCreate)
+	r.DELETE("/sessions/{id}/files", sessionContextDelete)
+
 	// Gate approval (Stage 5). Modal in the UI POSTs the user's
 	// decision here; revoke removes a previously-approved match key.
 	r.POST("/sessions/{id}/approve", approveCommand)

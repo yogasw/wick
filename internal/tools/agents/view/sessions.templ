@@ -318,7 +318,9 @@ templ SessionDetail(vm SessionDetailVM) {
 			</div>
 		</div>
 		@ApprovalModal(vm.Base)
+		@ContextPanel(vm.Base, vm.Session.ID)
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
+		<script src={ vm.Base + "/static/js/context.js" }></script>
 	}
 }
 
@@ -669,7 +671,7 @@ templ assistantTurn(t TurnVM) {
 templ turnEventCard(ev TurnEventVM) {
 	switch ev.Type {
 		case "thinking":
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs">
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
 				<button
 					type="button"
 					onclick="var b=this.parentElement.querySelector('[data-thinking-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
@@ -682,7 +684,7 @@ templ turnEventCard(ev TurnEventVM) {
 				<div data-thinking-body class="hidden border-t border-white-300 dark:border-navy-600 px-3 py-2 italic text-black-600 dark:text-black-700 leading-relaxed break-words text-xs">{ ev.Text }</div>
 			</div>
 		case "tool_use":
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs">
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
 				<button
 					type="button"
 					onclick="var b=this.parentElement.querySelector('[data-tool-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
@@ -700,7 +702,7 @@ templ turnEventCard(ev TurnEventVM) {
 				}
 			</div>
 		case "tool_result":
-			<div class={ "rounded-xl border overflow-hidden text-xs", templ.KV("border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20", ev.IsError), templ.KV("border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900", !ev.IsError) }>
+			<div class={ "rounded-xl border overflow-hidden text-xs", templ.KV("border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20", ev.IsError), templ.KV("border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800", !ev.IsError) }>
 				<button
 					type="button"
 					onclick="var b=this.parentElement.querySelector('[data-result-body]');b.classList.toggle('hidden');this.querySelector('[data-chevron]').style.transform=b.classList.contains('hidden')?'rotate(-90deg)':'';"
