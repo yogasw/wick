@@ -336,6 +336,16 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEvent(sid, ev)
 		},
 		OnExit: func(sid, name string, reason provider.ExitReason) {
+			// OnExit fires from the agent reader goroutine — no HTTP ctx
+			// in scope here, so request_id is not available. Pool's
+			// onAgentExit (called via HandleExit) will use the spawn-time
+			// logger it stashed in runEntry, which DOES carry request_id.
+			log.Debug().
+				Str("component", "lifecycle").
+				Str("session", sid).
+				Str("agent", name).
+				Int("reason", int(reason)).
+				Msg("OnExit: publishing synthetic Done + handing to pool")
 			agentsPool.HandleExit(sid, name, reason)
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
 			agentsBcast.Publish(sid, name, doneEv)
@@ -415,7 +425,14 @@ func NewServer() *Server {
 			agentsMgr.Register(s)
 		},
 		OnLifecycle: func(ev agentpool.LifecycleEvent) {
-			agentsBcast.PublishLifecycle(ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+			log.Ctx(ev.Ctx).Debug().
+				Str("component", "lifecycle").
+				Str("session", ev.SessionID).
+				Str("agent", ev.AgentName).
+				Str("lifecycle", ev.Lifecycle).
+				Int("pid", ev.PID).
+				Msg("lifecycle: broadcasting to SSE")
+			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
 		},
 	})
 	// Wire the hook writer so Manager injects .claude/settings.local.json

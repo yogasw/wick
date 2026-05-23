@@ -367,6 +367,7 @@
       function typingLabel(substate) {
         if (!substate) return "thinking…";
         if (substate === "thinking") return "thinking…";
+        if (substate === "spawning") return "spawning…";
         return "running " + substate + "…";
       }
 
@@ -383,13 +384,16 @@
 
       function handleAgentEvent(ev) {
         if (ev.type === "lifecycle") {
-          applyLifecycle(ev.lifecycle, ev.pid || 0, ev.data || "");
-          // Snapshot on reconnect: ensure turn bubble exists so trace
-          // cards replayed before this event have a container, and show
-          // typing indicator so user knows work is in progress.
-          if (ev.lifecycle === "working") {
-            ensurePendingTurn();
-            updateTypingSubstate(ev.data || "");
+          applyLifecycle(ev.lifecycle, ev.pid || 0, ev.data || "", ev.at || 0);
+          // Show typing indicator (its own avatar + bubble) for any
+          // in-flight lifecycle. Do NOT call ensurePendingTurn here —
+          // that adds a second empty avatar above the typing indicator
+          // since the assistant turn has no text yet. The pending turn
+          // is materialised by appendDelta when the first text_delta
+          // actually arrives.
+          if (ev.lifecycle === "spawning" || ev.lifecycle === "working") {
+            var sub = ev.lifecycle === "spawning" ? "spawning" : (ev.data || "");
+            updateTypingSubstate(sub);
             // Delay so in-flight event replay (thinking/tool cards) fires
             // first — those call hideTypingIndicator then showTypingIndicator
             // themselves. If nothing replayed, this fallback ensures the
@@ -397,6 +401,8 @@
             setTimeout(function() {
               if (!typingIndicatorEl) showTypingIndicator();
             }, 0);
+          } else if (ev.lifecycle === "idle" || ev.lifecycle === "killed") {
+            hideTypingIndicator();
           }
           return;
         }
@@ -422,35 +428,32 @@
           appendSystemTurn(d.text || "", d.steps || []);
           return;
         }
+        // Lifecycle (working/idle/spawning/killed) is BE-driven via the
+        // "lifecycle" event handled above. These per-event branches only
+        // update the visible turn content + the typing-indicator label.
         if (ev.type === "text_delta") {
           hideTypingIndicator();
           appendDelta(ev.data);
         } else if (ev.type === "done") {
           finalizeAssistantTurn();
-          applyLifecycle("idle", 0, "");
         } else if (ev.type === "session_start") {
           showTypingIndicator();
-          applyLifecycle("working", 0, "");
         } else if (ev.type === "error") {
           hideTypingIndicator();
           finalizeAssistantTurn();
-          applyLifecycle("idle", 0, "");
         } else if (ev.type === "thinking") {
           hideTypingIndicator();
           appendThinkingCard(ev.data || "");
-          applyLifecycle("working", 0, "thinking");
           updateTypingSubstate("thinking");
           showTypingIndicator();
         } else if (ev.type === "tool_use") {
           hideTypingIndicator();
           appendToolUseCard(ev);
-          applyLifecycle("working", 0, ev.tool_name || "tool");
           updateTypingSubstate(ev.tool_name || "tool");
           showTypingIndicator();
         } else if (ev.type === "tool_result") {
           hideTypingIndicator();
           appendToolResultCard(ev);
-          applyLifecycle("working", 0, "");
           updateTypingSubstate("");
           if (!turnHasText) showTypingIndicator();
         }
@@ -756,24 +759,31 @@
     // shrink the arc as the idle countdown burns down.
     var RING_CIRCUMFERENCE = 37.7;
 
-    function setBadgeLifecycle(badge, lifecycle, pid) {
-      badge.dataset.lifecycle = lifecycle;
+    function setBadgeLifecycle(badge, lifecycle, pid, atMs) {
+      // "killed" is a transient BE signal — the subprocess died, but we
+      // don't want to show a red "killed" pill forever. Render it as an
+      // empty placeholder badge instead (same as fresh load with no pool
+      // entry). Lifecycle history is visible in the spawn log if needed.
+      var visual = lifecycle === "killed" ? "" : lifecycle;
+      badge.dataset.lifecycle = visual;
       if (pid > 0) badge.dataset.pid = String(pid);
-      if (lifecycle === "idle" || lifecycle === "working") {
-        // Fresh activity → reset the countdown clock.
-        badge.dataset.lastActiveMs = String(Date.now());
+      if (lifecycle === "killed") badge.dataset.pid = "0";
+      if (visual === "idle" || visual === "working") {
+        // Trust the BE-supplied timestamp (snapshot replay on refresh
+        // carries the actual LastActive); fall back to now() for live
+        // transitions where the BE hasn't attached an At field.
+        badge.dataset.lastActiveMs = String(atMs > 0 ? atMs : Date.now());
       }
       ALL_BADGE_CLASSES.forEach(function (c) { badge.classList.remove(c); });
-      (BADGE_CLASS_MAP[lifecycle] || []).forEach(function (c) { badge.classList.add(c); });
+      (BADGE_CLASS_MAP[visual] || []).forEach(function (c) { badge.classList.add(c); });
 
       var label = badge.querySelector("[data-lifecycle-label]");
-      if (label) label.textContent = lifecycle || "—";
+      if (label) label.textContent = visual || "—";
 
       var countdown = badge.querySelector("[data-lifecycle-countdown]");
-      if (countdown && lifecycle !== "idle") countdown.textContent = "";
+      if (countdown && visual !== "idle") countdown.textContent = "";
 
-      paintRing(badge, lifecycle);
-      if (lifecycle === "killed") badge.dataset.pid = "0";
+      paintRing(badge, visual);
     }
 
     function paintRing(badge, lifecycle) {
@@ -808,13 +818,13 @@
       }
     }
 
-    function applyLifecycle(lifecycle, pid, substate) {
+    function applyLifecycle(lifecycle, pid, substate, atMs) {
       // Session detail SSE only updates its own badge — list pages
       // have their own row each tied to a different session id, and
       // wiring them all to one EventSource would require per-row
       // subscribers (out of scope here).
       if (!primaryBadge) return;
-      setBadgeLifecycle(primaryBadge, lifecycle, pid);
+      setBadgeLifecycle(primaryBadge, lifecycle, pid, atMs || 0);
       var sub = primaryBadge.querySelector("[data-lifecycle-substate]");
       if (sub) {
         var label = substate || "";
