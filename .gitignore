@@ -13,6 +13,7 @@
 
 # Dependency directories
 vendor/
+!internal/tools/agents/js/vendor/
 .env
 docker-compose.yaml
 
