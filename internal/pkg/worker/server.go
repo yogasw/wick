@@ -131,7 +131,23 @@ func tick(ctx context.Context, jobsSvc *manager.Service) {
 	}
 
 	now := time.Now()
-	for _, j := range enabled {
+	for i := range enabled {
+		j := &enabled[i]
+		// Sweep stuck rows for this job before evaluating cron. A
+		// job stuck in last_status="running" blocks every subsequent
+		// cron tick (RunCron refuses to start an already-running
+		// job), so this is what lets the cap of max_timeout_min
+		// actually mean something — without it, recovery required a
+		// server restart. Skip jobs that already report idle to save
+		// a redundant query in the common case.
+		if j.LastStatus == entity.JobStatusRunning {
+			if reset, err := jobsSvc.ResetStuckForJob(ctx, j); err != nil {
+				logger.Warn().Err(err).Str("job", j.Key).Msg("worker: reset stuck failed")
+			} else if reset {
+				logger.Warn().Str("job", j.Key).Msg("worker: reset stuck job (timed out past max_timeout_min)")
+			}
+		}
+
 		if j.Schedule == "" {
 			continue
 		}
