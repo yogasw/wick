@@ -4,7 +4,6 @@ package providerstorageretention
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/jobs"
@@ -28,7 +27,7 @@ func Register(mgr *providersync.Manager) {
 		},
 		Run: func(ctx context.Context) (string, error) {
 			mgr.RunRetention(ctx)
-			return fmt.Sprintf("retention run complete"), nil
+			return "retention run complete", nil
 		},
 	})
 }
