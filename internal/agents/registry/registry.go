@@ -16,9 +16,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/preset"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
@@ -113,6 +116,19 @@ func (r *Registry) Reload() error {
 		if dirty {
 			_ = session.SaveMeta(r.layout, id, s.Meta)
 			_ = session.SaveAgents(r.layout, id, s.Agents)
+		}
+		// Merge any inflight.jsonl left over from the previous process
+		// into conversation.jsonl as a truncated assistant turn. Without
+		// this, a subsequent --resume would branch off a history the
+		// agent CLI never saw the answer for.
+		recoveryAgent := s.Meta.ActiveAgent
+		if recoveryAgent == "" && len(s.Agents) > 0 {
+			recoveryAgent = s.Agents[0].Name
+		}
+		if recovered, err := store.RecoverInflight(r.layout, id, recoveryAgent, nil); err != nil {
+			log.Warn().Err(err).Str("session", id).Msg("registry: recover inflight failed")
+		} else if recovered {
+			log.Info().Str("session", id).Str("agent", recoveryAgent).Msg("registry: recovered inflight turn into conversation.jsonl")
 		}
 		sessions[id] = s
 	}

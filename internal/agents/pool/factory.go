@@ -91,6 +91,7 @@ type GateConfig struct {
 // agent.Start.
 func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	st := state.New(nil)
+	st.SetIdentity(opt.SessionID, opt.AgentName)
 	sto := store.New(store.Options{
 		Layout:    f.Layout,
 		SessionID: opt.SessionID,

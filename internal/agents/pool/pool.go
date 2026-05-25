@@ -86,6 +86,12 @@ type LifecycleEvent struct {
 	Lifecycle string // "spawning" | "killed"
 	PID       int
 	At        time.Time
+	// Ctx is the spawn-time context from the originating Send. Carries
+	// the zerolog logger the HTTP middleware attached, so callbacks
+	// can `log.Ctx(ev.Ctx)` and recover the request_id. Never nil —
+	// pool sets it to context.Background() when no spawn ctx applies
+	// (e.g. exit fired from an already-released runEntry).
+	Ctx context.Context
 }
 
 // AgentFactory builds an agent ready to Start. The pool wires the
@@ -155,13 +161,20 @@ type queueEntry struct {
 
 // runEntry tracks an active agent in the pool.
 type runEntry struct {
-	agent    *provider.Agent
-	state    *state.Machine
-	store    *store.Store
-	buffer   *Buffer
-	sessID   string
-	agentNm  string
-	cwd      string // resolved workspace path (used by RouteByCWD)
+	agent   *provider.Agent
+	state   *state.Machine
+	store   *store.Store
+	buffer  *Buffer
+	sessID  string
+	agentNm string
+	cwd     string // resolved workspace path (used by RouteByCWD)
+	// ctx is the spawn-time context (HTTP Send → pool.spawn). It
+	// carries the zerolog logger the middleware attached, so async
+	// post-spawn callbacks (onAgentExit, OnLifecycle) recover the
+	// originating request_id via log.Ctx(ctx). The cancel signal
+	// is intentionally NOT used to abort post-spawn work — only the
+	// logger value is read.
+	ctx context.Context
 }
 
 // New returns an empty pool.
@@ -254,6 +267,14 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	p.mu.Unlock()
 
 	if alive {
+		log.Ctx(ctx).Debug().
+			Str("component", "pool").
+			Str("session", sessionID).
+			Str("agent", agentName).
+			Str("role", role).
+			Str("source", source).
+			Int("text_len", len(text)).
+			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
 			_ = entry.store.AppendUserTurn(role, source, text)
@@ -263,6 +284,14 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		}
 		return entry.agent.Send(text)
 	}
+	log.Ctx(ctx).Debug().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("role", role).
+		Str("source", source).
+		Int("text_len", len(text)).
+		Msg("pool.send: no live subprocess — buffer + spawn-or-queue")
 
 	// Not active. Ensure the session exists on disk (channels like Slack
 	// pass a thread_ts as the session ID; the session is never created
@@ -462,6 +491,30 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		sessID:  sessionID,
 		agentNm: agentName,
 		cwd:     cwd,
+		ctx:     ctx,
+	}
+	// Spawn-local logger derived from the same ctx — consumers in the
+	// rest of this function reuse it without redoing the With() chain.
+	l := log.Ctx(ctx).With().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Logger()
+	// Wire the state machine's lifecycle hook into the pool's
+	// OnLifecycle callback so working↔idle transitions reach SSE the
+	// same path as spawning/killed. BE becomes the source of truth;
+	// the FE just listens to "lifecycle" events.
+	if p.cfg.OnLifecycle != nil {
+		st.SetLifecycleHook(func(from, to state.Lifecycle) {
+			p.cfg.OnLifecycle(LifecycleEvent{
+				SessionID: sessionID,
+				AgentName: agentName,
+				Lifecycle: to.String(),
+				Ctx:       ctx,
+				PID:       a.PID(),
+				At:        time.Now().UTC(),
+			})
+		})
 	}
 	p.mu.Lock()
 	if p.closed {
@@ -487,10 +540,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		return err
 	}
 	st.MarkSpawning()
+	l.Debug().
+		Int("first_input_len", len(combined)).
+		Msg("pool.spawn: starting subprocess")
 	if err := a.Start(ctx); err != nil {
+		l.Error().
+			Err(err).
+			Msg("pool.spawn: Start failed")
 		p.releaseSlot(key)
 		return err
 	}
+	l.Debug().
+		Int("pid", a.PID()).
+		Msg("pool.spawn: subprocess started")
 	// Spawn metadata (pid + first user message) is only knowable here:
 	// pid arrives from a.Start, first message from the buffer drain.
 	if br.OnStarted != nil {
@@ -506,6 +568,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			SessionID: sessionID,
 			AgentName: agentName,
 			Lifecycle: "spawning",
+			Ctx:       ctx,
 			PID:       a.PID(),
 			At:        time.Now().UTC(),
 		})
@@ -537,20 +600,31 @@ func (p *Pool) onAgentExit(sessionID, agentName string) {
 	defer p.wg.Done()
 	key := sessionKey(sessionID, agentName)
 	p.mu.Lock()
-	if entry, ok := p.active[key]; ok && entry.state != nil {
+	entry, ok := p.active[key]
+	if ok && entry.state != nil {
+		// MarkKilled flips the state machine → its lifecycle hook
+		// broadcasts the killed transition to SSE. Pool no longer
+		// emits a duplicate OnLifecycle("killed") below to avoid the
+		// FE receiving two killed events per exit.
 		entry.state.MarkKilled()
 	}
 	p.mu.Unlock()
+	// Recover the spawn-time ctx (carries request_id from the
+	// originating HTTP middleware). Fall back to Background when the
+	// entry was already released by a racing caller — rare and harmless,
+	// the log line just won't have request_id.
+	ctx := context.Background()
+	if ok {
+		ctx = entry.ctx
+	}
+	l := log.Ctx(ctx).With().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Logger()
+	l.Debug().Msg("pool.exit: subprocess exited — releasing slot")
 	_ = p.markStatus(sessionID, session.StatusIdle)
 	p.releaseSlot(key)
-	if p.cfg.OnLifecycle != nil {
-		p.cfg.OnLifecycle(LifecycleEvent{
-			SessionID: sessionID,
-			AgentName: agentName,
-			Lifecycle: "killed",
-			At:        time.Now().UTC(),
-		})
-	}
 	p.tryGrantQueue()
 }
 
@@ -813,6 +887,7 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 		if e.agent != nil {
 			entry.PID = e.agent.PID()
 			entry.InFlightEvents = e.agent.InFlightEvents()
+			entry.PartialText = e.agent.PartialText()
 		}
 		out = append(out, entry)
 	}
@@ -836,6 +911,11 @@ type ActiveEntry struct {
 	Substate       string
 	LastActive     time.Time
 	InFlightEvents []store.TurnEvent
+	// PartialText is the assistant text accumulated so far for the
+	// in-flight turn (everything received via TextDelta but not yet
+	// flushed by Done). Empty when no turn is mid-stream. Used by the
+	// SSE snapshot so a refresh keeps the partial bubble visible.
+	PartialText string
 }
 
 // Kill stops the running agent for sessionID+agentName. Idempotent if

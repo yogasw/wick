@@ -244,6 +244,29 @@ The web UI is the always-on third channel. No config — it's just `/tools/agent
 | **AskUser card** | When `ask_user` fires, JS renders an inline card in the composer area with the question, option buttons, and (if `allow_freeform=true`) a text input. Submit → `POST /sessions/{id}/answer`. |
 | **Approved-commands panel** | Lists every `approve_always` rule for the current session, with a Revoke button. |
 
+### SSE event vocabulary
+
+The web UI listens to one stream (`GET /tools/agents/stream?session=<id>`) and dispatches every event by `type`. Other channels reuse the same broadcaster ([stream.go](https://github.com/yogasw/wick/blob/master/internal/tools/agents/stream.go)) so adding a transport doesn't change the event shape — only how the transport delivers it.
+
+| `type` | Producer | Payload | FE handler |
+|---|---|---|---|
+| `lifecycle` | State machine via pool `OnLifecycle` | `lifecycle: spawning\|working\|idle\|killed`, `pid`, `at` (LastActive ms) | Update header badge, idle countdown, typing indicator |
+| `session_start` | Parser `SessionStart` event | — | Show typing indicator, append assistant bubble shell |
+| `text_delta` | Parser per chunk | `data: <chunk>` | Append to current assistant bubble |
+| `thinking` | Parser `Thinking` event | `data: <text>` | Append thinking card to turn trace |
+| `tool_use` | Parser `ToolUse` event | `tool_name`, `tool_input`, `tool_use_id`, `at` | Render tool card with running spinner |
+| `tool_result` | Parser `ToolResult` event | `tool_use_id`, `data`, `is_error`, `at` | Attach result to matching tool card |
+| `done` | Parser `Done` event | — | Finalize turn bubble |
+| `error` | Parser `Error` event | `data: <error msg>` | Render error bubble, finalize turn |
+| `unknown` | Parser fallback | — | Ignored (debug-only) |
+| `approval_request` | Gate sidecar via daemon socket | `data: JSON ApprovalRequest` | Open approval modal |
+| `approval_resolved` | Approval write-back | `data: JSON {id, decision}` | Close modal, refresh approved panel |
+| `ask_user` | AskUser MCP tool | `data: JSON {question, options, allow_freeform}` | Render inline askUser card |
+| `ask_user_resolved` | Answer submit | `data: JSON {id, value}` | Hide askUser card |
+| `system_turn` | Provider switcher | `data: JSON {text, steps}` | Render system bubble |
+
+The snapshot endpoint (`GET /stream/snapshot?session=<id>`) replays the **current** in-flight state as the same events so a page refresh mid-turn paints the partial bubble + trace cards without waiting for the next live event. The snapshot reads from pool first (live `entry.PartialText` + `entry.InFlightEvents`), then falls back to `inflight.jsonl` on disk for crashed-but-not-flushed turns.
+
 ### AskUser MCP tool
 
 This is the agent-initiated counterpart to the gate. The agent calls the `ask_user` MCP tool ([askuser.go:38-45](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L38)):

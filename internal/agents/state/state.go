@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/event"
 )
 
@@ -96,10 +97,34 @@ func (l Lifecycle) String() string {
 // goroutine; Current / LastActive can be read from any goroutine.
 type Machine struct {
 	mu         sync.RWMutex
-	state      State
-	lifecycle  Lifecycle
-	lastActive time.Time
-	now        func() time.Time // injected for tests
+	state          State
+	lifecycle      Lifecycle
+	lastActive     time.Time
+	now            func() time.Time              // injected for tests
+	sessionID      string                        // for log correlation
+	agentName      string                        // for log correlation
+	onLifecycle    func(from, to Lifecycle)      // optional broadcast hook
+}
+
+// SetIdentity attaches session/agent identifiers used in transition logs.
+// Pool calls this right after New so every lifecycle log line is
+// correlatable across the spawn/exit pipeline. No-op when called with
+// empty strings.
+func (m *Machine) SetIdentity(sessionID, agentName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionID = sessionID
+	m.agentName = agentName
+}
+
+// SetLifecycleHook installs a callback fired whenever lifecycle changes
+// (spawning↔working↔idle↔killed). Pool wires it to SSE broadcast so the
+// FE is the receiver rather than the inferrer. Fires after the lock is
+// released; safe to call broadcaster methods from inside.
+func (m *Machine) SetLifecycleHook(fn func(from, to Lifecycle)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onLifecycle = fn
 }
 
 // New returns a fresh machine in Idle. Caller can inject a clock for
@@ -122,9 +147,16 @@ func (m *Machine) Lifecycle() Lifecycle {
 // calls this when (re-)spawning a subprocess; idempotent.
 func (m *Machine) MarkSpawning() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	prev := m.lifecycle
 	m.lifecycle = LifecycleSpawning
 	m.lastActive = m.now()
+	sid, agent := m.sessionID, m.agentName
+	hook := m.onLifecycle
+	m.mu.Unlock()
+	logLifecycle(sid, agent, prev, LifecycleSpawning, "MarkSpawning")
+	if hook != nil && prev != LifecycleSpawning {
+		hook(prev, LifecycleSpawning)
+	}
 }
 
 // MarkKilled flips the lifecycle to Killed. Pool calls this from the
@@ -132,9 +164,16 @@ func (m *Machine) MarkSpawning() {
 // the spawn log's exit event, not here.
 func (m *Machine) MarkKilled() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	prev := m.lifecycle
 	m.lifecycle = LifecycleKilled
 	m.state = Idle
+	sid, agent := m.sessionID, m.agentName
+	hook := m.onLifecycle
+	m.mu.Unlock()
+	logLifecycle(sid, agent, prev, LifecycleKilled, "MarkKilled")
+	if hook != nil && prev != LifecycleKilled {
+		hook(prev, LifecycleKilled)
+	}
 }
 
 // Current returns the current state.
@@ -160,9 +199,10 @@ func (m *Machine) LastActive() time.Time {
 // Returns the resulting state for callers that want to log transitions.
 func (m *Machine) Apply(ev event.AgentEvent) State {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.lastActive = m.now()
+
+	prevState := m.state
+	prevLifecycle := m.lifecycle
 
 	switch ev.Type {
 	case event.Thinking:
@@ -186,7 +226,30 @@ func (m *Machine) Apply(ev event.AgentEvent) State {
 			m.lifecycle = LifecycleWorking
 		}
 	}
-	return m.state
+
+	curState := m.state
+	curLifecycle := m.lifecycle
+	sid, agent := m.sessionID, m.agentName
+	hook := m.onLifecycle
+	m.mu.Unlock()
+
+	if curLifecycle != prevLifecycle {
+		logLifecycle(sid, agent, prevLifecycle, curLifecycle, "Apply:"+ev.Type.String())
+		if hook != nil {
+			hook(prevLifecycle, curLifecycle)
+		}
+	}
+	if curState != prevState {
+		log.Debug().
+			Str("component", "state").
+			Str("session", sid).
+			Str("agent", agent).
+			Str("from", prevState.String()).
+			Str("to", curState.String()).
+			Str("event", ev.Type.String()).
+			Msg("state transition")
+	}
+	return curState
 }
 
 // MarkIdle forces the machine back to Idle without touching
@@ -194,6 +257,35 @@ func (m *Machine) Apply(ev event.AgentEvent) State {
 // shutdown) so a stale Responding state doesn't linger in the UI.
 func (m *Machine) MarkIdle() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	prev := m.state
 	m.state = Idle
+	sid, agent := m.sessionID, m.agentName
+	m.mu.Unlock()
+	if prev != Idle {
+		log.Debug().
+			Str("component", "state").
+			Str("session", sid).
+			Str("agent", agent).
+			Str("from", prev.String()).
+			Str("to", "idle").
+			Msg("MarkIdle: substate forced to idle")
+	}
+}
+
+// logLifecycle emits a single zerolog line whenever the high-level
+// lifecycle transitions. Same field set across MarkSpawning / MarkKilled
+// / Apply so the operator can grep one component name and see the full
+// spawning → working → idle → killed timeline.
+func logLifecycle(sessionID, agentName string, from, to Lifecycle, source string) {
+	if from == to {
+		return
+	}
+	log.Debug().
+		Str("component", "state").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("from", from.String()).
+		Str("to", to.String()).
+		Str("source", source).
+		Msg("lifecycle transition")
 }

@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -128,7 +129,18 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 // to subscribers. Idle/Working transitions are inferred from
 // AgentEvent flow on the client side; only the bookend transitions —
 // which never carry an AgentEvent — go through this channel.
-func (b *Broadcaster) PublishLifecycle(sessionID, agentName, lifecycle string, pid int) {
+// PublishLifecycle takes the spawn-time ctx so the broadcast log line
+// carries the originating request_id (set by the HTTP middleware) when
+// the spawn came from an HTTP path. Pass context.Background() when
+// no spawn ctx is in scope.
+func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName, lifecycle string, pid int) {
+	log.Ctx(ctx).Debug().
+		Str("component", "sse").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("lifecycle", lifecycle).
+		Int("pid", pid).
+		Msg("sse.publish: broadcasting lifecycle")
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		AgentName: agentName,
