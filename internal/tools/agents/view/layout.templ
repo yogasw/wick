@@ -74,10 +74,12 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					}
 				</div>
 			</div>
-			<!-- Bottom: Settings + user/theme widgets (moved from global navbar) -->
-			<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
-				@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
-			</div>
+			<!-- Bottom: Settings (admin-only) + user/theme widgets (moved from global navbar) -->
+			if user != nil && user.IsAdmin() {
+				<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
+					@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
+				</div>
+			}
 			<!-- Constrain top-widget dropdowns to sidebar width so menus don't overflow -->
 			<style>
 				[data-agents-top-widgets] details > div:not(summary),
