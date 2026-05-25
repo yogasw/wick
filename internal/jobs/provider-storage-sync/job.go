@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/providersync"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/job"
@@ -28,6 +29,10 @@ func Register(mgr *providersync.Manager) {
 			DefaultTags: []tool.DefaultTag{tags.System},
 			AutoEnable:  true,
 		},
+		Configs: []entity.Config{
+			WatcherStatus,
+			WatcherDebounceMs,
+		},
 		Run: newRun(mgr),
 	})
 }
@@ -36,6 +41,24 @@ func newRun(mgr *providersync.Manager) job.RunFunc {
 	return func(ctx context.Context) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
+
+		// Reconcile watcher lifecycle against current config every tick.
+		// Cheap: EnsureWatcher is idempotent (returns immediately when
+		// already running) and StopWatcher is a no-op when no watcher
+		// exists. This is how the UI toggle in the Settings page
+		// propagates without restarting the server — flip the cfg row,
+		// the next tick brings the watcher state in line. Worst-case
+		// lag is one cron period; the watcher itself does NOT depend on
+		// this tick to deliver events.
+		cfg := job.FromContext(ctx)
+		if cfg.CfgBool(CfgWatcherStatus) {
+			debounce := cfg.CfgInt(CfgWatcherDebounceMs)
+			if err := mgr.EnsureWatcher(ctx, debounce); err != nil {
+				return "", fmt.Errorf("watcher start: %w", err)
+			}
+		} else {
+			mgr.StopWatcher()
+		}
 
 		sources, err := mgr.ListSources(ctx)
 		if err != nil {
