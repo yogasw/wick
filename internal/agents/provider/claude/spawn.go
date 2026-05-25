@@ -96,6 +96,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		"--verbose",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
+		// Stream partial assistant text as it arrives so the UI shows a
+		// live typing effect (matches the VSCode/TUI experience). Verified
+		// safe against claude 2.1.138 — full tool_use + text turn streams
+		// end-to-end without crash. Earlier exit-status-1 reports were
+		// caused by a stale --resume ID, not this flag.
+		"--include-partial-messages",
 	}
 	// Trust the workspace explicitly so claude doesn't refuse to run
 	// inside an "untrusted" directory. Without this, agent sessions

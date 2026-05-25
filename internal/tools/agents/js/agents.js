@@ -263,6 +263,45 @@
       resize();
     });
 
+    // ── Auto-focus composer when user starts typing anywhere ──────────
+    // If the user hits a printable key (or Backspace/Enter) while focus
+    // is on body / a non-editable element, jump focus into the composer
+    // textarea so they can type without clicking it first. Skips when
+    // modal/overlay is open, when modifier keys are involved, or when
+    // focus is already on an editable element.
+    var composerTA = document.querySelector("[data-send-form] textarea");
+    if (composerTA) {
+      document.addEventListener("keydown", function (e) {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === "Escape" || e.key === "Tab") return;
+        // Only act on single-char keys, Enter, Backspace, Space.
+        var isPrintable = e.key.length === 1;
+        if (!isPrintable && e.key !== "Enter" && e.key !== "Backspace") return;
+        var t = e.target;
+        if (!t) return;
+        var tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+        if (t.closest && t.closest("button, a, summary")) return;
+        // Skip when an overlay (modal/drawer) is visible above the chat.
+        var openModal = document.querySelector("[data-context-modal]:not(.hidden), [data-context-panel]:not(.hidden)");
+        if (openModal) return;
+        if (composerTA.disabled) return;
+        composerTA.focus();
+        // Don't synthesize the keystroke — letting the browser deliver
+        // it after focus is unreliable cross-browser. For printable
+        // keys, append manually so the first char isn't lost.
+        if (isPrintable) {
+          e.preventDefault();
+          var pos = composerTA.selectionStart;
+          var v = composerTA.value;
+          composerTA.value = v.slice(0, pos) + e.key + v.slice(pos);
+          var newPos = pos + e.key.length;
+          composerTA.setSelectionRange(newPos, newPos);
+          composerTA.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+    }
+
     // ── SSE via SharedWorker (session detail page only) ───────────────
     // SharedWorker holds EventSource connections across page navigations —
     // navigating to another session reuses the worker's existing socket
@@ -367,6 +406,7 @@
       function typingLabel(substate) {
         if (!substate) return "thinking…";
         if (substate === "thinking") return "thinking…";
+        if (substate === "spawning") return "spawning…";
         return "running " + substate + "…";
       }
 
@@ -383,13 +423,16 @@
 
       function handleAgentEvent(ev) {
         if (ev.type === "lifecycle") {
-          applyLifecycle(ev.lifecycle, ev.pid || 0, ev.data || "");
-          // Snapshot on reconnect: ensure turn bubble exists so trace
-          // cards replayed before this event have a container, and show
-          // typing indicator so user knows work is in progress.
-          if (ev.lifecycle === "working") {
-            ensurePendingTurn();
-            updateTypingSubstate(ev.data || "");
+          applyLifecycle(ev.lifecycle, ev.pid || 0, ev.data || "", ev.at || 0);
+          // Show typing indicator (its own avatar + bubble) for any
+          // in-flight lifecycle. Do NOT call ensurePendingTurn here —
+          // that adds a second empty avatar above the typing indicator
+          // since the assistant turn has no text yet. The pending turn
+          // is materialised by appendDelta when the first text_delta
+          // actually arrives.
+          if (ev.lifecycle === "spawning" || ev.lifecycle === "working") {
+            var sub = ev.lifecycle === "spawning" ? "spawning" : (ev.data || "");
+            updateTypingSubstate(sub);
             // Delay so in-flight event replay (thinking/tool cards) fires
             // first — those call hideTypingIndicator then showTypingIndicator
             // themselves. If nothing replayed, this fallback ensures the
@@ -397,6 +440,8 @@
             setTimeout(function() {
               if (!typingIndicatorEl) showTypingIndicator();
             }, 0);
+          } else if (ev.lifecycle === "idle" || ev.lifecycle === "killed") {
+            hideTypingIndicator();
           }
           return;
         }
@@ -422,35 +467,32 @@
           appendSystemTurn(d.text || "", d.steps || []);
           return;
         }
+        // Lifecycle (working/idle/spawning/killed) is BE-driven via the
+        // "lifecycle" event handled above. These per-event branches only
+        // update the visible turn content + the typing-indicator label.
         if (ev.type === "text_delta") {
           hideTypingIndicator();
           appendDelta(ev.data);
         } else if (ev.type === "done") {
           finalizeAssistantTurn();
-          applyLifecycle("idle", 0, "");
         } else if (ev.type === "session_start") {
           showTypingIndicator();
-          applyLifecycle("working", 0, "");
         } else if (ev.type === "error") {
           hideTypingIndicator();
           finalizeAssistantTurn();
-          applyLifecycle("idle", 0, "");
         } else if (ev.type === "thinking") {
           hideTypingIndicator();
           appendThinkingCard(ev.data || "");
-          applyLifecycle("working", 0, "thinking");
           updateTypingSubstate("thinking");
           showTypingIndicator();
         } else if (ev.type === "tool_use") {
           hideTypingIndicator();
           appendToolUseCard(ev);
-          applyLifecycle("working", 0, ev.tool_name || "tool");
           updateTypingSubstate(ev.tool_name || "tool");
           showTypingIndicator();
         } else if (ev.type === "tool_result") {
           hideTypingIndicator();
           appendToolResultCard(ev);
-          applyLifecycle("working", 0, "");
           updateTypingSubstate("");
           if (!turnHasText) showTypingIndicator();
         }
@@ -548,7 +590,7 @@
         var body = ensureTraceWrap();
         if (!body) return;
         var card = document.createElement("div");
-        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
         card.innerHTML =
           '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-thinking-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\';" ' +
           'class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-600 dark:text-black-700">' +
@@ -588,7 +630,7 @@
         }
         var startLabel = ev.at ? fmtTime(ev.at) : "";
         var card = document.createElement("div");
-        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+        card.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
         card.setAttribute("data-tool-card", ev.tool_use_id || "");
         if (ev.at) card.setAttribute("data-tool-start-ms", ev.at);
         card.innerHTML =
@@ -654,7 +696,7 @@
           if (ev.tool_use_id) delete pendingToolCards[ev.tool_use_id];
         } else {
           // Standalone result (no matching tool_use card).
-          resultEl.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 overflow-hidden text-xs";
+          resultEl.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
           resultEl.innerHTML =
             '<div class="flex items-center gap-2 px-3 py-2 ' + (isError ? 'text-red-600 dark:text-red-400' : 'text-black-600 dark:text-black-700') + '">' +
             '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">' +
@@ -756,24 +798,31 @@
     // shrink the arc as the idle countdown burns down.
     var RING_CIRCUMFERENCE = 37.7;
 
-    function setBadgeLifecycle(badge, lifecycle, pid) {
-      badge.dataset.lifecycle = lifecycle;
+    function setBadgeLifecycle(badge, lifecycle, pid, atMs) {
+      // "killed" is a transient BE signal — the subprocess died, but we
+      // don't want to show a red "killed" pill forever. Render it as an
+      // empty placeholder badge instead (same as fresh load with no pool
+      // entry). Lifecycle history is visible in the spawn log if needed.
+      var visual = lifecycle === "killed" ? "" : lifecycle;
+      badge.dataset.lifecycle = visual;
       if (pid > 0) badge.dataset.pid = String(pid);
-      if (lifecycle === "idle" || lifecycle === "working") {
-        // Fresh activity → reset the countdown clock.
-        badge.dataset.lastActiveMs = String(Date.now());
+      if (lifecycle === "killed") badge.dataset.pid = "0";
+      if (visual === "idle" || visual === "working") {
+        // Trust the BE-supplied timestamp (snapshot replay on refresh
+        // carries the actual LastActive); fall back to now() for live
+        // transitions where the BE hasn't attached an At field.
+        badge.dataset.lastActiveMs = String(atMs > 0 ? atMs : Date.now());
       }
       ALL_BADGE_CLASSES.forEach(function (c) { badge.classList.remove(c); });
-      (BADGE_CLASS_MAP[lifecycle] || []).forEach(function (c) { badge.classList.add(c); });
+      (BADGE_CLASS_MAP[visual] || []).forEach(function (c) { badge.classList.add(c); });
 
       var label = badge.querySelector("[data-lifecycle-label]");
-      if (label) label.textContent = lifecycle || "—";
+      if (label) label.textContent = visual || "—";
 
       var countdown = badge.querySelector("[data-lifecycle-countdown]");
-      if (countdown && lifecycle !== "idle") countdown.textContent = "";
+      if (countdown && visual !== "idle") countdown.textContent = "";
 
-      paintRing(badge, lifecycle);
-      if (lifecycle === "killed") badge.dataset.pid = "0";
+      paintRing(badge, visual);
     }
 
     function paintRing(badge, lifecycle) {
@@ -808,13 +857,13 @@
       }
     }
 
-    function applyLifecycle(lifecycle, pid, substate) {
+    function applyLifecycle(lifecycle, pid, substate, atMs) {
       // Session detail SSE only updates its own badge — list pages
       // have their own row each tied to a different session id, and
       // wiring them all to one EventSource would require per-row
       // subscribers (out of scope here).
       if (!primaryBadge) return;
-      setBadgeLifecycle(primaryBadge, lifecycle, pid);
+      setBadgeLifecycle(primaryBadge, lifecycle, pid, atMs || 0);
       var sub = primaryBadge.querySelector("[data-lifecycle-substate]");
       if (sub) {
         var label = substate || "";

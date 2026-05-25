@@ -113,6 +113,18 @@ func (l Layout) SessionRaw(id string) string {
 	return filepath.Join(l.SessionDir(id), "raw.jsonl")
 }
 
+// SessionInflight is an append-only JSONL of every event in the
+// currently in-progress assistant turn: text_delta chunks, tool_use,
+// tool_result, thinking. The store appends as events arrive and
+// deletes the file the moment the turn flushes to conversation.jsonl,
+// so the presence of inflight.jsonl on boot means "a turn was killed
+// or the server crashed mid-stream; replay these for the operator".
+// Provider-agnostic — claude, codex, gemini, future CLIs all write
+// the same shape via store.Apply.
+func (l Layout) SessionInflight(id string) string {
+	return filepath.Join(l.SessionDir(id), "inflight.jsonl")
+}
+
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {

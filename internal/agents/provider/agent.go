@@ -263,6 +263,14 @@ func (a *Agent) respawnWithMessage(text string) error {
 	a.done = make(chan struct{})
 	a.mu.Unlock()
 
+	// Respawn = a brand-new subprocess from the FE's perspective; flip
+	// the state machine to Spawning so the lifecycle hook broadcasts
+	// the transition (otherwise codex/respawn-on-send providers leave
+	// the badge stuck at idle until the first event arrives).
+	if a.state != nil {
+		a.state.MarkSpawning()
+	}
+
 	go a.run(subCtx)
 	return nil
 }
@@ -347,6 +355,17 @@ func (a *Agent) InFlightEvents() []store.TurnEvent {
 		return nil
 	}
 	return a.store.InFlightEvents()
+}
+
+// PartialText returns the assistant text accumulated so far for the
+// in-flight turn. Empty when no turn is active or store is not wired.
+// The SSE snapshot endpoint uses this so a refresh mid-stream repaints
+// the partial bubble instead of waiting for the next delta.
+func (a *Agent) PartialText() string {
+	if a.store == nil {
+		return ""
+	}
+	return a.store.PartialText()
 }
 
 // run is the reader goroutine. Reads lines from stdout, parses each,
@@ -526,7 +545,41 @@ func (a *Agent) run(ctx context.Context) {
 	if waitErr != nil && !isCleanExitErr(waitErr) {
 		reason = ExitError
 	}
+	// Log the raw wait error + reason so an unexpected crash (subprocess
+	// dies right after spawn before emitting session_start) is visible.
+	// Clean exits log at debug; abnormal exits log at warn so they pop
+	// out of the firehose.
+	lvl := log.Debug
+	if reason == ExitError {
+		lvl = log.Warn
+	}
+	ev := lvl().
+		Str("component", "agent").
+		Int("pid", a.PID()).
+		Int("reason", int(reason)).
+		Str("reason_name", exitReasonName(reason))
+	if waitErr != nil {
+		ev = ev.Str("wait_err", waitErr.Error())
+	}
+	ev.Msg("agent.reader: subprocess exited")
 	a.exitReason(reason)
+}
+
+// exitReasonName mirrors the ExitReason iota for log lines. Kept local
+// to agent.go so the reader path doesn't need to import the pool's
+// stringifier.
+func exitReasonName(r ExitReason) string {
+	switch r {
+	case ExitClean:
+		return "clean"
+	case ExitIdle:
+		return "idle_ttl"
+	case ExitStopped:
+		return "stopped"
+	case ExitError:
+		return "error"
+	}
+	return "unknown"
 }
 
 // exitReason fires the OnExit hook at most once per spawn. Idempotent
