@@ -104,7 +104,7 @@ func restChannelPage(c *tool.Ctx) {
 	if globalConfigs != nil {
 		appURL = strings.TrimRight(globalConfigs.AppURL(), "/")
 	}
-	endpoint := appURL + "/integrations/rest/v1/chat/completions"
+	apiBase := appURL + "/integrations/rest/api/v1/openai"
 
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
@@ -114,9 +114,11 @@ func restChannelPage(c *tool.Ctx) {
 		Rows:        rows,
 		ActionBase:  c.Base() + "/channels/rest",
 		Docs: view.RestDocs(view.RestDocsVM{
-			Base:       appURL,
-			Endpoint:   endpoint,
-			SampleUser: "demo-user",
+			Base:              appURL,
+			APIBase:           apiBase,
+			ChatEndpoint:      apiBase + "/chat/completions",
+			ResponsesEndpoint: apiBase + "/responses",
+			ModelsEndpoint:    apiBase + "/models",
 		}),
 	}))
 }

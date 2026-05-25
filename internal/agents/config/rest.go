@@ -5,7 +5,7 @@ package config
 // field is stored on the channel itself — every request carries its own
 // Bearer.
 type RestChannelConfig struct {
-	Enabled   string `wick:"dropdown=true|false;hidden;key=enabled;desc=Enable the OpenAI-compatible REST endpoint at /integrations/rest/v1/chat/completions."`
+	Enabled   string `wick:"dropdown=true|false;hidden;key=enabled;desc=Enable the OpenAI-compatible REST endpoint at /integrations/rest/api/v1/openai/chat/completions."`
 	Workspace string `wick:"dropdown;hidden;key=workspace;desc=Workspace to use for sessions from REST requests. Leave empty to use the global default."`
 }
 
