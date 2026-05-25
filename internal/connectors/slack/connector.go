@@ -1,9 +1,9 @@
 // Package slack wraps Slack's Web API as a wick connector. One instance
 // = one Slack workspace (bot token). Operations cover the most common
 // LLM-driven workflows: reading channel/thread history, listing users
-// and channels, sending/editing/deleting messages, and managing
-// reactions. Designed as a drop-in replacement for the bundled Slack
-// MCP server.
+// and channels, sending/editing/deleting messages, managing reactions,
+// and creating or maintaining canvases. Designed as a drop-in replacement
+// for the bundled Slack MCP server.
 //
 // File layout:
 //
@@ -13,6 +13,7 @@
 package slack
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -29,7 +30,7 @@ const defaultBaseURL = "https://slack.com/api"
 // secret is shown in the admin UI thanks to visible_when.
 type Configs struct {
 	AuthMode  string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface; user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
-	BotToken  string `wick:"secret;visible_when=auth_mode:bot_token;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read."`
+	BotToken  string `wick:"secret;visible_when=auth_mode:bot_token;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, canvases:read, canvases:write."`
 	UserToken string `wick:"secret;visible_when=auth_mode:user_token;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect with Slack button when client_id is set in Agents → Channels → Slack settings. Or paste manually."`
 }
 
@@ -131,12 +132,43 @@ type RemoveReactionInput struct {
 	Name    string `wick:"required;desc=Emoji name without colons."`
 }
 
+type CreateCanvasInput struct {
+	Title     string `wick:"desc=Optional title of the standalone canvas."`
+	Markdown  string `wick:"textarea;desc=Optional initial canvas body in Slack-supported markdown."`
+	ChannelID string `wick:"desc=Optional channel ID to add the standalone canvas as a channel tab with write access."`
+}
+
+type CreateChannelCanvasInput struct {
+	ChannelID string `wick:"required;desc=Channel ID that will own the channel canvas."`
+	Title     string `wick:"desc=Optional title of the channel canvas."`
+	Markdown  string `wick:"textarea;desc=Optional initial canvas body in Slack-supported markdown."`
+}
+
+type EditCanvasInput struct {
+	CanvasID  string `wick:"required;desc=Canvas ID (F...) to edit."`
+	Operation string `wick:"dropdown=insert_at_end|insert_at_start|insert_after|insert_before|replace|delete|rename;default=insert_at_end;desc=Edit action. Section ID is required for insert_before, insert_after, and delete."`
+	SectionID string `wick:"desc=Section ID returned by lookup_canvas_sections. Optional for replace; required for relative insertion and delete."`
+	Markdown  string `wick:"textarea;desc=Markdown content for insert or replace, or new title for rename. Not used for delete."`
+}
+
+type LookupCanvasSectionsInput struct {
+	CanvasID string `wick:"required;desc=Canvas ID (F...) to inspect."`
+	Criteria string `wick:"required;textarea;desc=JSON criteria object, for example {\"section_types\":[\"any_header\"],\"contains_text\":\"Incident\"}."`
+}
+
+type SetCanvasAccessInput struct {
+	CanvasID    string `wick:"required;desc=Standalone canvas ID (F...) to share."`
+	AccessLevel string `wick:"dropdown=read|write|owner;default=read;desc=Access to grant. owner is valid only for user_ids."`
+	ChannelIDs  string `wick:"desc=Comma-separated channel IDs to grant access. Cannot be combined with user_ids."`
+	UserIDs     string `wick:"desc=Comma-separated user IDs to grant access. Cannot be combined with channel_ids."`
+}
+
 // Meta returns the static metadata block for this connector.
 func Meta() connector.Meta {
 	return connector.Meta{
 		Key:         Key,
 		Name:        "Slack",
-		Description: "Read channels, threads, and users; send, edit, and delete messages; manage reactions on Slack via the Web API.",
+		Description: "Read channels, threads, and users; send, edit, and delete messages; manage reactions and canvases on Slack via the Web API.",
 		Icon:        "💬",
 	}
 }
@@ -152,8 +184,8 @@ func Operations() []connector.Operation {
 			listChannels,
 			wickdocs.Docs{
 				OutputShape: map[string]string{
-					"channels":           "Array of channel objects: id, name, is_private, is_archived, topic, purpose, num_members.",
-					"response_metadata":  "Pagination wrapper. response_metadata.next_cursor non-empty = call again with cursor.",
+					"channels":          "Array of channel objects: id, name, is_private, is_archived, topic, purpose, num_members.",
+					"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = call again with cursor.",
 				},
 				Quirks: []string{
 					"types defaults to public_channel,private_channel. Add mpim,im to include group DMs and DMs.",
@@ -393,6 +425,72 @@ func Operations() []connector.Operation {
 			"Remove an emoji reaction previously added by the bot.",
 			RemoveReactionInput{},
 			removeReaction, wickdocs.Docs{},
+		),
+		connector.OpDestructive(
+			"create_canvas",
+			"Create Canvas",
+			"Create a standalone Slack canvas, optionally pre-filled with markdown and added as a channel tab.",
+			CreateCanvasInput{},
+			createCanvas,
+			wickdocs.Docs{
+				TemplateableFields: []string{"title", "markdown", "channel_id"},
+				Quirks: []string{
+					"Requires canvases:write scope.",
+					"On free Slack teams, channel_id is required because non-tabbed standalone canvases cannot be created.",
+					"Use set_canvas_access to share a standalone canvas after creation.",
+				},
+				PairWith: []string{"connector:slack.set_canvas_access", "connector:slack.send_message"},
+			},
+		),
+		connector.OpDestructive(
+			"create_channel_canvas",
+			"Create Channel Canvas",
+			"Create the dedicated canvas for a channel, optionally pre-filled with markdown.",
+			CreateChannelCanvasInput{},
+			createChannelCanvas,
+			wickdocs.Docs{
+				TemplateableFields: []string{"channel_id", "title", "markdown"},
+				Quirks: []string{
+					"Each channel can have only one channel canvas; Slack returns channel_canvas_already_exists if one is already present.",
+					"Access follows channel membership, so set_canvas_access is unnecessary for this operation.",
+				},
+			},
+		),
+		connector.OpDestructive(
+			"edit_canvas",
+			"Edit Canvas",
+			"Append, insert, replace, delete a section, or rename an existing Slack canvas.",
+			EditCanvasInput{},
+			editCanvas,
+			wickdocs.Docs{
+				TemplateableFields: []string{"canvas_id", "operation", "section_id", "markdown"},
+				PairWith:           []string{"connector:slack.lookup_canvas_sections"},
+			},
+		),
+		connector.Op(
+			"lookup_canvas_sections",
+			"Lookup Canvas Sections",
+			"Find canvas section IDs by heading type or contained text for subsequent targeted edits.",
+			LookupCanvasSectionsInput{},
+			lookupCanvasSections,
+			wickdocs.Docs{
+				PairWith: []string{"connector:slack.edit_canvas"},
+			},
+		),
+		connector.OpDestructive(
+			"set_canvas_access",
+			"Set Canvas Access",
+			"Grant read, write, or owner access to a standalone canvas for channels or users.",
+			SetCanvasAccessInput{},
+			setCanvasAccess,
+			wickdocs.Docs{
+				TemplateableFields: []string{"canvas_id", "access_level", "channel_ids", "user_ids"},
+				Quirks: []string{
+					"Provide channel_ids or user_ids, never both.",
+					"Only user_ids may receive owner access.",
+					"Slack requires the canvas link to have been shared with each target channel or user before setting its access.",
+				},
+			},
 		),
 	}
 }
@@ -729,4 +827,151 @@ func reactionAction(c *connector.Ctx, method string) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "channel": ch, "ts": ts, "name": name}, nil
+}
+
+func createCanvas(c *connector.Ctx) (any, error) {
+	body := map[string]any{}
+	if title := strings.TrimSpace(c.Input("title")); title != "" {
+		body["title"] = title
+	}
+	if markdown := c.Input("markdown"); strings.TrimSpace(markdown) != "" {
+		body["document_content"] = canvasDocument(markdown)
+	}
+	if channelID := strings.TrimSpace(c.Input("channel_id")); channelID != "" {
+		body["channel_id"] = channelID
+	}
+	return slackPost(c, "canvases.create", body)
+}
+
+func createChannelCanvas(c *connector.Ctx) (any, error) {
+	channelID := strings.TrimSpace(c.Input("channel_id"))
+	if channelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	body := map[string]any{"channel_id": channelID}
+	if title := strings.TrimSpace(c.Input("title")); title != "" {
+		body["title"] = title
+	}
+	if markdown := c.Input("markdown"); strings.TrimSpace(markdown) != "" {
+		body["document_content"] = canvasDocument(markdown)
+	}
+	return slackPost(c, "conversations.canvases.create", body)
+}
+
+func editCanvas(c *connector.Ctx) (any, error) {
+	canvasID := strings.TrimSpace(c.Input("canvas_id"))
+	if canvasID == "" {
+		return nil, fmt.Errorf("canvas_id is required")
+	}
+	operation := firstNonEmpty(strings.TrimSpace(c.Input("operation")), "insert_at_end")
+	sectionID := strings.TrimSpace(c.Input("section_id"))
+	markdown := c.Input("markdown")
+	change := map[string]any{"operation": operation}
+
+	switch operation {
+	case "insert_after", "insert_before":
+		if sectionID == "" {
+			return nil, fmt.Errorf("section_id is required for %s", operation)
+		}
+		if strings.TrimSpace(markdown) == "" {
+			return nil, fmt.Errorf("markdown is required for %s", operation)
+		}
+		change["section_id"] = sectionID
+		change["document_content"] = canvasDocument(markdown)
+	case "insert_at_start", "insert_at_end":
+		if strings.TrimSpace(markdown) == "" {
+			return nil, fmt.Errorf("markdown is required for %s", operation)
+		}
+		change["document_content"] = canvasDocument(markdown)
+	case "replace":
+		if strings.TrimSpace(markdown) == "" {
+			return nil, fmt.Errorf("markdown is required for replace")
+		}
+		if sectionID != "" {
+			change["section_id"] = sectionID
+		}
+		change["document_content"] = canvasDocument(markdown)
+	case "delete":
+		if sectionID == "" {
+			return nil, fmt.Errorf("section_id is required for delete")
+		}
+		change["section_id"] = sectionID
+	case "rename":
+		if strings.TrimSpace(markdown) == "" {
+			return nil, fmt.Errorf("markdown is required for rename")
+		}
+		change["title_content"] = canvasDocument(markdown)
+	default:
+		return nil, fmt.Errorf("unsupported operation %q", operation)
+	}
+
+	return slackPost(c, "canvases.edit", map[string]any{
+		"canvas_id": canvasID,
+		"changes":   []map[string]any{change},
+	})
+}
+
+func lookupCanvasSections(c *connector.Ctx) (any, error) {
+	canvasID := strings.TrimSpace(c.Input("canvas_id"))
+	if canvasID == "" {
+		return nil, fmt.Errorf("canvas_id is required")
+	}
+	rawCriteria := strings.TrimSpace(c.Input("criteria"))
+	if rawCriteria == "" {
+		return nil, fmt.Errorf("criteria is required")
+	}
+	var criteria map[string]any
+	if err := json.Unmarshal([]byte(rawCriteria), &criteria); err != nil {
+		return nil, fmt.Errorf("criteria must be a JSON object: %w", err)
+	}
+	return slackPost(c, "canvases.sections.lookup", map[string]any{
+		"canvas_id": canvasID,
+		"criteria":  criteria,
+	})
+}
+
+func setCanvasAccess(c *connector.Ctx) (any, error) {
+	canvasID := strings.TrimSpace(c.Input("canvas_id"))
+	if canvasID == "" {
+		return nil, fmt.Errorf("canvas_id is required")
+	}
+	level := firstNonEmpty(strings.TrimSpace(c.Input("access_level")), "read")
+	if level != "read" && level != "write" && level != "owner" {
+		return nil, fmt.Errorf("access_level must be read, write, or owner")
+	}
+	channelIDs := parseCanvasIDs(c.Input("channel_ids"))
+	userIDs := parseCanvasIDs(c.Input("user_ids"))
+	if len(channelIDs) == 0 && len(userIDs) == 0 {
+		return nil, fmt.Errorf("channel_ids or user_ids is required")
+	}
+	if len(channelIDs) > 0 && len(userIDs) > 0 {
+		return nil, fmt.Errorf("channel_ids and user_ids cannot be combined")
+	}
+	if level == "owner" && len(channelIDs) > 0 {
+		return nil, fmt.Errorf("owner access is valid only for user_ids")
+	}
+	body := map[string]any{"canvas_id": canvasID, "access_level": level}
+	if len(channelIDs) > 0 {
+		body["channel_ids"] = channelIDs
+	} else {
+		body["user_ids"] = userIDs
+	}
+	return slackPost(c, "canvases.access.set", body)
+}
+
+func canvasDocument(markdown string) map[string]any {
+	return map[string]any{"type": "markdown", "markdown": markdown}
+}
+
+func parseCanvasIDs(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	for _, value := range strings.Split(raw, ",") {
+		if id := strings.TrimSpace(value); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
