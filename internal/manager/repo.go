@@ -72,55 +72,84 @@ func (r *repo) UpdateSchedule(ctx context.Context, id string, schedule string, e
 		}).Error
 }
 
-// ResetStuckRuns resets only runs that have exceeded their job's max_timeout_min.
-// A run is considered stuck when ended_at IS NULL and
-// started_at < now - COALESCE(max_timeout_min, 30) minutes.
-// This preserves legitimately long-running jobs whose timeout has not elapsed.
-// Returns the number of jobs whose status was reset to idle.
-func (r *repo) ResetStuckRuns(ctx context.Context) (int, error) {
+// ResetStuckForJob marks any open run of job j whose started_at is
+// older than max_timeout_min as error, then flips j's last_status to
+// idle when no open run remains. Returns true when the row was reset.
+//
+// Per-job (not a bulk sweep) for two reasons:
+//
+//   - The worker tick already iterates the enabled-jobs list to
+//     evaluate cron triggers. Sweeping per-job inside that same loop
+//     piggybacks on data we already have, no extra "list enabled"
+//     query.
+//   - Disabled / archived jobs are skipped automatically: the caller
+//     simply doesn't pass them in. As job_runs history grows, scan
+//     size stays bounded by the (small) active set.
+//
+// The previous bulk version had a Postgres-only `interval '1 minute'`
+// math in SQL that errored silently on SQLite and let stuck rows pile
+// up across restarts. Doing the cutoff math in Go keeps this portable
+// across both drivers with no dialect branching.
+func (r *repo) ResetStuckForJob(ctx context.Context, j *entity.Job) (bool, error) {
+	if j == nil {
+		return false, nil
+	}
+	timeout := j.MaxTimeoutMin
+	if timeout <= 0 {
+		timeout = 30
+	}
+	cutoff := time.Now().Add(-time.Duration(timeout) * time.Minute)
+
+	var stuckIDs []string
+	if err := r.db.WithContext(ctx).Model(&entity.JobRun{}).
+		Where("job_id = ? AND ended_at IS NULL AND started_at < ?", j.ID, cutoff).
+		Pluck("id", &stuckIDs).Error; err != nil {
+		return false, err
+	}
+	if len(stuckIDs) == 0 {
+		return false, nil
+	}
+
 	now := time.Now()
 	tx := r.db.WithContext(ctx).Begin()
 	if tx.Error != nil {
-		return 0, tx.Error
+		return false, tx.Error
 	}
 	defer func() {
-		if r := recover(); r != nil {
+		if rec := recover(); rec != nil {
 			tx.Rollback()
 		}
 	}()
 
-	// Step 1: mark timed-out open runs as error.
-	if err := tx.Exec(`
-		UPDATE job_runs
-		SET status = ?, result = ?, ended_at = ?
-		WHERE ended_at IS NULL
-		  AND EXISTS (
-		    SELECT 1 FROM jobs
-		    WHERE jobs.id = job_runs.job_id
-		      AND job_runs.started_at < ? - (COALESCE(NULLIF(jobs.max_timeout_min, 0), 30) * interval '1 minute')
-		  )
-	`, entity.RunStatusError, "timed out (server restart)", now, now).Error; err != nil {
+	if err := tx.Model(&entity.JobRun{}).
+		Where("id IN ?", stuckIDs).
+		Updates(map[string]any{
+			"status":   entity.RunStatusError,
+			"result":   "timed out (max_timeout exceeded)",
+			"ended_at": &now,
+		}).Error; err != nil {
 		tx.Rollback()
-		return 0, err
+		return false, err
 	}
 
-	// Step 2: reset job status to idle where no open run remains.
-	res := tx.Exec(`
-		UPDATE jobs
-		SET last_status = ?, updated_at = ?
-		WHERE last_status = ?
-		  AND NOT EXISTS (
-		    SELECT 1 FROM job_runs
-		    WHERE job_runs.job_id = jobs.id
-		      AND job_runs.ended_at IS NULL
-		  )
-	`, entity.JobStatusIdle, now, entity.JobStatusRunning)
+	// Flip job.last_status to idle only when no other open run remains.
+	// A manual trigger fired right after a stuck cron tick should keep
+	// running — that fresh run's row still has ended_at IS NULL.
+	res := tx.Model(&entity.Job{}).
+		Where("id = ? AND last_status = ?", j.ID, entity.JobStatusRunning).
+		Where("NOT EXISTS (?)",
+			tx.Model(&entity.JobRun{}).Select("1").
+				Where("job_runs.job_id = ? AND job_runs.ended_at IS NULL", j.ID)).
+		Updates(map[string]any{
+			"last_status": entity.JobStatusIdle,
+			"updated_at":  now,
+		})
 	if res.Error != nil {
 		tx.Rollback()
-		return 0, res.Error
+		return false, res.Error
 	}
 
-	return int(res.RowsAffected), tx.Commit().Error
+	return res.RowsAffected > 0, tx.Commit().Error
 }
 
 func (r *repo) SetStatus(ctx context.Context, id string, status entity.JobStatus) error {

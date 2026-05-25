@@ -80,6 +80,13 @@
         if (!data || !data.files) return;
         var n = data.files.filter(function (f) { return !f.isDir; }).length;
         updateFabBadge(n);
+        // Cache cwd on the panel root so openFileByAbsPath works
+        // even before the user opens the panel (a markdown link in
+        // chat can be clicked while the file tree is still cold).
+        if (data.cwd) {
+          var cwdEl = $("[data-context-cwd]", panel);
+          if (cwdEl && !cwdEl.textContent) cwdEl.textContent = data.cwd;
+        }
       })
       .catch(function () {});
   }
@@ -563,6 +570,40 @@
     });
   }
   function escapeAttr(s) { return escapeHtml(s); }
+
+  // Public API: surface a tiny namespace so other modules (chat
+  // markdown renderer in agents.js) can drive the panel without
+  // reaching into private state. Kept narrow on purpose — only what
+  // the clickable-path feature needs.
+  window.AgentContext = {
+    // getCwd returns the absolute path of the current session cwd,
+    // or "" when the panel hasn't been initialised / prefetch hasn't
+    // resolved yet. Cached on the [data-context-cwd] node.
+    getCwd: function () {
+      if (!panel) return "";
+      var el = $("[data-context-cwd]", panel);
+      return (el && el.textContent) || "";
+    },
+    // openFileByAbsPath opens the preview modal for absPath when it
+    // lives under the current session cwd. Returns true on success
+    // (caller should preventDefault); false when the path is outside
+    // cwd or the panel isn't ready — caller should fall back to its
+    // own behaviour (e.g. show a "raw path" popup).
+    openFileByAbsPath: function (absPath) {
+      if (!panel || !absPath) return false;
+      var cwd = this.getCwd();
+      if (!cwd) return false;
+      // Normalise trailing slash so the prefix match doesn't false-
+      // negative when cwd ends with "/".
+      var prefix = cwd.replace(/\/+$/, "") + "/";
+      if (absPath === cwd) return false; // it's the dir itself
+      if (absPath.indexOf(prefix) !== 0) return false;
+      var rel = absPath.slice(prefix.length);
+      if (!rel) return false;
+      openFile(rel);
+      return true;
+    },
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
