@@ -1,11 +1,11 @@
 // Package rest implements an OpenAI Chat Completions compatible HTTP
 // channel for the agents pool. Clients use any OpenAI SDK pointed at
-// http://<wick>/integrations/rest/v1 with a wick Personal Access Token
+// http://<wick>/integrations/rest/api/v1/openai with a wick Personal Access Token
 // as the Bearer.
 //
 // Request shape (subset of OpenAI):
 //
-//	POST /integrations/rest/v1/chat/completions
+//	POST /integrations/rest/api/v1/openai/chat/completions
 //	Authorization: Bearer wick_pat_...
 //	{ "model": "wick", "messages": [...] }
 //
@@ -101,7 +101,7 @@ func (c *Channel) Start(ctx context.Context) error {
 	if !c.IsConfigured() {
 		return fmt.Errorf("rest: not enabled")
 	}
-	log.Info().Str("channel", "rest").Msg("started — POST /integrations/rest/v1/chat/completions")
+	log.Info().Str("channel", "rest").Msg("started — POST /integrations/rest/api/v1/openai/chat/completions")
 	<-ctx.Done()
 	return nil
 }
@@ -134,14 +134,19 @@ func (c *Channel) SetSessionStartHook(fn agentchannels.SessionStartHook) { c.onS
 
 // HTTPHandlerProvider ----------------------------------------------------
 
-// HTTPPath satisfies channels.HTTPHandlerProvider.
-func (c *Channel) HTTPPath() string {
-	return "POST /integrations/rest/v1/chat/completions"
-}
-
-// HTTPHandler satisfies channels.HTTPHandlerProvider.
-func (c *Channel) HTTPHandler() http.Handler {
-	return http.HandlerFunc(c.handleChatCompletions)
+// HTTPHandlers satisfies channels.MultiHTTPHandlerProvider.
+// Mounts three OpenAI-compatible routes under /integrations/rest/api/v1/openai, so
+// any OpenAI SDK pointed at that base URL works without extra config:
+//
+//   - POST /chat/completions — Chat Completions API
+//   - POST /responses        — Responses API (with previous_response_id chaining)
+//   - GET  /models           — list of advertised models
+func (c *Channel) HTTPHandlers() map[string]http.Handler {
+	return map[string]http.Handler{
+		"POST /integrations/rest/api/v1/openai/chat/completions": http.HandlerFunc(c.handleChatCompletions),
+		"POST /integrations/rest/api/v1/openai/responses":        http.HandlerFunc(c.handleResponses),
+		"GET /integrations/rest/api/v1/openai/models":            http.HandlerFunc(c.handleModels),
+	}
 }
 
 // AgentEventReceiver -----------------------------------------------------
@@ -212,21 +217,20 @@ func (c *Channel) OnApprovalResolved(_, _, _ string) {}
 // Handler ---------------------------------------------------------------
 
 // chatRequest is the subset of the OpenAI Chat Completions payload we
-// need plus a wick-specific session_id extension. If session_id is set,
-// requests with the same value reuse the same wick session (multi-turn
-// — only the last user message is sent, history lives in wick). If
-// omitted, every request spawns a fresh session and the full messages
-// array is flattened into one prompt (stateless, pure OpenAI parity).
-//
-// session_id can also be supplied via metadata.session_id for clients
-// that expose only the standard OpenAI fields.
+// need plus a `conversation` extension borrowed from OpenAI's Responses
+// API. When conversation is set, requests with the same value reuse one
+// wick session (multi-turn — only the last user message is sent, history
+// lives in wick). When omitted, every request spawns a fresh session and
+// the full messages array is flattened into one prompt (stateless, pure
+// OpenAI parity). conversation may also be supplied via metadata for
+// clients that expose only the standard OpenAI fields.
 type chatRequest struct {
-	Model     string            `json:"model"`
-	User      string            `json:"user"`
-	SessionID string            `json:"session_id"`
-	Metadata  map[string]string `json:"metadata"`
-	Stream    bool              `json:"stream"`
-	Messages  []chatMessage     `json:"messages"`
+	Model        string            `json:"model"`
+	User         string            `json:"user"`
+	Conversation string            `json:"conversation"`
+	Metadata     map[string]string `json:"metadata"`
+	Stream       bool              `json:"stream"`
+	Messages     []chatMessage     `json:"messages"`
 }
 
 type chatMessage struct {
@@ -251,28 +255,13 @@ type chatChoice struct {
 }
 
 func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if !c.IsConfigured() {
-		writeError(w, http.StatusServiceUnavailable, "rest channel disabled")
+	if status, msg := c.checkReady(); status != 0 {
+		writeError(w, status, msg)
 		return
 	}
-	if c.sendFn == nil {
-		writeError(w, http.StatusServiceUnavailable, "rest channel not wired")
-		return
-	}
-	if c.auth == nil {
-		writeError(w, http.StatusUnauthorized, "no authenticator configured")
-		return
-	}
-
-	bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	bearer = strings.TrimSpace(bearer)
-	if bearer == "" {
-		writeError(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	userID, err := c.auth.Authenticate(r.Context(), bearer)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid token")
+	userID, status, msg := c.authBearer(r)
+	if status != 0 {
+		writeError(w, status, msg)
 		return
 	}
 
@@ -289,18 +278,18 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "messages is required")
 		return
 	}
-
-	// Resolve session_id: explicit > metadata > "" (stateless).
-	explicitSession := strings.TrimSpace(req.SessionID)
-	if explicitSession == "" && req.Metadata != nil {
-		explicitSession = strings.TrimSpace(req.Metadata["session_id"])
+	if !IsModelAllowed(req.Model) {
+		writeModelNotFound(w, req.Model)
+		return
 	}
 
+	explicitSession := resolveConversation(req.Conversation, req.Metadata)
+
 	// Two modes:
-	//   - stateless (no session_id): flatten the full messages array into
-	//     one prompt, spawn a fresh session UUID. Client owns history.
-	//   - stateful (session_id set):  send only the last user message,
-	//     reuse session_id across requests so wick keeps history.
+	//   - stateless (no conversation): flatten the full messages array
+	//     into one prompt, spawn a fresh session UUID. Client owns history.
+	//   - stateful (conversation set): send only the last user message,
+	//     reuse the same wick session across requests so wick keeps history.
 	var (
 		prompt    string
 		sessionID string
@@ -319,6 +308,92 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	if res.errMsg != "" {
+		s := http.StatusInternalServerError
+		if res.blocked {
+			s = http.StatusForbidden
+		}
+		writeError(w, s, res.errMsg)
+		return
+	}
+
+	resp := chatResponse{
+		ID:      "wick-" + sessionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		Object:  "chat.completion",
+		Created: time.Now().Unix(),
+		Model:   firstNonEmpty(req.Model, "wick"),
+		Choices: []chatChoice{{
+			Index:        0,
+			Message:      chatMessage{Role: "assistant", Content: res.text},
+			FinishReason: "stop",
+		}},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// resolveConversation picks the conversation key from the explicit
+// field or, failing that, metadata.conversation. Empty result means
+// stateless (handler spawns a fresh session UUID). The name mirrors
+// OpenAI's Responses API field so wick speaks one vocabulary across
+// both endpoints.
+func resolveConversation(conversation string, metadata map[string]string) string {
+	if v := strings.TrimSpace(conversation); v != "" {
+		return v
+	}
+	if metadata != nil {
+		if v := strings.TrimSpace(metadata["conversation"]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// checkReady returns a non-zero (status, msg) when the channel cannot
+// serve requests (disabled, not wired, no auth). status 0 means OK.
+func (c *Channel) checkReady() (int, string) {
+	if !c.IsConfigured() {
+		return http.StatusServiceUnavailable, "rest channel disabled"
+	}
+	if c.sendFn == nil {
+		return http.StatusServiceUnavailable, "rest channel not wired"
+	}
+	if c.auth == nil {
+		return http.StatusUnauthorized, "no authenticator configured"
+	}
+	return 0, ""
+}
+
+// authBearer extracts and validates the Bearer token. Returns the owning
+// user_id on success; otherwise an HTTP status + message.
+func (c *Channel) authBearer(r *http.Request) (string, int, string) {
+	bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if bearer == "" {
+		return "", http.StatusUnauthorized, "missing bearer token"
+	}
+	uid, err := c.auth.Authenticate(r.Context(), bearer)
+	if err != nil {
+		return "", http.StatusUnauthorized, "invalid token"
+	}
+	return uid, 0, ""
+}
+
+// dispatchResult carries the agent's terminal state for one request.
+type dispatchResult struct {
+	text    string
+	errMsg  string
+	blocked bool
+}
+
+// dispatch claims sessionID, optionally injects origin context, sends the
+// prompt to the agent pool, and waits for Done. Returns either a result
+// (status 0) or an HTTP error (non-zero status + msg).
+func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, prompt string, reused bool) (dispatchResult, int, string) {
 	c.cfgMu.Lock()
 	workspace := c.cfg.Workspace
 	c.cfgMu.Unlock()
@@ -330,8 +405,7 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	c.mu.Lock()
 	if existing := c.turns[sessionID]; existing != nil && !existing.finished {
 		c.mu.Unlock()
-		writeError(w, http.StatusConflict, "session busy: a prior request is still in flight")
-		return
+		return dispatchResult{}, http.StatusConflict, "session busy: a prior request is still in flight"
 	}
 	c.turns[sessionID] = tn
 	c.mu.Unlock()
@@ -343,12 +417,9 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		c.mu.Unlock()
 	}()
 
-	// Inject origin context only on first-ever message for this session.
-	// For reused sessions whose on-disk state already exists, skip the
-	// inject so we don't pollute the conversation each turn.
 	if c.sessions != nil && (!reused || !c.sessions.SessionExists(sessionID)) {
 		userLabel := userID
-		if u := strings.TrimSpace(req.User); u != "" {
+		if u := strings.TrimSpace(userField); u != "" {
 			userLabel = userID + " (" + u + ")"
 		}
 		ctxText := fmt.Sprintf(
@@ -364,45 +435,19 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := c.sendFn(context.Background(), sessionID, workspace, "rest", "user", prompt); err != nil {
-		writeError(w, http.StatusInternalServerError, "pool dispatch failed: "+err.Error())
-		return
+		return dispatchResult{}, http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
 	}
 
 	select {
 	case <-tn.done:
-	case <-r.Context().Done():
-		writeError(w, 499, "client closed request")
-		return
+	case <-ctx.Done():
+		return dispatchResult{}, 499, "client closed request"
 	}
 
 	c.mu.Lock()
-	text := tn.buf.String()
-	errMsg := tn.errMsg
-	blocked := tn.blocked
+	res := dispatchResult{text: tn.buf.String(), errMsg: tn.errMsg, blocked: tn.blocked}
 	c.mu.Unlock()
-
-	if errMsg != "" {
-		status := http.StatusInternalServerError
-		if blocked {
-			status = http.StatusForbidden
-		}
-		writeError(w, status, errMsg)
-		return
-	}
-
-	resp := chatResponse{
-		ID:      "wick-" + sessionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   firstNonEmpty(req.Model, "wick"),
-		Choices: []chatChoice{{
-			Index:        0,
-			Message:      chatMessage{Role: "assistant", Content: text},
-			FinishReason: "stop",
-		}},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	return res, 0, ""
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
