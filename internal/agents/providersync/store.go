@@ -297,6 +297,19 @@ func (s *store) deleteSubtree(ctx context.Context, id uint, providerType, instan
 		Delete(&entity.ProviderStorage{}).Error
 }
 
+// deleteByAbsPath removes the file row(s) at the given absolute (slash-
+// normalised) rel_path, regardless of provider/instance. Used by the
+// realtime watcher when fsnotify reports Remove/Rename — disk truth is
+// the only truth, so the row is hard-deleted instead of waiting for the
+// retention job. Folder rows are left alone; pruneEmptyFolders cleans
+// them on the next sync pass if they go empty.
+func (s *store) deleteByAbsPath(ctx context.Context, abs string) (int64, error) {
+	res := s.db.WithContext(ctx).
+		Where("rel_path = ? AND is_dir = ?", abs, false).
+		Delete(&entity.ProviderStorage{})
+	return res.RowsAffected, res.Error
+}
+
 // deleteByInstance removes all rows for a provider instance.
 func (s *store) deleteByInstance(ctx context.Context, providerType, instanceName string) (int64, error) {
 	res := s.db.WithContext(ctx).
