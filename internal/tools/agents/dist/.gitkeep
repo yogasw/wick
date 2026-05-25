@@ -1,0 +1,3 @@
+# Vite output lands here (see fe/agents/workflow/vite.config.ts). Keep this
+# file so `//go:embed dist` succeeds on a clean checkout where the SPA hasn't
+# been built yet.

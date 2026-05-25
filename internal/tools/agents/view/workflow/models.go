@@ -19,6 +19,20 @@ type ListVM struct {
 	Layout    view.AgentsLayoutVM
 	Base      string
 	Workflows []mcp.Summary
+	// EditPathPrefix lets the same list view link to either the legacy
+	// templ editor (`/workflows/edit`) or the Svelte v2 editor
+	// (`/workflows-v2/edit`). Empty defaults to "/workflows/edit" for
+	// backward-compat with existing callers.
+	EditPathPrefix string
+}
+
+// listEditPrefix returns the edit-link prefix for one row in the list.
+// Centralised so both legacy and v2 callers stay in sync.
+func listEditPrefix(vm ListVM) string {
+	if vm.EditPathPrefix != "" {
+		return vm.EditPathPrefix
+	}
+	return "/workflows/edit"
 }
 
 // EditorVM carries the editor page payload — full workflow body

@@ -55,3 +55,5 @@ web/public/css/app.css
 lab-server
 wick
 ci-timing.txt
+node_modules/
+index-*

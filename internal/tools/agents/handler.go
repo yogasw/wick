@@ -26,6 +26,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
+	wfrepo "github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -102,7 +103,21 @@ func SetConfigs(c *configs.Service) { globalConfigs = c }
 
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
-func SetDB(db *gorm.DB) { globalDB = db }
+func SetDB(db *gorm.DB) {
+	globalDB = db
+	// Best-effort one-shot importer: hydrate the workflows + workflow_versions
+	// tables from the file-based store on first boot after the DB lands.
+	// Idempotent — re-runs are no-ops. Soft-fail so a DB error doesn't
+	// take down the server; the file-based UI keeps working regardless.
+	if db != nil && globalWorkflowMgr != nil {
+		repo := workflowRepoFor(db)
+		if _, err := repo.ImportFromFiles(globalWorkflowMgr.Service); err != nil {
+			log.Warn().Err(err).Msg("workflow importer (file → DB) failed; file-store stays primary")
+		}
+	}
+}
+
+func workflowRepoFor(db *gorm.DB) *wfrepo.Repo { return wfrepo.New(db) }
 
 // SetChannelRegistry wires the live channel registry so picker fields
 // can issue lookup queries against each channel's upstream (Slack API,
@@ -126,6 +141,13 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 func Register(r tool.Router) {
 	r.Static("/static/", StaticFS)
 	r.Static("/static/nodes/", wfnodes.StaticFS)
+
+	// New Svelte SPA shell + assets. Sits alongside legacy templ routes
+	// during the migration (see internal/docs/workflow/svelte-migration.md).
+	registerSPA(r)
+	registerSPAWorkflows(r)
+	registerSPAWorkflowHistory(r)
+	registerSPAPanels(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
@@ -231,7 +253,13 @@ func Register(r tool.Router) {
 	// ID-bound routes live under /edit/ so Go 1.22's mux doesn't
 	// flag a conflict with /static/{path}. The ID is the folder name
 	// (UUID for canvas-created workflows) — stable across name renames.
-	r.GET("/workflows/edit/{id}", workflowEditor)
+	r.GET("/workflows/edit/{id}", workflowEditorLegacy)
+
+	// Workflows v2 — Svelte editor mounted as a templ island. Same JSON
+	// API + repository under the hood; only the UI differs. Sidebar
+	// exposes both menu items during the migration so users can A/B.
+	r.GET("/workflows-v2", workflowsV2Page)
+	r.GET("/workflows-v2/edit/{id}", workflowEditor)
 	r.POST("/workflows/edit/{id}/save", saveWorkflow)
 	r.POST("/workflows/edit/{id}/rename", renameWorkflow)
 	r.POST("/workflows/edit/{id}/publish", publishWorkflow)
