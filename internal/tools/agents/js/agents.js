@@ -183,8 +183,19 @@
     s = s.replace(/_(.+?)_/g, '<em>$1</em>');
     // Inline code
     s = s.replace(/`([^`]+)`/g, '<code class="font-mono text-xs bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 rounded text-black-900 dark:text-white-100">$1</code>');
-    // Links
+    // Links — http(s) external (open in new tab) + arbitrary path
+    // links (intercepted by chatLinkClick: open in Context panel when
+    // under session cwd, otherwise show a path popup).
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" class="text-green-600 dark:text-green-400 underline" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, function (_m, label, href) {
+      // Note: inlineMarkdown's first line calls esc(s), so both label
+      // and href arrive already HTML-escaped (e.g. " → &quot;).
+      // Putting href into the attribute as-is is correct — the DOM
+      // unescapes on getAttribute() so chatLinkClick sees the
+      // original string. Skip URIs the previous pass already
+      // rewrote — those carry " class=" and never match this regex.
+      return '<a href="#" data-chat-path="' + href + '" class="text-green-600 dark:text-green-400 underline">' + label + '</a>';
+    });
     // Bare URLs
     s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="text-green-600 dark:text-green-400 underline break-all" target="_blank" rel="noopener">$2</a>');
     return s;
@@ -220,8 +231,60 @@
     return s;
   }
 
+  // chatLinkClick is the click handler for non-http markdown links
+  // rendered by inlineMarkdown(). It tries the Context panel first
+  // (so paths under the current session cwd open inline) and falls
+  // back to a tiny popup that just shows the raw path so the user
+  // can read or copy it.
+  function chatLinkClick(ev) {
+    var a = ev.target.closest && ev.target.closest("a[data-chat-path]");
+    if (!a) return;
+    ev.preventDefault();
+    var path = a.getAttribute("data-chat-path") || "";
+    if (window.AgentContext && window.AgentContext.openFileByAbsPath) {
+      if (window.AgentContext.openFileByAbsPath(path)) return;
+    }
+    showPathPopup(path);
+  }
+
+  // showPathPopup renders a lightweight modal with the path text +
+  // a Copy button. Used when the link can't be opened in the panel
+  // (path outside session cwd, panel not initialised, etc.) so the
+  // user still has *something* to act on.
+  function showPathPopup(path) {
+    var existing = document.querySelector("[data-chat-path-popup]");
+    if (existing) existing.remove();
+    var wrap = document.createElement("div");
+    wrap.setAttribute("data-chat-path-popup", "");
+    wrap.className = "fixed inset-0 z-[60] flex items-center justify-center bg-black/40";
+    wrap.innerHTML =
+      '<div class="bg-white-100 dark:bg-navy-700 rounded-lg shadow-xl max-w-xl w-[90vw] p-4 space-y-3">' +
+        '<div class="flex items-start justify-between gap-3">' +
+          '<div class="text-sm font-medium text-black-900 dark:text-white-100">External path</div>' +
+          '<button type="button" data-chat-path-close class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">' +
+            '<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>' +
+          '</button>' +
+        '</div>' +
+        '<div class="text-xs text-black-700 dark:text-black-600">Path is outside the current session — opening here is not supported.</div>' +
+        '<div class="font-mono text-xs bg-white-200 dark:bg-navy-800 border border-white-300 dark:border-navy-600 rounded px-3 py-2 break-all select-all">' + esc(path) + '</div>' +
+        '<div class="flex justify-end gap-2">' +
+          '<button type="button" data-chat-path-copy class="text-xs px-3 py-1.5 rounded bg-green-500 hover:bg-green-600 text-white-100">Copy</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(wrap);
+    var onKey = function (e) { if (e.key === "Escape") close(); };
+    var close = function () { wrap.remove(); document.removeEventListener("keydown", onKey); };
+    wrap.addEventListener("click", function (e) { if (e.target === wrap) close(); });
+    wrap.querySelector("[data-chat-path-close]").addEventListener("click", close);
+    wrap.querySelector("[data-chat-path-copy]").addEventListener("click", function () {
+      if (navigator.clipboard) navigator.clipboard.writeText(path).catch(function () {});
+    });
+    document.addEventListener("keydown", onKey);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     renderExistingMarkdown();
+    document.addEventListener("click", chatLinkClick);
 
 
     // ── Session search (All chats page) ──────────────────────────────
