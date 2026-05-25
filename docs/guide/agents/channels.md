@@ -4,13 +4,14 @@ outline: deep
 
 # Channels
 
-A **channel** is where a message comes from. Wick agents are reachable from three channels at once:
+A **channel** is where a message comes from. Wick agents are reachable from four channels at once:
 
 | Channel | Connection | Session key | Source |
 |---|---|---|---|
 | **Slack** | Socket Mode (default) or HTTP Event API | `thread_ts` | [`channels/slack/slack.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go) |
 | **Telegram** | Long polling | `tg-<chatID>` | [`channels/telegram/telegram.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go) |
 | **Web UI** | Direct HTTP + SSE | UUID minted by wick | [`internal/tools/agents/`](https://github.com/yogasw/wick/blob/master/internal/tools/agents) |
+| **REST (OpenAI-compatible)** | HTTP request/response, OpenAI SDK | `rest-<conversation>` (or fresh UUID) | [`channels/rest/rest.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go) |
 
 All three implement the same `Channel` interface ([channel.go:59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L59)) — the pool sees them uniformly via a `SendFunc`. Wiring is handled by `*Registry` (not `server.go` directly); `channels/setup/` composers do the one-call boot assembly.
 
@@ -287,6 +288,101 @@ The handler registers a pending question, broadcasts SSE, blocks the MCP call un
 
 The reason wick ships its own AskUser MCP tool instead of relying on Claude Code's `AskUserQuestion` harness tool: the harness tool isn't available when Claude runs in pipe mode (`-p`), only inside the Claude Code TUI. An MCP tool works in every mode.
 
+## REST (OpenAI-compatible)
+
+> **📸 Screenshot needed:** `agents-rest-config.png` — capture `/tools/agents/channels/rest` showing the form (Enabled toggle, Workspace) and the docs panel with three tabs (Chat Completions / Responses / Models). Save to `docs/public/screenshots/agents-rest-config.png`.
+
+OpenAI Chat Completions, Responses, and Models APIs exposed at `/integrations/rest/api/v1/openai/*`. Any OpenAI SDK (`openai-python`, `openai-node`, LangChain, LiteLLM, …) works by pointing `base_url` at that path and using a wick Personal Access Token as the API key. Source: [`channels/rest/`](https://github.com/yogasw/wick/tree/master/internal/agents/channels/rest).
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/integrations/rest/api/v1/openai/chat/completions` | Chat Completions — most clients. |
+| `POST` | `/integrations/rest/api/v1/openai/responses` | OpenAI Responses API. Supports `previous_response_id` chaining. |
+| `GET`  | `/integrations/rest/api/v1/openai/models` | Lists every enabled wick provider as an OpenAI model object. |
+
+### Auth
+
+Every request must carry a wick Personal Access Token as `Authorization: Bearer wick_pat_…`. Mint tokens at `/profile/tokens`. There is no shared bot token — auth is per-request, so a request with no Bearer returns `401`, an unknown token returns `401`. Channel-level enable is just an on/off in the config form; the token does the real auth.
+
+### Session binding via `conversation`
+
+Sessions are keyed by the OpenAI Responses API standard `conversation` field (an extension on Chat Completions; native on Responses). Three modes:
+
+| Mode | Trigger | Behaviour |
+|---|---|---|
+| **Stateless** | Omit `conversation` and `previous_response_id` | Each request spawns a fresh wick session UUID. Client owns history — re-send the full `messages` / `input` each turn (OpenAI parity). |
+| **Conversation** | `"conversation": "<id>"` | All requests with the same id reuse one wick session (`rest-<id>`). Only the new turn is sent; wick keeps history. Works on both endpoints. Also accepted via `metadata.conversation` for clients that expose only standard OpenAI fields. |
+| **Responses chaining** | `"previous_response_id": "resp_<id>"` (Responses only) | The id returned by a prior `/responses` call. Wick reuses the underlying session — equivalent to passing the same `conversation`. |
+
+::: tip One vocabulary
+Wick deliberately uses `conversation` everywhere instead of a custom `session_id` field. That keeps clients aligned with the OpenAI Responses API spec and means a single Python snippet (just `extra_body={"conversation": "..."}`) drives both endpoints.
+:::
+
+### Model validation
+
+The `model` field on chat / responses must match one of the ids returned by `GET /models`. The catalogue is built live from `provider.Load()` ([`models.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/models.go)): each enabled provider instance shows up once — default-seeded entries surface as the bare type (`claude`, `codex`, `gemini`), named instances as `type/name` (`claude/work`). Disabled instances are skipped. Unknown ids return `404 model_not_found` with the OpenAI-shaped error body so SDK typed-exception handling works. Empty `model` is allowed and lets wick pick.
+
+### Streaming
+
+Not supported. `"stream": true` returns `400` immediately — clients should leave it at the default `false`. The handler waits for the agent's `Done` event before responding, so a turn takes as long as the underlying provider does.
+
+### Approvals
+
+Gate prompts are **auto-blocked** ([`rest.go OnApprovalRequest`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go)). REST clients cannot deliver an interactive decision, so any approval request resolves to `block` and the resulting error surfaces as a `403`. Use the web UI to approve sensitive commands.
+
+### Concurrency
+
+Two safeguards:
+
+1. **Per-session REST lock**: a second request on the same `conversation` while the first is still in flight gets `409 session busy`. Prevents two REST clients racing the same wick session.
+2. **Pool queue**: dispatch always goes through `sendFn → pool.Send`, which FIFO-queues when slots are full and preempts idle slots when configured. REST has no direct spawn path. See [Pool & Sessions](./pool).
+
+### Configured response shape (chat completions)
+
+```json
+{
+  "id": "wick-rest-…",
+  "object": "chat.completion",
+  "created": 1715000000,
+  "model": "claude",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "…" },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+### Configured response shape (responses)
+
+```json
+{
+  "id": "resp_…",
+  "object": "response",
+  "status": "completed",
+  "model": "claude",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [{ "type": "output_text", "text": "…", "annotations": [] }]
+    }
+  ],
+  "output_text": "…",
+  "previous_response_id": null
+}
+```
+
+`id` is `resp_<conversation>` so a client can reuse it either as `previous_response_id` or pass the same `conversation` back — both land in the same wick session.
+
+### Hot-reload
+
+Same pattern as the other channels: [`rest/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/source.go) fingerprints `Enabled + Workspace`. `Registry.WatchConfigs` calls `Reload` on change. Toggle the channel from `/tools/agents/channels/rest` and it activates within 30 seconds without a server restart.
+
 ## Meta-commands
 
 Channels intercept these before they reach the agent ([metacmd.go:31-66](https://github.com/yogasw/wick/blob/master/internal/agents/channels/metacmd.go#L31)). All are case-insensitive and accept `/` or `!` prefix.
@@ -311,7 +407,7 @@ Channel configs live in `agent_channels` ([store.go](https://github.com/yogasw/w
 
 | Column | Holds |
 |---|---|
-| `type` | `slack` / `telegram` |
+| `type` | `slack` / `telegram` / `rest` |
 | `name` | Display name (currently always `default`) |
 | `enabled` | Mirrors whether `bot_token` is non-empty |
 | `config` | JSON map: per-field settings (one per `wick:"key=..."` field) |
