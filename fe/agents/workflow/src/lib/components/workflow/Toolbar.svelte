@@ -1,0 +1,292 @@
+<script lang="ts">
+  import { draftWorkflow, dirty, saveDraft, publish } from "$lib/stores/editor";
+  import { workflowAPI } from "$lib/api/workflow";
+  import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
+  import type { Writable } from "svelte/store";
+
+  // EditorShell hoists the top-level Editor / Executions toggle and
+  // passes the store down. Toolbar owns the visual tab pills.
+  type Props = { topTab: Writable<"editor" | "executions"> };
+  let { topTab }: Props = $props();
+
+  let saving = $state(false);
+  let publishing = $state(false);
+  let publishMenuOpen = $state(false);
+  let moreMenuOpen = $state(false);
+
+  let confirmDelete = $state(false);
+  let confirmDiscard = $state(false);
+  let confirmUnpublish = $state(false);
+
+  // Inline rename — clicking the workflow name opens a contenteditable
+  // input bound to a local draft string. Commit on Enter / blur,
+  // cancel on Escape. The URL stays put (workflowID is folder uuid),
+  // so the rename is purely a Name attribute update.
+  let editingName = $state(false);
+  let nameDraft = $state("");
+  function startRename() {
+    nameDraft = $draftWorkflow?.name ?? "";
+    editingName = true;
+  }
+  async function commitRename() {
+    const wf = $draftWorkflow;
+    if (!wf || !editingName) return;
+    editingName = false;
+    const next = nameDraft.trim();
+    if (!next || next === wf.name) return;
+    draftWorkflow.update((w) => (w ? { ...w, name: next } : w));
+    try {
+      await saveDraft();
+    } catch (e) {
+      console.error("rename save failed:", e);
+    }
+  }
+  function cancelRename() {
+    editingName = false;
+  }
+
+  async function onDelete() {
+    const wf = $draftWorkflow;
+    if (!wf) return;
+    try {
+      await workflowAPI.remove(wf.id);
+    } finally {
+      confirmDelete = false;
+      // Navigate back to the list — full reload to drop stale state.
+      window.location.href = "/tools/agents/workflows-v2";
+    }
+  }
+
+  async function onDiscard() {
+    const wf = $draftWorkflow;
+    if (!wf) return;
+    try {
+      await workflowAPI.discardDraft(wf.id);
+      window.location.reload();
+    } finally {
+      confirmDiscard = false;
+    }
+  }
+
+  async function onUnpublish() {
+    const wf = $draftWorkflow;
+    if (!wf) return;
+    try {
+      // Unpublish = toggle off active. We do not call a separate
+      // endpoint — the legacy editor flips Enabled=false to deactivate
+      // the live router registration.
+      await workflowAPI.toggle(wf.id, false);
+      draftWorkflow.update((w) => (w ? { ...w, enabled: false } : w));
+    } finally {
+      confirmUnpublish = false;
+    }
+  }
+
+  async function onSave() {
+    saving = true;
+    try {
+      await saveDraft();
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function onPublish() {
+    publishing = true;
+    try {
+      await publish();
+    } finally {
+      publishing = false;
+      publishMenuOpen = false;
+    }
+  }
+
+  async function onToggle() {
+    const wf = $draftWorkflow;
+    if (!wf) return;
+    await workflowAPI.toggle(wf.id, !wf.enabled);
+    draftWorkflow.update((w) => (w ? { ...w, enabled: !w.enabled } : w));
+  }
+</script>
+
+<header
+  class="flex items-center gap-3 px-4 py-2 border-b border-slate-200 dark:border-[#2c3a5a]
+         bg-white dark:bg-[#0f172a] text-slate-800 dark:text-slate-100"
+>
+  <!-- Breadcrumb + inline-renamable name. -->
+  <div class="flex items-center gap-2 text-sm font-medium min-w-0">
+    <a href="/tools/agents/workflows-v2" class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100">
+      Workflows
+    </a>
+    <span class="text-slate-400">›</span>
+    {#if editingName}
+      <input
+        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-0.5 text-sm"
+        bind:value={nameDraft}
+        onblur={commitRename}
+        onkeydown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") cancelRename(); }}
+        autofocus
+      />
+    {:else}
+      <button
+        class="truncate hover:text-emerald-500"
+        title="Click to rename (URL stays the same)"
+        onclick={startRename}
+      >{$draftWorkflow?.name ?? "—"}</button>
+    {/if}
+  </div>
+
+  <!-- Editor / Executions tab toggle. -->
+  <div class="flex items-center bg-slate-100 dark:bg-slate-800 rounded-md p-0.5 text-xs">
+    {#each ["editor", "executions"] as t}
+      <button
+        class="px-3 py-1 rounded capitalize transition-colors"
+        class:bg-white={$topTab === t}
+        class:dark:bg-slate-700={$topTab === t}
+        class:shadow-sm={$topTab === t}
+        class:text-slate-500={$topTab !== t}
+        class:dark:text-slate-400={$topTab !== t}
+        onclick={() => topTab.set(t as "editor" | "executions")}
+      >{t}</button>
+    {/each}
+  </div>
+
+  <div class="flex-1"></div>
+
+  <!-- Draft pill — only when there's an unpublished draft. -->
+  {#if $dirty}
+    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+      <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+      draft
+    </span>
+  {/if}
+
+  <!-- Active / Inactive toggle button. Single pill that flips colour
+       + label — matches n8n's "Active / Inactive" button + a leading
+       status dot so the state reads at a glance. -->
+  {#if $draftWorkflow}
+    <button
+      class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors"
+      class:bg-emerald-500={$draftWorkflow.enabled}
+      class:border-emerald-500={$draftWorkflow.enabled}
+      class:text-white={$draftWorkflow.enabled}
+      class:hover:bg-emerald-600={$draftWorkflow.enabled}
+      class:bg-slate-100={!$draftWorkflow.enabled}
+      class:dark:bg-slate-800={!$draftWorkflow.enabled}
+      class:border-slate-300={!$draftWorkflow.enabled}
+      class:dark:border-slate-600={!$draftWorkflow.enabled}
+      class:text-slate-600={!$draftWorkflow.enabled}
+      class:dark:text-slate-300={!$draftWorkflow.enabled}
+      class:hover:bg-slate-200={!$draftWorkflow.enabled}
+      class:dark:hover:bg-slate-700={!$draftWorkflow.enabled}
+      onclick={onToggle}
+      title={$draftWorkflow.enabled ? "Click to deactivate" : "Click to activate"}
+    >
+      <span class="h-1.5 w-1.5 rounded-full"
+            class:bg-white={$draftWorkflow.enabled}
+            class:bg-slate-400={!$draftWorkflow.enabled}></span>
+      {$draftWorkflow.enabled ? "Active" : "Inactive"}
+    </button>
+  {/if}
+
+  <!-- Save draft. -->
+  <button
+    class="px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50"
+    onclick={onSave}
+    disabled={saving || !$dirty}
+  >{saving ? "Saving…" : "Save"}</button>
+
+  <!-- Publish split button. -->
+  <div class="relative flex">
+    <button
+      class="px-3 py-1.5 rounded-l text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white disabled:opacity-50"
+      onclick={onPublish}
+      disabled={publishing || !$draftWorkflow}
+    >{publishing ? "…" : "Publish"}</button>
+    <button
+      class="px-2 py-1.5 rounded-r text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-l border-emerald-700"
+      onclick={() => (publishMenuOpen = !publishMenuOpen)}
+      aria-haspopup="menu"
+      aria-expanded={publishMenuOpen}
+      aria-label="Publish menu"
+    >▾</button>
+    {#if publishMenuOpen}
+      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs z-20">
+        <button
+          class="w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
+          disabled={!$dirty}
+          onclick={() => { publishMenuOpen = false; confirmDiscard = true; }}
+        >Discard draft</button>
+        <button
+          class="w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700 text-amber-700 dark:text-amber-300"
+          onclick={() => { publishMenuOpen = false; confirmUnpublish = true; }}
+        >Unpublish (deactivate)</button>
+      </div>
+    {/if}
+  </div>
+
+  <!-- History icon. -->
+  <button
+    class="h-7 w-7 rounded flex items-center justify-center text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+    title="Show execution history"
+    aria-label="History"
+  >
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 3"/></svg>
+  </button>
+
+  <!-- More menu (kebab). -->
+  <div class="relative">
+    <button
+      class="h-7 w-7 rounded flex items-center justify-center text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+      onclick={() => (moreMenuOpen = !moreMenuOpen)}
+      title="More actions"
+      aria-haspopup="menu"
+      aria-expanded={moreMenuOpen}
+      aria-label="More"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+    </button>
+    {#if moreMenuOpen}
+      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs z-20">
+        <a
+          class="block w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700"
+          href={`/tools/agents/workflows/edit/${$draftWorkflow?.id ?? ""}/download`}
+        >Download YAML</a>
+        <button
+          class="w-full px-3 py-2 text-left text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+          onclick={() => { moreMenuOpen = false; confirmDelete = true; }}
+        >Delete workflow</button>
+      </div>
+    {/if}
+  </div>
+</header>
+
+<ConfirmDialog
+  open={confirmDelete}
+  title="Delete workflow?"
+  body={`This will permanently remove "${$draftWorkflow?.name ?? ""}" and every run history attached to it. This cannot be undone.`}
+  confirmLabel="Delete"
+  destructive
+  onConfirm={onDelete}
+  onCancel={() => (confirmDelete = false)}
+/>
+
+<ConfirmDialog
+  open={confirmDiscard}
+  title="Discard draft?"
+  body="Unsaved changes since the last publish will be lost."
+  confirmLabel="Discard"
+  destructive
+  onConfirm={onDiscard}
+  onCancel={() => (confirmDiscard = false)}
+/>
+
+<ConfirmDialog
+  open={confirmUnpublish}
+  title="Unpublish workflow?"
+  body="The workflow stays in storage but stops responding to triggers."
+  confirmLabel="Unpublish"
+  destructive
+  onConfirm={onUnpublish}
+  onCancel={() => (confirmUnpublish = false)}
+/>

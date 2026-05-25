@@ -198,8 +198,18 @@ func WorkflowEventHook(b *Broadcaster) func(id, runID string, ev wf.RunEvent) {
 var globalWorkflowMgr *setup.Manager
 
 // SetWorkflowManager wires in the workflow Manager constructed by
-// server.go.
-func SetWorkflowManager(m *setup.Manager) { globalWorkflowMgr = m }
+// server.go. Also kicks the DB importer when both halves are ready —
+// SetDB and SetWorkflowManager run in either order across boots, so
+// each side triggers the import when its peer is already present.
+func SetWorkflowManager(m *setup.Manager) {
+	globalWorkflowMgr = m
+	if globalDB != nil && m != nil {
+		repo := workflowRepoFor(globalDB)
+		if _, err := repo.ImportFromFiles(m.Service); err != nil {
+			log.Warn().Err(err).Msg("workflow importer (file → DB) failed; file-store stays primary")
+		}
+	}
+}
 
 func notReadyWorkflow(c *tool.Ctx) bool {
 	if globalWorkflowMgr == nil {
@@ -224,6 +234,26 @@ func workflowsPage(c *tool.Ctx) {
 		Layout:    sidebarVM(c, "workflows", ""),
 		Base:      c.Base(),
 		Workflows: summaries,
+	}))
+}
+
+// workflowsV2Page renders the same list as the legacy /workflows page
+// but rewrites the "Open editor" link to the Svelte v2 path. Sidebar
+// activePage is "workflows-v2" so the v2 nav item gets the highlight.
+func workflowsV2Page(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	summaries, err := globalWorkflowMgr.MCP.List()
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.HTML(wfview.List(wfview.ListVM{
+		Layout:         sidebarVM(c, "workflows-v2", ""),
+		Base:           c.Base(),
+		Workflows:      summaries,
+		EditPathPrefix: "/workflows-v2/edit",
 	}))
 }
 
@@ -356,8 +386,35 @@ func workflowEditor(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
-	// Editor always opens the draft if one exists, otherwise the
-	// published workflow — so in-progress edits survive page refresh.
+	// Cheap existence check — Svelte fetches the workflow JSON itself
+	// once mounted, so the handler doesn't need to load + serialise it
+	// here. We just confirm the id resolves so 404s surface server-side
+	// instead of inside the FE.
+	if _, err := globalWorkflowMgr.Service.LoadDraft(id); err != nil {
+		c.NotFound()
+		return
+	}
+	layoutVM := sidebarVM(c, "workflows-v2", "")
+	layoutVM.FullBleed = true
+	propsJSON, _ := json.Marshal(map[string]string{"workflowID": id})
+	c.HTML(wfview.SvelteEditor(wfview.SvelteEditorVM{
+		Layout:    layoutVM,
+		Base:      c.Base(),
+		ID:        id,
+		AssetURL:  spaAssetURL("workflow"),
+		PropsJSON: string(propsJSON),
+	}))
+}
+
+// workflowEditorLegacy preserves the templ + Drawflow editor behind a
+// query flag (`?legacy=1`) so we can roll back instantly if the Svelte
+// port hits a regression. Delete this once Phase 6 of the migration
+// (see internal/docs/workflow/svelte-migration.md) lands.
+func workflowEditorLegacy(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
 	w, err := globalWorkflowMgr.Service.LoadDraft(id)
 	if err != nil {
 		c.NotFound()
@@ -371,9 +428,6 @@ func workflowEditor(c *tool.Ctx) {
 		graphJSON = "{}"
 	}
 	report := globalWorkflowMgr.Guard.Review(c.Context(), w)
-	// Runs panel pagination — `?runs_page=N` (1-based). 100 per page
-	// matches the index shard cap so each page request reads exactly
-	// one shard file.
 	page := 1
 	if v := strings.TrimSpace(c.Query("runs_page")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -385,19 +439,8 @@ func workflowEditor(c *tool.Ctx) {
 	if st, err := globalWorkflowMgr.Service.LoadState(id); err == nil {
 		approved = st.Approved
 	}
-
-	// Parse validation report on every render so the canvas can paint
-	// per-node error badges on initial load — without this badges only
-	// showed up after the first auto-save round-trip and disappeared on
-	// refresh.
 	validation := parse.Validate(w)
 	validationJSON, _ := json.Marshal(validationPayload(validation))
-
-	// The editor owns the full viewport (toolbar + canvas + bottom
-	// panel) and paints its own borders, so opt out of the layout's
-	// default px-6 py-6 padding wrapper — otherwise the canvas
-	// inherits the gutter and the toolbar sits inside a card instead
-	// of butting against the sidebar.
 	layoutVM := sidebarVM(c, "workflows", "")
 	layoutVM.FullBleed = true
 	c.HTML(wfview.Editor(wfview.EditorVM{
@@ -874,10 +917,25 @@ func workflowRegistryAPI(c *tool.Ctx) {
 			"is_default": info.IsDefault,
 		})
 	}
+	// node_types + trigger_types extend the original payload so the
+	// Svelte editor's Add Node palette can hydrate from one endpoint.
+	// node_types pulls from engine.Descriptors via MCP.NodeTypes —
+	// adding a node executor server-side surfaces here automatically.
+	nodeTypes := globalWorkflowMgr.MCP.NodeTypes()
+	triggerTypes := []map[string]any{
+		{"type": "cron", "label": "Cron schedule", "description": "Fire on a cron expression"},
+		{"type": "webhook", "label": "Webhook", "description": "HTTP POST trigger"},
+		{"type": "manual", "label": "Manual", "description": "Fired from the editor"},
+		{"type": "schedule_at", "label": "Schedule at", "description": "Fire once at a specific time"},
+		{"type": "channel", "label": "Channel", "description": "Inbound channel event (Slack, Telegram, …)"},
+		{"type": "error", "label": "Error", "description": "Fire when another workflow fails"},
+	}
 	c.JSON(http.StatusOK, map[string]any{
-		"channels":   channels,
-		"connectors": connectors,
-		"providers":  providers,
+		"channels":      channels,
+		"connectors":    connectors,
+		"providers":     providers,
+		"node_types":    nodeTypes,
+		"trigger_types": triggerTypes,
 	})
 }
 

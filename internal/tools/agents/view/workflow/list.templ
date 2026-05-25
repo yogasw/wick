@@ -232,7 +232,7 @@ templ listTable(vm ListVM) {
 										YAML
 									</a>
 									<a
-										href={ templ.SafeURL(vm.Base + "/workflows/edit/" + w.ID) }
+										href={ templ.SafeURL(vm.Base + listEditPrefix(vm) + "/" + w.ID) }
 										class="text-sm font-semibold text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300"
 									>Open editor →</a>
 								</div>
