@@ -247,6 +247,65 @@ func listRepos(c *connector.Ctx) (any, error) {
 - ❌ Sharing mutable state across `Execute` invocations — concurrent calls.
 - ❌ Polling tight loops without honoring `c.Context().Done()`.
 
+### Health check (optional)
+
+Connectors whose upstream API uses granular permissions (Slack scopes, GitHub token scopes, Google OAuth scopes) can expose a `HealthCheck` hook. When non-nil, the detail page at `/manager/connectors/{key}/{id}` renders a **Check Permissions** button; clicking it probes the upstream once and reconciles per-operation `system_disabled` flags against the report.
+
+```go
+import "github.com/yogasw/wick/pkg/connector"
+
+func HealthCheck(c *connector.Ctx) ([]connector.OpHealth, error) {
+    // Cheap probe — Slack's auth.test, GitHub's /user, etc.
+    granted, err := whoami(c)
+    if err != nil {
+        return nil, err // aborts the run; never partially flip flags
+    }
+    out := make([]connector.OpHealth, 0, len(opScopes))
+    for op, required := range opScopes {
+        ok, missing := evalScopes(required, granted)
+        h := connector.OpHealth{Key: op, OK: ok}
+        if !ok {
+            h.Reason = "needs scope: " + strings.Join(missing, ", ")
+        }
+        out = append(out, h)
+    }
+    return out, nil
+}
+```
+
+Register it on the `Module`:
+
+```go
+connector.Module{
+    Meta:        myconn.Meta(),
+    Configs:     entity.StructToConfigs(myconn.Configs{}),
+    Operations:  myconn.Operations(),
+    HealthCheck: myconn.HealthCheck, // ← optional
+}
+```
+
+Behavior:
+
+| OpHealth field | Effect on the row |
+|---|---|
+| `OK = true` | Clears `system_disabled` if previously set; admin's manual Enable/Disable preserved |
+| `OK = false` | Sets `system_disabled = true` with `Reason` shown next to the op (e.g. *"needs scope: chat:write"*); admin cannot enable until permission is granted upstream and a re-check passes |
+| Op omitted from report | Untouched — neither locked nor cleared |
+
+Returning an error (auth invalid, network) aborts the entire reconcile — no partial flips. Effective availability is `Enabled AND NOT SystemDisabled`; both flags surface in the operations table.
+
+### Row-level disable (whole connector off)
+
+Separate from the per-op toggle and the healthcheck lock, every row has a single `Disabled bool` flag (`entity.Connector.Disabled`) flipped from the **Disable / Enable Connector** button in the detail page top actions. When `Disabled = true`:
+
+- All `wick_execute` calls against the row return an error before reaching `ExecuteFunc`.
+- The row hides from `wick_list` for non-admin callers.
+- Per-op flags (`Enabled`, `SystemDisabled`) are preserved untouched — toggling the row back on restores the prior op state.
+
+Reversible — admin clicks Enable to restore. For permanent removal use Delete (separate top action) instead.
+
+Implementation: `Service.SetDisabled` (`internal/connectors/service.go`) writes to `entity.Connector.Disabled`. Route: `POST /manager/connectors/{key}/{id}/disable`.
+
 ## Per-row management UI
 
 ![Connector instance detail page](/screenshots/connector-detail.png)
