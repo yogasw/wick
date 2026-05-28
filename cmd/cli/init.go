@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func initCmd(tpl, designSystem embed.FS) *cobra.Command {
+func initCmd(tpl, designSystem, installScripts embed.FS) *cobra.Command {
 	var skipSetup bool
 	cmd := &cobra.Command{
 		Use:   "init [name]",
@@ -30,6 +30,9 @@ func initCmd(tpl, designSystem embed.FS) *cobra.Command {
 				if err := copySkillFromFS(designSystem, ".claude/skills/"+skill, name); err != nil {
 					return fmt.Errorf("copy %s skill: %w", skill, err)
 				}
+			}
+			if err := copyInstallScripts(installScripts, name); err != nil {
+				return fmt.Errorf("copy install scripts: %w", err)
 			}
 			fmt.Printf("created %s/\n", name)
 
@@ -102,6 +105,35 @@ func rewrite(p string, data []byte, name string) []byte {
 		return []byte(s)
 	}
 	return data
+}
+
+// copyInstallScripts drops scripts/install.sh + scripts/install.ps1 into
+// the new project root, rewriting the baked APP/REPO so the scaffolded
+// scripts target the user's app instead of wick itself. REPO owner is
+// left as `owner/<name>` for the user to edit once they create the
+// GitHub repo.
+func copyInstallScripts(fsys embed.FS, name string) error {
+	files := []string{"scripts/install.sh", "scripts/install.ps1"}
+	for _, src := range files {
+		data, err := fsys.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		s := string(data)
+		s = strings.ReplaceAll(s, `APP="wick"`, `APP="`+name+`"`)
+		s = strings.ReplaceAll(s, `$App   = 'wick'`, `$App   = '`+name+`'`)
+		s = strings.ReplaceAll(s, `REPO="yogasw/wick"`, `REPO="owner/`+name+`"`)
+		s = strings.ReplaceAll(s, `$Repo  = 'yogasw/wick'`, `$Repo  = 'owner/`+name+`'`)
+		dst := filepath.Join(name, filepath.Base(src))
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(src, ".sh") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(dst, []byte(s), mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func copySkillFromFS(fsys embed.FS, src, name string) error {

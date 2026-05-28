@@ -309,8 +309,21 @@ templ SessionDetail(vm SessionDetailVM) {
 			<div class="flex-1 overflow-y-auto" data-chat-panel>
 				@sessionDetailContent(vm)
 			</div>
-			<!-- Zone 3: composer fixed at bottom, centered -->
-			<div class="shrink-0 px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+			<!-- Zone 3: composer fixed at bottom, centered. Floating
+			     scroll-to-bottom pill sits just above the top edge. -->
+			<div class="relative shrink-0 px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+				<button
+					type="button"
+					data-scroll-bottom
+					class="hidden absolute left-1/2 -translate-x-1/2 -top-3 z-30 inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+					title="Scroll to latest (Ctrl+↓)"
+				>
+					<svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
+						<path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+					</svg>
+					<span>Jump to latest</span>
+					<kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
+				</button>
 				<div class="max-w-4xl mx-auto">
 					@AskUserCard(vm.Base)
 					@chatComposer(vm)

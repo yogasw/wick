@@ -120,6 +120,38 @@ The wick framework version (`BuildWickVersion`) is auto-filled from `debug.ReadB
 | Windows | Double-click the `.exe` — runs in place. Move the file = move the app. | Double-click the `.msi` → wizard installs to `%LocalAppData%\Programs\<AppName>` (no UAC). Uninstall via Add/Remove Programs. |
 | macOS | Open the `.dmg`, drag `<app>.app` into `/Applications`. | Same gesture, but the mounted volume shows `<app>.app` next to an `Applications` shortcut as a visual hint. |
 | Linux | `sudo apt install ./<app>-linux-<arch>.deb` (or `dpkg -i`). Installs to `/usr/bin/<app>` with `.desktop` entry + icon. Same flow either way. |
+| Termux / Android | Raw `<app>-linux-arm64` binary copied to `$PREFIX/bin/<app>` — no `dpkg`, no GUI deps. Built with `--headless` or pure-Go projects. |
+
+## Install scripts
+
+Every `wick init <name>` drops `install.sh` + `install.ps1` into the project root, pre-baked with the app name and a `REPO="owner/<name>"` placeholder. Commit both to the project's default branch and end-users get a one-liner install:
+
+```bash
+# Linux / macOS / Termux — public repo
+curl -fsSL https://raw.githubusercontent.com/<owner>/<name>/main/install.sh | sh
+
+# Windows — public repo
+iwr -useb https://raw.githubusercontent.com/<owner>/<name>/main/install.ps1 | iex
+```
+
+Private repo — pass a fine-grained PAT (Contents: read) at runtime:
+
+```bash
+TOKEN=ghp_xxx sh -c "$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
+  https://raw.githubusercontent.com/<owner>/<name>/main/install.sh)"
+```
+
+The scripts detect OS + arch from `uname` / `$PROCESSOR_ARCHITECTURE`, query the GitHub Releases API for the latest tag, and download the right asset:
+
+| Detect | Action |
+|---|---|
+| `$PREFIX` with `com.termux` | download raw `<app>-linux-<arch>` → `$PREFIX/bin/<app>` + `chmod +x` |
+| `uname -s = Darwin` | download `.dmg` → mount via `hdiutil` → copy `.app` to `/Applications` |
+| `uname -s = Linux` + `dpkg` present | download `.deb` → `sudo dpkg -i` |
+| `uname -s = Linux` + no `dpkg` | download raw binary → `/usr/local/bin/<app>` |
+| PowerShell | download `.msi` → `msiexec /i /qn` (silent install) |
+
+After `wick init`, edit the `REPO=` line in both scripts to match the actual GitHub repo owner (the placeholder is `owner/<name>` until you set it). Override the release version with `VERSION=v1.2.3` instead of latest.
 
 ## ldflags injection
 

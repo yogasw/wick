@@ -190,6 +190,70 @@ See [`internal/connectors/crudcrud/`](../../../internal/connectors/crudcrud/) fo
 - ❌ Sharing mutable state across `Execute` invocations — connector calls are concurrent.
 - ❌ Polling tight loops inside `Execute` without honoring `c.Context().Done()`.
 
+### Health check (optional `Module.HealthCheck`)
+
+Connectors whose upstream uses granular permissions (Slack scopes, GitHub token scopes, Google OAuth scopes) SHOULD expose a `HealthCheck` hook. When non-nil, `/manager/connectors/{key}/{id}` renders a **Check Permissions** button that calls `POST /manager/connectors/{key}/{id}/health-check` → `Service.RunHealthCheck` → reconciles per-op `system_disabled` flags against the report.
+
+```go
+func HealthCheck(c *connector.Ctx) ([]connector.OpHealth, error) {
+    granted, err := whoami(c) // one cheap probe — auth.test, /user, etc.
+    if err != nil {
+        return nil, err // aborts reconcile; no partial flips
+    }
+    out := make([]connector.OpHealth, 0, len(opScopes))
+    for op, required := range opScopes {
+        ok, missing := evalScopes(required, granted)
+        h := connector.OpHealth{Key: op, OK: ok}
+        if !ok {
+            h.Reason = "needs scope: " + strings.Join(missing, ", ")
+        }
+        out = append(out, h)
+    }
+    return out, nil
+}
+```
+
+Wire on the `Module` in `registry.go`:
+
+```go
+connector.Module{
+    Meta:        myconn.Meta(),
+    Configs:     entity.StructToConfigs(myconn.Configs{}),
+    Operations:  myconn.Operations(),
+    HealthCheck: myconn.HealthCheck,
+}
+```
+
+Reconciliation rules (see `internal/connectors/service.go::RunHealthCheck`):
+
+- `OpHealth.OK=true` → clears `system_disabled` if previously set; admin's manual Enable/Disable preserved.
+- `OpHealth.OK=false` → sets `system_disabled=true` with `Reason` displayed inline; admin cannot enable until a later check passes.
+- Ops **omitted** from the report are left untouched — neither locked nor cleared.
+- Returning a non-nil error aborts the whole reconcile; existing flags survive.
+
+Effective availability: `Enabled AND NOT SystemDisabled` (see `OpState` in `service.go`).
+
+When to add: any connector where upstream permission is granular and `Op.Description` claims an action the credential might not be authorized for. Skip for connectors with a single all-or-nothing token (e.g. simple API key).
+
+### Row-level disable (separate from per-op and from healthcheck)
+
+`entity.Connector.Disabled` is the row-level off-switch — flipped by the admin's "Disable Connector" button via `POST /manager/connectors/{key}/{id}/disable` → `Service.SetDisabled` (`internal/connectors/service.go`).
+
+When `Disabled=true`:
+
+- All `wick_execute` against the row error out before `ExecuteFunc` runs.
+- Row hides from `wick_list` for non-admin callers.
+- Per-op `Enabled` / `SystemDisabled` flags untouched — re-enable restores prior op state.
+
+Reversible. For permanent removal use the Delete action — different code path, different row state (hard delete via `Service.Delete`).
+
+Three independent off-switches to keep separate when reasoning about availability:
+- `Connector.Disabled` (row-level, admin-controlled)
+- `ConnectorOperation.Enabled=false` (per-op, admin-controlled — destructive ops default off)
+- `ConnectorOperation.SystemDisabled=true` (per-op, healthcheck-controlled)
+
+Effective op call passes only when all three resolve to "available".
+
 ## Registration
 
 Built-in wick connectors are appended in `internal/connectors/registry.go::RegisterBuiltins()`:

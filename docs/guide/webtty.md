@@ -2,6 +2,8 @@
 
 The Web Terminal gives you a browser-based shell session running on the Wick server. No SSH client needed.
 
+Powered by [gotty](https://github.com/sorenisanerd/gotty) (sorenisanerd's maintained fork) — embedded and proxied through the Wick port, so no extra ports need to be opened.
+
 <!-- TODO: screenshot of WebTTY page showing terminal with bash session running -->
 
 ## Why it exists

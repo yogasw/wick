@@ -316,6 +316,47 @@
       if (bottom) bottom.scrollIntoView({ block: "end" });
     });
 
+    // ── Floating scroll-to-bottom button ──────────────────────────────
+    // IntersectionObserver on the #chat-bottom sentinel: button shown
+    // whenever the sentinel is off-screen (user scrolled up OR new
+    // content grew below the viewport during streaming).
+    //
+    // To avoid a show→hide flicker on page load and after sending, the
+    // observer is "settled" only after the initial scroll-to-bottom
+    // lands. Before settling it can only hide the button, never show.
+    (function () {
+      var panel = document.querySelector("[data-chat-panel]");
+      var btn = document.querySelector("[data-scroll-bottom]");
+      var sentinel = document.getElementById("chat-bottom");
+      if (!panel || !btn || !sentinel || !("IntersectionObserver" in window)) return;
+      var settled = false;
+      window.__wickArmScrollBtn = function () {
+        settled = false;
+        setTimeout(function () { settled = true; }, 250);
+      };
+      window.__wickArmScrollBtn();
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) {
+            btn.classList.add("hidden");
+          } else if (settled) {
+            btn.classList.remove("hidden");
+          }
+        });
+      }, { root: panel, threshold: 0 });
+      io.observe(sentinel);
+      btn.addEventListener("click", function () {
+        sentinel.scrollIntoView({ behavior: "smooth", block: "end" });
+      });
+      // Ctrl+ArrowDown: jump to latest from anywhere, including while
+      // typing in the composer.
+      document.addEventListener("keydown", function (e) {
+        if (e.key !== "ArrowDown" || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        e.preventDefault();
+        sentinel.scrollIntoView({ behavior: "smooth", block: "end" });
+      });
+    })();
+
     // ── Auto-resize textarea ──────────────────────────────────────────
     document.querySelectorAll("[data-auto-resize]").forEach(function (ta) {
       function resize() {
@@ -773,7 +814,21 @@
         scrollToBottom();
       }
 
+      // Returns true when user is already pinned near the bottom of the
+      // chat scroll area. Used to skip auto-scroll while streaming so the
+      // user can read older messages without being yanked back down.
+      function isNearBottom() {
+        var panel = document.querySelector("[data-chat-panel]");
+        if (panel) {
+          var slack = panel.scrollHeight - panel.scrollTop - panel.clientHeight;
+          return slack < 80;
+        }
+        var w = window.innerHeight + window.scrollY;
+        return (document.documentElement.scrollHeight - w) < 80;
+      }
+
       function scrollToBottom() {
+        if (!isNearBottom()) return;
         var bottom = document.getElementById("chat-bottom");
         if (bottom) { bottom.scrollIntoView({ behavior: "smooth", block: "end" }); return; }
         var container = document.querySelector("[data-turns]");
@@ -1115,10 +1170,17 @@
           var bottom = document.getElementById("chat-bottom");
           if (bottom) container.insertBefore(wrap, bottom);
           else container.appendChild(wrap);
-          // Scroll after DOM paint
+          // Snap to bottom after DOM paint. Set scrollTop directly on
+          // the chat panel so it works even when the user was scrolled
+          // up — bypasses the streaming guard that gates scrollToBottom().
+          // Re-arm the floating button so it can't briefly show while
+          // the bubble appends and layout settles.
+          if (window.__wickArmScrollBtn) window.__wickArmScrollBtn();
           requestAnimationFrame(function() {
+            var p = document.querySelector("[data-chat-panel]");
+            if (p) p.scrollTop = p.scrollHeight;
             var b = document.getElementById("chat-bottom");
-            if (b) b.scrollIntoView({ behavior: "smooth", block: "end" });
+            if (b) b.scrollIntoView({ block: "end" });
           });
         }
 

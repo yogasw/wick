@@ -11,11 +11,15 @@ Two ways to use wick:
 Want Claude / Codex / Gemini as a Slack bot, Telegram bot, or web assistant? Just download the binary.
 
 ```bash
-# Linux / macOS
-curl -L https://github.com/yogasw/wick/releases/latest/download/wick-linux-amd64 -o wick
-chmod +x wick
-./wick setup    # first-boot: generates credentials + SQLite DB
-./wick server   # web UI at http://localhost:9425
+# Linux / macOS / Termux — auto-detects OS + arch
+curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh
+wick setup    # first-boot: generates credentials + SQLite DB
+wick server   # web UI at http://localhost:9425
+```
+
+```powershell
+# Windows
+iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.ps1 | iex
 ```
 
 ```bash
@@ -49,7 +53,10 @@ Every Bash command the agent runs goes through the **Command Gate** — whitelis
 ## 2. Build Internal Tools & Jobs — AI writes real Go files
 
 ```bash
-go install github.com/yogasw/wick@latest
+# Install wick CLI (pick one)
+go install github.com/yogasw/wick@latest                                              # Go users
+curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh   # no Go needed
+
 wick init my-app
 cd my-app
 wick dev   # http://localhost:9425

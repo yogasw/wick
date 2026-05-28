@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -12,7 +13,9 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager/view"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/tool"
 )
 
 // connectorRoutes wires the /manager/connectors/* surface. Called from
@@ -22,6 +25,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 		return authMidd.RequireAuth(next)
 	}
 
+	mux.Handle("GET /manager/connectors", auth(h.connectorsIndexPage))
 	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
 	mux.Handle("POST /manager/connectors/{key}/oauth-app", auth(h.saveConnectorOAuthApp))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
@@ -76,6 +80,131 @@ func (h *Handler) connectorListPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view.ConnectorListPage(mod, rows, tagsByRow, user, oauthCfg).Render(ctx, w)
+}
+
+// ── Index page ───────────────────────────────────────────────────────
+
+// connectorsIndexPage lists every registered connector definition,
+// grouped by category tag, with search + filter chips. It is the single
+// home-page launcher's destination: home shows one "Connectors" tile
+// instead of one tile per definition, so this page is where the full set
+// is browsed. Non-admins only see definitions they can manage at least
+// one row of; System connectors are admin-only.
+func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	isAdmin := user != nil && user.IsAdmin()
+
+	rows, err := h.connectors.ListForManager(ctx, login.GetUserTagIDs(ctx), isAdmin)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Count instance states per connector, scoped to the rows the caller
+	// can manage (ListForManager already applies tag access; admins see
+	// every row). Three states, because an enabled instance is not
+	// necessarily usable — its required config may still be unfilled:
+	//   active     = enabled AND config complete (ready to use)
+	//   needsSetup = enabled BUT required config missing (not ready)
+	//   disabled   = row-level off-switch on
+	type instanceCount struct{ active, needsSetup, disabled int }
+	countByKey := make(map[string]instanceCount, len(rows))
+	for _, row := range rows {
+		c := countByKey[row.Key]
+		switch {
+		case row.Disabled:
+			c.disabled++
+		case h.connectors.Status(row) == "needs_setup":
+			c.needsSetup++
+		default:
+			c.active++
+		}
+		countByKey[row.Key] = c
+	}
+
+	mods := h.connectors.Modules()
+
+	// Bucket connectors by their category tag (the first group tag that
+	// is neither the "Connector" umbrella nor "System"). Track each
+	// category's sort order so groups render in catalog order.
+	type bucket struct {
+		sort  int
+		desc  string
+		cards []view.ConnectorIndexCard
+	}
+	buckets := make(map[string]*bucket)
+	for _, m := range mods {
+		system := hasDefaultTag(m.Meta.DefaultTags, tags.System.Name)
+		if system && !isAdmin {
+			continue
+		}
+		cnt := countByKey[m.Meta.Key]
+		if !isAdmin && cnt.active+cnt.needsSetup+cnt.disabled == 0 {
+			continue
+		}
+		cat, catSort, catDesc := connectorCategory(m.Meta.DefaultTags, system)
+		b := buckets[cat]
+		if b == nil {
+			b = &bucket{sort: catSort, desc: catDesc}
+			buckets[cat] = b
+		}
+		b.cards = append(b.cards, view.ConnectorIndexCard{
+			Key:             m.Meta.Key,
+			Name:            m.Meta.Name,
+			Description:     m.Meta.Description,
+			Icon:            m.Meta.Icon,
+			Category:        cat,
+			OpCount:         len(m.Operations),
+			ActiveCount:     cnt.active,
+			NeedsSetupCount: cnt.needsSetup,
+			DisabledCount:   cnt.disabled,
+			System:          system,
+		})
+	}
+
+	groups := make([]view.ConnectorIndexGroup, 0, len(buckets))
+	for name, b := range buckets {
+		sort.Slice(b.cards, func(i, j int) bool { return b.cards[i].Name < b.cards[j].Name })
+		groups = append(groups, view.ConnectorIndexGroup{Name: name, Description: b.desc, Cards: b.cards})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		si, sj := buckets[groups[i].Name].sort, buckets[groups[j].Name].sort
+		if si != sj {
+			return si < sj
+		}
+		return groups[i].Name < groups[j].Name
+	})
+
+	view.ConnectorsIndexPage(groups, user).Render(ctx, w)
+}
+
+// connectorCategory picks the display category for a connector from its
+// DefaultTags: the first group tag that is neither "Connector" (the
+// umbrella every connector carries) nor "System". Returns the category
+// name, its sort order, and its description. Falls back to "System" for
+// system connectors with no other category, else "Other".
+func connectorCategory(list []tool.DefaultTag, system bool) (name string, sortOrder int, desc string) {
+	for _, t := range list {
+		if t.Name == tags.Connector.Name || t.Name == tags.System.Name {
+			continue
+		}
+		return t.Name, t.SortOrder, t.Description
+	}
+	if system {
+		return tags.System.Name, tags.System.SortOrder, tags.System.Description
+	}
+	return "Other", 1<<31 - 1, ""
+}
+
+// hasDefaultTag reports whether a connector's DefaultTags include a tag
+// with the given name.
+func hasDefaultTag(list []tool.DefaultTag, name string) bool {
+	for _, t := range list {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // saveConnectorOAuthApp persists the OAuth app credentials (client_id /

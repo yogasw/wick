@@ -20,9 +20,11 @@
 package connectors
 
 import (
+	"github.com/yogasw/wick/internal/connectors/bitbucket"
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
 	"github.com/yogasw/wick/internal/connectors/github"
 	"github.com/yogasw/wick/internal/connectors/httprest"
+	"github.com/yogasw/wick/internal/connectors/loki"
 	"github.com/yogasw/wick/internal/connectors/slack"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
@@ -77,21 +79,31 @@ func Register(m connector.Module) {
 // only exist mid-boot.
 func RegisterBuiltins() {
 	registerOnce(connector.Module{
-		Meta:       withConnectorTag(github.Meta()),
+		Meta:       withConnectorTag(github.Meta(), tags.Development),
 		Configs:    entity.StructToConfigs(github.Configs{}),
 		Operations: github.Operations(),
 	})
 	registerOnce(connector.Module{
-		Meta:       withConnectorTag(httprest.Meta()),
+		Meta:       withConnectorTag(httprest.Meta(), tags.API),
 		Configs:    entity.StructToConfigs(httprest.Configs{}),
 		Operations: httprest.Operations(),
 	})
 	registerOnce(connector.Module{
-		Meta:        withConnectorTag(slack.Meta()),
+		Meta:        withConnectorTag(slack.Meta(), tags.Communication),
 		Configs:     entity.StructToConfigs(slack.Configs{}),
 		Operations:  slack.Operations(),
 		HealthCheck: slack.HealthCheck,
 		OAuth:       slack.SlackOAuthMeta(),
+	})
+	registerOnce(connector.Module{
+		Meta:       withConnectorTag(bitbucket.Meta(), tags.Development),
+		Configs:    entity.StructToConfigs(bitbucket.Configs{}),
+		Operations: bitbucket.Operations(),
+	})
+	registerOnce(connector.Module{
+		Meta:       withConnectorTag(loki.Meta(), tags.Observability),
+		Configs:    entity.StructToConfigs(loki.Configs{}),
+		Operations: loki.Operations(),
 	})
 }
 
