@@ -1,6 +1,6 @@
 # Web Terminal (WebTTY)
 
-Mounts under `/tools/webtty`. Browser-based terminal proxied ke embedded `gotty` process.
+Mounts under `/tools/webtty`. Browser-based terminal proxied ke embedded [gotty](https://github.com/sorenisanerd/gotty) process (sorenisanerd's maintained fork — original `yudai/gotty` sudah unmaintained sejak 2018).
 
 ## Use case
 
@@ -20,8 +20,10 @@ Browser → /tools/webtty/tty/* (WebSocket + HTTP)
              ↓
          tty.Server (gotty proxy)
              ↓
-         gotty binary (spawns shell)
+         gotty binary (sorenisanerd fork — spawns shell)
 ```
+
+Upstream: [github.com/sorenisanerd/gotty](https://github.com/sorenisanerd/gotty)
 
 - Tidak expose port tambahan — semua traffic lewat port Wick utama
 - Route `/tty/` di-handle via `HandleRaw` (bypass middleware) untuk WebSocket upgrade

@@ -238,6 +238,10 @@ jobs:
         id: meta
         shell: bash
         working-directory: /tmp/wick
+        # Installer asset is always uploaded. For linux targets we ALSO
+        # upload the raw binary (`<app>-linux-<arch>`) so install.sh can
+        # serve Termux and dpkg-less Linux hosts that need the bare
+        # executable.
         run: |
           NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
           VERSION=${GITHUB_REF_NAME#v}
@@ -249,6 +253,11 @@ jobs:
           ASSET="${NAME}-${VERSION}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
           echo "asset_path=/tmp/wick/bin/$ASSET" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            RAW="${NAME}-linux-${{ matrix.arch }}"
+            echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+            echo "raw_path=/tmp/wick/bin/$RAW" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checksum
         if: steps.gate.outputs.enabled == 'true'
@@ -256,6 +265,9 @@ jobs:
         run: |
           cd /tmp/wick/bin
           sha256sum "${{ steps.meta.outputs.asset }}" > "${{ steps.meta.outputs.asset }}.sha256"
+          if [ "${{ matrix.os }}" = "linux" ] && [ -f "${{ steps.meta.outputs.raw }}" ]; then
+            sha256sum "${{ steps.meta.outputs.raw }}" > "${{ steps.meta.outputs.raw }}.sha256"
+          fi
 
       - name: Upload artifact
         if: steps.gate.outputs.enabled == 'true'
@@ -265,7 +277,10 @@ jobs:
           path: |
             ${{ steps.meta.outputs.asset_path }}
             ${{ steps.meta.outputs.asset_path }}.sha256
+            ${{ steps.meta.outputs.raw_path }}
+            ${{ steps.meta.outputs.raw_path }}.sha256
           retention-days: 7
+          if-no-files-found: ignore
 
   attach-to-release:
     name: Attach Binaries to Release
