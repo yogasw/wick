@@ -106,7 +106,7 @@ func Rest(reg *agentchannels.Registry, store RestStore, sendFn agentchannels.Sen
 	ch.SetSendFunc(sendFn)
 	reg.Add(ch, agentrest.NewConfigSource(store, ch))
 	if ch.IsConfigured() {
-		log.Info().Msg("agents: rest channel enabled, serving POST /integrations/rest/v1/chat/completions")
+		log.Info().Msg("agents: rest channel enabled, serving POST /integrations/rest/api/v1/openai/chat/completions")
 	} else {
 		log.Info().Msg("agents: rest channel not enabled (toggle in Channels → REST)")
 	}

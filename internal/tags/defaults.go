@@ -62,6 +62,42 @@ var (
 		SortOrder:   50,
 	}
 
+	// Connector category tags. These sub-divide the connector index page
+	// (/manager/connectors) into browsable sections — Communication,
+	// Development, Observability, … — alongside the existing API group. A
+	// connector opts into one by passing it to withConnectorTag in
+	// internal/connectors/registry.go. Admins can recategorize from
+	// /admin/tags; the set grows by adding a tag here. They do not render
+	// on the home page (connectors are collapsed to a single launcher
+	// there), only on the connector index.
+
+	// Communication groups chat / messaging connectors (Slack, Telegram,
+	// Discord, email, …).
+	Communication = tool.DefaultTag{
+		Name:        "Communication",
+		Description: "Chat and messaging connectors.",
+		IsGroup:     true,
+		SortOrder:   51,
+	}
+
+	// Development groups source-host and dev-platform connectors (GitHub,
+	// Bitbucket, GitLab, Jira, CI, …).
+	Development = tool.DefaultTag{
+		Name:        "Development",
+		Description: "Source hosts and developer platforms.",
+		IsGroup:     true,
+		SortOrder:   52,
+	}
+
+	// Observability groups logging / metrics / tracing connectors (Loki,
+	// Grafana, Prometheus, Sentry, …).
+	Observability = tool.DefaultTag{
+		Name:        "Observability",
+		Description: "Logging, metrics, and tracing connectors.",
+		IsGroup:     true,
+		SortOrder:   53,
+	}
+
 	// Job groups background jobs that run on a cron schedule or are
 	// triggered manually.
 	Job = tool.DefaultTag{

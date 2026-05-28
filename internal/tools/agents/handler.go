@@ -29,6 +29,7 @@ import (
 	wfrepo "github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
 	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/all"
@@ -305,6 +306,10 @@ func Register(r tool.Router) {
 
 func settingsPage(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if u := login.GetUser(c.Context()); u == nil || !u.IsAdmin() {
+		c.Error(http.StatusForbidden, "admins only")
 		return
 	}
 	rows := globalConfigs.ListOwned("agents")

@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,6 +16,11 @@ import (
 func newCtx(t *testing.T, configs map[string]string) *connector.Ctx {
 	t.Helper()
 	return connector.NewCtx(context.Background(), "test-row", configs, map[string]string{}, http.DefaultClient, nil, nil)
+}
+
+func newCtxWithInput(t *testing.T, input map[string]string) *connector.Ctx {
+	t.Helper()
+	return connector.NewCtx(context.Background(), "test-row", map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"}, input, http.DefaultClient, nil, nil)
 }
 
 // withBaseURL points the slack package at a test server for the duration
@@ -82,7 +88,7 @@ func TestParseScopeHeader(t *testing.T) {
 }
 
 func TestRunHealthCheck_AllOK(t *testing.T) {
-	srv := mockSlack(t, "channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,users:read,users:read.email,chat:write,reactions:write")
+	srv := mockSlack(t, "channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,users:read,users:read.email,chat:write,reactions:write,canvases:read,canvases:write")
 	withBaseURL(t, srv.URL)
 	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
 
@@ -114,6 +120,10 @@ func TestRunHealthCheck_MissingScopes(t *testing.T) {
 	assert.Contains(t, byOp["send_message"].Reason, "chat:write")
 	assert.False(t, byOp["add_reaction"].OK)
 	assert.Contains(t, byOp["add_reaction"].Reason, "reactions:write")
+	assert.False(t, byOp["create_canvas"].OK)
+	assert.Contains(t, byOp["create_canvas"].Reason, "canvases:write")
+	assert.False(t, byOp["lookup_canvas_sections"].OK)
+	assert.Contains(t, byOp["lookup_canvas_sections"].Reason, "canvases:read")
 }
 
 func TestRunHealthCheck_AuthError(t *testing.T) {
@@ -154,4 +164,129 @@ func TestPickToken_Missing(t *testing.T) {
 	_, err := pickToken(c)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured")
+}
+
+func TestCreateCanvas(t *testing.T) {
+	var path string
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		_, _ = w.Write([]byte(`{"ok":true,"canvas_id":"F123"}`))
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	result, err := createCanvas(newCtxWithInput(t, map[string]string{
+		"title":      "Incident details",
+		"markdown":   "# Summary\nEvidence",
+		"channel_id": "C123",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "/canvases.create", path)
+	assert.Equal(t, "Incident details", captured["title"])
+	assert.Equal(t, "C123", captured["channel_id"])
+	assert.Equal(t, map[string]any{"type": "markdown", "markdown": "# Summary\nEvidence"}, captured["document_content"])
+	assert.Equal(t, "F123", result.(map[string]any)["canvas_id"])
+}
+
+func TestCreateChannelCanvas(t *testing.T) {
+	var path string
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		_, _ = w.Write([]byte(`{"ok":true,"canvas_id":"F234"}`))
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := createChannelCanvas(newCtxWithInput(t, map[string]string{
+		"channel_id": "C234",
+		"title":      "Support",
+		"markdown":   "Details",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "/conversations.canvases.create", path)
+	assert.Equal(t, "C234", captured["channel_id"])
+	assert.Equal(t, "Support", captured["title"])
+}
+
+func TestEditCanvas(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := editCanvas(newCtxWithInput(t, map[string]string{
+		"canvas_id":  "F123",
+		"operation":  "replace",
+		"section_id": "temp:C:section",
+		"markdown":   "Updated evidence",
+	}))
+	require.NoError(t, err)
+	changes := captured["changes"].([]any)
+	change := changes[0].(map[string]any)
+	assert.Equal(t, "replace", change["operation"])
+	assert.Equal(t, "temp:C:section", change["section_id"])
+	assert.Equal(t, map[string]any{"type": "markdown", "markdown": "Updated evidence"}, change["document_content"])
+}
+
+func TestEditCanvasRequiresSectionForDelete(t *testing.T) {
+	_, err := editCanvas(newCtxWithInput(t, map[string]string{
+		"canvas_id": "F123",
+		"operation": "delete",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "section_id")
+}
+
+func TestLookupCanvasSections(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		_, _ = w.Write([]byte(`{"ok":true,"sections":[{"id":"temp:C:section"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := lookupCanvasSections(newCtxWithInput(t, map[string]string{
+		"canvas_id": "F123",
+		"criteria":  `{"section_types":["any_header"],"contains_text":"Incident"}`,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "F123", captured["canvas_id"])
+	assert.Equal(t, "Incident", captured["criteria"].(map[string]any)["contains_text"])
+}
+
+func TestSetCanvasAccess(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := setCanvasAccess(newCtxWithInput(t, map[string]string{
+		"canvas_id":    "F123",
+		"access_level": "write",
+		"channel_ids":  "C123, C234",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "write", captured["access_level"])
+	assert.Equal(t, []any{"C123", "C234"}, captured["channel_ids"])
+}
+
+func TestSetCanvasAccessRejectsMixedEntities(t *testing.T) {
+	_, err := setCanvasAccess(newCtxWithInput(t, map[string]string{
+		"canvas_id":   "F123",
+		"channel_ids": "C123",
+		"user_ids":    "U123",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be combined")
 }

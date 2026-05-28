@@ -159,10 +159,20 @@ func NewServer() *Server {
 	// Boot force-restore: DB is source of truth on first start after a
 	// container restart (no-volume env). Runs after Bootstrap so the
 	// verbose_logs config row is already seeded and readable.
+	//
+	// The realtime watcher is started AFTER restore completes so it
+	// doesn't race the restore writes and trigger spurious "disk
+	// changed" syncs back into the DB.
 	{
 		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
 		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
 			log.Warn().Err(err).Msg("providersync: startup restore failed")
+		}
+		if configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true" {
+			debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
+			if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
+				log.Warn().Err(err).Msg("providersync: watcher start failed")
+			}
 		}
 	}
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
@@ -902,12 +912,15 @@ func NewServer() *Server {
 		})
 	}
 
-	// Register connectors as items. One module = one card; the card
-	// links to the manager list page where users see N rows for that
+	// Register connectors as items. One module = one card path under
+	// /manager/connectors/{key} where users see N rows for that
 	// definition (one per credential set), each with a test panel and
-	// enable/disable/duplicate actions. DefaultTags propagate so the
-	// generic seed loop below attaches them to the card's path, which
-	// is what the home page renders.
+	// enable/disable/duplicate actions. These entries stay in allItems
+	// for the admin tag UI, access-control seeding, and wickmanager's
+	// tool_list — but the home grid does NOT render them individually;
+	// it shows a single "Connectors" launcher instead (see homeItems
+	// below). The connector set is expected to grow large and every row
+	// needs config before use, so per-connector home tiles only add noise.
 	for _, cm := range connectors.All() {
 		m := cm.Meta
 		allItems = append(allItems, tool.Tool{
@@ -945,7 +958,33 @@ func NewServer() *Server {
 	}
 
 	// ── Home ─────────────────────────────────────────────────────
-	homeHandler := home.NewHandler(allItems, authSvc, tagsSvc, bookmarkSvc)
+	// Home shows connectors as one launcher tile under the AI group
+	// instead of one tile per definition. Derive a home-only item list:
+	// drop the per-connector entries, append a single "Connectors" card
+	// that deep-links to the /manager/connectors index page.
+	homeItems := make([]tool.Tool, 0, len(allItems)+1)
+	for _, t := range allItems {
+		if t.Category == "connector" {
+			continue
+		}
+		homeItems = append(homeItems, t)
+	}
+	connectorsTile := tool.Tool{
+		Name:              "Connectors",
+		Description:       "Browse and manage LLM-callable connectors that wrap external APIs.",
+		Icon:              "🔌",
+		Path:              "/manager/connectors",
+		Category:          "connector",
+		DefaultVisibility: entity.VisibilityPrivate,
+		DefaultTags:       []tool.DefaultTag{tags.AI},
+	}
+	homeItems = append(homeItems, connectorsTile)
+	// Seed the AI group tag on the launcher path so it lands in the AI
+	// card next to Agents (the generic loop above only walks allItems).
+	if err := tagsSvc.EnsureToolDefaultTags(context.Background(), connectorsTile.Path, connectorsTile.DefaultTags); err != nil {
+		log.Error().Msgf("seed connectors launcher tag: %s", err.Error())
+	}
+	homeHandler := home.NewHandler(homeItems, authSvc, tagsSvc, bookmarkSvc)
 
 	// ── Router ───────────────────────────────────────────────────
 	r := http.NewServeMux()
