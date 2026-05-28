@@ -21,7 +21,7 @@ Pick one:
 
 ```bash
 # Option A — Go install (any platform with Go installed)
-go install github.com/yogasw/wick@v0.14.7
+go install github.com/yogasw/wick@v0.14.8
 ```
 
 ```bash
