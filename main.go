@@ -16,10 +16,13 @@ var templateFS embed.FS
 //go:embed all:.claude/skills/encrypted-fields
 var wickSkillsFS embed.FS
 
+//go:embed scripts/install.sh scripts/install.ps1
+var installScriptsFS embed.FS
+
 //go:embed VERSION
 var version string
 
 func main() {
 	cli.AppVersion = "v" + strings.TrimSpace(version)
-	cli.Execute(templateFS, wickSkillsFS)
+	cli.Execute(templateFS, wickSkillsFS, installScriptsFS)
 }
