@@ -17,8 +17,21 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 
 ## 2. Install Wick CLI
 
+Pick one:
+
 ```bash
-go install github.com/yogasw/wick@v0.14.7
+# Option A — Go install (any platform with Go installed)
+go install github.com/yogasw/wick@v0.14.8
+```
+
+```bash
+# Option B — Curl installer (Linux / macOS / Termux, no Go required)
+curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh
+```
+
+```powershell
+# Option C — PowerShell installer (Windows, no Go required)
+iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.ps1 | iex
 ```
 
 Verify:
@@ -26,6 +39,10 @@ Verify:
 ```bash
 wick version
 ```
+
+::: tip Termux / Android
+The curl installer detects Termux (`$PREFIX` set) and drops the raw `linux-arm64` binary into `$PREFIX/bin/wick` — no `dpkg`, no root, no GUI dependencies.
+:::
 
 ## 3. Init a project
 
