@@ -773,7 +773,21 @@
         scrollToBottom();
       }
 
+      // Returns true when user is already pinned near the bottom of the
+      // chat scroll area. Used to skip auto-scroll while streaming so the
+      // user can read older messages without being yanked back down.
+      function isNearBottom() {
+        var panel = document.querySelector("[data-chat-panel]");
+        if (panel) {
+          var slack = panel.scrollHeight - panel.scrollTop - panel.clientHeight;
+          return slack < 50;
+        }
+        var w = window.innerHeight + window.scrollY;
+        return (document.documentElement.scrollHeight - w) < 50;
+      }
+
       function scrollToBottom() {
+        if (!isNearBottom()) return;
         var bottom = document.getElementById("chat-bottom");
         if (bottom) { bottom.scrollIntoView({ behavior: "smooth", block: "end" }); return; }
         var container = document.querySelector("[data-turns]");
