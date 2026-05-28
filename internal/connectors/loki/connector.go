@@ -8,7 +8,7 @@ import (
 const Key = "loki"
 
 type Configs struct {
-	BaseURL       string `wick:"url;required;default=https://loki.qiscus.io;desc=Grafana base URL. Example: https://loki.qiscus.io"`
+	BaseURL       string `wick:"url;required;desc=Grafana base URL. Example: https://loki.domain.com"`
 	DatasourceUID string `wick:"required;default=43cBBeg4k;desc=Loki datasource UID in Grafana. Found in the datasource proxy URL segment after /uid/."`
 	AuthMode      string `wick:"dropdown=basic|token;required;default=basic;desc=basic = Grafana username + password, token = Bearer API key (Service Account)."`
 	Token         string `wick:"secret;desc=Grafana Service Account token. Used when auth_mode = token."`
