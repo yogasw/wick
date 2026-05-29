@@ -314,8 +314,18 @@ jobs:
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        # `upload-artifact` preserves absolute paths (e.g. /tmp/wick-agent/...)
+        # under `artifacts/tmp/...` after merge-multiple, so a naive
+        # `artifacts/*` glob expands to that nested directory and `gh
+        # release upload` errors with `is a directory`. Walk recursively
+        # and pass only files.
         run: |
-          gh release upload "${{ github.ref_name }}" artifacts/* \
+          mapfile -t FILES < <(find artifacts -type f)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No artifact files found under artifacts/."
+            exit 1
+          fi
+          gh release upload "${{ github.ref_name }}" "${FILES[@]}" \
             --repo "${{ github.repository }}" \
             --clobber
 
