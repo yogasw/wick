@@ -17,21 +17,10 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 
 ## 2. Install Wick CLI
 
-Pick one:
+The Wick CLI scaffolds and builds projects (`wick init`, `wick build`, `wick dev`). Install via Go:
 
 ```bash
-# Option A — Go install (any platform with Go installed)
 go install github.com/yogasw/wick@v0.14.8
-```
-
-```bash
-# Option B — Curl installer (Linux / macOS / Termux, no Go required)
-curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh
-```
-
-```powershell
-# Option C — PowerShell installer (Windows, no Go required)
-iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.ps1 | iex
 ```
 
 Verify:
@@ -40,8 +29,8 @@ Verify:
 wick version
 ```
 
-::: tip Termux / Android
-The curl installer detects Termux (`$PREFIX` set) and drops the raw `linux-arm64` binary into `$PREFIX/bin/wick` — no `dpkg`, no root, no GUI dependencies.
+::: tip Just want to run AI agents without building tools?
+Skip the CLI and grab the pre-built **`wick-agent`** runtime binary directly — see [Run AI Agents (no Go)](https://github.com/yogasw/wick#1-run-ai-agents--no-go-no-framework) in the README. That binary ships pre-built for Linux / macOS / Windows / Termux via a curl installer; the Wick CLI here is for **scaffolding new projects**.
 :::
 
 ## 3. Init a project
