@@ -357,6 +357,27 @@ func Operations() []connector.Operation {
     thread_ts: '{{.Node.trigger.payload.thread}}'
     text: "Got it — looking into this now."`,
 					},
+					{
+						Name: "with_blocks",
+						YAML: `- id: alert
+  type: connector
+  module: slack
+  op: send_message
+  args:
+    channel: "#alerts"
+    text: "Service down — payments-api"
+    blocks: |
+      [
+        {"type":"header","text":{"type":"plain_text","text":":rotating_light: Service down"}},
+        {"type":"section","fields":[
+          {"type":"mrkdwn","text":"*Service:*\npayments-api"},
+          {"type":"mrkdwn","text":"*Region:*\nap-southeast-1"}
+        ]},
+        {"type":"actions","elements":[
+          {"type":"button","text":{"type":"plain_text","text":"Open runbook"},"url":"https://example.com/runbook"}
+        ]}
+      ]`,
+					},
 				},
 			},
 		),
@@ -676,21 +697,38 @@ func sendMessage(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf("channel is required")
 	}
 	text := c.Input("text")
-	blocks := strings.TrimSpace(c.Input("blocks"))
-	if strings.TrimSpace(text) == "" && blocks == "" {
+	blocksRaw := strings.TrimSpace(c.Input("blocks"))
+	if strings.TrimSpace(text) == "" && blocksRaw == "" {
 		return nil, fmt.Errorf("text or blocks is required")
 	}
 	body := map[string]any{"channel": ch}
 	if text != "" {
+		// Keep text for notification preview / fallback even when we
+		// render via blocks below.
 		body["text"] = text
 	}
-	if blocks != "" {
-		parsed, err := parseBlocks(blocks)
+	// Append the signed footer to every send_message. If the caller
+	// supplied blocks, append onto theirs; otherwise wrap the plain
+	// text in a section block first so the footer renders alongside.
+	var outBlocks []any
+	if blocksRaw != "" {
+		parsed, err := parseBlocks(blocksRaw)
 		if err != nil {
 			return nil, err
 		}
-		body["blocks"] = parsed
+		if arr, ok := parsed.([]any); ok {
+			outBlocks = arr
+		}
+	} else if text != "" {
+		outBlocks = []any{
+			map[string]any{
+				"type": "section",
+				"text": map[string]any{"type": "mrkdwn", "text": text},
+			},
+		}
 	}
+	outBlocks = append(outBlocks, signedFooterBlock(c))
+	body["blocks"] = outBlocks
 	if v := strings.TrimSpace(c.Input("thread_ts")); v != "" {
 		body["thread_ts"] = v
 		if c.InputBool("reply_broadcast") {

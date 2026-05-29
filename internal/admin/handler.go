@@ -102,6 +102,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/variables", admin(h.variablesPage))
 	mux.Handle("POST /admin/variables/{key}", admin(h.setVariable))
 	mux.Handle("POST /admin/variables/{key}/regenerate", admin(h.regenerateVariable))
+	mux.Handle("GET /admin/variables/lan-ips", admin(h.lanIPs))
 
 	// User actions
 	mux.Handle("POST /admin/users/{id}/approve", admin(h.approveUser))
