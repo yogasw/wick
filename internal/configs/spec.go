@@ -16,6 +16,8 @@ package configs
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"os"
+	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -40,6 +42,33 @@ const (
 var generators = map[string]func() string{
 	KeySessionSecret: generateHex32,
 	KeyEncryptionKey: generateHex32,
+}
+
+// envOverrides maps app-level keys to env-var names that override the
+// DB value at read time. Useful for bootstrap on remote hosts where
+// the seeded localhost app_url blocks the admin UI behind its own
+// host allowlist — exporting APP_URL lets the operator break in
+// without first reaching the UI to flip the row. The admin UI marks
+// these rows as read-only while the env var is set so it is obvious
+// where the value is coming from.
+var envOverrides = map[string]string{
+	KeyAppURL:        "APP_URL",
+	KeyEncryptionKey: "WICK_ENC_KEY",
+}
+
+// EnvOverrideFor reports the env-var override for a key, if any. Returns
+// (envName, value, true) only when the env var is declared in
+// envOverrides AND currently set to a non-empty value.
+func EnvOverrideFor(key string) (envName, value string, set bool) {
+	envName = envOverrides[key]
+	if envName == "" {
+		return "", "", false
+	}
+	v := strings.TrimSpace(os.Getenv(envName))
+	if v == "" {
+		return "", "", false
+	}
+	return envName, v, true
 }
 
 // appDefaults returns the seed rows reconciled into `configs` on every
