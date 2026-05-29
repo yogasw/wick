@@ -179,8 +179,11 @@
     s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
-    s = s.replace(/_(.+?)_/g, '<em>$1</em>');
+    // Underscore emphasis — only at word boundaries so identifiers like
+    // mcp_claude_ai_Slack don't get eaten as italic. Asterisks above
+    // still handle the intraword case.
+    s = s.replace(/(^|\W)__(\S(?:.*?\S)?)__(?=\W|$)/g, '$1<strong>$2</strong>');
+    s = s.replace(/(^|\W)_(\S(?:.*?\S)?)_(?=\W|$)/g, '$1<em>$2</em>');
     // Inline code
     s = s.replace(/`([^`]+)`/g, '<code class="font-mono text-xs bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 rounded text-black-900 dark:text-white-100">$1</code>');
     // Links — http(s) external (open in new tab) + arbitrary path

@@ -93,16 +93,33 @@ templ simpleFieldInner(row entity.Config) {
 			if row.IsSecret && row.Value != "" {
 				<span class="rounded-full bg-pos-100 px-1.5 py-0.5 text-[10px] font-semibold text-pos-400">stored</span>
 			}
+			if row.EnvOverride != "" {
+				<span class="rounded-full bg-prog-100 px-1.5 py-0.5 text-[10px] font-semibold text-prog-400" title="Overridden by environment variable — unset it and restart to edit from here">env: { row.EnvOverride }</span>
+			}
 			<span data-save-status class="ml-auto text-[10px] transition-all"></span>
 		</div>
 		@simpleFieldWidget(row)
-		if row.Description != "" {
+		if row.EnvOverride != "" {
+			<p class="mt-1.5 text-[11px] text-prog-400 leading-relaxed">
+				Overridden by <span class="font-mono">{ row.EnvOverride }</span> environment variable. Unset it and restart to edit from here.
+			</p>
+		} else if row.Description != "" {
 			<p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed">{ row.Description }</p>
 		}
 	</div>
 }
 
 templ simpleFieldWidget(row entity.Config) {
+	if row.EnvOverride != "" {
+		<fieldset disabled class="opacity-60 cursor-not-allowed">
+			@simpleFieldWidgetInner(row)
+		</fieldset>
+	} else {
+		@simpleFieldWidgetInner(row)
+	}
+}
+
+templ simpleFieldWidgetInner(row entity.Config) {
 	if row.IsSecret {
 		if row.Value != "" {
 			<input

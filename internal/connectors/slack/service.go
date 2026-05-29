@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -444,6 +446,58 @@ func evalScopeRule(rule [][]string, granted map[string]struct{}) (bool, [][]stri
 		}
 	}
 	return len(missing) == 0, missing
+}
+
+// botUserIDCache memoizes auth.test → user_id per token so send_message
+// doesn't pay an extra round-trip on every call. Tokens rotate rarely;
+// the cache lives for the process lifetime.
+var botUserIDCache sync.Map // map[string]string
+
+// resolveBotUserID returns the Slack user_id behind the active token.
+// Empty string when auth.test fails — caller falls back to the app name.
+func resolveBotUserID(c *connector.Ctx) string {
+	token, err := pickToken(c)
+	if err != nil || token == "" {
+		return ""
+	}
+	if v, ok := botUserIDCache.Load(token); ok {
+		return v.(string)
+	}
+	raw, err := slackGet(c, "auth.test", nil)
+	if err != nil {
+		return ""
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := m["user_id"].(string)
+	if id != "" {
+		botUserIDCache.Store(token, id)
+	}
+	return id
+}
+
+// signedFooterBlock builds the Block Kit context block that gets
+// appended to every send_message — "Sent using <@BotID>" when the
+// bot user is resolvable, falling back to the app name.
+func signedFooterBlock(c *connector.Ctx) map[string]any {
+	botID := resolveBotUserID(c)
+	var footerText string
+	if botID != "" {
+		footerText = "Sent using <@" + botID + ">"
+	} else {
+		footerText = "Sent using *" + appname.Resolve() + "*"
+	}
+	return map[string]any{
+		"type": "context",
+		"elements": []any{
+			map[string]any{
+				"type": "mrkdwn",
+				"text": footerText,
+			},
+		},
+	}
 }
 
 func cursorFrom(m map[string]any) string {

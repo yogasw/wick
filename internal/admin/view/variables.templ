@@ -15,7 +15,116 @@ templ VariablesPage(rows []entity.Config, editKey string, user *entity.User) {
 			</div>
 			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Variables</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">App-level runtime knobs. Changes are cached in memory and take effect immediately. Secrets are write-only — once set, no one can read them back.</p>
+			@lanIPDetectPanel()
 			@managerview.ConfigsTable(rows, "/admin/variables", editKey, "/admin/variables")
 		</main>
 	}
+}
+
+// lanIPDetectPanel offers admins a way to discover this host's
+// reachable LAN URLs and paste them into the allowed_origins kvlist.
+// Suggestions are intentionally read-only — the admin still picks and
+// pastes so a phone joining a public Wi-Fi network doesn't auto-expose
+// the manager to every device on the SSID.
+templ lanIPDetectPanel() {
+	<div class="mt-5 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4">
+		<div class="flex items-center justify-between gap-3">
+			<div class="min-w-0">
+				<p class="text-sm font-semibold text-black-900 dark:text-white-100">Detect LAN URLs</p>
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+					Find URLs that other devices on the same network can use to reach this app. Click <strong>Add</strong> next to each URL to insert it into <span class="font-mono">allowed_origins</span> below — saved automatically.
+				</p>
+			</div>
+			<button
+				type="button"
+				data-lan-detect
+				class="shrink-0 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+			>Detect</button>
+		</div>
+		<div data-lan-results class="mt-3 hidden flex flex-col gap-2"></div>
+		<script>
+		(function () {
+			const btn = document.querySelector('[data-lan-detect]');
+			const panel = document.querySelector('[data-lan-results]');
+			if (!btn || !panel) return;
+
+			function existingOrigins() {
+				const set = new Set();
+				const section = document.querySelector('[data-kvlist-key="allowed_origins"]');
+				if (!section) return set;
+				section.querySelectorAll('[data-kv-row] [data-col="url"]').forEach((i) => {
+					const v = (i.value || '').trim();
+					if (v) set.add(v);
+				});
+				return set;
+			}
+
+			function addToAllowlist(url) {
+				const section = document.querySelector('[data-kvlist-key="allowed_origins"]');
+				if (!section || typeof window.kvBlockAddRow !== 'function') return false;
+				window.kvBlockAddRow(section);
+				// Newest row is the last one — find its url input and fill it.
+				const rows = section.querySelectorAll('[data-kv-row]');
+				const last = rows[rows.length - 1];
+				if (!last) return false;
+				const input = last.querySelector('[data-col="url"]');
+				if (!input) return false;
+				input.value = url;
+				// Trigger input so the debounced auto-save picks it up.
+				input.dispatchEvent(new Event('input', { bubbles: true }));
+				return true;
+			}
+
+			btn.addEventListener('click', async () => {
+				btn.disabled = true;
+				btn.textContent = 'Detecting…';
+				panel.classList.remove('hidden');
+				panel.innerHTML = '';
+				try {
+					const resp = await fetch('/admin/variables/lan-ips', { credentials: 'same-origin' });
+					if (!resp.ok) throw new Error('HTTP ' + resp.status);
+					const data = await resp.json();
+					const urls = (data && data.urls) || [];
+					if (urls.length === 0) {
+						panel.innerHTML = '<p class="text-xs text-black-700 dark:text-black-600">No private LAN IPv4 addresses detected — this host may only have public or loopback interfaces.</p>';
+						return;
+					}
+					const existing = existingOrigins();
+					urls.forEach((u) => {
+						const row = document.createElement('div');
+						row.className = 'flex items-center gap-2';
+						const code = document.createElement('code');
+						code.className = 'flex-1 truncate font-mono text-xs text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 px-2 py-1 rounded';
+						code.textContent = u;
+						const add = document.createElement('button');
+						add.type = 'button';
+						add.className = 'shrink-0 rounded border border-white-400 dark:border-navy-600 px-2 py-1 text-[11px] font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors';
+						const alreadyAdded = existing.has(u);
+						add.textContent = alreadyAdded ? 'Already added' : 'Add';
+						add.disabled = alreadyAdded;
+						if (alreadyAdded) add.classList.add('opacity-50', 'cursor-not-allowed');
+						add.addEventListener('click', () => {
+							if (add.disabled) return;
+							if (addToAllowlist(u)) {
+								add.textContent = 'Added';
+								add.disabled = true;
+								add.classList.add('opacity-50', 'cursor-not-allowed');
+							} else {
+								add.textContent = 'Failed';
+							}
+						});
+						row.appendChild(code);
+						row.appendChild(add);
+						panel.appendChild(row);
+					});
+				} catch (err) {
+					panel.innerHTML = '<p class="text-xs text-neg-500">Detect failed: ' + (err && err.message ? err.message : err) + '</p>';
+				} finally {
+					btn.disabled = false;
+					btn.textContent = 'Detect';
+				}
+			});
+		})();
+		</script>
+	</div>
 }
