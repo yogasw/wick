@@ -31,6 +31,7 @@ const (
 	KeyAppDescription       = "app_description"
 	DefaultAppDescription   = "A lightweight internal tooling platform — build, deploy, and run custom tools for your team in minutes."
 	KeyAppURL               = "app_url"
+	KeyAllowedOrigins       = "allowed_origins"
 	KeySessionSecret        = "session_secret"
 	KeyAdminPasswordChanged = "admin_password_changed"
 	KeyEncryptionKey        = "encryption_key"
@@ -52,8 +53,9 @@ var generators = map[string]func() string{
 // these rows as read-only while the env var is set so it is obvious
 // where the value is coming from.
 var envOverrides = map[string]string{
-	KeyAppURL:        "APP_URL",
-	KeyEncryptionKey: "WICK_ENC_KEY",
+	KeyAppURL:         "APP_URL",
+	KeyAllowedOrigins: "ALLOWED_ORIGINS",
+	KeyEncryptionKey:  "WICK_ENC_KEY",
 }
 
 // EnvOverrideFor reports the env-var override for a key, if any. Returns
@@ -94,6 +96,13 @@ func appDefaults() []entity.Config {
 			Type:        "url",
 			Value:       "http://localhost:9425",
 			Description: "Base URL where this app is reachable. Used to build the OAuth callback URL and other absolute links. Update after moving the app behind a new domain.",
+		},
+		{
+			Key:         KeyAllowedOrigins,
+			Type:        "kvlist",
+			Options:     "url",
+			Value:       "[]",
+			Description: "Extra URLs that may reach the admin/host allowlist beyond app_url. Add one row per origin (e.g. http://192.168.1.42:9425) when you need to open the app from another device on the same network. The ALLOWED_ORIGINS env var (comma-separated) overrides this list — handy for Termux/LAN bootstrap before the admin UI is reachable.",
 		},
 		{
 			Key:           KeySessionSecret,

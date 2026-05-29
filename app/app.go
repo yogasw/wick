@@ -470,7 +470,7 @@ func Run() {
 		},
 	}
 
-	root.AddCommand(serverCmd, workerCmd, allCmd, mcpCmd, trayCmd, uninstallCmd())
+	root.AddCommand(serverCmd, workerCmd, allCmd, mcpCmd, trayCmd, configCmd(), uninstallCmd())
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())

@@ -1146,25 +1146,21 @@ func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[st
 
 
 // hostAllowlistHandler rejects requests whose Host header doesn't match
-// the host of the configured app_url. The /health endpoint is exempt
-// so external load balancers / uptime checks can probe via the raw
-// listen addr (e.g. http://10.0.0.5:9425/health) without first knowing
-// the public hostname. Empty app_url disables the check entirely (a
-// fresh DB ships with the default localhost URL, so this is mainly a
-// safety valve while the operator is bootstrapping).
+// the host of app_url or any entry in allowed_origins. The /health
+// endpoint is exempt so external load balancers / uptime checks can
+// probe via the raw listen addr (e.g. http://10.0.0.5:9425/health)
+// without first knowing the public hostname. Empty app_url AND empty
+// allowed_origins disables the check entirely (a fresh DB ships with
+// the default localhost URL, so this is mainly a safety valve while
+// the operator is bootstrapping).
 func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		appURL := strings.TrimSpace(s.configsSvc.AppURL())
-		if appURL == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		u, err := neturl.Parse(appURL)
-		if err != nil || u.Host == "" {
+		allowed := collectAllowedHosts(s.configsSvc.AppURL(), s.configsSvc.AllowedOrigins())
+		if len(allowed) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1174,13 +1170,45 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 		if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
 			got = fh
 		}
-		if !hostMatches(got, u.Host) {
-			log.Warn().Str("request_host", got).Str("app_url_host", u.Host).Msg("hostAllowlist: forbidden — host mismatch")
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		for _, exp := range allowed {
+			if hostMatches(got, exp) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		log.Warn().Str("request_host", got).Strs("allowed_hosts", allowed).Msg("hostAllowlist: forbidden — host mismatch")
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	})
+}
+
+// collectAllowedHosts extracts the host:port of app_url plus each entry
+// in allowed_origins. Empty / unparseable URLs are skipped. Returns
+// nil when nothing was extractable so the caller can detect "no
+// allowlist configured" and pass through.
+func collectAllowedHosts(appURL string, origins []string) []string {
+	out := make([]string, 0, 1+len(origins))
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
 			return
 		}
-		next.ServeHTTP(w, r)
-	})
+		// Accept either a full URL or a bare host:port; neturl.Parse
+		// returns Host == "" for the latter, so fall back to the raw
+		// string in that case.
+		if u, err := neturl.Parse(raw); err == nil && u.Host != "" {
+			out = append(out, u.Host)
+			return
+		}
+		out = append(out, raw)
+	}
+	add(appURL)
+	for _, o := range origins {
+		add(o)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // hostMatches compares request host against expected host. Both are
