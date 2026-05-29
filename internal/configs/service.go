@@ -2,8 +2,10 @@ package configs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/yogasw/wick/internal/enc"
@@ -459,6 +461,41 @@ func (s *Service) AppURL() string {
 		return v
 	}
 	return s.Get(KeyAppURL)
+}
+
+// AllowedOrigins returns the extra URLs/hosts allowed alongside
+// app_url. ALLOWED_ORIGINS env wins (comma-separated) for the same
+// bootstrap reason as APP_URL — needed for LAN/Termux access before
+// the admin UI is reachable. Falls back to the DB-stored kvlist
+// (JSON array of {url: "..."}) otherwise.
+func (s *Service) AllowedOrigins() []string {
+	if _, v, ok := EnvOverrideFor(KeyAllowedOrigins); ok {
+		out := make([]string, 0)
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	raw := strings.TrimSpace(s.Get(KeyAllowedOrigins))
+	if raw == "" {
+		return nil
+	}
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		for _, v := range row {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // EncryptionKey returns the master key for the encrypted-fields layer.
