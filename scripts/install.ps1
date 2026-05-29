@@ -7,7 +7,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$App   = 'wick'                  # auto-rewritten by `wick init`
+$App   = 'wick-agent'            # auto-rewritten by `wick init`
 $Repo  = 'yogasw/wick'           # auto-rewritten by `wick init` — EDIT after init
 $Token = if ($env:TOKEN) { $env:TOKEN } else { '' }
 

@@ -120,8 +120,8 @@ func copyInstallScripts(fsys embed.FS, name string) error {
 			return err
 		}
 		s := string(data)
-		s = strings.ReplaceAll(s, `APP="wick"`, `APP="`+name+`"`)
-		s = strings.ReplaceAll(s, `$App   = 'wick'`, `$App   = '`+name+`'`)
+		s = strings.ReplaceAll(s, `APP="wick-agent"`, `APP="`+name+`"`)
+		s = strings.ReplaceAll(s, `$App   = 'wick-agent'`, `$App   = '`+name+`'`)
 		s = strings.ReplaceAll(s, `REPO="yogasw/wick"`, `REPO="owner/`+name+`"`)
 		s = strings.ReplaceAll(s, `$Repo  = 'yogasw/wick'`, `$Repo  = 'owner/`+name+`'`)
 		dst := filepath.Join(name, filepath.Base(src))

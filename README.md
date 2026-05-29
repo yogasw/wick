@@ -13,8 +13,7 @@ Want Claude / Codex / Gemini as a Slack bot, Telegram bot, or web assistant? Jus
 ```bash
 # Linux / macOS / Termux — auto-detects OS + arch
 curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh
-wick setup    # first-boot: generates credentials + SQLite DB
-wick server   # web UI at http://localhost:9425
+wick-agent server   # web UI at http://localhost:9425 — creds auto-generated on first run
 ```
 
 ```powershell
@@ -26,23 +25,23 @@ iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.p
 # Docker — single-container: HTTP + cron in one process
 docker run -d \
   -p 9425:9425 \
-  -v wick-data:/root/.wick \
-  ghcr.io/yogasw/wick:latest all
+  -v wick-agent-data:/root/.wick-agent \
+  ghcr.io/yogasw/wick-agent:latest all
 ```
 
 The binary supports two modes — pick one:
 
 | Mode | Command | Best for |
 |---|---|---|
-| **System tray** | `./wick` (no args) | Desktop — right-click menu, icon shows state, auto-start on login |
-| **Headless** | `./wick server` | Remote server / Docker — no GUI, logs to stdout |
+| **System tray** | `wick-agent` (no args) | Desktop — right-click menu, icon shows state, auto-start on login |
+| **Headless** | `wick-agent server` | Remote server / Docker — no GUI, logs to stdout |
 
 Then in the web UI (`/tools/agents`):
 
-1. **Providers** — point wick at your Claude / Codex / Gemini binary and your PAT
+1. **Providers** — point wick-agent at your Claude / Codex / Gemini binary and your PAT
 2. **Channels** — connect Slack (Socket Mode), Telegram bot, or just use the built-in Web UI
 3. **Workspaces** — pick a folder for the agent to work in (a `default` is created automatically)
-4. Send a message → wick spawns the agent and routes the conversation
+4. Send a message → wick-agent spawns the agent and routes the conversation
 
 Every Bash command the agent runs goes through the **Command Gate** — whitelist globs or escalate to interactive 4-mode approval (Approve once / This session / Always / Block), audited to JSONL.
 
@@ -53,14 +52,15 @@ Every Bash command the agent runs goes through the **Command Gate** — whitelis
 ## 2. Build Internal Tools & Jobs — AI writes real Go files
 
 ```bash
-# Install wick CLI (pick one)
-go install github.com/yogasw/wick@latest                                              # Go users
-curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh   # no Go needed
+# Install wick CLI (needs Go installed)
+go install github.com/yogasw/wick@latest
 
 wick init my-app
 cd my-app
 wick dev   # http://localhost:9425
 ```
+
+> The `install.sh` / `install.ps1` scripts above install `wick-agent` (the runtime binary), **not** the `wick` CLI used for scaffolding. For development you need `go install`.
 
 Open `my-app/` in Claude Code and prompt what you need:
 

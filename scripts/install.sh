@@ -11,7 +11,7 @@
 # Private repo:  TOKEN=ghp_xxx sh -c "$(curl -fsSL -H \"Authorization: Bearer $TOKEN\" <url>/install.sh)"
 set -eu
 
-APP="wick"                       # auto-rewritten by `wick init`
+APP="wick-agent"                 # auto-rewritten by `wick init`
 REPO="yogasw/wick"               # auto-rewritten by `wick init` — EDIT after init
 TOKEN="${TOKEN:-}"               # private repo → TOKEN=ghp_... at runtime
 
@@ -36,6 +36,22 @@ fi
 VER="${TAG#v}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
 
+# Helper: download the gate sidecar alongside the main binary. Gate is
+# the PreToolUse hook the agent invokes before every Bash command — the
+# .deb/.dmg/.msi bundle it implicitly, but raw installs need the
+# explicit fetch.
+install_gate() {
+  dest_dir="$1"
+  gate_url="$BASE/${APP}-gate-linux-${ARCH}"
+  echo "→ gate: $gate_url"
+  if curl -fsSL $AUTH "$gate_url" -o "$dest_dir/$APP-gate"; then
+    chmod +x "$dest_dir/$APP-gate"
+    echo "✓ $APP-gate installed at $dest_dir/$APP-gate"
+  else
+    echo "! gate sidecar not found at $gate_url — skipping (agent has an embedded fallback)"
+  fi
+}
+
 # Termux first — $PREFIX with com.termux marker
 if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   URL="$BASE/${APP}-linux-${ARCH}"
@@ -43,6 +59,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   curl -fsSL $AUTH "$URL" -o "$PREFIX/bin/$APP"
   chmod +x "$PREFIX/bin/$APP"
   echo "✓ $APP installed at $PREFIX/bin/$APP"
+  install_gate "$PREFIX/bin"
   exit 0
 fi
 
@@ -72,6 +89,16 @@ case "$OS" in
       echo "→ linux: $URL (raw, no dpkg)"
       sudo curl -fsSL $AUTH "$URL" -o /usr/local/bin/$APP
       sudo chmod +x /usr/local/bin/$APP
+      # Gate sidecar — same idea as the Termux path. Need sudo here
+      # because /usr/local/bin is root-owned on most distros.
+      gate_url="$BASE/${APP}-gate-linux-${ARCH}"
+      echo "→ gate: $gate_url"
+      if sudo curl -fsSL $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
+        sudo chmod +x /usr/local/bin/$APP-gate
+        echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
+      else
+        echo "! gate sidecar not found at $gate_url — skipping (agent has an embedded fallback)"
+      fi
     fi
     echo "✓ $APP installed"
     ;;

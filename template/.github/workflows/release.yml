@@ -416,6 +416,14 @@ jobs:
             echo "raw=$RAW" >> "$GITHUB_OUTPUT"
             echo "raw_path=bin/$RAW" >> "$GITHUB_OUTPUT"
           fi
+          # Gate sidecar — bundled inside .deb/.dmg/.msi, but also
+          # uploaded as a standalone asset so install.sh's Termux and
+          # dpkg-less branches can fetch it next to the raw binary.
+          EXT_GATE=""
+          [ "${{ matrix.os }}" = "windows" ] && EXT_GATE=".exe"
+          GATE="${NAME}-gate-${{ matrix.os }}-${{ matrix.arch }}${EXT_GATE}"
+          echo "gate=$GATE" >> "$GITHUB_OUTPUT"
+          echo "gate_path=bin/$GATE" >> "$GITHUB_OUTPUT"
 
       - name: Cache wick setup artifacts
         uses: actions/cache@v5
@@ -482,6 +490,10 @@ jobs:
             sha256sum "${{ steps.meta.outputs.raw }}" \
               > "${{ steps.meta.outputs.raw }}.sha256"
           fi
+          if [ -f "${{ steps.meta.outputs.gate }}" ]; then
+            sha256sum "${{ steps.meta.outputs.gate }}" \
+              > "${{ steps.meta.outputs.gate }}.sha256"
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
@@ -491,6 +503,8 @@ jobs:
             ${{ steps.meta.outputs.asset_path }}.sha256
             ${{ steps.meta.outputs.raw_path }}
             ${{ steps.meta.outputs.raw_path }}.sha256
+            ${{ steps.meta.outputs.gate_path }}
+            ${{ steps.meta.outputs.gate_path }}.sha256
           retention-days: 7
           if-no-files-found: ignore
 
