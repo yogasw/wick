@@ -11,7 +11,7 @@
 # Private repo:  TOKEN=ghp_xxx sh -c "$(curl -fsSL -H \"Authorization: Bearer $TOKEN\" <url>/install.sh)"
 set -eu
 
-APP="wick"                       # auto-rewritten by `wick init`
+APP="wick-agent"                 # auto-rewritten by `wick init`
 REPO="yogasw/wick"               # auto-rewritten by `wick init` — EDIT after init
 TOKEN="${TOKEN:-}"               # private repo → TOKEN=ghp_... at runtime
 
