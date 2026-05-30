@@ -36,6 +36,10 @@ func DefaultSystemPrompt() string {
 // ImmutableSystemPrompt returns the global rules combined with
 // claude-specific rules. Passed via --append-system-prompt on every
 // claude spawn; operator-uneditable, always wins on conflict.
+//
+// Connector catalog is NOT appended here — the catalog needs the live
+// connectors service to filter for ready instances, which only the
+// factory can wire. See ClaudeFactory.ConnectorCatalogLoader.
 func ImmutableSystemPrompt() string {
 	return resolve(immutableSystemPromptTemplate + "\n\n" + immutableSystemPromptClaudeTemplate)
 }
