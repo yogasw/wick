@@ -265,6 +265,30 @@ Remove the entry written by `install`. Same flags as `install`.
 
 ---
 
+## Version
+
+Three equivalent forms print the embedded release string in one line and exit. The format is stable — `scripts/install.sh`'s probe greps it against the resolved release tag to decide whether a re-install should be skipped.
+
+```bash
+./bin/myapp version
+./bin/myapp --version
+./bin/myapp -v
+# myapp version v0.14.13 (wick v0.14.13)
+```
+
+The gate sidecar (`<app>-gate`) accepts the same three forms and prints its own version line:
+
+```bash
+./bin/myapp-gate version
+./bin/myapp-gate --version
+./bin/myapp-gate -v
+# myapp-gate version v0.14.13
+```
+
+The version handler on `<app>-gate` returns **before** the binary reads stdin, so probing it from a script does not interfere with its normal PreToolUse hook path.
+
+---
+
 ## Uninstall
 
 ### `<app> uninstall`
