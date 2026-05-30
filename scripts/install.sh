@@ -26,6 +26,13 @@ esac
 AUTH=""
 [ -n "$TOKEN" ] && AUTH="-H Authorization:Bearer $TOKEN"
 
+# Privileged writes run plain — if the user lacks perms on the target
+# dir (e.g. /usr/local/bin) the curl/mv/chmod call surfaces a clear
+# error and the user can re-run with `sudo sh install.sh` themselves.
+# Avoiding inline sudo saves a ~30s hostname-resolution stall on VMs
+# where the host isn't in /etc/hosts, and matches the codex /
+# rustup-style "you decide how to elevate" convention.
+
 if [ "${VERSION:-latest}" = "latest" ]; then
   TAG=$(curl -fsSL $AUTH "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
@@ -35,6 +42,56 @@ fi
 [ -z "$TAG" ] && { echo "could not resolve latest tag for $REPO" >&2; exit 1; }
 VER="${TAG#v}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
+
+# ── Pre-install version probe ────────────────────────────────────────
+# Each component supports `<bin> version` (cobra-generated for the
+# main app/gate; `gotty -v` for gotty). Failing probes return "" so
+# the status table just shows "not installed". Skip flags are set
+# when the installed version already matches the resolved TAG so we
+# don't redo work on re-runs.
+probe_version() {
+  bin="$1"
+  [ -n "$bin" ] && [ -x "$bin" ] || { echo ""; return; }
+  v=$("$bin" version 2>/dev/null | head -1 | tr -d '\r')
+  [ -n "$v" ] && { echo "$v"; return; }
+  v=$("$bin" -v 2>/dev/null | head -1 | tr -d '\r')
+  [ -n "$v" ] && { echo "$v"; return; }
+  v=$("$bin" --version 2>/dev/null | head -1 | tr -d '\r')
+  echo "$v"
+}
+
+APP_PATH=$(command -v "$APP" 2>/dev/null || echo "")
+GATE_PATH=$(command -v "$APP-gate" 2>/dev/null || echo "")
+GOTTY_PATH=$(command -v gotty 2>/dev/null || echo "")
+APP_VER=$(probe_version "$APP_PATH")
+GATE_VER=$(probe_version "$GATE_PATH")
+GOTTY_VER=$(probe_version "$GOTTY_PATH")
+
+SKIP_APP=0; SKIP_GATE=0
+case "$APP_VER" in
+  *"$TAG"*|*"$VER"*) SKIP_APP=1 ;;
+esac
+case "$GATE_VER" in
+  *"$TAG"*|*"$VER"*) SKIP_GATE=1 ;;
+esac
+
+format_status() {
+  cur="$1"; target="$2"
+  if [ -z "$cur" ]; then
+    echo "not installed    → install $target"
+  elif echo "$cur" | grep -qF "$target"; then
+    echo "$cur (up to date — skip)"
+  else
+    echo "$cur → upgrade to $target"
+  fi
+}
+
+echo ""
+echo "Component status (release: $TAG)"
+printf "  %-18s : %s\n" "$APP"      "$(format_status "$APP_VER" "$TAG")"
+printf "  %-18s : %s\n" "$APP-gate" "$(format_status "$GATE_VER" "$TAG")"
+printf "  %-18s : %s\n" "gotty"     "${GOTTY_VER:-not installed} (prompt below)"
+echo ""
 
 # Helper: download the gate sidecar alongside the main binary. Gate is
 # the PreToolUse hook the agent invokes before every Bash command — the
@@ -57,17 +114,33 @@ install_gate() {
 # distributed as tarball, so no `go` toolchain required.
 #
 # Args: $1 dest_dir, $2 goos (linux|darwin)
-# Uses outer-scope $ARCH (already normalised to amd64|arm64).
+# Uses outer-scope $ARCH (already normalised to amd64|arm64). Writes
+# run plain — caller is expected to invoke install.sh with whatever
+# privilege the target dir needs.
 install_gotty() {
   dest_dir="$1"
   goos="$2"
-  prompt="$3"   # "sudo" → use sudo for curl/mv/chmod; "" → run plain.
+  # Version check — show installed version and ask whether to upgrade
+  # / reinstall. Skip the install when already present and user picks n.
+  installed_ver=""
+  if [ -x "$dest_dir/gotty" ]; then
+    installed_ver=$("$dest_dir/gotty" -v 2>/dev/null | head -1 || true)
+  fi
   echo ""
+  if [ -n "$installed_ver" ]; then
+    echo "gotty already installed: $installed_ver"
+  fi
   if [ -e /dev/tty ]; then
-    printf "Install gotty (web terminal) from https://github.com/sorenisanerd/gotty? [Y/n]: "
+    if [ -n "$installed_ver" ]; then
+      printf "Reinstall / upgrade gotty from https://github.com/sorenisanerd/gotty? [y/N]: "
+      default_ans="n"
+    else
+      printf "Install gotty (web terminal) from https://github.com/sorenisanerd/gotty? [Y/n]: "
+      default_ans="y"
+    fi
     read ans < /dev/tty || ans=""
+    [ -z "$ans" ] && ans="$default_ans"
   else
-    ans=""
     echo "(no tty — skipping gotty install; rerun with a terminal to enable web terminal)"
     return 0
   fi
@@ -94,26 +167,29 @@ install_gotty() {
     rm -rf "$tmp"
     return 0
   fi
-  if [ "$prompt" = "sudo" ]; then
-    sudo mv "$tmp/gotty" "$dest_dir/gotty"
-    sudo chmod +x "$dest_dir/gotty"
-  else
-    mv "$tmp/gotty" "$dest_dir/gotty"
-    chmod +x "$dest_dir/gotty"
-  fi
+  mv "$tmp/gotty" "$dest_dir/gotty"
+  chmod +x "$dest_dir/gotty"
   rm -rf "$tmp"
   echo "✓ gotty $gotty_tag installed at $dest_dir/gotty"
 }
 
 # Termux first — $PREFIX with com.termux marker
 if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
-  URL="$BASE/${APP}-linux-${ARCH}"
-  echo "→ termux: $URL"
-  curl -fsSL $AUTH "$URL" -o "$PREFIX/bin/$APP"
-  chmod +x "$PREFIX/bin/$APP"
-  echo "✓ $APP installed at $PREFIX/bin/$APP"
-  install_gate "$PREFIX/bin"
-  install_gotty "$PREFIX/bin" "linux" ""
+  if [ "$SKIP_APP" = "1" ]; then
+    echo "✓ $APP already at $TAG — skipping"
+  else
+    URL="$BASE/${APP}-linux-${ARCH}"
+    echo "→ termux: $URL"
+    curl -fsSL $AUTH "$URL" -o "$PREFIX/bin/$APP"
+    chmod +x "$PREFIX/bin/$APP"
+    echo "✓ $APP installed at $PREFIX/bin/$APP"
+  fi
+  if [ "$SKIP_GATE" = "1" ]; then
+    echo "✓ $APP-gate already at $TAG — skipping"
+  else
+    install_gate "$PREFIX/bin"
+  fi
+  install_gotty "$PREFIX/bin" "linux"
   # LAN access prompt — Termux defaults to localhost, which is
   # unreachable from your laptop or another phone on the same Wi-Fi.
   # Surface every private-range IPv4 we can see and let the user pick
@@ -197,44 +273,64 @@ fi
 
 case "$OS" in
   Darwin)
-    URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
-    TMP=$(mktemp -d)
-    echo "→ macOS: $URL"
-    curl -fsSL $AUTH "$URL" -o "$TMP/$APP.dmg"
-    hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
-    MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
-    cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
-    hdiutil detach "/Volumes/$MOUNT" -quiet
-    rm -rf "$TMP"
-    echo "✓ $APP installed to /Applications/$APP.app"
-    install_gotty "/usr/local/bin" "darwin" "sudo"
+    if [ "$SKIP_APP" = "1" ]; then
+      echo "✓ $APP already at $TAG — skipping"
+    else
+      URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
+      TMP=$(mktemp -d)
+      echo "→ macOS: $URL"
+      curl -fsSL $AUTH "$URL" -o "$TMP/$APP.dmg"
+      hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
+      MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
+      cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
+      hdiutil detach "/Volumes/$MOUNT" -quiet
+      rm -rf "$TMP"
+      echo "✓ $APP installed to /Applications/$APP.app"
+    fi
+    install_gotty "/usr/local/bin" "darwin"
     ;;
   Linux)
-    if command -v dpkg >/dev/null 2>&1; then
-      URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
-      TMP=$(mktemp)
-      echo "→ linux: $URL"
-      curl -fsSL $AUTH "$URL" -o "$TMP"
-      sudo dpkg -i "$TMP"
-      rm -f "$TMP"
-    else
-      URL="$BASE/${APP}-linux-${ARCH}"
-      echo "→ linux: $URL (raw, no dpkg)"
-      sudo curl -fsSL $AUTH "$URL" -o /usr/local/bin/$APP
-      sudo chmod +x /usr/local/bin/$APP
-      # Gate sidecar — same idea as the Termux path. Need sudo here
-      # because /usr/local/bin is root-owned on most distros.
-      gate_url="$BASE/${APP}-gate-linux-${ARCH}"
-      echo "→ gate: $gate_url"
-      if sudo curl -fsSL $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
-        sudo chmod +x /usr/local/bin/$APP-gate
-        echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
+    if [ "$SKIP_APP" = "1" ] && [ "$SKIP_GATE" = "1" ]; then
+      echo "✓ $APP and $APP-gate already at $TAG — skipping"
+    elif command -v dpkg >/dev/null 2>&1; then
+      if [ "$SKIP_APP" = "1" ]; then
+        echo "✓ $APP already at $TAG — skipping .deb"
       else
-        echo "! gate sidecar not found at $gate_url — skipping (agent has an embedded fallback)"
+        URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
+        TMP=$(mktemp)
+        echo "→ linux: $URL"
+        curl -fsSL $AUTH "$URL" -o "$TMP"
+        dpkg -i "$TMP"
+        rm -f "$TMP"
+        echo "✓ $APP installed"
+      fi
+    else
+      if [ "$SKIP_APP" = "1" ]; then
+        echo "✓ $APP already at $TAG — skipping raw binary"
+      else
+        URL="$BASE/${APP}-linux-${ARCH}"
+        echo "→ linux: $URL (raw, no dpkg)"
+        curl -fsSL $AUTH "$URL" -o /usr/local/bin/$APP
+        chmod +x /usr/local/bin/$APP
+        echo "✓ $APP installed"
+      fi
+      if [ "$SKIP_GATE" = "1" ]; then
+        echo "✓ $APP-gate already at $TAG — skipping"
+      else
+        # Gate sidecar — same idea as the Termux path. /usr/local/bin
+        # is root-owned on most distros, so the caller must run
+        # install.sh with root privileges (or via `sudo sh`).
+        gate_url="$BASE/${APP}-gate-linux-${ARCH}"
+        echo "→ gate: $gate_url"
+        if curl -fsSL $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
+          chmod +x /usr/local/bin/$APP-gate
+          echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
+        else
+          echo "! gate sidecar not found at $gate_url — skipping (agent has an embedded fallback)"
+        fi
       fi
     fi
-    echo "✓ $APP installed"
-    install_gotty "/usr/local/bin" "linux" "sudo"
+    install_gotty "/usr/local/bin" "linux"
     ;;
   *)
     echo "unsupported OS: $OS (use install.ps1 for Windows)" >&2

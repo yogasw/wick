@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 //go:embed all:assets
@@ -126,7 +126,7 @@ func ResolveGateBinaryWithSource(sessionDir string) (path, source string, err er
 	}
 	lookupName := brandedGateName()
 	lookupName = strings.TrimSuffix(lookupName, ".exe")
-	if p, err := exec.LookPath(lookupName); err == nil {
+	if p, err := safeexec.LookPath(lookupName); err == nil {
 		return p, SourcePath, nil
 	}
 	return "", "", fmt.Errorf("gate binary %q not found: build the app with `wick build` (sibling+embed both produced) or place %s on PATH", lookupName, lookupName)

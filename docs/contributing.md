@@ -36,6 +36,21 @@ docs/             # this documentation site (VitePress)
 `template/` is copied as-is by `wick init`. If you add a new file there, every new project gets it. If you change an existing file, run `wick init` in a temp dir and verify the output looks right before opening a PR.
 :::
 
+## Code conventions
+
+### Avoid `os/exec.LookPath` in `wick-agent` code paths
+
+Inside everything that runs in the `wick-agent` binary (`app/`, `internal/agents/`, `internal/pkg/api/`, and anything reachable from `template/main.go`), use `github.com/yogasw/wick/internal/safeexec` instead of `os/exec.LookPath`:
+
+- `safeexec.LookPath(name)` — drop-in replacement.
+- `safeexec.ResolveBin(name)` — call before `exec.Command(name, ...)` when `name` might be a bare binary name without a slash. `exec.Command` calls `LookPath` internally during `Cmd` construction whenever the argument has no slash.
+
+Why: Go's stdlib `exec.LookPath` uses the `faccessat2(2)` Linux syscall, which Android's seccomp filter on kernels < 5.8 rejects with `SIGSYS` (killing the process) instead of the `ENOSYS` Go's runtime falls back on. This affects Termux users running on phones where the kernel is older than the Android version suggests — Android 13 with kernel 4.14 is a common combination on devices that shipped before 2022.
+
+CLI tooling under `cmd/cli/`, `internal/builder/`, and `internal/updater/` runs on the developer's host (kernel ≥ 5.8 in practice) and can keep using stdlib `exec.LookPath`.
+
+See [Termux / Android](/guide/termux-android) for the full background.
+
 ## Running tests
 
 ```bash

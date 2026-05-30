@@ -130,12 +130,14 @@ export default withMermaid(defineConfig({
         text: 'Distribution',
         items: [
           { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+          { text: 'Termux / Android', link: '/guide/termux-android' },
         ],
       },
       {
         text: 'Reference',
         items: [
           { text: 'CLI', link: '/reference/cli' },
+          { text: 'App CLI', link: '/reference/app-cli' },
           { text: 'wick.yml', link: '/reference/wick-yml' },
           { text: 'wick build', link: '/reference/build' },
           { text: 'Environment Variables', link: '/reference/env-vars' },

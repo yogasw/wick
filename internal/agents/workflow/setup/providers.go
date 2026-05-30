@@ -11,6 +11,7 @@ import (
 
 	agentprovider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // cliProvider adapts an agentprovider.Instance (claude / codex /
@@ -68,7 +69,10 @@ func (p *cliProvider) StructuredCall(ctx context.Context, req provider.Structure
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	bin := p.ins.Bin()
+	bin, err := safeexec.ResolveBin(p.ins.Bin())
+	if err != nil {
+		return provider.StructuredResult{OK: false, Error: err.Error()}, nil
+	}
 	args := []string{"--output-format", "json", "--print", prompt}
 	if len(p.ins.ExtraArgs) > 0 {
 		args = append(p.ins.ExtraArgs, args...)
@@ -113,7 +117,10 @@ func (p *cliProvider) AgentCall(ctx context.Context, req provider.AgentRequest) 
 	case <-ctx.Done():
 		return provider.AgentResult{}, ctx.Err()
 	}
-	bin := p.ins.Bin()
+	bin, err := safeexec.ResolveBin(p.ins.Bin())
+	if err != nil {
+		return provider.AgentResult{}, fmt.Errorf("%s: %w", p.ins.Name, err)
+	}
 	args := append([]string(nil), p.ins.ExtraArgs...)
 	args = append(args, "--print", req.Prompt)
 	start := time.Now()

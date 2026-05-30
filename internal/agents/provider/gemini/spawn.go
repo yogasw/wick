@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Spawner spawns the real `gemini` CLI binary in non-interactive mode.
@@ -59,6 +60,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if bin == "" {
 		bin = "gemini"
 	}
+	resolved, err := safeexec.ResolveBin(bin)
+	if err != nil {
+		return nil, fmt.Errorf("gemini binary not found: %w", err)
+	}
+	bin = resolved
 
 	// Install / remove per-workspace hook config based on the user's
 	// per-instance intent. See claude/spawn.go for the fail-soft

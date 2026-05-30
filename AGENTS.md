@@ -48,6 +48,19 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 - Any process you started is stopped.
 - Changes on the tool grid / Ctrl+K palette look right in both light and dark mode (if UI changed).
 
+## Code conventions
+
+### Never call `os/exec.LookPath` directly — use `internal/safeexec.LookPath`
+
+Go's `os/exec.LookPath` uses the `faccessat2(2)` syscall to check executable permissions. Android's seccomp filter on devices that still ship a 4.x kernel (Android 13 userland on top of kernel 4.14 is a real, in-the-wild combination) rejects `faccessat2` with `SIGSYS` instead of the `ENOSYS` that Go's runtime expects, killing the process before its fallback to plain `faccessat` can fire.
+
+Anything that runs inside `wick-agent` (everything under `internal/agents/`, `internal/pkg/api/`, `app/`, and code reachable from `template/main.go`) must avoid `exec.LookPath`:
+
+- **Replace `exec.LookPath(name)`** with `safeexec.LookPath(name)`.
+- **Before `exec.Command(name, ...)` where `name` may be a bare binary name** (anything without `/`), call `safeexec.ResolveBin(name)` first and pass the resolved absolute path. `exec.Command` calls `LookPath` internally during `Cmd` construction whenever the argument has no slash, which trips the same `faccessat2` chain.
+
+CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) runs on the developer's build host — kernel ≥ 5.8 in practice — and stays on stdlib `exec.LookPath` since `wick build` / `wick init` / `wick doctor` never run inside `wick-agent`.
+
 ## Skills to use
 
 - `tool-module` — any work under `internal/tools/{tool}/` **or** `internal/jobs/{job}/`. Covers both surfaces — they share the same Config reflection, `wick:"..."` tag grammar, and bootstrap contract.

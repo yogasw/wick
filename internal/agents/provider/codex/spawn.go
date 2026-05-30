@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Spawner spawns the real `codex` CLI binary in non-interactive
@@ -71,6 +72,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if bin == "" {
 		bin = "codex"
 	}
+	resolved, err := safeexec.ResolveBin(bin)
+	if err != nil {
+		return nil, fmt.Errorf("codex binary not found: %w", err)
+	}
+	bin = resolved
 
 	// Write preset to .codex/soul.md and point codex at it via
 	// -c instructions_files so the instructions apply on both fresh and

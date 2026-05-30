@@ -273,18 +273,18 @@ templ sessionPager(vm SessionsTableVM) {
 // SessionDetail renders the session detail page with tabs and composer.
 templ SessionDetail(vm SessionDetailVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="relative flex flex-col -mt-6 -mx-6" style="height:100vh" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+		<div class="relative flex flex-col -mt-6 -mx-6 h-[100svh]" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
 			<!-- Zone 1: transparent overlay bar -->
-			<div class="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 py-2">
+			<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">
 				<!-- Left: tab dropdown -->
 				@sessionDetailTabs(vm)
 				<!-- Right: info + actions -->
 				<div class="flex items-center gap-2 shrink-0">
 					if vm.Session.Meta.Workspace != "" {
-						<span class="text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
+						<span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
 					}
 					if len(vm.Session.Agents) > 0 {
-						<span class="text-xs text-black-500 dark:text-black-600">{ vm.Session.Agents[0].Name } · { vm.Session.Agents[0].Provider }</span>
+						<span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{ vm.Session.Agents[0].Name } · { vm.Session.Agents[0].Provider }</span>
 					}
 					<span data-sse-status class="hidden inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium" data-state="">
 						<svg data-sse-spin viewBox="0 0 16 16" class="h-2.5 w-2.5 hidden animate-spin" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>
@@ -292,13 +292,13 @@ templ SessionDetail(vm SessionDetailVM) {
 						<span data-sse-label></span>
 					</span>
 					@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
-					<button data-kill={ vm.Session.ID } class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors">
+					<button data-kill={ vm.Session.ID } aria-label="Kill session" class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-2 md:px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors">
 						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M4 4l4 4M8 4L4 8" stroke-linecap="round"></path></svg>
-						Kill
+						<span class="hidden md:inline">Kill</span>
 					</button>
-					<button data-delete-session={ vm.Session.ID } class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors">
+					<button data-delete-session={ vm.Session.ID } aria-label="Delete session" class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-2 md:px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors">
 						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M4 3V2h4v1M5 5.5v3M7 5.5v3M3 3l.5 7h5L9 3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-						Delete
+						<span class="hidden md:inline">Delete</span>
 					</button>
 				</div>
 			</div>

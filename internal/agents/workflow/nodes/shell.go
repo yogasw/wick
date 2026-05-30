@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 type shellSchema struct {
@@ -67,7 +68,11 @@ func (e *ShellExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cctx, args[0], args[1:]...)
+	binPath, err := safeexec.ResolveBin(args[0])
+	if err != nil {
+		return workflow.NodeOutput{}, fmt.Errorf("resolve %q: %w", args[0], err)
+	}
+	cmd := exec.CommandContext(cctx, binPath, args[1:]...)
 	if len(n.ShellEnv) > 0 {
 		envSlice := []string{}
 		for k, v := range n.ShellEnv {
@@ -90,7 +95,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if ee, ok := err.(*exec.ExitError); ok {
 		exitCode = ee.ExitCode()

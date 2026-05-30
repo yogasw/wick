@@ -9,7 +9,6 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -56,7 +55,9 @@ import (
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
@@ -992,6 +993,11 @@ func NewServer() *Server {
 	// Health check endpoint — used by load balancers and uptime monitoring.
 	r.Handle("GET /health", http.HandlerFunc(healthHandler.Check))
 
+	// PWA manifest is dynamic — bakes the configured app name into the
+	// installable identity so downstream "MyApp" doesn't install as
+	// "wick". Registered before the static catch-all below.
+	r.Handle("GET /public/manifest.json", http.HandlerFunc(pwa.ManifestHandler))
+
 	// Static files (embedded in binary). Directory listings are blocked.
 	r.Handle("GET /public/", ui.StaticHandler("", web.PublicFiles))
 
@@ -1459,7 +1465,7 @@ func resolveWickGateBin() string {
 			}
 		}
 	}
-	if p, err := exec.LookPath("wick-gate"); err == nil {
+	if p, err := safeexec.LookPath("wick-gate"); err == nil {
 		return p
 	}
 	return ""
