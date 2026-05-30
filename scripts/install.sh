@@ -225,6 +225,45 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     install_gate "$PREFIX/bin"
   fi
   install_gotty "$PREFIX/bin" "linux"
+
+  # ── Codex CLI fix for Termux ──────────────────────────────────────
+  # OpenAI's Codex CLI ships a musl-linked binary that hard-codes:
+  #   /etc/resolv.conf              (DNS)
+  #   /etc/ssl/certs/ca-certificates.crt  (TLS roots)
+  # Android's /etc is read-only, so `codex login --device-auth` fails
+  # with: "error sending request for url …auth.openai.com…".
+  # Termux keeps the real files at $PREFIX/etc/resolv.conf and
+  # $PREFIX/etc/tls/cert.pem — proot lets us bind-mount them into the
+  # paths codex expects without modifying the binary or the system.
+  #
+  # Workaround source: https://gist.github.com/netanel-haber/77b91c4148249394d75546348bae7698
+  #
+  # Marker prefix is intentionally different from the ALLOWED_ORIGINS
+  # marker below so the "clear / edit" cleanup grep there doesn't nuke
+  # this alias.
+  codex_rc="$HOME/.bashrc"
+  codex_marker="# $APP installer: codex-termux fix"
+  if command -v codex >/dev/null 2>&1; then
+    if [ -f "$codex_rc" ] && grep -qF "$codex_marker" "$codex_rc" 2>/dev/null; then
+      echo ""
+      echo "✓ codex termux alias already in $codex_rc — skipping"
+    else
+      echo ""
+      echo "→ applying codex termux fix (proot bind-mount for DNS + CA bundle)"
+      if ! command -v proot >/dev/null 2>&1; then
+        echo "→ installing proot…"
+        if ! pkg install -y proot >/dev/null 2>&1; then
+          echo "! pkg install proot failed — install it manually, then re-run." >&2
+        fi
+      fi
+      alias_line="alias codex='proot -b \$PREFIX/etc/resolv.conf:/etc/resolv.conf -b \$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt codex'  $codex_marker"
+      printf '\n%s\n' "$alias_line" >> "$codex_rc"
+      echo "  ✓ added to $codex_rc:"
+      echo "    $alias_line"
+      echo "  Re-open your shell (or run: source $codex_rc) before calling codex."
+    fi
+  fi
+
   # LAN access prompt — Termux defaults to localhost, which is
   # unreachable from your laptop or another phone on the same Wi-Fi.
   # Surface every private-range IPv4 we can see and let the user pick

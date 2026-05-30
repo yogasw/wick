@@ -45,15 +45,30 @@ type TurnEvent struct {
 	EndAt     time.Time `json:"end_at,omitempty"`   // tool_result: when tool finished
 }
 
+// Attachment is one file uploaded with a user turn. The file content
+// lives under <SessionDir>/uploads/<StoredName>; URL is the path the UI
+// uses to fetch it (served via /tools/agents/sessions/<id>/uploads/...).
+// AbsPath is the on-disk path passed to the CLI subprocess so it can
+// Read the file via tool calls.
+type Attachment struct {
+	Name       string `json:"name"`               // original filename (display)
+	StoredName string `json:"stored_name"`        // filename under uploads dir
+	URL        string `json:"url,omitempty"`      // GET path for the UI
+	AbsPath    string `json:"abs_path,omitempty"` // absolute disk path for CLI
+	MIME       string `json:"mime,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+}
+
 // ConversationTurn is the on-disk shape of one user/assistant turn.
 type ConversationTurn struct {
-	Timestamp time.Time   `json:"ts"`
-	Role      string      `json:"role"`            // "user" | "assistant" | "system"
-	Agent     string      `json:"agent,omitempty"` // assistant turn only
-	Source    string      `json:"source,omitempty"`
-	Text      string      `json:"text"`
-	Truncated bool        `json:"truncated,omitempty"`
-	Events    []TurnEvent `json:"events,omitempty"` // tool/thinking trace
+	Timestamp   time.Time    `json:"ts"`
+	Role        string       `json:"role"`            // "user" | "assistant" | "system"
+	Agent       string       `json:"agent,omitempty"` // assistant turn only
+	Source      string       `json:"source,omitempty"`
+	Text        string       `json:"text"`
+	Truncated   bool         `json:"truncated,omitempty"`
+	Events      []TurnEvent  `json:"events,omitempty"`      // tool/thinking trace
+	Attachments []Attachment `json:"attachments,omitempty"` // user turn only
 }
 
 // Store collects events for one session+agent and persists them.
@@ -109,11 +124,19 @@ func New(opt Options) *Store {
 // the subprocess. Source is the transport label ("ui", "slack",
 // "api"). Role is normally "user"; "system" for operator instructions.
 func (s *Store) AppendUserTurn(role, source, text string) error {
+	return s.AppendUserTurnWithAttachments(role, source, text, nil)
+}
+
+// AppendUserTurnWithAttachments is AppendUserTurn plus a list of
+// uploaded files. The attachments are persisted alongside the text so
+// the UI can re-render thumbnails / file chips after reload.
+func (s *Store) AppendUserTurnWithAttachments(role, source, text string, atts []Attachment) error {
 	turn := ConversationTurn{
-		Timestamp: s.now().UTC(),
-		Role:      role,
-		Source:    source,
-		Text:      text,
+		Timestamp:   s.now().UTC(),
+		Role:        role,
+		Source:      source,
+		Text:        text,
+		Attachments: atts,
 	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),

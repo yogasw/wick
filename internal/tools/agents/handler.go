@@ -143,6 +143,8 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
 
+	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
+
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
@@ -408,9 +410,19 @@ func startNewSession(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	// Compose form may be multipart (when files are attached) or
+	// urlencoded. ParseMultipartForm short-circuits to ParseForm for
+	// urlencoded bodies so calling it once is safe either way.
+	if strings.HasPrefix(c.R.Header.Get("Content-Type"), "multipart/") {
+		if err := c.R.ParseMultipartForm(maxMultipartTotal); err != nil {
+			renderCompose(c, "", "parse form: "+err.Error())
+			return
+		}
+	}
 	text := strings.TrimSpace(c.Form("message"))
-	if text == "" {
-		renderCompose(c, "", "Type a message to start the session.")
+	hasFiles := c.R.MultipartForm != nil && len(c.R.MultipartForm.File["files"]) > 0
+	if text == "" && !hasFiles {
+		renderCompose(c, "", "Type a message or attach a file to start the session.")
 		return
 	}
 	prov := c.Form("provider")
@@ -446,9 +458,15 @@ func startNewSession(c *tool.Ctx) {
 		renderCompose(c, text, err.Error())
 		return
 	}
+	atts, err := saveUploadsFromMultipart(c, id, c.Base())
+	if err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose save uploads: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
 	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
-	if err := globalPool.Send(bgCtx, id, "main", "ui", "user", text); err != nil {
+	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
 		return
@@ -656,6 +674,19 @@ func sessionDetail(c *tool.Ctx) {
 					Text:      e.Text,
 				})
 			}
+			for _, a := range t.Attachments {
+				// IsImage must match the server's inline-serve whitelist
+				// (imageMIMEAllowed) — SVG / generic image/* types are
+				// served as attachments, so rendering them via <img> would
+				// just produce a broken icon.
+				vm.Attachments = append(vm.Attachments, view.AttachmentVM{
+					Name:    a.Name,
+					URL:     a.URL,
+					MIME:    a.MIME,
+					Size:    a.Size,
+					IsImage: imageMIMEAllowed[a.MIME],
+				})
+			}
 			turns = append(turns, vm)
 		}
 	case "commands":
@@ -794,13 +825,31 @@ func sendMessage(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	var req sendReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
-		return
+	var atts []agentstore.Attachment
+
+	// Accept multipart/form-data when files are attached; fall back to
+	// the JSON shape so text-only sends from older clients still work.
+	if strings.HasPrefix(c.R.Header.Get("Content-Type"), "multipart/") {
+		if err := c.R.ParseMultipartForm(maxMultipartTotal); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "parse form: " + err.Error()})
+			return
+		}
+		req.Text = strings.TrimSpace(c.Form("text"))
+		saved, err := saveUploadsFromMultipart(c, id, c.Base())
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		atts = saved
+	} else {
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		req.Text = strings.TrimSpace(req.Text)
 	}
-	req.Text = strings.TrimSpace(req.Text)
-	if req.Text == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "text required"})
+	if req.Text == "" && len(atts) == 0 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
 		return
 	}
 
@@ -867,7 +916,7 @@ func sendMessage(c *tool.Ctx) {
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
 	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
-	if err := globalPool.Send(bgCtx, id, agentName, "ui", "user", req.Text); err != nil {
+	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", req.Text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
