@@ -130,6 +130,7 @@ export default withMermaid(defineConfig({
         text: 'Distribution',
         items: [
           { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+          { text: 'Termux / Android', link: '/guide/termux-android' },
         ],
       },
       {
