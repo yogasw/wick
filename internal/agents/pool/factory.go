@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // ClaudeFactory is the production AgentFactory: wires a ClaudeParser +
@@ -334,7 +334,7 @@ func resolveProviderBinary(providerType, providerName string) (bin, source strin
 	if ins, err := provider.Find(t, providerName); err == nil && ins.Binary != "" {
 		return ins.Binary, "registry"
 	}
-	if p, err := exec.LookPath(string(t)); err == nil {
+	if p, err := safeexec.LookPath(string(t)); err == nil {
 		return p, "path"
 	}
 	if st := provider.Probe(context.Background(), provider.Instance{Type: t, Name: providerName}); st.PathFound {
