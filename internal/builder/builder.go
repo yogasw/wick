@@ -50,6 +50,16 @@ func Build(cfg Config) (Result, error) {
 	if cfg.GOARCH == "" {
 		cfg.GOARCH = runtime.GOARCH
 	}
+	// Android targets (Termux on aarch64 phones) must build headless:
+	// fyne.io/systray is CGO+X11 and unbuildable for GOOS=android.
+	// Picking GOOS=android over GOOS=linux also flips Go's runtime
+	// Eaccess() to return ENOSYS immediately, sidestepping the
+	// faccessat2 syscall that Android kernels < 5.8 (e.g. devices
+	// stuck on kernel 4.x even when userland is Android 13) reject
+	// with SIGSYS instead of the ENOSYS Go's fallback expects.
+	if cfg.GOOS == "android" {
+		cfg.Headless = true
+	}
 	if cfg.Output == "" {
 		cfg.Output = filepath.Join("bin", cfg.AppName+"-"+cfg.GOOS+"-"+cfg.GOARCH)
 		if cfg.GOOS == "windows" {
