@@ -280,6 +280,35 @@ func (s *Service) GetOwned(owner, key string) string {
 	return s.cache[ownerKey{Owner: owner, Key: key}].Value
 }
 
+// envOverrideForUI shapes an env-supplied value into the form the UI
+// widget for v.Type expects. For kvlist, the env var is a CSV (one
+// origin per item) but the widget parses Value as a JSON array of
+// {col: value} objects — without the conversion, the table renders
+// "No rows yet" even though the override is live. Non-kvlist types
+// pass through unchanged.
+func envOverrideForUI(v entity.Config, raw string) string {
+	if v.Type != "kvlist" {
+		return raw
+	}
+	col := "value"
+	if v.Options != "" {
+		col = strings.SplitN(v.Options, "|", 2)[0]
+	}
+	rows := make([]map[string]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		rows = append(rows, map[string]string{col: p})
+	}
+	out, err := json.Marshal(rows)
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
 // ListOwned returns every config scoped to owner in declaration order.
 // Non-persisted metadata fields (Hidden, VisibleWhen, Options, …) are
 // restored from the meta map because gorm:"-" tags strip them on DB
@@ -305,7 +334,7 @@ func (s *Service) ListOwned(owner string) []entity.Config {
 		// the input gets disabled — Set() rejects writes while live.
 		if owner == "" {
 			if envName, val, set := EnvOverrideFor(key); set {
-				v.Value = val
+				v.Value = envOverrideForUI(v, val)
 				v.EnvOverride = envName
 			}
 		}
