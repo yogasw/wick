@@ -45,19 +45,37 @@ VER="${TAG#v}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
 
 # ── Pre-install version probe ────────────────────────────────────────
-# Each component supports `<bin> version` (cobra-generated for the
-# main app/gate; `gotty -v` for gotty). Failing probes return "" so
-# the status table just shows "not installed". Skip flags are set
-# when the installed version already matches the resolved TAG so we
-# don't redo work on re-runs.
+# Three subtle bugs we need to avoid here:
+#  1. Probed binaries inherit sh's stdin (the `curl | sh` pipe). If a
+#     probe reads stdin (e.g. wick-agent-gate, which expects PreToolUse
+#     hook JSON), it steals lines from the script body and sh later
+#     dies with "Syntax error: end of file unexpected (expecting fi)".
+#     Cure: redirect </dev/null on every probe call.
+#  2. `gotty version` is not a version subcommand — gotty interprets
+#     it as "serve the command `version` over a web terminal" and binds
+#     :8080, which fails (port in use) or hangs (port free). Skip the
+#     `version` subcommand attempt for gotty.
+#  3. gate has no `version` subcommand or `--version` flag — every
+#     probe path returns hook-error JSON. Just inherit APP_VER (gate
+#     ships in the same release/.deb/.msi as the main app).
 probe_version() {
   bin="$1"
   [ -n "$bin" ] && [ -x "$bin" ] || { echo ""; return; }
-  v=$("$bin" version 2>/dev/null | head -1 | tr -d '\r')
+  v=$("$bin" --version </dev/null 2>/dev/null | head -1 | tr -d '\r')
   [ -n "$v" ] && { echo "$v"; return; }
-  v=$("$bin" -v 2>/dev/null | head -1 | tr -d '\r')
+  v=$("$bin" -v </dev/null 2>/dev/null | head -1 | tr -d '\r')
   [ -n "$v" ] && { echo "$v"; return; }
-  v=$("$bin" --version 2>/dev/null | head -1 | tr -d '\r')
+  v=$("$bin" version </dev/null 2>/dev/null | head -1 | tr -d '\r')
+  echo "$v"
+}
+
+# gotty-specific: only --version is safe; `version` and `-v` need
+# special handling (the latter is the correct flag but we still want to
+# avoid the `version` subcommand fallback that probe_version would try).
+probe_gotty() {
+  bin="$1"
+  [ -n "$bin" ] && [ -x "$bin" ] || { echo ""; return; }
+  v=$("$bin" --version </dev/null 2>/dev/null | head -1 | tr -d '\r')
   echo "$v"
 }
 
@@ -65,8 +83,15 @@ APP_PATH=$(command -v "$APP" 2>/dev/null || echo "")
 GATE_PATH=$(command -v "$APP-gate" 2>/dev/null || echo "")
 GOTTY_PATH=$(command -v gotty 2>/dev/null || echo "")
 APP_VER=$(probe_version "$APP_PATH")
-GATE_VER=$(probe_version "$GATE_PATH")
-GOTTY_VER=$(probe_version "$GOTTY_PATH")
+# Gate ships alongside app in the same release; probing gate directly
+# is unsafe (see comment above), so reuse APP_VER when the gate binary
+# is present.
+if [ -n "$GATE_PATH" ]; then
+  GATE_VER="$APP_VER"
+else
+  GATE_VER=""
+fi
+GOTTY_VER=$(probe_gotty "$GOTTY_PATH")
 
 SKIP_APP=0; SKIP_GATE=0
 case "$APP_VER" in
@@ -123,7 +148,8 @@ install_gotty() {
   goos="$2"
   installed_ver=""
   if [ -x "$dest_dir/gotty" ]; then
-    installed_ver=$("$dest_dir/gotty" -v 2>/dev/null | head -1 || true)
+    # </dev/null so gotty doesn't steal sh's stdin (see probe_version).
+    installed_ver=$("$dest_dir/gotty" --version </dev/null 2>/dev/null | head -1 || true)
   fi
   # Resolve latest tag up-front so we can auto-skip when already current,
   # keeping re-runs config-only (no prompt, no download).
