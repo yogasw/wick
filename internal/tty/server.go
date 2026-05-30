@@ -93,30 +93,37 @@ func (s *Server) start() error {
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.GottyAddr, s.cfg.GottyPort)
 
+	// Resolve gotty + shell to absolute paths up front. gotty itself
+	// calls exec.Command(<shell>) in its localcommand backend, which on
+	// Termux/Android (kernel < 5.8) crashes via faccessat2 SIGSYS when
+	// the shell is a bare name — passing an absolute path bypasses Go's
+	// internal LookPath inside the gotty subprocess.
+	bin, err := safeexec.ResolveBin(s.cfg.GottyBin)
+	if err != nil {
+		s.log.Error().Err(err).Str("bin", s.cfg.GottyBin).Msg("tty: gotty not found on PATH")
+		return fmt.Errorf("start gotty: %w", err)
+	}
+	shell, err := safeexec.ResolveBin(s.cfg.Shell)
+	if err != nil {
+		s.log.Error().Err(err).Str("shell", s.cfg.Shell).Msg("tty: shell not found on PATH")
+		return fmt.Errorf("start gotty: resolve shell: %w", err)
+	}
+
 	args := []string{
 		"--permit-write",
 		"--port", fmt.Sprintf("%d", s.cfg.GottyPort),
 		"--address", s.cfg.GottyAddr,
 		"--reconnect",
 		"--reconnect-time", "3",
-		s.cfg.Shell,
+		shell,
 	}
 
 	s.log.Info().
-		Str("bin", s.cfg.GottyBin).
+		Str("bin", bin).
 		Str("addr", addr).
-		Str("shell", s.cfg.Shell).
+		Str("shell", shell).
 		Strs("args", args).
 		Msg("tty: spawning gotty")
-
-	// Resolve to absolute path ourselves rather than letting exec.Command
-	// call Go's LookPath. LookPath uses faccessat2(2), which Android/Termux
-	// seccomp on kernel < 5.8 rejects with SIGSYS → crash on every spawn.
-	bin, err := safeexec.ResolveBin(s.cfg.GottyBin)
-	if err != nil {
-		s.log.Error().Err(err).Str("bin", s.cfg.GottyBin).Msg("tty: gotty not found on PATH")
-		return fmt.Errorf("start gotty: %w", err)
-	}
 
 	cmd := safeexec.Command(bin, args...)
 	cmd.Stdout = os.Stdout
