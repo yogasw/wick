@@ -14,7 +14,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	@tooltipStyles()
 	@scrollbarStyles()
 	{{ user := login.GetUser(ctx) }}
-	<div class="flex w-full h-screen" data-agents-shell>
+	<div class="flex w-full h-[100svh]" data-agents-shell>
 		<!-- Mobile hamburger (md:hidden). Hidden when drawer open. -->
 		<button
 			type="button"
@@ -79,11 +79,26 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/workspaces", "Workspaces", vm.ActivePage == "workspaces")
-				@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-				@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
-				@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
-				@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
-				@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
+				<details class="group" { agentsMoreOpenAttr(vm.ActivePage)... }>
+					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">
+						<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+							<circle cx="4" cy="8" r="1" fill="currentColor"></circle>
+							<circle cx="8" cy="8" r="1" fill="currentColor"></circle>
+							<circle cx="12" cy="8" r="1" fill="currentColor"></circle>
+						</svg>
+						<span class="flex-1">More</span>
+						<svg viewBox="0 0 12 12" class="h-3 w-3 opacity-60 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path>
+						</svg>
+					</summary>
+					<div class="flex flex-col gap-0.5 pt-0.5">
+						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
+						@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
+						@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
+					</div>
+				</details>
 			</nav>
 			<!-- Recent sessions list (scrollable, fills remaining height) -->
 			<div class="flex flex-col flex-1 overflow-hidden">
@@ -511,6 +526,18 @@ templ agentsNavLink(href, label string, active bool) {
 		@agentsNavIcon(label)
 		{ label }
 	</a>
+}
+
+// agentsMoreOpenAttr returns an "open" attribute on the <details>
+// when the active page lives inside the collapsed "More" group, so
+// the section auto-expands when the user lands on a secondary tool
+// (otherwise the active row would be hidden).
+func agentsMoreOpenAttr(activePage string) templ.Attributes {
+	switch activePage {
+	case "presets", "providers", "skills", "channels", "data-tables":
+		return templ.Attributes{"open": ""}
+	}
+	return templ.Attributes{}
 }
 
 templ agentsNavIcon(label string) {

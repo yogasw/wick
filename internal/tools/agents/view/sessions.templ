@@ -273,7 +273,7 @@ templ sessionPager(vm SessionsTableVM) {
 // SessionDetail renders the session detail page with tabs and composer.
 templ SessionDetail(vm SessionDetailVM) {
 	@AgentsLayout(vm.Layout) {
-		<div class="relative flex flex-1 min-h-0 flex-col -mt-6 -mx-6" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+		<div class="relative flex flex-col -mt-6 -mx-6 h-[100svh]" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
 			<!-- Zone 1: transparent overlay bar -->
 			<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">
 				<!-- Left: tab dropdown -->
