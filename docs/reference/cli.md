@@ -6,10 +6,10 @@ outline: deep
 
 Wick ships two kinds of commands:
 
-- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `all`, `skill`, `doctor`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
+- **Built-in commands** are hardcoded in the `wick` binary (`init`, `run`, `build`, `server`, `worker`, `all`, `skill`, `doctor`, `mcp`, `workflow`, `upgrade`, `version`). They work the same across every project and the behavior is fixed by the installed wick version.
 - **Task shortcuts** (`dev`, `setup`, `test`, `tidy`, `generate`) are thin wrappers that execute the matching task in your project's [`wick.yml`](./wick-yml). You can edit or extend those tasks per project; `wick run <task>` runs any arbitrary task defined there.
 
-Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `all`, `mcp serve / install / uninstall`) — see [Built apps](#built-apps) below.
+Apps built by `wick build` also ship their own subcommand tree (`tray`, `server`, `worker`, `all`, `start`, `stop`, `status`, `service`, `config`, `mcp`, `uninstall`) — see the dedicated [App CLI Reference](./app-cli).
 
 Run `wick --help` to print the current list.
 
@@ -103,7 +103,7 @@ Common flags:
 | `--goos` | `GOOS` | Target GOOS; mutex with `--target` |
 | `--goarch` | `GOARCH` | Target GOARCH; mutex with `--target` |
 | `--all` | — | Best-effort build all OS/arch; auto-skip darwin on non-mac host |
-| `--headless` | — | Add `-tags headless` (no tray) |
+| `--headless` | — | Add `-tags headless` (no tray) — recommended for Termux / server targets |
 
 Full reference incl. CI workflow templates and PAT setup: [`wick build` reference](./build).
 
@@ -135,11 +135,51 @@ Runs the same worker process as `./myapp worker` but straight from source. Usefu
 
 ### `wick all`
 
-Start the HTTP server and the cron scheduler in one process. Equivalent to `go run . all`. See [`<app> all`](#app-all) for the trade-off table — same command, just running straight from source.
+Start the HTTP server and the cron scheduler in one process. Equivalent to `go run . all`. See [`<app> all`](./app-cli#app-all) on the App CLI page for the single-node vs. multi-pod trade-off table — same command, just running from source instead of a built binary.
 
 ```bash
 wick all
 ```
+
+---
+
+### `wick mcp`
+
+Wick's own MCP server, separate from the per-app MCP a built binary ships ([`<app> mcp`](./app-cli#mcp)). Used while developing tools / connectors in the wick repo so a Claude / Cursor session can hit the live in-tree code without going through `wick build`.
+
+```bash
+wick mcp serve                                # run over stdio (called by clients)
+wick mcp config                               # print a config snippet + target paths
+wick mcp install --client claude              # write the entry directly
+wick mcp install --client all --mode rebuild  # all clients, force rebuild on launch
+```
+
+Build modes (`--mode`, also accepted by `mcp serve`):
+
+| Mode | When to use |
+|---|---|
+| `auto` (default) | Rebuild only when HEAD commit changed; otherwise run cached binary |
+| `dev` | `go run` — no binary, always recompiles, good while actively developing |
+| `build` | Build once if binary missing, reuse existing binary otherwise |
+| `rebuild` | Always force a full rebuild before running |
+
+`--client` accepts `claude`, `cursor`, `gemini`, `codex`, `claude-code`, `all`. Default server name is the basename of the cwd; override with `--name`.
+
+---
+
+### `wick workflow test <id>`
+
+Run the `__tests__/` fixtures bundled with a workflow under the current agents layout. Walks every case file in `<workflow_id>/__tests__/`, executes the workflow against each, and prints pass / fail counts.
+
+```bash
+wick workflow test draft-pr
+#   ✓ happy-path (412ms)
+#   ✓ missing-input-rejected (88ms)
+#   ✗ on-error-branch
+#     expected status="failed", got "succeeded"
+```
+
+Exits non-zero if any case fails. Useful in CI to gate workflow edits.
 
 ---
 
@@ -240,72 +280,8 @@ See [`wick.yml` reference](./wick-yml) for the full task syntax (`if_missing`, `
 
 ---
 
-## Built apps
+## See also
 
-The binary produced by `wick build` registers its own command tree. Run `./bin/<app> --help` for the live list.
-
-### `<app>` (no args)
-
-Launch the system tray UI. Same as `<app> tray`. The tray runs the HTTP server and the background worker as in-process goroutines and exposes MCP install / uninstall, preferences, and self-update from the menu.
-
-See the [Desktop Tray guide](../guide/desktop-tray) for menu layout, file locations, and self-updater behavior.
-
-### `<app> tray`
-
-Explicit tray subcommand. Identical to running with no args.
-
-In headless builds (`wick build --headless`) this prints `tray not available in headless build` and exits non-zero.
-
-### `<app> server`
-
-Start the HTTP server only. Useful for running on a server, in Docker, or alongside an external process supervisor.
-
-```bash
-./bin/myapp server
-./bin/myapp server --port 9000   # override the resolved port
-```
-
-### `<app> worker`
-
-Start the background job worker only. Pair with `server` in a separate process / container when you want to scale them independently.
-
-### `<app> all`
-
-Run the HTTP server **and** the cron scheduler in the same process, sharing one `manager.Service`. Use this for single-node deployments where `server` and `worker` can't share a volume (single-container Docker, simple VPS, etc.) — without a shared filesystem a separate worker pod can't see provider-storage files restored on the API pod, so jobs that touch those files silently no-op.
-
-```bash
-./bin/myapp all
-./bin/myapp all --port 9000
-```
-
-Trade-offs vs. running `server` + `worker` as separate processes:
-
-| Aspect | `all` (single-node) | `server` + `worker` (multi-pod) |
-|---|---|---|
-| Filesystem | One pod, no volume sharing needed | Needs shared volume (or per-pod restore) |
-| Scaling | Vertical only (one process) | Horizontal (scale worker independently) |
-| Cron double-fire | Impossible (one `manager.Service`) | Possible if you accidentally run two workers |
-| Failure isolation | HTTP crash kills cron too | Independent |
-
-The scheduler goroutine auto-respawns with exponential backoff (2s → 30s cap) if it exits unexpectedly. Clean shutdown via `SIGTERM` / Ctrl+C stops both.
-
-### `<app> mcp serve`
-
-Run the MCP server over stdio. Spawned by Claude Desktop / Cursor / Gemini / Codex / Claude Code based on the entry written by `mcp install`.
-
-### `<app> mcp install`
-
-Write the binary's MCP entry into the chosen client's config file. Resolves `os.Executable()` so the entry points at the actual built binary, not at `wick`.
-
-```bash
-./bin/myapp mcp install                          # all detected clients
-./bin/myapp mcp install --client claude          # Claude Desktop only
-./bin/myapp mcp install --client claude-code     # writes ~/.claude.json
-./bin/myapp mcp install --name custom-server     # override server name
-```
-
-`--client` accepts: `claude`, `cursor`, `gemini`, `codex`, `claude-code`, `all`. The default server name is the basename of the current directory.
-
-### `<app> mcp uninstall`
-
-Remove the entry written by `install`. Same flags as `install`.
+- [App CLI Reference](./app-cli) — subcommands of the binary `wick build` produces (`tray`, `server`, `start`, `stop`, `service`, `config`, `mcp`, `uninstall`).
+- [Desktop Tray guide](../guide/desktop-tray) — what the tray menu does and how its autostart toggle relates to `<app> service install`.
+- [Termux / Android guide](../guide/termux-android) — running wick headless via the `start` / `service install` flow.

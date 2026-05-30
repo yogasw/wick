@@ -137,6 +137,7 @@ export default withMermaid(defineConfig({
         text: 'Reference',
         items: [
           { text: 'CLI', link: '/reference/cli' },
+          { text: 'App CLI', link: '/reference/app-cli' },
           { text: 'wick.yml', link: '/reference/wick-yml' },
           { text: 'wick build', link: '/reference/build' },
           { text: 'Environment Variables', link: '/reference/env-vars' },

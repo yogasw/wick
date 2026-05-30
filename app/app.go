@@ -38,6 +38,7 @@ import (
 	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/env"
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
@@ -359,8 +360,18 @@ func Run() {
 	root := &cobra.Command{
 		Use:   BuildAppName,
 		Short: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")",
-		Long:  BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")\n\nRun with no args to launch the system tray. Use subcommands for headless server / worker / MCP / install.",
+		Long: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")" +
+			"\n\nRun with no args to launch the system tray on desktops with a GUI." +
+			"\nOn headless environments (Termux / SSH / no DISPLAY) use `" + BuildAppName + " start`" +
+			"\nfor a background daemon, or one of the foreground subcommands.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !env.HasGUI() {
+				fmt.Fprintf(os.Stderr,
+					"Headless environment detected — tray needs a desktop session.\n"+
+						"Use `%s start` for background daemon mode, or `%s all` to run in foreground.\n",
+					BuildAppName, BuildAppName)
+				return nil
+			}
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
@@ -369,6 +380,11 @@ func Run() {
 			return nil
 		},
 	}
+	root.AddGroup(
+		&cobra.Group{ID: "daemon", Title: "Daemon (background):"},
+		&cobra.Group{ID: "run", Title: "Run (foreground):"},
+		&cobra.Group{ID: "tools", Title: "Tools:"},
+	)
 
 	serverCmd := &cobra.Command{
 		Use:   "server",
@@ -470,7 +486,36 @@ func Run() {
 		},
 	}
 
-	root.AddCommand(serverCmd, workerCmd, allCmd, mcpCmd, trayCmd, configCmd(), uninstallCmd())
+	// Group foreground run commands.
+	serverCmd.GroupID = "run"
+	workerCmd.GroupID = "run"
+	allCmd.GroupID = "run"
+
+	// Group tools.
+	mcpCmd.GroupID = "tools"
+	trayCmd.GroupID = "tools"
+
+	// Daemon (background) commands — start/stop/restart/status using a
+	// PID file under userconfig.Dir. Lets headless boxes (Termux, SSH
+	// servers, Linux without DISPLAY) run wick without a system tray
+	// or manual `nohup &` shell tricks.
+	startCmd := daemonStartCmd()
+	stopCmd := daemonStopCmd()
+	restartCmd := daemonRestartCmd()
+	statusCmd := daemonStatusCmd()
+	svcCmd := serviceCmd()
+	startCmd.GroupID = "daemon"
+	stopCmd.GroupID = "daemon"
+	restartCmd.GroupID = "daemon"
+	statusCmd.GroupID = "daemon"
+	svcCmd.GroupID = "daemon"
+
+	root.AddCommand(
+		serverCmd, workerCmd, allCmd,
+		startCmd, stopCmd, restartCmd, statusCmd, svcCmd,
+		mcpCmd, trayCmd,
+		configCmd(), uninstallCmd(),
+	)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())
