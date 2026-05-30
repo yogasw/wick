@@ -58,6 +58,16 @@ type ClaudeFactory struct {
 	// every preset. Preset stays the primary; this only adds to it.
 	SystemPromptLoader func() string
 
+	// ConnectorCatalogLoader (optional) returns a "## Available wick
+	// connectors" markdown block listing the connectors the spawning
+	// agent should prefer over hand-rolled HTTP. Wired in server.go
+	// so the loader can call connectorsSvc and filter to instances
+	// whose status is "ready" — connectors the operator has finished
+	// configuring. Empty string = no append (no connectors ready, or
+	// service unavailable). Inserted between the immutable rules and
+	// the preset body so the catalog can't override either layer.
+	ConnectorCatalogLoader func() string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -117,6 +127,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		immutable = config.ImmutableSystemPrompt()
 	}
 	presetContent := immutable
+	if f.ConnectorCatalogLoader != nil {
+		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {
+			presetContent += "\n\n" + catalog
+		}
+	}
 	if opt.PresetName != "" {
 		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
 			presetContent += "\n\n" + p.Body

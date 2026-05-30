@@ -8,9 +8,42 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/internal/initcreds"
 	"github.com/yogasw/wick/internal/pkg/daemon"
 	"github.com/yogasw/wick/internal/pkg/env"
 )
+
+// printInitCredsBanner prints the same App URL / email / default-password
+// block the foreground `server` / `all` commands emit on startup, so the
+// operator who ran `<app> start` sees the credentials without having to
+// tail daemon.log. Silent no-op when the credentials file is missing —
+// either the admin password has been changed (file cleared by the
+// server) or the daemon never reached the seed step.
+//
+// Wait window: the file is written inside the spawned daemon AFTER the
+// server boots, so on first start we poll for up to ~3s. On re-runs
+// the file already exists and the first iteration returns immediately.
+func printInitCredsBanner(appName string) {
+	credsPath, _ := initcreds.Path(appName)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if info, ok := initcreds.Read(appName); ok {
+			fmt.Println()
+			fmt.Printf("  → App URL:          %s\n", info.URL)
+			fmt.Printf("  → Email:            %s\n", info.Email)
+			fmt.Printf("  → Default password: %s\n", info.Password)
+			if credsPath != "" {
+				fmt.Printf("  → Saved to:         %s (auto-deleted after password change)\n", credsPath)
+			}
+			fmt.Printf("\n  ⚠ WARNING: Change the default password at %s/profile/setup\n", info.URL)
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 // daemonArgs picks the subcommand to detach into:
 //
@@ -56,6 +89,9 @@ func daemonStartCmd() *cobra.Command {
 			}
 			fmt.Printf("started %s as `%s` (pid %d)\n  log: %s\n  pid: %s\n",
 				BuildAppName, mode[0], pid, p.LogFile, p.PIDFile)
+			fmt.Printf("  view logs: tail -f %s   (or `%s status --log 4000`)\n",
+				p.LogFile, BuildAppName)
+			printInitCredsBanner(BuildAppName)
 			return nil
 		},
 	}
@@ -108,6 +144,9 @@ func daemonRestartCmd() *cobra.Command {
 			}
 			fmt.Printf("restarted %s as `%s` (pid %d)\n  log: %s\n",
 				BuildAppName, mode[0], pid, p.LogFile)
+			fmt.Printf("  view logs: tail -f %s   (or `%s status --log 4000`)\n",
+				p.LogFile, BuildAppName)
+			printInitCredsBanner(BuildAppName)
 			return nil
 		},
 	}

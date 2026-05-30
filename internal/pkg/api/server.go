@@ -698,6 +698,28 @@ func NewServer() *Server {
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
 
+	// Wire the agent factory's connector-catalog loader now that the
+	// connectors service exists. The loader runs at every agent spawn,
+	// listing only connector definitions whose Meta.Key has at least
+	// one instance with status="ready" — so the model never sees a
+	// connector the operator hasn't finished configuring. A 2s ctx
+	// budget keeps a slow DB from stalling spawn.
+	agentsFactory.ConnectorCatalogLoader = func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		rows, err := connectorsSvc.List(ctx)
+		if err != nil {
+			return ""
+		}
+		ready := make(map[string]bool, len(rows))
+		for _, row := range rows {
+			if connectorsSvc.Status(row) == "ready" {
+				ready[row.Key] = true
+			}
+		}
+		return agentconfig.ConnectorCatalog(ready)
+	}
+
 	// Workflow connector executor needs row credentials resolved
 	// from the connectors service — wire after the service is built.
 	wfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connectorsSvc))
