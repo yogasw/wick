@@ -49,7 +49,7 @@ func buildGateBinary(cfg Config) (binArtifact string, err error) {
 		return "", fmt.Errorf("mkdir %s: %w", filepath.Dir(embedOut), err)
 	}
 
-	gateLDFlags := fmt.Sprintf("-s -w -X github.com/yogasw/wick/internal/appname.BuildAppName=%s", cfg.AppName)
+	gateLDFlags := fmt.Sprintf("-s -w -X github.com/yogasw/wick/internal/appname.BuildAppName=%s -X main.Version=%s", cfg.AppName, cfg.AppVersion)
 	fmt.Printf("> go build %s → %s\n", gateModulePath, embedOut)
 	embedCmd := exec.Command("go", "build",
 		"-trimpath",
