@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/mcpconfig"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 const (
@@ -46,10 +47,10 @@ binary, and verify socket/spec paths.`,
 }
 
 type check struct {
-	label   string
-	status  string // checkOK | checkFail | checkWarn
-	detail  string
-	indent  int
+	label    string
+	status   string // checkOK | checkFail | checkWarn
+	detail   string
+	indent   int
 	required bool
 }
 
@@ -104,7 +105,7 @@ func collectChecks(file string) []check {
 	})
 
 	// ── Go toolchain ──────────────────────────────────────────────────
-	if out, err := exec.Command("go", "version").Output(); err == nil {
+	if out, err := safeexec.Command("go", "version").Output(); err == nil {
 		version := parseGoVersion(strings.TrimSpace(string(out)))
 		checks = append(checks, check{
 			label:    "go",
@@ -250,7 +251,7 @@ func checkGate(file string) []check {
 		}
 	}
 	if gatePath == "" {
-		if p, err := exec.LookPath(strings.TrimSuffix(gateName, ".exe")); err == nil {
+		if p, err := safeexec.LookPath(strings.TrimSuffix(gateName, ".exe")); err == nil {
 			gatePath, gateSource = p, "PATH"
 		}
 	}
@@ -402,7 +403,7 @@ func checkBinary(name, hint string) check {
 		}
 	}
 	// Fall back to PATH
-	if path, err := exec.LookPath(name); err == nil {
+	if path, err := safeexec.LookPath(name); err == nil {
 		return check{
 			label:    name,
 			status:   checkOK,
@@ -428,7 +429,7 @@ func checkTailwind() check {
 		if _, err := os.Stat(local); err == nil {
 			return check{label: "tailwindcss", status: checkOK, detail: local}
 		}
-		if path, err := exec.LookPath(name); err == nil {
+		if path, err := safeexec.LookPath(name); err == nil {
 			return check{label: "tailwindcss", status: checkOK, detail: path}
 		}
 	}

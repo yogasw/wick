@@ -24,7 +24,6 @@ package builder
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -32,6 +31,7 @@ import (
 	"github.com/yogasw/wick/internal/builder/darwin"
 	"github.com/yogasw/wick/internal/builder/linux"
 	"github.com/yogasw/wick/internal/builder/windows"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Build compiles the Go source in CWD per cfg, then wraps the
@@ -170,7 +170,7 @@ func runGoBuild(cfg Config, ldflags []string) error {
 	args = append(args, ".")
 
 	fmt.Printf("> go %s\n", strings.Join(args, " "))
-	cmd := exec.Command("go", args...)
+	cmd := safeexec.Command("go", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),

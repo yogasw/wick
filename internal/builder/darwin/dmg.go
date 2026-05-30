@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // ErrSkippedDMG is returned when DMG creation is skipped because the
@@ -31,7 +32,7 @@ func PackageDMG(appPath, dmgPath, volName string, installerLayout bool) (string,
 	if runtime.GOOS != "darwin" {
 		return "", ErrSkippedDMG
 	}
-	if _, err := exec.LookPath("hdiutil"); err != nil {
+	if _, err := safeexec.LookPath("hdiutil"); err != nil {
 		return "", fmt.Errorf("hdiutil not found: %w", err)
 	}
 
@@ -44,7 +45,7 @@ func PackageDMG(appPath, dmgPath, volName string, installerLayout bool) (string,
 		defer os.RemoveAll(stage)
 
 		stagedApp := filepath.Join(stage, filepath.Base(appPath))
-		if err := exec.Command("cp", "-R", appPath, stagedApp).Run(); err != nil {
+		if err := safeexec.Command("cp", "-R", appPath, stagedApp).Run(); err != nil {
 			return "", fmt.Errorf("stage app: %w", err)
 		}
 		if err := os.Symlink("/Applications", filepath.Join(stage, "Applications")); err != nil {
@@ -57,7 +58,7 @@ func PackageDMG(appPath, dmgPath, volName string, installerLayout bool) (string,
 	// to keep CI reruns idempotent.
 	_ = os.Remove(dmgPath)
 
-	cmd := exec.Command("hdiutil", "create",
+	cmd := safeexec.Command("hdiutil", "create",
 		"-volname", volName,
 		"-srcfolder", srcFolder,
 		"-ov",

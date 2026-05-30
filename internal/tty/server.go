@@ -15,6 +15,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 type Config struct {
@@ -107,12 +109,21 @@ func (s *Server) start() error {
 		Strs("args", args).
 		Msg("tty: spawning gotty")
 
-	cmd := exec.Command(s.cfg.GottyBin, args...)
+	// Resolve to absolute path ourselves rather than letting exec.Command
+	// call Go's LookPath. LookPath uses faccessat2(2), which Android/Termux
+	// seccomp on kernel < 5.8 rejects with SIGSYS → crash on every spawn.
+	bin, err := safeexec.ResolveBin(s.cfg.GottyBin)
+	if err != nil {
+		s.log.Error().Err(err).Str("bin", s.cfg.GottyBin).Msg("tty: gotty not found on PATH")
+		return fmt.Errorf("start gotty: %w", err)
+	}
+
+	cmd := safeexec.Command(bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		s.log.Error().Err(err).Str("bin", s.cfg.GottyBin).Msg("tty: failed to spawn gotty — is gotty in PATH?")
+		s.log.Error().Err(err).Str("bin", bin).Msg("tty: failed to spawn gotty")
 		return fmt.Errorf("start gotty: %w", err)
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -91,7 +90,7 @@ func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) 
 	sentinelForBash := strings.ReplaceAll(sentinelPath, "\\", "/")
 	prompt := fmt.Sprintf(`Run this exact bash command without asking: touch "%s"`, sentinelForBash)
 
-	cmd := exec.CommandContext(ctx, bin,
+	cmd := safeexec.CommandContext(ctx, bin,
 		"-p",
 		"--verbose",
 		"--output-format", "stream-json",

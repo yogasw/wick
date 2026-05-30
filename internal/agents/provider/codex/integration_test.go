@@ -9,18 +9,18 @@ package codex
 import (
 	"bufio"
 	"context"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/event"
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 func skipIfNoCodex(t *testing.T) string {
 	t.Helper()
-	bin, err := exec.LookPath("codex")
+	bin, err := safeexec.LookPath("codex")
 	if err != nil {
 		t.Skip("codex binary not found on PATH — skipping integration test")
 	}

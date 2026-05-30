@@ -4,10 +4,11 @@ package systemtray
 
 import (
 	"bytes"
-	"os/exec"
 	"syscall"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // openInEditor opens path in the user's default app for that file
@@ -21,7 +22,7 @@ import (
 // Wait + stderr capture so a silent failure (path missing, default app
 // not registered, etc.) lands in the log instead of disappearing.
 func openInEditor(path string) error {
-	c := exec.Command("cmd", "/c", "start", "", path)
+	c := safeexec.Command("cmd", "/c", "start", "", path)
 	c.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x08000000,

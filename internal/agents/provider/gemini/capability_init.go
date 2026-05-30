@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/yogasw/wick/internal/agents/capability"
@@ -110,7 +109,7 @@ func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) 
 		return fmt.Errorf("gemini binary: %w", err)
 	}
 	prompt := fmt.Sprintf(`Run the shell command: touch "%s"`, sentinelPath)
-	cmd := exec.CommandContext(ctx, bin, "-p", prompt)
+	cmd := safeexec.CommandContext(ctx, bin, "-p", prompt)
 	cmd.Dir = workspace
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {

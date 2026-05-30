@@ -3,8 +3,9 @@
 package systemtray
 
 import (
-	"os/exec"
 	"runtime"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // notify shows an OS-level notification.
@@ -13,9 +14,9 @@ import (
 func notify(title, message string) error {
 	if runtime.GOOS == "darwin" {
 		script := `display notification "` + escapeAS(message) + `" with title "` + escapeAS(title) + `"`
-		return exec.Command("osascript", "-e", script).Start()
+		return safeexec.Command("osascript", "-e", script).Start()
 	}
-	return exec.Command("notify-send", title, message).Start()
+	return safeexec.Command("notify-send", title, message).Start()
 }
 
 func escapeAS(s string) string {

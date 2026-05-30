@@ -34,7 +34,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 )
 
@@ -66,7 +65,7 @@ func findExecutable(file string) error {
 // during exec.Command construction — that path triggers faccessat2,
 // which Android's seccomp on kernel < 5.8 rejects with SIGSYS.
 func ResolveBin(name string) (string, error) {
-	if strings.Contains(name, "/") {
+	if hasPathSep(name) {
 		return name, nil
 	}
 	return LookPath(name)
@@ -77,7 +76,7 @@ func ResolveBin(name string) (string, error) {
 // If file contains a slash it is checked directly. Returns an
 // *exec.Error so callers can use errors.Is(err, exec.ErrNotFound).
 func LookPath(file string) (string, error) {
-	if strings.Contains(file, "/") {
+	if hasPathSep(file) {
 		if err := findExecutable(file); err != nil {
 			return "", &exec.Error{Name: file, Err: err}
 		}
@@ -97,4 +96,17 @@ func LookPath(file string) (string, error) {
 		}
 	}
 	return "", &exec.Error{Name: file, Err: exec.ErrNotFound}
+}
+
+// hasPathSep reports whether s carries a path separator that would
+// make exec.Command bypass its internal LookPath. On Windows that's
+// either "/" or "\"; on unix only "/" (so backslashes in unix paths
+// — rare but legal as a filename — don't accidentally fast-track).
+func hasPathSep(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' || s[i] == os.PathSeparator {
+			return true
+		}
+	}
+	return false
 }

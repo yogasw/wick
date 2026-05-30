@@ -15,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // writeTestWickYML drops a minimal wick.yml in a fresh tempdir and
@@ -36,14 +37,14 @@ func writeTestWickYML(t *testing.T, app string) {
 // binary name is irrelevant. Skips when `go build` is unavailable.
 func buildGate(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("go"); err != nil {
+	if _, err := safeexec.LookPath("go"); err != nil {
 		t.Skip("`go` not in PATH — can't compile gate")
 	}
 	out := filepath.Join(t.TempDir(), "gate")
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", out, "github.com/yogasw/wick/cmd/gate")
+	cmd := safeexec.Command("go", "build", "-o", out, "github.com/yogasw/wick/cmd/gate")
 	if buildOut, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build gate: %v\n%s", err, buildOut)
 	}
@@ -88,7 +89,7 @@ func setupGate(t *testing.T, rules []gate.CommandRule) (bin, app string, layout 
 // env var inherited from the test process — no env vars, no ldflags.
 func runGate(t *testing.T, bin, stdin string) (int, string) {
 	t.Helper()
-	cmd := exec.Command(bin)
+	cmd := safeexec.Command(bin)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -225,7 +226,7 @@ func TestGate_MissingSharedSpecIsEmpty(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	writeTestWickYML(t, "itest-empty")
 
-	cmd := exec.Command(bin)
+	cmd := safeexec.Command(bin)
 	cmd.Stdin = strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"ls"}}`)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -245,7 +246,7 @@ func TestGate_MissingSharedSpecIsEmpty(t *testing.T) {
 // rationale).
 func TestGate_TimeoutOnHangingStdin(t *testing.T) {
 	bin, _, _ := setupGate(t, []gate.CommandRule{{Pattern: "ls *"}})
-	cmd := exec.Command(bin)
+	cmd := safeexec.Command(bin)
 	stdinR, stdinW, _ := pipePair()
 	cmd.Stdin = stdinR
 	defer stdinW.Close()

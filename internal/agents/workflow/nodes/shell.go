@@ -72,7 +72,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("resolve %q: %w", args[0], err)
 	}
-	cmd := exec.CommandContext(cctx, binPath, args[1:]...)
+	cmd := safeexec.CommandContext(cctx, binPath, args[1:]...)
 	if len(n.ShellEnv) > 0 {
 		envSlice := []string{}
 		for k, v := range n.ShellEnv {

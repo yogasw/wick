@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Spec is the per-app gate config the binary loads at every
@@ -307,7 +308,7 @@ func ProbeGateSupport(ctx context.Context, claudeBin, gateBin string) ProbeResul
 	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cctx, claudeBin,
+	cmd := safeexec.CommandContext(cctx, claudeBin,
 		"-p",
 		"--settings", settingsPath,
 		"--output-format", "stream-json",
@@ -363,7 +364,7 @@ func ProbeGateSupport(ctx context.Context, claudeBin, gateBin string) ProbeResul
 func claudeVersionString(ctx context.Context, claudeBin string) string {
 	vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(vctx, claudeBin, "--version").Output()
+	out, err := safeexec.CommandContext(vctx, claudeBin, "--version").Output()
 	if err != nil {
 		return ""
 	}

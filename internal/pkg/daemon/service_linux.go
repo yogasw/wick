@@ -5,9 +5,10 @@ package daemon
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // service_linux.go provides the *headless* backends — only used when
@@ -141,8 +142,8 @@ WantedBy=default.target
 	// daemon-reload picks up the new unit. enable wires it into boot.
 	// Failures here are non-fatal — user can run the commands manually
 	// if the host's systemctl is unavailable.
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
-	_ = exec.Command("systemctl", "--user", "enable", appName+".service").Run()
+	_ = safeexec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = safeexec.Command("systemctl", "--user", "enable", appName+".service").Run()
 	return nil
 }
 
@@ -154,12 +155,12 @@ func uninstallSystemd(appName string) error {
 	if !pathExists(target) {
 		return ErrNotInstalled
 	}
-	_ = exec.Command("systemctl", "--user", "stop", appName+".service").Run()
-	_ = exec.Command("systemctl", "--user", "disable", appName+".service").Run()
+	_ = safeexec.Command("systemctl", "--user", "stop", appName+".service").Run()
+	_ = safeexec.Command("systemctl", "--user", "disable", appName+".service").Run()
 	if err := os.Remove(target); err != nil {
 		return err
 	}
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = safeexec.Command("systemctl", "--user", "daemon-reload").Run()
 	return nil
 }
 
@@ -175,7 +176,7 @@ func systemdStatus(appName string) (ServiceState, error) {
 	}
 	st.Installed = pathExists(target)
 	if st.Installed {
-		out, _ := exec.Command("systemctl", "--user", "is-active", appName+".service").Output()
+		out, _ := safeexec.Command("systemctl", "--user", "is-active", appName+".service").Output()
 		st.Active = strings.TrimSpace(string(out)) == "active"
 	}
 	return st, nil

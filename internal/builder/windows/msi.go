@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"html"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // ErrSkippedMSI is returned when MSI creation is skipped because the
@@ -41,7 +42,7 @@ var ErrSkippedMSI = errors.New("msi: wixl not found on PATH")
 // is not on PATH (mirrors the darwin .dmg skip pattern so cross-builds
 // from hosts without wixl still produce a usable .exe).
 func PackageMSI(exePath, gateExePath, appName, appVersion, goarch string) (string, error) {
-	if _, err := exec.LookPath("wixl"); err != nil {
+	if _, err := safeexec.LookPath("wixl"); err != nil {
 		return "", ErrSkippedMSI
 	}
 
@@ -51,19 +52,19 @@ func PackageMSI(exePath, gateExePath, appName, appVersion, goarch string) (strin
 
 	maj, min, pat := parseSemver(appVersion)
 	wxs := buildWXS(wxsParams{
-		AppName:      appName,
-		ExeName:      appName + ".exe",
-		ExeSource:    exePath,
-		GateExeName:  appName + "-gate.exe",
+		AppName:       appName,
+		ExeName:       appName + ".exe",
+		ExeSource:     exePath,
+		GateExeName:   appName + "-gate.exe",
 		GateExeSource: gateExePath,
-		Version:      fmt.Sprintf("%d.%d.%d.0", maj, min, pat),
-		Win64:        win64,
-		UpgradeCode:  stableGUID("wick.upgrade." + appName),
-		MainCompGUID: stableGUID("wick.main." + appName),
-		GateCompGUID: stableGUID("wick.gate." + appName),
-		MenuCompGUID: stableGUID("wick.menu." + appName),
-		DeskCompGUID: stableGUID("wick.desktop." + appName),
-		Manufacturer: appName,
+		Version:       fmt.Sprintf("%d.%d.%d.0", maj, min, pat),
+		Win64:         win64,
+		UpgradeCode:   stableGUID("wick.upgrade." + appName),
+		MainCompGUID:  stableGUID("wick.main." + appName),
+		GateCompGUID:  stableGUID("wick.gate." + appName),
+		MenuCompGUID:  stableGUID("wick.menu." + appName),
+		DeskCompGUID:  stableGUID("wick.desktop." + appName),
+		Manufacturer:  appName,
 	})
 
 	wxsFile, err := os.CreateTemp("", "wick-msi-*.wxs")
@@ -79,7 +80,7 @@ func PackageMSI(exePath, gateExePath, appName, appVersion, goarch string) (strin
 	defer os.Remove(wxsFile.Name())
 
 	_ = os.Remove(msiPath)
-	cmd := exec.Command("wixl", "--arch", wixArch, "-o", msiPath, wxsFile.Name())
+	cmd := safeexec.Command("wixl", "--arch", wixArch, "-o", msiPath, wxsFile.Name())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
