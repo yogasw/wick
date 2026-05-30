@@ -34,7 +34,8 @@ AUTH=""
 # rustup-style "you decide how to elevate" convention.
 
 if [ "${VERSION:-latest}" = "latest" ]; then
-  TAG=$(curl -fsSL $AUTH "https://api.github.com/repos/$REPO/releases/latest" \
+  echo "→ resolving latest tag for $REPO..."
+  TAG=$(curl -fsSL --max-time 15 $AUTH "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 else
   TAG="$VERSION"
@@ -101,7 +102,7 @@ install_gate() {
   dest_dir="$1"
   gate_url="$BASE/${APP}-gate-linux-${ARCH}"
   echo "→ gate: $gate_url"
-  if curl -fsSL $AUTH "$gate_url" -o "$dest_dir/$APP-gate"; then
+  if curl -fL --progress-bar $AUTH "$gate_url" -o "$dest_dir/$APP-gate"; then
     chmod +x "$dest_dir/$APP-gate"
     echo "✓ $APP-gate installed at $dest_dir/$APP-gate"
   else
@@ -126,7 +127,8 @@ install_gotty() {
   fi
   # Resolve latest tag up-front so we can auto-skip when already current,
   # keeping re-runs config-only (no prompt, no download).
-  gotty_tag=$(curl -fsSL "https://api.github.com/repos/sorenisanerd/gotty/releases/latest" \
+  echo "→ resolving latest gotty tag..."
+  gotty_tag=$(curl -fsSL --max-time 15 "https://api.github.com/repos/sorenisanerd/gotty/releases/latest" \
               | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
   echo ""
   if [ -n "$installed_ver" ] && [ -n "$gotty_tag" ]; then
@@ -164,7 +166,7 @@ install_gotty() {
   url="https://github.com/sorenisanerd/gotty/releases/download/${gotty_tag}/${asset}"
   tmp=$(mktemp -d)
   echo "→ gotty: $url"
-  if ! curl -fsSL "$url" -o "$tmp/gotty.tar.gz"; then
+  if ! curl -fL --progress-bar "$url" -o "$tmp/gotty.tar.gz"; then
     echo "! download failed — skipping gotty" >&2
     rm -rf "$tmp"
     return 0
@@ -187,7 +189,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   else
     URL="$BASE/${APP}-linux-${ARCH}"
     echo "→ termux: $URL"
-    curl -fsSL $AUTH "$URL" -o "$PREFIX/bin/$APP"
+    curl -fL --progress-bar $AUTH "$URL" -o "$PREFIX/bin/$APP"
     chmod +x "$PREFIX/bin/$APP"
     echo "✓ $APP installed at $PREFIX/bin/$APP"
   fi
@@ -321,7 +323,7 @@ case "$OS" in
       URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
       TMP=$(mktemp -d)
       echo "→ macOS: $URL"
-      curl -fsSL $AUTH "$URL" -o "$TMP/$APP.dmg"
+      curl -fL --progress-bar $AUTH "$URL" -o "$TMP/$APP.dmg"
       hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
       MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
       cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
@@ -341,7 +343,7 @@ case "$OS" in
         URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
         TMP=$(mktemp)
         echo "→ linux: $URL"
-        curl -fsSL $AUTH "$URL" -o "$TMP"
+        curl -fL --progress-bar $AUTH "$URL" -o "$TMP"
         dpkg -i "$TMP"
         rm -f "$TMP"
         echo "✓ $APP installed"
@@ -352,7 +354,7 @@ case "$OS" in
       else
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
-        curl -fsSL $AUTH "$URL" -o /usr/local/bin/$APP
+        curl -fL --progress-bar $AUTH "$URL" -o /usr/local/bin/$APP
         chmod +x /usr/local/bin/$APP
         echo "✓ $APP installed"
       fi
@@ -364,7 +366,7 @@ case "$OS" in
         # install.sh with root privileges (or via `sudo sh`).
         gate_url="$BASE/${APP}-gate-linux-${ARCH}"
         echo "→ gate: $gate_url"
-        if curl -fsSL $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
+        if curl -fL --progress-bar $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
           chmod +x /usr/local/bin/$APP-gate
           echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
         else
