@@ -4,8 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // ErrSkippedSign is returned when ad-hoc codesign is skipped because
@@ -34,10 +35,10 @@ func SignAdHoc(appPath string) error {
 	if runtime.GOOS != "darwin" {
 		return ErrSkippedSign
 	}
-	if _, err := exec.LookPath("codesign"); err != nil {
+	if _, err := safeexec.LookPath("codesign"); err != nil {
 		return fmt.Errorf("codesign not found: %w", err)
 	}
-	cmd := exec.Command("codesign", "--sign", "-", "--deep", "--force", "--timestamp=none", appPath)
+	cmd := safeexec.Command("codesign", "--sign", "-", "--deep", "--force", "--timestamp=none", appPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

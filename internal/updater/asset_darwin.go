@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // assetName returns the release asset name for this OS/arch:
@@ -50,7 +51,7 @@ func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
 	}
 	defer os.RemoveAll(mountPoint)
 
-	attach := exec.Command("hdiutil", "attach",
+	attach := safeexec.Command("hdiutil", "attach",
 		"-nobrowse", "-readonly",
 		"-mountpoint", mountPoint,
 		tmpPath,
@@ -59,7 +60,7 @@ func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
 		return nil, fmt.Errorf("hdiutil attach: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	defer func() {
-		detach := exec.Command("hdiutil", "detach", "-quiet", mountPoint)
+		detach := safeexec.Command("hdiutil", "detach", "-quiet", mountPoint)
 		_ = detach.Run()
 	}()
 

@@ -1,3 +1,10 @@
+//go:build !windows
+
+// Windows has no unix exec bit, so findExecutable's mode&0o111 check
+// rejects every file. These tests assume unix semantics — gate them off
+// on Windows. safeexec itself works on Windows; only this test fixture
+// is unix-specific.
+
 package safeexec
 
 import (

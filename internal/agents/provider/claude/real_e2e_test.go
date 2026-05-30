@@ -2,21 +2,21 @@ package claude
 
 import (
 	"context"
-	"os/exec"
 	"testing"
 	"time"
 
-	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/event"
+	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/state"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // TestRealClaudeMultiTurn spawns the real claude CLI, sends two
 // follow-up prompts on the same long-lived process, and asserts that
 //
-//   1. SessionStart fires once (one process, one CLI session ID)
-//   2. Each turn produces a TextDelta + Done
-//   3. The captured CLI session ID is non-empty (we can resume later)
+//  1. SessionStart fires once (one process, one CLI session ID)
+//  2. Each turn produces a TextDelta + Done
+//  3. The captured CLI session ID is non-empty (we can resume later)
 //
 // Skipped unless `WICK_CLAUDE_E2E=1` is set so CI without a logged-in
 // claude binary stays green.
@@ -85,7 +85,7 @@ func claudeE2EEnabled(t *testing.T) bool {
 	if v := getenv("WICK_CLAUDE_E2E"); v != "1" {
 		return false
 	}
-	if _, err := exec.LookPath("claude"); err != nil {
+	if _, err := safeexec.LookPath("claude"); err != nil {
 		t.Logf("WICK_CLAUDE_E2E=1 set but `claude` not in PATH: %v", err)
 		return false
 	}

@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // swapLinuxDeb installs the staged .deb via pkexec dpkg -i in a
@@ -46,7 +47,7 @@ func swapLinuxDeb(current, staged, cacheDir string, sentinel Sentinel) error {
 	// setsid + nohup detaches the helper so it survives our exit.
 	// The parent argv[0] is opaque to the helper; we pass our PID
 	// explicitly so it can verify-and-wait if needed.
-	cmd := exec.Command("setsid", "nohup", helperPath, fmt.Sprintf("%d", pid))
+	cmd := safeexec.Command("setsid", "nohup", helperPath, fmt.Sprintf("%d", pid))
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil

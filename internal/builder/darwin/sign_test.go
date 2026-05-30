@@ -2,11 +2,12 @@ package darwin
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 func TestSignAdHoc_SkipNonDarwin(t *testing.T) {
@@ -47,7 +48,7 @@ func TestSignAdHoc_Darwin(t *testing.T) {
 
 func assertAdHocSigned(t *testing.T, appPath string) {
 	t.Helper()
-	out, err := exec.Command("codesign", "-dvv", appPath).CombinedOutput()
+	out, err := safeexec.Command("codesign", "-dvv", appPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("codesign -dvv: %v\n%s", err, out)
 	}

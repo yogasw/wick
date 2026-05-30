@@ -15,22 +15,22 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
 // Paths bundles the per-app filesystem locations used by the daemon.
 type Paths struct {
-	Dir      string // ~/.<appname>/
-	PIDFile  string // run.pid
-	LogFile  string // daemon.log
-	ExePath  string // resolved path to the currently running binary
+	Dir     string // ~/.<appname>/
+	PIDFile string // run.pid
+	LogFile string // daemon.log
+	ExePath string // resolved path to the currently running binary
 }
 
 // ResolvePaths returns the canonical daemon paths for an app. The
@@ -110,7 +110,7 @@ func Start(p Paths, args []string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("open log %s: %w", p.LogFile, err)
 	}
-	cmd := exec.Command(p.ExePath, args...)
+	cmd := safeexec.Command(p.ExePath, args...)
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	cmd.Stdin = nil

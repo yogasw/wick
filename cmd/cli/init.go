@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 func initCmd(tpl, designSystem, installScripts embed.FS) *cobra.Command {
@@ -155,7 +156,7 @@ func copySkillFromFS(fsys embed.FS, src, name string) error {
 
 func runIn(dir, bin string, args ...string) error {
 	fmt.Printf("\n> %s %s\n", bin, strings.Join(args, " "))
-	c := exec.Command(bin, args...)
+	c := safeexec.Command(bin, args...)
 	c.Dir = dir
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
