@@ -17,12 +17,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // fakeProviderSource is the source of a tiny provider binary built per
@@ -70,7 +71,7 @@ func main() {
 	}
 	data, _ := json.Marshal(payload)
 
-	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd := safeexec.Command(parts[0], parts[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "stdin pipe:", err)
@@ -107,7 +108,7 @@ func main() {
 // shouldn't be running integration tests anyway, but be polite).
 func buildFakeProvider(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("go"); err != nil {
+	if _, err := safeexec.LookPath("go"); err != nil {
 		t.Skip("integration test needs `go` on PATH to build the fake provider")
 	}
 	dir := t.TempDir()
@@ -119,7 +120,7 @@ func buildFakeProvider(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, src)
+	cmd := safeexec.Command("go", "build", "-o", bin, src)
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build fake provider: %v\n%s", err, out)
@@ -133,7 +134,7 @@ func buildFakeProvider(t *testing.T) string {
 // socket — pure adapter test.
 func buildGateBinary(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("go"); err != nil {
+	if _, err := safeexec.LookPath("go"); err != nil {
 		t.Skip("needs `go` on PATH")
 	}
 	dir := t.TempDir()
@@ -141,7 +142,7 @@ func buildGateBinary(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/gate")
+	cmd := safeexec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/gate")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build gate: %v\n%s", err, out)
@@ -179,7 +180,7 @@ func (p fakeProberIntegration) SendSentinel(ctx context.Context, workspace, sent
 	if err != nil {
 		return fmt.Errorf("read hook: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, p.fakeBinary, string(hookBytes), sentinel)
+	cmd := safeexec.CommandContext(ctx, p.fakeBinary, string(hookBytes), sentinel)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("fakeprov: %v\n%s", err, out)
@@ -304,7 +305,7 @@ func TestIntegration_GateAdapterShapeCodex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, gateBin, "--probe-deny", "--provider=codex")
+	cmd := safeexec.CommandContext(ctx, gateBin, "--probe-deny", "--provider=codex")
 	cmd.Stdin = nil // gate drains stdin then emits
 	out, err := cmd.Output()
 	if err != nil {

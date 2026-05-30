@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/mcpconfig"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 func mcpCmd() *cobra.Command {
@@ -56,7 +56,7 @@ Modes (--mode):
 func mcpServeMode(mode string) error {
 	switch mode {
 	case "dev":
-		c := exec.Command("go", "run", ".", "mcp", "serve")
+		c := safeexec.Command("go", "run", ".", "mcp", "serve")
 		c.Stdin = os.Stdin
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
@@ -106,7 +106,7 @@ func buildBinary(bin string) error {
 		args = append(args, "-ldflags", strings.Join(ldf, " "))
 	}
 	args = append(args, "-o", bin, ".")
-	c := exec.Command("go", args...)
+	c := safeexec.Command("go", args...)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
@@ -125,7 +125,7 @@ func readVersionFile() (string, error) {
 }
 
 func gitShortHash() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	out, err := safeexec.Command("git", "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		return "", err
 	}

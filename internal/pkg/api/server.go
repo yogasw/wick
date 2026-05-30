@@ -18,26 +18,36 @@ import (
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
-	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
-	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
+	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/agents/agentctl"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
+	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
+	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
+	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
+	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
+	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/health"
@@ -55,26 +65,16 @@ import (
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
-	"github.com/yogasw/wick/internal/safeexec"
-	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
-	wf "github.com/yogasw/wick/internal/agents/workflow"
-	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
-	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
-	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
-	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
-	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
-	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
-	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
-	"github.com/yogasw/wick/internal/agents/workflow/wftest"
-	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -1172,7 +1172,6 @@ func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[st
 	return out
 }
 
-
 // hostAllowlistHandler rejects requests whose Host header doesn't match
 // the host of app_url or any entry in allowed_origins. The /health
 // endpoint is exempt so external load balancers / uptime checks can
@@ -1292,8 +1291,8 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	)
 
 	httpSrv := http.Server{
-		Addr:         addr,
-		Handler:      h,
+		Addr:              addr,
+		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout and WriteTimeout unset — SSE connections stay open
 		// indefinitely and must not be cut by server-side timeouts.
