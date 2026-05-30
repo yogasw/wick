@@ -23,9 +23,27 @@ $Tag = if ($env:VERSION -and $env:VERSION -ne 'latest') {
 }
 if (-not $Tag) { throw "could not resolve latest tag for $Repo" }
 $Ver = $Tag.TrimStart('v')
+
+# Probe installed version — skip download/msiexec when already at target.
+# Keeps re-runs config-only (no UAC prompt, no MSI churn). Falls back to
+# install when probe fails or the binary isn't on PATH.
+$Installed = $null
+$Cmd = Get-Command $App -ErrorAction SilentlyContinue
+if ($Cmd) {
+  try {
+    $Installed = (& $App version 2>$null | Select-Object -First 1)
+    if ($Installed) { $Installed = $Installed.ToString().Trim() }
+  } catch {}
+}
+if ($Installed -and ($Installed -match [regex]::Escape($Tag) -or $Installed -match [regex]::Escape($Ver))) {
+  Write-Host "OK $App already at $Tag — skipping (currently: $Installed)"
+  exit 0
+}
+
 $Url = "https://github.com/$Repo/releases/download/$Tag/$App-$Ver-windows-$Arch.msi"
 $Tmp = [IO.Path]::GetTempFileName() + '.msi'
 Write-Host "-> $Url"
+if ($Installed) { Write-Host "   (upgrading from $Installed)" }
 Invoke-WebRequest -Headers $Headers $Url -OutFile $Tmp
 Start-Process msiexec -ArgumentList "/i `"$Tmp`" /qn" -Wait
 Remove-Item $Tmp

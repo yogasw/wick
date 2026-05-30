@@ -34,7 +34,8 @@ AUTH=""
 # rustup-style "you decide how to elevate" convention.
 
 if [ "${VERSION:-latest}" = "latest" ]; then
-  TAG=$(curl -fsSL $AUTH "https://api.github.com/repos/$REPO/releases/latest" \
+  echo "→ resolving latest tag for $REPO..."
+  TAG=$(curl -fsSL --max-time 15 $AUTH "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 else
   TAG="$VERSION"
@@ -44,19 +45,37 @@ VER="${TAG#v}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
 
 # ── Pre-install version probe ────────────────────────────────────────
-# Each component supports `<bin> version` (cobra-generated for the
-# main app/gate; `gotty -v` for gotty). Failing probes return "" so
-# the status table just shows "not installed". Skip flags are set
-# when the installed version already matches the resolved TAG so we
-# don't redo work on re-runs.
+# Three subtle bugs we need to avoid here:
+#  1. Probed binaries inherit sh's stdin (the `curl | sh` pipe). If a
+#     probe reads stdin (e.g. wick-agent-gate, which expects PreToolUse
+#     hook JSON), it steals lines from the script body and sh later
+#     dies with "Syntax error: end of file unexpected (expecting fi)".
+#     Cure: redirect </dev/null on every probe call.
+#  2. `gotty version` is not a version subcommand — gotty interprets
+#     it as "serve the command `version` over a web terminal" and binds
+#     :8080, which fails (port in use) or hangs (port free). Skip the
+#     `version` subcommand attempt for gotty.
+#  3. gate has no `version` subcommand or `--version` flag — every
+#     probe path returns hook-error JSON. Just inherit APP_VER (gate
+#     ships in the same release/.deb/.msi as the main app).
 probe_version() {
   bin="$1"
   [ -n "$bin" ] && [ -x "$bin" ] || { echo ""; return; }
-  v=$("$bin" version 2>/dev/null | head -1 | tr -d '\r')
+  v=$("$bin" --version </dev/null 2>/dev/null | head -1 | tr -d '\r')
   [ -n "$v" ] && { echo "$v"; return; }
-  v=$("$bin" -v 2>/dev/null | head -1 | tr -d '\r')
+  v=$("$bin" -v </dev/null 2>/dev/null | head -1 | tr -d '\r')
   [ -n "$v" ] && { echo "$v"; return; }
-  v=$("$bin" --version 2>/dev/null | head -1 | tr -d '\r')
+  v=$("$bin" version </dev/null 2>/dev/null | head -1 | tr -d '\r')
+  echo "$v"
+}
+
+# gotty-specific: only --version is safe; `version` and `-v` need
+# special handling (the latter is the correct flag but we still want to
+# avoid the `version` subcommand fallback that probe_version would try).
+probe_gotty() {
+  bin="$1"
+  [ -n "$bin" ] && [ -x "$bin" ] || { echo ""; return; }
+  v=$("$bin" --version </dev/null 2>/dev/null | head -1 | tr -d '\r')
   echo "$v"
 }
 
@@ -64,8 +83,15 @@ APP_PATH=$(command -v "$APP" 2>/dev/null || echo "")
 GATE_PATH=$(command -v "$APP-gate" 2>/dev/null || echo "")
 GOTTY_PATH=$(command -v gotty 2>/dev/null || echo "")
 APP_VER=$(probe_version "$APP_PATH")
-GATE_VER=$(probe_version "$GATE_PATH")
-GOTTY_VER=$(probe_version "$GOTTY_PATH")
+# Gate ships alongside app in the same release; probing gate directly
+# is unsafe (see comment above), so reuse APP_VER when the gate binary
+# is present.
+if [ -n "$GATE_PATH" ]; then
+  GATE_VER="$APP_VER"
+else
+  GATE_VER=""
+fi
+GOTTY_VER=$(probe_gotty "$GOTTY_PATH")
 
 SKIP_APP=0; SKIP_GATE=0
 case "$APP_VER" in
@@ -101,7 +127,7 @@ install_gate() {
   dest_dir="$1"
   gate_url="$BASE/${APP}-gate-linux-${ARCH}"
   echo "→ gate: $gate_url"
-  if curl -fsSL $AUTH "$gate_url" -o "$dest_dir/$APP-gate"; then
+  if curl -fL --progress-bar $AUTH "$gate_url" -o "$dest_dir/$APP-gate"; then
     chmod +x "$dest_dir/$APP-gate"
     echo "✓ $APP-gate installed at $dest_dir/$APP-gate"
   else
@@ -120,15 +146,26 @@ install_gate() {
 install_gotty() {
   dest_dir="$1"
   goos="$2"
-  # Version check — show installed version and ask whether to upgrade
-  # / reinstall. Skip the install when already present and user picks n.
   installed_ver=""
   if [ -x "$dest_dir/gotty" ]; then
-    installed_ver=$("$dest_dir/gotty" -v 2>/dev/null | head -1 || true)
+    # </dev/null so gotty doesn't steal sh's stdin (see probe_version).
+    installed_ver=$("$dest_dir/gotty" --version </dev/null 2>/dev/null | head -1 || true)
   fi
+  # Resolve latest tag up-front so we can auto-skip when already current,
+  # keeping re-runs config-only (no prompt, no download).
+  echo "→ resolving latest gotty tag..."
+  gotty_tag=$(curl -fsSL --max-time 15 "https://api.github.com/repos/sorenisanerd/gotty/releases/latest" \
+              | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
   echo ""
+  if [ -n "$installed_ver" ] && [ -n "$gotty_tag" ]; then
+    gv="${gotty_tag#v}"
+    if echo "$installed_ver" | grep -qF "$gv"; then
+      echo "✓ gotty $installed_ver already at $gotty_tag — skipping"
+      return 0
+    fi
+  fi
   if [ -n "$installed_ver" ]; then
-    echo "gotty already installed: $installed_ver"
+    echo "gotty installed: $installed_ver (latest: ${gotty_tag:-unknown})"
   fi
   if [ -e /dev/tty ]; then
     if [ -n "$installed_ver" ]; then
@@ -147,8 +184,6 @@ install_gotty() {
   case "$ans" in
     n|N|no|NO) echo "Skipped gotty install."; return 0 ;;
   esac
-  gotty_tag=$(curl -fsSL "https://api.github.com/repos/sorenisanerd/gotty/releases/latest" \
-              | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
   if [ -z "$gotty_tag" ]; then
     echo "! could not resolve gotty latest tag — skipping" >&2
     return 0
@@ -157,7 +192,7 @@ install_gotty() {
   url="https://github.com/sorenisanerd/gotty/releases/download/${gotty_tag}/${asset}"
   tmp=$(mktemp -d)
   echo "→ gotty: $url"
-  if ! curl -fsSL "$url" -o "$tmp/gotty.tar.gz"; then
+  if ! curl -fL --progress-bar "$url" -o "$tmp/gotty.tar.gz"; then
     echo "! download failed — skipping gotty" >&2
     rm -rf "$tmp"
     return 0
@@ -180,7 +215,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   else
     URL="$BASE/${APP}-linux-${ARCH}"
     echo "→ termux: $URL"
-    curl -fsSL $AUTH "$URL" -o "$PREFIX/bin/$APP"
+    curl -fL --progress-bar $AUTH "$URL" -o "$PREFIX/bin/$APP"
     chmod +x "$PREFIX/bin/$APP"
     echo "✓ $APP installed at $PREFIX/bin/$APP"
   fi
@@ -196,6 +231,41 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   # which to whitelist. We never silently expose — the phone might be
   # on public Wi-Fi where the agent UI shouldn't be reachable to every
   # device on the SSID.
+  # Check for existing managed ALLOWED_ORIGINS in ~/.bashrc — re-runs
+  # should be config-only, not force-reprompt every time.
+  rc="$HOME/.bashrc"
+  existing_origins=""
+  if [ -f "$rc" ]; then
+    existing_origins=$(grep -F "added by $APP installer" "$rc" 2>/dev/null \
+                       | sed -n 's/^export ALLOWED_ORIGINS="\([^"]*\)".*/\1/p' | head -1)
+  fi
+  if [ -n "$existing_origins" ]; then
+    echo ""
+    echo "  LAN whitelist — existing ALLOWED_ORIGINS in $rc:"
+    echo "    $existing_origins"
+    if [ -e /dev/tty ]; then
+      printf "  [k]eep / [e]dit / [c]lear [k]: "
+      read wlchoice < /dev/tty || wlchoice=""
+      [ -z "$wlchoice" ] && wlchoice="k"
+    else
+      wlchoice="k"
+    fi
+    case "$wlchoice" in
+      k|K|keep|KEEP)
+        echo "  ✓ keeping existing whitelist."
+        exit 0
+        ;;
+      c|C|clear|CLEAR)
+        tmp="$rc.tmp.$$"
+        grep -vF "added by $APP installer" "$rc" > "$tmp" && mv "$tmp" "$rc"
+        echo "  ✓ cleared whitelist from $rc."
+        exit 0
+        ;;
+      e|E|edit|EDIT) ;;
+      *) echo "  unknown choice — keeping existing."; exit 0 ;;
+    esac
+  fi
+
   if command -v ip >/dev/null 2>&1; then
     lan_ips=$(ip -4 addr show 2>/dev/null | awk '/inet (10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ {print $2}' | cut -d/ -f1)
   else
@@ -279,7 +349,7 @@ case "$OS" in
       URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
       TMP=$(mktemp -d)
       echo "→ macOS: $URL"
-      curl -fsSL $AUTH "$URL" -o "$TMP/$APP.dmg"
+      curl -fL --progress-bar $AUTH "$URL" -o "$TMP/$APP.dmg"
       hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
       MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
       cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
@@ -299,7 +369,7 @@ case "$OS" in
         URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
         TMP=$(mktemp)
         echo "→ linux: $URL"
-        curl -fsSL $AUTH "$URL" -o "$TMP"
+        curl -fL --progress-bar $AUTH "$URL" -o "$TMP"
         dpkg -i "$TMP"
         rm -f "$TMP"
         echo "✓ $APP installed"
@@ -310,7 +380,7 @@ case "$OS" in
       else
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
-        curl -fsSL $AUTH "$URL" -o /usr/local/bin/$APP
+        curl -fL --progress-bar $AUTH "$URL" -o /usr/local/bin/$APP
         chmod +x /usr/local/bin/$APP
         echo "✓ $APP installed"
       fi
@@ -322,7 +392,7 @@ case "$OS" in
         # install.sh with root privileges (or via `sudo sh`).
         gate_url="$BASE/${APP}-gate-linux-${ARCH}"
         echo "→ gate: $gate_url"
-        if curl -fsSL $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
+        if curl -fL --progress-bar $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
           chmod +x /usr/local/bin/$APP-gate
           echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
         else

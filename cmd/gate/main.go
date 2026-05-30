@@ -62,6 +62,13 @@ type hookToolInput struct {
 	Path     string `json:"path"`      // Glob base / LS
 }
 
+// Version is the gate binary's release version, injected at build
+// time via `-X main.Version=...` (see internal/builder/gate.go).
+// Falls back to "dev" for go-run / unbranded builds. The installer's
+// version probe matches this string against the resolved release tag
+// to decide whether to skip a re-install.
+var Version = "dev"
+
 // stdinReadTimeout is the upper bound for waiting on hook stdin. If
 // claude doesn't deliver the JSON within this window, fail-safe
 // kicks in and we block.
@@ -129,6 +136,11 @@ const socketResponseTimeout = 28 * time.Second
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "version", "--version", "-v":
+			// Single-line, installer-probe-friendly format matching the
+			// main app's `<app> version vX.Y.Z` output.
+			fmt.Printf("%s version %s\n", gate.AppName()+"-gate", Version)
+			return
 		case "--config", "-config", "config":
 			printConfig()
 			return
