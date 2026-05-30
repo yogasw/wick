@@ -9,19 +9,19 @@ import (
 )
 
 // connectorCatalogHeader is the section preamble appended above the
-// runtime list of connector keys + descriptions. Wording is deliberate:
-// it sets a "wick-first" bias without making the model refuse a
-// fallback when the connector errors or the user requests a different
-// path. Pairs with the wick_get hint so the model can skip wick_list
-// on cold starts and go straight to fetching the full schema for the
-// key it wants.
+// runtime list of connector keys + descriptions.
+//
+// The "MUST route via wick" rule lives in system_prompt_immutable.md
+// where it can't be undone by presets or operator edits. This header
+// stays minimal — it only seeds the discovery hint so the agent jumps
+// straight to wick_get for whichever key it wants instead of burning
+// a turn on wick_list / wick_search.
 const connectorCatalogHeader = `## Available wick connectors
 
-Prefer these over hand-rolled HTTP / generic SDKs unless they error or
-the user explicitly requests otherwise. Call wick_get "<key>" for the
-full operation list and input schemas — this section only lists keys +
-one-line descriptions, so wick_list / wick_search are unnecessary for
-a cold-start discovery pass.
+Routing rules for these are in the immutable section above. To get
+the full operation list and input schemas for any key below, call
+wick_get "<key>" — wick_list / wick_search are unnecessary for a
+cold-start discovery pass.
 
 `
 
