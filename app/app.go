@@ -360,6 +360,11 @@ func Run() {
 	root := &cobra.Command{
 		Use:   BuildAppName,
 		Short: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")",
+		// Setting Version enables `<app> --version` and `<app> -v` for free
+		// via cobra. The matching `version` subcommand is registered below
+		// so `wick-agent version` works too — the installer's version probe
+		// relies on at least one of these returning the embedded version.
+		Version: BuildAppVersion,
 		Long: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")" +
 			"\n\nRun with no args to launch the system tray on desktops with a GUI." +
 			"\nOn headless environments (Termux / SSH / no DISPLAY) use `" + BuildAppName + " start`" +
@@ -385,6 +390,19 @@ func Run() {
 		&cobra.Group{ID: "run", Title: "Run (foreground):"},
 		&cobra.Group{ID: "tools", Title: "Tools:"},
 	)
+	// Override the default cobra version template (just "{{.Version}}\n")
+	// so `<app> --version` produces "<app> version vX.Y.Z (wick vA.B.C)"
+	// — a single line the installer's probe_version can grep against the
+	// resolved release tag.
+	root.SetVersionTemplate("{{.Name}} version " + BuildAppVersion + " (wick " + BuildWickVersion + ")\n")
+
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print " + BuildAppName + " version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(BuildAppName + " version " + BuildAppVersion + " (wick " + BuildWickVersion + ")")
+		},
+	}
 
 	serverCmd := &cobra.Command{
 		Use:   "server",
@@ -515,6 +533,7 @@ func Run() {
 		startCmd, stopCmd, restartCmd, statusCmd, svcCmd,
 		mcpCmd, trayCmd,
 		configCmd(), uninstallCmd(),
+		versionCmd,
 	)
 
 	if err := root.Execute(); err != nil {
