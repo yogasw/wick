@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
@@ -375,11 +376,11 @@ func Probe(ctx context.Context, ins Instance) Status {
 	if ins.Binary != "" {
 		st.Path = ins.Binary
 		source = "registry"
-		if _, err := exec.LookPath(ins.Binary); err == nil {
+		if _, err := safeexec.LookPath(ins.Binary); err == nil {
 			st.PathFound = true
 		}
 	} else {
-		path, err := exec.LookPath(string(ins.Type))
+		path, err := safeexec.LookPath(string(ins.Type))
 		if err == nil {
 			st.Path = path
 			st.PathFound = true

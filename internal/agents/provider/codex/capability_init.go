@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/yogasw/wick/internal/agents/capability"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // init registers codex with the capability registries. InterceptScope
@@ -95,7 +96,7 @@ func (hookConfigWriter) DryRun(workspace, gateBin string) (string, []byte, error
 type prober struct{}
 
 func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) error {
-	bin, err := exec.LookPath("codex")
+	bin, err := safeexec.LookPath("codex")
 	if err != nil {
 		return fmt.Errorf("codex binary: %w", err)
 	}

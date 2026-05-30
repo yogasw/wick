@@ -10,6 +10,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // init wires this provider into the capability registries. Loaded
@@ -78,7 +79,7 @@ func (hookConfigWriter) DryRun(workspace, gateBin string) (string, []byte, error
 type prober struct{}
 
 func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) error {
-	bin, err := exec.LookPath("claude")
+	bin, err := safeexec.LookPath("claude")
 	if err != nil {
 		return fmt.Errorf("claude binary: %w", err)
 	}

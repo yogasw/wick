@@ -10,14 +10,14 @@ import (
 	ico "github.com/sergeymakinen/go-ico"
 )
 
-// WickIcon renders the brand W with a state-specific corner badge,
+// WickIcon renders the brand wrench with a state-specific corner badge,
 // Defender-style. Exported so `wick build` can embed the same icon
 // into the downstream Windows .exe via a generated .syso resource.
 //
-//	stopped (both off) : gray bg + dim W (no badge)
-//	server only        : blue bg + W + server-bars badge
-//	worker only        : orange bg + W + gear badge
-//	both               : green bg + W + green-check badge
+//	stopped (both off) : gray bg + dim wrench (no badge)
+//	server only        : blue bg + wrench + server-bars badge
+//	worker only        : orange bg + wrench + gear badge
+//	both               : green bg + wrench + green-check badge
 //
 // 64×64 canvas. Background color is the primary signal at 16-px tray
 // scale; the badge becomes legible at larger DPI. asICO chooses the
@@ -44,11 +44,11 @@ func WickIcon(serverRunning, workerRunning, asICO bool) []byte {
 	}
 	fillBG(img, bg)
 
-	wColor := white
+	fg := white
 	if !serverRunning && !workerRunning {
-		wColor = dim
+		fg = dim
 	}
-	drawW(img, wColor)
+	drawWrench(img, bg, fg)
 
 	switch {
 	case serverRunning && workerRunning:
@@ -68,15 +68,16 @@ func WickIcon(serverRunning, workerRunning, asICO bool) []byte {
 	return buf.Bytes()
 }
 
-// BrandIcon renders the plain brand mark — green bg + white W, no
-// state badge. Used by `wick build` for the Windows .exe icon so
+// BrandIcon renders the plain brand mark — green bg + white wrench,
+// no state badge. Used by `wick build` for the Windows .exe icon so
 // Explorer thumbnail / taskbar entry stay clean (state belongs in the
 // tray, not the file icon).
 func BrandIcon(asICO bool) []byte {
 	const size = 64
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	fillBG(img, color.RGBA{0x1d, 0x7d, 0x4f, 0xff})
-	drawW(img, color.RGBA{0xff, 0xff, 0xff, 0xff})
+	bg := color.RGBA{0x1d, 0x7d, 0x4f, 0xff}
+	fillBG(img, bg)
+	drawWrench(img, bg, color.RGBA{0xff, 0xff, 0xff, 0xff})
 
 	var buf bytes.Buffer
 	if asICO {
@@ -158,16 +159,18 @@ func fillBG(img *image.RGBA, c color.RGBA) {
 	draw.Draw(img, img.Bounds(), &image.Uniform{c}, image.Point{}, draw.Src)
 }
 
-func drawW(img *image.RGBA, c color.Color) {
-	const stroke = 8
-	for _, s := range [][4]int{
-		{3, 6, 21, 58},
-		{21, 58, 32, 24},
-		{32, 24, 43, 58},
-		{43, 58, 61, 6},
-	} {
-		drawLine(img, s[0], s[1], s[2], s[3], stroke, c)
-	}
+// drawWrench renders the brand mark — diagonal handle from bottom-left
+// to a ring-spanner head at the top-right. bg is needed to carve the
+// inner hole of the ring. At tray scale (16-24px) the hole collapses
+// visually so the head reads as a solid disk, but at >=32px it's a
+// recognizable ring spanner. Matches the wrench in /public/manifest.json
+// + docs/public/logo.svg so the PWA, taskbar, and tray share one mark.
+func drawWrench(img *image.RGBA, bg, fg color.Color) {
+	// Diagonal handle from bottom-left tail to top-right head end.
+	drawLine(img, 12, 52, 52, 12, 10, fg)
+	// Ring head: solid disk minus a small inner hole.
+	fillCircle(img, 52, 12, 10, fg)
+	fillCircle(img, 52, 12, 4, bg)
 }
 
 func fillRect(img *image.RGBA, x, y, w, h int, c color.Color) {
