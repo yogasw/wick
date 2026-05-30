@@ -120,15 +120,24 @@ install_gate() {
 install_gotty() {
   dest_dir="$1"
   goos="$2"
-  # Version check — show installed version and ask whether to upgrade
-  # / reinstall. Skip the install when already present and user picks n.
   installed_ver=""
   if [ -x "$dest_dir/gotty" ]; then
     installed_ver=$("$dest_dir/gotty" -v 2>/dev/null | head -1 || true)
   fi
+  # Resolve latest tag up-front so we can auto-skip when already current,
+  # keeping re-runs config-only (no prompt, no download).
+  gotty_tag=$(curl -fsSL "https://api.github.com/repos/sorenisanerd/gotty/releases/latest" \
+              | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
   echo ""
+  if [ -n "$installed_ver" ] && [ -n "$gotty_tag" ]; then
+    gv="${gotty_tag#v}"
+    if echo "$installed_ver" | grep -qF "$gv"; then
+      echo "✓ gotty $installed_ver already at $gotty_tag — skipping"
+      return 0
+    fi
+  fi
   if [ -n "$installed_ver" ]; then
-    echo "gotty already installed: $installed_ver"
+    echo "gotty installed: $installed_ver (latest: ${gotty_tag:-unknown})"
   fi
   if [ -e /dev/tty ]; then
     if [ -n "$installed_ver" ]; then
@@ -147,8 +156,6 @@ install_gotty() {
   case "$ans" in
     n|N|no|NO) echo "Skipped gotty install."; return 0 ;;
   esac
-  gotty_tag=$(curl -fsSL "https://api.github.com/repos/sorenisanerd/gotty/releases/latest" \
-              | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
   if [ -z "$gotty_tag" ]; then
     echo "! could not resolve gotty latest tag — skipping" >&2
     return 0
@@ -196,6 +203,41 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   # which to whitelist. We never silently expose — the phone might be
   # on public Wi-Fi where the agent UI shouldn't be reachable to every
   # device on the SSID.
+  # Check for existing managed ALLOWED_ORIGINS in ~/.bashrc — re-runs
+  # should be config-only, not force-reprompt every time.
+  rc="$HOME/.bashrc"
+  existing_origins=""
+  if [ -f "$rc" ]; then
+    existing_origins=$(grep -F "added by $APP installer" "$rc" 2>/dev/null \
+                       | sed -n 's/^export ALLOWED_ORIGINS="\([^"]*\)".*/\1/p' | head -1)
+  fi
+  if [ -n "$existing_origins" ]; then
+    echo ""
+    echo "  LAN whitelist — existing ALLOWED_ORIGINS in $rc:"
+    echo "    $existing_origins"
+    if [ -e /dev/tty ]; then
+      printf "  [k]eep / [e]dit / [c]lear [k]: "
+      read wlchoice < /dev/tty || wlchoice=""
+      [ -z "$wlchoice" ] && wlchoice="k"
+    else
+      wlchoice="k"
+    fi
+    case "$wlchoice" in
+      k|K|keep|KEEP)
+        echo "  ✓ keeping existing whitelist."
+        exit 0
+        ;;
+      c|C|clear|CLEAR)
+        tmp="$rc.tmp.$$"
+        grep -vF "added by $APP installer" "$rc" > "$tmp" && mv "$tmp" "$rc"
+        echo "  ✓ cleared whitelist from $rc."
+        exit 0
+        ;;
+      e|E|edit|EDIT) ;;
+      *) echo "  unknown choice — keeping existing."; exit 0 ;;
+    esac
+  fi
+
   if command -v ip >/dev/null 2>&1; then
     lan_ips=$(ip -4 addr show 2>/dev/null | awk '/inet (10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ {print $2}' | cut -d/ -f1)
   else
