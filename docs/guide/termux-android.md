@@ -1,55 +1,57 @@
 # Termux / Android
 
-Wick agents can run on Android phones via [Termux](https://termux.dev) — useful for always-on bots on a spare phone, no VPS required. The standard `linux/arm64` build from each release works out of the box, including on devices that still ship a 4.x kernel.
+Run a Wick agent on an Android phone via [Termux](https://termux.dev) — handy for always-on bots on a spare phone without spinning up a VPS. The standard `linux/arm64` release binary works out of the box.
 
-## Background
+## Install
 
-Before v0.14.12, `wick-agent server` could crash on Termux with `SIGSYS: bad system call` on devices whose Android kernel is older than 5.8:
-
-```
-SIGSYS: bad system call
-internal/syscall/unix.faccessat2(...)
-internal/syscall/unix.Eaccess(...)
-os/exec.findExecutable(...)
-os/exec.LookPath(...)
-github.com/yogasw/wick/internal/agents/provider.Probe(...)
-```
-
-The trigger was Go's standard library `os/exec.LookPath`, which uses the `faccessat2(2)` syscall (number 439, added in Linux 5.8). Android's seccomp filter rejects unknown syscalls with `SIGSYS` (process kill) instead of the `ENOSYS` Go's runtime falls back on, so the fallback never fires.
-
-Affected example device: Android 13 userland on top of kernel `4.14.186`, aarch64 — common on phones that shipped before mid-2022 and never received a kernel upgrade.
-
-## The fix
-
-Every code path inside `wick-agent` that called `exec.LookPath` (or `exec.Command(bareName, ...)`, which calls `LookPath` internally) now routes through `internal/safeexec`. That package mirrors the stdlib semantics but uses `os.Stat` + file mode bits to check executability — no `faccessat2`, no syscall Android's seccomp blocks.
-
-Trade-off: `safeexec.LookPath` doesn't honour `AT_EACCESS` (effective-uid permission check). That only matters for setuid binaries, which wick-agent is never deployed as, so real-uid mode bits are the correct authority anyway.
-
-## Install on Termux
-
-The regular `install.sh` handles Termux automatically:
+In Termux:
 
 ```bash
-# In Termux:
 pkg install curl
 curl -fsSL https://yogasw.github.io/wick/install.sh | sh
 wick-agent server
 ```
 
-::: tip Storage / network access
-If you want the agent to read SMS, get GPS, send notifications, etc., install [Termux:API](https://wiki.termux.dev/wiki/Termux:API) (`pkg install termux-api`) and call its CLI tools (`termux-sms-list`, `termux-location`, `termux-notification`) from your agent via `exec.Command`. The Termux:API app must come from F-Droid or GitHub — Play Store builds are too old.
+Open `http://localhost:9425` in the phone's browser to reach the admin UI, then add your AI provider keys and start the agent.
+
+::: tip Reaching the agent from another device
+By default the server binds to localhost. To reach it from your laptop, either open the URL on the phone itself or set up Termux's [SSH access](https://wiki.termux.dev/wiki/Remote_Access) and forward port `9425`.
 :::
 
-## Verifying the binary is safe
+## Talking to phone hardware (SMS, GPS, notifications)
 
-If you build from source, confirm no `exec.LookPath` callsites slipped through:
+Install [Termux:API](https://wiki.termux.dev/wiki/Termux:API) once:
 
 ```bash
-go build -tags headless ./internal/agents/...
-grep -RIn 'exec\.LookPath' internal/agents/ internal/pkg/api/ app/
-# Only matches should be inside internal/safeexec/lookpath.go itself.
+pkg install termux-api
 ```
 
-## Contributing — keep it safe
+Then install the **Termux:API companion app** from F-Droid or the [GitHub releases](https://github.com/termux/termux-api/releases) page — the Play Store version is too old. Grant SMS / location / notification permissions when prompted.
 
-If you're adding code inside `wick-agent` paths, use `internal/safeexec` instead of `os/exec.LookPath`. See the [contributing guide](/contributing#code-conventions) for the full rule. CLI tooling under `cmd/cli/` and `internal/builder/` runs on the developer's host and can keep using stdlib `exec.LookPath`.
+After that your agent (workflow shell nodes, Go tools, etc.) can call:
+
+| Command | What it does |
+|---|---|
+| `termux-sms-list` | Dump inbox SMS as JSON |
+| `termux-location` | Current GPS coordinates |
+| `termux-notification --content "..."` | Push a notification to the status bar |
+| `termux-battery-status` | Battery level + temperature |
+| `termux-camera-photo -c 0 out.jpg` | Snap a photo |
+
+Each is just a CLI binary — wire it up wherever you'd normally shell out.
+
+## Keeping it running
+
+Android will suspend the process when the screen turns off unless Termux holds a wake lock:
+
+```bash
+termux-wake-lock
+wick-agent server
+```
+
+Add `termux-wake-lock` to your `.bashrc` if you want it permanent. For unattended autostart on boot, see [`termux-services`](https://wiki.termux.dev/wiki/Termux-services).
+
+## What you don't get on Termux
+
+- **System tray / GUI** — no desktop to attach to. Run `wick-agent server` directly.
+- **Installer packaging** — `.deb` / `.dmg` / `.msi` formats don't apply; the raw binary `install.sh` fetches is what runs.
