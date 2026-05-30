@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/safeexec"
@@ -139,7 +140,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--resume", opt.ResumeID)
 	}
 
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)

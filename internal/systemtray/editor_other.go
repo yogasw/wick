@@ -3,13 +3,14 @@
 package systemtray
 
 import (
-	"os/exec"
 	"runtime"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 func openInEditor(path string) error {
 	if runtime.GOOS == "darwin" {
-		return exec.Command("open", path).Start()
+		return safeexec.Command("open", path).Start()
 	}
-	return exec.Command("xdg-open", path).Start()
+	return safeexec.Command("xdg-open", path).Start()
 }

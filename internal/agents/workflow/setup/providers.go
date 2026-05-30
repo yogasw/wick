@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -78,7 +77,7 @@ func (p *cliProvider) StructuredCall(ctx context.Context, req provider.Structure
 		args = append(p.ins.ExtraArgs, args...)
 	}
 	start := time.Now()
-	out, err := exec.CommandContext(cctx, bin, args...).Output()
+	out, err := safeexec.CommandContext(cctx, bin, args...).Output()
 	usage := provider.Usage{LatencyMs: time.Since(start).Milliseconds()}
 	if err != nil {
 		return provider.StructuredResult{Raw: string(out), OK: false, Error: err.Error(), Usage: usage}, nil
@@ -124,7 +123,7 @@ func (p *cliProvider) AgentCall(ctx context.Context, req provider.AgentRequest) 
 	args := append([]string(nil), p.ins.ExtraArgs...)
 	args = append(args, "--print", req.Prompt)
 	start := time.Now()
-	out, err := exec.CommandContext(ctx, bin, args...).Output()
+	out, err := safeexec.CommandContext(ctx, bin, args...).Output()
 	usage := provider.Usage{LatencyMs: time.Since(start).Milliseconds()}
 	if err != nil {
 		return provider.AgentResult{Text: string(out), Usage: usage}, fmt.Errorf("%s: %w", p.ins.Name, err)

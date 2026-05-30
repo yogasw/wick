@@ -3,9 +3,9 @@ package builder
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // gateModulePath is the import path of the gate command in the wick
@@ -51,7 +51,7 @@ func buildGateBinary(cfg Config) (binArtifact string, err error) {
 
 	gateLDFlags := fmt.Sprintf("-s -w -X github.com/yogasw/wick/internal/appname.BuildAppName=%s -X main.Version=%s", cfg.AppName, cfg.AppVersion)
 	fmt.Printf("> go build %s → %s\n", gateModulePath, embedOut)
-	embedCmd := exec.Command("go", "build",
+	embedCmd := safeexec.Command("go", "build",
 		"-trimpath",
 		"-ldflags", gateLDFlags,
 		"-o", embedOut,
@@ -79,12 +79,12 @@ func buildGateBinary(cfg Config) (binArtifact string, err error) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir %s: %w", binDir, err)
 	}
-	mainBin := cfg.Output
-	if mainBin == "" {
-		mainBin = filepath.Join(binDir, cfg.AppName+"-"+cfg.GOOS+"-"+cfg.GOARCH+embedExt)
-	}
-	stem := strings.TrimSuffix(filepath.Base(mainBin), filepath.Ext(mainBin))
-	binArtifact = filepath.Join(binDir, stem+"-gate"+embedExt)
+	// Naming: `<app>-gate-<os>-<arch>[.exe]` — matches install.sh's
+	// download URL and the release workflow's upload glob. Don't derive
+	// from mainBin filename (e.g. `<stem>-gate`) — that produces
+	// `wick-agent-linux-arm64-gate`, which install.sh won't find and
+	// the workflow's `if-no-files-found: ignore` silently swallows.
+	binArtifact = filepath.Join(binDir, fmt.Sprintf("%s-gate-%s-%s%s", cfg.AppName, cfg.GOOS, cfg.GOARCH, embedExt))
 	if err := copyFile(embedOut, binArtifact); err != nil {
 		return "", fmt.Errorf("copy gate to bin: %w", err)
 	}
@@ -97,7 +97,7 @@ func buildGateBinary(cfg Config) (binArtifact string, err error) {
 // or pinned an older wick that predated it. Used to decide whether
 // the build step runs at all.
 func gateModuleAvailable() bool {
-	cmd := exec.Command("go", "list", gateModulePath)
+	cmd := safeexec.Command("go", "list", gateModulePath)
 	cmd.Stderr = nil
 	cmd.Stdout = nil
 	return cmd.Run() == nil
