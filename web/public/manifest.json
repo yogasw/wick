@@ -1,0 +1,25 @@
+{
+	"name": "wick",
+	"short_name": "wick",
+	"description": "wick — agents and tools dashboard",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"orientation": "any",
+	"background_color": "#142638",
+	"theme_color": "#10b981",
+	"icons": [
+		{
+			"src": "/public/img/icon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any"
+		},
+		{
+			"src": "/public/img/icon-maskable.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "maskable"
+		}
+	]
+}
