@@ -115,7 +115,12 @@ Start the HTTP server directly without needing a `wick.yml` task. Equivalent to 
 
 ```bash
 wick server
+wick server --host 127.0.0.1     # bind specific interface
+wick server --host 192.168.1.42  # multi-NIC host: bind one IP only
+wick server --localhost          # shortcut for --host 127.0.0.1
 ```
+
+`--host` / `--localhost` forward to the inner `go run . server`, which sets `WICK_HOST` and makes the kernel drop SYN packets from any non-matching source. See [`<app> server`](./app-cli#app-server) for the full rationale, precedence rules, and SSH port-forward pattern.
 
 Use this instead of `wick dev` when you don't need hot-reload or asset generation — production-like run from source.
 
@@ -139,6 +144,8 @@ Start the HTTP server and the cron scheduler in one process. Equivalent to `go r
 
 ```bash
 wick all
+wick all --host 127.0.0.1   # bind specific interface
+wick all --localhost        # shortcut for --host 127.0.0.1
 ```
 
 ---
