@@ -89,13 +89,20 @@ func generateCmd() *cobra.Command {
 }
 
 func serverCmd() *cobra.Command {
-	return &cobra.Command{
+	var localhostOnly bool
+	c := &cobra.Command{
 		Use:   "server",
 		Short: "Run the HTTP server (go run . server)",
 		RunE: func(c *cobra.Command, args []string) error {
-			return execCmd("go run . server")
+			cmd := "go run . server"
+			if localhostOnly {
+				cmd += " --localhost"
+			}
+			return execCmd(cmd)
 		},
 	}
+	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	return c
 }
 
 func workerCmd() *cobra.Command {
@@ -109,11 +116,18 @@ func workerCmd() *cobra.Command {
 }
 
 func allCmd() *cobra.Command {
-	return &cobra.Command{
+	var localhostOnly bool
+	c := &cobra.Command{
 		Use:   "all",
 		Short: "Run HTTP server + cron in one process (go run . all)",
 		RunE: func(c *cobra.Command, args []string) error {
-			return execCmd("go run . all")
+			cmd := "go run . all"
+			if localhostOnly {
+				cmd += " --localhost"
+			}
+			return execCmd(cmd)
 		},
 	}
+	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	return c
 }

@@ -1259,7 +1259,13 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 	}
 	logger := zerolog.Ctx(ctx)
-	addr := fmt.Sprintf(":%d", port)
+	// WICK_HOST pins the listen interface — empty (default) binds all
+	// interfaces so Docker and remote-VPS deploys keep working as-is.
+	// Set WICK_HOST=127.0.0.1 (or use --localhost on `server` / `start`)
+	// to make wick unreachable from the LAN — required on Termux phones
+	// where unrooted Android has no firewall to keep port :9425 private.
+	host := os.Getenv("WICK_HOST")
+	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// Expose the server port to agent subprocesses via WICK_PORT so they
 	// can reach wick's local proxy endpoints (e.g. /integrations/slack/send)
@@ -1322,7 +1328,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		appURL = fmt.Sprintf("http://localhost:%d", port)
 	}
 	fmt.Printf("\n  ✓ %s is running\n", s.configsSvc.AppName())
-	fmt.Printf("  → Listening on: :%d\n", port)
+	fmt.Printf("  → Listening on: %s\n", addr)
 	fmt.Printf("  → App URL:      %s\n", appURL)
 	if !s.configsSvc.AdminPasswordChanged() {
 		// Tray pipes stdout to app.log, so printing plaintext password

@@ -404,10 +404,14 @@ func Run() {
 		},
 	}
 
+	var localhostOnly bool
 	serverCmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run web server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if localhostOnly {
+				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -417,6 +421,7 @@ func Run() {
 		},
 	}
 	serverCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
+	serverCmd.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
 
 	workerCmd := &cobra.Command{
 		Use:   "worker",
@@ -430,10 +435,14 @@ func Run() {
 		},
 	}
 
+	var allLocalhostOnly bool
 	allCmd := &cobra.Command{
 		Use:   "all",
 		Short: "Run web server and cron scheduler in one process (single-node)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if allLocalhostOnly {
+				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -477,6 +486,7 @@ func Run() {
 		},
 	}
 	allCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
+	allCmd.Flags().BoolVar(&allLocalhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
 
 	mcpCmd := &cobra.Command{
 		Use:   "mcp",

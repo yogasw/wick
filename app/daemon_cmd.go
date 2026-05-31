@@ -64,7 +64,8 @@ func daemonArgs() []string {
 // command is the canonical "run in the background" entry point
 // regardless of platform.
 func daemonStartCmd() *cobra.Command {
-	return &cobra.Command{
+	var localhostOnly bool
+	c := &cobra.Command{
 		Use:   "start",
 		Short: "Start " + BuildAppName + " in the background (tray on GUI, daemon on headless)",
 		Long: "Spawn " + BuildAppName + " detached from this shell. " +
@@ -79,6 +80,13 @@ func daemonStartCmd() *cobra.Command {
 				return err
 			}
 			mode := daemonArgs()
+			// Propagate --localhost to the spawned child via env so the
+			// flag survives the detach across both `all` and `tray` modes
+			// (tray boots the server in-process; setting WICK_HOST in the
+			// parent before fork is the simplest way to thread it through).
+			if localhostOnly {
+				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			}
 			pid, err := daemon.Start(p, mode)
 			if errors.Is(err, daemon.ErrAlreadyRunning) {
 				fmt.Printf("%s already running (pid %d). Tail log: %s\n", BuildAppName, pid, p.LogFile)
@@ -95,6 +103,8 @@ func daemonStartCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	return c
 }
 
 // daemonStopCmd sends SIGTERM to the daemon, waits up to 5s for
@@ -129,6 +139,7 @@ func daemonStopCmd() *cobra.Command {
 // new daemon's pid on success.
 func daemonRestartCmd() *cobra.Command {
 	var timeout time.Duration
+	var localhostOnly bool
 	c := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart the " + BuildAppName + " daemon",
@@ -138,6 +149,9 @@ func daemonRestartCmd() *cobra.Command {
 				return err
 			}
 			mode := daemonArgs()
+			if localhostOnly {
+				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			}
 			pid, err := daemon.Restart(p, timeout, mode)
 			if err != nil {
 				return err
@@ -151,6 +165,7 @@ func daemonRestartCmd() *cobra.Command {
 		},
 	}
 	c.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "grace period before SIGKILL during stop")
+	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
 	return c
 }
 
