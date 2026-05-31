@@ -69,6 +69,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/sso"
+	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
@@ -1285,6 +1286,20 @@ func (s *Server) Run(ctx context.Context, port int) error {
 
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)
+
+	// Admin-defined startup script (e.g. ngrok / cloudflared tunnel).
+	// Lifetime is tied to the server ctx — tray stop or process exit
+	// kills the subprocess via signal. Edits to the script row only
+	// take effect on next server boot. Runs detached from the request
+	// hot path so a slow tunnel command never blocks HTTP serve.
+	if s.configsSvc.Get(configs.KeyStartupScriptEnabled) == "true" {
+		script := s.configsSvc.Get(configs.KeyStartupScript)
+		go func() {
+			if err := startupscript.Run(ctx, appname.Resolve(), script); err != nil {
+				logger.Warn().Err(err).Msg("startup script")
+			}
+		}()
+	}
 
 	h := chainMiddleware(
 		s.authMidd.Session(s.router),

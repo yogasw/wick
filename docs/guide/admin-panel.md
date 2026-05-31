@@ -91,6 +91,55 @@ Env vars seed the row on first boot only; subsequent edits via this page are dur
 
 Operational guide: [Environment Variables](../reference/env-vars).
 
+## Startup script
+
+`/admin/variables` exposes a `startup_script` textarea and `startup_script_enabled` toggle. When enabled, wick runs the script in a fresh shell every time the server boots — `sh` on Linux/macOS, PowerShell on Windows. Output (stdout + stderr) lands in `~/.<appName>/logs/startup-script-YYYY-MM-DD.log`.
+
+The script + every process it spawns is bound to the server context via a process group (Unix `setpgid` + `kill -pgid`) / Job Object (Windows `KILL_ON_JOB_CLOSE`). Tray Stop, tray Quit, and `wick server` SIGINT all tear down the whole tree — backgrounded `&` daemons cannot survive as orphans. Restart the server to pick up edits; the running process is not HUP'd in-place.
+
+### Multi-line behaviour
+
+The script runs sequentially in one shell process, exactly like a `.sh` / `.ps1` file. A long-running foreground command blocks everything below it:
+
+```bash
+ngrok http 9425         # blocks here — line 2 never runs
+echo "tunnel up"
+```
+
+For multiple daemons in parallel, background each one explicitly:
+
+```bash
+# Unix
+ngrok http 9425 &
+cloudflared tunnel run my-tunnel &
+```
+
+```powershell
+# Windows
+Start-Process ngrok -ArgumentList "http 9425"
+Start-Process cloudflared -ArgumentList "tunnel run my-tunnel"
+```
+
+All children — direct or backgrounded — die together when the server stops.
+
+### Use cases
+
+- **Tunnel without exposing the LAN port.** Pair `--localhost` (or `WICK_HOST=127.0.0.1`) with a tunnel command:
+
+  ```bash
+  ngrok http 9425
+  # or
+  cloudflared tunnel run my-tunnel
+  ```
+
+  Port `:9425` stays bound to loopback, the tunnel terminates TLS on a vendor domain, and the LAN never sees the server. Required pattern on Termux phones where Android has no host firewall.
+
+- **Pre-warm caches or kick off side processes** that should always run alongside the server.
+
+::: warning
+Anything in this textarea runs as the wick user with full shell access. It's admin-gated like every other `/admin/*` page, but treat it the same as `session_secret` — anyone who can edit this row can execute arbitrary code on the host.
+:::
+
 ## Reference
 
 - Module operations: [Tool Module](./tool-module), [Background Job](./job-module), [Connector Module](./connector-module)

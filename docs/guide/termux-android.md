@@ -161,6 +161,13 @@ wick-agent service install
 
 On Termux this writes a [Termux:Boot](https://wiki.termux.dev/wiki/Termux:Boot) script at `~/.termux/boot/wick-agent-start` that runs `wick-agent start` after device boot. Install the Termux:Boot companion app from F-Droid for it to fire. Details: [App CLI — Auto-start service](/reference/app-cli#auto-start-service).
 
+## Remote access without exposing the port
+
+Unrooted Android has no firewall, so binding `:9425` to all interfaces leaks the admin UI to every device on the Wi-Fi. Two clean options:
+
+- **SSH tunnel** (built-in, no extra dep) — bind to localhost and forward from your laptop. Covered in [Codex login](#codex-login-port-forward-from-your-laptop) above; same pattern works for `9425`.
+- **Outbound tunnel** (no port-forward on either side) — set `startup_script` at `/admin/variables` to `ngrok http 9425` or `cloudflared tunnel run my-tunnel`, toggle `startup_script_enabled` on, and restart. The tunnel spawns alongside the server and dies when you stop wick. Details: [Admin Panel — Startup script](./admin-panel#startup-script).
+
 ## What you don't get on Termux
 
 - **System tray / GUI** — no desktop to attach to. Use `wick-agent start` (daemon).
