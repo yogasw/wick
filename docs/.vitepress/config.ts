@@ -87,6 +87,16 @@ export default withMermaid(defineConfig({
         text: 'AI Agents',
         items: [
           { text: 'Agent Host Only (no Go needed)', link: '/guide/agents-only' },
+          {
+            text: 'Install',
+            collapsed: false,
+            items: [
+              { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+              { text: 'Headless Server', link: '/guide/headless' },
+              { text: 'Docker', link: '/guide/docker' },
+              { text: 'Termux / Android', link: '/guide/termux-android' },
+            ],
+          },
           { text: 'Overview', link: '/guide/agents' },
           { text: 'Workspaces', link: '/guide/agents/workspaces' },
           { text: 'Providers', link: '/guide/agents/providers' },
@@ -124,13 +134,6 @@ export default withMermaid(defineConfig({
           { text: 'shell', link: '/workflow/nodes/shell' },
           { text: 'switch', link: '/workflow/nodes/switch' },
           { text: 'transform', link: '/workflow/nodes/transform' },
-        ],
-      },
-      {
-        text: 'Distribution',
-        items: [
-          { text: 'Desktop Tray', link: '/guide/desktop-tray' },
-          { text: 'Termux / Android', link: '/guide/termux-android' },
         ],
       },
       {
