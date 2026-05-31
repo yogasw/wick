@@ -89,19 +89,23 @@ func generateCmd() *cobra.Command {
 }
 
 func serverCmd() *cobra.Command {
-	var localhostOnly bool
+	var host string
+	var localhost bool
 	c := &cobra.Command{
 		Use:   "server",
 		Short: "Run the HTTP server (go run . server)",
 		RunE: func(c *cobra.Command, args []string) error {
 			cmd := "go run . server"
-			if localhostOnly {
+			if host != "" {
+				cmd += " --host " + host
+			} else if localhost {
 				cmd += " --localhost"
 			}
 			return execCmd(cmd)
 		},
 	}
-	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	c.Flags().StringVar(&host, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	c.Flags().BoolVar(&localhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 	return c
 }
 
@@ -116,18 +120,22 @@ func workerCmd() *cobra.Command {
 }
 
 func allCmd() *cobra.Command {
-	var localhostOnly bool
+	var host string
+	var localhost bool
 	c := &cobra.Command{
 		Use:   "all",
 		Short: "Run HTTP server + cron in one process (go run . all)",
 		RunE: func(c *cobra.Command, args []string) error {
 			cmd := "go run . all"
-			if localhostOnly {
+			if host != "" {
+				cmd += " --host " + host
+			} else if localhost {
 				cmd += " --localhost"
 			}
 			return execCmd(cmd)
 		},
 	}
-	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	c.Flags().StringVar(&host, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	c.Flags().BoolVar(&localhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 	return c
 }

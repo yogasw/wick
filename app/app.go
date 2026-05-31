@@ -404,13 +404,14 @@ func Run() {
 		},
 	}
 
-	var localhostOnly bool
+	var serverHost string
+	var serverLocalhost bool
 	serverCmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run web server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if localhostOnly {
-				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			if err := applyHostFlags(serverHost, serverLocalhost); err != nil {
+				return err
 			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
@@ -421,7 +422,8 @@ func Run() {
 		},
 	}
 	serverCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
-	serverCmd.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	serverCmd.Flags().StringVar(&serverHost, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	serverCmd.Flags().BoolVar(&serverLocalhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 
 	workerCmd := &cobra.Command{
 		Use:   "worker",
@@ -435,13 +437,14 @@ func Run() {
 		},
 	}
 
-	var allLocalhostOnly bool
+	var allHost string
+	var allLocalhost bool
 	allCmd := &cobra.Command{
 		Use:   "all",
 		Short: "Run web server and cron scheduler in one process (single-node)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if allLocalhostOnly {
-				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			if err := applyHostFlags(allHost, allLocalhost); err != nil {
+				return err
 			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
@@ -486,7 +489,8 @@ func Run() {
 		},
 	}
 	allCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
-	allCmd.Flags().BoolVar(&allLocalhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	allCmd.Flags().StringVar(&allHost, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	allCmd.Flags().BoolVar(&allLocalhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 
 	mcpCmd := &cobra.Command{
 		Use:   "mcp",
@@ -549,4 +553,19 @@ func Run() {
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())
 	}
+}
+
+// applyHostFlags resolves the --host / --localhost pair to a single
+// WICK_HOST env value the server reads at bind time. --host wins when
+// both are set (explicit IP beats the shortcut); --localhost alone is
+// 127.0.0.1; nothing set leaves WICK_HOST untouched so the default
+// bind-all behavior survives.
+func applyHostFlags(host string, localhost bool) error {
+	switch {
+	case host != "":
+		_ = os.Setenv("WICK_HOST", host)
+	case localhost:
+		_ = os.Setenv("WICK_HOST", "127.0.0.1")
+	}
+	return nil
 }

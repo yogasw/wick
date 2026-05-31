@@ -36,12 +36,16 @@ Start the HTTP server only. Useful for splitting server / worker across containe
 
 ```bash
 ./bin/myapp server
-./bin/myapp server --port 9000        # override the resolved port
-./bin/myapp server --localhost        # bind 127.0.0.1 only (kernel-level firewall)
-WICK_HOST=127.0.0.1 ./bin/myapp server  # same, via env
+./bin/myapp server --port 9000              # override the resolved port
+./bin/myapp server --host 127.0.0.1         # bind specific interface
+./bin/myapp server --host 192.168.1.42      # bind one NIC only (multi-network host)
+./bin/myapp server --localhost              # shortcut for --host 127.0.0.1
+WICK_HOST=127.0.0.1 ./bin/myapp server      # same, via env
 ```
 
-**`--localhost` / `WICK_HOST`** — pins the listen interface. Default (empty / unset) binds `0.0.0.0` so Docker, systemd, and remote-VPS deploys keep working. Setting it to `127.0.0.1` makes the kernel drop SYN packets from any non-loopback source — required on Termux phones where unrooted Android has no firewall to keep `:9425` private. Pair with `ssh -L 9425:localhost:9425 -p 8022 user@phone-ip` for remote access.
+**`--host <addr>` / `--localhost` / `WICK_HOST`** — pin the listen interface. Default (all empty / unset) binds `0.0.0.0` so Docker, systemd, and remote-VPS deploys keep working without any flag. Setting `127.0.0.1` makes the kernel drop SYN packets from any non-loopback source — required on Termux phones where unrooted Android has no firewall to keep `:9425` private. Pair with `ssh -L 9425:localhost:9425 -p 8022 user@phone-ip` for remote access.
+
+Precedence when multiple are set: `--host` wins over `--localhost`; both env-overridable via `WICK_HOST` (env only takes effect when no flag is passed).
 
 ### `<app> worker`
 
@@ -58,7 +62,8 @@ Run the HTTP server **and** the cron scheduler in the same process, sharing one 
 ```bash
 ./bin/myapp all
 ./bin/myapp all --port 9000
-./bin/myapp all --localhost   # bind 127.0.0.1 only (see `server --localhost` above)
+./bin/myapp all --host 127.0.0.1   # bind specific interface
+./bin/myapp all --localhost        # shortcut for --host 127.0.0.1
 ```
 
 Trade-offs vs. running `server` + `worker` as separate processes:
@@ -87,13 +92,14 @@ Spawn the binary in the background. Mode is chosen at runtime:
 
 ```bash
 ./bin/myapp start
-./bin/myapp start --localhost   # bind 127.0.0.1 only — child inherits WICK_HOST
+./bin/myapp start --host 127.0.0.1   # bind specific interface — child inherits WICK_HOST
+./bin/myapp start --localhost        # shortcut for --host 127.0.0.1
 # started myapp as `tray` (pid 12345)
 #   log: ~/.myapp/daemon.log
 #   pid: ~/.myapp/run.pid
 ```
 
-`--localhost` (and `WICK_HOST=127.0.0.1`) propagates to the spawned child via process env, so both `tray` (GUI) and `all` (headless) modes honor it. See [`server --localhost`](#app-server) for the security rationale.
+`--host` / `--localhost` (and `WICK_HOST=...`) propagate to the spawned child via process env, so both `tray` (GUI) and `all` (headless) modes honor the chosen bind interface. See [`server --host`](#app-server) for the full security rationale.
 
 Re-running `start` while a live daemon is recorded is a no-op — prints `already running (pid N)` and exits 0.
 
@@ -115,7 +121,8 @@ Stale PID files (process no longer alive) are silently cleaned up so the next `s
 ```bash
 ./bin/myapp restart
 ./bin/myapp restart --timeout 15s
-./bin/myapp restart --localhost   # rebind 127.0.0.1 on the new daemon
+./bin/myapp restart --host 127.0.0.1   # rebind specific interface on new daemon
+./bin/myapp restart --localhost        # shortcut for --host 127.0.0.1
 ```
 
 ### `<app> status`

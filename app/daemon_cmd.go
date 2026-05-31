@@ -64,7 +64,8 @@ func daemonArgs() []string {
 // command is the canonical "run in the background" entry point
 // regardless of platform.
 func daemonStartCmd() *cobra.Command {
-	var localhostOnly bool
+	var host string
+	var localhost bool
 	c := &cobra.Command{
 		Use:   "start",
 		Short: "Start " + BuildAppName + " in the background (tray on GUI, daemon on headless)",
@@ -80,12 +81,12 @@ func daemonStartCmd() *cobra.Command {
 				return err
 			}
 			mode := daemonArgs()
-			// Propagate --localhost to the spawned child via env so the
-			// flag survives the detach across both `all` and `tray` modes
+			// Propagate --host / --localhost to the spawned child via env so
+			// the flag survives the detach across both `all` and `tray` modes
 			// (tray boots the server in-process; setting WICK_HOST in the
 			// parent before fork is the simplest way to thread it through).
-			if localhostOnly {
-				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			if err := applyHostFlags(host, localhost); err != nil {
+				return err
 			}
 			pid, err := daemon.Start(p, mode)
 			if errors.Is(err, daemon.ErrAlreadyRunning) {
@@ -103,7 +104,8 @@ func daemonStartCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	c.Flags().StringVar(&host, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	c.Flags().BoolVar(&localhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 	return c
 }
 
@@ -139,7 +141,8 @@ func daemonStopCmd() *cobra.Command {
 // new daemon's pid on success.
 func daemonRestartCmd() *cobra.Command {
 	var timeout time.Duration
-	var localhostOnly bool
+	var host string
+	var localhost bool
 	c := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart the " + BuildAppName + " daemon",
@@ -149,8 +152,8 @@ func daemonRestartCmd() *cobra.Command {
 				return err
 			}
 			mode := daemonArgs()
-			if localhostOnly {
-				_ = os.Setenv("WICK_HOST", "127.0.0.1")
+			if err := applyHostFlags(host, localhost); err != nil {
+				return err
 			}
 			pid, err := daemon.Restart(p, timeout, mode)
 			if err != nil {
@@ -165,7 +168,8 @@ func daemonRestartCmd() *cobra.Command {
 		},
 	}
 	c.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "grace period before SIGKILL during stop")
-	c.Flags().BoolVar(&localhostOnly, "localhost", false, "Bind 127.0.0.1 only — not reachable from LAN (env: WICK_HOST=127.0.0.1)")
+	c.Flags().StringVar(&host, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	c.Flags().BoolVar(&localhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 	return c
 }
 
