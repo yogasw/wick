@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "copy-installers": "node scripts/copy-installers.mjs",
+    "predev": "npm run copy-installers",
+    "prebuild": "npm run copy-installers",
     "dev": "vitepress dev .",
     "build": "vitepress build .",
     "preview": "vitepress preview ."

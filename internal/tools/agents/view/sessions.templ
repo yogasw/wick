@@ -447,8 +447,10 @@ templ chatEmptyState() {
 }
 
 templ chatComposer(vm SessionDetailVM) {
-	<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md">
+	<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md" data-composer-drop>
 		<form data-send-form>
+			<div data-attach-chips class="hidden flex-wrap gap-2 px-3 pt-3"></div>
+			<input type="file" multiple class="hidden" data-attach-input/>
 			<textarea
 				name="text"
 				rows="1"
@@ -459,6 +461,16 @@ templ chatComposer(vm SessionDetailVM) {
 			></textarea>
 			<div class="flex items-center justify-between px-3 pb-3 pt-1">
 				<div class="flex items-center gap-2">
+					<button
+						type="button"
+						data-attach-toggle
+						class="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+						title="Attach file"
+					>
+						<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+						</svg>
+					</button>
 					if len(vm.Providers) > 0 {
 						<div class="relative" data-row-action="">
 							<button
@@ -618,11 +630,61 @@ templ userTurn(t TurnVM) {
 			if !t.Time.IsZero() {
 				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
 			}
-			<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble">
-				<span data-linkify>{ t.Text }</span>
-			</div>
+			if len(t.Attachments) > 0 {
+				<div class="flex flex-wrap justify-end gap-1.5 max-w-full">
+					for _, a := range t.Attachments {
+						@attachmentChip(a)
+					}
+				</div>
+			}
+			if t.Text != "" {
+				<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble">
+					<span data-linkify>{ t.Text }</span>
+				</div>
+			}
 		</div>
 	</div>
+}
+
+// attachmentChip renders one user-uploaded file as a clickable button.
+// Clicking opens the shared preview modal (data-context-modal from
+// ContextPanel) via window.AgentContext.previewExternal. Images get an
+// inline thumbnail; everything else shows as a compact file row.
+templ attachmentChip(a AttachmentVM) {
+	if a.IsImage {
+		<button
+			type="button"
+			data-attach-preview
+			data-attach-url={ a.URL }
+			data-attach-name={ a.Name }
+			data-attach-mime={ a.MIME }
+			data-attach-size={ fmt.Sprintf("%d", a.Size) }
+			class="block rounded-xl overflow-hidden border border-white-300 dark:border-navy-600 shadow-sm bg-white-100 dark:bg-navy-800 hover:shadow-md transition-shadow cursor-pointer"
+			title={ a.Name }
+		>
+			<img src={ a.URL } alt={ a.Name } class="block max-h-56 max-w-[240px] object-contain bg-white-200 dark:bg-navy-900"/>
+		</button>
+	} else {
+		<button
+			type="button"
+			data-attach-preview
+			data-attach-url={ a.URL }
+			data-attach-name={ a.Name }
+			data-attach-mime={ a.MIME }
+			data-attach-size={ fmt.Sprintf("%d", a.Size) }
+			class="inline-flex items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors max-w-[240px] cursor-pointer text-left"
+			title={ a.Name }
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z" stroke-linejoin="round"></path>
+				<path d="M9 2v4h4" stroke-linejoin="round"></path>
+			</svg>
+			<span class="truncate">{ a.Name }</span>
+			if a.Size > 0 {
+				<span class="text-black-600 dark:text-black-700 shrink-0">{ formatSize(a.Size) }</span>
+			}
+		</button>
+	}
 }
 
 templ assistantTurn(t TurnVM) {

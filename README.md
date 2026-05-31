@@ -12,13 +12,13 @@ Want Claude / Codex / Gemini as a Slack bot, Telegram bot, or web assistant? Jus
 
 ```bash
 # Linux / macOS / Termux — auto-detects OS + arch
-curl -fsSL https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.sh | sh
+curl -fsSL https://yogasw.github.io/wick/install.sh | sh
 wick-agent server   # web UI at http://localhost:9425 — creds auto-generated on first run
 ```
 
 ```powershell
 # Windows
-iwr -useb https://raw.githubusercontent.com/yogasw/wick/master/scripts/install.ps1 | iex
+iwr -useb https://yogasw.github.io/wick/install.ps1 | iex
 ```
 
 ```bash

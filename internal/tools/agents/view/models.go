@@ -116,12 +116,24 @@ type TurnEventVM struct {
 
 // TurnVM is one conversation turn for the UI.
 type TurnVM struct {
-	Role      string // "user" | "assistant" | "system"
-	Agent     string
-	Text      string
-	Truncated bool
-	Time      time.Time
-	Events    []TurnEventVM
+	Role        string // "user" | "assistant" | "system"
+	Agent       string
+	Text        string
+	Truncated   bool
+	Time        time.Time
+	Events      []TurnEventVM
+	Attachments []AttachmentVM
+}
+
+// AttachmentVM is one user-uploaded file rendered under the user
+// bubble. URL is the GET path served by sessionUploadServe; IsImage
+// gates inline thumbnail rendering vs the generic file chip.
+type AttachmentVM struct {
+	Name    string
+	URL     string
+	MIME    string
+	Size    int64
+	IsImage bool
 }
 
 // SessionDetailVM holds data for the Session detail page.

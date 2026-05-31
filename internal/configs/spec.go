@@ -35,6 +35,8 @@ const (
 	KeySessionSecret        = "session_secret"
 	KeyAdminPasswordChanged = "admin_password_changed"
 	KeyEncryptionKey        = "encryption_key"
+	KeyStartupScript        = "startup_script"
+	KeyStartupScriptEnabled = "startup_script_enabled"
 )
 
 // generators maps app-level keys to the function that produces a fresh
@@ -117,6 +119,18 @@ func appDefaults() []entity.Config {
 			Type:        "bool",
 			Value:       "false",
 			Description: "Set to true once the default admin password has been changed. Used to show a security warning on startup.",
+		},
+		{
+			Key:         KeyStartupScriptEnabled,
+			Type:        "checkbox",
+			Value:       "false",
+			Description: "Run the startup script below in a shell when the server boots. Output is captured to logs/startup-script-YYYY-MM-DD.log. The process is killed when the server stops.",
+		},
+		{
+			Key:         KeyStartupScript,
+			Type:        "textarea",
+			Value:       "",
+			Description: "Shell script run on server boot (sh on Linux/macOS, PowerShell on Windows). Use it to launch a tunnel like `ngrok http 9425` or `cloudflared tunnel run my-tunnel` so the local port stays unexposed. Edit + restart the server (tray menu) to apply.",
 		},
 		{
 			Key:           KeyEncryptionKey,

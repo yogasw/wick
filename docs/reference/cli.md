@@ -115,7 +115,12 @@ Start the HTTP server directly without needing a `wick.yml` task. Equivalent to 
 
 ```bash
 wick server
+wick server --host 127.0.0.1     # bind specific interface
+wick server --host 192.168.1.42  # multi-NIC host: bind one IP only
+wick server --localhost          # shortcut for --host 127.0.0.1
 ```
+
+`--host` / `--localhost` forward to the inner `go run . server`, which sets `WICK_HOST` and makes the kernel drop SYN packets from any non-matching source. See [`<app> server`](./app-cli#app-server) for the full rationale, precedence rules, and SSH port-forward pattern.
 
 Use this instead of `wick dev` when you don't need hot-reload or asset generation — production-like run from source.
 
@@ -139,6 +144,8 @@ Start the HTTP server and the cron scheduler in one process. Equivalent to `go r
 
 ```bash
 wick all
+wick all --host 127.0.0.1   # bind specific interface
+wick all --localhost        # shortcut for --host 127.0.0.1
 ```
 
 ---
@@ -207,7 +214,7 @@ $ wick upgrade
 current: v0.1.13
 latest:  v0.4.2
 upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.14.17
+> go get github.com/yogasw/wick@v0.14.18
 > go mod tidy
 > <dev task from wick.yml>
 ```
@@ -218,7 +225,7 @@ Steps:
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
 3. If already on latest, exit without prompting.
 4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.14.17`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+5. Run `go get github.com/yogasw/wick@v0.14.18`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 

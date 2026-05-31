@@ -1146,6 +1146,229 @@
       });
     }
 
+    // ── Attachments (paperclip, paste, drag-drop) ─────────────────────
+    // Wire any [data-composer-drop] container with the matching
+    // [data-attach-input], [data-attach-toggle], [data-attach-chips]
+    // children. Files are mirrored into the hidden <input>.files via a
+    // DataTransfer so native form submission picks them up untouched —
+    // the session-detail composer's fetch handler also reads
+    // input.files when building its FormData.
+    var MAX_FILES = 5;
+    var MAX_FILE_BYTES = 25 * 1024 * 1024;
+    function humanSize(n) {
+      if (n < 1024) return n + "B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + "KB";
+      return (n / 1024 / 1024).toFixed(2) + "MB";
+    }
+    function wickInitAttachments(root) {
+      var input = root.querySelector("[data-attach-input]");
+      var chips = root.querySelector("[data-attach-chips]");
+      var toggle = root.querySelector("[data-attach-toggle]");
+      if (!input || !chips) return null;
+      var pending = []; // {file, key, previewURL?}
+      function rerender() {
+        chips.innerHTML = "";
+        if (pending.length === 0) {
+          chips.classList.add("hidden");
+          chips.classList.remove("flex");
+        } else {
+          chips.classList.remove("hidden");
+          chips.classList.add("flex");
+        }
+        pending.forEach(function (item, idx) {
+          var chip = document.createElement("div");
+          chip.className =
+            "relative inline-flex items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 pl-1.5 pr-7 py-1 text-xs text-black-900 dark:text-white-100 max-w-[200px]";
+          var isImg = item.file.type && item.file.type.indexOf("image/") === 0;
+          if (isImg) {
+            var img = document.createElement("img");
+            if (!item.previewURL) item.previewURL = URL.createObjectURL(item.file);
+            img.src = item.previewURL;
+            img.className = "h-7 w-7 rounded-md object-cover shrink-0";
+            chip.appendChild(img);
+          } else {
+            var ic = document.createElement("span");
+            ic.className = "inline-flex h-7 w-7 items-center justify-center rounded-md bg-white-300 dark:bg-navy-800 shrink-0 text-green-500";
+            ic.innerHTML = '<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z" stroke-linejoin="round"></path><path d="M9 2v4h4" stroke-linejoin="round"></path></svg>';
+            chip.appendChild(ic);
+          }
+          var meta = document.createElement("div");
+          meta.className = "flex flex-col min-w-0";
+          var name = document.createElement("span");
+          name.className = "truncate font-medium";
+          name.textContent = item.file.name;
+          var size = document.createElement("span");
+          size.className = "text-[10px] text-black-600 dark:text-black-700";
+          size.textContent = humanSize(item.file.size);
+          meta.appendChild(name);
+          meta.appendChild(size);
+          chip.appendChild(meta);
+          var rm = document.createElement("button");
+          rm.type = "button";
+          rm.className =
+            "absolute top-1/2 -translate-y-1/2 right-1.5 h-5 w-5 rounded-full bg-black-300/40 dark:bg-navy-900/60 text-white-100 hover:bg-neg-500 transition-colors flex items-center justify-center";
+          rm.innerHTML = '<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l6 6M9 3l-6 6" stroke-linecap="round"></path></svg>';
+          rm.addEventListener("click", function () {
+            if (item.previewURL) URL.revokeObjectURL(item.previewURL);
+            pending.splice(idx, 1);
+            sync();
+            rerender();
+          });
+          chip.appendChild(rm);
+          chips.appendChild(chip);
+        });
+      }
+      function sync() {
+        // Mirror pending list into input.files so native form submit
+        // picks up paste/drag-drop additions and removals.
+        try {
+          var dt = new DataTransfer();
+          pending.forEach(function (it) { dt.items.add(it.file); });
+          input.files = dt.files;
+        } catch (err) {
+          // DataTransfer not available — keep going; fetch path uses
+          // pending[] directly so the session-detail composer still works.
+        }
+      }
+      function add(files) {
+        var arr = Array.from(files || []);
+        for (var i = 0; i < arr.length; i++) {
+          var f = arr[i];
+          if (pending.length >= MAX_FILES) {
+            alert("Max " + MAX_FILES + " files per message.");
+            break;
+          }
+          if (f.size > MAX_FILE_BYTES) {
+            alert(f.name + ": exceeds " + (MAX_FILE_BYTES / 1024 / 1024) + " MB cap.");
+            continue;
+          }
+          pending.push({ file: f, key: f.name + ":" + f.size + ":" + f.lastModified });
+        }
+        sync();
+        rerender();
+      }
+      if (toggle) toggle.addEventListener("click", function () { input.click(); });
+      input.addEventListener("change", function () {
+        // Move freshly-picked files into pending then clear input so the
+        // next change event fires even when the same file is reselected.
+        var picked = input.files;
+        if (picked && picked.length > 0) {
+          // Avoid double-counting: input.files was already set by sync()
+          // on prior adds. Only add files that aren't already in pending.
+          var existing = {};
+          pending.forEach(function (it) { existing[it.key] = true; });
+          for (var i = 0; i < picked.length; i++) {
+            var f = picked[i];
+            var k = f.name + ":" + f.size + ":" + f.lastModified;
+            if (!existing[k]) {
+              if (pending.length >= MAX_FILES) break;
+              if (f.size > MAX_FILE_BYTES) continue;
+              pending.push({ file: f, key: k });
+            }
+          }
+          sync();
+          rerender();
+        }
+      });
+      // Paste — pull image/file items off the clipboard and add them.
+      var ta = root.querySelector("textarea");
+      if (ta) {
+        ta.addEventListener("paste", function (e) {
+          if (!e.clipboardData) return;
+          var items = e.clipboardData.items || [];
+          var picked = [];
+          for (var i = 0; i < items.length; i++) {
+            if (items[i].kind === "file") {
+              var f = items[i].getAsFile();
+              if (f) {
+                // Paste'd images often have no filename — give them one.
+                if (!f.name || f.name === "image.png") {
+                  var ext = (f.type && f.type.split("/")[1]) || "png";
+                  try { f = new File([f], "pasted-" + Date.now() + "." + ext, { type: f.type }); } catch (e2) {}
+                }
+                picked.push(f);
+              }
+            }
+          }
+          if (picked.length > 0) {
+            e.preventDefault();
+            add(picked);
+          }
+        });
+      }
+      // Drag-drop on the composer box.
+      ["dragenter", "dragover"].forEach(function (ev) {
+        root.addEventListener(ev, function (e) {
+          if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf("Files") !== -1) {
+            e.preventDefault();
+            root.classList.add("ring-2", "ring-green-500");
+          }
+        });
+      });
+      ["dragleave", "drop"].forEach(function (ev) {
+        root.addEventListener(ev, function (e) {
+          root.classList.remove("ring-2", "ring-green-500");
+          if (ev === "drop" && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            e.preventDefault();
+            add(e.dataTransfer.files);
+          }
+        });
+      });
+      return {
+        getPending: function () { return pending.map(function (it) { return it.file; }); },
+        clear: function () {
+          pending.forEach(function (it) { if (it.previewURL) URL.revokeObjectURL(it.previewURL); });
+          pending = [];
+          sync();
+          rerender();
+        },
+      };
+    }
+    var composerAttach = null;
+    document.querySelectorAll("[data-composer-drop]").forEach(function (root) {
+      var inst = wickInitAttachments(root);
+      // The session-detail composer is the one wrapping [data-send-form];
+      // remember its instance so the fetch submitter can read pending files.
+      if (inst && root.querySelector("[data-send-form]")) composerAttach = inst;
+    });
+
+    // ── Attachment preview (click chip → open shared modal) ───────────
+    // Event delegation on document so dynamically appended optimistic
+    // chips work without re-wiring. URL is validated as same-origin
+    // (relative path or blob:) before being passed to the modal — guards
+    // against javascript: / cross-origin URIs in the unlikely event a
+    // chip is injected with a tampered data-attach-url.
+    function isSafeAttachURL(u) {
+      if (!u) return false;
+      if (u.indexOf("blob:") === 0) return true;        // optimistic chips
+      if (u.charAt(0) === "/" && u.charAt(1) !== "/") return true; // same-origin path
+      try {
+        var resolved = new URL(u, window.location.origin);
+        return resolved.origin === window.location.origin &&
+          (resolved.protocol === "http:" || resolved.protocol === "https:");
+      } catch (_) { return false; }
+    }
+    document.addEventListener("click", function (e) {
+      var btn = e.target && e.target.closest && e.target.closest("[data-attach-preview]");
+      if (!btn) return;
+      e.preventDefault();
+      var rawURL = btn.dataset.attachUrl;
+      if (!isSafeAttachURL(rawURL)) {
+        console.warn("attach preview: rejecting unsafe url", rawURL);
+        return;
+      }
+      var opts = {
+        url: rawURL,
+        name: btn.dataset.attachName,
+        mime: btn.dataset.attachMime,
+        size: parseInt(btn.dataset.attachSize, 10) || 0,
+      };
+      if (window.AgentContext && typeof window.AgentContext.previewExternal === "function") {
+        if (window.AgentContext.previewExternal(opts)) return;
+      }
+      window.open(opts.url, "_blank", "noopener");
+    });
+
     // ── Composer (send message) ───────────────────────────────────────
     var sendForm = document.querySelector("[data-send-form]");
     if (sendForm && sessionID && base) {
@@ -1153,7 +1376,8 @@
         e.preventDefault();
         var textarea = sendForm.querySelector("textarea");
         var text = textarea.value.trim();
-        if (!text) return;
+        var files = composerAttach ? composerAttach.getPending() : [];
+        if (!text && files.length === 0) return;
         var btn = sendForm.querySelector("button[type=submit]");
         textarea.disabled = true;
         if (btn) btn.disabled = true;
@@ -1165,19 +1389,49 @@
           wrap.className = "flex justify-end gap-2 group";
           var col = document.createElement("div");
           col.className = "flex flex-col items-end gap-1 max-w-[80%] min-w-0";
-          var bubble = document.createElement("div");
-          bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble";
-          bubble.innerHTML = linkifyText(text);
-          col.appendChild(bubble);
+          if (files.length > 0) {
+            var attRow = document.createElement("div");
+            attRow.className = "flex flex-wrap justify-end gap-1.5 max-w-full";
+            files.forEach(function (f) {
+              var isImg = f.type && f.type.indexOf("image/") === 0;
+              // Blob URL works for the optimistic bubble's lifetime
+              // (until the server-rendered turn replaces it). Click
+              // delegation in [data-attach-preview] feeds these into
+              // window.AgentContext.previewExternal too.
+              var blobURL = URL.createObjectURL(f);
+              var btn = document.createElement("button");
+              btn.type = "button";
+              btn.title = f.name;
+              btn.dataset.attachPreview = "";
+              btn.dataset.attachUrl = blobURL;
+              btn.dataset.attachName = f.name;
+              btn.dataset.attachMime = f.type || "";
+              btn.dataset.attachSize = String(f.size);
+              if (isImg) {
+                btn.className = "block rounded-xl overflow-hidden border border-white-300 dark:border-navy-600 shadow-sm bg-white-100 dark:bg-navy-800 cursor-pointer";
+                var im = document.createElement("img");
+                im.src = blobURL;
+                im.alt = f.name;
+                im.className = "block max-h-56 max-w-[240px] object-contain bg-white-200 dark:bg-navy-900";
+                btn.appendChild(im);
+              } else {
+                btn.className = "inline-flex items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs text-black-900 dark:text-white-100 max-w-[240px] cursor-pointer text-left";
+                btn.innerHTML = '<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z" stroke-linejoin="round"></path><path d="M9 2v4h4" stroke-linejoin="round"></path></svg><span class="truncate">' + escapeHtml(f.name) + '</span><span class="text-black-600 dark:text-black-700 shrink-0">' + humanSize(f.size) + '</span>';
+              }
+              attRow.appendChild(btn);
+            });
+            col.appendChild(attRow);
+          }
+          if (text) {
+            var bubble = document.createElement("div");
+            bubble.className = "rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble";
+            bubble.innerHTML = linkifyText(text);
+            col.appendChild(bubble);
+          }
           wrap.appendChild(col);
           var bottom = document.getElementById("chat-bottom");
           if (bottom) container.insertBefore(wrap, bottom);
           else container.appendChild(wrap);
-          // Snap to bottom after DOM paint. Set scrollTop directly on
-          // the chat panel so it works even when the user was scrolled
-          // up — bypasses the streaming guard that gates scrollToBottom().
-          // Re-arm the floating button so it can't briefly show while
-          // the bubble appends and layout settles.
           if (window.__wickArmScrollBtn) window.__wickArmScrollBtn();
           requestAnimationFrame(function() {
             var p = document.querySelector("[data-chat-panel]");
@@ -1187,15 +1441,25 @@
           });
         }
 
-        fetch(base + "/sessions/" + encodeURIComponent(sessionID) + "/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text }),
-        })
+        var fetchOpts;
+        if (files.length > 0) {
+          var fd = new FormData();
+          fd.append("text", text);
+          files.forEach(function (f) { fd.append("files", f, f.name); });
+          fetchOpts = { method: "POST", body: fd };
+        } else {
+          fetchOpts = {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text }),
+          };
+        }
+        fetch(base + "/sessions/" + encodeURIComponent(sessionID) + "/send", fetchOpts)
           .then(function (r) { return r.json(); })
           .then(function () {
             textarea.value = "";
             textarea.style.height = "auto";
+            if (composerAttach) composerAttach.clear();
           })
           .catch(function (err) {
             console.error("send failed:", err);

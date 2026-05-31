@@ -129,6 +129,8 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, opt.InitialMessage)
 	}
 
+	bin, args = termuxProotWrap(bin, args)
+
 	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
@@ -228,4 +230,33 @@ func (p *process) Kill() error {
 		return nil
 	}
 	return p.cmd.Process.Kill()
+}
+
+// termuxProotWrap wraps the codex argv with `proot` bind-mounts when
+// running under Termux. Codex's musl binary hard-codes
+// /etc/resolv.conf and /etc/ssl/certs/ca-certificates.crt; Android's
+// /etc is read-only, so the websocket handshake to wss://chatgpt.com
+// fails with "failed to lookup address information: Try again" (DNS)
+// without bind-mounting Termux's copies into place.
+//
+// install.sh provisions proot and writes the same bind-mount as a
+// bash alias for interactive use. Wick spawns codex via direct exec
+// (alias bypassed), so the wrap has to happen here.
+func termuxProotWrap(bin string, args []string) (string, []string) {
+	if os.Getenv("TERMUX_VERSION") == "" {
+		if _, err := os.Stat("/data/data/com.termux/files/usr"); err != nil {
+			return bin, args
+		}
+	}
+	prefix := os.Getenv("PREFIX")
+	if prefix == "" {
+		return bin, args
+	}
+	wrapped := append([]string{
+		"-b", prefix + "/etc/resolv.conf:/etc/resolv.conf",
+		"-b", prefix + "/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt",
+		bin,
+	}, args...)
+	log.Info().Str("bin", bin).Msg("agents.spawn: codex wrapped with proot (termux)")
+	return "proot", wrapped
 }

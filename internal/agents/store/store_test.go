@@ -67,6 +67,64 @@ func TestAppendUserTurn(t *testing.T) {
 	if len(lines) != 1 || lines[0].Role != "user" || lines[0].Text != "hello" {
 		t.Fatalf("turn: %+v", lines)
 	}
+	if len(lines[0].Attachments) != 0 {
+		t.Fatalf("expected no attachments, got %+v", lines[0].Attachments)
+	}
+}
+
+func TestAppendUserTurnWithAttachments(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	atts := []Attachment{
+		{Name: "screenshot.png", StoredName: "1-aa-screenshot.png", URL: "/tools/agents/sessions/S1/uploads/1-aa-screenshot.png", AbsPath: "/tmp/uploads/1-aa-screenshot.png", MIME: "image/png", Size: 4096},
+		{Name: "log.txt", StoredName: "2-bb-log.txt", URL: "/tools/agents/sessions/S1/uploads/2-bb-log.txt", AbsPath: "/tmp/uploads/2-bb-log.txt", MIME: "text/plain", Size: 128},
+	}
+	if err := st.AppendUserTurnWithAttachments("user", "ui", "look at this", atts); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 turn, got %d", len(lines))
+	}
+	got := lines[0]
+	if got.Text != "look at this" {
+		t.Fatalf("text: %q", got.Text)
+	}
+	if len(got.Attachments) != 2 {
+		t.Fatalf("attachments: %+v", got.Attachments)
+	}
+	if got.Attachments[0].Name != "screenshot.png" || got.Attachments[0].MIME != "image/png" || got.Attachments[0].Size != 4096 {
+		t.Fatalf("att[0]: %+v", got.Attachments[0])
+	}
+	if got.Attachments[1].StoredName != "2-bb-log.txt" || got.Attachments[1].AbsPath != "/tmp/uploads/2-bb-log.txt" {
+		t.Fatalf("att[1]: %+v", got.Attachments[1])
+	}
+}
+
+func TestAppendUserTurnEmptyAttachmentsOmitted(t *testing.T) {
+	// Verify the JSON-on-disk does NOT include an "attachments": null
+	// noise field when no files are attached — existing tooling reading
+	// conversation.jsonl shouldn't break on a new optional column.
+	st, _ := newStore(t, "", false)
+	if err := st.AppendUserTurnWithAttachments("user", "ui", "plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := readFirstRaw(t, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "attachments") {
+		t.Fatalf("did not expect attachments key in JSON: %s", raw)
+	}
+}
+
+func readFirstRaw(t *testing.T, st *Store) (string, error) {
+	t.Helper()
+	var got string
+	err := storage.ReadJSONL(st.layout.SessionConversation(st.sessionID), func(line []byte) bool {
+		got = string(line)
+		return false
+	})
+	return got, err
 }
 
 func TestApplyTextDeltasFlushedOnDone(t *testing.T) {

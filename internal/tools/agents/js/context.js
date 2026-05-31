@@ -323,7 +323,9 @@
 
     var tabs = $("[data-context-tabs]", modal);
     var saveBtn = $("[data-context-modal-save]", modal);
-    var editable = !currentFile.binary && !currentFile.tooBig;
+    // Uploads / external blobs are read-only — disable the Edit tab so
+    // the user can't try to /files/save a path that lives outside cwd.
+    var editable = !currentFile.binary && !currentFile.tooBig && !currentFile._externalURL;
     if (editable) {
       tabs.classList.remove("hidden");
       tabs.classList.add("flex");
@@ -365,7 +367,10 @@
     var ext = extOf(currentFile.path);
     previewHost.innerHTML = '<div class="flex items-center justify-center py-12 text-xs text-black-700 dark:text-black-600">Loading preview…</div>';
 
-    var url = base() + "/sessions/" + sessionID() + "/files/download?path=" + encodeURIComponent(currentFile.path);
+    // Uploads + arbitrary external blobs use _externalURL; in-tree
+    // files use the /files/download path.
+    var url = currentFile._externalURL ||
+      (base() + "/sessions/" + sessionID() + "/files/download?path=" + encodeURIComponent(currentFile.path));
 
     if (isImage(ext)) {
       previewHost.innerHTML = '<div class="flex items-center justify-center h-full bg-white-200 dark:bg-navy-800 p-4"><img src="' + escapeAttr(url) + '" alt="" class="max-w-full max-h-full object-contain"/></div>';
@@ -451,6 +456,15 @@
 
   function downloadCurrent() {
     if (!currentFile) return;
+    if (currentFile._externalURL) {
+      var a = document.createElement("a");
+      a.href = currentFile._externalURL;
+      a.download = currentFile.path.split("/").pop();
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
     downloadFile(currentFile.path);
   }
 
@@ -601,6 +615,57 @@
       var rel = absPath.slice(prefix.length);
       if (!rel) return false;
       openFile(rel);
+      return true;
+    },
+    // previewExternal opens the preview modal for a file whose bytes
+    // live at an arbitrary URL (e.g. user-uploaded attachments served
+    // by /sessions/<id>/uploads/<storedName>). opts:
+    //   {name, url, size?, mime?, mtime?}
+    // For text-y MIME the body is fetched and rendered inline; images
+    // / PDFs are pointed at the URL directly. The Edit tab is always
+    // hidden — uploads are read-only.
+    previewExternal: function (opts) {
+      if (!modal || !opts || !opts.url) return false;
+      var name = String(opts.name || "file");
+      var mime = String(opts.mime || "").toLowerCase();
+      var isImg = mime.indexOf("image/") === 0;
+      var isText = mime.indexOf("text/") === 0 || mime === "application/json" ||
+        mime === "application/javascript" || mime === "application/yaml" ||
+        mime === "application/x-yaml" || mime === "application/toml";
+      var isPDF = mime === "application/pdf";
+
+      currentFile = {
+        path: name,
+        size: opts.size || 0,
+        mtime: opts.mtime || Math.floor(Date.now() / 1000),
+        binary: !isText,
+        tooBig: false,
+        content: "",
+        _externalURL: opts.url,
+      };
+
+      function show() { openModal(); }
+
+      if (isText) {
+        // Fetch the bytes so renderPreview's text branch shows the raw
+        // contents (instead of needing an iframe).
+        fetch(opts.url, { credentials: "same-origin" })
+          .then(function (r) { return r.text(); })
+          .then(function (t) {
+            currentFile.content = t || "";
+            currentFile.binary = false;
+            show();
+          })
+          .catch(function (e) {
+            currentFile.binary = true;
+            currentFile.content = "";
+            show();
+          });
+        return true;
+      }
+      // Image / PDF / unknown — modal renders via URL src directly.
+      if (!isImg && !isPDF) currentFile.binary = true;
+      show();
       return true;
     },
   };
