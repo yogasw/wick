@@ -29,10 +29,8 @@ export default withMermaid(defineConfig({
     logo: '/logo.svg',
 
     nav: [
-      { text: 'Agent Host', link: '/guide/agents-only' },
-      { text: 'Framework Guide', link: '/guide/getting-started' },
-      { text: 'AI Quickstart', link: '/guide/ai-quickstart' },
-      { text: 'Reference', link: '/reference/wick-yml' },
+      { text: 'Wick Agent', link: '/guide/agents-only' },
+      { text: 'Wick Framework', link: '/guide/getting-started' },
       {
         text: `v${version}`,
         items: [
