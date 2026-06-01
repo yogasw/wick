@@ -1,6 +1,6 @@
 import { writable, derived, get } from "svelte/store";
 import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
-import { workflowAPI, type ValidationReport, type ValidationIssue } from "$lib/api/workflow";
+import { workflowAPI, type ValidationReport, type ValidationIssue, type WorkflowState } from "$lib/api/workflow";
 import { toastError, toastOk } from "./toast";
 
 // Decorate raw {Path, Message} issues with severity + node so consumers
@@ -102,6 +102,11 @@ export const draftWorkflow = writable<Workflow | null>(null);
 // "discard draft → revert" path.
 export const publishedWorkflow = writable<Workflow | null>(null);
 
+// Governance / approval snapshot — drives the "approved vN" badge
+// in the toolbar. Null when state has never been written for this
+// workflow (fresh draft); the toolbar treats null as "not approved".
+export const workflowState = writable<WorkflowState | null>(null);
+
 // Dirty when draft diverges from published (cheap shallow JSON compare —
 // good enough for the gate label; deep diff lives in the version-history
 // panel).
@@ -125,6 +130,7 @@ export async function loadWorkflow(id: string) {
   const res = await workflowAPI.get(id);
   publishedWorkflow.set(hydrate(res.workflow));
   draftWorkflow.set(hydrate(res.draft ?? structuredClone(res.workflow)));
+  workflowState.set(res.state ?? null);
   // Reset transient state so the toolbar + toasts don't surface stale
   // status from a previously-loaded workflow. Also clear per-node run
   // overlays — otherwise a node carried "failed" from the previous

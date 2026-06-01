@@ -8,6 +8,7 @@
     lastSavedAt,
     validationErrorCount,
     validationWarningCount,
+    workflowState,
   } from "$lib/stores/editor";
 
   // Tick a local timestamp once per second so "Saved Xs ago" updates
@@ -221,6 +222,21 @@
     >
       <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
       {$validationWarningCount} {$validationWarningCount === 1 ? "warning" : "warnings"}
+    </span>
+  {/if}
+
+  <!-- Approved badge — shown when governance has signed off on a
+       published version. v1 surfaces this as "approved vN" so the
+       operator knows the live version is the one auditors green-lit. -->
+  {#if $workflowState?.approved}
+    <span
+      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+      title={$workflowState.approved_by
+        ? `approved by ${$workflowState.approved_by}` + ($workflowState.approved_at ? ` · ${new Date($workflowState.approved_at).toLocaleString()}` : "")
+        : "approved"}
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+      approved{$workflowState.approved_version ? ` v${$workflowState.approved_version}` : ""}
     </span>
   {/if}
 

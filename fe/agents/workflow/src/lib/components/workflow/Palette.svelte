@@ -85,9 +85,21 @@
       const datatableChildren: Item[] = [];
       for (const n of cat.node_types ?? []) {
         const cat = categoryFor(n.type);
-        const item: Item = { type: n.type, label: prettyLabel(n.type) };
+        // Each node type ships its own description via the engine
+        // descriptor — surface it as a 2-line subtitle so the
+        // palette reads like the v1 picker (label + short hint)
+        // instead of a bare type name.
+        const item: Item = {
+          type: n.type,
+          label: prettyLabel(n.type),
+          description: n.description,
+        };
         if (n.type.startsWith("datatable_")) {
-          datatableChildren.push({ type: n.type, label: prettyLabel(n.type) });
+          datatableChildren.push({
+            type: n.type,
+            label: prettyLabel(n.type),
+            description: n.description,
+          });
           continue;
         }
         if (cat === "AI") aiItems.push(item);
@@ -231,10 +243,18 @@
               <button
                 draggable="true"
                 ondragstart={(e) => ondragstart(e, item.type)}
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-sm text-slate-100 bg-slate-800 hover:bg-slate-700 cursor-grab transition-colors"
+                class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-slate-100 bg-slate-800 hover:bg-slate-700 cursor-grab transition-colors"
+                title={item.description}
               >
-                <span class="truncate">{item.label}</span>
-                {#if item.badge}<span class="text-[10px] text-slate-400">{item.badge}</span>{/if}
+                <div class="w-full flex items-center justify-between gap-2">
+                  <span class="text-sm font-medium truncate">{item.label}</span>
+                  {#if item.badge}<span class="text-[10px] text-slate-400 shrink-0">{item.badge}</span>{/if}
+                </div>
+                {#if item.description}
+                  <span class="text-[10px] text-slate-400 line-clamp-2 leading-snug">
+                    {item.description}
+                  </span>
+                {/if}
               </button>
             {/if}
           {/each}

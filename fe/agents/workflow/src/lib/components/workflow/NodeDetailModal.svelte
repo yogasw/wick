@@ -17,6 +17,8 @@
 
   import { detailNodeID, draftWorkflow, removeNode, updateNode } from "$lib/stores/editor";
   import { catalog } from "$lib/stores/catalog";
+  import { workflowAPI } from "$lib/api/workflow";
+  import { toastError } from "$lib/stores/toast";
   import type { Node } from "$lib/types/workflow";
   import ArgField from "./fields/ArgField.svelte";
   import KvListField from "./fields/KvListField.svelte";
@@ -100,6 +102,53 @@
     if (!confirm(`Delete node "${node.label || node.id}"?`)) return;
     removeNode(node.id);
     close();
+  }
+
+  // Execute-step state — populated by runStep(). `lastRun.output`
+  // mirrors what the server's nodeOutputToJSON returns
+  // (verdict/confidence/result/...). Lives at component scope so
+  // re-opening the modal on the same node keeps the last result
+  // until another run lands.
+  type StepResult = {
+    ok: boolean;
+    output?: Record<string, unknown>;
+    error?: string;
+    latency_ms?: number;
+    at: number;
+  };
+  let executing = $state(false);
+  let lastRun = $state<StepResult | null>(null);
+
+  async function runStep() {
+    if (!node) return;
+    let parsedMock: Record<string, unknown> | undefined;
+    const mockRaw = (node as { mock_input?: string }).mock_input ?? "";
+    if (mockRaw.trim()) {
+      try {
+        parsedMock = JSON.parse(mockRaw);
+      } catch {
+        toastError("Bad mock JSON", "Settings → Mock input must be valid JSON.");
+        return;
+      }
+    }
+    executing = true;
+    try {
+      const wf = $draftWorkflow;
+      if (!wf) return;
+      const res = await workflowAPI.execNode(wf.id, {
+        node,
+        input: parsedMock,
+      });
+      lastRun = { ...res, at: Date.now() };
+      if (!res.ok) {
+        toastError("Execute step failed", res.error ?? "Executor returned an error.");
+      }
+    } catch (e) {
+      lastRun = { ok: false, error: e instanceof Error ? e.message : String(e), at: Date.now() };
+      toastError("Execute step failed", lastRun.error ?? "");
+    } finally {
+      executing = false;
+    }
   }
 
   // ── switch rule drag-reorder ──────────────────────────────────────
@@ -251,8 +300,13 @@
               >{t === "params" ? "Parameters" : "Settings"}</button>
             {/each}
             <div class="flex-1"></div>
-            <button class="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium">
-              <span>▸</span> Execute step
+            <button
+              class="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium disabled:opacity-50"
+              onclick={runStep}
+              disabled={executing}
+              title="Run only this node with the current input (no persistence)"
+            >
+              <span>▸</span> {executing ? "Running…" : "Execute step"}
             </button>
           </nav>
 
@@ -441,15 +495,25 @@
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
                   />
                 </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Provider</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
-                    placeholder="(default)"
-                    value={node.provider ?? ""}
-                    oninput={(e) => patch("provider", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
+                <Field
+                  kind="select"
+                  label="Provider"
+                  value={node.provider ?? ""}
+                  onChange={(v) => patch("provider", v)}
+                  options={[
+                    { label: "(default)", value: "" },
+                    ...(($catalog?.providers ?? []).map((p) => ({
+                      label: p.is_default ? `${p.name} · default` : p.name,
+                      value: p.name,
+                    }))),
+                  ]}
+                  helper="Override the workflow-level default. Empty = use engine default."
+                />
+                {#if ($catalog?.providers ?? []).length === 0}
+                  <div class="text-[11px] text-amber-600 dark:text-amber-400 -mt-1">
+                    No providers registered yet — set one up in the Providers settings page.
+                  </div>
+                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Skills (one per line)</span>
                   <textarea
@@ -526,6 +590,37 @@
                       )}
                   ></textarea>
                 </label>
+                {#if (node.output_cases ?? []).length > 0}
+                  <!-- Case coverage — show each declared case + the
+                       edge it routes to (if any). Mirrors v1's
+                       editor_inspector.templ "Cases (branches)"
+                       panel so the operator catches unrouted cases
+                       before they fail at runtime. -->
+                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-1">
+                    <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                      Branch routing
+                    </div>
+                    {#each node.output_cases ?? [] as caseLabel}
+                      {@const routedEdges = ($draftWorkflow?.graph?.edges ?? []).filter((e) => e.from === node!.id && e.case === caseLabel)}
+                      <div class="flex items-center gap-2 text-[12px]">
+                        <span class="font-mono px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 min-w-[80px]">{caseLabel}</span>
+                        {#if routedEdges.length === 0}
+                          <span class="text-rose-600 dark:text-rose-400 text-[11px] italic">unrouted — no outgoing edge with this case</span>
+                        {:else}
+                          <span class="text-slate-400">→</span>
+                          {#each routedEdges as edge}
+                            <button
+                              type="button"
+                              class="font-mono text-emerald-600 dark:text-emerald-400 hover:underline"
+                              onclick={() => detailNodeID.set(edge.to)}
+                              title="Open downstream node"
+                            >{edge.to}</button>
+                          {/each}
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
                 <ArgField
                   label="Input (text to classify)"
                   value={node.input ?? ""}
@@ -536,15 +631,25 @@
                   onValueChange={(v) => patch("input", v)}
                   onModeChange={(m) => patchMode("input", m)}
                 />
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Provider</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
-                    placeholder="(default)"
-                    value={node.provider ?? ""}
-                    oninput={(e) => patch("provider", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
+                <Field
+                  kind="select"
+                  label="Provider"
+                  value={node.provider ?? ""}
+                  onChange={(v) => patch("provider", v)}
+                  options={[
+                    { label: "(default)", value: "" },
+                    ...(($catalog?.providers ?? []).map((p) => ({
+                      label: p.is_default ? `${p.name} · default` : p.name,
+                      value: p.name,
+                    }))),
+                  ]}
+                  helper="Override the workflow-level default. Empty = use engine default."
+                />
+                {#if ($catalog?.providers ?? []).length === 0}
+                  <div class="text-[11px] text-amber-600 dark:text-amber-400 -mt-1">
+                    No providers registered yet — set one up in the Providers settings page.
+                  </div>
+                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
@@ -1152,11 +1257,46 @@
 
         <!-- RIGHT: output. -->
         <section class="flex flex-col p-4 overflow-y-auto">
-          <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2">OUTPUT</div>
-          <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
-            <div>Last recorded output unavailable.</div>
-            <div class="text-[11px]">Run the workflow to populate.</div>
+          <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2 flex items-center justify-between gap-2">
+            <span>OUTPUT</span>
+            {#if lastRun}
+              <span
+                class="px-1.5 py-0.5 rounded text-[10px]"
+                class:bg-emerald-100={lastRun.ok}
+                class:text-emerald-700={lastRun.ok}
+                class:dark:bg-emerald-900={lastRun.ok}
+                class:dark:text-emerald-300={lastRun.ok}
+                class:bg-rose-100={!lastRun.ok}
+                class:text-rose-700={!lastRun.ok}
+                class:dark:bg-rose-900={!lastRun.ok}
+                class:dark:text-rose-300={!lastRun.ok}
+              >
+                {lastRun.ok ? "ok" : "fail"} · {lastRun.latency_ms ?? 0}ms
+              </span>
+            {/if}
           </div>
+          {#if lastRun}
+            {#if lastRun.error}
+              <div class="text-[11px] text-rose-700 dark:text-rose-300 whitespace-pre-wrap mb-2">
+                {lastRun.error}
+              </div>
+            {/if}
+            <pre class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-slate-900/40 p-2 text-[11px] font-mono text-slate-800 dark:text-slate-200">{JSON.stringify(lastRun.output ?? {}, null, 2)}</pre>
+          {:else}
+            <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
+              <div class="text-2xl">⤒</div>
+              <div>No output data</div>
+              <button
+                type="button"
+                class="px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium disabled:opacity-50"
+                onclick={runStep}
+                disabled={executing}
+              >{executing ? "Running…" : "Execute step"}</button>
+              <div class="text-[11px] text-center max-w-[180px]">
+                Or set mock data under Settings → Mock input to feed in a sample event.
+              </div>
+            </div>
+          {/if}
         </section>
       </div>
     </div>

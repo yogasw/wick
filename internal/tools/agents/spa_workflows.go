@@ -76,6 +76,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/toggle/{id}", spaWorkflowToggle)
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
+	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
 }
 
 type spaWorkflowSummary struct {
@@ -126,6 +127,12 @@ func spaWorkflowGet(c *tool.Ctx) {
 		if draft, err := globalWorkflowMgr.Service.LoadDraft(id); err == nil {
 			resp["draft"] = draft
 		}
+	}
+	// Approval / governance snapshot — fed to the toolbar's
+	// "approved vN" badge. Soft-fail when state hasn't been written
+	// yet (fresh workflow before any approve action).
+	if st, err := globalWorkflowMgr.Service.LoadState(id); err == nil {
+		resp["state"] = st
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -260,4 +267,69 @@ func spaWorkflowRuns(c *tool.Ctx) {
 		"page":     page,
 		"has_more": hasMore,
 	})
+}
+
+// spaExecNode runs one node in isolation — n8n's "Execute step"
+// pattern, JSON-only twin of the legacy execNodeStep handler. Accepts
+// a raw wf.Node JSON object (not a drawflow node blob) so the v2
+// inspector doesn't need to round-trip through the legacy codec.
+//
+// Body shape: { node: <wf.Node JSON>, input?: <map>, event?: <map>,
+// parent_id?: <string> }. Response mirrors execNodeStep so the
+// Output pane of the modal can render either result interchangeably.
+func spaExecNode(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		Node     wf.Node        `json:"node"`
+		Input    map[string]any `json:"input"`
+		Event    map[string]any `json:"event"`
+		ParentID string         `json:"parent_id"`
+	}
+	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if body.Node.Type == "" {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "node.type is required"})
+		return
+	}
+	exec, ok := globalWorkflowMgr.Engine.Executors[body.Node.Type]
+	if !ok {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "no executor for node type " + string(body.Node.Type)})
+		return
+	}
+	w, err := globalWorkflowMgr.Service.LoadDraft(id)
+	if err != nil {
+		// Soft-fail — operator may be iterating before any save lands.
+		w = wf.Workflow{ID: id}
+	}
+	envVals, _ := globalWorkflowMgr.Service.LoadEnvValues(id)
+	outputs := map[string]any{}
+	nodeOutputs := map[string]wf.NodeOutput{}
+	if body.ParentID != "" {
+		outputs[body.ParentID] = body.Input
+	}
+	outputs["input"] = body.Input
+	rc := &wf.RunContext{
+		Workflow:    w,
+		Event:       eventFromExecBody(body.Event, body.Input),
+		Outputs:     outputs,
+		EnvValues:   envVals,
+		RunID:       "step-" + time.Now().UTC().Format("20060102T150405.000000000"),
+		NodeOutputs: nodeOutputs,
+	}
+	startedAt := time.Now()
+	out, runErr := exec.Execute(c.Context(), body.Node, rc)
+	resp := map[string]any{
+		"ok":         runErr == nil,
+		"latency_ms": time.Since(startedAt).Milliseconds(),
+		"output":     nodeOutputToJSON(out),
+	}
+	if runErr != nil {
+		resp["error"] = runErr.Error()
+	}
+	c.JSON(http.StatusOK, resp)
 }

@@ -115,6 +115,19 @@
     close();
   }
 
+  // Inline duplicate check — flag when this trigger's label is shared
+  // by another trigger in the same workflow. Save runs the same check
+  // via editor.saveDraft so the operator can't slip past with a stale
+  // local state.
+  function labelClashes(target: Trigger): boolean {
+    if (!target.label) return false;
+    const wf = $draftWorkflow;
+    if (!wf) return false;
+    return (wf.triggers ?? []).some(
+      (t) => t.id !== target.id && t.label === target.label,
+    );
+  }
+
   const triggerHeadColour: Record<string, string> = {
     manual: "bg-amber-400",
     cron: "bg-sky-400",
@@ -197,13 +210,22 @@
                 <div class="text-[11px] text-slate-500 uppercase mb-1">Trigger ID</div>
                 <div class="font-mono text-[12px] text-slate-700 dark:text-slate-300 break-all">{trigger.id ?? "—"}</div>
               </div>
+              {@const labelTaken = labelClashes(trigger)}
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class:border-rose-500={labelTaken}
+                  class:border-slate-200={!labelTaken}
+                  class:dark:border-slate-700={!labelTaken}
                   value={trigger.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
                 />
+                {#if labelTaken}
+                  <span class="text-[11px] text-rose-600 dark:text-rose-400">
+                    Label "{trigger.label}" is already used by another trigger.
+                  </span>
+                {/if}
               </label>
 
               <!-- Cron-specific fields. -->

@@ -11,10 +11,20 @@ export type WorkflowSummary = {
   updated_at?: string;
 };
 
+export type WorkflowState = {
+  approved?: boolean;
+  approved_by?: string;
+  approved_at?: string;
+  approved_version?: number;
+  content_hash?: string;
+  governance_mode?: string;
+};
+
 export type WorkflowGetResponse = {
   workflow: Workflow;
   draft?: Workflow;
   has_draft: boolean;
+  state?: WorkflowState;
 };
 
 // ValidationIssue mirrors the parse.Issue shape the backend hands back
@@ -228,6 +238,28 @@ export const workflowAPI = {
     slug: string,
   ): Promise<{ name: string; type: string }[]> =>
     apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
+
+  // n8n-style "Execute step" — run a single node in isolation against
+  // an optional parent input + event envelope. Server runs the
+  // executor against the current draft env; nothing persists to runs/.
+  execNode: (
+    workflowID: string,
+    body: {
+      node: unknown;
+      input?: Record<string, unknown>;
+      event?: Record<string, unknown>;
+      parent_id?: string;
+    },
+  ): Promise<{
+    ok: boolean;
+    latency_ms?: number;
+    output?: Record<string, unknown>;
+    error?: string;
+  }> =>
+    apiPost(
+      `${BASE}/api/workflows/exec-node/${encodeURIComponent(workflowID)}`,
+      body,
+    ),
 
   runState: (id: string, runID: string): Promise<any> =>
     // Legacy endpoint already returns JSON unconditionally.
