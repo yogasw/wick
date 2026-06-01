@@ -118,6 +118,7 @@ type TurnEventVM struct {
 type TurnVM struct {
 	Role        string // "user" | "assistant" | "system"
 	Agent       string
+	Provider    string // "type/name" — snapshot from the turn that produced it
 	Text        string
 	Truncated   bool
 	Time        time.Time

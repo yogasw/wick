@@ -647,14 +647,36 @@
         if (!pendingTurnEl) {
           pendingTurnEl = document.createElement("div");
           pendingTurnEl.className = "flex justify-start group";
+          var label = currentTurnLabel();
+          var labelHtml = label
+            ? '<span class="text-xs font-medium text-black-800 dark:text-black-600">' + escapeHtml(label) + '</span>'
+            : '';
           pendingTurnEl.innerHTML =
             '<div class="flex flex-col gap-1.5 max-w-[92%] min-w-0" data-turn-events>' +
+            labelHtml +
             '</div>';
           var bottom = document.getElementById("chat-bottom");
           if (bottom) container.insertBefore(pendingTurnEl, bottom);
           else container.appendChild(pendingTurnEl);
         }
         return pendingTurnEl.querySelector("[data-turn-events]");
+      }
+
+      // currentTurnLabel mirrors view.formatTurnLabel: "{agent}.{providerName}"
+      // with default agent "main" hidden and provider compacted to its
+      // name half. Reads live attrs so a provider/agent swap before
+      // first delta arrives still produces the right label.
+      function currentTurnLabel() {
+        var root = document.querySelector("[data-session-id]");
+        if (!root) return "";
+        var agent = (root.getAttribute("data-active-agent") || "").trim();
+        var provider = (root.getAttribute("data-active-provider") || "").trim();
+        var name = provider;
+        var slash = provider.lastIndexOf("/");
+        if (slash >= 0) name = provider.slice(slash + 1);
+        if (!agent || agent === "main") return name;
+        if (!name) return agent;
+        return agent + "." + name;
       }
 
       // Returns data-trace-wrap, creating the trace section (toggle btn +

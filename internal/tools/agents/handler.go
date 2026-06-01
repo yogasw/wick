@@ -660,6 +660,7 @@ func sessionDetail(c *tool.Ctx) {
 			vm := view.TurnVM{
 				Role:      t.Role,
 				Agent:     t.Agent,
+				Provider:  t.Provider,
 				Text:      t.Text,
 				Truncated: t.Truncated,
 				Time:      t.Timestamp,

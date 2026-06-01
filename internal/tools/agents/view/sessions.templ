@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/session"
@@ -272,8 +273,16 @@ templ sessionPager(vm SessionsTableVM) {
 
 // SessionDetail renders the session detail page with tabs and composer.
 templ SessionDetail(vm SessionDetailVM) {
+	{{
+		activeAgent := ""
+		activeProvider := ""
+		if len(vm.Session.Agents) > 0 {
+			activeAgent = vm.Session.Agents[0].Name
+			activeProvider = vm.Session.Agents[0].Provider
+		}
+	}}
 	@AgentsLayout(vm.Layout) {
-		<div class="relative flex flex-col -mt-6 -mx-6 h-[100dvh]" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+		<div class="relative flex flex-col -mt-6 -mx-6 h-[100dvh]" data-session-id={ vm.Session.ID } data-base={ vm.Base } data-active-agent={ activeAgent } data-active-provider={ activeProvider }>
 			<!-- Zone 1: transparent overlay bar -->
 			<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">
 				<!-- Left: tab dropdown -->
@@ -283,8 +292,8 @@ templ SessionDetail(vm SessionDetailVM) {
 					if vm.Session.Meta.Workspace != "" {
 						<span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
 					}
-					if len(vm.Session.Agents) > 0 {
-						<span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{ vm.Session.Agents[0].Name } · { vm.Session.Agents[0].Provider }</span>
+					if activeAgent != "" || activeProvider != "" {
+						<span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{ formatTurnLabel(activeAgent, activeProvider) }</span>
 					}
 					<span data-sse-status class="hidden inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium" data-state="">
 						<svg data-sse-spin viewBox="0 0 16 16" class="h-2.5 w-2.5 hidden animate-spin" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>
@@ -688,10 +697,11 @@ templ attachmentChip(a AttachmentVM) {
 }
 
 templ assistantTurn(t TurnVM) {
+	{{ label := formatTurnLabel(t.Agent, t.Provider) }}
 	<div class="flex justify-start group">
 		<div class="flex flex-col gap-1.5 max-w-[92%] min-w-0" data-turn-events>
-			if t.Agent != "" {
-				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ t.Agent }</span>
+			if label != "" {
+				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ label }</span>
 			}
 			if len(t.Events) > 0 {
 				<div class="flex flex-col gap-1">
@@ -820,6 +830,27 @@ templ systemTurn(t TurnVM) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// formatTurnLabel builds the chat-bubble header for an assistant turn.
+// Format: "{agent}.{providerName}" — provider type is dropped (caller
+// can still look it up in the session header); provider name is the
+// part after the slash in "type/name". Default agent "main" is hidden
+// so the label collapses to just the provider name in the common
+// single-agent case.
+func formatTurnLabel(agent, provider string) string {
+	name := provider
+	if i := strings.LastIndex(provider, "/"); i >= 0 {
+		name = provider[i+1:]
+	}
+	switch {
+	case agent == "" || agent == "main":
+		return name
+	case name == "":
+		return agent
+	default:
+		return agent + "." + name
+	}
+}
 
 // rowFallbackLifecycle maps the persisted session.Meta.Status (used
 // when the pool has no live entry for a row) onto a lifecycle the
