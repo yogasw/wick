@@ -1,6 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="wick">
 	<rect width="512" height="512" rx="96" fill="#1d7d4f"/>
-	<g transform="translate(86 86) scale(14.2)" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-		<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+	<defs>
+		<linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#f3f0fb"/>
+			<stop offset="0.45" stop-color="#d9d0f1"/>
+			<stop offset="1" stop-color="#a98fe0"/>
+		</linearGradient>
+		<mask id="wr">
+			<rect width="512" height="512" fill="black"/>
+			<g fill="white">
+				<rect x="232" y="150" width="48" height="212" rx="18"/>
+				<circle cx="256" cy="150" r="64"/>
+				<circle cx="256" cy="362" r="64"/>
+			</g>
+			<g fill="black">
+				<rect x="234" y="70" width="44" height="92" rx="10"/>
+				<rect x="234" y="350" width="44" height="92" rx="10"/>
+			</g>
+		</mask>
+	</defs>
+	<g transform="rotate(-40 256 256)">
+		<rect width="512" height="512" fill="url(#metal)" mask="url(#wr)"/>
 	</g>
 </svg>
