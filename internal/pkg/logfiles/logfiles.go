@@ -1,6 +1,24 @@
-//go:build !headless
-
-package systemtray
+// Package logfiles wires per-component dated log files for wick
+// runtimes that own their own process (tray on GUI hosts, headless
+// `all` spawned by `wick start`). It opens app/server/worker/mcp
+// files under ~/.<appName>/logs/, pipes os.Stdout / os.Stderr into
+// app.log so fmt.Printf and panic traces survive when the real
+// console is detached, and prunes files older than the retention
+// window.
+//
+// Layout:
+//
+//	~/.<appName>/logs/
+//	  app-YYYY-MM-DD.log     // tray / startup / global zerolog + stdout/stderr
+//	  server-YYYY-MM-DD.log  // HTTP server (zerolog component=server)
+//	  worker-YYYY-MM-DD.log  // job worker (zerolog component=worker)
+//	  mcp-YYYY-MM-DD.log     // wickmanager MCP audit
+//
+// Each file is tee'd to the original stderr so an interactive operator
+// still sees output in the terminal. When the caller has no real
+// stderr (tray detaches the console, daemon redirects to daemon.log),
+// the file is the only sink — that's the intent.
+package logfiles
 
 import (
 	"io"
@@ -23,22 +41,20 @@ const (
 	defaultRetentionDays = 7
 )
 
-// logSet holds per-component loggers and the log directory path.
-type logSet struct {
+// Set bundles the per-component loggers produced by Setup. Callers
+// wire each logger into the relevant subsystem (server / worker / mcp)
+// and use App as the global zerolog default.
+type Set struct {
 	App    zerolog.Logger
 	Server zerolog.Logger
 	Worker zerolog.Logger
-	// MCP receives audit events emitted by the wickmanager connector
-	// for every tools/list / tools/call (read + write). Sits next to
-	// the other per-component logs; pruning shares the same prefix
-	// rotation pruneOldLogs runs.
-	MCP zerolog.Logger
-	Dir string
+	MCP    zerolog.Logger
+	Dir    string
 }
 
 // bestEffortWriter writes to primary; on success also attempts secondary
-// (ignoring secondary errors). Ensures file always receives the write even
-// when stderr is unavailable (tray mode detaches the console).
+// (ignoring secondary errors). Ensures the file always receives the
+// write even when stderr is unavailable (tray detaches the console).
 type bestEffortWriter struct {
 	primary   io.Writer
 	secondary io.Writer
@@ -52,26 +68,19 @@ func (w *bestEffortWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// setupLogFiles creates three dated log files under
-// ~/.<appName>/logs/:
-//
-//	app-YYYY-MM-DD.log    — tray / startup / app-level events
-//	server-YYYY-MM-DD.log — HTTP server events
-//	worker-YYYY-MM-DD.log — background job worker events
-//
-// Each file is also tee'd to the original stderr. The global zerolog
-// log.Logger and stdlib log are set to the App logger. Stdout/Stderr are
-// piped so fmt.Printf and panic traces land in app.log even after
-// hideConsole detaches the console. Caller defers the returned
-// cleanup func which flushes the pipe goroutines then closes all files.
-func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
+// Setup creates the dated log files, installs stdout/stderr pipes that
+// funnel fmt.Printf and panic traces into app.log, points the global
+// zerolog log.Logger and stdlib log at the App logger, and returns a
+// cleanup func that flushes the pipe goroutines then closes all files.
+// retentionDays <= 0 falls back to the default (7 days).
+func Setup(appName string, retentionDays int) (Set, func(), error) {
 	dir, err := userconfig.Dir(appName)
 	if err != nil {
-		return logSet{}, func() {}, err
+		return Set{}, func() {}, err
 	}
 	dir = filepath.Join(dir, "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return logSet{}, func() {}, err
+		return Set{}, func() {}, err
 	}
 	if retentionDays <= 0 {
 		retentionDays = defaultRetentionDays
@@ -87,25 +96,25 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 	}
 	fApp, err := openLog("app")
 	if err != nil {
-		return logSet{}, func() {}, err
+		return Set{}, func() {}, err
 	}
 	fSrv, err := openLog("server")
 	if err != nil {
 		fApp.Close()
-		return logSet{}, func() {}, err
+		return Set{}, func() {}, err
 	}
 	fWrk, err := openLog("worker")
 	if err != nil {
 		fApp.Close()
 		fSrv.Close()
-		return logSet{}, func() {}, err
+		return Set{}, func() {}, err
 	}
 	fMCP, err := openLog("mcp")
 	if err != nil {
 		fApp.Close()
 		fSrv.Close()
 		fWrk.Close()
-		return logSet{}, func() {}, err
+		return Set{}, func() {}, err
 	}
 
 	origOut, origErr := os.Stdout, os.Stderr
@@ -113,7 +122,6 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 	var wg sync.WaitGroup
 	var pipeWriters []*os.File
 
-	// Pipe os.Stdout so fmt.Printf and panic traces land in app.log.
 	if rOut, wOut, perr := os.Pipe(); perr == nil {
 		os.Stdout = wOut
 		pipeWriters = append(pipeWriters, wOut)
@@ -123,7 +131,6 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 			io.Copy(&bestEffortWriter{primary: fApp, secondary: origOut}, rOut)
 		}()
 	}
-	// Pipe os.Stderr — hideConsole has already detached the real one.
 	if rErr, wErr, perr := os.Pipe(); perr == nil {
 		os.Stderr = wErr
 		pipeWriters = append(pipeWriters, wErr)
@@ -139,7 +146,7 @@ func setupLogFiles(appName string, retentionDays int) (logSet, func(), error) {
 	mwWrk := &bestEffortWriter{primary: fWrk, secondary: origErr}
 	mwMCP := &bestEffortWriter{primary: fMCP, secondary: origErr}
 
-	ls := logSet{
+	ls := Set{
 		App:    zerolog.New(mwApp).With().Timestamp().Logger(),
 		Server: zerolog.New(mwSrv).With().Timestamp().Logger(),
 		Worker: zerolog.New(mwWrk).With().Timestamp().Logger(),
@@ -177,7 +184,6 @@ func pruneOldLogs(dir string, retentionDays int) {
 		if !strings.HasSuffix(name, logSuffix) {
 			continue
 		}
-		// Extract date from app-YYYY-MM-DD.log or legacy wick-YYYY-MM-DD.log
 		base := strings.TrimSuffix(name, logSuffix)
 		idx := strings.LastIndex(base, "-")
 		if idx < 0 {

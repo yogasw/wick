@@ -6,14 +6,14 @@ templ Layout(title string) {
 	<html lang="en" class={ htmlThemeClasses(theme) }>
 		<head>
 			<meta charset="UTF-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"/>
 			<title>{ title } | { AppNameFromContext(ctx) }</title>
 			<link rel="stylesheet" href="/public/css/app.css"/>
 			<!-- PWA manifest + icons. Install-to-home works on Chrome/Android
 			     and iOS Safari 16+; older iOS keeps the default web-clip icon. -->
 			<link rel="manifest" href="/public/manifest.json"/>
 			<link rel="icon" type="image/svg+xml" href="/public/img/icon.svg"/>
-			<link rel="apple-touch-icon" href="/public/img/icon.svg"/>
+			<link rel="apple-touch-icon" href="/public/img/icon-192.png"/>
 			<meta name="theme-color" content="#10b981"/>
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
@@ -32,6 +32,13 @@ templ Layout(title string) {
 			<script src="/public/js/app.js"></script>
 			<script src="/public/js/palette.js"></script>
 			<script src="/public/js/dialog.js"></script>
+			<script>
+				if ('serviceWorker' in navigator) {
+					window.addEventListener('load', function () {
+						navigator.serviceWorker.register('/sw.js').catch(function () {})
+					})
+				}
+			</script>
 		</body>
 	</html>
 }

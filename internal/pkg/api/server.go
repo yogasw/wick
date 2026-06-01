@@ -1021,6 +1021,10 @@ func NewServer() *Server {
 	// "wick". Registered before the static catch-all below.
 	r.Handle("GET /public/manifest.json", http.HandlerFunc(pwa.ManifestHandler))
 
+	// Service worker served from the root so its scope covers the whole
+	// app — required for the PWA install prompt to appear.
+	r.Handle("GET /sw.js", http.HandlerFunc(pwa.ServiceWorkerHandler))
+
 	// Static files (embedded in binary). Directory listings are blocked.
 	r.Handle("GET /public/", ui.StaticHandler("", web.PublicFiles))
 

@@ -173,6 +173,33 @@ templ simpleFieldWidgetInner(row entity.Config) {
 						}
 					</span>
 				</label>
+			case "bool", "boolean":
+				<label class="inline-flex items-center gap-3 cursor-pointer mt-1 select-none">
+					<input
+						data-field-key={ row.Key }
+						type="checkbox"
+						if row.Value == "true" {
+							checked
+						}
+						class="sr-only cfg-toggle-input"
+					/>
+					if row.Value == "true" {
+						<span data-toggle-track class="toggle-track is-on">
+							<span class="toggle-knob"></span>
+						</span>
+					} else {
+						<span data-toggle-track class="toggle-track">
+							<span class="toggle-knob"></span>
+						</span>
+					}
+					<span data-toggle-label class="text-xs font-medium text-black-800 dark:text-black-600 min-w-[1.75rem]">
+						if row.Value == "true" {
+							On
+						} else {
+							Off
+						}
+					</span>
+				</label>
 			case "number":
 				<input
 					data-field-key={ row.Key }
@@ -781,6 +808,16 @@ templ configsSaveScript() {
 				var immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';
 				var handler=function(){saveField(el,base);applyVisibility(form);};
 				el.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));
+			});
+			// bool toggle: sync visual track + label with sr-only checkbox state
+			form.querySelectorAll('.cfg-toggle-input').forEach(function(el){
+				el.addEventListener('change',function(){
+					var lbl=el.closest('label');if(!lbl)return;
+					var track=lbl.querySelector('[data-toggle-track]');
+					if(track)track.classList.toggle('is-on',el.checked);
+					var txt=lbl.querySelector('[data-toggle-label]');
+					if(txt)txt.textContent=el.checked?'On':'Off';
+				});
 			});
 			applyVisibility(form);
 			// kvlist blocks — delegate on the rows container for both input
