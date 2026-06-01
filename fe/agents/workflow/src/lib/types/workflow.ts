@@ -266,6 +266,14 @@ export type Workflow = {
   on_error?: { node: string };
   created_by?: string;
   created_at?: string;
+  // Workflow-level canvas metadata. The Go side preserves this via a
+  // map[string]any so node + trigger positions survive a JSON ↔ YAML
+  // round-trip even though Node itself has no _canvas field. Editor
+  // saveDraft flattens per-node _canvas into _canvas.positions[id].
+  _canvas?: {
+    positions?: Record<string, { x?: number; y?: number }>;
+    [k: string]: unknown;
+  };
 };
 
 // Version history snapshot returned by the new repository layer.

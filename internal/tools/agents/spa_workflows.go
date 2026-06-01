@@ -158,7 +158,14 @@ func spaWorkflowSave(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"ok": true})
+	// Bundle validation alongside the save outcome so the SPA can
+	// refresh its toolbar chip + Validation tab in a single
+	// round-trip — same contract the v1 templ /save endpoint used.
+	report := parse.Validate(w)
+	c.JSON(http.StatusOK, map[string]any{
+		"ok":         true,
+		"validation": validationPayload(report),
+	})
 }
 
 func spaWorkflowPublish(c *tool.Ctx) {

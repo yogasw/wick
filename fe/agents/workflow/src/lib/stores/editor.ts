@@ -1,6 +1,24 @@
 import { writable, derived, get } from "svelte/store";
 import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
-import { workflowAPI } from "$lib/api/workflow";
+import { workflowAPI, type ValidationReport, type ValidationIssue } from "$lib/api/workflow";
+import { toastError, toastOk } from "./toast";
+
+// Decorate raw {Path, Message} issues with severity + node so consumers
+// (toolbar chip, ValidationTab) don't repeat the extraction logic.
+function decorateReport(r: ValidationReport | undefined | null): ValidationReport | null {
+  if (!r) return null;
+  const tag = (i: ValidationIssue, sev: "error" | "warning"): ValidationIssue => {
+    const m = i.Path?.match(/graph\.nodes\[([^\]]+)\]/);
+    return { ...i, severity: sev, node: m ? m[1] : undefined, field: i.Path };
+  };
+  return {
+    ok: r.ok,
+    errors: (r.errors ?? []).map((i) => tag(i, "error")),
+    warnings: (r.warnings ?? []).map((i) => tag(i, "warning")),
+    by_node: r.by_node,
+    global: r.global,
+  };
+}
 
 // Selected node id for the inspector. Null when nothing focused.
 // Kept for backward compat with single-select paths; the inspector
@@ -44,6 +62,39 @@ export const runStatusByNode = writable<Record<string, "success" | "failed" | "r
 // top of the editor.
 export const lastRunSummary = writable<{ runID: string; status: string; durationMs: number } | null>(null);
 
+// Save status state machine — mirrors v1's `#wf-save-status` text:
+//   idle     — nothing pending, no save in flight
+//   pending  — local edit detected, debounce timer running
+//   saving   — POST /save in flight
+//   saved    — last save completed (validation reported separately)
+//   failed   — last save errored (network / server 5xx)
+//
+// Validation outcome lives on its own (validationReport + the chip in
+// the toolbar) so the save-status pill stays focused on "did the
+// bytes hit disk" — same split as v1.
+export type SaveStatus = "idle" | "pending" | "saving" | "saved" | "failed";
+
+export const saveStatus = writable<SaveStatus>("idle");
+
+// Unix-ms timestamp of the last successful save. Toolbar derives a
+// "Saved Xs ago" suffix off this via a 1 s interval $effect.
+export const lastSavedAt = writable<number | null>(null);
+
+// Latest validation report — refreshed after every save, drives the
+// red error chip in the toolbar + the row list in the Validation tab.
+// `null` means "not run yet"; treat as clean for gate purposes.
+export const validationReport = writable<ValidationReport | null>(null);
+
+// Quick derived: error count from the latest validation report. Used
+// by the toolbar chip + by the Publish gate.
+export const validationErrorCount = derived(validationReport, ($r) => {
+  return $r?.errors?.length ?? 0;
+});
+
+export const validationWarningCount = derived(validationReport, ($r) => {
+  return $r?.warnings?.length ?? 0;
+});
+
 // Current draft workflow document. Source-of-truth for canvas + inspector.
 export const draftWorkflow = writable<Workflow | null>(null);
 
@@ -74,7 +125,44 @@ export async function loadWorkflow(id: string) {
   const res = await workflowAPI.get(id);
   publishedWorkflow.set(hydrate(res.workflow));
   draftWorkflow.set(hydrate(res.draft ?? structuredClone(res.workflow)));
+  // Reset transient state so the toolbar + toasts don't surface stale
+  // status from a previously-loaded workflow. Also clear per-node run
+  // overlays — otherwise a node carried "failed" from the previous
+  // session, the red ring + status dot still paints on the new page.
+  saveStatus.set("idle");
+  lastSavedAt.set(null);
+  validationReport.set(null);
+  runStatusByNode.set({});
+  // First subscriber call fires immediately with the just-set value;
+  // skip that and only react to genuine post-load edits.
+  autosaveArmed = false;
 }
+
+// Auto-save plumbing — mirrors v1 editor.js's 800 ms post-edit
+// debounce. Any draftWorkflow mutation after the initial load arms
+// the timer; the next save fires once edits go quiet, transitioning
+// saveStatus through "pending" → "saving" → terminal.
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+let autosaveArmed = false;
+const AUTOSAVE_MS = 800;
+
+draftWorkflow.subscribe((wf) => {
+  if (!wf) return;
+  if (!autosaveArmed) {
+    // First update after a load — the call that delivers the initial
+    // value. Real edits land later.
+    autosaveArmed = true;
+    return;
+  }
+  saveStatus.set("pending");
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null;
+    // Quiet autosave — toolbar status text + validation chip carry
+    // the feedback; we don't want a toast every 800 ms of editing.
+    saveDraft({ silent: true }).catch((e) => console.warn("auto-save failed:", e));
+  }, AUTOSAVE_MS);
+});
 
 // hydrate normalises the workflow shape — backend may leave nullable
 // fields out when empty so the canvas can rely on `.nodes` + `.edges`
@@ -190,15 +278,90 @@ export function disconnect(from: string, to: string, caseKey?: string) {
   });
 }
 
-export async function saveDraft() {
+// saveDraft writes the current draft to the backend, refreshes the
+// validation report, and updates saveStatus.
+//
+// `silent: true` (used by the auto-save subscriber) suppresses the
+// success toast so a steady stream of canvas edits doesn't flood the
+// corner — the toolbar status text + validation chip still update.
+// Failures always toast: silent operation must not hide real errors.
+// Project per-node `_canvas.{x,y}` into the workflow-level
+// `_canvas.positions[id]` map. The Go Node struct doesn't carry a
+// `_canvas` field so the per-node positions get dropped on the
+// JSON → YAML round-trip; the workflow-level Canvas map (which IS
+// declared as `map[string]any`) round-trips intact. Run this before
+// every save so node drags persist.
+function flattenCanvasPositions(wf: Workflow): Workflow {
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (const n of wf.graph?.nodes ?? []) {
+    if (n._canvas) {
+      positions[n.id] = { x: n._canvas.x ?? 0, y: n._canvas.y ?? 0 };
+    }
+  }
+  const prev = ((wf as any)._canvas ?? {}) as Record<string, unknown>;
+  const prevPositions = (prev.positions ?? {}) as Record<
+    string,
+    { x?: number; y?: number }
+  >;
+  // Triggers live in the existing positions map already (drag handler
+  // writes there directly). Merge so we don't clobber trigger entries
+  // when projecting nodes.
+  const merged = { ...prevPositions, ...positions };
+  return {
+    ...wf,
+    _canvas: { ...prev, positions: merged },
+  } as Workflow;
+}
+
+export async function saveDraft(opts: { silent?: boolean } = {}) {
   const wf = get(draftWorkflow);
   if (!wf) return;
-  await workflowAPI.saveDraft(wf.id, wf);
+  const projected = flattenCanvasPositions(wf);
+  saveStatus.set("saving");
+  let res: Awaited<ReturnType<typeof workflowAPI.saveDraft>>;
+  try {
+    res = await workflowAPI.saveDraft(wf.id, projected);
+  } catch (e) {
+    saveStatus.set("failed");
+    toastError("Save failed", e instanceof Error ? e.message : String(e));
+    throw e;
+  }
+  saveStatus.set("saved");
+  lastSavedAt.set(Date.now());
+  // Validation rides on the same response — see spaWorkflowSave in
+  // internal/tools/agents/spa_workflows.go.
+  validationReport.set(decorateReport(res.validation));
+  if (!opts.silent) {
+    toastOk("Saved");
+  }
 }
 
 export async function publish(message?: string) {
   const wf = get(draftWorkflow);
   if (!wf) return;
-  await workflowAPI.publish(wf.id, message);
+  // Cheap UI-side gate using the latest validation snapshot. The
+  // backend gate is still authoritative — a stale UI state can
+  // still hit the server and get back the "cannot publish" JSON,
+  // which we surface via the regular catch path.
+  const errCount = (get(validationReport)?.issues ?? []).filter(
+    (i) => i.severity === "error",
+  ).length;
+  if (errCount > 0) {
+    toastError(
+      "Cannot publish",
+      `Fix ${errCount} validation ${errCount === 1 ? "error" : "errors"} first.`,
+    );
+    return;
+  }
+  try {
+    await workflowAPI.publish(wf.id, message);
+  } catch (e) {
+    toastError(
+      "Publish failed",
+      e instanceof Error ? e.message : String(e),
+    );
+    throw e;
+  }
   publishedWorkflow.set(structuredClone(wf));
+  toastOk("Published");
 }

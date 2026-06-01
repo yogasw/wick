@@ -1,5 +1,34 @@
 <script lang="ts">
-  import { draftWorkflow, dirty, saveDraft, publish } from "$lib/stores/editor";
+  import {
+    draftWorkflow,
+    dirty,
+    saveDraft,
+    publish,
+    saveStatus,
+    lastSavedAt,
+    validationErrorCount,
+    validationWarningCount,
+  } from "$lib/stores/editor";
+
+  // Tick a local timestamp once per second so "Saved Xs ago" updates
+  // without subscribing the lastSavedAt store on every render.
+  let now = $state(Date.now());
+  $effect(() => {
+    const id = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(id);
+  });
+  function fmtAgo(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    if (s < 5) return "just now";
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    return `${h}h ago`;
+  }
+  const savedAgo = $derived(
+    $lastSavedAt ? fmtAgo(now - $lastSavedAt) : "",
+  );
   import { workflowAPI } from "$lib/api/workflow";
   import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
   import type { Writable } from "svelte/store";
@@ -153,6 +182,48 @@
 
   <div class="flex-1"></div>
 
+  <!-- Save status text — mirrors v1's #wf-save-status. Hidden in idle
+       state to avoid noise; shows up the moment a save runs. The
+       "Saved Xs ago" suffix ticks every second off lastSavedAt. -->
+  {#if $saveStatus !== "idle"}
+    <span
+      class="text-[11px] italic"
+      class:text-slate-500={$saveStatus === "saving" || $saveStatus === "saved"}
+      class:dark:text-slate-400={$saveStatus === "saving" || $saveStatus === "saved"}
+      class:text-amber-600={$saveStatus === "pending"}
+      class:dark:text-amber-400={$saveStatus === "pending"}
+      class:text-rose-600={$saveStatus === "failed"}
+      class:dark:text-rose-400={$saveStatus === "failed"}
+    >
+      {#if $saveStatus === "pending"}Pending…
+      {:else if $saveStatus === "saving"}⟳ Saving…
+      {:else if $saveStatus === "saved"}✓ Saved{#if savedAgo} {savedAgo}{/if}
+      {:else if $saveStatus === "failed"}✕ Save failed
+      {/if}
+    </span>
+  {/if}
+
+  <!-- Validation count chip — separate from save status so it stays
+       visible after the status text fades, surfacing the gate state at
+       all times. Hidden when validation is clean. -->
+  {#if $validationErrorCount > 0}
+    <span
+      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300"
+      title="Validation errors block publish"
+    >
+      <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+      {$validationErrorCount} validation {$validationErrorCount === 1 ? "issue" : "issues"}
+    </span>
+  {:else if $validationWarningCount > 0}
+    <span
+      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+      title="Warnings do not block publish"
+    >
+      <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+      {$validationWarningCount} {$validationWarningCount === 1 ? "warning" : "warnings"}
+    </span>
+  {/if}
+
   <!-- Draft pill — only when there's an unpublished draft. -->
   {#if $dirty}
     <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
@@ -199,9 +270,12 @@
   <!-- Publish split button. -->
   <div class="relative flex">
     <button
-      class="px-3 py-1.5 rounded-l text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white disabled:opacity-50"
+      class="px-3 py-1.5 rounded-l text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
       onclick={onPublish}
-      disabled={publishing || !$draftWorkflow}
+      disabled={publishing || !$draftWorkflow || $validationErrorCount > 0}
+      title={$validationErrorCount > 0
+        ? `Fix ${$validationErrorCount} validation error${$validationErrorCount === 1 ? "" : "s"} before publishing`
+        : "Publish the draft as the live version"}
     >{publishing ? "…" : "Publish"}</button>
     <button
       class="px-2 py-1.5 rounded-r text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-l border-emerald-700"

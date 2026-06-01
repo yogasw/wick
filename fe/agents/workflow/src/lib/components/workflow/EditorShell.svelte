@@ -6,6 +6,7 @@
   import TriggerDetailModal from "./TriggerDetailModal.svelte";
   import BottomTabs from "./BottomTabs.svelte";
   import ExecutionsPanel from "./ExecutionsPanel.svelte";
+  import ToastHost from "$lib/components/shared/ToastHost.svelte";
   import { writable } from "svelte/store";
 
   // Top-level tab toggle between Editor + Executions panel.
@@ -80,3 +81,5 @@
     <ExecutionsPanel workflowID={workflowID} />
   {/if}
 </div>
+
+<ToastHost />

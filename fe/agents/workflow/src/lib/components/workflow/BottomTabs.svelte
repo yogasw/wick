@@ -7,7 +7,7 @@
   import JsonTab from "./tabs/JsonTab.svelte";
   import HistoryTab from "./tabs/HistoryTab.svelte";
   import { logLines } from "$lib/stores/sse";
-  import { draftWorkflow } from "$lib/stores/editor";
+  import { draftWorkflow, validationReport } from "$lib/stores/editor";
   import { workflowAPI, type ValidationReport } from "$lib/api/workflow";
 
   // Bottom-panel data fetched once per workflow load + on demand when
@@ -66,7 +66,10 @@
       case "runs": return runs?.length ?? 0;
       case "tests": return (testsData.length > 0 ? testsData : tests)?.length ?? 0;
       case "guard": return guardData?.length ?? null;
-      case "validation": return validationData?.issues?.length ?? null;
+      case "validation": {
+        const r = $validationReport ?? validationData;
+        return (r?.errors?.length ?? 0) + (r?.warnings?.length ?? 0);
+      }
       case "history": return versions?.length ?? 0;
       default: return null;
     }
@@ -166,7 +169,7 @@
   </nav>
   {#if !collapsed}
     <div class="flex-1 overflow-y-auto p-3">
-      {#if active === "validation"}<ValidationTab report={validationData ?? validation} />
+      {#if active === "validation"}<ValidationTab />
       {:else if active === "guard"}<GuardTab hits={guardData ?? guardHits} />
       {:else if active === "tests"}<TestsTab cases={testsData.length > 0 ? testsData : tests} onRunAll={() => refreshPanel("tests")} running={panelLoading} />
       {:else if active === "runs"}<RunsTab runs={runs} />

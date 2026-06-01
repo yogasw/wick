@@ -17,17 +17,37 @@ export type WorkflowGetResponse = {
   has_draft: boolean;
 };
 
+// ValidationIssue mirrors the parse.Issue shape the backend hands back
+// (Path / Message capitalised by Go's json default tags). Severity
+// isn't a server field — it comes from the bucket the issue landed in
+// (errors[] vs warnings[]) and we tag it at unmarshal time so downstream
+// code can iterate one list.
 export type ValidationIssue = {
-  severity: "error" | "warning";
+  Path: string;
+  Message: string;
+  severity?: "error" | "warning";
+  // Convenience: derived from Path on the FE so existing code that
+  // wants a node id can ask for `.node` instead of regex-parsing.
   node?: string;
   field?: string;
-  message: string;
   hint?: string;
 };
 
+// Matches Go-side validationPayload(): the v1 templ /save endpoint
+// and the JSON /api/workflows/validate + /api/workflows/save endpoints
+// all return this shape now.
 export type ValidationReport = {
   ok: boolean;
-  issues: ValidationIssue[];
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  by_node?: Record<string, string[]>;
+  global?: string[];
+};
+
+export type SaveResponse = {
+  ok: boolean;
+  validation?: ValidationReport;
+  error?: string;
 };
 
 export type CatalogResponse = {
@@ -63,9 +83,11 @@ export const workflowAPI = {
   get: (id: string): Promise<WorkflowGetResponse> =>
     apiGet(`${BASE}/api/workflows/get/${encodeURIComponent(id)}`),
 
-  saveDraft: (id: string, body: { yaml: string } | Workflow): Promise<{ ok: boolean }> =>
+  saveDraft: (id: string, body: { yaml: string } | Workflow): Promise<SaveResponse> =>
     // Backend accepts both shapes: {yaml: "..."} envelope OR raw
     // Workflow JSON (see normaliseWorkflowBody on the Go side).
+    // Response carries `validation` so save + validate land in one
+    // round-trip — match v1's templ contract.
     apiPost(`${BASE}/api/workflows/save/${encodeURIComponent(id)}`, body),
 
   publish: (id: string, _message?: string): Promise<{ ok: boolean }> =>

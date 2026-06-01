@@ -12,25 +12,14 @@
 
   let view = $state<"all" | "diff">("all");
 
-  // Strip editor-only `_canvas` metadata before printing — node
-  // positions are persistence noise the YAML on disk doesn't care
-  // about, and including them muddies the diff with rebalance churn.
-  function clean(wf: unknown): unknown {
-    if (wf === null || typeof wf !== "object") return wf;
-    if (Array.isArray(wf)) return wf.map(clean);
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(wf as Record<string, unknown>)) {
-      if (k === "_canvas") continue;
-      out[k] = clean(v);
-    }
-    return out;
-  }
-
+  // Show full workflow JSON including `_canvas` positions so
+  // operators can confirm node drags actually persist. This is what
+  // the backend writes to disk verbatim (minus YAML formatting).
   const draftText = $derived(
-    $draftWorkflow ? JSON.stringify(clean($draftWorkflow), null, 2) : "",
+    $draftWorkflow ? JSON.stringify($draftWorkflow, null, 2) : "",
   );
   const publishedText = $derived(
-    $publishedWorkflow ? JSON.stringify(clean($publishedWorkflow), null, 2) : "",
+    $publishedWorkflow ? JSON.stringify($publishedWorkflow, null, 2) : "",
   );
 
   type Row = { text: string; changed: boolean };
