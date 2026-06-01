@@ -50,6 +50,12 @@ type Config struct {
 	// only while the named field's current value equals <value>. Not
 	// persisted — pure presentation hint.
 	VisibleWhen string `gorm:"-" json:"-"`
+	// EnvOverride names the environment variable currently overriding
+	// this row's value. Set by Service.ListOwned when the operator has
+	// exported an env var declared in configs.envOverrides — the UI
+	// renders a badge + disables the input, and Set() rejects writes
+	// while the override is live. Empty when no override is active.
+	EnvOverride string `gorm:"-" json:"-"`
 }
 
 func (Config) TableName() string { return "configs" }

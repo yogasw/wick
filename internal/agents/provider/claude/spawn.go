@@ -29,8 +29,10 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Spawner spawns the real `claude` CLI binary with stream-json output
@@ -83,6 +85,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if bin == "" {
 		bin = "claude"
 	}
+	resolved, err := safeexec.ResolveBin(bin)
+	if err != nil {
+		return nil, fmt.Errorf("claude binary not found: %w", err)
+	}
+	bin = resolved
 
 	// Install / remove the per-workspace hook config from the user's
 	// per-instance intent. We do this every Spawn (not just the first)
@@ -133,7 +140,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--resume", opt.ResumeID)
 	}
 
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)

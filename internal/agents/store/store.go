@@ -45,15 +45,31 @@ type TurnEvent struct {
 	EndAt     time.Time `json:"end_at,omitempty"`   // tool_result: when tool finished
 }
 
+// Attachment is one file uploaded with a user turn. The file content
+// lives under <SessionDir>/uploads/<StoredName>; URL is the path the UI
+// uses to fetch it (served via /tools/agents/sessions/<id>/uploads/...).
+// AbsPath is the on-disk path passed to the CLI subprocess so it can
+// Read the file via tool calls.
+type Attachment struct {
+	Name       string `json:"name"`               // original filename (display)
+	StoredName string `json:"stored_name"`        // filename under uploads dir
+	URL        string `json:"url,omitempty"`      // GET path for the UI
+	AbsPath    string `json:"abs_path,omitempty"` // absolute disk path for CLI
+	MIME       string `json:"mime,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+}
+
 // ConversationTurn is the on-disk shape of one user/assistant turn.
 type ConversationTurn struct {
-	Timestamp time.Time   `json:"ts"`
-	Role      string      `json:"role"`            // "user" | "assistant" | "system"
-	Agent     string      `json:"agent,omitempty"` // assistant turn only
-	Source    string      `json:"source,omitempty"`
-	Text      string      `json:"text"`
-	Truncated bool        `json:"truncated,omitempty"`
-	Events    []TurnEvent `json:"events,omitempty"` // tool/thinking trace
+	Timestamp   time.Time    `json:"ts"`
+	Role        string       `json:"role"`               // "user" | "assistant" | "system"
+	Agent       string       `json:"agent,omitempty"`    // assistant turn only
+	Provider    string       `json:"provider,omitempty"` // assistant turn only — "type/name" snapshot at turn time
+	Source      string       `json:"source,omitempty"`
+	Text        string       `json:"text"`
+	Truncated   bool         `json:"truncated,omitempty"`
+	Events      []TurnEvent  `json:"events,omitempty"`      // tool/thinking trace
+	Attachments []Attachment `json:"attachments,omitempty"` // user turn only
 }
 
 // Store collects events for one session+agent and persists them.
@@ -61,6 +77,7 @@ type Store struct {
 	layout    config.Layout
 	sessionID string
 	agentName string
+	provider  string // "type/name" — stamped onto each assistant turn
 
 	// turnBuf accumulates TextDelta chunks; flushed on Done.
 	turnBuf strings.Builder
@@ -80,11 +97,14 @@ type Store struct {
 }
 
 // Options configures a Store. AgentName ties assistant turns to the
-// agents.json entry that emitted them.
+// agents.json entry that emitted them. Provider is "type/name" and is
+// stamped on every assistant turn so the UI can render which model
+// produced it even after the active provider switches.
 type Options struct {
 	Layout    config.Layout
 	SessionID string
 	AgentName string
+	Provider  string
 	RecordRaw bool
 	Now       func() time.Time // optional; defaults to time.Now
 }
@@ -100,6 +120,7 @@ func New(opt Options) *Store {
 		layout:    opt.Layout,
 		sessionID: opt.SessionID,
 		agentName: opt.AgentName,
+		provider:  opt.Provider,
 		recordRaw: opt.RecordRaw,
 		now:       now,
 	}
@@ -109,11 +130,19 @@ func New(opt Options) *Store {
 // the subprocess. Source is the transport label ("ui", "slack",
 // "api"). Role is normally "user"; "system" for operator instructions.
 func (s *Store) AppendUserTurn(role, source, text string) error {
+	return s.AppendUserTurnWithAttachments(role, source, text, nil)
+}
+
+// AppendUserTurnWithAttachments is AppendUserTurn plus a list of
+// uploaded files. The attachments are persisted alongside the text so
+// the UI can re-render thumbnails / file chips after reload.
+func (s *Store) AppendUserTurnWithAttachments(role, source, text string, atts []Attachment) error {
 	turn := ConversationTurn{
-		Timestamp: s.now().UTC(),
-		Role:      role,
-		Source:    source,
-		Text:      text,
+		Timestamp:   s.now().UTC(),
+		Role:        role,
+		Source:      source,
+		Text:        text,
+		Attachments: atts,
 	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
@@ -313,6 +342,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Timestamp: s.now().UTC(),
 		Role:      "assistant",
 		Agent:     s.agentName,
+		Provider:  s.provider,
 		Text:      body,
 		Truncated: truncated,
 		Events:    evSnap,
@@ -395,13 +425,15 @@ func LoadInflight(layout config.Layout, sessionID string) ([]InflightEntry, erro
 //
 // agentName goes onto the assistant turn record so the UI groups it
 // under the right agent; pass session.Meta.ActiveAgent or the first
-// entry of session.Agents.
+// entry of session.Agents. provider is "type/name" of the agent that
+// owned the inflight stream — stamped onto the recovered turn so the UI
+// can label it like any other assistant turn.
 //
 // Returns true when a recovery write actually happened (caller may want
 // to log). Missing file or empty entries → (false, nil). Any disk error
 // in append OR delete propagates so the caller knows the file is still
 // there (registry boot can choose to keep going).
-func RecoverInflight(layout config.Layout, sessionID, agentName string, now func() time.Time) (bool, error) {
+func RecoverInflight(layout config.Layout, sessionID, agentName, provider string, now func() time.Time) (bool, error) {
 	entries, err := LoadInflight(layout, sessionID)
 	if err != nil {
 		return false, err
@@ -444,6 +476,7 @@ func RecoverInflight(layout config.Layout, sessionID, agentName string, now func
 		Timestamp: now().UTC(),
 		Role:      "assistant",
 		Agent:     agentName,
+		Provider:  provider,
 		Text:      text,
 		Truncated: true,
 		Events:    events,

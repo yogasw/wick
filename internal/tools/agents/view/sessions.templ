@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/session"
@@ -272,19 +273,27 @@ templ sessionPager(vm SessionsTableVM) {
 
 // SessionDetail renders the session detail page with tabs and composer.
 templ SessionDetail(vm SessionDetailVM) {
+	{{
+		activeAgent := ""
+		activeProvider := ""
+		if len(vm.Session.Agents) > 0 {
+			activeAgent = vm.Session.Agents[0].Name
+			activeProvider = vm.Session.Agents[0].Provider
+		}
+	}}
 	@AgentsLayout(vm.Layout) {
-		<div class="relative flex flex-col -mt-6 -mx-6" style="height:100vh" data-session-id={ vm.Session.ID } data-base={ vm.Base }>
+		<div class="relative flex flex-col -mt-6 -mx-6 h-[100dvh]" data-session-id={ vm.Session.ID } data-base={ vm.Base } data-active-agent={ activeAgent } data-active-provider={ activeProvider }>
 			<!-- Zone 1: transparent overlay bar -->
-			<div class="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 py-2">
+			<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">
 				<!-- Left: tab dropdown -->
 				@sessionDetailTabs(vm)
 				<!-- Right: info + actions -->
 				<div class="flex items-center gap-2 shrink-0">
 					if vm.Session.Meta.Workspace != "" {
-						<span class="text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
+						<span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
 					}
-					if len(vm.Session.Agents) > 0 {
-						<span class="text-xs text-black-500 dark:text-black-600">{ vm.Session.Agents[0].Name } · { vm.Session.Agents[0].Provider }</span>
+					if activeAgent != "" || activeProvider != "" {
+						<span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{ formatTurnLabel(activeAgent, activeProvider) }</span>
 					}
 					<span data-sse-status class="hidden inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium" data-state="">
 						<svg data-sse-spin viewBox="0 0 16 16" class="h-2.5 w-2.5 hidden animate-spin" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>
@@ -292,13 +301,13 @@ templ SessionDetail(vm SessionDetailVM) {
 						<span data-sse-label></span>
 					</span>
 					@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
-					<button data-kill={ vm.Session.ID } class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors">
+					<button data-kill={ vm.Session.ID } aria-label="Kill session" class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-2 md:px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors">
 						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M4 4l4 4M8 4L4 8" stroke-linecap="round"></path></svg>
-						Kill
+						<span class="hidden md:inline">Kill</span>
 					</button>
-					<button data-delete-session={ vm.Session.ID } class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors">
+					<button data-delete-session={ vm.Session.ID } aria-label="Delete session" class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-2 md:px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors">
 						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M4 3V2h4v1M5 5.5v3M7 5.5v3M3 3l.5 7h5L9 3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-						Delete
+						<span class="hidden md:inline">Delete</span>
 					</button>
 				</div>
 			</div>
@@ -309,8 +318,21 @@ templ SessionDetail(vm SessionDetailVM) {
 			<div class="flex-1 overflow-y-auto" data-chat-panel>
 				@sessionDetailContent(vm)
 			</div>
-			<!-- Zone 3: composer fixed at bottom, centered -->
-			<div class="shrink-0 px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+			<!-- Zone 3: composer fixed at bottom, centered. Floating
+			     scroll-to-bottom pill sits just above the top edge. -->
+			<div class="relative shrink-0 px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+				<button
+					type="button"
+					data-scroll-bottom
+					class="hidden absolute left-1/2 -translate-x-1/2 -top-3 z-30 inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+					title="Scroll to latest (Ctrl+↓)"
+				>
+					<svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
+						<path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+					</svg>
+					<span>Jump to latest</span>
+					<kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
+				</button>
 				<div class="max-w-4xl mx-auto">
 					@AskUserCard(vm.Base)
 					@chatComposer(vm)
@@ -434,8 +456,10 @@ templ chatEmptyState() {
 }
 
 templ chatComposer(vm SessionDetailVM) {
-	<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md">
+	<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md" data-composer-drop>
 		<form data-send-form>
+			<div data-attach-chips class="hidden flex-wrap gap-2 px-3 pt-3"></div>
+			<input type="file" multiple class="hidden" data-attach-input/>
 			<textarea
 				name="text"
 				rows="1"
@@ -446,6 +470,16 @@ templ chatComposer(vm SessionDetailVM) {
 			></textarea>
 			<div class="flex items-center justify-between px-3 pb-3 pt-1">
 				<div class="flex items-center gap-2">
+					<button
+						type="button"
+						data-attach-toggle
+						class="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+						title="Attach file"
+					>
+						<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+						</svg>
+					</button>
 					if len(vm.Providers) > 0 {
 						<div class="relative" data-row-action="">
 							<button
@@ -605,24 +639,69 @@ templ userTurn(t TurnVM) {
 			if !t.Time.IsZero() {
 				<span class="text-[10px] text-black-600 dark:text-black-700 opacity-0 group-hover:opacity-100 transition-opacity px-1">{ relTime(t.Time) }</span>
 			}
-			<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble">
-				<span data-linkify>{ t.Text }</span>
-			</div>
+			if len(t.Attachments) > 0 {
+				<div class="flex flex-wrap justify-end gap-1.5 max-w-full">
+					for _, a := range t.Attachments {
+						@attachmentChip(a)
+					}
+				</div>
+			}
+			if t.Text != "" {
+				<div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed shadow-sm user-bubble">
+					<span data-linkify>{ t.Text }</span>
+				</div>
+			}
 		</div>
 	</div>
 }
 
-templ assistantTurn(t TurnVM) {
-	<div class="flex justify-start gap-3 group">
-		<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">
-			<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
-				<circle cx="8" cy="6" r="2.5"></circle>
-				<path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path>
+// attachmentChip renders one user-uploaded file as a clickable button.
+// Clicking opens the shared preview modal (data-context-modal from
+// ContextPanel) via window.AgentContext.previewExternal. Images get an
+// inline thumbnail; everything else shows as a compact file row.
+templ attachmentChip(a AttachmentVM) {
+	if a.IsImage {
+		<button
+			type="button"
+			data-attach-preview
+			data-attach-url={ a.URL }
+			data-attach-name={ a.Name }
+			data-attach-mime={ a.MIME }
+			data-attach-size={ fmt.Sprintf("%d", a.Size) }
+			class="block rounded-xl overflow-hidden border border-white-300 dark:border-navy-600 shadow-sm bg-white-100 dark:bg-navy-800 hover:shadow-md transition-shadow cursor-pointer"
+			title={ a.Name }
+		>
+			<img src={ a.URL } alt={ a.Name } class="block max-h-56 max-w-[240px] object-contain bg-white-200 dark:bg-navy-900"/>
+		</button>
+	} else {
+		<button
+			type="button"
+			data-attach-preview
+			data-attach-url={ a.URL }
+			data-attach-name={ a.Name }
+			data-attach-mime={ a.MIME }
+			data-attach-size={ fmt.Sprintf("%d", a.Size) }
+			class="inline-flex items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors max-w-[240px] cursor-pointer text-left"
+			title={ a.Name }
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z" stroke-linejoin="round"></path>
+				<path d="M9 2v4h4" stroke-linejoin="round"></path>
 			</svg>
-		</div>
-		<div class="flex flex-col gap-1.5 max-w-[80%] min-w-0" data-turn-events>
-			if t.Agent != "" {
-				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ t.Agent }</span>
+			<span class="truncate">{ a.Name }</span>
+			if a.Size > 0 {
+				<span class="text-black-600 dark:text-black-700 shrink-0">{ formatSize(a.Size) }</span>
+			}
+		</button>
+	}
+}
+
+templ assistantTurn(t TurnVM) {
+	{{ label := formatTurnLabel(t.Agent, t.Provider) }}
+	<div class="flex justify-start group">
+		<div class="flex flex-col gap-1.5 max-w-[92%] min-w-0" data-turn-events>
+			if label != "" {
+				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ label }</span>
 			}
 			if len(t.Events) > 0 {
 				<div class="flex flex-col gap-1">
@@ -751,6 +830,27 @@ templ systemTurn(t TurnVM) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// formatTurnLabel builds the chat-bubble header for an assistant turn.
+// Format: "{agent}.{providerName}" — provider type is dropped (caller
+// can still look it up in the session header); provider name is the
+// part after the slash in "type/name". Default agent "main" is hidden
+// so the label collapses to just the provider name in the common
+// single-agent case.
+func formatTurnLabel(agent, provider string) string {
+	name := provider
+	if i := strings.LastIndex(provider, "/"); i >= 0 {
+		name = provider[i+1:]
+	}
+	switch {
+	case agent == "" || agent == "main":
+		return name
+	case name == "":
+		return agent
+	default:
+		return agent + "." + name
+	}
+}
 
 // rowFallbackLifecycle maps the persisted session.Meta.Status (used
 // when the pool has no live entry for a row) onto a lifecycle the

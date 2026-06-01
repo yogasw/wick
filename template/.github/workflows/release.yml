@@ -392,9 +392,13 @@ jobs:
         #             installer)
         # Version embedded in filename so the user can identify the build
         # at a glance (Windows file Properties shows it too via .syso, but
-        # the .msi/.deb don't). Only the installer is uploaded as the
-        # release asset; the raw .exe / .app bundle stay in bin/ for
-        # local debugging.
+        # the .msi/.deb don't).
+        #
+        # For linux targets the raw binary (`<app>-linux-<arch>`) is ALSO
+        # attached to the release so install.sh can serve Termux and
+        # dpkg-less Linux hosts that need the bare executable. The raw
+        # .exe / .app bundle on other OSes stay in bin/ for local
+        # debugging only — the installer covers their distribution.
         run: |
           NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
           [ -z "$NAME" ] && NAME=$(awk '/^module /{n=split($2,a,"/"); print a[n]}' go.mod)
@@ -407,6 +411,19 @@ jobs:
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
           echo "asset_path=bin/$ASSET" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            RAW="${NAME}-linux-${{ matrix.arch }}"
+            echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+            echo "raw_path=bin/$RAW" >> "$GITHUB_OUTPUT"
+          fi
+          # Gate sidecar — bundled inside .deb/.dmg/.msi, but also
+          # uploaded as a standalone asset so install.sh's Termux and
+          # dpkg-less branches can fetch it next to the raw binary.
+          EXT_GATE=""
+          [ "${{ matrix.os }}" = "windows" ] && EXT_GATE=".exe"
+          GATE="${NAME}-gate-${{ matrix.os }}-${{ matrix.arch }}${EXT_GATE}"
+          echo "gate=$GATE" >> "$GITHUB_OUTPUT"
+          echo "gate_path=bin/$GATE" >> "$GITHUB_OUTPUT"
 
       - name: Cache wick setup artifacts
         uses: actions/cache@v5
@@ -469,6 +486,14 @@ jobs:
           cd bin
           sha256sum "${{ steps.meta.outputs.asset }}" \
             > "${{ steps.meta.outputs.asset }}.sha256"
+          if [ "${{ matrix.os }}" = "linux" ] && [ -f "${{ steps.meta.outputs.raw }}" ]; then
+            sha256sum "${{ steps.meta.outputs.raw }}" \
+              > "${{ steps.meta.outputs.raw }}.sha256"
+          fi
+          if [ -f "${{ steps.meta.outputs.gate }}" ]; then
+            sha256sum "${{ steps.meta.outputs.gate }}" \
+              > "${{ steps.meta.outputs.gate }}.sha256"
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
@@ -476,7 +501,12 @@ jobs:
           path: |
             ${{ steps.meta.outputs.asset_path }}
             ${{ steps.meta.outputs.asset_path }}.sha256
+            ${{ steps.meta.outputs.raw_path }}
+            ${{ steps.meta.outputs.raw_path }}.sha256
+            ${{ steps.meta.outputs.gate_path }}
+            ${{ steps.meta.outputs.gate_path }}.sha256
           retention-days: 7
+          if-no-files-found: ignore
 
   release:
     name: Publish release

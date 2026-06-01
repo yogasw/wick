@@ -16,6 +16,8 @@ package configs
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"os"
+	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -29,9 +31,12 @@ const (
 	KeyAppDescription       = "app_description"
 	DefaultAppDescription   = "A lightweight internal tooling platform — build, deploy, and run custom tools for your team in minutes."
 	KeyAppURL               = "app_url"
+	KeyAllowedOrigins       = "allowed_origins"
 	KeySessionSecret        = "session_secret"
 	KeyAdminPasswordChanged = "admin_password_changed"
 	KeyEncryptionKey        = "encryption_key"
+	KeyStartupScript        = "startup_script"
+	KeyStartupScriptEnabled = "startup_script_enabled"
 )
 
 // generators maps app-level keys to the function that produces a fresh
@@ -40,6 +45,34 @@ const (
 var generators = map[string]func() string{
 	KeySessionSecret: generateHex32,
 	KeyEncryptionKey: generateHex32,
+}
+
+// envOverrides maps app-level keys to env-var names that override the
+// DB value at read time. Useful for bootstrap on remote hosts where
+// the seeded localhost app_url blocks the admin UI behind its own
+// host allowlist — exporting APP_URL lets the operator break in
+// without first reaching the UI to flip the row. The admin UI marks
+// these rows as read-only while the env var is set so it is obvious
+// where the value is coming from.
+var envOverrides = map[string]string{
+	KeyAppURL:         "APP_URL",
+	KeyAllowedOrigins: "ALLOWED_ORIGINS",
+	KeyEncryptionKey:  "WICK_ENC_KEY",
+}
+
+// EnvOverrideFor reports the env-var override for a key, if any. Returns
+// (envName, value, true) only when the env var is declared in
+// envOverrides AND currently set to a non-empty value.
+func EnvOverrideFor(key string) (envName, value string, set bool) {
+	envName = envOverrides[key]
+	if envName == "" {
+		return "", "", false
+	}
+	v := strings.TrimSpace(os.Getenv(envName))
+	if v == "" {
+		return "", "", false
+	}
+	return envName, v, true
 }
 
 // appDefaults returns the seed rows reconciled into `configs` on every
@@ -67,6 +100,13 @@ func appDefaults() []entity.Config {
 			Description: "Base URL where this app is reachable. Used to build the OAuth callback URL and other absolute links. Update after moving the app behind a new domain.",
 		},
 		{
+			Key:         KeyAllowedOrigins,
+			Type:        "kvlist",
+			Options:     "url",
+			Value:       "[]",
+			Description: "Extra URLs that may reach the admin/host allowlist beyond app_url. Add one row per origin (e.g. http://192.168.1.42:9425) when you need to open the app from another device on the same network. The ALLOWED_ORIGINS env var (comma-separated) overrides this list — handy for Termux/LAN bootstrap before the admin UI is reachable.",
+		},
+		{
 			Key:           KeySessionSecret,
 			Type:          "text",
 			Value:         generateHex32(),
@@ -79,6 +119,20 @@ func appDefaults() []entity.Config {
 			Type:        "bool",
 			Value:       "false",
 			Description: "Set to true once the default admin password has been changed. Used to show a security warning on startup.",
+			Hidden:      true,
+		},
+		{
+			Key:         KeyStartupScriptEnabled,
+			Type:        "bool",
+			Value:       "false",
+			Description: "Run the startup script below in a shell when the server boots. Output is captured to logs/startup-script-YYYY-MM-DD.log. The process is killed when the server stops.",
+		},
+		{
+			Key:         KeyStartupScript,
+			Type:        "textarea",
+			Value:       "",
+			Description: "Shell script run on server boot (sh on Linux/macOS, PowerShell on Windows). Use it to launch a tunnel like `ngrok http 9425` or `cloudflared tunnel run my-tunnel` so the local port stays unexposed. Edit + restart the server (tray menu) to apply.",
+			VisibleWhen: "startup_script_enabled:true",
 		},
 		{
 			Key:           KeyEncryptionKey,

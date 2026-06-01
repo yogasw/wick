@@ -54,7 +54,7 @@ jobs:
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Init project
-        run: wick init wick --skip-setup
+        run: wick init wick-agent --skip-setup
         working-directory: /tmp
 
       - name: Upload wick CLI binary
@@ -67,8 +67,8 @@ jobs:
       - name: Upload project scaffold
         uses: actions/upload-artifact@v4
         with:
-          name: wick-scaffold
-          path: /tmp/wick
+          name: wick-agent-scaffold
+          path: /tmp/wick-agent
           retention-days: 1
 
   build-binaries:
@@ -193,8 +193,8 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
-          name: wick-scaffold
-          path: /tmp/wick
+          name: wick-agent-scaffold
+          path: /tmp/wick-agent
 
       - name: Cache wixl (windows cross-compile)
         if: steps.gate.outputs.enabled == 'true' && matrix.os == 'windows'
@@ -211,7 +211,7 @@ jobs:
       - name: Setup
         if: steps.gate.outputs.enabled == 'true'
         run: wick setup
-        working-directory: /tmp/wick
+        working-directory: /tmp/wick-agent
 
       - name: Add Go bin to PATH (ubuntu)
         if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'ubuntu-latest'
@@ -231,13 +231,17 @@ jobs:
           RELEASE_GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_GITHUB_PAT: ${{ secrets.RELEASE_GITHUB_DOWNLOAD_PAT }}
         run: wick build --installer
-        working-directory: /tmp/wick
+        working-directory: /tmp/wick-agent
 
       - name: Resolve asset name
         if: steps.gate.outputs.enabled == 'true'
         id: meta
         shell: bash
-        working-directory: /tmp/wick
+        working-directory: /tmp/wick-agent
+        # Installer asset is always uploaded. For linux targets we ALSO
+        # upload the raw binary (`<app>-linux-<arch>`) so install.sh can
+        # serve Termux and dpkg-less Linux hosts that need the bare
+        # executable.
         run: |
           NAME=$(grep '^name:' wick.yml | awk '{print $2}' | tr -d '"'"'"' ')
           VERSION=${GITHUB_REF_NAME#v}
@@ -248,14 +252,33 @@ jobs:
           esac
           ASSET="${NAME}-${VERSION}-${{ matrix.os }}-${{ matrix.arch }}.${EXT}"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-          echo "asset_path=/tmp/wick/bin/$ASSET" >> "$GITHUB_OUTPUT"
+          echo "asset_path=/tmp/wick-agent/bin/$ASSET" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            RAW="${NAME}-linux-${{ matrix.arch }}"
+            echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+            echo "raw_path=/tmp/wick-agent/bin/$RAW" >> "$GITHUB_OUTPUT"
+          fi
+          # Gate sidecar — bundled inside .deb/.dmg/.msi, but also
+          # uploaded as a standalone asset so install.sh's Termux and
+          # dpkg-less branches can fetch it next to the raw binary.
+          EXT_GATE=""
+          [ "${{ matrix.os }}" = "windows" ] && EXT_GATE=".exe"
+          GATE="${NAME}-gate-${{ matrix.os }}-${{ matrix.arch }}${EXT_GATE}"
+          echo "gate=$GATE" >> "$GITHUB_OUTPUT"
+          echo "gate_path=/tmp/wick-agent/bin/$GATE" >> "$GITHUB_OUTPUT"
 
       - name: Checksum
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
-          cd /tmp/wick/bin
+          cd /tmp/wick-agent/bin
           sha256sum "${{ steps.meta.outputs.asset }}" > "${{ steps.meta.outputs.asset }}.sha256"
+          if [ "${{ matrix.os }}" = "linux" ] && [ -f "${{ steps.meta.outputs.raw }}" ]; then
+            sha256sum "${{ steps.meta.outputs.raw }}" > "${{ steps.meta.outputs.raw }}.sha256"
+          fi
+          if [ -f "${{ steps.meta.outputs.gate }}" ]; then
+            sha256sum "${{ steps.meta.outputs.gate }}" > "${{ steps.meta.outputs.gate }}.sha256"
+          fi
 
       - name: Upload artifact
         if: steps.gate.outputs.enabled == 'true'
@@ -265,7 +288,12 @@ jobs:
           path: |
             ${{ steps.meta.outputs.asset_path }}
             ${{ steps.meta.outputs.asset_path }}.sha256
+            ${{ steps.meta.outputs.raw_path }}
+            ${{ steps.meta.outputs.raw_path }}.sha256
+            ${{ steps.meta.outputs.gate_path }}
+            ${{ steps.meta.outputs.gate_path }}.sha256
           retention-days: 7
+          if-no-files-found: ignore
 
   attach-to-release:
     name: Attach Binaries to Release
@@ -299,8 +327,18 @@ jobs:
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        # `upload-artifact` preserves absolute paths (e.g. /tmp/wick-agent/...)
+        # under `artifacts/tmp/...` after merge-multiple, so a naive
+        # `artifacts/*` glob expands to that nested directory and `gh
+        # release upload` errors with `is a directory`. Walk recursively
+        # and pass only files.
         run: |
-          gh release upload "${{ github.ref_name }}" artifacts/* \
+          mapfile -t FILES < <(find artifacts -type f)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No artifact files found under artifacts/."
+            exit 1
+          fi
+          gh release upload "${{ github.ref_name }}" "${FILES[@]}" \
             --repo "${{ github.repository }}" \
             --clobber
 
@@ -355,8 +393,8 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
-          name: wick-scaffold
-          path: /tmp/wick
+          name: wick-agent-scaffold
+          path: /tmp/wick-agent
 
       - name: Set up Docker Buildx
         if: steps.gate.outputs.enabled == 'true'
@@ -374,12 +412,12 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         uses: docker/build-push-action@v6
         with:
-          context: /tmp/wick
+          context: /tmp/wick-agent
           push: true
           platforms: ${{ vars.DOCKER_PLATFORM || 'linux/arm64' }}
           tags: |
-            ghcr.io/yogasw/wick:latest
-            ghcr.io/yogasw/wick:${{ github.ref_name }}
+            ghcr.io/yogasw/wick-agent:latest
+            ghcr.io/yogasw/wick-agent:${{ github.ref_name }}
           build-args: |
             APP_VERSION=${{ github.ref_name }}
           cache-from: type=gha

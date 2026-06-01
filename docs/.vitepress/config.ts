@@ -29,10 +29,8 @@ export default withMermaid(defineConfig({
     logo: '/logo.svg',
 
     nav: [
-      { text: 'Agent Host', link: '/guide/agents-only' },
-      { text: 'Framework Guide', link: '/guide/getting-started' },
-      { text: 'AI Quickstart', link: '/guide/ai-quickstart' },
-      { text: 'Reference', link: '/reference/wick-yml' },
+      { text: 'Wick Agent', link: '/guide/agents-only' },
+      { text: 'Wick Framework', link: '/guide/getting-started' },
       {
         text: `v${version}`,
         items: [
@@ -87,6 +85,16 @@ export default withMermaid(defineConfig({
         text: 'AI Agents',
         items: [
           { text: 'Agent Host Only (no Go needed)', link: '/guide/agents-only' },
+          {
+            text: 'Install',
+            collapsed: false,
+            items: [
+              { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+              { text: 'Headless Server', link: '/guide/headless' },
+              { text: 'Docker', link: '/guide/docker' },
+              { text: 'Termux / Android', link: '/guide/termux-android' },
+            ],
+          },
           { text: 'Overview', link: '/guide/agents' },
           { text: 'Workspaces', link: '/guide/agents/workspaces' },
           { text: 'Providers', link: '/guide/agents/providers' },
@@ -127,15 +135,10 @@ export default withMermaid(defineConfig({
         ],
       },
       {
-        text: 'Distribution',
-        items: [
-          { text: 'Desktop Tray', link: '/guide/desktop-tray' },
-        ],
-      },
-      {
         text: 'Reference',
         items: [
           { text: 'CLI', link: '/reference/cli' },
+          { text: 'App CLI', link: '/reference/app-cli' },
           { text: 'wick.yml', link: '/reference/wick-yml' },
           { text: 'wick build', link: '/reference/build' },
           { text: 'Environment Variables', link: '/reference/env-vars' },

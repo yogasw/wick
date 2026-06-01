@@ -20,6 +20,35 @@ import (
 	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
+// augmentWithAttachments returns text plus a trailing block listing
+// the absolute on-disk paths of any uploaded files. The CLI subprocess
+// reads the file content via its own Read/View tool — wick just hands
+// it the paths. Returns text unchanged when atts is empty.
+func augmentWithAttachments(text string, atts []store.Attachment) string {
+	if len(atts) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString(text)
+	if text != "" {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("[Attached files]")
+	for _, a := range atts {
+		path := a.AbsPath
+		if path == "" {
+			path = a.StoredName
+		}
+		b.WriteString("\n- ")
+		if a.Name != "" && a.Name != filepath.Base(path) {
+			b.WriteString(a.Name)
+			b.WriteString(": ")
+		}
+		b.WriteString(path)
+	}
+	return b.String()
+}
+
 // Pool is the global slot manager. It tracks how many agent
 // subprocesses are alive across all sessions, FIFO-queues sessions
 // that arrive while full, and grants slots when one frees up.
@@ -247,16 +276,25 @@ func (p *Pool) SessionExists(sessionID string) bool {
 }
 
 func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, text string) error {
-	return p.send(ctx, sessionID, agentName, source, role, text, "")
+	return p.send(ctx, sessionID, agentName, source, role, text, "", nil)
 }
 
 // SendWithWorkspace is like Send but binds sessionID to the named workspace
 // when auto-creating the session. Pass an empty string for the default.
 func (p *Pool) SendWithWorkspace(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
-	return p.send(ctx, sessionID, agentName, source, role, text, workspace)
+	return p.send(ctx, sessionID, agentName, source, role, text, workspace, nil)
 }
 
-func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
+// SendWithAttachments is Send with a list of user-uploaded files. The
+// caller is responsible for materializing the files on disk under
+// SessionDir/uploads/ — the pool only persists the metadata into
+// conversation.jsonl and appends a small `[Attached files]` block to
+// the text sent to the CLI subprocess so it can Read the paths.
+func (p *Pool) SendWithAttachments(ctx context.Context, sessionID, agentName, source, role, text, workspace string, atts []store.Attachment) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, workspace, atts)
+}
+
+func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, workspace string, atts []store.Attachment) error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -274,15 +312,16 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Str("role", role).
 			Str("source", source).
 			Int("text_len", len(text)).
+			Int("attachments", len(atts)).
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurn(role, source, text)
+			_ = entry.store.AppendUserTurnWithAttachments(role, source, text, atts)
 		}
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
 		}
-		return entry.agent.Send(text)
+		return entry.agent.Send(augmentWithAttachments(text, atts))
 	}
 	log.Ctx(ctx).Debug().
 		Str("component", "pool").
@@ -309,14 +348,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if err != nil {
 		return err
 	}
-	if err := buf.Append(text); err != nil {
+	// Buffer the agent-facing text (with attachment block appended) so
+	// the first drain after spawn includes file references in the user
+	// message. Storage gets the un-augmented text + structured atts.
+	if err := buf.Append(augmentWithAttachments(text, atts)); err != nil {
 		return err
 	}
 	// Persist the user turn to conversation.jsonl immediately so a page
 	// refresh while the session is buffered (queued or mid-spawn) still
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
-	p.persistBufferedTurn(sessionID, agentName, role, source, text)
+	p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
 
 	p.mu.Lock()
 	// If this session is already mid-spawn, the in-flight spawn's Drain
@@ -360,13 +402,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurn(role, source, text)
+	_ = sto.AppendUserTurnWithAttachments(role, source, text, atts)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,

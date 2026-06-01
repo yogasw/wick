@@ -9,7 +9,6 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,26 +18,36 @@ import (
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
-	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
-	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
+	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/agents/agentctl"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
+	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
+	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
+	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
+	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
+	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
+	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/health"
@@ -56,24 +65,17 @@ import (
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
-	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/sso"
+	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
-	wf "github.com/yogasw/wick/internal/agents/workflow"
-	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
-	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
-	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
-	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
-	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
-	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
-	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
-	"github.com/yogasw/wick/internal/agents/workflow/wftest"
-	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -697,6 +699,28 @@ func NewServer() *Server {
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
 
+	// Wire the agent factory's connector-catalog loader now that the
+	// connectors service exists. The loader runs at every agent spawn,
+	// listing only connector definitions whose Meta.Key has at least
+	// one instance with status="ready" — so the model never sees a
+	// connector the operator hasn't finished configuring. A 2s ctx
+	// budget keeps a slow DB from stalling spawn.
+	agentsFactory.ConnectorCatalogLoader = func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		rows, err := connectorsSvc.List(ctx)
+		if err != nil {
+			return ""
+		}
+		ready := make(map[string]bool, len(rows))
+		for _, row := range rows {
+			if connectorsSvc.Status(row) == "ready" {
+				ready[row.Key] = true
+			}
+		}
+		return agentconfig.ConnectorCatalog(ready)
+	}
+
 	// Workflow connector executor needs row credentials resolved
 	// from the connectors service — wire after the service is built.
 	wfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connectorsSvc))
@@ -992,6 +1016,15 @@ func NewServer() *Server {
 	// Health check endpoint — used by load balancers and uptime monitoring.
 	r.Handle("GET /health", http.HandlerFunc(healthHandler.Check))
 
+	// PWA manifest is dynamic — bakes the configured app name into the
+	// installable identity so downstream "MyApp" doesn't install as
+	// "wick". Registered before the static catch-all below.
+	r.Handle("GET /public/manifest.json", http.HandlerFunc(pwa.ManifestHandler))
+
+	// Service worker served from the root so its scope covers the whole
+	// app — required for the PWA install prompt to appear.
+	r.Handle("GET /sw.js", http.HandlerFunc(pwa.ServiceWorkerHandler))
+
 	// Static files (embedded in binary). Directory listings are blocked.
 	r.Handle("GET /public/", ui.StaticHandler("", web.PublicFiles))
 
@@ -1144,27 +1177,22 @@ func buildSlackUserTokenMap(ctx context.Context, svc *connectors.Service) map[st
 	return out
 }
 
-
 // hostAllowlistHandler rejects requests whose Host header doesn't match
-// the host of the configured app_url. The /health endpoint is exempt
-// so external load balancers / uptime checks can probe via the raw
-// listen addr (e.g. http://10.0.0.5:9425/health) without first knowing
-// the public hostname. Empty app_url disables the check entirely (a
-// fresh DB ships with the default localhost URL, so this is mainly a
-// safety valve while the operator is bootstrapping).
+// the host of app_url or any entry in allowed_origins. The /health
+// endpoint is exempt so external load balancers / uptime checks can
+// probe via the raw listen addr (e.g. http://10.0.0.5:9425/health)
+// without first knowing the public hostname. Empty app_url AND empty
+// allowed_origins disables the check entirely (a fresh DB ships with
+// the default localhost URL, so this is mainly a safety valve while
+// the operator is bootstrapping).
 func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		appURL := strings.TrimSpace(s.configsSvc.AppURL())
-		if appURL == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		u, err := neturl.Parse(appURL)
-		if err != nil || u.Host == "" {
+		allowed := collectAllowedHosts(s.configsSvc.AppURL(), s.configsSvc.AllowedOrigins())
+		if len(allowed) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1174,13 +1202,45 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 		if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
 			got = fh
 		}
-		if !hostMatches(got, u.Host) {
-			log.Warn().Str("request_host", got).Str("app_url_host", u.Host).Msg("hostAllowlist: forbidden — host mismatch")
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		for _, exp := range allowed {
+			if hostMatches(got, exp) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		log.Warn().Str("request_host", got).Strs("allowed_hosts", allowed).Msg("hostAllowlist: forbidden — host mismatch")
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	})
+}
+
+// collectAllowedHosts extracts the host:port of app_url plus each entry
+// in allowed_origins. Empty / unparseable URLs are skipped. Returns
+// nil when nothing was extractable so the caller can detect "no
+// allowlist configured" and pass through.
+func collectAllowedHosts(appURL string, origins []string) []string {
+	out := make([]string, 0, 1+len(origins))
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
 			return
 		}
-		next.ServeHTTP(w, r)
-	})
+		// Accept either a full URL or a bare host:port; neturl.Parse
+		// returns Host == "" for the latter, so fall back to the raw
+		// string in that case.
+		if u, err := neturl.Parse(raw); err == nil && u.Host != "" {
+			out = append(out, u.Host)
+			return
+		}
+		out = append(out, raw)
+	}
+	add(appURL)
+	for _, o := range origins {
+		add(o)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // hostMatches compares request host against expected host. Both are
@@ -1204,7 +1264,13 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 	}
 	logger := zerolog.Ctx(ctx)
-	addr := fmt.Sprintf(":%d", port)
+	// WICK_HOST pins the listen interface — empty (default) binds all
+	// interfaces so Docker and remote-VPS deploys keep working as-is.
+	// Set WICK_HOST=127.0.0.1 (or use --localhost on `server` / `start`)
+	// to make wick unreachable from the LAN — required on Termux phones
+	// where unrooted Android has no firewall to keep port :9425 private.
+	host := os.Getenv("WICK_HOST")
+	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// Expose the server port to agent subprocesses via WICK_PORT so they
 	// can reach wick's local proxy endpoints (e.g. /integrations/slack/send)
@@ -1225,6 +1291,20 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)
 
+	// Admin-defined startup script (e.g. ngrok / cloudflared tunnel).
+	// Lifetime is tied to the server ctx — tray stop or process exit
+	// kills the subprocess via signal. Edits to the script row only
+	// take effect on next server boot. Runs detached from the request
+	// hot path so a slow tunnel command never blocks HTTP serve.
+	if s.configsSvc.Get(configs.KeyStartupScriptEnabled) == "true" {
+		script := s.configsSvc.Get(configs.KeyStartupScript)
+		go func() {
+			if err := startupscript.Run(ctx, appname.Resolve(), script); err != nil {
+				logger.Warn().Err(err).Msg("startup script")
+			}
+		}()
+	}
+
 	h := chainMiddleware(
 		s.authMidd.Session(s.router),
 		recoverHandler,
@@ -1236,8 +1316,8 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	)
 
 	httpSrv := http.Server{
-		Addr:         addr,
-		Handler:      h,
+		Addr:              addr,
+		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout and WriteTimeout unset — SSE connections stay open
 		// indefinitely and must not be cut by server-side timeouts.
@@ -1267,7 +1347,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		appURL = fmt.Sprintf("http://localhost:%d", port)
 	}
 	fmt.Printf("\n  ✓ %s is running\n", s.configsSvc.AppName())
-	fmt.Printf("  → Listening on: :%d\n", port)
+	fmt.Printf("  → Listening on: %s\n", addr)
 	fmt.Printf("  → App URL:      %s\n", appURL)
 	if !s.configsSvc.AdminPasswordChanged() {
 		// Tray pipes stdout to app.log, so printing plaintext password
@@ -1431,7 +1511,7 @@ func resolveWickGateBin() string {
 			}
 		}
 	}
-	if p, err := exec.LookPath("wick-gate"); err == nil {
+	if p, err := safeexec.LookPath("wick-gate"); err == nil {
 		return p
 	}
 	return ""

@@ -43,6 +43,11 @@ docs/node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 docs/yarn.lock
+
+# Auto-copied from scripts/ by docs prebuild — do not edit in docs/public/
+docs/public/install.sh
+docs/public/install.ps1
+docs/public/install-claude-termux.sh
 bin/
 graphify-out/
 .debug/

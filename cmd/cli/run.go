@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 type wickConfig struct {
@@ -152,7 +154,7 @@ func dispatchCmdBg(raw any, vars map[string]string) (*os.Process, error) {
 func startBackground(cmd string) (*os.Process, error) {
 	parts := splitFields(cmd)
 	bin, args := resolveLocalBin(parts[0]), parts[1:]
-	c := exec.Command(bin, args...)
+	c := safeexec.Command(bin, args...)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Start(); err != nil {
@@ -184,7 +186,7 @@ func handleIfMissing(ifMissing any, v map[string]any, vars map[string]string) er
 		}
 	} else if cmd, ok := m["cmd"]; ok {
 		bin := interpolate(fmt.Sprint(cmd), vars)
-		if _, err := exec.LookPath(bin); err == nil {
+		if _, err := safeexec.LookPath(bin); err == nil {
 			fmt.Printf("  skip: %s already in PATH\n", bin)
 			return nil
 		}
@@ -314,7 +316,7 @@ func execCmd(cmd string) error {
 
 	parts := splitFields(cmd)
 	bin, args := resolveLocalBin(parts[0]), parts[1:]
-	c := exec.Command(bin, args...)
+	c := safeexec.Command(bin, args...)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
@@ -328,13 +330,13 @@ func execCmd(cmd string) error {
 func execShell(script string) error {
 	var c *exec.Cmd
 	if runtime.GOOS == "windows" {
-		bash, err := exec.LookPath("bash")
+		bash, err := safeexec.LookPath("bash")
 		if err != nil {
 			return fmt.Errorf("run: bash not found on PATH — install Git Bash, WSL, or MSYS2 to run shell scripts on Windows")
 		}
-		c = exec.Command(bash, "-c", script)
+		c = safeexec.Command(bash, "-c", script)
 	} else {
-		c = exec.Command("/bin/sh", "-c", script)
+		c = safeexec.Command("/bin/sh", "-c", script)
 	}
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

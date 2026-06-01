@@ -2,9 +2,10 @@ package configs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"strings"
 	"sync"
 
 	"github.com/yogasw/wick/internal/enc"
@@ -279,6 +280,35 @@ func (s *Service) GetOwned(owner, key string) string {
 	return s.cache[ownerKey{Owner: owner, Key: key}].Value
 }
 
+// envOverrideForUI shapes an env-supplied value into the form the UI
+// widget for v.Type expects. For kvlist, the env var is a CSV (one
+// origin per item) but the widget parses Value as a JSON array of
+// {col: value} objects — without the conversion, the table renders
+// "No rows yet" even though the override is live. Non-kvlist types
+// pass through unchanged.
+func envOverrideForUI(v entity.Config, raw string) string {
+	if v.Type != "kvlist" {
+		return raw
+	}
+	col := "value"
+	if v.Options != "" {
+		col = strings.SplitN(v.Options, "|", 2)[0]
+	}
+	rows := make([]map[string]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		rows = append(rows, map[string]string{col: p})
+	}
+	out, err := json.Marshal(rows)
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
 // ListOwned returns every config scoped to owner in declaration order.
 // Non-persisted metadata fields (Hidden, VisibleWhen, Options, …) are
 // restored from the meta map because gorm:"-" tags strip them on DB
@@ -298,6 +328,15 @@ func (s *Service) ListOwned(owner string) []entity.Config {
 			v.Hidden = m.Hidden
 			v.VisibleWhen = m.VisibleWhen
 			v.ColOptions = m.ColOptions
+		}
+		// App-level rows can be overridden by env. Surface the override
+		// to the UI so the operator sees where the value comes from and
+		// the input gets disabled — Set() rejects writes while live.
+		if owner == "" {
+			if envName, val, set := EnvOverrideFor(key); set {
+				v.Value = envOverrideForUI(v, val)
+				v.EnvOverride = envName
+			}
 		}
 		out = append(out, v)
 	}
@@ -353,6 +392,16 @@ func (s *Service) SetOwned(ctx context.Context, owner, key, value string) error 
 }
 
 func (s *Service) setOwned(ctx context.Context, owner, key, value string) error {
+	// Reject UI writes to env-overridden app-level rows. Without this
+	// the admin would submit a new value, the request would succeed,
+	// the cache would refresh, but the very next ListOwned() call
+	// would swap the env value back in — confusing. Surface as an
+	// error so the UI shows "✗ failed" instead.
+	if owner == "" {
+		if envName, _, set := EnvOverrideFor(key); set {
+			return fmt.Errorf("config %q is overridden by the %s environment variable — unset it and restart to edit from the UI", key, envName)
+		}
+	}
 	// IsSecret rows render as password inputs with a "leave blank to
 	// keep" placeholder — an empty submit means the admin did not
 	// touch the field, so don't clobber the stored value.
@@ -429,9 +478,54 @@ func (s *Service) Regenerate(ctx context.Context, key string) error {
 
 func (s *Service) AppName() string            { return s.Get(KeyAppName) }
 func (s *Service) AppDescription() string     { return s.Get(KeyAppDescription) }
-func (s *Service) AppURL() string             { return s.Get(KeyAppURL) }
 func (s *Service) SessionSecret() string      { return s.Get(KeySessionSecret) }
 func (s *Service) AdminPasswordChanged() bool { return s.Get(KeyAdminPasswordChanged) == "true" }
+
+// AppURL returns the public URL. APP_URL env wins when set — lets the
+// operator override the seeded localhost value without first reaching
+// the admin UI (which is itself behind the host allowlist that uses
+// this value). Falls back to the DB-stored value otherwise.
+func (s *Service) AppURL() string {
+	if _, v, ok := EnvOverrideFor(KeyAppURL); ok {
+		return v
+	}
+	return s.Get(KeyAppURL)
+}
+
+// AllowedOrigins returns the extra URLs/hosts allowed alongside
+// app_url. ALLOWED_ORIGINS env wins (comma-separated) for the same
+// bootstrap reason as APP_URL — needed for LAN/Termux access before
+// the admin UI is reachable. Falls back to the DB-stored kvlist
+// (JSON array of {url: "..."}) otherwise.
+func (s *Service) AllowedOrigins() []string {
+	if _, v, ok := EnvOverrideFor(KeyAllowedOrigins); ok {
+		out := make([]string, 0)
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	raw := strings.TrimSpace(s.Get(KeyAllowedOrigins))
+	if raw == "" {
+		return nil
+	}
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		for _, v := range row {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+				break
+			}
+		}
+	}
+	return out
+}
 
 // EncryptionKey returns the master key for the encrypted-fields layer.
 // WICK_ENC_KEY in the environment wins when set — production deploys
@@ -439,7 +533,7 @@ func (s *Service) AdminPasswordChanged() bool { return s.Get(KeyAdminPasswordCha
 // back to the DB-stored value (auto-generated on first boot via the
 // generators map in spec.go).
 func (s *Service) EncryptionKey() string {
-	if v := os.Getenv("WICK_ENC_KEY"); v != "" {
+	if _, v, ok := EnvOverrideFor(KeyEncryptionKey); ok {
 		return v
 	}
 	return s.Get(KeyEncryptionKey)

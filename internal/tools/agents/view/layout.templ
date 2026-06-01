@@ -13,10 +13,35 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	@lifecycleStyles()
 	@tooltipStyles()
 	@scrollbarStyles()
+	<!-- The Agents shell is a fixed full-height app. Lock the document so a
+	     scroll-to-bottom (scrollIntoView) only moves the chat panel, never the
+	     page itself — otherwise reloading or switching into a session with
+	     history scrolls the whole page and pushes the floating header out of
+	     view. Scrolling happens inside [data-chat-panel] only. -->
+	<style>
+		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+	</style>
 	{{ user := login.GetUser(ctx) }}
-	<div class="flex w-full h-screen">
-		<!-- Sidebar -->
-		<aside class="flex w-60 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+	<div class="flex w-full h-[100dvh]" data-agents-shell>
+		<!-- Mobile hamburger (md:hidden). Hidden when drawer open. -->
+		<button
+			type="button"
+			data-sidebar-open
+			aria-label="Open menu"
+			class="md:hidden fixed top-2 left-2 z-30 flex h-9 w-9 items-center justify-center rounded-lg border border-white-300 dark:border-navy-600 bg-white-100/90 dark:bg-navy-700/90 backdrop-blur-sm shadow-sm text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-opacity"
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75">
+				<path d="M2 4h12M2 8h12M2 12h12" stroke-linecap="round"></path>
+			</svg>
+		</button>
+		<!-- Mobile backdrop (shown when drawer open) -->
+		<div
+			data-sidebar-backdrop
+			class="hidden md:hidden fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+			aria-hidden="true"
+		></div>
+		<!-- Sidebar: fixed drawer on mobile, static column on md+ -->
+		<aside data-sidebar class="fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 -translate-x-full transition-transform duration-200 ease-out md:static md:w-60 md:translate-x-0 md:transition-none">
 			<!-- Header: brand + workspace + profile (single row, replaces global navbar) -->
 			<div data-agents-top-widgets class="flex items-center gap-2 px-3 py-2.5 border-b border-white-300 dark:border-navy-600">
 				<a href="/" class="flex flex-1 min-w-0 items-center gap-2 hover:opacity-80 transition-opacity" title={ ui.AppNameFromContext(ctx) }>
@@ -27,6 +52,17 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					</div>
 				</a>
 				@ui.UserMenu(user)
+				<!-- Mobile close drawer (md:hidden) -->
+				<button
+					type="button"
+					data-sidebar-close
+					aria-label="Close menu"
+					class="md:hidden flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+				>
+					<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path>
+					</svg>
+				</button>
 			</div>
 			<!-- Hidden palette trigger so palette.js paletteEnabled() detects it
 			     (Ctrl+K shortcut requires a button[onclick="openPalette()"] in DOM) -->
@@ -52,11 +88,26 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/workflows-v2", "Workflows v2", vm.ActivePage == "workflows-v2")
 				@agentsNavLink(vm.Base+"/workspaces", "Workspaces", vm.ActivePage == "workspaces")
-				@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-				@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
-				@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
-				@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
-				@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
+				<details class="group" { agentsMoreOpenAttr(vm.ActivePage)... }>
+					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">
+						<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+							<circle cx="4" cy="8" r="1" fill="currentColor"></circle>
+							<circle cx="8" cy="8" r="1" fill="currentColor"></circle>
+							<circle cx="12" cy="8" r="1" fill="currentColor"></circle>
+						</svg>
+						<span class="flex-1">More</span>
+						<svg viewBox="0 0 12 12" class="h-3 w-3 opacity-60 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path>
+						</svg>
+					</summary>
+					<div class="flex flex-col gap-0.5 pt-0.5">
+						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
+						@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
+						@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
+					</div>
+				</details>
 			</nav>
 			<!-- Recent sessions list (scrollable, fills remaining height) -->
 			<div class="flex flex-col flex-1 overflow-hidden">
@@ -105,6 +156,50 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	     wickConfirm just include the script below and the shell above. -->
 	@ui.Dialog()
 	<script src="/public/js/dialog.js"></script>
+	<script>
+		(function () {
+			var shell = document.querySelector('[data-agents-shell]');
+			if (!shell) return;
+			var sb = shell.querySelector('[data-sidebar]');
+			var bd = shell.querySelector('[data-sidebar-backdrop]');
+			var openBtn = shell.querySelector('[data-sidebar-open]');
+			var closeBtn = shell.querySelector('[data-sidebar-close]');
+			if (!sb) return;
+			var mq = window.matchMedia('(max-width: 767px)');
+			function isMobile() { return mq.matches; }
+			function open() {
+				sb.classList.remove('-translate-x-full');
+				if (bd) bd.classList.remove('hidden');
+				if (openBtn) { openBtn.classList.add('opacity-0','pointer-events-none'); }
+			}
+			function close() {
+				sb.classList.add('-translate-x-full');
+				if (bd) bd.classList.add('hidden');
+				if (openBtn) { openBtn.classList.remove('opacity-0','pointer-events-none'); }
+			}
+			if (openBtn) openBtn.addEventListener('click', open);
+			if (closeBtn) closeBtn.addEventListener('click', close);
+			if (bd) bd.addEventListener('click', close);
+			// Auto-close on nav click (mobile only)
+			sb.querySelectorAll('a').forEach(function (a) {
+				a.addEventListener('click', function () { if (isMobile()) close(); });
+			});
+			// ESC closes drawer when mobile + open
+			document.addEventListener('keydown', function (e) {
+				if (e.key === 'Escape' && isMobile() && !sb.classList.contains('-translate-x-full')) close();
+			});
+			// Reset state when crossing breakpoint so desktop view is clean
+			mq.addEventListener('change', function () {
+				if (!isMobile()) {
+					sb.classList.remove('-translate-x-full');
+					if (bd) bd.classList.add('hidden');
+					if (openBtn) openBtn.classList.remove('opacity-0','pointer-events-none');
+				} else {
+					sb.classList.add('-translate-x-full');
+				}
+			});
+		})();
+	</script>
 }
 
 templ sidebarSessionRow(base, id string, sess session.Session, label string, lc SessionLifecycleVM, active bool) {
@@ -440,6 +535,18 @@ templ agentsNavLink(href, label string, active bool) {
 		@agentsNavIcon(label)
 		{ label }
 	</a>
+}
+
+// agentsMoreOpenAttr returns an "open" attribute on the <details>
+// when the active page lives inside the collapsed "More" group, so
+// the section auto-expands when the user lands on a secondary tool
+// (otherwise the active row would be hidden).
+func agentsMoreOpenAttr(activePage string) templ.Attributes {
+	switch activePage {
+	case "presets", "providers", "skills", "channels", "data-tables":
+		return templ.Attributes{"open": ""}
+	}
+	return templ.Attributes{}
 }
 
 templ agentsNavIcon(label string) {

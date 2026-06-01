@@ -1,8 +1,20 @@
 <template>
   <div class="prompt-box">
     <p class="prompt-box__label">Paste this into any AI agent to get started:</p>
+    <div class="prompt-box__tabs" role="tablist">
+      <button
+        v-for="t in tabs"
+        :key="t.id"
+        :class="['prompt-box__tab', { active: active === t.id }]"
+        role="tab"
+        :aria-selected="active === t.id"
+        @click="active = t.id"
+      >
+        {{ t.label }}
+      </button>
+    </div>
     <div class="prompt-box__inner">
-      <code class="prompt-box__code">{{ START_PROMPT }}</code>
+      <code class="prompt-box__code">{{ currentPrompt }}</code>
       <button class="prompt-box__btn" @click="copy" :class="{ copied }">
         {{ copied ? '✓ Copied' : 'Copy' }}
       </button>
@@ -11,13 +23,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { START_PROMPT } from '../prompt'
+import { computed, ref } from 'vue'
+import { AGENT_PROMPT, FRAMEWORK_PROMPT } from '../prompt'
 
+type TabId = 'agent' | 'framework'
+
+const tabs: { id: TabId; label: string }[] = [
+  { id: 'agent', label: 'Wick Agent' },
+  { id: 'framework', label: 'Wick Framework' },
+]
+
+const active = ref<TabId>('agent')
 const copied = ref(false)
 
+const currentPrompt = computed(() =>
+  active.value === 'agent' ? AGENT_PROMPT : FRAMEWORK_PROMPT,
+)
+
 function copy() {
-  navigator.clipboard.writeText(START_PROMPT)
+  navigator.clipboard.writeText(currentPrompt.value)
   copied.value = true
   setTimeout(() => (copied.value = false), 2000)
 }
@@ -32,6 +56,36 @@ function copy() {
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.prompt-box__tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.prompt-box__tab {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--vp-c-text-2);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.prompt-box__tab:hover {
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+}
+
+.prompt-box__tab.active {
+  background: var(--vp-c-brand-soft);
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
 }
 
 .prompt-box__inner {

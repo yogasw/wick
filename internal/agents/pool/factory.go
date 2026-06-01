@@ -3,12 +3,12 @@ package pool
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -19,6 +19,7 @@ import (
 	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // ClaudeFactory is the production AgentFactory: wires a ClaudeParser +
@@ -58,6 +59,16 @@ type ClaudeFactory struct {
 	// every preset. Preset stays the primary; this only adds to it.
 	SystemPromptLoader func() string
 
+	// ConnectorCatalogLoader (optional) returns a "## Available wick
+	// connectors" markdown block listing the connectors the spawning
+	// agent should prefer over hand-rolled HTTP. Wired in server.go
+	// so the loader can call connectorsSvc and filter to instances
+	// whose status is "ready" — connectors the operator has finished
+	// configuring. Empty string = no append (no connectors ready, or
+	// service unavailable). Inserted between the immutable rules and
+	// the preset body so the catalog can't override either layer.
+	ConnectorCatalogLoader func() string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -92,10 +103,22 @@ type GateConfig struct {
 func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	st := state.New(nil)
 	st.SetIdentity(opt.SessionID, opt.AgentName)
+	// Compute provider "type/name" for store stamping. Mirrors the
+	// AgentEntry.Provider format used in agents.json so the UI can
+	// render either source the same way.
+	storeProviderType := opt.ProviderType
+	if storeProviderType == "" {
+		storeProviderType = string(provider.TypeClaude)
+	}
+	storeProviderName := opt.ProviderName
+	if storeProviderName == "" {
+		storeProviderName = storeProviderType
+	}
 	sto := store.New(store.Options{
 		Layout:    f.Layout,
 		SessionID: opt.SessionID,
 		AgentName: opt.AgentName,
+		Provider:  storeProviderType + "/" + storeProviderName,
 		RecordRaw: f.RecordRaw,
 	})
 
@@ -117,6 +140,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		immutable = config.ImmutableSystemPrompt()
 	}
 	presetContent := immutable
+	if f.ConnectorCatalogLoader != nil {
+		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {
+			presetContent += "\n\n" + catalog
+		}
+	}
 	if opt.PresetName != "" {
 		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
 			presetContent += "\n\n" + p.Body
@@ -334,7 +362,7 @@ func resolveProviderBinary(providerType, providerName string) (bin, source strin
 	if ins, err := provider.Find(t, providerName); err == nil && ins.Binary != "" {
 		return ins.Binary, "registry"
 	}
-	if p, err := exec.LookPath(string(t)); err == nil {
+	if p, err := safeexec.LookPath(string(t)); err == nil {
 		return p, "path"
 	}
 	if st := provider.Probe(context.Background(), provider.Instance{Type: t, Name: providerName}); st.PathFound {
