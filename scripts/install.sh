@@ -119,6 +119,17 @@ printf "  %-18s : %s\n" "$APP-gate" "$(format_status "$GATE_VER" "$TAG")"
 printf "  %-18s : %s\n" "gotty"     "${GOTTY_VER:-not installed} (prompt below)"
 echo ""
 
+# Helper: stop the running agent before overwriting its binary. curl -o
+# truncates the target first, which fails with "Text file busy" on
+# Linux/Termux if the binary is currently executing. `wick-agent stop`
+# kills the daemon cleanly; ignore failure (binary may be stale/broken).
+# Gate is a per-invocation hook, not a daemon — no stop needed.
+stop_running() {
+  bin="$1"
+  [ -x "$bin" ] || return 0
+  "$bin" stop </dev/null >/dev/null 2>&1 || true
+}
+
 # Helper: download the gate sidecar alongside the main binary. Gate is
 # the PreToolUse hook the agent invokes before every Bash command — the
 # .deb/.dmg/.msi bundle it implicitly, but raw installs need the
@@ -215,6 +226,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   else
     URL="$BASE/${APP}-linux-${ARCH}"
     echo "→ termux: $URL"
+    stop_running "$PREFIX/bin/$APP"
     curl -fL --progress-bar $AUTH "$URL" -o "$PREFIX/bin/$APP"
     chmod +x "$PREFIX/bin/$APP"
     echo "✓ $APP installed at $PREFIX/bin/$APP"
@@ -419,6 +431,7 @@ case "$OS" in
       else
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
+        stop_running "/usr/local/bin/$APP"
         curl -fL --progress-bar $AUTH "$URL" -o /usr/local/bin/$APP
         chmod +x /usr/local/bin/$APP
         echo "✓ $APP installed"
