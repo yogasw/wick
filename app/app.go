@@ -39,6 +39,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/pkg/logfiles"
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
@@ -448,13 +449,24 @@ func Run() {
 			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
+			// Split component logs into app/server/worker/mcp dated files
+			// under ~/.<appName>/logs/, matching tray mode. Daemon parent
+			// still redirects child stdout/stderr to daemon.log as a
+			// safety net for panics that fire before this point.
+			serverLogger := log.With().Str("component", "server").Logger()
+			workerLogger := log.With().Str("component", "worker").Logger()
+			if ls, cleanup, err := logfiles.Setup(BuildAppName, 0); err == nil {
+				defer cleanup()
+				serverLogger = ls.Server
+				workerLogger = ls.Worker
+			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
+			ctx = serverLogger.WithContext(ctx)
 
 			srv := api.NewServer()
 
-			schedCtx := log.With().Str("component", "worker").Logger().WithContext(ctx)
+			schedCtx := workerLogger.WithContext(ctx)
 			// Auto-respawn loop. RunScheduler should only return when
 			// schedCtx is cancelled; any other return is treated as a
 			// crash and restarted with backoff so a transient DB blip
