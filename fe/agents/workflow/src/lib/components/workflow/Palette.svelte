@@ -71,7 +71,7 @@
       if (datatableChildren.length > 0) {
         dataItems.push({
           type: "datatable_get", // parent stub, not draggable
-          label: "Tables",
+          label: "Data Tables",
           badge: `${datatableChildren.length} ops`,
           children: datatableChildren,
         });

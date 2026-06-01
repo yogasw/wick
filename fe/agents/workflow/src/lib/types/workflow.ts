@@ -109,11 +109,25 @@ export type Node = {
   module?: string;
   row_id?: string;
 
+  // datatable_*
+  table?: string;
+  conditions?: DataTableCond[];
+  condition_modes?: Record<string, string>;
+  row_modes?: Record<string, string>;
+  key?: Record<string, unknown>;
+  row?: Record<string, unknown>;
+  order_by?: DataTableOrder[];
+  limit?: number;
+  offset?: number;
+
   // shell
   command?: string[];
   env?: Record<string, string>;
   cwd?: string;
   parse_output?: string;
+  // shell command timeout — string like "30s" or "1m". Distinct from
+  // `timeout_sec` which the engine reads for every other node type.
+  timeout?: string;
 
   // http
   method?: string;
@@ -137,33 +151,80 @@ export type Node = {
   // branch
   expr?: string;
 
-  // switch — rule list (canonical shape lives in editor)
-  rules?: SwitchRule[];
+  // switch — first-match-wins rule list. Storage key is "cases" to
+  // match the Go side (workflow.Node.Cases). The earlier `rules` name
+  // was an editor-only leftover that never round-tripped.
+  cases?: SwitchCase[];
+  default_case?: string;
+
+  // session_init — `preset` selects the built-in sharing mode
+  // (workflow_run / workflow_global / new). `session_id` is a literal
+  // or template string that wins over preset when set. `workspace`
+  // overrides the per-run workspace.
+  preset?: string;
+
+  // end
+  result?: string;
+
+  // editor-only: mock input JSON used when Execute step has no parent
+  // output yet. Not consumed by the engine — purely a UX scratchpad.
+  mock_input?: string;
 
   // canvas position (engine ignores; canvas persists)
   _canvas?: { x?: number; y?: number };
 };
 
-export type SwitchRule = { when: string; case: string };
+export type SwitchCase = { when: string; case: string };
+// Back-compat alias — earlier components imported SwitchRule. Drop
+// once everything has migrated.
+export type SwitchRule = SwitchCase;
+
+export type DataTableCond = {
+  column: string;
+  op: string;
+  value?: unknown;
+};
+
+export type DataTableOrder = {
+  column: string;
+  direction?: string;
+};
 
 export type Trigger = {
   id?: string;
   type: TriggerType;
   entry_node?: string;
-  schedule?: string;
+
   // cron
-  expr?: string;
+  schedule?: string;
+  timezone?: string;
+
   // channel
   channel?: string;
-  match?: Record<string, unknown>;
   event?: string;
+  target?: string;
+  match?: Record<string, unknown>;
+  match_enabled?: boolean;
+  match_modes?: Record<string, string>;
+  whitelist?: unknown;
+  dedup_ttl_sec?: number;
+  reply_source?: boolean;
+
   // webhook
   path?: string;
   method?: string;
-  // schedule_at
-  at?: string;
+  secret_ref?: string;
+  parse_body?: string;
+  body_to_var?: string;
+
   // manual
   label?: string;
+  button_label?: string;
+  require_role?: string;
+
+  // schedule_at
+  at?: string;
+  delete_after?: boolean;
 };
 
 export type QueuePolicy = {

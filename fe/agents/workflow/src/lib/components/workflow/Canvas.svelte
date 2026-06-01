@@ -5,7 +5,7 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, paletteOpen, detailNodeID, runStatusByNode } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode } from "$lib/stores/editor";
   import { workflowAPI } from "$lib/api/workflow";
   import { componentFor } from "./nodes";
   import TriggerNode from "./nodes/TriggerNode.svelte";
@@ -136,7 +136,59 @@
   } | null>(null);
   let connectCursor = $state<{ x: number; y: number } | null>(null);
 
+  // ── Context menu (right-click on node / trigger / edge) ─────────────
+  // Floating menu pinned to mouse position. Currently exposes Delete
+  // only; expand here when more per-target actions land. Target
+  // discriminates so the same menu can act on three different shapes.
+  type CtxTarget =
+    | { kind: "node"; id: string }
+    | { kind: "trigger"; id: string }
+    | { kind: "edge"; from: string; to: string; caseKey?: string }
+    | { kind: "trigger-edge"; triggerID: string };
+  let ctxMenu = $state<{ x: number; y: number; target: CtxTarget } | null>(null);
+
+  function openCtxMenu(e: MouseEvent, target: CtxTarget) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxMenu = { x: e.clientX, y: e.clientY, target };
+  }
+
+  function closeCtxMenu() {
+    ctxMenu = null;
+  }
+
+  function deleteCtxTarget() {
+    const t = ctxMenu?.target;
+    if (!t) return;
+    switch (t.kind) {
+      case "node":
+        removeNode(t.id);
+        break;
+      case "trigger":
+        removeTrigger(t.id);
+        break;
+      case "edge":
+        disconnect(t.from, t.to, t.caseKey);
+        break;
+      case "trigger-edge":
+        draftWorkflow.update((wf) => {
+          if (!wf) return wf;
+          wf.triggers = (wf.triggers ?? []).map((tr) =>
+            tr.id === t.triggerID ? { ...tr, entry_node: undefined } : tr,
+          );
+          return wf;
+        });
+        break;
+    }
+    closeCtxMenu();
+  }
+
   function startConnect(e: PointerEvent, fromID: string, fromKind: "node" | "trigger" | "node-input") {
+    // Only left-button drags create connections. Right-click goes to
+    // the context menu instead — otherwise the dashed connect line
+    // gets orphaned because contextmenu suppresses the pointerup that
+    // would normally clear `connecting`.
+    if (e.button !== 0) return;
     e.stopPropagation();
     if (!canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
@@ -729,8 +781,29 @@
 <svelte:window
   onpointermove={(e) => { onpointermove(e); onConnectMove(e); onPanDragMove(e); onMarqueeMove(e); }}
   onpointerup={(e) => { onpointerup(); finishConnect(e); panDrag = null; onMarqueeUp(); }}
-  onkeydown={(e) => { onkeydown(e); onSpaceKeydown(e); }}
+  onpointercancel={() => { connecting = null; connectCursor = null; }}
+  onpointerdown={(e) => {
+    // Backup cancel — if a connect drag was orphaned (pointer left the
+    // window mid-drag, browser ate the pointerup, etc.), the next
+    // pointerdown anywhere clears it. Don't fire when the user starts
+    // a fresh connect from a port (handled by stopPropagation in
+    // startConnect → this listener never sees those events).
+    if (connecting && e.button === 0) {
+      connecting = null;
+      connectCursor = null;
+    }
+  }}
+  onkeydown={(e) => {
+    onkeydown(e); onSpaceKeydown(e);
+    // Esc cancels an in-flight connect (orphaned dashed line on canvas)
+    // and closes the right-click context menu.
+    if (e.key === "Escape") {
+      connecting = null; connectCursor = null;
+      ctxMenu = null;
+    }
+  }}
   onkeyup={onSpaceKeyup}
+  onclick={() => { if (ctxMenu) ctxMenu = null; }}
 />
 
 <div
@@ -782,6 +855,16 @@
             {#if pts}
               {@const mid = midPoint(pts)}
               <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-slate-400 dark:text-slate-600" />
+              <!-- Wide invisible hit path widens right-click target — bare
+                   stroke-width=2 is too thin to land on reliably. -->
+              <path
+                d={bezier(pts)}
+                fill="none"
+                stroke="transparent"
+                stroke-width="14"
+                style="pointer-events: stroke; cursor: context-menu;"
+                oncontextmenu={(e) => openCtxMenu(e, { kind: "trigger-edge", triggerID: trig.id! })}
+              />
               <circle cx={mid.x} cy={mid.y} r="4" fill="#facc15" />
             {/if}
           {/if}
@@ -791,6 +874,14 @@
           {#if pts}
             {@const mid = midPoint(pts)}
             <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-slate-400 dark:text-slate-600" />
+            <path
+              d={bezier(pts)}
+              fill="none"
+              stroke="transparent"
+              stroke-width="14"
+              style="pointer-events: stroke; cursor: context-menu;"
+              oncontextmenu={(ev) => openCtxMenu(ev, { kind: "edge", from: e.from, to: e.to, caseKey: e.case })}
+            />
             <circle cx={mid.x} cy={mid.y} r="4" fill="#facc15" />
             {#if e.case}
               <text class="text-[10px] fill-slate-500">
@@ -809,6 +900,7 @@
           style="left: {node._canvas?.x ?? 0}px; top: {node._canvas?.y ?? 0}px;"
           onpointerdown={(e) => onnodepointerdown(e, node.id)}
           ondblclick={() => detailNodeID.set(node.id)}
+          oncontextmenu={(e) => openCtxMenu(e, { kind: "node", id: node.id })}
           role="presentation"
           bind:clientHeight={cardHeights[node.id]}
         >
@@ -900,6 +992,8 @@
           class="absolute"
           style="left: {pos.x}px; top: {pos.y}px;"
           onpointerdown={(e) => ontriggerpointerdown(e, trig.id ?? "")}
+          ondblclick={() => trig.id && detailTriggerID.set(trig.id)}
+          oncontextmenu={(e) => trig.id && openCtxMenu(e, { kind: "trigger", id: trig.id })}
           role="presentation"
           bind:clientHeight={cardHeights[trig.id ?? ""]}
         >
@@ -1010,6 +1104,44 @@
   onConfirm={confirmDeleteSelected}
   onCancel={() => (confirmDeleteNode = false)}
 />
+
+{#if ctxMenu}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed z-[80] min-w-[140px] rounded-md border border-slate-200 dark:border-slate-700
+           bg-white dark:bg-slate-800 shadow-lg py-1 text-sm"
+    style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;"
+    role="menu"
+    onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
+  >
+    <button
+      type="button"
+      class="w-full text-left px-3 py-1.5 flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30"
+      onclick={deleteCtxTarget}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+        <path d="M10 11v6"></path>
+        <path d="M14 11v6"></path>
+        <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+      </svg>
+      <span>
+        {#if ctxMenu.target.kind === "edge" || ctxMenu.target.kind === "trigger-edge"}
+          Delete connection
+        {:else if ctxMenu.target.kind === "trigger"}
+          Delete trigger
+        {:else}
+          Delete node
+        {/if}
+      </span>
+    </button>
+  </div>
+{/if}
 
 <style>
   /* Mirror the legacy editor.css canvas bg — dot grid keyed to the

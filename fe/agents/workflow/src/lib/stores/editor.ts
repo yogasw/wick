@@ -1,5 +1,5 @@
 import { writable, derived, get } from "svelte/store";
-import type { Workflow, Node, Edge } from "$lib/types/workflow";
+import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
 import { workflowAPI } from "$lib/api/workflow";
 
 // Selected node id for the inspector. Null when nothing focused.
@@ -25,6 +25,14 @@ export const paletteOpen = writable<boolean>(false);
 // so editing a node's config doesn't fight the canvas for screen
 // real-estate.
 export const detailNodeID = writable<string | null>(null);
+
+// Trigger detail modal — sibling of detailNodeID, kept separate because
+// triggers live on `wf.triggers[]` rather than `wf.graph.nodes[]` and
+// the inspector renders type-specific forms (cron expr, channel +
+// event picker, webhook path/method, manual button label, …). Mirrors
+// the legacy editor_inspector.templ trigger panel — see
+// internal/tools/agents/view/workflow/editor_inspector.templ.
+export const detailTriggerID = writable<string | null>(null);
 
 // Live execution feedback — per-node status overlay (✓ success, ✗
 // failed, … running). Populated by the run-now flow and SSE stream
@@ -123,6 +131,24 @@ export function addNode(node: Node) {
     if (!wf) return wf;
     ensureGraph(wf);
     wf.graph.nodes = [...wf.graph.nodes, node];
+    return wf;
+  });
+}
+
+export function updateTrigger(id: string, patch: Partial<Trigger>) {
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    const idx = (wf.triggers ?? []).findIndex((t) => t.id === id);
+    if (idx < 0) return wf;
+    wf.triggers[idx] = { ...wf.triggers[idx], ...patch };
+    return wf;
+  });
+}
+
+export function removeTrigger(id: string) {
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    wf.triggers = (wf.triggers ?? []).filter((t) => t.id !== id);
     return wf;
   });
 }

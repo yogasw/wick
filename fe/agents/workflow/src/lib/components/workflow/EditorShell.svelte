@@ -3,6 +3,7 @@
   import Palette from "./Palette.svelte";
   import Canvas from "./Canvas.svelte";
   import NodeDetailModal from "./NodeDetailModal.svelte";
+  import TriggerDetailModal from "./TriggerDetailModal.svelte";
   import BottomTabs from "./BottomTabs.svelte";
   import ExecutionsPanel from "./ExecutionsPanel.svelte";
   import { writable } from "svelte/store";
@@ -73,6 +74,7 @@
       {/if}
     </div>
     <NodeDetailModal />
+    <TriggerDetailModal />
     <BottomTabs runs={runs} versions={versions} onRestoreVersion={onRestoreVersion} />
   {:else}
     <ExecutionsPanel workflowID={workflowID} />

@@ -157,23 +157,78 @@ graph.
 
 ## Dev
 
-Dev servers are per-app because each Vite server binds a port:
+Two loops, pick the one that fits the task.
+
+### Build-watch + live-disk (recommended for full-stack iteration)
+
+Use this when you need the templ shell (sidebar, topbar, theme) **and**
+live updates. Wick reads the SPA tree from disk so Vite's rebuild flows
+through without a Go recompile.
+
+```bash
+# Terminal 1: rebuild every workspace's bundle on save (~1 s incremental)
+cd fe
+npm run dev
+
+# Terminal 2: wick with the live-disk swap on
+WICK_DEV_REPO_ROOT=$(pwd)/.. go run ./cmd/lab server
+# PowerShell:
+#   $env:WICK_DEV_REPO_ROOT="d:\code\work\wick"; go run ./cmd/lab server
+```
+
+The VS Code launch config `wicklab` already sets `WICK_DEV_REPO_ROOT`
+via `env:` — F5 there to skip the manual env wiring.
+
+Edit `.svelte` / `.ts` → Vite rewrites `internal/tools/<tool>/dist/<app>/`
+→ wick picks the new bundle on the next render. Browser still needs a
+manual reload (`Ctrl+R`); for auto-reload run the optional Vite dev
+server below.
+
+### Per-app Vite dev server (HMR, no templ chrome)
+
+Use this when iterating on the SPA in isolation — instant HMR, but the
+templ shell isn't there, so sidebar / theme / other-tool nav are absent.
 
 ```bash
 cd fe
-npm run dev:workflow
+npm run dev:workflow         # Vite at http://localhost:5173 with HMR
 ```
 
 The Vite proxy in each app's `vite.config.ts` forwards `/tools/*` +
 `/public/*` to a running wick server (default `http://localhost:9425` —
-the wicklab port; override via `WICK_PROXY=http://host:port` before
-the dev command).
+override via `WICK_PROXY=http://host:port`). Open
+`http://localhost:5173/tools/agents/agents-v2/workflow/#/edit/<id>` to
+exercise the editor.
 
 For a new app, add a script in `fe/package.json`:
 
 ```json
 "dev:<new>": "npm --workspace=@wick-fe/agents-<new> run dev"
 ```
+
+### How the live-disk swap works
+
+`internal/pkg/spadev/spadev.go` exposes `LiveDiskFS(toolName)`. Every
+tool's `spa.go` calls it from `init()`:
+
+```go
+//go:embed all:dist
+var spaEmbedded embed.FS
+var SPAFS fs.FS = spaEmbedded
+
+func init() {
+  if live, ok := spadev.LiveDiskFS("agents"); ok {
+    SPAFS = live
+    spaLiveDisk = true
+  }
+}
+```
+
+When `WICK_DEV_REPO_ROOT` is set, `LiveDiskFS` returns an `os.DirFS`
+rooted at `<repo>/internal/tools/<toolName>/`; otherwise it returns
+`(nil, false)` and the embed stays in charge. The same one env var
+covers every tool that ever ships an SPA — drop a `spa.go` into the new
+tool and it joins the dev loop automatically.
 
 ## Build
 

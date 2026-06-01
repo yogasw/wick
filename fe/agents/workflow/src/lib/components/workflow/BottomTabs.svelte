@@ -4,7 +4,7 @@
   import TestsTab from "./tabs/TestsTab.svelte";
   import RunsTab from "./tabs/RunsTab.svelte";
   import LogsTab from "./tabs/LogsTab.svelte";
-  import YamlTab from "./tabs/YamlTab.svelte";
+  import JsonTab from "./tabs/JsonTab.svelte";
   import HistoryTab from "./tabs/HistoryTab.svelte";
   import { logLines } from "$lib/stores/sse";
   import { draftWorkflow } from "$lib/stores/editor";
@@ -40,14 +40,15 @@
   }
 
   let active = $state<
-    "logs" | "yaml" | "runs" | "validation" | "guard" | "tests" | "history"
+    "logs" | "json" | "runs" | "validation" | "guard" | "tests" | "history"
   >("logs");
 
-  // Tab label override — matches the legacy editor where the YAML tab
-  // reads "YAML preview" (full noun) but the storage key stays terse.
+  // Tab labels — storage keys stay terse, labels read full nouns.
+  // JSON preview shows the live draft side-by-side with the last
+  // published copy so operators see the diff before publishing.
   const labels: Record<string, string> = {
     logs: "Logs",
-    yaml: "YAML preview",
+    json: "JSON preview",
     runs: "Runs",
     validation: "Validation",
     guard: "Guard",
@@ -92,11 +93,11 @@
   }
 
   // Tab order mirrors the legacy editor: read-only debugging first
-  // (logs / yaml / runs), static checks next (validation / guard /
+  // (logs / json / runs), static checks next (validation / guard /
   // tests), history last.
   const tabs = [
     "logs",
-    "yaml",
+    "json",
     "runs",
     "validation",
     "guard",
@@ -170,7 +171,7 @@
       {:else if active === "tests"}<TestsTab cases={testsData.length > 0 ? testsData : tests} onRunAll={() => refreshPanel("tests")} running={panelLoading} />
       {:else if active === "runs"}<RunsTab runs={runs} />
       {:else if active === "logs"}<LogsTab lines={logs} />
-      {:else if active === "yaml"}<YamlTab />
+      {:else if active === "json"}<JsonTab />
       {:else if active === "history"}<HistoryTab versions={versions} onrestore={onRestoreVersion} />
       {/if}
     </div>

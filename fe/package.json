@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "npm --workspaces --if-present run build",
+    "dev": "npm --workspaces --if-present run build:watch",
     "check": "npm --workspaces --if-present run check",
     "test": "npm --workspaces --if-present run test:unit",
     "e2e": "npm --workspaces --if-present run test:e2e",

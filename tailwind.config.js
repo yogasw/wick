@@ -12,8 +12,10 @@ module.exports = {
     './internal/**/*_templ.go',
     './internal/**/*.js',
     './web/public/js/app.js',
-    './fe/**/*.svelte',
-    './fe/**/*.ts',
+    // Narrow to FE source dirs — broader `./fe/**/*.{svelte,ts}`
+    // walks every workspace's node_modules and triples scan time.
+    './fe/agents/*/src/**/*.{svelte,ts}',
+    './fe/agents/*/index.html',
   ],
 
   theme: {
