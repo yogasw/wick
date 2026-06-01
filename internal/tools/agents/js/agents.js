@@ -496,11 +496,8 @@
         var container = document.querySelector("[data-turns]");
         if (!container) return;
         typingIndicatorEl = document.createElement("div");
-        typingIndicatorEl.className = "flex justify-start gap-3 items-end";
+        typingIndicatorEl.className = "flex justify-start items-end";
         typingIndicatorEl.innerHTML =
-          '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800">' +
-          '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg>' +
-          '</div>' +
           '<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5">' +
           '<div class="flex items-center gap-2 text-xs text-black-600 dark:text-black-700">' +
           '<svg class="h-3 w-3 shrink-0 animate-spin text-green-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path></svg>' +
@@ -649,11 +646,9 @@
         if (!container) return null;
         if (!pendingTurnEl) {
           pendingTurnEl = document.createElement("div");
-          pendingTurnEl.className = "flex justify-start gap-3 group";
+          pendingTurnEl.className = "flex justify-start group";
           pendingTurnEl.innerHTML =
-            '<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">' +
-            '<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="2.5"></circle><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path></svg></div>' +
-            '<div class="flex flex-col gap-1.5 max-w-[80%] min-w-0" data-turn-events>' +
+            '<div class="flex flex-col gap-1.5 max-w-[92%] min-w-0" data-turn-events>' +
             '</div>';
           var bottom = document.getElementById("chat-bottom");
           if (bottom) container.insertBefore(pendingTurnEl, bottom);

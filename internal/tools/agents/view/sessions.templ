@@ -688,14 +688,8 @@ templ attachmentChip(a AttachmentVM) {
 }
 
 templ assistantTurn(t TurnVM) {
-	<div class="flex justify-start gap-2 group">
-		<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 mt-1">
-			<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
-				<circle cx="8" cy="6" r="2.5"></circle>
-				<path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke-linecap="round"></path>
-			</svg>
-		</div>
-		<div class="flex flex-col gap-1.5 max-w-[88%] min-w-0" data-turn-events>
+	<div class="flex justify-start group">
+		<div class="flex flex-col gap-1.5 max-w-[92%] min-w-0" data-turn-events>
 			if t.Agent != "" {
 				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ t.Agent }</span>
 			}
