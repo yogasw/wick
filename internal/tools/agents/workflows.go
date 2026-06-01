@@ -850,7 +850,9 @@ func workflowRegistryAPI(c *tool.Ctx) {
 				"destructive": a.Destructive,
 			}
 			if ad, ok := actionDescs[a.ID]; ok && ad.InputType != nil {
-				row["args_html"] = renderArgFormHTML(c.Context(), entity.StructToConfigs(ad.InputType))
+				schema := entity.StructToConfigs(ad.InputType)
+				row["args_html"] = renderArgFormHTML(c.Context(), schema)
+				row["args_schema"] = schema
 			}
 			ops = append(ops, row)
 		}
@@ -861,10 +863,11 @@ func workflowRegistryAPI(c *tool.Ctx) {
 		events := []map[string]any{}
 		for _, ev := range globalWorkflowMgr.Integration.EventsByChannel(info.Name) {
 			events = append(events, map[string]any{
-				"id":          ev.Event,
-				"name":        ev.Name,
-				"description": ev.Description,
-				"match_html":  renderArgFormHTML(c.Context(), ev.MatchSchema),
+				"id":           ev.Event,
+				"name":         ev.Name,
+				"description":  ev.Description,
+				"match_html":   renderArgFormHTML(c.Context(), ev.MatchSchema),
+				"match_schema": ev.MatchSchema,
 			})
 		}
 		channels = append(channels, map[string]any{
@@ -901,6 +904,7 @@ func workflowRegistryAPI(c *tool.Ctx) {
 			}
 			if modOK && i < len(mod.Operations) {
 				row["args_html"] = renderArgFormHTML(c.Context(), mod.Operations[i].Input)
+				row["args_schema"] = mod.Operations[i].Input
 			}
 			ops = append(ops, row)
 		}

@@ -12,11 +12,19 @@
   // node.condition_modes[column] / node.row_modes[column].
 
   import type { Node, DataTableCond, DataTableOrder } from "$lib/types/workflow";
-  import { updateNode } from "$lib/stores/editor";
+  import { draftWorkflow, updateNode } from "$lib/stores/editor";
   import ArgField from "../fields/ArgField.svelte";
+  import Field from "../fields/Field.svelte";
 
   type Props = { node: Node };
   let { node }: Props = $props();
+
+  // Available data table aliases declared at the workflow root —
+  // `workflow.data_tables[].alias` is the key the engine resolves.
+  // Drop the typo path by offering a select instead of free text.
+  const tableAliases = $derived(
+    ($draftWorkflow?.data_tables ?? []).map((t) => t.alias),
+  );
 
   const op = $derived(node.type.replace(/^datatable_/, ""));
 
@@ -167,20 +175,32 @@
   const keyEntries = $derived(Object.entries(node.key ?? { id: "" }));
 </script>
 
-<!-- Table picker — every datatable_* op needs this. -->
-<label class="flex flex-col gap-1">
-  <span class="text-xs font-medium">Data table</span>
-  <input
-    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-    placeholder="alias defined in workflow.data_tables[]"
+<!-- Table picker — every datatable_* op needs this. Aliases come from
+     the workflow root `data_tables[].alias` so adding a new binding
+     surfaces here automatically; falls back to free text when no
+     bindings are declared yet so first-time setup still works. -->
+{#if tableAliases.length > 0}
+  <Field
+    kind="select"
+    label="Data table"
     value={node.table ?? ""}
-    oninput={(e) => patch("table", (e.target as HTMLInputElement).value)}
+    onChange={(v) => patch("table", v)}
+    options={[
+      { label: "(select alias)", value: "" },
+      ...tableAliases.map((a) => ({ label: a, value: a })),
+    ]}
+    helper="Pick from workflow.data_tables[] aliases."
   />
-  <span class="text-[11px] text-slate-500 dark:text-slate-400">
-    Reference the alias key in <code>workflow.data_tables[]</code>, not the raw
-    table name.
-  </span>
-</label>
+{:else}
+  <Field
+    kind="text"
+    label="Data table"
+    value={node.table ?? ""}
+    onChange={(v) => patch("table", v)}
+    placeholder="alias defined in workflow.data_tables[]"
+    helper="No data_tables declared yet — define one in the workflow YAML first; this dropdown will populate."
+  />
+{/if}
 
 {#if showKey}
   <!-- ── get: primary key ───────────────────────────────────────── -->

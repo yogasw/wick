@@ -5,7 +5,20 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport } from "$lib/stores/editor";
+
+  // Map node.id → first validation error message. Populated from
+  // validationReport.errors via the Path regex. Drives the red badge
+  // overlay on the canvas card so validation issues surface without
+  // opening the Validation tab.
+  const nodeErrors = $derived.by<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const e of $validationReport?.errors ?? []) {
+      const m = (e.Path ?? "").match(/graph\.nodes\[([^\]]+)\]/);
+      if (m && !out[m[1]]) out[m[1]] = e.Message ?? "Invalid";
+    }
+    return out;
+  });
   import { workflowAPI } from "$lib/api/workflow";
   import { componentFor } from "./nodes";
   import TriggerNode from "./nodes/TriggerNode.svelte";
@@ -62,11 +75,40 @@
     const y = (e.clientY - rect.top - pan.y) / zoom;
     const nodeType = e.dataTransfer?.getData("application/x-wick-node-type") as NodeType | "";
     const triggerType = e.dataTransfer?.getData("application/x-wick-trigger-type");
+    const channelEventRaw = e.dataTransfer?.getData("application/x-wick-channel-event");
     if (nodeType) {
       // Let addNode pick the next free `<type>_<N>` slot — drops in
       // quick succession get `http_1`, `http_2`, … instead of random
       // hashes that collide visually + fight the validator.
       addNode({ id: "", type: nodeType, _canvas: { x, y } } as any);
+      return;
+    }
+    if (channelEventRaw) {
+      // Pre-formed channel trigger from the palette — pick the
+      // channel + event then drop a ready-to-wire entry.
+      try {
+        const parsed = JSON.parse(channelEventRaw) as { channel: string; event: string };
+        const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
+        draftWorkflow.update((wf) => {
+          if (!wf) return wf;
+          wf.triggers = [
+            ...(wf.triggers ?? []),
+            {
+              id,
+              type: "channel",
+              channel: parsed.channel,
+              event: parsed.event,
+            },
+          ];
+          const canvas = ((wf as any)._canvas ?? {}) as any;
+          if (!canvas.positions) canvas.positions = {};
+          canvas.positions[id] = { x, y };
+          (wf as any)._canvas = canvas;
+          return wf;
+        });
+      } catch (err) {
+        console.warn("bad channel-event drop payload:", err);
+      }
       return;
     }
     if (triggerType) {
@@ -897,6 +939,7 @@
       {#each $draftWorkflow.graph.nodes ?? [] as node (node.id)}
         {@const Comp = componentFor(node.type)}
         {@const status = $runStatusByNode[node.id]}
+        {@const validationErr = nodeErrors[node.id]}
         <div
           class="absolute"
           style="left: {node._canvas?.x ?? 0}px; top: {node._canvas?.y ?? 0}px;"
@@ -910,9 +953,21 @@
             node={node}
             selected={$selectedNodeIDs.has(node.id) || $selectedNodeID === node.id}
             running={status === "running"}
-            errored={status === "failed"}
+            errored={status === "failed" || !!validationErr}
             onselect={() => selectedNodeID.set(node.id)}
           />
+          {#if validationErr}
+            <!-- Validation badge — red "!" pin at top-right of the
+                 card. Tooltip carries the first error message so
+                 hover reveals what's wrong without leaving the canvas. -->
+            <button
+              type="button"
+              class="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold flex items-center justify-center shadow-md ring-2 ring-white dark:ring-slate-900"
+              title={validationErr}
+              onclick={(e) => { e.stopPropagation(); detailNodeID.set(node.id); }}
+              aria-label="Validation error — click to open inspector"
+            >!</button>
+          {/if}
           <!-- Output port — drag from here to another node's body to
                create an edge. Transparent overlay sits on BaseNode's
                bottom-centre white circle. -->

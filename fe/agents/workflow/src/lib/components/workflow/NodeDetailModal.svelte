@@ -16,10 +16,31 @@
   // where it helps but never reduce the surface.
 
   import { detailNodeID, draftWorkflow, removeNode, updateNode } from "$lib/stores/editor";
+  import { catalog } from "$lib/stores/catalog";
   import type { Node } from "$lib/types/workflow";
   import ArgField from "./fields/ArgField.svelte";
   import KvListField from "./fields/KvListField.svelte";
+  import Field from "./fields/Field.svelte";
+  import SchemaForm from "./fields/SchemaForm.svelte";
   import DatatableForm from "./nodes/DatatableForm.svelte";
+
+  // Catalog-derived helpers for the channel / connector forms below.
+  // Drive every dropdown + arg row off the registry so adding a new
+  // channel or connector lights up the inspector with zero FE edits.
+  const currentChannelOps = $derived.by(() => {
+    if (!node || node.type !== "channel") return [];
+    return $catalog?.channels?.find((c) => c.name === node.channel)?.ops ?? [];
+  });
+  const currentChannelOp = $derived.by(() => {
+    return currentChannelOps.find((o) => o.id === node?.op);
+  });
+  const currentConnectorOps = $derived.by(() => {
+    if (!node || node.type !== "connector") return [];
+    return $catalog?.connectors?.find((c) => c.module === node.module)?.ops ?? [];
+  });
+  const currentConnectorOp = $derived.by(() => {
+    return currentConnectorOps.find((o) => o.id === node?.op);
+  });
 
   const node = $derived.by<Node | null>(() => {
     const id = $detailNodeID;
@@ -733,66 +754,149 @@
 
               <!-- ── channel ────────────────────────────────────── -->
               {#if node.type === "channel"}
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Channel</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-                    placeholder="slack / telegram / rest"
-                    value={node.channel ?? ""}
-                    oninput={(e) => patch("channel", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Op</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-                    placeholder="send_message"
-                    value={node.op ?? ""}
-                    oninput={(e) => patch("op", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
-                <KvListField
-                  label="Args"
-                  entries={(node.args ?? {}) as Record<string, string>}
-                  modes={node.arg_modes}
-                  helper="Op inputs as key/value. Each value rendered as a Go template."
-                  keyPlaceholder="to"
-                  valuePlaceholder="#alerts"
-                  onChange={(next) => patchArgs("args", next)}
-                  onModeChange={(m) => patchModeMap("arg_modes", m)}
+                <Field
+                  kind="select"
+                  label="Channel"
+                  value={node.channel ?? ""}
+                  onChange={(v) => {
+                    patch("channel", v);
+                    // Reset op + args when switching channels — catalog
+                    // resolves a different op set + arg schema per
+                    // channel, leaving stale values around will fail
+                    // validation on the server.
+                    patch("op", "");
+                    patch("args", {});
+                  }}
+                  options={[
+                    { label: "(select channel)", value: "" },
+                    ...($catalog?.channels ?? []).map((c) => ({
+                      label: c.name,
+                      value: c.name,
+                    })),
+                  ]}
+                  helper="Channels registered with the wick channel registry."
                 />
+                {#if node.channel}
+                  <Field
+                    kind="select"
+                    label="Op"
+                    value={node.op ?? ""}
+                    onChange={(v) => {
+                      patch("op", v);
+                      patch("args", {});
+                    }}
+                    options={[
+                      { label: "(select op)", value: "" },
+                      ...currentChannelOps.map((o) => ({ label: o.id, value: o.id })),
+                    ]}
+                  />
+                  {#if currentChannelOp?.description}
+                    <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                      {currentChannelOp.description}
+                    </div>
+                  {/if}
+                {/if}
+                {#if currentChannelOp?.args_schema && currentChannelOp.args_schema.length > 0}
+                  <!-- Schema-driven args — fields, types, picker
+                       sources, visible_when predicates all come from
+                       the Go ActionDescriptor.InputType wick tags. -->
+                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2">
+                    <SchemaForm
+                      schema={currentChannelOp.args_schema}
+                      values={(node.args ?? {}) as Record<string, unknown>}
+                      onChange={(k, v) => patchArgs("args", { ...(node.args ?? {}), [k]: v })}
+                      onClear={(k) => {
+                        const next = { ...(node.args ?? {}) };
+                        delete next[k];
+                        patchArgs("args", next);
+                      }}
+                    />
+                  </div>
+                {:else if node.op}
+                  <!-- Op declares no schema — fall back to the legacy
+                       free-form key/value editor so older channels
+                       still work. -->
+                  <KvListField
+                    label="Args"
+                    entries={(node.args ?? {}) as Record<string, string>}
+                    modes={node.arg_modes}
+                    helper="Op declared no schema. Free-form key/value — each value rendered as a Go template."
+                    keyPlaceholder="to"
+                    valuePlaceholder="#alerts"
+                    onChange={(next) => patchArgs("args", next)}
+                    onModeChange={(m) => patchModeMap("arg_modes", m)}
+                  />
+                {/if}
               {/if}
 
               <!-- ── connector ──────────────────────────────────── -->
               {#if node.type === "connector"}
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Module</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-                    placeholder="github / slack / bitbucket"
-                    value={node.module ?? ""}
-                    oninput={(e) => patch("module", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Op</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-                    placeholder="create_issue"
-                    value={node.op ?? ""}
-                    oninput={(e) => patch("op", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
-                <KvListField
-                  label="Args"
-                  entries={(node.args ?? {}) as Record<string, string>}
-                  modes={node.arg_modes}
-                  helper="Op inputs as key/value. Each value rendered as a Go template."
-                  keyPlaceholder="title"
-                  valuePlaceholder={"Bug: {{.Event.Payload.subject}}"}
-                  onChange={(next) => patchArgs("args", next)}
-                  onModeChange={(m) => patchModeMap("arg_modes", m)}
+                <Field
+                  kind="select"
+                  label="Module"
+                  value={node.module ?? ""}
+                  onChange={(v) => {
+                    patch("module", v);
+                    patch("op", "");
+                    patch("args", {});
+                  }}
+                  options={[
+                    { label: "(select module)", value: "" },
+                    ...($catalog?.connectors ?? []).map((c) => ({
+                      label: c.name || c.module,
+                      value: c.module,
+                    })),
+                  ]}
+                  helper="Connector modules registered with the wick connector registry."
                 />
+                {#if node.module}
+                  <Field
+                    kind="select"
+                    label="Op"
+                    value={node.op ?? ""}
+                    onChange={(v) => {
+                      patch("op", v);
+                      patch("args", {});
+                    }}
+                    options={[
+                      { label: "(select op)", value: "" },
+                      ...currentConnectorOps.map((o) => ({
+                        label: o.name || o.id,
+                        value: o.id,
+                      })),
+                    ]}
+                  />
+                  {#if currentConnectorOp?.description}
+                    <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                      {currentConnectorOp.description}
+                    </div>
+                  {/if}
+                {/if}
+                {#if currentConnectorOp?.args_schema && currentConnectorOp.args_schema.length > 0}
+                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2">
+                    <SchemaForm
+                      schema={currentConnectorOp.args_schema}
+                      values={(node.args ?? {}) as Record<string, unknown>}
+                      onChange={(k, v) => patchArgs("args", { ...(node.args ?? {}), [k]: v })}
+                      onClear={(k) => {
+                        const next = { ...(node.args ?? {}) };
+                        delete next[k];
+                        patchArgs("args", next);
+                      }}
+                    />
+                  </div>
+                {:else if node.op}
+                  <KvListField
+                    label="Args"
+                    entries={(node.args ?? {}) as Record<string, string>}
+                    modes={node.arg_modes}
+                    helper="Op declared no schema. Free-form key/value — each value rendered as a Go template."
+                    keyPlaceholder="title"
+                    valuePlaceholder={"Bug: {{.Event.Payload.subject}}"}
+                    onChange={(next) => patchArgs("args", next)}
+                    onModeChange={(m) => patchModeMap("arg_modes", m)}
+                  />
+                {/if}
               {/if}
 
               <!-- ── parallel ───────────────────────────────────── -->

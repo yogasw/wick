@@ -12,8 +12,34 @@
     removeTrigger,
     updateTrigger,
   } from "$lib/stores/editor";
+  import { catalog } from "$lib/stores/catalog";
   import type { Trigger } from "$lib/types/workflow";
+  import type {
+    CatalogConfigField,
+    ChannelDescriptor,
+    ChannelEventDescriptor,
+  } from "$lib/api/workflow";
   import { workflowAPI } from "$lib/api/workflow";
+  import Field from "./fields/Field.svelte";
+  import SchemaForm from "./fields/SchemaForm.svelte";
+
+  // Pull channel + event descriptors out of the shared catalog so the
+  // inspector renders the same picker UX as v1: channel select →
+  // event select (with name + description) → schema-driven match form.
+  const channelDescriptors = $derived<ChannelDescriptor[]>(
+    $catalog?.channels ?? [],
+  );
+  const currentChannel = $derived<ChannelDescriptor | undefined>(
+    channelDescriptors.find((c) => c.name === trigger?.channel),
+  );
+  const currentEvent = $derived<ChannelEventDescriptor | undefined>(
+    currentChannel?.events?.find((e) => e.id === trigger?.event),
+  );
+  // Match schema rows visible in the filter form. Falls back to the
+  // free-form key/value editor when the event lacks a declared schema.
+  const matchSchema = $derived<CatalogConfigField[]>(
+    currentEvent?.match_schema ?? [],
+  );
 
   const trigger = $derived.by<Trigger | null>(() => {
     const id = $detailTriggerID;
@@ -22,6 +48,18 @@
   });
 
   let activeTab = $state<"params" | "settings">("params");
+
+  // Channel + event search filter — useful when an integration ships
+  // many events (Slack's ~12). Empty string = show all.
+  let channelFilter = $state("");
+  let eventFilter = $state("");
+
+  // Lowercase-contains filter so the operator can type a fragment
+  // ("modal", "msg", "click") and find the relevant entry quickly.
+  function matches(haystack: string | undefined, needle: string): boolean {
+    if (!needle) return true;
+    return (haystack ?? "").toLowerCase().includes(needle.toLowerCase());
+  }
 
   function close() {
     detailTriggerID.set(null);
@@ -248,79 +286,115 @@
                 </label>
               {/if}
 
-              <!-- Channel-specific fields. Channel + event are free-text
-                   inputs for now; the legacy editor wires them to a
-                   dynamic catalog (channels list + per-channel event
-                   schema). Catalog wiring lands in a follow-up. -->
+              <!-- Channel-specific fields. Channel + event hydrate
+                   from the shared catalog so v2 matches v1's
+                   inspector behaviour: registered channels in the
+                   dropdown, registered events filtered by channel,
+                   event description shown inline, match form driven
+                   by EventDescriptor.MatchSchema (entity.Config[]). -->
               {#if trigger.type === "channel"}
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Channel</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-                    placeholder="slack / telegram / rest"
-                    value={trigger.channel ?? ""}
-                    oninput={(e) => patch("channel", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Event</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
-                    placeholder="message"
+                <Field
+                  kind="select"
+                  label="Channel"
+                  value={trigger.channel ?? ""}
+                  onChange={(v) => {
+                    patch("channel", v);
+                    // Reset event + match when switching channels — the
+                    // catalog only resolves events under the new channel.
+                    patch("event", "");
+                    patch("match", {});
+                  }}
+                  options={[
+                    { label: "(select channel)", value: "" },
+                    ...channelDescriptors.map((c) => ({ label: c.name, value: c.name })),
+                  ]}
+                  helper="Channels registered with the wick channel registry."
+                />
+                {#if trigger.channel}
+                  <Field
+                    kind="select"
+                    label="Event"
                     value={trigger.event ?? ""}
-                    oninput={(e) => patch("event", (e.target as HTMLInputElement).value)}
+                    onChange={(v) => {
+                      patch("event", v);
+                      patch("match", {});
+                    }}
+                    options={[
+                      { label: "(select event)", value: "" },
+                      ...(currentChannel?.events ?? []).map((e) => ({
+                        label: e.name ?? e.id,
+                        value: e.id,
+                      })),
+                    ]}
                   />
-                </label>
-                <label class="flex items-center gap-2 mt-2">
-                  <input
-                    type="checkbox"
-                    class="w-4 h-4 accent-emerald-500"
-                    checked={trigger.match_enabled ?? false}
-                    onchange={(e) => patch("match_enabled", (e.target as HTMLInputElement).checked)}
-                  />
-                  <span class="text-xs font-medium">Filter events (whitelist match)</span>
-                </label>
-                {#if trigger.match_enabled}
-                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-2">
-                    <div class="text-[11px] text-slate-500">Match keys — exact-string filter on the event payload.</div>
-                    {#each Object.entries(trigger.match ?? {}) as [k, v] (k)}
-                      <div class="flex items-center gap-2">
-                        <input
-                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
-                          value={k}
-                          readonly
-                        />
-                        <input
-                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
-                          value={typeof v === "string" ? v : JSON.stringify(v)}
-                          oninput={(e) => patchMatchEntry(k, (e.target as HTMLInputElement).value)}
-                        />
-                        <button
-                          class="text-rose-500 text-xs px-2"
-                          onclick={() => removeMatchEntry(k)}
-                          title="Remove match key"
-                        >✕</button>
-                      </div>
-                    {/each}
-                    <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-slate-700">
-                      <input
-                        class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
-                        placeholder="key"
-                        bind:value={newMatchKey}
-                      />
-                      <input
-                        class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
-                        placeholder="value"
-                        bind:value={newMatchValue}
-                        onkeydown={(e) => e.key === "Enter" && addMatchEntry()}
-                      />
-                      <button
-                        class="text-emerald-600 text-xs px-2"
-                        onclick={addMatchEntry}
-                        title="Add match key"
-                      >+</button>
+                  {#if currentEvent?.description}
+                    <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                      {currentEvent.description}
                     </div>
-                  </div>
+                  {/if}
+                {/if}
+
+                <Field
+                  kind="checkbox"
+                  label="Filter events (whitelist match)"
+                  value={trigger.match_enabled ?? false}
+                  onChange={(v) => patch("match_enabled", v)}
+                />
+
+                {#if trigger.match_enabled}
+                  {#if matchSchema.length > 0}
+                    <!-- Schema-driven form. Each row's widget comes
+                         straight from entity.Config.Type (see
+                         docs/reference/config-tags.md). SchemaForm
+                         handles visible_when, hidden, and per-row
+                         widget pick. -->
+                    <div class="rounded border border-slate-200 dark:border-slate-700 p-2">
+                      <SchemaForm
+                        schema={matchSchema}
+                        values={(trigger.match ?? {}) as Record<string, unknown>}
+                        onChange={patchMatchEntry}
+                        onClear={removeMatchEntry}
+                      />
+                    </div>
+                  {:else}
+                    <!-- Fallback free-form key/value editor for events
+                         without a declared schema (or when catalog
+                         hasn't loaded yet). -->
+                    <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-2">
+                      <div class="text-[11px] text-slate-500">
+                        Match keys — exact-string filter on the event payload.
+                      </div>
+                      {#each Object.entries(trigger.match ?? {}) as [k, v] (k)}
+                        <div class="flex items-center gap-2">
+                          <input
+                            class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                            value={k}
+                            readonly
+                          />
+                          <input
+                            class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                            value={typeof v === "string" ? v : JSON.stringify(v)}
+                            oninput={(e) => patchMatchEntry(k, (e.target as HTMLInputElement).value)}
+                          />
+                          <button class="text-rose-500 text-xs px-2" onclick={() => removeMatchEntry(k)}>✕</button>
+                        </div>
+                      {/each}
+                      <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-slate-700">
+                        <input
+                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                          placeholder="key"
+                          bind:value={newMatchKey}
+                        />
+                        <input
+                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                          placeholder="value"
+                          bind:value={newMatchValue}
+                          onkeydown={(e) => e.key === "Enter" && addMatchEntry()}
+                        />
+                        <button class="text-emerald-600 text-xs px-2" onclick={addMatchEntry}>+</button>
+                      </div>
+                    </div>
+                  {/if}
                 {/if}
               {/if}
 

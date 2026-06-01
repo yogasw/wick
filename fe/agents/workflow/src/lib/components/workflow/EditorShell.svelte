@@ -12,6 +12,7 @@
   // Top-level tab toggle between Editor + Executions panel.
   const topTab = writable<"editor" | "executions">("editor");
   import { loadWorkflow, draftWorkflow, paletteOpen, lastRunSummary } from "$lib/stores/editor";
+  import { loadCatalog } from "$lib/stores/catalog";
   import { connectSSE, disconnectSSE } from "$lib/stores/sse";
   import { workflowAPI, type RunSummary } from "$lib/api/workflow";
   import type { WorkflowVersion } from "$lib/types/workflow";
@@ -24,6 +25,7 @@
 
   $effect(() => {
     void loadWorkflow(workflowID);
+    void loadCatalog();
     void refreshRuns();
     void refreshVersions();
     // Subscribe to the live event stream for this workflow so node

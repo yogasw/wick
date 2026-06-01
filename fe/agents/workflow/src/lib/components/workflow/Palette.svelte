@@ -10,7 +10,8 @@
   type Item = {
     type: string;          // raw drag payload (`classify`, `trigger:cron`, …)
     label: string;
-    badge?: string;
+    badge?: string;        // short right-aligned tag (e.g. "on fail")
+    description?: string;  // multi-line subtitle rendered below label
     children?: Item[];
   };
   type Group = { title: string; items: Item[] };
@@ -46,11 +47,37 @@
   onMount(async () => {
     try {
       const cat = await workflowAPI.catalog();
-      const triggerItems: Item[] = (cat.trigger_types ?? []).map((t) => ({
-        type: `trigger:${t.type}`,
-        label: t.label || t.type,
-        badge: t.type === "error" ? "on fail" : undefined,
-      }));
+      // Generic trigger types (cron, webhook, manual, schedule_at,
+      // error). Skip `channel` — each registered channel gets its own
+      // expandable parent below so the operator can drag a specific
+      // event, not a stub.
+      const triggerItems: Item[] = (cat.trigger_types ?? [])
+        .filter((t) => t.type !== "channel")
+        .map((t) => ({
+          type: `trigger:${t.type}`,
+          label: t.label || t.type,
+          badge: t.type === "error" ? "on fail" : undefined,
+        }));
+
+      // Per-channel parent rows — children = registered events. Drag
+      // a child to drop a channel trigger pre-populated with channel
+      // + event. Mirrors the legacy editor's trigger picker.
+      for (const ch of cat.channels ?? []) {
+        const eventChildren: Item[] = (ch.events ?? []).map((ev) => ({
+          // Payload format `trigger:channel:<channel>:<event>` — Canvas
+          // ondrop unpacks this and creates a fully-formed trigger.
+          type: `trigger:channel:${ch.name}:${ev.id}`,
+          label: ev.name || ev.id,
+          description: ev.description,
+        }));
+        if (eventChildren.length === 0) continue;
+        triggerItems.push({
+          type: `trigger:channel-parent:${ch.name}`,
+          label: ch.name,
+          badge: "trigger ›",
+          children: eventChildren,
+        });
+      }
       const aiItems: Item[] = [];
       const actionItems: Item[] = [];
       const logicItems: Item[] = [];
@@ -104,7 +131,26 @@
   );
 
   function ondragstart(e: DragEvent, type: string) {
-    if (type.startsWith("trigger:")) {
+    if (type.startsWith("trigger:channel:")) {
+      // `trigger:channel:<channel>:<event>` — drop a fully-formed
+      // channel trigger pre-populated with the picked event.
+      const rest = type.slice("trigger:channel:".length);
+      const idx = rest.indexOf(":");
+      if (idx >= 0) {
+        e.dataTransfer?.setData(
+          "application/x-wick-channel-event",
+          JSON.stringify({
+            channel: rest.slice(0, idx),
+            event: rest.slice(idx + 1),
+          }),
+        );
+      }
+    } else if (type.startsWith("trigger:channel-parent:")) {
+      // Parent row itself isn't draggable — clicking only toggles
+      // expansion. Suppress the drag.
+      e.preventDefault();
+      return;
+    } else if (type.startsWith("trigger:")) {
       e.dataTransfer?.setData("application/x-wick-trigger-type", type.slice("trigger:".length));
     } else {
       e.dataTransfer?.setData("application/x-wick-node-type", type);
@@ -166,10 +212,17 @@
                     <button
                       draggable="true"
                       ondragstart={(e) => ondragstart(e, child.type)}
-                      class="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded text-xs text-slate-100 bg-slate-800/70 hover:bg-slate-700 cursor-grab transition-colors"
+                      class="w-full flex flex-col items-start gap-0.5 px-3 py-1.5 rounded text-left text-slate-100 bg-slate-800/70 hover:bg-slate-700 cursor-grab transition-colors"
+                      title={child.description}
                     >
-                      <span class="truncate">{child.label}</span>
-                      {#if child.badge}<span class="text-[10px] text-slate-400">{child.badge}</span>{/if}
+                      <span class="text-xs font-medium truncate w-full">{child.label}</span>
+                      {#if child.description}
+                        <span class="text-[10px] text-slate-400 line-clamp-2 leading-snug w-full">
+                          {child.description}
+                        </span>
+                      {:else if child.badge}
+                        <span class="text-[10px] text-slate-400">{child.badge}</span>
+                      {/if}
                     </button>
                   {/each}
                 </div>

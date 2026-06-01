@@ -50,11 +50,78 @@ export type SaveResponse = {
   error?: string;
 };
 
+// Mirror of pkg/entity/Config — the JSON shape Go marshals when the
+// registry API embeds a MatchSchema or op input schema. Field
+// casing reflects entity.Config's struct field names verbatim; the
+// json:"..." tags only kick in for the presentation-hint fields
+// (visible_when, hidden, env_override, col_options).
+//
+// `Options` syntax depends on `Type`:
+//   - dropdown → "a|b|c"          (pipe-separated option values)
+//   - kvlist   → "col1|col2"      (pipe-separated column names)
+//   - picker   → "<source>"       (LookupProvider source key)
+//
+// `visible_when` predicate: "<otherField>:<value>" or
+// "<otherField>:<v1>|<v2>|<v3>" — show this row only while the
+// referenced field's current value is one of those literals.
+export type CatalogConfigField = {
+  Owner?: string;
+  Key: string;
+  Value?: string;
+  Type?: string;
+  Options?: string;
+  IsSecret?: boolean;
+  CanRegenerate?: boolean;
+  Locked?: boolean;
+  Required?: boolean;
+  Description?: string;
+  hidden?: boolean;
+  visible_when?: string;
+  env_override?: string;
+  col_options?: Record<string, string>;
+};
+
+export type ChannelEventDescriptor = {
+  id: string;
+  name: string;
+  description: string;
+  match_schema?: CatalogConfigField[];
+};
+
+export type ChannelOpDescriptor = {
+  id: string;
+  description?: string;
+  destructive?: boolean;
+  args_schema?: CatalogConfigField[];
+};
+
+export type ChannelDescriptor = {
+  name: string;
+  supports_session: boolean;
+  ops?: ChannelOpDescriptor[];
+  events?: ChannelEventDescriptor[];
+};
+
+export type ConnectorOpDescriptor = {
+  id: string;
+  name: string;
+  description?: string;
+  destructive?: boolean;
+  input?: { key: string; description: string; required: boolean }[];
+  args_schema?: CatalogConfigField[];
+};
+
+export type ConnectorDescriptor = {
+  module: string;
+  name: string;
+  ops?: ConnectorOpDescriptor[];
+};
+
 export type CatalogResponse = {
   node_types: { type: string; description: string; when_to_use?: string; schema?: Record<string, unknown>; example?: string }[];
   trigger_types: { type: string; label: string; description: string }[];
-  channels: { name: string; supports_session: boolean }[];
-  connectors: { module: string; name: string }[];
+  channels: ChannelDescriptor[];
+  connectors: ConnectorDescriptor[];
   providers: { name: string; is_default: boolean }[];
 };
 
@@ -139,6 +206,19 @@ export const workflowAPI = {
   // a superset.
   catalog: (): Promise<CatalogResponse> =>
     apiGet(`${BASE}/workflows/api/registry`),
+
+  // Picker resolver — backs `wick:"picker=slack.channels"` fields in
+  // event match schemas / config forms. Module is the channel name
+  // (e.g. "slack"), source is the registry key the channel's
+  // LookupProvider understands. Returns `[{id, name}, ...]`.
+  lookup: (
+    module: string,
+    source: string,
+    q: string,
+  ): Promise<{ id: string; name: string }[]> =>
+    apiGet(
+      `${BASE}/workflows/api/lookup?module=${encodeURIComponent(module)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
+    ),
 
   runState: (id: string, runID: string): Promise<any> =>
     // Legacy endpoint already returns JSON unconditionally.
