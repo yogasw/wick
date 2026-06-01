@@ -46,12 +46,13 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		"start_url":        "/",
 		"scope":            "/",
 		"display":          "standalone",
-		"orientation":      "any",
 		"background_color": "#142638",
 		"theme_color":      "#10b981",
 		"icons": []icon{
+			{Src: "/public/img/icon-192.png", Sizes: "192x192", Type: "image/png", Purpose: "any"},
+			{Src: "/public/img/icon-512.png", Sizes: "512x512", Type: "image/png", Purpose: "any"},
+			{Src: "/public/img/icon-maskable-512.png", Sizes: "512x512", Type: "image/png", Purpose: "maskable"},
 			{Src: "/public/img/icon.svg", Sizes: "any", Type: "image/svg+xml", Purpose: "any"},
-			{Src: "/public/img/icon-maskable.svg", Sizes: "any", Type: "image/svg+xml", Purpose: "maskable"},
 		},
 		"shortcuts": []shortcut{
 			{Name: name, ShortName: name, Description: "Open the " + name + " home", URL: "/"},

@@ -376,8 +376,10 @@
     // textarea so they can type without clicking it first. Skips when
     // modal/overlay is open, when modifier keys are involved, or when
     // focus is already on an editable element.
+    // Skip on touch devices: there's no physical keyboard to "start typing"
+    // with, and force-focusing the composer just pops the on-screen keyboard.
     var composerTA = document.querySelector("[data-send-form] textarea");
-    if (composerTA) {
+    if (composerTA && !window.matchMedia("(pointer: coarse)").matches) {
       document.addEventListener("keydown", function (e) {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Escape" || e.key === "Tab") return;
@@ -1467,12 +1469,16 @@
           .finally(function () {
             textarea.disabled = false;
             if (btn) btn.disabled = false;
-            textarea.focus();
+            // Don't refocus on touch devices — it re-summons the on-screen
+            // keyboard right after sending, which feels like an accidental tap.
+            if (!window.matchMedia("(pointer: coarse)").matches) textarea.focus();
           });
       });
 
-      // Enter = send, Shift+Enter = newline
+      // Enter = send, Shift+Enter = newline. On touch devices Enter inserts a
+      // newline instead (send via the button), matching chat-app conventions.
       sendForm.querySelector("textarea").addEventListener("keydown", function (e) {
+        if (window.matchMedia("(pointer: coarse)").matches) return;
         if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           sendForm.dispatchEvent(new Event("submit"));
