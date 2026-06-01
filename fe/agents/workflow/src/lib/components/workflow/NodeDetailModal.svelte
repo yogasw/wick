@@ -22,6 +22,7 @@
   import KvListField from "./fields/KvListField.svelte";
   import Field from "./fields/Field.svelte";
   import SchemaForm from "./fields/SchemaForm.svelte";
+  import CodeEditor from "./fields/CodeEditor.svelte";
   import DatatableForm from "./nodes/DatatableForm.svelte";
 
   // Catalog-derived helpers for the channel / connector forms below.
@@ -99,6 +100,45 @@
     if (!confirm(`Delete node "${node.label || node.id}"?`)) return;
     removeNode(node.id);
     close();
+  }
+
+  // ── switch rule drag-reorder ──────────────────────────────────────
+  // First-match-wins routing in `switch` nodes is order-sensitive,
+  // so the operator needs to drag rules into place. Mirrors v1's
+  // switchnode/inspector.js drag handle pattern: a small grab area
+  // arms the row's `draggable` attribute on mousedown, the drop
+  // event reorders the cases array, autosave flushes the result.
+  let switchDragFrom = $state<number | null>(null);
+  let switchDragOver = $state<number | null>(null);
+  function onSwitchDragStart(i: number, e: DragEvent) {
+    switchDragFrom = i;
+    e.dataTransfer?.setData("text/plain", String(i));
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  }
+  function onSwitchDragOver(i: number, e: DragEvent) {
+    if (switchDragFrom === null) return;
+    e.preventDefault();
+    switchDragOver = i;
+  }
+  function onSwitchDrop(i: number, e: DragEvent) {
+    e.preventDefault();
+    if (switchDragFrom === null || !node) {
+      switchDragFrom = null;
+      switchDragOver = null;
+      return;
+    }
+    const from = switchDragFrom;
+    switchDragFrom = null;
+    switchDragOver = null;
+    if (from === i) return;
+    const next = [...(node.cases ?? [])];
+    const [moved] = next.splice(from, 1);
+    next.splice(i, 0, moved);
+    updateNode(node.id, { cases: next });
+  }
+  function onSwitchDragEnd() {
+    switchDragFrom = null;
+    switchDragOver = null;
   }
 
   // Inline duplicate check for the Label input — flags when the
@@ -562,7 +602,28 @@
                     >+ add rule</button>
                   </div>
                   {#each node.cases ?? [] as rule, i (i)}
-                    <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-2">
+                    <div
+                      class="rounded border p-2 space-y-2 transition-colors"
+                      class:border-slate-200={switchDragOver !== i}
+                      class:dark:border-slate-700={switchDragOver !== i}
+                      class:border-emerald-400={switchDragOver === i}
+                      class:dark:border-emerald-500={switchDragOver === i}
+                      class:opacity-50={switchDragFrom === i}
+                      draggable="true"
+                      ondragstart={(e) => onSwitchDragStart(i, e)}
+                      ondragover={(e) => onSwitchDragOver(i, e)}
+                      ondrop={(e) => onSwitchDrop(i, e)}
+                      ondragend={onSwitchDragEnd}
+                      role="listitem"
+                    >
+                      <div class="flex items-center gap-2 -mt-1 -mx-1">
+                        <span
+                          class="text-slate-400 dark:text-slate-500 text-xs cursor-grab select-none"
+                          title="Drag to reorder — first match wins"
+                          aria-label="Reorder handle"
+                        >⋮⋮</span>
+                        <span class="text-[10px] text-slate-400">#{i + 1}</span>
+                      </div>
                       <label class="flex flex-col gap-1">
                         <span class="text-[11px] text-slate-500">When</span>
                         <input
@@ -614,17 +675,33 @@
 
               <!-- ── go_script + python ─────────────────────────── -->
               {#if node.type === "go_script" || node.type === "python"}
-                <ArgField
-                  label="Code"
-                  value={node.code ?? ""}
-                  mode={modeFor("code")}
-                  multiline
-                  rows={14}
-                  placeholder="// stdin = RenderCtx JSON, stdout = result JSON"
-                  helper="Full {node.type === 'go_script' ? 'Go' : 'Python'} program. Runs in a sandboxed subprocess."
-                  onValueChange={(v) => patch("code", v)}
-                  onModeChange={(m) => patchMode("code", m)}
-                />
+                <div class="space-y-1">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs font-medium">Code</span>
+                    <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide">
+                      {#each ["fixed", "expression"] as m}
+                        <button
+                          type="button"
+                          class="px-2 py-0.5 transition-colors"
+                          class:bg-emerald-500={modeFor("code") === m}
+                          class:text-white={modeFor("code") === m}
+                          class:text-slate-500={modeFor("code") !== m}
+                          class:dark:text-slate-400={modeFor("code") !== m}
+                          onclick={() => patchMode("code", m)}
+                        >{m}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <CodeEditor
+                    value={node.code ?? ""}
+                    language={node.type === "python" ? "python" : "go"}
+                    rows={14}
+                    onChange={(v) => patch("code", v)}
+                  />
+                  <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                    Full {node.type === "go_script" ? "Go" : "Python"} program. stdin = RenderCtx JSON, stdout = result JSON. Runs in a sandboxed subprocess.
+                  </span>
+                </div>
               {/if}
 
               <!-- ── transform ──────────────────────────────────── -->
@@ -717,30 +794,55 @@
 
               <!-- ── session_init ──────────────────────────────── -->
               {#if node.type === "session_init"}
+                {@const sessionMode = node.session_id ? "custom" : (node.preset || "workflow_run")}
                 <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Sharing preset</span>
+                  <span class="text-xs font-medium">Sharing mode</span>
                   <select
                     class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
-                    value={node.preset ?? "workflow_run"}
-                    onchange={(e) => patch("preset", (e.target as HTMLSelectElement).value)}
+                    value={sessionMode}
+                    onchange={(e) => {
+                      const m = (e.target as HTMLSelectElement).value;
+                      if (m === "custom") {
+                        // Mutex: switching to custom — auto-seed UUID
+                        // when the field is empty so the operator sees
+                        // a working id immediately, and clear preset
+                        // since session_id wins on the engine side.
+                        const seed = node.session_id || (crypto?.randomUUID?.() ?? "");
+                        updateNode(node!.id, { preset: "", session_id: seed });
+                      } else {
+                        // Drop session_id so preset takes over —
+                        // mirrors the v1 inspector.js mutex.
+                        updateNode(node!.id, { preset: m, session_id: "" });
+                      }
+                    }}
                   >
                     <option value="workflow_run">workflow_run — reuse within this run</option>
                     <option value="workflow_global">workflow_global — reuse across runs of this workflow</option>
                     <option value="new">new — fresh session each call</option>
+                    <option value="custom">custom — literal id below</option>
                   </select>
-                  <span class="text-[11px] text-slate-500">
-                    Ignored when Session ID below is filled in (literal id wins).
-                  </span>
                 </label>
-                <ArgField
-                  label="Session ID (literal — wins over preset)"
-                  value={node.session_id ?? ""}
-                  mode={modeFor("session_id")}
-                  placeholder={"user-{{.Event.Payload.user}}"}
-                  helper="Empty = follow preset above. Set to pin to a specific id."
-                  onValueChange={(v) => patch("session_id", v)}
-                  onModeChange={(m) => patchMode("session_id", m)}
-                />
+                {#if sessionMode === "custom"}
+                  <div class="flex items-end gap-2">
+                    <div class="flex-1">
+                      <ArgField
+                        label="Session ID"
+                        value={node.session_id ?? ""}
+                        mode={modeFor("session_id")}
+                        placeholder={"user-{{.Event.Payload.user}}"}
+                        helper="Literal string or Go template. Wins over preset on the engine side."
+                        onValueChange={(v) => patch("session_id", v)}
+                        onModeChange={(m) => patchMode("session_id", m)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      class="h-9 px-3 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs hover:bg-slate-50 dark:hover:bg-slate-700"
+                      title="Generate a fresh UUID"
+                      onclick={() => patch("session_id", crypto?.randomUUID?.() ?? "")}
+                    >regen</button>
+                  </div>
+                {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Workspace override (optional)</span>
                   <input

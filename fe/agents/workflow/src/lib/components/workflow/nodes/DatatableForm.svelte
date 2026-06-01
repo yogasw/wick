@@ -13,6 +13,7 @@
 
   import type { Node, DataTableCond, DataTableOrder } from "$lib/types/workflow";
   import { draftWorkflow, updateNode } from "$lib/stores/editor";
+  import { workflowAPI } from "$lib/api/workflow";
   import ArgField from "../fields/ArgField.svelte";
   import Field from "../fields/Field.svelte";
 
@@ -25,6 +26,33 @@
   const tableAliases = $derived(
     ($draftWorkflow?.data_tables ?? []).map((t) => t.alias),
   );
+
+  // Resolve the picked alias → backend table slug → column list, used
+  // to populate every per-row column dropdown. The workflow's
+  // `data_tables[]` carries `alias` (operator's nickname) and `table`
+  // (real slug); fall back to alias when `table` is omitted so older
+  // workflows still autocomplete. Cached in-memory across renders.
+  const tableSlug = $derived.by<string>(() => {
+    const t = node.table;
+    if (!t) return "";
+    const binding = ($draftWorkflow?.data_tables ?? []).find((b) => b.alias === t);
+    return binding?.table ?? t;
+  });
+  let columnsCache = $state<Record<string, string[]>>({});
+  let columnsLoading = $state(false);
+  $effect(() => {
+    const slug = tableSlug;
+    if (!slug || columnsCache[slug]) return;
+    columnsLoading = true;
+    void workflowAPI
+      .dataTableColumns(slug)
+      .then((res) => {
+        columnsCache = { ...columnsCache, [slug]: (res ?? []).map((c) => c.name) };
+      })
+      .catch((e) => console.warn("data-table columns fetch failed:", e))
+      .finally(() => (columnsLoading = false));
+  });
+  const columnNames = $derived(tableSlug ? columnsCache[tableSlug] ?? [] : []);
 
   const op = $derived(node.type.replace(/^datatable_/, ""));
 
@@ -219,6 +247,7 @@
         <div class="flex items-center gap-2">
           <input
             class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+            list="dt-columns-{node.id}"
             placeholder="column name"
             value={column}
             onchange={(e) => {
@@ -272,7 +301,8 @@
         <div class="flex items-center gap-2">
           <input
             class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
-            placeholder="column"
+            list="dt-columns-{node.id}"
+            placeholder={columnNames.length > 0 ? "column" : (columnsLoading ? "loading columns…" : "column")}
             value={cond.column}
             oninput={(e) =>
               updateCondition(i, { column: (e.target as HTMLInputElement).value })}
@@ -322,6 +352,7 @@
       <div class="flex items-center gap-2">
         <input
           class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+          list="dt-columns-{node.id}"
           placeholder="column"
           value={ord.column}
           oninput={(e) => updateOrder(i, { column: (e.target as HTMLInputElement).value })}
@@ -380,6 +411,7 @@
         <div class="flex items-center gap-2">
           <input
             class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+            list="dt-columns-{node.id}"
             value={column}
             onchange={(e) => renameRowColumn(column, (e.target as HTMLInputElement).value)}
           />
@@ -402,6 +434,7 @@
     <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-slate-700">
       <input
         class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+        list="dt-columns-{node.id}"
         placeholder="column"
         bind:value={newRowColumn}
         onkeydown={(e) => e.key === "Enter" && addRow()}
@@ -420,3 +453,13 @@
     </div>
   </div>
 {/if}
+
+<!-- Shared column-name autocomplete source. Every column input
+     references this via `list="dt-columns-<node.id>"`; populated
+     lazily from /api/data-tables/<slug>/columns on first table
+     selection so the operator gets typeahead instead of typo'ing. -->
+<datalist id="dt-columns-{node.id}">
+  {#each columnNames as col}
+    <option value={col}></option>
+  {/each}
+</datalist>

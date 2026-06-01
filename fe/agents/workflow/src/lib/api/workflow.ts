@@ -220,6 +220,15 @@ export const workflowAPI = {
       `${BASE}/workflows/api/lookup?module=${encodeURIComponent(module)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
     ),
 
+  // Data table directory — workspace-level. Used by the datatable
+  // inspector to surface table slug picker + per-column autocomplete.
+  dataTables: (): Promise<{ slug: string; name: string }[]> =>
+    apiGet(`${BASE}/api/data-tables`),
+  dataTableColumns: (
+    slug: string,
+  ): Promise<{ name: string; type: string }[]> =>
+    apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
+
   runState: (id: string, runID: string): Promise<any> =>
     // Legacy endpoint already returns JSON unconditionally.
     apiGet(
