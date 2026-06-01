@@ -119,10 +119,11 @@ func appDefaults() []entity.Config {
 			Type:        "bool",
 			Value:       "false",
 			Description: "Set to true once the default admin password has been changed. Used to show a security warning on startup.",
+			Hidden:      true,
 		},
 		{
 			Key:         KeyStartupScriptEnabled,
-			Type:        "checkbox",
+			Type:        "bool",
 			Value:       "false",
 			Description: "Run the startup script below in a shell when the server boots. Output is captured to logs/startup-script-YYYY-MM-DD.log. The process is killed when the server stops.",
 		},
@@ -131,6 +132,7 @@ func appDefaults() []entity.Config {
 			Type:        "textarea",
 			Value:       "",
 			Description: "Shell script run on server boot (sh on Linux/macOS, PowerShell on Windows). Use it to launch a tunnel like `ngrok http 9425` or `cloudflared tunnel run my-tunnel` so the local port stays unexposed. Edit + restart the server (tray menu) to apply.",
+			VisibleWhen: "startup_script_enabled:true",
 		},
 		{
 			Key:           KeyEncryptionKey,
