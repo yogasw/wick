@@ -7,12 +7,11 @@
     "agents/*"
   ],
   "scripts": {
-    "dev:workflow": "npm --workspace=@wick-fe/agents-workflow run dev",
-    "build:workflow": "npm --workspace=@wick-fe/agents-workflow run build",
-    "check:workflow": "npm --workspace=@wick-fe/agents-workflow run check",
-    "test:workflow": "npm --workspace=@wick-fe/agents-workflow run test:unit",
-    "e2e:workflow": "npm --workspace=@wick-fe/agents-workflow run test:e2e",
-    "build:all": "npm run build:workflow"
+    "build": "npm --workspaces --if-present run build",
+    "check": "npm --workspaces --if-present run check",
+    "test": "npm --workspaces --if-present run test:unit",
+    "e2e": "npm --workspaces --if-present run test:e2e",
+    "dev:workflow": "npm --workspace=@wick-fe/agents-workflow run dev"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

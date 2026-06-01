@@ -11,9 +11,8 @@
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "verbatimModuleSyntax": true,
-    "baseUrl": ".",
     "paths": {
-      "$lib/*": ["src/lib/*"]
+      "$lib/*": ["./src/lib/*"]
     },
     "types": ["node", "vite/client"]
   },

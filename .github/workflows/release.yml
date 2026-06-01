@@ -301,6 +301,17 @@ jobs:
           curl -sSL -o bin/tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-linux-x64
           chmod +x bin/tailwindcss
 
+      - name: Setup Node (for FE workflow SPA)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: fe/package-lock.json
+
+      - name: Install FE deps
+        working-directory: fe
+        run: npm ci
+
       - name: Commit, tag, and push
         id: push
         run: |
@@ -318,14 +329,25 @@ jobs:
           # Push clean branch first so PR back to master stays generated-file-free
           git push origin $BRANCH
 
-          # Generate templ + tailwind so `go install github.com/yogasw/wick@vX.Y.Z` works
-          # (these files are gitignored, only baked into the tag commit)
+          # Generate templ + tailwind + every Vite SPA workspace under fe/ so
+          # `go install github.com/yogasw/wick@vX.Y.Z` ships a working binary.
+          # All outputs are gitignored on master and only baked into the tag
+          # commit. `npm run build` runs `build` in every workspace that has
+          # one — drop a new app under fe/agents/* and it auto-joins the
+          # release without touching this workflow.
           templ generate ./...
           ./bin/tailwindcss -i web/src/input.css -o web/public/css/app.css --minify
+          (cd fe && npm run build)
 
-          # Extra commit on detached state carrying generated files, then tag it
-          git add -f $(find . -name '*_templ.go' -not -path './vendor/*') web/public/css/app.css
-          git commit -m "chore: bundle generated templ + css for v${VERSION}"
+          # Extra commit on detached state carrying generated files, then tag it.
+          # The dist/ glob covers every Go tool that ships a Vite SPA — convention:
+          # `internal/tools/<tool>/dist/`. Add a new tool with its own SPA and it
+          # joins the tag bundle without touching this workflow.
+          git add -f \
+            $(find . -name '*_templ.go' -not -path './vendor/*') \
+            web/public/css/app.css \
+            $(find internal/tools -type d -name dist 2>/dev/null)
+          git commit -m "chore: bundle generated templ + css + spa for v${VERSION}"
           git tag v${VERSION}
           git push origin v${VERSION}
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
