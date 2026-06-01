@@ -80,6 +80,19 @@
     close();
   }
 
+  // Inline duplicate check for the Label input — flags when the
+  // current node's label is also held by another node in the graph.
+  // Save is blocked client-side by editor.saveDraft; this surfaces
+  // the conflict immediately at the row that caused it.
+  function labelClashesWith(target: Node): boolean {
+    if (!target.label) return false;
+    const wf = $draftWorkflow;
+    if (!wf) return false;
+    return (wf.graph?.nodes ?? []).some(
+      (n) => n.id !== target.id && (n.label === target.label || n.id === target.label),
+    );
+  }
+
   // Output refs — list of templating refs operators can copy-paste
   // into downstream fields. Static per-type table; mirrors the green
   // "Output refs available" box at the bottom of the legacy
@@ -189,13 +202,22 @@
                 <div class="text-[11px] text-slate-500 uppercase mb-1">Node ID</div>
                 <div class="font-mono text-[12px] text-slate-700 dark:text-slate-300">{node.id}</div>
               </div>
+              {@const labelTaken = labelClashesWith(node)}
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class:border-rose-500={labelTaken}
+                  class:border-slate-200={!labelTaken}
+                  class:dark:border-slate-700={!labelTaken}
                   value={node.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
                 />
+                {#if labelTaken}
+                  <span class="text-[11px] text-rose-600 dark:text-rose-400">
+                    Label "{node.label}" is already used by another node — pick a unique value.
+                  </span>
+                {/if}
               </label>
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Description</span>

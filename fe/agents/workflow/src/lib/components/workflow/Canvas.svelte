@@ -63,8 +63,10 @@
     const nodeType = e.dataTransfer?.getData("application/x-wick-node-type") as NodeType | "";
     const triggerType = e.dataTransfer?.getData("application/x-wick-trigger-type");
     if (nodeType) {
-      const id = `${nodeType}_${Math.random().toString(36).slice(2, 8)}`;
-      addNode({ id, type: nodeType, _canvas: { x, y } });
+      // Let addNode pick the next free `<type>_<N>` slot — drops in
+      // quick succession get `http_1`, `http_2`, … instead of random
+      // hashes that collide visually + fight the validator.
+      addNode({ id: "", type: nodeType, _canvas: { x, y } } as any);
       return;
     }
     if (triggerType) {

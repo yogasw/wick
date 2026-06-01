@@ -214,11 +214,36 @@ export function updateNode(id: string, patch: Partial<Node>) {
   });
 }
 
+// Generate a label like `<type>_<N>` that isn't already used by any
+// existing node label or id within the workflow. Mirrors the
+// "duplicate label" validator on the Go side so brand-new nodes
+// never fail validation just for existing.
+function nextNodeLabel(wf: Workflow, type: string): string {
+  const taken = new Set<string>();
+  for (const n of wf.graph?.nodes ?? []) {
+    if (n.label) taken.add(n.label);
+    if (n.id) taken.add(n.id);
+  }
+  let i = 1;
+  while (taken.has(`${type}_${i}`)) i++;
+  return `${type}_${i}`;
+}
+
 export function addNode(node: Node) {
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     ensureGraph(wf);
-    wf.graph.nodes = [...wf.graph.nodes, node];
+    // Auto-fill label (and id when missing) with the next free
+    // `<type>_<N>` slot so duplicates from quick drops don't trip
+    // the validator. Operator can rename via the inspector after.
+    const filled = { ...node };
+    if (!filled.label) {
+      filled.label = nextNodeLabel(wf, node.type);
+    }
+    if (!filled.id) {
+      filled.id = filled.label;
+    }
+    wf.graph.nodes = [...wf.graph.nodes, filled];
     return wf;
   });
 }
@@ -313,9 +338,34 @@ function flattenCanvasPositions(wf: Workflow): Workflow {
   } as Workflow;
 }
 
+// Returns the set of labels (or ids when label is blank) that more
+// than one node shares — `[]` when clean. Used to short-circuit save
+// before the backend rejects the workflow.
+function findDuplicateLabels(wf: Workflow): string[] {
+  const seen = new Map<string, number>();
+  for (const n of wf.graph?.nodes ?? []) {
+    const key = (n.label || n.id || "").trim();
+    if (!key) continue;
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  return [...seen.entries()].filter(([, c]) => c > 1).map(([k]) => k);
+}
+
 export async function saveDraft(opts: { silent?: boolean } = {}) {
   const wf = get(draftWorkflow);
   if (!wf) return;
+  // Client-side dup label check — block before round-tripping the
+  // backend so the user sees the conflict instantly. The Go
+  // validator catches the same case but only after the disk write.
+  const dups = findDuplicateLabels(wf);
+  if (dups.length > 0) {
+    saveStatus.set("failed");
+    toastError(
+      "Cannot save — duplicate labels",
+      `Used by more than one node: ${dups.join(", ")}. Rename via the inspector.`,
+    );
+    return;
+  }
   const projected = flattenCanvasPositions(wf);
   saveStatus.set("saving");
   let res: Awaited<ReturnType<typeof workflowAPI.saveDraft>>;
