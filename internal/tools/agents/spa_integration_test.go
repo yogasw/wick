@@ -75,9 +75,25 @@ func (t *testRouter) handle(method, p string, h tool.HandlerFunc) {
 	})
 }
 
+// skipIfNoSPAShell skips when the Vite bundle isn't built. index.html +
+// assets are not committed (regenerated at build/release time, mirror of
+// *_templ.go), so any test that hits the SPA HTTP surface needs to opt
+// out gracefully on fresh clones / CI without a build step.
+func skipIfNoSPAShell(t *testing.T) {
+	t.Helper()
+	sub, err := fs.Sub(SPAFS, "dist/workflow")
+	if err != nil {
+		t.Skip("no SPA dist subtree — run `npm run build:workflow` to enable")
+	}
+	if _, err := sub.Open("index.html"); err != nil {
+		t.Skip("no SPA shell — run `npm run build:workflow` to enable")
+	}
+}
+
 // TestSPAShellServes ensures hitting /tools/agents/agents-v2/workflow/
 // returns the Vite-built index.html with the right base URL injected.
 func TestSPAShellServes(t *testing.T) {
+	skipIfNoSPAShell(t)
 	r := newTestRouter()
 	registerSPA(r)
 
@@ -104,6 +120,7 @@ func TestSPAShellServes(t *testing.T) {
 // TestSPAShellClientRoute ensures a /edit/<id> hash-route fallback
 // returns the same shell — the SPA owns routing client-side.
 func TestSPAShellClientRoute(t *testing.T) {
+	skipIfNoSPAShell(t)
 	r := newTestRouter()
 	registerSPA(r)
 	srv := httptest.NewServer(r.mux)
