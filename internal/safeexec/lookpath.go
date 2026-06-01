@@ -30,32 +30,10 @@ package safeexec
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 )
-
-// findExecutable reports whether file is a regular file with at
-// least one executable mode bit set. Unlike os/exec.findExecutable
-// it never calls unix.Eaccess (and therefore never reaches
-// faccessat2). This sacrifices the euid-based AT_EACCESS check —
-// fine for wick because the process is never setuid; effective
-// and real uid are always the same.
-func findExecutable(file string) error {
-	d, err := os.Stat(file)
-	if err != nil {
-		return err
-	}
-	if m := d.Mode(); !m.IsDir() && m&0o111 != 0 {
-		return nil
-	}
-	if d.IsDir() {
-		return syscall.EISDIR
-	}
-	return fs.ErrPermission
-}
 
 // ResolveBin returns the absolute path to name. If name already
 // contains a slash it is returned unchanged (caller is assumed to
@@ -73,8 +51,10 @@ func ResolveBin(name string) (string, error) {
 
 // LookPath searches PATH for an executable named file, mirroring
 // os/exec.LookPath's semantics but without the faccessat2 syscall.
-// If file contains a slash it is checked directly. Returns an
-// *exec.Error so callers can use errors.Is(err, exec.ErrNotFound).
+// If file contains a slash it is checked directly. On Windows, bare
+// names without an extension are resolved against PATHEXT so "cmd"
+// finds "cmd.exe". Returns an *exec.Error so callers can use
+// errors.Is(err, exec.ErrNotFound).
 func LookPath(file string) (string, error) {
 	if hasPathSep(file) {
 		if err := findExecutable(file); err != nil {
@@ -87,8 +67,7 @@ func LookPath(file string) (string, error) {
 		if dir == "" {
 			dir = "."
 		}
-		full := filepath.Join(dir, file)
-		if err := findExecutable(full); err == nil {
+		if full, ok := findInDir(dir, file); ok {
 			if !filepath.IsAbs(full) {
 				return full, &exec.Error{Name: file, Err: errors.New("resolved to relative path")}
 			}
