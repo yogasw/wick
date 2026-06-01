@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Project — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+  .panel { background: #0f172a; color: #e2e8f0; border-radius: 12px; }
+  .panel-light { background: #ffffff; color: #1e293b; border: 1px solid #e2e8f0; border-radius: 12px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .chip-active { background:rgba(20,184,166,0.15); color:#5eead4; border:1px solid rgba(20,184,166,0.35); }
+  .row { padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+  .row:hover { background: rgba(255,255,255,0.04); }
+  .row.active { background: rgba(20,184,166,0.12); color: #5eead4; }
+  .row .meta { font-size: 11px; color:#64748b; }
+  .row-light { padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+  .row-light:hover { background: #f1f5f9; }
+  .section-h { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; padding: 12px 12px 6px; display:flex; justify-content:space-between; }
+  .pill { background:#1e293b; padding:2px 8px; border-radius:999px; font-size:10px; color:#94a3b8; }
+  .breadcrumb a { color:#94a3b8; }
+  .breadcrumb a:hover { color:#5eead4; }
+  .key { color: #7dd3fc; }
+  .str { color: #fde68a; }
+  .cmt { color: #6b7280; font-style: italic; }
+  .legend-dot { width:10px; height:10px; border-radius:999px; display:inline-block; vertical-align:middle; margin-right:6px; }
+  .badge { display:inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+  .badge-managed { background: #e0e7ff; color: #4338ca; }
+  .badge-custom  { background: #fef3c7; color: #92400e; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+<!-- HERO -->
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-4">
+  <div class="text-xs font-semibold tracking-widest text-teal-600 uppercase">Wick · Project</div>
+  <h1 class="text-3xl font-bold mt-1">Project — Bundle of Defaults + Folder</h1>
+  <p class="mt-2 text-slate-600 max-w-2xl">1 Project = 1 Folder + Defaults + Pinned. Session bound to 1 project at create. Move-to-project allowed; mid-project folder switch is not — folder is part of project identity.</p>
+  <p class="mt-2 text-xs text-slate-500">Paired with <code>design.md</code>. Update keduanya barengan kalau layout / kontrak berubah.</p>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 pb-20 space-y-10">
+
+<!-- ============================================================ -->
+<!-- STATE 0: MIGRATION BANNER -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⓪ First boot after upgrade — auto-migrate banner</h2>
+  <p class="text-sm text-slate-600 mb-4">Idempotent boot-time migration: each existing workspace becomes a project with the same folder. Sessions re-linked automatically.</p>
+  <div class="panel-light p-0 overflow-hidden">
+    <div class="bg-emerald-50 border-b border-emerald-200 px-6 py-3 flex items-center gap-3">
+      <div class="text-emerald-600 text-xl">✓</div>
+      <div class="flex-1 text-sm">
+        <div class="font-semibold text-emerald-800">Migrated 3 workspaces to projects</div>
+        <div class="text-emerald-700 text-xs">Each workspace became a project; folder + defaults preserved. Sessions re-linked. No data loss.</div>
+      </div>
+      <button class="text-emerald-700 hover:text-emerald-900 text-xs font-semibold">Dismiss</button>
+    </div>
+    <div class="p-6 grid grid-cols-3 gap-4 text-sm">
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-slate-500 text-xs">Before</div>
+        <pre class="text-xs mt-1">workspaces/
+  wick/files/
+  sandbox/files/
+  docs/  (custom path)</pre>
+      </div>
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-slate-500 text-xs">After</div>
+        <pre class="text-xs mt-1">projects/
+  &lt;id1&gt;/files/        (was wick)
+  &lt;id2&gt;/files/        (was sandbox)
+  &lt;id3&gt;/              (was docs; custom)</pre>
+      </div>
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-slate-500 text-xs">Sessions</div>
+        <pre class="text-xs mt-1">sessions/&lt;sid&gt;/meta.json
+  - workspace: "wick"
+  + project_id: &lt;id1&gt;</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 1: UNSCOPED LANDING -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">① Unscoped landing (default)</h2>
+  <p class="text-sm text-slate-600 mb-4">Projects section above. Recent shows all chats across projects, each row tagged with its project. New session = no project unless picked.</p>
+
+  <div class="grid grid-cols-12 gap-4">
+    <div class="col-span-3 panel p-2 h-[520px] overflow-hidden">
+      <div class="px-3 py-3 flex items-center justify-between">
+        <div class="font-bold text-sm">my-app · Agents</div>
+        <button class="text-xs bg-teal-500 hover:bg-teal-400 text-slate-900 font-semibold px-3 py-1.5 rounded-md">+ New</button>
+      </div>
+
+      <div class="px-2 mb-2 space-y-1">
+        <div class="row flex items-center gap-2"><span class="text-teal-300">✎</span> New session</div>
+        <div class="row flex items-center gap-2"><span>▦</span> Overview</div>
+      </div>
+
+      <div class="section-h">
+        <span>Projects</span>
+        <button class="text-teal-300 hover:text-teal-200 normal-case font-semibold tracking-normal">+ New</button>
+      </div>
+      <div class="px-1">
+        <div class="row flex items-center gap-2">📁 <span>Wick Backend</span> <span class="ml-auto pill">12</span></div>
+        <div class="row flex items-center gap-2">🧪 <span>Sandbox</span> <span class="ml-auto pill">3</span></div>
+        <div class="row flex items-center gap-2">📚 <span>Learning</span> <span class="ml-auto pill">7</span></div>
+      </div>
+
+      <div class="section-h"><span>Recent · all chats</span></div>
+      <div class="px-1">
+        <div class="row active">Debug auth middleware <div class="meta">📁 Wick Backend · 2m ago</div></div>
+        <div class="row">Try haiku speed <div class="meta">🧪 Sandbox · 1h ago</div></div>
+        <div class="row">Pagi standup notes <div class="meta">no project · today</div></div>
+        <div class="row">Refactor connector pkg <div class="meta">📁 Wick Backend · yesterday</div></div>
+        <div class="row">Learn drawflow events <div class="meta">📚 Learning · 2d ago</div></div>
+      </div>
+    </div>
+
+    <div class="col-span-9 panel-light p-8 h-[520px] flex flex-col items-center justify-center text-center">
+      <div class="w-14 h-14 rounded-xl bg-teal-500/15 grid place-items-center mb-4">
+        <div class="text-teal-600 text-2xl">✦</div>
+      </div>
+      <h3 class="text-2xl font-bold">New session</h3>
+      <p class="text-sm text-slate-500 mt-1 max-w-md">Pick a project (or skip for unscoped). Session is created when you send the first message.</p>
+
+      <div class="mt-6 w-full max-w-2xl">
+        <div class="border border-slate-300 rounded-2xl bg-white p-3">
+          <textarea class="w-full text-sm text-slate-500 outline-none resize-none" rows="2" placeholder="Ask anything..."></textarea>
+          <div class="flex items-center gap-2 mt-2 border-t border-slate-200 pt-2 flex-wrap">
+            <button class="w-8 h-8 rounded-full bg-slate-100 grid place-items-center text-slate-500">📎</button>
+            <select class="text-xs border border-slate-300 rounded-md px-2 py-1.5"><option>— no project —</option></select>
+            <select class="text-xs border border-slate-300 rounded-md px-2 py-1.5"><option>claude · claude</option></select>
+            <select class="text-xs border border-slate-300 rounded-md px-2 py-1.5"><option>— preset (default) —</option></select>
+            <button class="ml-auto bg-teal-500 hover:bg-teal-400 text-slate-900 font-semibold text-sm px-4 py-1.5 rounded-md">Send →</button>
+          </div>
+        </div>
+        <p class="text-xs text-slate-400 mt-3">Pick a project to auto-prefill provider + preset. Folder follows the project.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 2: SCOPED -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">② Scoped to project — defaults auto-prefilled</h2>
+  <p class="text-sm text-slate-600 mb-4">Klik project di sidebar → swap ke scoped. Provider + preset auto-prefill dari project defaults. Folder implicit (1 folder per project).</p>
+
+  <div class="grid grid-cols-12 gap-4">
+    <div class="col-span-3 panel p-2 h-[520px] overflow-hidden">
+      <div class="px-3 py-3 flex items-center justify-between">
+        <div class="breadcrumb text-xs"><a href="#">← All chats</a> <span class="text-slate-500">/</span> <span class="text-teal-300 font-semibold">📁 Wick Backend</span></div>
+        <button class="text-xs bg-teal-500 hover:bg-teal-400 text-slate-900 font-semibold px-3 py-1.5 rounded-md">+ New</button>
+      </div>
+
+      <div class="section-h"><span>📌 Pinned</span></div>
+      <div class="px-1">
+        <div class="row">Auth migration tracker <div class="meta">pinned</div></div>
+      </div>
+
+      <div class="section-h">
+        <span>Recent · Wick Backend</span>
+        <span class="text-slate-500 normal-case tracking-normal">12 chats</span>
+      </div>
+      <div class="px-1">
+        <div class="row active">Debug auth middleware <div class="meta">2m ago</div></div>
+        <div class="row">Refactor connector pkg <div class="meta">yesterday</div></div>
+        <div class="row">Trace failing E2E test <div class="meta">2d ago</div></div>
+        <div class="row">SSE replay bug <div class="meta">last week</div></div>
+      </div>
+    </div>
+
+    <div class="col-span-9 panel-light p-0 h-[520px] flex flex-col">
+      <div class="px-6 py-3 border-b border-slate-200 flex items-center gap-3">
+        <span class="chip chip-active">📁 Wick Backend
+          <button class="text-teal-200 hover:text-white">✕</button>
+        </span>
+        <span class="text-xs text-slate-500 font-mono">/d/code/work/wick</span>
+        <span class="ml-auto text-xs text-slate-400 hover:text-slate-600 cursor-pointer">⚙ Project settings</span>
+      </div>
+
+      <div class="flex-1 grid place-items-center p-8">
+        <div class="w-full max-w-2xl text-center">
+          <div class="w-14 h-14 rounded-xl bg-teal-500/15 grid place-items-center mb-4 mx-auto">
+            <div class="text-teal-600 text-2xl">✦</div>
+          </div>
+          <h3 class="text-2xl font-bold">New session in 📁 Wick Backend</h3>
+          <p class="text-sm text-slate-500 mt-1">Provider + preset inherited from project. Override anything per-session.</p>
+
+          <div class="mt-6">
+            <div class="border border-slate-300 rounded-2xl bg-white p-3 text-left">
+              <textarea class="w-full text-sm text-slate-500 outline-none resize-none" rows="2" placeholder="Ask anything..."></textarea>
+              <div class="flex items-center gap-2 mt-2 border-t border-slate-200 pt-2 flex-wrap">
+                <button class="w-8 h-8 rounded-full bg-slate-100 grid place-items-center text-slate-500">📎</button>
+                <select class="text-xs border border-teal-300 bg-teal-50 rounded-md px-2 py-1.5 text-teal-700 font-semibold"><option>📁 Wick Backend</option></select>
+                <select class="text-xs border border-teal-300 bg-teal-50 rounded-md px-2 py-1.5 text-teal-700 font-semibold"><option>claude · claude</option></select>
+                <select class="text-xs border border-teal-300 bg-teal-50 rounded-md px-2 py-1.5 text-teal-700 font-semibold"><option>engineer (from project)</option></select>
+                <button class="ml-auto bg-teal-500 hover:bg-teal-400 text-slate-900 font-semibold text-sm px-4 py-1.5 rounded-md">Send →</button>
+              </div>
+            </div>
+            <p class="text-xs text-slate-400 mt-3">Teal dropdowns = inherited from project. Click any to override.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 3: MOVE-TO MENU -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">③ Move chat to project — 1-level menu</h2>
+  <p class="text-sm text-slate-600 mb-4">Right-click row → submenu list projects. Atomic <code>meta.project_id</code> update. Folder of target project becomes the new cwd context.</p>
+
+  <div class="grid grid-cols-12 gap-4">
+    <div class="col-span-4 panel p-2 h-[400px] overflow-hidden relative">
+      <div class="px-3 py-3 flex items-center justify-between">
+        <div class="font-bold text-sm">Recent</div>
+      </div>
+      <div class="px-1">
+        <div class="row">Pagi standup notes <div class="meta">no project · today</div></div>
+        <div class="row active">Try haiku speed <div class="meta">no project · 2h ago</div></div>
+        <div class="row">Debug auth middleware <div class="meta">📁 Wick Backend · 3h ago</div></div>
+      </div>
+
+      <div class="absolute left-44 top-32 panel-light shadow-2xl border border-slate-200 rounded-lg w-56 py-1 text-sm">
+        <div class="row-light flex items-center gap-2">📌 Pin</div>
+        <div class="row-light flex items-center gap-2">✏️ Rename</div>
+        <div class="row-light flex items-center justify-between gap-2 bg-slate-100">
+          📂 Move to project <span class="text-slate-400">▸</span>
+        </div>
+        <div class="row-light flex items-center gap-2">🗑 Delete</div>
+        <div class="absolute left-56 top-16 panel-light shadow-2xl border border-slate-200 rounded-lg w-48 py-1 text-sm">
+          <div class="row-light flex items-center gap-2">📁 Wick Backend</div>
+          <div class="row-light flex items-center gap-2">🧪 Sandbox</div>
+          <div class="row-light flex items-center gap-2">📚 Learning</div>
+          <div class="row-light flex items-center gap-2 border-t border-slate-200 mt-1 pt-2 text-slate-500">— No project —</div>
+          <div class="row-light flex items-center gap-2 text-teal-600 font-semibold">+ New project…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-span-8 panel-light p-6 h-[400px]">
+      <h4 class="font-bold text-sm mb-2">Move semantics</h4>
+      <ol class="list-decimal pl-5 text-sm space-y-1 text-slate-700">
+        <li>Read <code>sessions/&lt;sid&gt;/meta.json</code></li>
+        <li>Write <code>meta.project_id = newPid</code> (atomic via <code>storage.WriteJSON</code>)</li>
+        <li>Registry: <code>upsertSession</code> dgn meta baru</li>
+      </ol>
+      <p class="text-xs text-slate-500 mt-3">Session ID + path stable → workflows / channels / agent spawn yg pegang sid gak break. Filesystem unchanged. Agent next-spawn pakai folder dari new project.</p>
+
+      <h4 class="font-bold text-sm mt-6 mb-2">Cwd shift caveat</h4>
+      <p class="text-sm text-slate-700">Pindah session ke project lain = cwd berubah saat next agent spawn. Lama (terminated) subprocess gak ke-touch; live subprocess perlu kill + respawn buat pickup cwd baru.</p>
+
+      <h4 class="font-bold text-sm mt-6 mb-2">Drag-and-drop alternative</h4>
+      <p class="text-sm text-slate-700">Drag chat row dari Recent ke project node di sidebar = same move op. Discoverable via right-click; power-user via drag.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 4: PROJECT SETTINGS (single folder, no list editor) -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">④ Project settings — single folder + defaults</h2>
+  <p class="text-sm text-slate-600 mb-4">Folder is part of project identity — single field (managed or custom path). Defaults bundled. Pinned sessions managed inline.</p>
+
+  <div class="panel-light p-6">
+    <div class="flex items-center gap-3 mb-6 pb-4 border-b border-slate-200">
+      <div class="w-12 h-12 rounded-xl bg-slate-100 grid place-items-center text-2xl">📁</div>
+      <div>
+        <input class="text-2xl font-bold outline-none border-b border-transparent focus:border-teal-400" value="Wick Backend">
+        <p class="text-xs text-slate-500">12 chats · created 2026-05-20</p>
+      </div>
+      <button class="ml-auto text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-md border border-red-200">Delete project</button>
+    </div>
+
+    <div class="grid grid-cols-2 gap-6">
+      <!-- Left column: folder + defaults -->
+      <div>
+        <h4 class="font-bold text-sm mb-2">Folder</h4>
+        <div class="border border-slate-200 rounded-lg p-3 space-y-2">
+          <div class="flex items-center gap-2 text-sm">
+            <input type="radio" id="folder-custom" name="folder-mode" checked>
+            <label for="folder-custom" class="font-semibold">Custom path</label>
+            <span class="badge badge-custom">CUSTOM</span>
+          </div>
+          <input class="w-full font-mono text-xs border border-slate-300 rounded-md px-2 py-1.5" value="/d/code/work/wick">
+          <p class="text-xs text-slate-500">Absolute path to an existing folder. Wick will use this as the agent cwd.</p>
+
+          <div class="flex items-center gap-2 text-sm mt-3 pt-3 border-t border-slate-200">
+            <input type="radio" id="folder-managed" name="folder-mode">
+            <label for="folder-managed" class="font-semibold">Managed</label>
+            <span class="badge badge-managed">MANAGED</span>
+          </div>
+          <p class="text-xs text-slate-500 mt-1">Wick creates and owns the folder at <code>projects/&lt;id&gt;/files/</code>. Useful for scratch sessions.</p>
+        </div>
+
+        <h4 class="font-bold text-sm mt-6 mb-2">Defaults</h4>
+        <div class="space-y-2 text-sm">
+          <div><label class="block text-slate-500 text-xs mb-0.5">Provider</label><select class="w-full border border-slate-300 rounded-md px-2 py-1.5"><option>claude · claude</option></select></div>
+          <div><label class="block text-slate-500 text-xs mb-0.5">Preset</label><select class="w-full border border-slate-300 rounded-md px-2 py-1.5"><option>engineer</option></select></div>
+          <div>
+            <label class="block text-slate-500 text-xs mb-0.5">System prompt addon</label>
+            <textarea rows="3" class="w-full border border-slate-300 rounded-md p-2 text-xs" placeholder="Appended to preset system prompt for every session..."></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right column: pinned + meta preview -->
+      <div>
+        <h4 class="font-bold text-sm mb-2">📌 Pinned sessions</h4>
+        <div class="space-y-1">
+          <div class="row-light flex items-center gap-2 border border-slate-200">
+            <span>Auth migration tracker</span>
+            <button class="ml-auto text-slate-400 hover:text-red-500">✕</button>
+          </div>
+          <div class="text-xs text-slate-400 italic px-2 py-1">+ Pin a session from Recent</div>
+        </div>
+
+        <h4 class="font-bold text-sm mt-6 mb-2">Project meta preview</h4>
+        <pre class="text-xs bg-slate-50 border border-slate-200 rounded-md p-3"><span class="cmt"># projects/01J.../meta.json</span>
+<span class="key">id</span>:           <span class="str">"01J..."</span>
+<span class="key">name</span>:         <span class="str">"Wick Backend"</span>
+<span class="key">icon</span>:         <span class="str">"📁"</span>
+<span class="key">custom_path</span>:  <span class="str">"/d/code/work/wick"</span>
+<span class="key">defaults</span>:
+  <span class="key">preset</span>:     <span class="str">"engineer"</span>
+  <span class="key">provider</span>:   <span class="str">"claude/claude"</span>
+<span class="key">pinned_sessions</span>: [<span class="str">"01J..."</span>]</pre>
+
+        <h4 class="font-bold text-sm mt-6 mb-2">Folder change semantics</h4>
+        <ul class="list-disc pl-5 text-xs text-slate-600 space-y-1">
+          <li>Managed → custom: managed <code>files/</code> kept on disk (orphaned backup; user-deletable manual)</li>
+          <li>Custom → managed: new managed dir created; custom path untouched (wick never owned it)</li>
+          <li>Custom A → custom B: meta-only change; no folder touched</li>
+          <li>Live sessions: cwd shifts at next spawn; running subprocess unaffected until restart</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STORAGE DIAGRAM -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⑤ Storage layout (cheat sheet)</h2>
+  <p class="text-sm text-slate-600 mb-4">Project = single folder. Managed = nested. Custom = referenced by absolute path only.</p>
+
+  <div class="panel-light p-6">
+    <pre class="text-xs leading-relaxed"><span class="cmt">&lt;BaseDir&gt;/</span>
+  presets/                              <span class="cmt">unchanged</span>
+  workflows/                            <span class="cmt">unchanged</span>
+  sessions/
+    &lt;sid&gt;/
+      meta.json                        <span class="cmt">← + project_id (replaces workspace)</span>
+      conversation.jsonl
+      ...
+  projects/                            <span class="cmt">← NEW (replaces workspaces/)</span>
+    &lt;project-id&gt;/
+      meta.json                        <span class="cmt">← defaults, pinned, folder ref</span>
+      files/                           <span class="cmt">← managed cwd (only if custom_path empty)</span></pre>
+
+    <div class="mt-4 grid grid-cols-2 gap-4 text-xs">
+      <div class="p-3 border border-emerald-200 bg-emerald-50 rounded-lg">
+        <div class="font-bold text-emerald-700 mb-1"><span class="legend-dot bg-emerald-500"></span>Authoritative (truth)</div>
+        <ul class="list-disc pl-5 text-emerald-900 space-y-0.5">
+          <li><code>sessions/&lt;sid&gt;/meta.json</code></li>
+          <li><code>projects/&lt;pid&gt;/meta.json</code></li>
+        </ul>
+      </div>
+      <div class="p-3 border border-amber-200 bg-amber-50 rounded-lg">
+        <div class="font-bold text-amber-700 mb-1"><span class="legend-dot bg-amber-500"></span>Derived (rebuildable)</div>
+        <ul class="list-disc pl-5 text-amber-900 space-y-0.5">
+          <li>Registry in-memory cache (project + session maps)</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="text-xs text-slate-500 mt-3">Per-project sessions.jsonl <strong>dropped</strong> — in-memory filter via <code>registry.sessions</code> by <code>Meta.ProjectID</code> cukup utk v1 (sessions &lt; 10k).</p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- MIGRATION DETAIL -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⑥ Migration detail (workspaces/ → projects/)</h2>
+  <p class="text-sm text-slate-600 mb-4">Idempotent boot-time scan. 1:1 mapping — each workspace becomes a project with the same folder.</p>
+  <div class="panel-light p-6">
+    <pre class="text-xs leading-relaxed">for each <span class="key">workspaces/&lt;name&gt;/</span>:
+  pid = uuid.new()
+  project.Create({
+    id:          pid,
+    name:        name,                         <span class="cmt"># display = old workspace name</span>
+    description: ws.description,
+    custom_path: ws.custom_path,
+    defaults: {
+      preset:   ws.default_preset,
+      provider: ws.default_provider,
+    },
+    tags: ws.tags,
+  })
+  if ws.custom_path == "":
+    <span class="cmt"># managed → move folder (atomic same-FS rename)</span>
+    os.Rename(
+      <span class="str">"workspaces/&lt;name&gt;/files"</span>,
+      <span class="str">"projects/&lt;pid&gt;/files"</span>
+    )
+  <span class="cmt"># else: custom path unchanged, only referenced from meta</span>
+
+for each <span class="key">sessions/&lt;sid&gt;/</span> where meta.workspace != <span class="str">""</span>:
+  pid = workspaceToProject[meta.workspace]
+  meta.project_id = pid
+  meta.workspace = <span class="str">""</span>                              <span class="cmt"># drop legacy field</span>
+  session.SaveMeta(sid, meta)</pre>
+    <p class="text-xs text-slate-500 mt-3"><strong>Idempotency:</strong> skip if <code>projects/</code> already non-empty. Legacy <code>workspaces/</code> dir kept defensively; cleanup deferred to v1.1.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="text-center text-xs text-slate-400 pb-8">
+  Wick · Project design mockup · paired with <code>design.md</code>
+</footer>
+
+</body>
+</html>
