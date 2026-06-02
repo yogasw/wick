@@ -78,20 +78,23 @@
     const channelEventRaw = e.dataTransfer?.getData("application/x-wick-channel-event");
     const actionPrefillRaw = e.dataTransfer?.getData("application/x-wick-action-prefill");
     if (actionPrefillRaw) {
-      // Per-channel / per-connector palette row. Payload carries the
-      // node type + the channel or module to seed so the inspector
-      // opens already pointing at the right backend.
+      // Per-channel / per-connector palette drill. Payload carries
+      // the node type + the channel or module + the specific op so
+      // the dropped node is fully specified and the inspector locks
+      // those fields (matches v1 two-pane picker UX).
       try {
         const prefill = JSON.parse(actionPrefillRaw) as {
           type: string;
           channel?: string;
           module?: string;
+          op?: string;
         };
         addNode({
           id: "",
           type: prefill.type as NodeType,
           ...(prefill.channel ? { channel: prefill.channel } : {}),
           ...(prefill.module ? { module: prefill.module } : {}),
+          ...(prefill.op ? { op: prefill.op } : {}),
           _canvas: { x, y },
         } as any);
       } catch (err) {

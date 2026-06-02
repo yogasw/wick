@@ -264,10 +264,17 @@ export function addNode(node: Node) {
     // the channel name / module instead, so a Slack drop reads `slack_1`
     // and a GitHub drop reads `github_1`.
     const filled = { ...node };
-    const labelKey =
+    // Channel/connector drops carry channel/module + op. Combine into
+    // a label key so dropping two different Slack ops yields
+    // `slack_send_1` and `slack_open_1` rather than fighting over
+    // `slack_1`. Falls back to the bare channel/module when op is
+    // absent (manually-created node without a drill drop).
+    const backend =
       (node.type === "channel" && (node as any).channel) ||
       (node.type === "connector" && (node as any).module) ||
-      node.type;
+      "";
+    const opPart = (node as any).op ? `_${(node as any).op}` : "";
+    const labelKey = backend ? `${backend}${opPart}` : node.type;
     if (!filled.label) {
       filled.label = nextNodeLabel(wf, labelKey);
     }

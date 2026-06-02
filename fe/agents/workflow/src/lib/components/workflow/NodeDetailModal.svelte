@@ -961,46 +961,69 @@
 
               <!-- ── channel ────────────────────────────────────── -->
               {#if node.type === "channel"}
-                <Field
-                  kind="select"
-                  label="Channel"
-                  value={node.channel ?? ""}
-                  onChange={(v) => {
-                    patch("channel", v);
-                    // Reset op + args when switching channels — catalog
-                    // resolves a different op set + arg schema per
-                    // channel, leaving stale values around will fail
-                    // validation on the server.
-                    patch("op", "");
-                    patch("args", {});
-                  }}
-                  options={[
-                    { label: "(select channel)", value: "" },
-                    ...($catalog?.channels ?? []).map((c) => ({
-                      label: c.name,
-                      value: c.name,
-                    })),
-                  ]}
-                  helper="Channels registered with the wick channel registry."
-                />
-                {#if node.channel}
+                {#if node.channel && node.op}
+                  <!-- Locked channel + op — set by the palette drill
+                       drop. Same rationale as the connector lock above. -->
+                  <div class="rounded border border-slate-200 dark:border-slate-700 px-3 py-2 bg-slate-50 dark:bg-slate-800/40">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="flex flex-col">
+                        <span class="text-[10px] uppercase tracking-wider text-slate-500">Action</span>
+                        <span class="text-sm font-medium">
+                          {node.channel}
+                          <span class="text-slate-400 mx-1">›</span>
+                          {node.op}
+                        </span>
+                      </div>
+                      <span class="text-[10px] text-slate-400">locked</span>
+                    </div>
+                    {#if currentChannelOp?.description}
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                        {currentChannelOp.description}
+                      </div>
+                    {/if}
+                  </div>
+                {:else}
                   <Field
                     kind="select"
-                    label="Op"
-                    value={node.op ?? ""}
+                    label="Channel"
+                    value={node.channel ?? ""}
                     onChange={(v) => {
-                      patch("op", v);
+                      patch("channel", v);
+                      // Reset op + args when switching channels — catalog
+                      // resolves a different op set + arg schema per
+                      // channel, leaving stale values around will fail
+                      // validation on the server.
+                      patch("op", "");
                       patch("args", {});
                     }}
                     options={[
-                      { label: "(select op)", value: "" },
-                      ...currentChannelOps.map((o) => ({ label: o.id, value: o.id })),
+                      { label: "(select channel)", value: "" },
+                      ...($catalog?.channels ?? []).map((c) => ({
+                        label: c.name,
+                        value: c.name,
+                      })),
                     ]}
+                    helper="Channels registered with the wick channel registry."
                   />
-                  {#if currentChannelOp?.description}
-                    <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
-                      {currentChannelOp.description}
-                    </div>
+                  {#if node.channel}
+                    <Field
+                      kind="select"
+                      label="Op"
+                      value={node.op ?? ""}
+                      onChange={(v) => {
+                        patch("op", v);
+                        patch("args", {});
+                      }}
+                      options={[
+                        { label: "(select op)", value: "" },
+                        ...currentChannelOps.map((o) => ({ label: o.id, value: o.id })),
+                      ]}
+                    />
+                    {#if currentChannelOp?.description}
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                        {currentChannelOp.description}
+                      </div>
+                    {/if}
                   {/if}
                 {/if}
                 {#if currentChannelOp?.args_schema && currentChannelOp.args_schema.length > 0}
@@ -1038,45 +1061,73 @@
 
               <!-- ── connector ──────────────────────────────────── -->
               {#if node.type === "connector"}
-                <Field
-                  kind="select"
-                  label="Module"
-                  value={node.module ?? ""}
-                  onChange={(v) => {
-                    patch("module", v);
-                    patch("op", "");
-                    patch("args", {});
-                  }}
-                  options={[
-                    { label: "(select module)", value: "" },
-                    ...($catalog?.connectors ?? []).map((c) => ({
-                      label: c.name || c.module,
-                      value: c.module,
-                    })),
-                  ]}
-                  helper="Connector modules registered with the wick connector registry."
-                />
-                {#if node.module}
+                {#if node.module && node.op}
+                  <!-- Locked module + op — set by the palette drill
+                       drop. Changing them would invalidate the args
+                       schema; if the user wants a different op they
+                       delete the node and drop a new one. -->
+                  <div class="rounded border border-slate-200 dark:border-slate-700 px-3 py-2 bg-slate-50 dark:bg-slate-800/40">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="flex flex-col">
+                        <span class="text-[10px] uppercase tracking-wider text-slate-500">Action</span>
+                        <span class="text-sm font-medium">
+                          {($catalog?.connectors ?? []).find((c) => c.module === node.module)?.name || node.module}
+                          <span class="text-slate-400 mx-1">›</span>
+                          {currentConnectorOp?.name || node.op}
+                        </span>
+                      </div>
+                      <span class="text-[10px] text-slate-400">locked</span>
+                    </div>
+                    {#if currentConnectorOp?.description}
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                        {currentConnectorOp.description}
+                      </div>
+                    {/if}
+                  </div>
+                {:else}
+                  <!-- Manually created node (no drill drop) — keep the
+                       editable dropdowns so the user can still wire it
+                       up by hand. -->
                   <Field
                     kind="select"
-                    label="Op"
-                    value={node.op ?? ""}
+                    label="Module"
+                    value={node.module ?? ""}
                     onChange={(v) => {
-                      patch("op", v);
+                      patch("module", v);
+                      patch("op", "");
                       patch("args", {});
                     }}
                     options={[
-                      { label: "(select op)", value: "" },
-                      ...currentConnectorOps.map((o) => ({
-                        label: o.name || o.id,
-                        value: o.id,
+                      { label: "(select module)", value: "" },
+                      ...($catalog?.connectors ?? []).map((c) => ({
+                        label: c.name || c.module,
+                        value: c.module,
                       })),
                     ]}
+                    helper="Connector modules registered with the wick connector registry."
                   />
-                  {#if currentConnectorOp?.description}
-                    <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
-                      {currentConnectorOp.description}
-                    </div>
+                  {#if node.module}
+                    <Field
+                      kind="select"
+                      label="Op"
+                      value={node.op ?? ""}
+                      onChange={(v) => {
+                        patch("op", v);
+                        patch("args", {});
+                      }}
+                      options={[
+                        { label: "(select op)", value: "" },
+                        ...currentConnectorOps.map((o) => ({
+                          label: o.name || o.id,
+                          value: o.id,
+                        })),
+                      ]}
+                    />
+                    {#if currentConnectorOp?.description}
+                      <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                        {currentConnectorOp.description}
+                      </div>
+                    {/if}
                   {/if}
                 {/if}
                 {#if currentConnectorOp?.args_schema && currentConnectorOp.args_schema.length > 0}
