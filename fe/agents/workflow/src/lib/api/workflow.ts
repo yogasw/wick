@@ -243,9 +243,27 @@ export const workflowAPI = {
     // engine routes to the correct entry_node.
     apiPost(`${BASE}/api/workflows/run/${encodeURIComponent(id)}`, { trigger_id: triggerID }),
 
-  runs: async (id: string): Promise<{ runs: RunSummary[]; page: number; has_more: boolean }> => {
-    const res = await apiGet<{ runs: any[]; page: number; has_more: boolean }>(
-      `${BASE}/api/workflows/runs/${encodeURIComponent(id)}`,
+  runs: async (
+    id: string,
+    opts?: {
+      page?: number;
+      pageSize?: number;
+      status?: "success" | "failed" | "running";
+      from?: string; // yyyy-mm-dd
+      to?: string;   // yyyy-mm-dd
+      q?: string;    // substring of run id
+    },
+  ): Promise<{ runs: RunSummary[]; page: number; has_more: boolean; total: number }> => {
+    const qs = new URLSearchParams();
+    if (opts?.page) qs.set("page", String(opts.page));
+    if (opts?.pageSize) qs.set("page_size", String(opts.pageSize));
+    if (opts?.status) qs.set("status", opts.status);
+    if (opts?.from) qs.set("from", opts.from);
+    if (opts?.to) qs.set("to", opts.to);
+    if (opts?.q) qs.set("q", opts.q);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    const res = await apiGet<{ runs: any[]; page: number; has_more: boolean; total?: number }>(
+      `${BASE}/api/workflows/runs/${encodeURIComponent(id)}${suffix}`,
     );
     // Normalise: ensure each row has both `id` and `run_id` so panels
     // that wrote `r.run_id` (legacy) still work.
@@ -254,7 +272,7 @@ export const workflowAPI = {
       run_id: r.run_id ?? r.id,
       id: r.id ?? r.run_id,
     })) as RunSummary[];
-    return { runs, page: res.page, has_more: res.has_more };
+    return { runs, page: res.page, has_more: res.has_more, total: res.total ?? -1 };
   },
 
   remove: (id: string): Promise<{ ok: boolean }> =>

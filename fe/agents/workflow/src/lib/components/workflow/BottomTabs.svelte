@@ -2,7 +2,6 @@
   import ValidationTab from "./tabs/ValidationTab.svelte";
   import GuardTab from "./tabs/GuardTab.svelte";
   import TestsTab from "./tabs/TestsTab.svelte";
-  import RunsTab from "./tabs/RunsTab.svelte";
   import LogsTab from "./tabs/LogsTab.svelte";
   import JsonTab from "./tabs/JsonTab.svelte";
   import HistoryTab from "./tabs/HistoryTab.svelte";
@@ -40,30 +39,30 @@
   }
 
   let active = $state<
-    "logs" | "json" | "runs" | "validation" | "guard" | "tests" | "history"
+    "logs" | "json" | "validation" | "guard" | "tests" | "history"
   >("logs");
 
   // Tab labels — storage keys stay terse, labels read full nouns.
   // JSON preview shows the live draft side-by-side with the last
   // published copy so operators see the diff before publishing.
+  // Runs moved to the top-level Executions tab; that view owns the
+  // detail pane + replay-to-editor action.
   const labels: Record<string, string> = {
     logs: "Logs",
     json: "JSON preview",
-    runs: "Runs",
     validation: "Validation",
     guard: "Guard",
     tests: "Tests",
     history: "History",
   };
 
-  // Count badge per tab: surfaces "Logs (0)" / "Runs (14)" inline so
+  // Count badge per tab: surfaces "Logs (0)" / "Tests (3)" inline so
   // operators see at a glance whether anything happened on the active
   // run before opening the panel.
   function tabCount(t: string): number | null {
     switch (t) {
       // Logs come from the live SSE store, not the placeholder prop.
       case "logs": return $logLines.length;
-      case "runs": return runs?.length ?? 0;
       case "tests": return (testsData.length > 0 ? testsData : tests)?.length ?? 0;
       case "guard": return guardData?.length ?? null;
       case "validation": {
@@ -101,7 +100,6 @@
   const tabs = [
     "logs",
     "json",
-    "runs",
     "validation",
     "guard",
     "tests",
@@ -112,7 +110,6 @@
     validation?: any;
     guardHits?: any;
     tests?: any[];
-    runs?: any[];
     logs?: any[];
     versions?: any[];
     onRestoreVersion?: (id: number) => void;
@@ -121,7 +118,6 @@
     validation = null,
     guardHits = null,
     tests = [],
-    runs = [],
     logs = [],
     versions = [],
     onRestoreVersion,
@@ -172,7 +168,6 @@
       {#if active === "validation"}<ValidationTab />
       {:else if active === "guard"}<GuardTab hits={guardData ?? guardHits} />
       {:else if active === "tests"}<TestsTab cases={testsData.length > 0 ? testsData : tests} onRunAll={() => refreshPanel("tests")} running={panelLoading} />
-      {:else if active === "runs"}<RunsTab runs={runs} />
       {:else if active === "logs"}<LogsTab lines={logs} />
       {:else if active === "json"}<JsonTab />
       {:else if active === "history"}<HistoryTab versions={versions} onrestore={onRestoreVersion} />

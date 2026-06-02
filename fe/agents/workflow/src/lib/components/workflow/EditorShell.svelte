@@ -23,38 +23,31 @@
     detailTriggerID,
     removeNode,
     removeTrigger,
+    savePinnedTrigger,
   } from "$lib/stores/editor";
+  import { toastOk } from "$lib/stores/toast";
   import { get } from "svelte/store";
   import { loadCatalog } from "$lib/stores/catalog";
   import { connectSSE, disconnectSSE } from "$lib/stores/sse";
-  import { workflowAPI, type RunSummary } from "$lib/api/workflow";
+  import { workflowAPI } from "$lib/api/workflow";
   import type { WorkflowVersion } from "$lib/types/workflow";
 
   type Props = { workflowID: string };
   let { workflowID }: Props = $props();
 
-  let runs = $state<RunSummary[]>([]);
   let versions = $state<WorkflowVersion[]>([]);
 
   $effect(() => {
     void loadWorkflow(workflowID);
     void loadCatalog();
-    void refreshRuns();
     void refreshVersions();
     // Subscribe to the live event stream for this workflow so node
-    // status overlays (Gap D) + Logs tab content (Gap E) update in
-    // real time while a run is firing.
+    // status overlays + Logs tab content update in real time while a
+    // run is firing. The Executions panel does its own polling for
+    // the runs list, so we don't need a top-level refresh here.
     connectSSE(workflowID);
     return () => disconnectSSE();
   });
-
-
-  async function refreshRuns() {
-    try {
-      const res = await workflowAPI.runs(workflowID);
-      runs = res.runs ?? [];
-    } catch { /* endpoint may not be JSON-mode yet — Phase 2 fixes that */ }
-  }
 
   async function refreshVersions() {
     try {
@@ -67,6 +60,21 @@
     await workflowAPI.restoreVersion(workflowID, versionID);
     await loadWorkflow(workflowID);
     await refreshVersions();
+  }
+
+  // Replay-to-editor: switch the top tab back to Editor and pin the
+  // trigger that fired the picked run so the next Execute click
+  // reuses it. Never fires the run automatically — that's the team
+  // rule: replay = navigate, not auto-execute.
+  function onReplay(triggerID: string | null) {
+    if (triggerID) savePinnedTrigger(workflowID, triggerID);
+    topTab.set("editor");
+    toastOk(
+      "Replay prefilled",
+      triggerID
+        ? "Trigger pinned — hit Execute to re-run."
+        : "Open the Editor and hit Execute to re-run.",
+    );
   }
 
   // Global keyboard shortcuts. We only short-circuit when focus is in a
@@ -162,9 +170,9 @@
     </div>
     <NodeDetailModal />
     <TriggerDetailModal />
-    <BottomTabs runs={runs} versions={versions} onRestoreVersion={onRestoreVersion} />
+    <BottomTabs versions={versions} onRestoreVersion={onRestoreVersion} />
   {:else}
-    <ExecutionsPanel workflowID={workflowID} />
+    <ExecutionsPanel workflowID={workflowID} onReplay={onReplay} />
   {/if}
 </div>
 

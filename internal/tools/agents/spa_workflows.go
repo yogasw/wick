@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -281,6 +282,33 @@ func spaWorkflowRunNow(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
+// runsFilter narrows the runs list before pagination. Empty fields =
+// no-op for that dimension. Applied in-memory after IndexList reads
+// the shardedlog page; that's good enough for typical run volumes
+// (<10k per workflow) and keeps the index file format unchanged.
+type runsFilter struct {
+	Status string
+	From   time.Time
+	To     time.Time
+	Q      string // case-insensitive substring of the run id
+}
+
+func (f runsFilter) keep(r mcp.RunSummary) bool {
+	if f.Status != "" && !strings.EqualFold(r.Status, f.Status) {
+		return false
+	}
+	if !f.From.IsZero() && r.StartedAt.Before(f.From) {
+		return false
+	}
+	if !f.To.IsZero() && r.StartedAt.After(f.To) {
+		return false
+	}
+	if f.Q != "" && !strings.Contains(strings.ToLower(r.ID), f.Q) {
+		return false
+	}
+	return true
+}
+
 func spaWorkflowRuns(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -292,16 +320,101 @@ func spaWorkflowRuns(c *tool.Ctx) {
 			page = n
 		}
 	}
-	runs, hasMore, err := globalWorkflowMgr.MCP.GetRunSummaries(id, page, 50)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	pageSize := 50
+	if v := strings.TrimSpace(c.Query("page_size")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			pageSize = n
+		}
+	}
+
+	// Parse filters. Date inputs accept yyyy-mm-dd or full RFC3339;
+	// `to` gets bumped to end-of-day so a same-day "from=to" still
+	// includes runs that fired through 23:59.
+	f := runsFilter{
+		Status: strings.TrimSpace(c.Query("status")),
+		Q:      strings.ToLower(strings.TrimSpace(c.Query("q"))),
+	}
+	if v := strings.TrimSpace(c.Query("from")); v != "" {
+		if t, err := parseDateInput(v, false); err == nil {
+			f.From = t
+		}
+	}
+	if v := strings.TrimSpace(c.Query("to")); v != "" {
+		if t, err := parseDateInput(v, true); err == nil {
+			f.To = t
+		}
+	}
+
+	// No filters → fall back to the cheap paginated path. Saves a
+	// full-scan read when the FE is just polling for new runs.
+	noFilter := f.Status == "" && f.Q == "" && f.From.IsZero() && f.To.IsZero()
+	if noFilter {
+		runs, hasMore, err := globalWorkflowMgr.MCP.GetRunSummaries(id, page, pageSize)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{
+			"runs":     runs,
+			"page":     page,
+			"has_more": hasMore,
+			"total":    -1, // unknown without a full scan
+		})
 		return
 	}
+
+	// Filtered path: read up to N pages, accumulate matches, then
+	// paginate the matched set. N bounded so a runaway query can't
+	// scan an infinite history.
+	const maxScanPages = 40 // 40 * pageSize ≤ 8000 entries — plenty for typical workloads
+	matched := make([]mcp.RunSummary, 0, pageSize*2)
+	for p := 1; p <= maxScanPages; p++ {
+		rows, hasMore, err := globalWorkflowMgr.MCP.GetRunSummaries(id, p, pageSize)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		for _, r := range rows {
+			if f.keep(r) {
+				matched = append(matched, r)
+			}
+		}
+		if !hasMore {
+			break
+		}
+	}
+
+	from := (page - 1) * pageSize
+	if from > len(matched) {
+		from = len(matched)
+	}
+	to := from + pageSize
+	if to > len(matched) {
+		to = len(matched)
+	}
 	c.JSON(http.StatusOK, map[string]any{
-		"runs":     runs,
+		"runs":     matched[from:to],
 		"page":     page,
-		"has_more": hasMore,
+		"has_more": to < len(matched),
+		"total":    len(matched),
 	})
+}
+
+// parseDateInput accepts "yyyy-mm-dd" (FE date input) or full RFC3339.
+// endOfDay=true bumps a yyyy-mm-dd value to 23:59:59.999 so a
+// same-day from/to range still includes everything fired that day.
+func parseDateInput(v string, endOfDay bool) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.Parse("2006-01-02", v)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if endOfDay {
+		t = t.Add(24*time.Hour - time.Nanosecond)
+	}
+	return t.UTC(), nil
 }
 
 // spaExecNode runs one node in isolation — n8n's "Execute step"

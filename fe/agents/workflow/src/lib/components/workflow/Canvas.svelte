@@ -5,7 +5,7 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger } from "$lib/stores/editor";
 
   // Map node.id → first validation error message. Populated from
   // validationReport.errors via the Path regex. Drives the red badge
@@ -742,49 +742,39 @@
 
   let triggerPickerOpen = $state(false);
 
-  // Per-workflow pinned trigger. Defaults to the first manual trigger
-  // (or just the first trigger) the moment a workflow is loaded; the
-  // user can pin a different one via the dropdown and the choice is
-  // persisted to localStorage so reloading the editor keeps it.
-  let pinnedTriggerID = $state<string | null>(null);
-  function pinStorageKey(workflowID: string) {
-    return `wick:wfv2:pinned-trigger:${workflowID}`;
-  }
+  // Per-workflow pinned trigger lives in the editor store so the
+  // Executions panel's Replay action can update it cross-tab. This
+  // effect reconciles the store with localStorage when a workflow
+  // loads + falls back to the first manual / first overall trigger.
   $effect(() => {
     const wf = $draftWorkflow;
     if (!wf) return;
-    const stored =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem(pinStorageKey(wf.id))
-        : null;
     const triggers = wf.triggers ?? [];
     const known = (id: string | null) => !!triggers.find((t) => t.id === id);
+    // Already in sync? Skip.
+    const current = $pinnedTriggerID;
+    if (current && known(current)) return;
+    const stored = loadPinnedTrigger(wf.id);
     if (stored && known(stored)) {
-      pinnedTriggerID = stored;
+      pinnedTriggerID.set(stored);
       return;
     }
-    // Fallback: first manual trigger, else first overall, else null.
     const fallback =
       triggers.find((t) => t.type === "manual")?.id ?? triggers[0]?.id ?? null;
-    pinnedTriggerID = fallback ?? null;
+    pinnedTriggerID.set(fallback ?? null);
   });
 
   const pinnedTrigger = $derived.by(() => {
     const wf = $draftWorkflow;
     if (!wf) return undefined;
-    return (wf.triggers ?? []).find((t) => t.id === pinnedTriggerID);
+    return (wf.triggers ?? []).find((t) => t.id === $pinnedTriggerID);
   });
 
   function pinTrigger(id: string | undefined | null) {
     const wf = $draftWorkflow;
     if (!wf || !id) return;
-    pinnedTriggerID = id;
     triggerPickerOpen = false;
-    try {
-      window.localStorage.setItem(pinStorageKey(wf.id), id);
-    } catch {
-      /* private mode / storage full — pin survives this session only */
-    }
+    savePinnedTrigger(wf.id, id);
   }
 
   async function executePinned() {
@@ -796,7 +786,7 @@
     // trigger_id, on purpose. The dropdown auto-pins the first
     // trigger on load so this branch only fires after the user has
     // wiped a pin somehow.
-    const fired = pinnedTriggerID ?? triggers[0]?.id;
+    const fired = $pinnedTriggerID ?? triggers[0]?.id;
     if (!fired) {
       console.warn("execute: no trigger pinned — pick one from the dropdown");
       return;
@@ -1205,7 +1195,7 @@
       <div class="rounded-lg bg-slate-900/95 border border-slate-700 shadow-xl p-3 min-w-[280px] text-xs">
         <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Pin trigger to execute</div>
         {#each $draftWorkflow?.triggers ?? [] as t}
-          {@const isPinned = t.id === pinnedTriggerID}
+          {@const isPinned = t.id === $pinnedTriggerID}
           {@const entryNode = ($draftWorkflow?.graph?.nodes ?? []).find((n) => n.id === t.entry_node)}
           {@const entryLabel = entryNode?.label || t.entry_node || "?"}
           <button

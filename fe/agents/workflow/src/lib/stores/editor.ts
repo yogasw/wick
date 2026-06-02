@@ -81,6 +81,33 @@ export const stepResultsByNode = writable<Record<string, StepResult>>({});
 export const triggerRunStatus = writable<Record<string, "success" | "failed" | "running">>({});
 export const lastFiredTriggerID = writable<string | null>(null);
 
+// Pinned trigger for the Execute button. Lifted out of Canvas so the
+// Executions panel can pin a trigger via Replay (per-workflow scope,
+// persisted to localStorage). Stays in editor.ts because both Canvas
+// and EditorShell mutate it.
+export const pinnedTriggerID = writable<string | null>(null);
+function pinKey(workflowID: string) {
+  return `wick:wfv2:pinned-trigger:${workflowID}`;
+}
+export function loadPinnedTrigger(workflowID: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(pinKey(workflowID));
+  } catch {
+    return null;
+  }
+}
+export function savePinnedTrigger(workflowID: string, triggerID: string | null) {
+  pinnedTriggerID.set(triggerID);
+  if (typeof window === "undefined") return;
+  try {
+    if (triggerID) window.localStorage.setItem(pinKey(workflowID), triggerID);
+    else window.localStorage.removeItem(pinKey(workflowID));
+  } catch {
+    /* storage full / denied — in-memory pin still works for this session */
+  }
+}
+
 // Last run summary — drives the "Run completed in XXms" toast at the
 // top of the editor.
 export const lastRunSummary = writable<{ runID: string; status: string; durationMs: number } | null>(null);
