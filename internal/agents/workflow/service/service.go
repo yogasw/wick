@@ -6,7 +6,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,8 +31,8 @@ var ErrNameTaken = errors.New("workflow name already taken")
 type Service interface {
 	List() ([]string, error)
 	Load(id string) (workflow.Workflow, error)
-	Create(id string, w workflow.Workflow, files map[string][]byte) error
-	Update(id string, w workflow.Workflow, files map[string][]byte) error
+	Create(id string, w workflow.Workflow) error
+	Update(id string, w workflow.Workflow) error
 	Delete(id string) error
 	Toggle(id string, enabled bool) error
 
@@ -44,22 +43,23 @@ type Service interface {
 	// pre-validation + Create/Update guards both use this.
 	FindByName(name, exceptID string) (string, error)
 
-	// Draft/Publish lifecycle.
-	// LoadDraft returns the draft if present, else the published workflow.
-	// HasDraft reports whether workflow.draft.yaml exists.
-	// SaveDraft writes the canvas state to workflow.draft.yaml.
-	// Publish promotes the draft to workflow.yaml and removes the draft.
-	// DiscardDraft removes workflow.draft.yaml (revert to published).
+	// Draft/Publish lifecycle. SaveDraft persists in-progress edits,
+	// Publish promotes the draft to the live slot, DiscardDraft drops
+	// the draft and reverts to the published body.
 	LoadDraft(id string) (workflow.Workflow, error)
 	HasDraft(id string) bool
 	SaveDraft(id string, w workflow.Workflow) error
 	Publish(id string) (workflow.Workflow, error)
 	DiscardDraft(id string) error
 
-	ListFiles(id string) ([]string, error)
-	ReadFile(id, relPath string) ([]byte, error)
-	WriteFile(id, relPath string, data []byte) error
-	DeleteFile(id, relPath string) error
+	// Test fixtures live under the workflow as named cases. Name is the
+	// slug-safe identifier ([a-z0-9_-]); the body is the raw JSON the
+	// runner consumes. Implementations route to disk (legacy) or to the
+	// workflow_test_cases table (DB-primary).
+	ListTests(id string) ([]string, error)
+	GetTest(id, name string) ([]byte, error)
+	SaveTest(id, name string, body []byte) error
+	DeleteTest(id, name string) error
 
 	LoadState(id string) (workflow.WorkflowState, error)
 	SaveState(id string, st workflow.WorkflowState) error
@@ -141,7 +141,7 @@ func (s *FileService) FindByName(name, exceptID string) (string, error) {
 }
 
 // Create scaffolds a new folder.
-func (s *FileService) Create(id string, w workflow.Workflow, files map[string][]byte) error {
+func (s *FileService) Create(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -159,26 +159,15 @@ func (s *FileService) Create(id string, w workflow.Workflow, files map[string][]
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "nodes"), 0o755); err != nil {
-		return err
-	}
 	w.ID = id
 	if w.CreatedAt.IsZero() {
 		w.CreatedAt = time.Now().UTC()
 	}
-	if err := s.writeWorkflowYAML(id, w); err != nil {
-		return err
-	}
-	for rel, data := range files {
-		if err := s.WriteFile(id, rel, data); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.writeWorkflowBody(id, w)
 }
 
-// Update overwrites workflow.yaml + optional supporting files.
-func (s *FileService) Update(id string, w workflow.Workflow, files map[string][]byte) error {
+// Update overwrites the workflow body in place.
+func (s *FileService) Update(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -186,15 +175,7 @@ func (s *FileService) Update(id string, w workflow.Workflow, files map[string][]
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	w.ID = id
-	if err := s.writeWorkflowYAML(id, w); err != nil {
-		return err
-	}
-	for rel, data := range files {
-		if err := s.WriteFile(id, rel, data); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.writeWorkflowBody(id, w)
 }
 
 // Delete removes the folder.
@@ -216,74 +197,83 @@ func (s *FileService) Toggle(id string, enabled bool) error {
 		return err
 	}
 	w.Enabled = enabled
-	return s.writeWorkflowYAML(id, w)
+	return s.writeWorkflowBody(id, w)
 }
 
-// ListFiles walks the workflow folder excluding runs/.
-func (s *FileService) ListFiles(id string) ([]string, error) {
+// ListTests returns every test case name registered under the
+// workflow. FileService stores cases on disk under `__tests__/*.json`
+// — name is the basename without extension.
+func (s *FileService) ListTests(id string) ([]string, error) {
 	if err := parse.ValidateID(id); err != nil {
 		return nil, err
 	}
-	root := s.Layout.WorkflowDir(id)
-	if !storage.PathExists(root) {
-		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	testsDir := filepath.Join(s.Layout.WorkflowDir(id), "__tests__")
+	if !storage.PathExists(testsDir) {
+		return nil, nil
 	}
-	out := []string{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path == root {
-			return nil
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		if rel == "runs" || strings.HasPrefix(rel, "runs/") {
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		out = append(out, rel)
-		return nil
-	})
+	entries, err := os.ReadDir(testsDir)
 	if err != nil {
 		return nil, err
+	}
+	out := []string{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		if name == e.Name() {
+			// Skip non-.json entries.
+			continue
+		}
+		out = append(out, name)
 	}
 	return out, nil
 }
 
-// ReadFile reads a relative path inside the workflow folder.
-func (s *FileService) ReadFile(id, relPath string) ([]byte, error) {
-	abs, err := s.safePath(id, relPath)
+// GetTest returns one test case body by name.
+func (s *FileService) GetTest(id, name string) ([]byte, error) {
+	path, err := s.testPath(id, name)
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(abs)
+	return os.ReadFile(path)
 }
 
-// WriteFile writes a relative path atomically.
-func (s *FileService) WriteFile(id, relPath string, data []byte) error {
-	abs, err := s.safePath(id, relPath)
+// SaveTest writes one test case body atomically.
+func (s *FileService) SaveTest(id, name string, body []byte) error {
+	path, err := s.testPath(id, name)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return err
-	}
-	return WriteAtomic(abs, data)
+	return WriteAtomic(path, body)
 }
 
-// DeleteFile removes a relative path inside the workflow folder.
-func (s *FileService) DeleteFile(id, relPath string) error {
-	abs, err := s.safePath(id, relPath)
+// DeleteTest drops one test case file.
+func (s *FileService) DeleteTest(id, name string) error {
+	path, err := s.testPath(id, name)
 	if err != nil {
 		return err
 	}
-	return os.Remove(abs)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// testPath validates name + builds the disk path for `__tests__/<name>.json`.
+func (s *FileService) testPath(id, name string) (string, error) {
+	if err := parse.ValidateID(id); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("test name is empty")
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return "", fmt.Errorf("test name %q must be slug-safe (a-z 0-9 dash underscore)", name)
+		}
+	}
+	return filepath.Join(s.Layout.WorkflowDir(id), "__tests__", name+".json"), nil
 }
 
 // LoadState reads `<id>/state.json`. Missing file returns zero value.
@@ -329,7 +319,7 @@ func (s *FileService) SaveEnvValues(id string, values map[string]string) error {
 	return WriteAtomic(s.Layout.WorkflowEnvFile(id), data)
 }
 
-func (s *FileService) writeWorkflowYAML(id string, w workflow.Workflow) error {
+func (s *FileService) writeWorkflowBody(id string, w workflow.Workflow) error {
 	data, err := parse.Marshal(w)
 	if err != nil {
 		return err
@@ -438,39 +428,6 @@ func (s *FileService) DiscardDraft(id string) error {
 		return err
 	}
 	return nil
-}
-
-func (s *FileService) safePath(id, relPath string) (string, error) {
-	if err := parse.ValidateID(id); err != nil {
-		return "", err
-	}
-	if relPath == "" {
-		return "", fmt.Errorf("relPath is empty")
-	}
-	if filepath.IsAbs(relPath) {
-		return "", fmt.Errorf("absolute path not allowed: %s", relPath)
-	}
-	clean := filepath.Clean(relPath)
-	if strings.HasPrefix(clean, "..") || strings.Contains(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path traversal not allowed: %s", relPath)
-	}
-	if strings.HasPrefix(clean, string(filepath.Separator)) {
-		return "", fmt.Errorf("absolute path not allowed: %s", relPath)
-	}
-	root := s.Layout.WorkflowDir(id)
-	abs := filepath.Join(root, clean)
-	absResolved, err := filepath.Abs(abs)
-	if err != nil {
-		return "", err
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(absResolved, rootAbs) {
-		return "", fmt.Errorf("path escapes workflow folder: %s", relPath)
-	}
-	return abs, nil
 }
 
 // WriteAtomic does tmp+rename so a crash leaves the old file intact.

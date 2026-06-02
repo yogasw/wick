@@ -98,11 +98,9 @@ func (s *DBService) FindByName(name, exceptID string) (string, error) {
 	return "", nil
 }
 
-// Create inserts the workflow row + the initial supporting files. The
-// first SaveDraft (from MCP / SPA) appends the first version history
-// entry — Create itself doesn't snapshot, matching the file-store
-// behaviour where a brand-new folder has no draft yet.
-func (s *DBService) Create(id string, w workflow.Workflow, files map[string][]byte) error {
+// Create inserts the workflow row + the initial draft body. The first
+// SaveDraft snapshot anchors the version history.
+func (s *DBService) Create(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -127,25 +125,15 @@ func (s *DBService) Create(id string, w workflow.Workflow, files map[string][]by
 	if w.CreatedAt.IsZero() {
 		w.CreatedAt = time.Now().UTC()
 	}
-	// Seed the workflow body as the initial draft so handlers can edit
-	// from a known starting point. Files (prompts, scripts, fixtures)
-	// land in their own table via the supporting-file path.
-	if _, err := s.repo.SaveDraft(id, w, w.CreatedBy, "initial scaffold"); err != nil {
-		return err
-	}
-	for rel, data := range files {
-		if err := s.WriteFile(id, rel, data); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := s.repo.SaveDraft(id, w, w.CreatedBy, "initial scaffold")
+	return err
 }
 
-// Update replaces the workflow body in-place + (optionally) supporting
-// files. Used by rename / metadata-only paths where the canvas isn't
-// driving the change. Internally this writes through the published
-// slot (Repo.SaveDraft + Publish would create a phantom draft).
-func (s *DBService) Update(id string, w workflow.Workflow, files map[string][]byte) error {
+// Update replaces the workflow body in-place. Used by rename /
+// metadata-only paths where the canvas isn't driving the change.
+// Internally writes through the published slot (Repo.SaveDraft +
+// Publish would create a phantom draft).
+func (s *DBService) Update(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
@@ -160,15 +148,7 @@ func (s *DBService) Update(id string, w workflow.Workflow, files map[string][]by
 	if err != nil {
 		return err
 	}
-	if err := s.repo.SetPublished(id, w.Name, w.Enabled, w.Version, body); err != nil {
-		return err
-	}
-	for rel, data := range files {
-		if err := s.WriteFile(id, rel, data); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.repo.SetPublished(id, w.Name, w.Enabled, w.Version, body)
 }
 
 // Delete drops the workflow row + every cascading table (versions,
@@ -304,14 +284,13 @@ func (s *DBService) DiscardDraft(id string) error {
 	return s.repo.DiscardDraft(id)
 }
 
-// ── Test fixtures (__tests__/*.json) ────────────────────────────────
+// ── Test fixtures ────────────────────────────────────────────────────
+//
+// Test cases live in the workflow_test_cases table — addressed by name
+// alone, no file path involved.
 
-// ListFiles returns every test fixture path stored against the
-// workflow. The DB-primary store only persists user-authored data —
-// the workflow body lives in its own column, runs/ stay on disk, so
-// the only path-addressable surface left is __tests__/ from
-// workflow_test_cases.
-func (s *DBService) ListFiles(id string) ([]string, error) {
+// ListTests returns every test case name registered under the workflow.
+func (s *DBService) ListTests(id string) ([]string, error) {
 	if err := parse.ValidateID(id); err != nil {
 		return nil, err
 	}
@@ -327,57 +306,38 @@ func (s *DBService) ListFiles(id string) ([]string, error) {
 	}
 	out := make([]string, len(rows))
 	for i, r := range rows {
-		out[i] = "__tests__/" + r.Name + ".json"
+		out[i] = r.Name
 	}
 	return out, nil
 }
 
-// ReadFile returns the raw bytes for one test fixture under
-// __tests__/<name>.json. Any other path errors as not-exist — there is
-// no supporting-files concept in the DB-primary store.
-func (s *DBService) ReadFile(id, relPath string) ([]byte, error) {
+// GetTest returns one test case body by name.
+func (s *DBService) GetTest(id, name string) ([]byte, error) {
 	if err := parse.ValidateID(id); err != nil {
 		return nil, err
 	}
-	name, ok := strings.CutPrefix(relPath, "__tests__/")
-	if !ok {
-		return nil, fmt.Errorf("%w: %s (only __tests__/*.json is readable in DB store)", os.ErrNotExist, relPath)
-	}
-	name = strings.TrimSuffix(name, ".json")
 	row, err := s.repo.GetTest(id, name)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("%w: %s", os.ErrNotExist, relPath)
+			return nil, fmt.Errorf("%w: test %q", os.ErrNotExist, name)
 		}
 		return nil, err
 	}
 	return []byte(row.Body), nil
 }
 
-// WriteFile creates or replaces one test fixture under
-// __tests__/<name>.json. Any other path is rejected.
-func (s *DBService) WriteFile(id, relPath string, data []byte) error {
+// SaveTest upserts one test case body.
+func (s *DBService) SaveTest(id, name string, body []byte) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
-	name, ok := strings.CutPrefix(relPath, "__tests__/")
-	if !ok {
-		return fmt.Errorf("only __tests__/*.json paths are writable in DB store: %s", relPath)
-	}
-	name = strings.TrimSuffix(name, ".json")
-	return s.repo.SaveTest(id, name, data)
+	return s.repo.SaveTest(id, name, body)
 }
 
-// DeleteFile drops one test fixture. No-op-equivalent error for any
-// other path — the DB store doesn't model arbitrary files.
-func (s *DBService) DeleteFile(id, relPath string) error {
+// DeleteTest drops one test case by name.
+func (s *DBService) DeleteTest(id, name string) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
-	name, ok := strings.CutPrefix(relPath, "__tests__/")
-	if !ok {
-		return fmt.Errorf("only __tests__/*.json paths are deletable in DB store: %s", relPath)
-	}
-	name = strings.TrimSuffix(name, ".json")
 	return s.repo.DeleteTest(id, name)
 }

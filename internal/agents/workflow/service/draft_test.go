@@ -38,7 +38,7 @@ func makeWorkflow(id string) wf.Workflow {
 func TestDraftSaveDoesNotTouchPublished(t *testing.T) {
 	svc, dir := newTestService(t)
 	w := makeWorkflow("wf")
-	if err := svc.Create("wf", w, nil); err != nil {
+	if err := svc.Create("wf", w); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	publishedPath := filepath.Join(dir, "workflows", "wf", "workflow.yaml")
@@ -72,7 +72,7 @@ func TestDraftSaveDoesNotTouchPublished(t *testing.T) {
 func TestPublishPromotesDraft(t *testing.T) {
 	svc, dir := newTestService(t)
 	w := makeWorkflow("wf")
-	if err := svc.Create("wf", w, nil); err != nil {
+	if err := svc.Create("wf", w); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	w2 := w
@@ -116,7 +116,7 @@ func TestServiceToggleSkipsValidation(t *testing.T) {
 			Nodes: []wf.Node{{ID: "c", Type: wf.NodeClassify, OutputCases: []string{"a"}}},
 		},
 	}
-	if err := svc.Create("bad", bad, nil); err != nil {
+	if err := svc.Create("bad", bad); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if err := svc.Toggle("bad", true); err != nil {
@@ -133,7 +133,7 @@ func TestServiceToggleSkipsValidation(t *testing.T) {
 func TestDiscardDraftRevertsToPublished(t *testing.T) {
 	svc, _ := newTestService(t)
 	w := makeWorkflow("wf")
-	if err := svc.Create("wf", w, nil); err != nil {
+	if err := svc.Create("wf", w); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	w2 := w

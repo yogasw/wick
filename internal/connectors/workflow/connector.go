@@ -114,25 +114,11 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 		connector.Op("workflow_get", "Get Workflow",
 			"Get full workflow definition: triggers, graph nodes/edges, env schema. Pass the workflow ID.",
 			idInput{}, h.get, wickdocs.Docs{}),
-		connector.Op("workflow_list_files", "List Workflow Files",
-			"List all files in a workflow folder (workflow.json, nodes/*.md, __tests__/, etc.).",
-			idInput{}, h.listFiles, wickdocs.Docs{}),
-		connector.Op("workflow_read_file", "Read Workflow File",
-			"Read content of one file in a workflow folder. Replaces native file tool for remote AI.",
-			readFileInput{}, h.readFile, wickdocs.
-
-				// ── Tier 2: write ──────────────────────────────────────────────
-				Docs{}),
+		// ── Tier 2: write ──────────────────────────────────────────────
 
 		connector.Op("workflow_create", "Create Workflow",
 			"Scaffold a new workflow folder with a template. Templates: empty, support-triage, incident-response, daily-digest. Returns {id, name}. Newly created workflows start disabled — admin must enable.",
 			createInput{}, h.create, wickdocs.Docs{}),
-		connector.Op("workflow_write_file", "Write Workflow File",
-			"Atomically write a file inside a workflow folder. Safe path — rejects '..' and symlinks. Use for workflow.json, nodes/prompt.md, scripts, test fixtures.\n\nWhen writing workflow.json: body MUST be valid JSON (YAML rejected). Every trigger must have entry_node set to the graph node it starts from. Omitting entry_node disconnects the trigger from the graph.\n\nMatch filter shape (picker fields are array of {id, name} objects — NOT strings):\n  {\n    \"match\": {\n      \"mode\": \"whitelist\",\n      \"channel_id\": [ { \"id\": \"C123\", \"name\": \"#general\" } ]\n    },\n    \"match_enabled\": true\n  }\n\nTemplate refs (preferred): every trigger and node lives under {{.Node.<label>.…}} — payload at {{.Node.<trigger-label>.payload.<key>}}, upstream node fields at {{.Node.<node-label>.<field>}}. Label defaults to node id when no label is set. Legacy {{.Event.*}} still resolves but new workflows should use the Node.<label> form so triggers and nodes share one access pattern.",
-			writeFileInput{}, h.writeFile, wickdocs.Docs{}),
-		connector.OpDestructive("workflow_delete_file", "Delete Workflow File",
-			"Delete a file inside a workflow folder.",
-			deleteFileInput{}, h.deleteFile, wickdocs.Docs{}),
 		connector.OpDestructive("workflow_delete", "Delete Workflow",
 			"Delete the full workflow folder and unregister all scheduled triggers.",
 			idInput{}, h.deleteWorkflow, wickdocs.Docs{}),
@@ -161,10 +147,10 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Enable or disable a workflow. Disabled workflows skip cron/channel/webhook but can still be run via workflow_run_now.",
 			toggleInput{}, h.toggle, wickdocs.Docs{}),
 		connector.Op("workflow_publish", "Publish Draft",
-			"Promote workflow.draft.json → workflow.json and re-register the workflow with the router. Required after any edit (workflow_write_file workflow.json, workflow_add_node, workflow_connect, etc.) — edits land in draft until you publish. ALWAYS ask the user before publishing edits.",
+			"Promote the draft body to published and re-register the workflow with the router. Required after any edit (workflow_add_node, workflow_update_node, workflow_connect, workflow_set_triggers, etc.) — edits land in the draft slot until you publish. ALWAYS ask the user before publishing edits.",
 			publishInput{}, h.publish, wickdocs.Docs{}),
 		connector.Op("workflow_discard_draft", "Discard Draft",
-			"Throw away workflow.draft.json and revert to the published version.",
+			"Throw away the in-progress draft and revert to the published version.",
 			idInput{}, h.discardDraft, wickdocs.Docs{}),
 		connector.Op("workflow_has_draft", "Has Draft",
 			"Returns {has_draft: bool} — true when there are unpublished edits.",
@@ -329,11 +315,6 @@ type skillsInput struct {
 	Provider string `wick:"desc=Provider name (claude/codex/gemini). Omit to list all."`
 }
 
-type readFileInput struct {
-	ID   string `wick:"required;desc=Workflow ID."`
-	Path string `wick:"required;desc=Relative file path inside workflow folder. Example: workflow.json or nodes/prompt.md"`
-}
-
 type createInput struct {
 	Name     string `wick:"required;desc=Display name for the workflow."`
 	Template string `wick:"desc=Starter template: empty (default), support-triage, incident-response, daily-digest."`
@@ -371,17 +352,6 @@ type dtFilterInput struct {
 	Slug       string `wick:"required;desc=Data table slug."`
 	Where      string `wick:"textarea;desc=Optional equality JSON."`
 	Conditions string `wick:"textarea;desc=Optional condition JSON array (n8n parity ops). Wins over Where when both set."`
-}
-
-type writeFileInput struct {
-	ID      string `wick:"required;desc=Workflow ID."`
-	Path    string `wick:"required;desc=Relative path inside workflow folder. Example: workflow.json"`
-	Content string `wick:"textarea;required;desc=File content (full replace — not a patch)."`
-}
-
-type deleteFileInput struct {
-	ID   string `wick:"required;desc=Workflow ID."`
-	Path string `wick:"required;desc=Relative file path to delete."`
 }
 
 type addNodeInput struct {

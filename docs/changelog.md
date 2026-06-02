@@ -4,6 +4,24 @@ All notable changes to Wick are documented here.
 
 ---
 
+## Unreleased — Workflows: DB-primary JSON
+
+### Changed
+- Workflow body now lives in the database as JSON. Three tables: `workflows` (current state), `workflow_versions` (append-only history), `workflow_test_cases` (named test fixtures). YAML codec dropped; `parse.Parse` / `parse.Marshal` are JSON-only.
+- Run state, run events, and env values stay on disk (`runs/<id>/state.json`, `events.jsonl`, `env.json`) — same place, JSON content.
+- Workflow editor is the Svelte SPA at `/tools/agents/workflows/edit/<id>`. The legacy templ+Drawflow editor is removed.
+
+### Added
+- Version history panel with side-by-side compare. Pick two versions, the editor shows both bodies for diff.
+- MCP ops: `workflow_lock` (canvas freeze), `workflow_guard` (standalone safety review), `workflow_versions` + `workflow_version_detail` + `workflow_restore_version`, `workflow_diff_versions`, `workflow_exec_node` (single-node execute).
+- Test fixture ops gained name-only addressing — `workflow_save_test_case` / `workflow_list_test_cases` / `workflow_delete_test_case` no longer take file paths.
+
+### Removed
+- MCP ops: `workflow_read_file`, `workflow_write_file`, `workflow_list_files`, `workflow_delete_file`. Workflow body is not file-addressable anymore — use `workflow_get` and the dedicated edit ops (`workflow_add_node`, `workflow_set_triggers`, etc).
+- `prompt_file: nodes/<file>.md` on agent and classify nodes. Use the inline `prompt` field; templates resolve against `.Event`, `.Node`, `.Trigger` as before.
+
+---
+
 ## [v0.14.19](https://github.com/yogasw/wick/compare/v0.14.18...v0.14.19) — Mobile UX & PWA
 
 _Released on 2026-06-01_

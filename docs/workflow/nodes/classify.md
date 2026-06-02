@@ -16,10 +16,9 @@ Ask an LLM to bucket free-text input into one of a fixed set of cases. The verdi
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `output_cases` | list (YAML) | ✅ | Enum labels the LLM must pick from. Each becomes a JSON Schema enum value passed to the provider's structured output. |
+| `output_cases` | array | ✅ | Enum labels the LLM must pick from. Each becomes a JSON Schema enum value passed to the provider's structured output. |
 | `input` | template | ✅ | Text to classify. Use a template expression like <code v-pre>{{index .Event.Payload "text"}}</code>. |
 | `provider` | string | | Provider name. Optional — falls back to the default. |
-| `prompt_file` | path (template) | | Optional prompt file path to override the built-in classify prompt. |
 | `fuzzy_match` | bool | | Allow Levenshtein / substring fallback when the model returns a variant (e.g. `"bugs"` for `bug`). |
 | `retry_on_mismatch` | int | | Retry count when the LLM returns an unrecognized label. Each retry tightens the system prompt — costs tokens. Keep ≤ 2. |
 
@@ -35,12 +34,14 @@ Ask an LLM to bucket free-text input into one of a fixed set of cases. The verdi
 
 ## Example
 
-```yaml
-- id: triage
-  type: classify
-  output_cases: [bug, feature, question]
-  input: '{{index .Event.Payload "text"}}'
-  provider: claude
+```json
+{
+  "id": "triage",
+  "type": "classify",
+  "output_cases": ["bug", "feature", "question"],
+  "input": "{{index .Event.Payload \"text\"}}",
+  "provider": "claude"
+}
 ```
 
 ## Reliability stack

@@ -54,7 +54,7 @@ func (s *stubService) Load(id string) (workflow.Workflow, error) {
 	return w, nil
 }
 
-func (s *stubService) Update(id string, w workflow.Workflow, _ map[string][]byte) error {
+func (s *stubService) Update(id string, w workflow.Workflow) error {
 	if s.updateErr != nil {
 		return s.updateErr
 	}
@@ -63,22 +63,20 @@ func (s *stubService) Update(id string, w workflow.Workflow, _ map[string][]byte
 }
 
 // Remaining interface methods — all no-ops.
-func (s *stubService) List() ([]string, error)                               { return nil, nil }
-func (s *stubService) FindByName(_, _ string) (string, error)                 { return "", nil }
-func (s *stubService) Create(_ string, _ workflow.Workflow, _ map[string][]byte) error {
-	return nil
-}
-func (s *stubService) Delete(_ string) error                                   { return nil }
-func (s *stubService) Toggle(_ string, _ bool) error                           { return nil }
-func (s *stubService) LoadDraft(id string) (workflow.Workflow, error)           { return s.Load(id) }
-func (s *stubService) HasDraft(_ string) bool                                  { return false }
-func (s *stubService) SaveDraft(id string, w workflow.Workflow) error           { s.workflows[id] = w; return nil }
-func (s *stubService) Publish(_ string) (workflow.Workflow, error)             { return workflow.Workflow{}, nil }
-func (s *stubService) DiscardDraft(_ string) error                             { return nil }
-func (s *stubService) ListFiles(_ string) ([]string, error)                    { return nil, nil }
-func (s *stubService) ReadFile(_, _ string) ([]byte, error)                    { return nil, nil }
-func (s *stubService) WriteFile(_, _ string, _ []byte) error                   { return nil }
-func (s *stubService) DeleteFile(_, _ string) error                            { return nil }
+func (s *stubService) List() ([]string, error)                          { return nil, nil }
+func (s *stubService) FindByName(_, _ string) (string, error)           { return "", nil }
+func (s *stubService) Create(_ string, _ workflow.Workflow) error       { return nil }
+func (s *stubService) Delete(_ string) error                            { return nil }
+func (s *stubService) Toggle(_ string, _ bool) error                    { return nil }
+func (s *stubService) LoadDraft(id string) (workflow.Workflow, error)   { return s.Load(id) }
+func (s *stubService) HasDraft(_ string) bool                           { return false }
+func (s *stubService) SaveDraft(id string, w workflow.Workflow) error   { s.workflows[id] = w; return nil }
+func (s *stubService) Publish(_ string) (workflow.Workflow, error)      { return workflow.Workflow{}, nil }
+func (s *stubService) DiscardDraft(_ string) error                      { return nil }
+func (s *stubService) ListTests(_ string) ([]string, error)             { return nil, nil }
+func (s *stubService) GetTest(_, _ string) ([]byte, error)              { return nil, nil }
+func (s *stubService) SaveTest(_, _ string, _ []byte) error             { return nil }
+func (s *stubService) DeleteTest(_, _ string) error                     { return nil }
 func (s *stubService) LoadState(_ string) (workflow.WorkflowState, error)      { return workflow.WorkflowState{}, nil }
 func (s *stubService) SaveState(_ string, _ workflow.WorkflowState) error      { return nil }
 func (s *stubService) LoadEnvValues(_ string) (map[string]string, error)       { return nil, nil }

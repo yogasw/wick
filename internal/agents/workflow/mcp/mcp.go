@@ -264,11 +264,11 @@ func (m *Ops) List() ([]Summary, error) {
 // Get returns the full workflow.
 func (m *Ops) Get(id string) (workflow.Workflow, error) { return m.Service.Load(id) }
 
-// ListFiles returns relative file paths in the workflow folder.
-func (m *Ops) ListFiles(id string) ([]string, error) { return m.Service.ListFiles(id) }
+// ListTests returns every test case name registered under the workflow.
+func (m *Ops) ListTests(id string) ([]string, error) { return m.Service.ListTests(id) }
 
-// ReadFile returns the content of one file.
-func (m *Ops) ReadFile(id, path string) ([]byte, error) { return m.Service.ReadFile(id, path) }
+// GetTest returns one test case body by name.
+func (m *Ops) GetTest(id, name string) ([]byte, error) { return m.Service.GetTest(id, name) }
 
 // ── Tier 2: write ────────────────────────────────────────────────────
 
@@ -294,19 +294,19 @@ func (m *Ops) Create(in CreateInput) (workflow.Workflow, error) {
 		return workflow.Workflow{}, err
 	}
 	w := scaffold.Workflow(id, in.Name, in.Template)
-	if err := m.Service.Create(id, w, nil); err != nil {
+	if err := m.Service.Create(id, w); err != nil {
 		return workflow.Workflow{}, err
 	}
 	return m.Service.Load(id)
 }
 
-// WriteFile atomically writes a file inside the workflow folder.
-func (m *Ops) WriteFile(id, path string, data []byte) error {
-	return m.Service.WriteFile(id, path, data)
+// SaveTest upserts one test case body.
+func (m *Ops) SaveTest(id, name string, body []byte) error {
+	return m.Service.SaveTest(id, name, body)
 }
 
-// DeleteFile removes a file inside the workflow folder.
-func (m *Ops) DeleteFile(id, path string) error { return m.Service.DeleteFile(id, path) }
+// DeleteTest drops one test case by name.
+func (m *Ops) DeleteTest(id, name string) error { return m.Service.DeleteTest(id, name) }
 
 // Delete removes the workflow folder + unregisters scheduling.
 func (m *Ops) Delete(id string) error {

@@ -300,7 +300,7 @@ func renameWorkflow(c *tool.Ctx) {
 	svc := globalWorkflowMgr.Service
 	if pub, err := svc.Load(id); err == nil {
 		pub.Name = name
-		if err := svc.Update(id, pub, nil); err != nil {
+		if err := svc.Update(id, pub); err != nil {
 			c.Error(http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -572,19 +572,15 @@ func workflowRunStateAPI(c *tool.Ctx) {
 	})
 }
 
-// loadTestCaseItems reads __tests__/*.json for an id and returns items.
+// loadTestCaseItems reads every test case for the workflow.
 func loadTestCaseItems(id string) ([]TestCaseItem, error) {
-	files, err := globalWorkflowMgr.MCP.ListFiles(id)
+	names, err := globalWorkflowMgr.MCP.ListTests(id)
 	if err != nil {
 		return nil, err
 	}
 	var items []TestCaseItem
-	for _, f := range files {
-		if !strings.HasPrefix(f, "__tests__/") || !strings.HasSuffix(f, ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(strings.TrimPrefix(f, "__tests__/"), ".json")
-		data, err := globalWorkflowMgr.MCP.ReadFile(id, f)
+	for _, name := range names {
+		data, err := globalWorkflowMgr.MCP.GetTest(id, name)
 		if err != nil {
 			continue
 		}

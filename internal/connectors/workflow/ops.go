@@ -10,7 +10,6 @@ import (
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
-	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -152,18 +151,6 @@ func (h *handlers) checkName(c *connector.Ctx) (any, error) {
 	}, nil
 }
 
-func (h *handlers) listFiles(c *connector.Ctx) (any, error) {
-	return h.ops.ListFiles(c.Input("id"))
-}
-
-func (h *handlers) readFile(c *connector.Ctx) (any, error) {
-	data, err := h.ops.ReadFile(c.Input("id"), c.Input("path"))
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"content": string(data)}, nil
-}
-
 // ── Tier 2: write ──────────────────────────────────────────────────────
 
 func (h *handlers) create(c *connector.Ctx) (any, error) {
@@ -181,7 +168,7 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	// in draft and need an explicit workflow_publish to go live.
 	w = topDownLayout(w)
 	w.Enabled = true
-	if err := h.ops.Service.Update(w.ID, w, nil); err != nil {
+	if err := h.ops.Service.Update(w.ID, w); err != nil {
 		return nil, fmt.Errorf("auto-publish: %w", err)
 	}
 	return map[string]any{
@@ -190,50 +177,6 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 		"enabled":   true,
 		"published": true,
 	}, nil
-}
-
-func (h *handlers) writeFile(c *connector.Ctx) (any, error) {
-	id := c.Input("id")
-	path := c.Input("path")
-	content := []byte(c.Input("content"))
-
-	// Edits to the main workflow body go to draft (workflow.draft.json)
-	// so the live router keeps running the published version until the
-	// user explicitly calls workflow_publish. Other files (nodes/*.md,
-	// env.json, __tests__/) write through directly — they have
-	// no draft/publish split.
-	if path == "workflow.json" || path == "workflow.yaml" {
-		// Parse so SaveDraft can validate + carry forward ID/CreatedAt
-		// fields. Fail-fast on bad body rather than writing a broken
-		// draft and surfacing it on next load. Body must be JSON now —
-		// callers passing the legacy `workflow.yaml` path are accepted
-		// but the content itself still needs to be JSON.
-		w, perr := parse.Parse(id, content)
-		if perr != nil {
-			return nil, fmt.Errorf("parse workflow body: %w", perr)
-		}
-		w = topDownLayout(w)
-		normalizeTriggerEntryNodes(&w)
-		if err := h.ops.Service.SaveDraft(id, w); err != nil {
-			return nil, err
-		}
-		return map[string]any{
-			"ok":      true,
-			"draft":   true,
-			"message": "Saved to draft. Call workflow_publish to make it live.",
-		}, nil
-	}
-	if err := h.ops.WriteFile(id, path, content); err != nil {
-		return nil, err
-	}
-	return ok("file written"), nil
-}
-
-func (h *handlers) deleteFile(c *connector.Ctx) (any, error) {
-	if err := h.ops.DeleteFile(c.Input("id"), c.Input("path")); err != nil {
-		return nil, err
-	}
-	return ok("file deleted"), nil
 }
 
 func (h *handlers) deleteWorkflow(c *connector.Ctx) (any, error) {
@@ -478,11 +421,11 @@ func (h *handlers) recordTest(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := "__tests__/auto-" + runID[:min(8, len(runID))] + ".json"
-	if err := h.ops.WriteFile(id, path, data); err != nil {
-		return nil, fmt.Errorf("write fixture: %w", err)
+	name := "auto-" + runID[:min(8, len(runID))]
+	if err := h.ops.SaveTest(id, name, data); err != nil {
+		return nil, fmt.Errorf("save fixture: %w", err)
 	}
-	return map[string]any{"path": path, "fixture": string(data)}, nil
+	return map[string]any{"name": name, "fixture": string(data)}, nil
 }
 
 func (h *handlers) captureFixture(c *connector.Ctx) (any, error) {
@@ -511,11 +454,11 @@ func (h *handlers) captureFixture(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := "__tests__/node-" + nodeID + ".json"
-	if err := h.ops.WriteFile(id, path, data); err != nil {
-		return nil, fmt.Errorf("write fixture: %w", err)
+	name := "node-" + nodeID
+	if err := h.ops.SaveTest(id, name, data); err != nil {
+		return nil, fmt.Errorf("save fixture: %w", err)
 	}
-	return map[string]any{"path": path, "fixture": string(data)}, nil
+	return map[string]any{"name": name, "fixture": string(data)}, nil
 }
 
 func (h *handlers) runNow(c *connector.Ctx) (any, error) {
@@ -580,16 +523,16 @@ func (h *handlers) copyRunToEditor(c *connector.Ctx) (any, error) {
 	if err := h.ops.Service.SaveDraft(id, w); err != nil {
 		return nil, fmt.Errorf("save draft: %w", err)
 	}
-	if len(state.Outputs) > 0 {
-		mockData, _ := json.MarshalIndent(state.Outputs, "", "  ")
-		_ = h.ops.Service.WriteFile(id, "runs/"+runID+"/mocks.json", mockData)
-	}
+	// Caller fetches the run's per-node outputs separately via
+	// workflow_get_run + passes them as node_outputs to workflow_exec_node
+	// when they want Execute Step to prefill from real data.
 	return map[string]any{
 		"ok":        true,
 		"id":        id,
 		"run_id":    runID,
 		"had_draft": hadDraft,
-		"message":   "Workflow loaded as draft. Mocks written to runs/" + runID + "/mocks.json. Ask user before publishing.",
+		"outputs":   state.Outputs,
+		"message":   "Workflow loaded as draft. Outputs returned for prefilling Execute Step. Ask user before publishing.",
 	}, nil
 }
 
@@ -612,29 +555,24 @@ func (h *handlers) replayRun(c *connector.Ctx) (any, error) {
 
 func (h *handlers) listTestCases(c *connector.Ctx) (any, error) {
 	id := c.Input("id")
-	files, err := h.ops.ListFiles(id)
+	names, err := h.ops.ListTests(id)
 	if err != nil {
 		return nil, err
 	}
 	type row struct {
 		Name           string `json:"name"`
-		Path           string `json:"path"`
 		AssertionCount int    `json:"assertion_count"`
 	}
 	rows := []row{}
-	for _, f := range files {
-		if !strings.HasPrefix(f, "__tests__/") || !strings.HasSuffix(f, ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(strings.TrimPrefix(f, "__tests__/"), ".json")
-		data, err := h.ops.ReadFile(id, f)
+	for _, name := range names {
+		data, err := h.ops.GetTest(id, name)
 		if err != nil {
-			rows = append(rows, row{Name: name, Path: f})
+			rows = append(rows, row{Name: name})
 			continue
 		}
 		var tc wftest.Case
 		_ = json.Unmarshal(data, &tc)
-		rows = append(rows, row{Name: name, Path: f, AssertionCount: len(tc.Assertions)})
+		rows = append(rows, row{Name: name, AssertionCount: len(tc.Assertions)})
 	}
 	return rows, nil
 }
@@ -665,18 +603,16 @@ func (h *handlers) saveTestCase(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := "__tests__/" + name + ".json"
-	if err := h.ops.WriteFile(id, path, data); err != nil {
+	if err := h.ops.SaveTest(id, name, data); err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true, "name": name, "path": path}, nil
+	return map[string]any{"ok": true, "name": name}, nil
 }
 
 func (h *handlers) deleteTestCase(c *connector.Ctx) (any, error) {
 	id := c.Input("id")
 	name := c.Input("name")
-	path := "__tests__/" + name + ".json"
-	if err := h.ops.DeleteFile(id, path); err != nil {
+	if err := h.ops.DeleteTest(id, name); err != nil {
 		return nil, err
 	}
 	return ok("test case deleted"), nil
