@@ -5,7 +5,7 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID } from "$lib/stores/editor";
 
   // Map node.id → first validation error message. Populated from
   // validationReport.errors via the Path regex. Drives the red badge
@@ -732,11 +732,18 @@
     const wf = $draftWorkflow;
     if (!wf) return;
     triggerPickerOpen = false;
+    // Remember which trigger the user clicked so the SSE handler can
+    // paint the per-trigger status badge while the run is in flight.
+    // Falls back to the first manual trigger if the caller didn't
+    // specify (matches the "single-trigger workflow" shortcut path).
+    const fired =
+      triggerID ?? (wf.triggers ?? []).find((t) => t.type === "manual")?.id ?? wf.triggers?.[0]?.id ?? null;
+    lastFiredTriggerID.set(fired ?? null);
     try {
       await workflowAPI.runNow(wf.id);
-      void triggerID; // backend currently picks the first manual trigger
     } catch (e) {
       console.error("execute workflow failed:", e);
+      lastFiredTriggerID.set(null);
     }
   }
 
@@ -1045,6 +1052,7 @@
            trigger object, so look them up inline. -->
       {#each $draftWorkflow.triggers ?? [] as trig (trig.id ?? trig.type)}
         {@const pos = ($draftWorkflow as any)._canvas?.positions?.[trig.id ?? ""] ?? { x: 60, y: 60 }}
+        {@const trigStatus = trig.id ? $triggerRunStatus[trig.id] : undefined}
         <div
           class="absolute"
           style="left: {pos.x}px; top: {pos.y}px;"
@@ -1059,6 +1067,16 @@
             selected={(trig.id ? $selectedNodeIDs.has(trig.id) : false) || $selectedNodeID === trig.id}
             onselect={() => selectedNodeID.set(trig.id ?? null)}
           />
+          <!-- Run status badge — mirrors the per-node overlay so
+               operators see when their manual fire actually kicked off
+               + how it ended. Auto-clears 5s after completion. -->
+          {#if trigStatus === "running"}
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-500 text-white text-[10px] flex items-center justify-center shadow animate-pulse" title="Running…">⟳</div>
+          {:else if trigStatus === "success"}
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-emerald-500 text-white text-[10px] flex items-center justify-center shadow" title="Last run: success">✓</div>
+          {:else if trigStatus === "failed"}
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-rose-500 text-white text-[10px] flex items-center justify-center shadow" title="Last run: failed">✗</div>
+          {/if}
           <!-- Trigger output port — transparent hit target over
                BaseNode's white circle (BaseNode is shared with regular
                nodes, so we don't re-draw the port handle here). -->

@@ -58,6 +58,14 @@ export const detailTriggerID = writable<string | null>(null);
 // them on the run's most recent state.
 export const runStatusByNode = writable<Record<string, "success" | "failed" | "running">>({});
 
+// Per-trigger run status — set when the user fires a trigger via the
+// Execute button + cleared on next workflow_started for the same id.
+// Backend RunEvent doesn't carry a trigger id, so we rely on the FE
+// remembering which trigger was just clicked (cron / external triggers
+// don't get a badge — only manual runs).
+export const triggerRunStatus = writable<Record<string, "success" | "failed" | "running">>({});
+export const lastFiredTriggerID = writable<string | null>(null);
+
 // Last run summary — drives the "Run completed in XXms" toast at the
 // top of the editor.
 export const lastRunSummary = writable<{ runID: string; status: string; durationMs: number } | null>(null);

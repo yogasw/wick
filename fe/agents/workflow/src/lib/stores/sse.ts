@@ -3,6 +3,8 @@ import {
   runStatusByNode,
   lastRunSummary,
   draftWorkflow,
+  triggerRunStatus,
+  lastFiredTriggerID,
 } from "./editor";
 
 // SSE wire event shape from `agents.Event` (internal/tools/agents/
@@ -122,6 +124,10 @@ function handle(raw: string, workflowID: string) {
   if (payload.event === "workflow_started") {
     runStartedAt = Date.parse(payload.ts) || Date.now();
     runStatusByNode.set({}); // reset per-node overlay for the new run
+    const fired = get(lastFiredTriggerID);
+    if (fired) {
+      triggerRunStatus.update((m) => ({ ...m, [fired]: "running" }));
+    }
   } else if (
     payload.event === "workflow_completed" ||
     payload.event === "workflow_failed"
@@ -133,6 +139,20 @@ function handle(raw: string, workflowID: string) {
       status: payload.event === "workflow_completed" ? "success" : "failed",
       durationMs: duration,
     });
+    const fired = get(lastFiredTriggerID);
+    if (fired) {
+      const final: "success" | "failed" =
+        payload.event === "workflow_completed" ? "success" : "failed";
+      triggerRunStatus.update((m) => ({ ...m, [fired]: final }));
+      // Clear the badge after 5s so it doesn't linger as stale state.
+      setTimeout(() => {
+        triggerRunStatus.update((m) => {
+          if (m[fired] !== final) return m;
+          const { [fired]: _, ...rest } = m;
+          return rest;
+        });
+      }, 5000);
+    }
     // Auto-clear the toast after 5s.
     setTimeout(() => {
       const current = get(lastRunSummary);
