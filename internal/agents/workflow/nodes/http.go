@@ -74,7 +74,7 @@ func (e *HTTPExecutor) Descriptor() engine.NodeDescriptor {
 		Badge:       "GET / POST",
 		Description: "Make an HTTP request. URL/headers/query/body rendered as Go templates.",
 		WhenToUse:   "Direct external API calls without a connector module.",
-		Example:     "- id: call_api\n  type: http\n  method: POST\n  url: https://api.example.com/tickets\n  headers:\n    Content-Type: application/json\n  body: |\n    {\"title\": \"{{jsonEscape (index .Event.Payload \\\"text\\\")}}\"}",
+		Example:     "{\n  \"id\": \"call_api\",\n  \"type\": \"http\",\n  \"method\": \"POST\",\n  \"url\": \"https://api.example.com/tickets\",\n  \"headers\": { \"Content-Type\": \"application/json\" },\n  \"body\": \"{\\\"title\\\": \\\"{{jsonEscape (index .Event.Payload \\\"text\\\")}}\\\"}\"\n}",
 		Schema:      integration.StructSchema(HTTPSchema{}),
 		Output: map[string]string{
 			"status":  "int — HTTP status code",
@@ -108,26 +108,31 @@ func (e *HTTPExecutor) Descriptor() engine.NodeDescriptor {
 			Examples: []wickdocs.Example{
 				{
 					Name: "post_json_body",
-					YAML: `- id: file_ticket
-  type: http
-  method: POST
-  url: https://api.example.com/tickets
-  headers:
-    Content-Type: application/json
-    Authorization: "Bearer {{.Env.API_TOKEN}}"
-  body: |
-    {"title": "{{jsonEscape .Node.classify.reasoning}}"}
-  parse_response: json
-  timeout_sec: "15"`,
+					Body: `{
+  "id": "file_ticket",
+  "type": "http",
+  "method": "POST",
+  "url": "https://api.example.com/tickets",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer {{.Env.API_TOKEN}}"
+  },
+  "body": "{\"title\": \"{{jsonEscape .Node.classify.reasoning}}\"}",
+  "parse_response": "json",
+  "timeout_sec": "15"
+}`,
 				},
 				{
 					Name: "get_with_query",
-					YAML: `- id: lookup
-  type: http
-  method: GET
-  url: https://api.example.com/users
-  query:
-    email: "{{.Node.trigger.payload.email}}"`,
+					Body: `{
+  "id": "lookup",
+  "type": "http",
+  "method": "GET",
+  "url": "https://api.example.com/users",
+  "query": {
+    "email": "{{.Node.trigger.payload.email}}"
+  }
+}`,
 				},
 			},
 		},

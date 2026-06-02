@@ -82,7 +82,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Entry point. Returns {base_dir, node_types[], trigger_types[], templates[]}. Call this first to orient yourself before creating or editing workflows.",
 			emptyInput{}, h.workspace, wickdocs.Docs{}),
 		connector.Op("workflow_node_types", "List Node Types",
-			"List all node types with schema, example YAML, and when_to_use. Use to know what types are available before calling workflow_add_node.",
+			"List all node types with schema, example body, and when_to_use. Use to know what types are available before calling workflow_add_node.",
 			emptyInput{}, h.nodeTypes, wickdocs.Docs{}),
 		connector.Op("workflow_trigger_types", "List Trigger Types",
 			"List all trigger types with schema + example. Use to know valid trigger shapes before calling workflow_set_triggers.",
@@ -115,7 +115,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Get full workflow definition: triggers, graph nodes/edges, env schema. Pass the workflow ID.",
 			idInput{}, h.get, wickdocs.Docs{}),
 		connector.Op("workflow_list_files", "List Workflow Files",
-			"List all files in a workflow folder (workflow.yaml, nodes/*.md, __tests__/, etc.).",
+			"List all files in a workflow folder (workflow.json, nodes/*.md, __tests__/, etc.).",
 			idInput{}, h.listFiles, wickdocs.Docs{}),
 		connector.Op("workflow_read_file", "Read Workflow File",
 			"Read content of one file in a workflow folder. Replaces native file tool for remote AI.",
@@ -128,7 +128,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Scaffold a new workflow folder with a template. Templates: empty, support-triage, incident-response, daily-digest. Returns {id, name}. Newly created workflows start disabled — admin must enable.",
 			createInput{}, h.create, wickdocs.Docs{}),
 		connector.Op("workflow_write_file", "Write Workflow File",
-			"Atomically write a file inside a workflow folder. Safe path — rejects '..' and symlinks. Use for workflow.yaml, nodes/prompt.md, scripts, test fixtures. When writing workflow.yaml: every trigger must have entry_node set to the graph node it starts from (e.g. entry_node: classify). Omitting entry_node disconnects the trigger from the graph.\n\nMatch filter format in YAML: picker fields use native YAML array of {id, name} objects — NOT JSON strings. Example:\n  match:\n    mode: whitelist\n    channel_id:\n      - id: C123\n        name: '#general'\n  match_enabled: true\n\nTemplate refs (preferred): every trigger and node lives under {{.Node.<label>.…}} — payload at {{.Node.<trigger-label>.payload.<key>}}, upstream node fields at {{.Node.<node-label>.<field>}}. Label defaults to node id when no label is set. Legacy {{.Event.*}} still resolves but new workflows should use the Node.<label> form so triggers and nodes share one access pattern.",
+			"Atomically write a file inside a workflow folder. Safe path — rejects '..' and symlinks. Use for workflow.json, nodes/prompt.md, scripts, test fixtures.\n\nWhen writing workflow.json: body MUST be valid JSON (YAML rejected). Every trigger must have entry_node set to the graph node it starts from. Omitting entry_node disconnects the trigger from the graph.\n\nMatch filter shape (picker fields are array of {id, name} objects — NOT strings):\n  {\n    \"match\": {\n      \"mode\": \"whitelist\",\n      \"channel_id\": [ { \"id\": \"C123\", \"name\": \"#general\" } ]\n    },\n    \"match_enabled\": true\n  }\n\nTemplate refs (preferred): every trigger and node lives under {{.Node.<label>.…}} — payload at {{.Node.<trigger-label>.payload.<key>}}, upstream node fields at {{.Node.<node-label>.<field>}}. Label defaults to node id when no label is set. Legacy {{.Event.*}} still resolves but new workflows should use the Node.<label> form so triggers and nodes share one access pattern.",
 			writeFileInput{}, h.writeFile, wickdocs.Docs{}),
 		connector.OpDestructive("workflow_delete_file", "Delete Workflow File",
 			"Delete a file inside a workflow folder.",
@@ -161,10 +161,10 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Enable or disable a workflow. Disabled workflows skip cron/channel/webhook but can still be run via workflow_run_now.",
 			toggleInput{}, h.toggle, wickdocs.Docs{}),
 		connector.Op("workflow_publish", "Publish Draft",
-			"Promote workflow.draft.yaml → workflow.yaml and re-register the workflow with the router. Required after any edit (workflow_write_file workflow.yaml, workflow_add_node, workflow_connect, etc.) — edits land in draft until you publish. ALWAYS ask the user before publishing edits.",
+			"Promote workflow.draft.json → workflow.json and re-register the workflow with the router. Required after any edit (workflow_write_file workflow.json, workflow_add_node, workflow_connect, etc.) — edits land in draft until you publish. ALWAYS ask the user before publishing edits.",
 			publishInput{}, h.publish, wickdocs.Docs{}),
 		connector.Op("workflow_discard_draft", "Discard Draft",
-			"Throw away workflow.draft.yaml and revert to the published version.",
+			"Throw away workflow.draft.json and revert to the published version.",
 			idInput{}, h.discardDraft, wickdocs.Docs{}),
 		connector.Op("workflow_has_draft", "Has Draft",
 			"Returns {has_draft: bool} — true when there are unpublished edits.",
@@ -183,7 +183,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Resolve a picker source (e.g. slack.channels, slack.users, slack.usergroups) to [{id, name}] items. Use when populating Match filter picker fields so AI passes valid IDs instead of guessing.",
 			pickerResolveInput{}, h.pickerResolve, wickdocs.Docs{}),
 		connector.Op("workflow_describe", "Describe Workflow",
-			"Human-readable summary of a workflow: triggers, graph shape, dependencies (channels/connectors/providers), plus dangling-edge and template-reference warnings. Call before editing to orient yourself; safer than walking the full YAML.",
+			"Human-readable summary of a workflow: triggers, graph shape, dependencies (channels/connectors/providers), plus dangling-edge and template-reference warnings. Call before editing to orient yourself; safer than walking the full JSON.",
 			idInput{}, h.describe, wickdocs.Docs{}),
 		connector.Op("workflow_simulate", "Simulate Workflow",
 			"Dry-run a workflow with a synthetic event. No state persisted, no external calls. Returns per-node outputs + path_taken + final_result. Pass event as JSON string.",
@@ -195,7 +195,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Return which nodes were hit and which are untested across all __tests__/ cases.",
 			idInput{}, h.testCoverage, wickdocs.Docs{}),
 		connector.Op("workflow_record_test", "Record Test from Run",
-			"Generate a __tests__/ fixture by capturing a real run's event + per-node outputs. Returns the fixture YAML path.",
+			"Generate a __tests__/ fixture by capturing a real run's event + per-node outputs. Returns the fixture JSON path.",
 			recordTestInput{}, h.recordTest, wickdocs.Docs{}),
 		connector.Op("workflow_capture_fixture", "Capture Node Fixture",
 			"Snapshot one node's output from a run as a unit test fixture in __tests__/nodes/.",
@@ -308,7 +308,7 @@ type skillsInput struct {
 
 type readFileInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
-	Path string `wick:"required;desc=Relative file path inside workflow folder. Example: workflow.yaml or nodes/prompt.md"`
+	Path string `wick:"required;desc=Relative file path inside workflow folder. Example: workflow.json or nodes/prompt.md"`
 }
 
 type createInput struct {
@@ -352,7 +352,7 @@ type dtFilterInput struct {
 
 type writeFileInput struct {
 	ID      string `wick:"required;desc=Workflow ID."`
-	Path    string `wick:"required;desc=Relative path inside workflow folder. Example: workflow.yaml"`
+	Path    string `wick:"required;desc=Relative path inside workflow folder. Example: workflow.json"`
 	Content string `wick:"textarea;required;desc=File content (full replace — not a patch)."`
 }
 

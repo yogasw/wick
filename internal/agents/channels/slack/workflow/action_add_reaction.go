@@ -42,7 +42,7 @@ func registerActionAddReaction(reg *integration.Registry, ch *slack.Channel) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "ack_received",
-					YAML: `- id: ack
+					Body: `- id: ack
   type: channel
   channel: slack
   action: add_reaction

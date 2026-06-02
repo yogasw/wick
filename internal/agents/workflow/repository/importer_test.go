@@ -115,7 +115,7 @@ func TestImportCarriesDraft(t *testing.T) {
 	if !row.HasDraft {
 		t.Error("draft flag not set after import")
 	}
-	if row.YAMLDraft == "" {
+	if row.BodyDraft == "" {
 		t.Error("draft yaml empty after import")
 	}
 	vs, _ := r.Versions("d")

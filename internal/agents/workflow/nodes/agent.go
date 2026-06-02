@@ -17,8 +17,8 @@ import (
 )
 
 type agentSchema struct {
-	PromptFile string `wick:"required;key=prompt_file;desc=Path to prompt markdown file relative to workflow root (e.g. nodes/summarize.md). Rendered as Go template."`
-	Provider   string `wick:"key=provider;desc=Provider name"`
+	Prompt   string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
+	Provider string `wick:"key=provider;desc=Provider name"`
 	Skills     string `wick:"key=skills;desc=YAML list of skill names to expose"`
 	Tools      string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
 	MaxTurns   int    `wick:"key=max_turns;desc=Max agent turns (default unlimited)"`
@@ -77,9 +77,9 @@ func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 		Category:    engine.CategoryAI,
 		Label:       "Agent",
 		Badge:       "AI agent",
-		Description: "Spawn an AI agent with a prompt file and optional skills.",
+		Description: "Spawn an AI agent with an inline prompt and optional skills.",
 		WhenToUse:   "Multi-turn reasoning, summarization, or skill-driven action.",
-		Example:     "- id: summarize\n  type: agent\n  provider: claude\n  prompt_file: nodes/summarize.md",
+		Example:     "{\n  \"id\": \"summarize\",\n  \"type\": \"agent\",\n  \"provider\": \"claude\",\n  \"prompt\": \"Summarize this ticket: {{.Node.trigger.payload.text}}\"\n}",
 		Schema:      integration.StructSchema(agentSchema{}),
 		Output:      map[string]string{"text": "string — last assistant message"},
 		Docs: wickdocs.Docs{
@@ -90,10 +90,9 @@ func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 				"usage":       "Provider token usage breakdown (input/output/total). Provider-specific shape.",
 				"session_id":  "Resolved session ID. Reuse via session_from on a downstream agent to continue the conversation.",
 			},
-			TemplateableFields: []string{"prompt", "prompt_file"},
+			TemplateableFields: []string{"prompt"},
 			Quirks: []string{
-				"prompt_file is read relative to the workflow folder (e.g. nodes/summarize.md). The file body is itself rendered as a Go template with .Event / .Node / .Trigger context.",
-				"prompt vs prompt_file: prompt is an inline string, prompt_file points to an external markdown file. Use prompt_file once the prompt grows past a few lines so version control diffs stay readable.",
+				"prompt is rendered as a Go template with .Event / .Node / .Trigger context. Use {{.Node.<upstream>.<field>}} to pull data from prior nodes.",
 				"arg_modes.prompt defaults to expression. Set to fixed if you want the inline prompt rendered literally without Go template expansion.",
 				"session = \"new\" forces a fresh provider session per run. Omit to inherit the workflow-run session set by an upstream session_init node (or the engine default wf_<id>_run_<runID>).",
 				"max_turns 0 (unset) = provider default (typically unlimited). Set explicitly when the agent is meant to do a single bounded reasoning step.",
@@ -108,36 +107,39 @@ func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 				"Avoid referencing .Node.<this>.parsed assuming structured output was auto-parsed. The engine surfaces raw text; if the prompt is supposed to return JSON, parse it downstream with {{fromJson .Node.<this>.text}}.",
 				"Listing a skill in skills: that the provider hasn't installed errors at run time. Call workflow_skills (optionally filter by provider) first to see what's available.",
 			},
-			InputSample:  `{"provider":"claude","prompt_file":"nodes/summarize.md","max_turns":4,"session":"new"}`,
+			InputSample:  `{"provider":"claude","prompt":"Summarize this ticket: {{.Node.trigger.payload.text}}","max_turns":4,"session":"new"}`,
 			OutputSample: `{"text":"User reported an authentication bug after the latest deploy. Suggesting we roll back the JWT middleware.","tools_used":["Read","Grep"],"skills_used":[],"usage":{"input_tokens":1284,"output_tokens":97,"total_tokens":1381},"session_id":"wf_adhoc_3f9b…"}`,
 			Examples: []wickdocs.Example{
 				{
 					Name: "basic_summary",
-					YAML: `- id: summarize
-  type: agent
-  provider: claude
-  prompt_file: nodes/summarize.md
-  arg_modes:
-    prompt_file: expression`,
+					Body: `{
+  "id": "summarize",
+  "type": "agent",
+  "provider": "claude",
+  "prompt": "Summarize this support ticket and propose a one-line resolution:\n{{.Node.trigger.payload.text}}"
+}`,
 				},
 				{
 					Name: "skill_driven_action",
-					YAML: `- id: triage
-  type: agent
-  provider: claude
-  prompt_file: nodes/triage.md
-  skills:
-    - github-issues
-  max_turns: 4
-  session: new`,
+					Body: `{
+  "id": "triage",
+  "type": "agent",
+  "provider": "claude",
+  "prompt": "Triage this issue end-to-end. Open or update a GitHub issue if needed.\n\nReport:\n{{.Node.trigger.payload.text}}",
+  "skills": ["github-issues"],
+  "max_turns": 4,
+  "session": "new"
+}`,
 				},
 				{
 					Name: "continue_session",
-					YAML: `- id: follow_up
-  type: agent
-  provider: claude
-  prompt_file: nodes/follow_up.md
-  session_from: summarize`,
+					Body: `{
+  "id": "follow_up",
+  "type": "agent",
+  "provider": "claude",
+  "prompt": "Continue the conversation. The user said: {{.Node.trigger.payload.text}}",
+  "session_from": "summarize"
+}`,
 				},
 			},
 		},

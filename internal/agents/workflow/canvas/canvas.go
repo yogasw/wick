@@ -199,7 +199,7 @@ func indexNodes(g workflow.Graph) map[string]workflow.Node {
 
 func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	knownKeys := map[string]struct{}{
-		"label": {}, "description": {}, "prompt": {}, "prompt_file": {},
+		"label": {}, "description": {}, "prompt": {},
 		"timeout_sec": {}, "on_failure": {}, "fallback": {}, "provider": {},
 		"preset": {}, "session": {}, "output_cases": {}, "expr": {},
 		"url": {}, "method": {}, "channel": {}, "op": {}, "module": {},
@@ -225,9 +225,6 @@ func applyNodePatch(n *workflow.Node, patch map[string]any) error {
 	}
 	if v, ok := patch["prompt"].(string); ok {
 		n.Prompt = v
-	}
-	if v, ok := patch["prompt_file"].(string); ok {
-		n.PromptFile = v
 	}
 	switch v := patch["timeout_sec"].(type) {
 	case int:

@@ -9,16 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// readBodyAll captures the request body once so we can sniff its shape
-// (yaml-envelope vs. raw workflow JSON) without consuming the reader.
+// readBodyAll captures the request body so handlers can sniff or
+// validate before unmarshalling.
 func readBodyAll(c *tool.Ctx) ([]byte, error) {
 	if c.R.Body == nil {
 		return nil, errors.New("empty body")
@@ -27,37 +25,23 @@ func readBodyAll(c *tool.Ctx) ([]byte, error) {
 	return io.ReadAll(c.R.Body)
 }
 
-// normaliseWorkflowBody returns YAML bytes ready for parse.Parse. The
-// FE may send either {"yaml": "..."} or the full workflow as JSON
-// (a JSON object that lacks a `yaml` field). Strip whitespace first
-// because an empty buffer is treated as "no body".
+// normaliseWorkflowBody returns canonical JSON bytes ready for
+// parse.Parse. The FE sends the full workflow as JSON; this helper
+// keeps the validate seam in case callers want to wrap the body later
+// (e.g. envelope with metadata). Currently it just round-trips JSON to
+// guarantee the shape parses cleanly into wf.Workflow.
 func normaliseWorkflowBody(id string, raw []byte) ([]byte, error) {
-	trim := strings.TrimSpace(string(raw))
-	if trim == "" {
+	if strings.TrimSpace(string(raw)) == "" {
 		return nil, errors.New("body is required")
 	}
-	// yaml-envelope shape.
-	var env struct {
-		YAML string `json:"yaml"`
-	}
-	if err := json.Unmarshal(raw, &env); err == nil && strings.TrimSpace(env.YAML) != "" {
-		return []byte(env.YAML), nil
-	}
-	// Raw workflow JSON — marshal back to YAML so the parser sees one
-	// shape. yaml.v3 round-trips a Workflow cleanly because every YAML
-	// tag on the struct doubles as a JSON-compatible key.
 	var w wf.Workflow
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, errors.New("body must be either {\"yaml\":...} or a workflow JSON object: " + err.Error())
+		return nil, errors.New("body must be a workflow JSON object: " + err.Error())
 	}
 	if w.ID == "" {
 		w.ID = id
 	}
-	out, err := yaml.Marshal(w)
-	if err != nil {
-		return nil, errors.New("marshal workflow → yaml: " + err.Error())
-	}
-	return out, nil
+	return json.Marshal(w)
 }
 
 // JSON-only API wrappers consumed by the Svelte SPA under

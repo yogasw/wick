@@ -74,7 +74,7 @@ func (e *GoScriptExecutor) Descriptor() engine.NodeDescriptor {
 		Badge:       "Go script",
 		Description: "Run a Go program (yaegi interpreter). Stdin = run context JSON, stdout = result JSON.",
 		WhenToUse:   "Logic that needs real Go code — string manipulation, math, JSON shaping, custom predicates. Use http/transform for I/O; this node is pure compute.",
-		Example:     "- id: shape_payload\n  type: go_script\n  code: |\n    package main\n    import (\"encoding/json\"; \"os\")\n    func main() {\n      var ctx map[string]any\n      json.NewDecoder(os.Stdin).Decode(&ctx)\n      ev := ctx[\"Event\"].(map[string]any)[\"Payload\"].(map[string]any)\n      json.NewEncoder(os.Stdout).Encode(map[string]any{\"upper\": ev[\"text\"]})\n    }\n",
+		Example:     "{\n  \"id\": \"shape_payload\",\n  \"type\": \"go_script\",\n  \"code\": \"package main\\nimport (\\\"encoding/json\\\"; \\\"os\\\")\\nfunc main() {\\n  var ctx map[string]any\\n  json.NewDecoder(os.Stdin).Decode(&ctx)\\n  ev := ctx[\\\"Event\\\"].(map[string]any)[\\\"Payload\\\"].(map[string]any)\\n  json.NewEncoder(os.Stdout).Encode(map[string]any{\\\"upper\\\": ev[\\\"text\\\"]})\\n}\\n\"\n}",
 		Schema:      integration.StructSchema(GoScriptSchema{}),
 		Output: map[string]string{
 			"result": "any — JSON value parsed from script stdout. When result is an object, its keys are merged into Node.<id>.* for direct template access.",

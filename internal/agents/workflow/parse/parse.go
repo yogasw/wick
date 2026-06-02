@@ -1,4 +1,4 @@
-// Package parse decodes and validates workflow.yaml bodies. Pure
+// Package parse decodes and validates workflow JSON bodies. Pure
 // in-memory transforms over the types defined in `workflow` root pkg
 // — no filesystem, no engine, no executors.
 //
@@ -16,7 +16,6 @@ import (
 	gotemplate "text/template"
 
 	"github.com/google/uuid"
-	"gopkg.in/yaml.v3"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
@@ -105,14 +104,14 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
-// Parse decodes a workflow.yaml body. The folder name is the
-// authoritative ID — it overwrites whatever `id:` happens to be in the
-// YAML so renaming a folder always wins over a stale value. The
+// Parse decodes a workflow JSON body. The folder name (or DB id) is the
+// authoritative ID — it overwrites whatever `id` happens to be in the
+// body so renaming the workflow always wins over a stale value. The
 // returned workflow has not yet been validated; call Validate after.
 func Parse(id string, data []byte) (workflow.Workflow, error) {
 	var w workflow.Workflow
-	if err := yaml.Unmarshal(data, &w); err != nil {
-		return workflow.Workflow{}, Error{Path: "yaml", Message: err.Error()}
+	if err := json.Unmarshal(data, &w); err != nil {
+		return workflow.Workflow{}, Error{Path: "json", Message: err.Error()}
 	}
 	w.ID = id
 	if w.ID == "" {
@@ -121,9 +120,9 @@ func Parse(id string, data []byte) (workflow.Workflow, error) {
 	return w, nil
 }
 
-// Marshal serializes a Workflow back to YAML.
+// Marshal serializes a Workflow back to indented JSON.
 func Marshal(w workflow.Workflow) ([]byte, error) {
-	return yaml.Marshal(w)
+	return json.MarshalIndent(w, "", "  ")
 }
 
 // Result is the aggregate of static checks performed by Validate.
@@ -432,16 +431,16 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 	case "":
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: "is required"})
 	case workflow.NodeClassify:
-		if n.Prompt == "" && n.PromptFile == "" {
-			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt or prompt_file"})
+		if n.Prompt == "" {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt"})
 		}
 		checkTemplate(r, path, "prompt", n.Prompt)
 		if len(n.OutputCases) == 0 {
 			r.Warnings = append(r.Warnings, Error{Path: path + ".output_cases", Message: "classify without output_cases will accept any verdict (defeats normalize/fuzzy)"})
 		}
 	case workflow.NodeAgent:
-		if n.Prompt == "" && n.PromptFile == "" {
-			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt or prompt_file"})
+		if n.Prompt == "" {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt"})
 		}
 		checkTemplate(r, path, "prompt", n.Prompt)
 	case workflow.NodeChannel:

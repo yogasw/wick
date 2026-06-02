@@ -37,7 +37,7 @@ func (e *SwitchExecutor) Descriptor() engine.NodeDescriptor {
 		Badge:       "case",
 		Description: "Multi-case branching. First rule whose 'when' is true wins; emits Verdict=case so downstream edges route by case:.",
 		WhenToUse:   "Routing with 2+ conditions where 'branch' (single expr) is awkward. Each rule is independent; ordering matters (first match wins).",
-		Example:     "- id: route\n  type: switch\n  cases:\n    - when: '{{index .Event.Payload \"status\"}} == \"approved\"'\n      case: approve\n    - when: '{{index .Event.Payload \"status\"}} == \"rejected\"'\n      case: reject\n  default_case: review",
+		Example:     "{\n  \"id\": \"route\",\n  \"type\": \"switch\",\n  \"cases\": [\n    { \"when\": \"{{index .Event.Payload \\\"status\\\"}} == \\\"approved\\\"\", \"case\": \"approve\" },\n    { \"when\": \"{{index .Event.Payload \\\"status\\\"}} == \\\"rejected\\\"\", \"case\": \"reject\" }\n  ],\n  \"default_case\": \"review\"\n}",
 		Schema:      integration.StructSchema(switchSchema{}),
 		Output: map[string]string{
 			"verdict": "string — winning case label (or default_case fallback)",

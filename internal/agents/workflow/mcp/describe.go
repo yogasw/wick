@@ -253,19 +253,18 @@ var templateNodeRefRx = regexp.MustCompile(`\.Node\.([A-Za-z_][A-Za-z0-9_]*)`)
 // defaultTemplateableFields is the generic field pool wick scans on
 // every node for {{.Node.X}} references. Covers the common shapes used
 // by the built-in nodes (prompt, url, body, expr, input, expression,
-// sql, plus prompt_file's referenced filename). Per-type executors
-// extend this pool via TemplateableFieldsDeclarer when their schema
-// adds fields outside this set.
+// sql). Per-type executors extend this pool via
+// TemplateableFieldsDeclarer when their schema adds fields outside
+// this set.
 func defaultTemplateableFields(n workflow.Node) map[string]string {
 	return map[string]string{
-		"prompt":      n.Prompt,
-		"prompt_file": n.PromptFile,
-		"url":         n.URL,
-		"body":        n.Body,
-		"expr":        n.Expr,
-		"input":       n.Input,
-		"expression":  n.Expression,
-		"sql":         n.SQL,
+		"prompt":     n.Prompt,
+		"url":        n.URL,
+		"body":       n.Body,
+		"expr":       n.Expr,
+		"input":      n.Input,
+		"expression": n.Expression,
+		"sql":        n.SQL,
 	}
 }
 

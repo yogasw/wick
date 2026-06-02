@@ -13,7 +13,6 @@ import (
 	"errors"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
@@ -64,9 +63,9 @@ func (r *Repo) LoadWorkflow(id string) (wf.Workflow, error) {
 	if err != nil {
 		return wf.Workflow{}, err
 	}
-	yamlText := row.YAMLPublished
+	yamlText := row.BodyPublished
 	if yamlText == "" {
-		yamlText = row.YAMLDraft
+		yamlText = row.BodyDraft
 	}
 	if yamlText == "" {
 		return wf.Workflow{}, errors.New("workflow has no yaml")
@@ -81,9 +80,9 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 	if err != nil {
 		return wf.Workflow{}, err
 	}
-	yamlText := row.YAMLDraft
+	yamlText := row.BodyDraft
 	if yamlText == "" {
-		yamlText = row.YAMLPublished
+		yamlText = row.BodyPublished
 	}
 	if yamlText == "" {
 		return wf.Workflow{}, errors.New("workflow has no yaml")
@@ -98,14 +97,14 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 // Side effect: enforces DraftRetention by deleting the oldest excess
 // draft rows for this workflow. Published rows are never pruned.
 func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (uint, error) {
-	yamlBytes, err := yaml.Marshal(w)
+	body, err := parse.Marshal(w)
 	if err != nil {
 		return 0, err
 	}
 	now := time.Now()
 	var version uint
 	err = r.db.Transaction(func(tx *gorm.DB) error {
-		// Update only the draft-relevant columns so YAMLPublished is
+		// Update only the draft-relevant columns so BodyPublished is
 		// preserved across edits. Insert when the row doesn't exist
 		// yet (covers paths that skip Create — e.g. importer + tests).
 		var existing entity.Workflow
@@ -118,7 +117,7 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 		existing.Name = w.Name
 		existing.Enabled = w.Enabled
 		existing.Version = w.Version
-		existing.YAMLDraft = string(yamlBytes)
+		existing.BodyDraft = string(body)
 		existing.HasDraft = true
 		existing.UpdatedAt = now
 		if err := tx.Save(&existing).Error; err != nil {
@@ -127,7 +126,7 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 		snap := entity.WorkflowVersion{
 			WorkflowID: id,
 			Kind:       KindDraft,
-			YAML:       string(yamlBytes),
+			Body:       string(body),
 			Message:    message,
 			CreatedBy:  createdBy,
 			CreatedAt:  now,
@@ -142,7 +141,7 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 }
 
 // Publish promotes the current draft to published. The published yaml
-// becomes the new YAMLPublished column and a snapshot is appended to
+// becomes the new BodyPublished column and a snapshot is appended to
 // workflow_versions with Kind=published. The draft column is cleared
 // and HasDraft flipped to false so the next save creates a fresh
 // draft, matching the file-based publish flow.
@@ -153,12 +152,12 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		if err := tx.Where("id = ?", id).First(&row).Error; err != nil {
 			return err
 		}
-		if row.YAMLDraft == "" {
+		if row.BodyDraft == "" {
 			return errors.New("no draft to publish")
 		}
 		now := time.Now()
-		row.YAMLPublished = row.YAMLDraft
-		row.YAMLDraft = ""
+		row.BodyPublished = row.BodyDraft
+		row.BodyDraft = ""
 		row.HasDraft = false
 		row.UpdatedAt = now
 		if err := tx.Save(&row).Error; err != nil {
@@ -167,7 +166,7 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		snap := entity.WorkflowVersion{
 			WorkflowID: id,
 			Kind:       KindPublished,
-			YAML:       row.YAMLPublished,
+			Body:       row.BodyPublished,
 			Message:    message,
 			CreatedBy:  createdBy,
 			CreatedAt:  now,
@@ -188,10 +187,56 @@ func (r *Repo) DiscardDraft(id string) error {
 	return r.db.Model(&entity.Workflow{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"yaml_draft": "",
+			"body_draft": "",
 			"has_draft":  false,
 			"updated_at": time.Now(),
 		}).Error
+}
+
+// SetPublished overwrites the published slot in place. Used by paths
+// that bypass the draft → publish flow (workflow rename, metadata
+// patches). Appends a published-kind snapshot so the history surface
+// still records the change.
+func (r *Repo) SetPublished(id, name string, enabled bool, version int, body []byte) error {
+	now := time.Now()
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var row entity.Workflow
+		if err := tx.Where("id = ?", id).First(&row).Error; err != nil {
+			return err
+		}
+		row.Name = name
+		row.Enabled = enabled
+		row.Version = version
+		row.BodyPublished = string(body)
+		row.UpdatedAt = now
+		if err := tx.Save(&row).Error; err != nil {
+			return err
+		}
+		snap := entity.WorkflowVersion{
+			WorkflowID: id,
+			Kind:       KindPublished,
+			Body:       string(body),
+			CreatedAt:  now,
+		}
+		return tx.Create(&snap).Error
+	})
+}
+
+// SetEnabled flips the enabled flag on the workflow row and refreshes
+// the published body bytes so the column stays in sync. Used by the
+// Toggle path (UI + MCP) where the body changed but no draft/publish
+// flow is needed.
+func (r *Repo) SetEnabled(id string, enabled bool, body []byte) error {
+	updates := map[string]any{
+		"enabled":    enabled,
+		"updated_at": time.Now(),
+	}
+	if len(body) > 0 {
+		updates["body_published"] = string(body)
+	}
+	return r.db.Model(&entity.Workflow{}).
+		Where("id = ?", id).
+		Updates(updates).Error
 }
 
 // Create inserts a brand-new workflow row. Used by the importer
@@ -210,8 +255,8 @@ func (r *Repo) Create(id, name, createdBy string) error {
 }
 
 // Delete removes the workflow row + every version snapshot + every
-// test case. Matches the file-store semantics where deleting the
-// folder wipes everything.
+// test case. One transaction so a crash mid-way leaves nothing
+// half-deleted.
 func (r *Repo) Delete(id string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("workflow_id = ?", id).Delete(&entity.WorkflowVersion{}).Error; err != nil {
@@ -222,6 +267,61 @@ func (r *Repo) Delete(id string) error {
 		}
 		return tx.Where("id = ?", id).Delete(&entity.Workflow{}).Error
 	})
+}
+
+// ── Test cases ───────────────────────────────────────────────────────
+
+// ListTests returns every test case Name for the workflow, ordered by
+// name.
+func (r *Repo) ListTests(id string) ([]entity.WorkflowTestCase, error) {
+	var rows []entity.WorkflowTestCase
+	err := r.db.
+		Where("workflow_id = ?", id).
+		Order("name asc").
+		Find(&rows).Error
+	return rows, err
+}
+
+// GetTest returns one test case by (workflow_id, name).
+func (r *Repo) GetTest(id, name string) (entity.WorkflowTestCase, error) {
+	var row entity.WorkflowTestCase
+	err := r.db.
+		Where("workflow_id = ? AND name = ?", id, name).
+		First(&row).Error
+	return row, err
+}
+
+// SaveTest upserts one test case. Body is the raw JSON the engine
+// reads at run time.
+func (r *Repo) SaveTest(id, name string, body []byte) error {
+	// Try update first to preserve the auto-increment ID across edits.
+	res := r.db.
+		Model(&entity.WorkflowTestCase{}).
+		Where("workflow_id = ? AND name = ?", id, name).
+		Updates(map[string]any{
+			"body":       string(body),
+			"updated_at": time.Now(),
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected > 0 {
+		return nil
+	}
+	// No existing row — insert fresh.
+	return r.db.Create(&entity.WorkflowTestCase{
+		WorkflowID: id,
+		Name:       name,
+		Body:       string(body),
+		UpdatedAt:  time.Now(),
+	}).Error
+}
+
+// DeleteTest removes one test case by name.
+func (r *Repo) DeleteTest(id, name string) error {
+	return r.db.
+		Where("workflow_id = ? AND name = ?", id, name).
+		Delete(&entity.WorkflowTestCase{}).Error
 }
 
 // Versions returns the version history for a workflow ordered newest
@@ -253,7 +353,7 @@ func (r *Repo) Restore(id string, versionID uint, createdBy string) (uint, error
 	if snap.WorkflowID != id {
 		return 0, errors.New("version does not belong to this workflow")
 	}
-	w, err := parse.Parse(id, []byte(snap.YAML))
+	w, err := parse.Parse(id, []byte(snap.Body))
 	if err != nil {
 		return 0, err
 	}

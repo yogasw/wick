@@ -159,11 +159,10 @@ type Node struct {
 	Strategy string   `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// classify + agent
-	Provider   string `yaml:"provider,omitempty"    json:"provider,omitempty"`
-	Preset     string `yaml:"preset,omitempty"      json:"preset,omitempty"`
-	Prompt     string `yaml:"prompt,omitempty"      json:"prompt,omitempty"`
-	PromptFile string `yaml:"prompt_file,omitempty" json:"prompt_file,omitempty"`
-	Session    string `yaml:"session,omitempty"     json:"session,omitempty"`
+	Provider string `yaml:"provider,omitempty"    json:"provider,omitempty"`
+	Preset   string `yaml:"preset,omitempty"      json:"preset,omitempty"`
+	Prompt   string `yaml:"prompt,omitempty"      json:"prompt,omitempty"`
+	Session  string `yaml:"session,omitempty"     json:"session,omitempty"`
 
 	// agent override — copy resolved sessionID from another node in
 	// this run. Must reference an upstream agent or session_init node.

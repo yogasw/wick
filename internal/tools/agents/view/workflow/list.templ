@@ -54,7 +54,7 @@ templ listScripts() {
 			form.submit();
 		});
 
-		// ── Paste YAML modal ──
+		// ── Paste JSON modal ──
 		const pasteBtn    = document.getElementById('wf-import-paste-btn');
 		const pasteModal  = document.getElementById('wf-paste-modal');
 		const pasteClose  = document.getElementById('wf-paste-close');
@@ -74,15 +74,15 @@ templ listScripts() {
 		document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePasteModal(); });
 
 		pasteSubmit?.addEventListener('click', async () => {
-			const yaml = pasteArea?.value?.trim();
-			if (!yaml) { showErr('YAML content is empty'); return; }
+			const body = pasteArea?.value?.trim();
+			if (!body) { showErr('JSON content is empty'); return; }
 			const url = pasteSubmit.dataset.importUrl;
 			pasteSubmit.disabled = true;
 			pasteSubmit.textContent = 'Importing…';
 			try {
-				const blob = new Blob([yaml], { type: 'application/x-yaml' });
+				const blob = new Blob([body], { type: 'application/json' });
 				const fd = new FormData();
-				fd.append('file', blob, 'workflow.yaml');
+				fd.append('file', blob, 'workflow.json');
 				const resp = await fetch(url, { method: 'POST', body: fd });
 				if (resp.redirected) { window.location.href = resp.url; return; }
 				if (!resp.ok) { showErr(await resp.text()); return; }
@@ -111,7 +111,7 @@ templ listHeader(base string) {
 				<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">Workflows</h1>
 				<p class="mt-1 text-sm text-black-700 dark:text-black-600">DAG-based automations — drag-drop editor, AI-buildable, run-tracked.</p>
 			</div>
-			<!-- Import YAML dropdown -->
+			<!-- Import JSON dropdown -->
 			<div class="relative" id="wf-import-wrap">
 				<button
 					type="button"
@@ -119,34 +119,34 @@ templ listHeader(base string) {
 					class="flex items-center gap-2 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-sm font-medium text-black-700 dark:text-black-400 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
 				>
 					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-					Import YAML ▾
+					Import JSON ▾
 				</button>
 				<div id="wf-import-menu" class="hidden absolute right-0 top-full mt-1 w-44 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md z-20 text-sm overflow-hidden">
 					<label class="flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-800 dark:text-black-300">
 						<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
 						Upload file
-						<input type="file" accept=".yaml,.yml" class="hidden" id="wf-import-file" data-import-url={ base + "/workflows/import" }/>
+						<input type="file" accept=".json" class="hidden" id="wf-import-file" data-import-url={ base + "/workflows/import" }/>
 					</label>
 					<button type="button" id="wf-import-paste-btn" class="flex w-full items-center gap-2 px-3 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-800 dark:text-black-300">
 						<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-						Paste YAML text
+						Paste JSON text
 					</button>
 				</div>
 			</div>
 
-			<!-- Paste YAML modal -->
+			<!-- Paste JSON modal -->
 			<div id="wf-paste-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
 				<div class="absolute inset-0 bg-black/40 backdrop-blur-sm" id="wf-paste-backdrop"></div>
 				<div class="relative w-full max-w-xl mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl overflow-hidden">
 					<div class="flex items-center gap-2 px-4 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-						<span class="font-semibold text-sm text-black-900 dark:text-white-100">Paste workflow YAML</span>
+						<span class="font-semibold text-sm text-black-900 dark:text-white-100">Paste workflow JSON</span>
 						<button type="button" id="wf-paste-close" class="ml-auto text-black-600 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 text-xl leading-none">×</button>
 					</div>
 					<div class="p-4">
 						<textarea
 							id="wf-paste-content"
 							class="w-full h-64 font-mono text-xs rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 text-black-900 dark:text-white-100 p-3 focus:border-green-500 focus:outline-none resize-none"
-							placeholder={ "name: My Workflow\ntriggers:\n  - type: manual\ngraph:\n  entry: start\n  nodes:\n    - id: start\n      type: end\n      result: done" }
+							placeholder={ "{\n  \"name\": \"My Workflow\",\n  \"triggers\": [{ \"type\": \"manual\" }],\n  \"graph\": {\n    \"entry\": \"start\",\n    \"nodes\": [{ \"id\": \"start\", \"type\": \"end\", \"result\": \"done\" }]\n  }\n}" }
 						></textarea>
 						<div id="wf-paste-error" class="hidden mt-2 text-xs text-red-600 dark:text-red-400"></div>
 					</div>
@@ -225,10 +225,10 @@ templ listTable(vm ListVM) {
 									<a
 										href={ templ.SafeURL(vm.Base + "/workflows/edit/" + w.ID + "/download") }
 										class="inline-flex items-center gap-1 text-xs text-black-600 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 transition-colors"
-										title="Download workflow.yaml"
+										title="Download workflow.json"
 									>
 										<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-										YAML
+										JSON
 									</a>
 									<a
 										href={ templ.SafeURL(vm.Base + "/workflows/edit/" + w.ID) }

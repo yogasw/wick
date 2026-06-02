@@ -314,7 +314,7 @@ func (s *FileService) LoadEnvValues(id string) (map[string]string, error) {
 		}
 		return nil, err
 	}
-	if err := env.UnmarshalYAMLFile(data, &out); err != nil {
+	if err := env.UnmarshalFile(data, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -322,7 +322,7 @@ func (s *FileService) LoadEnvValues(id string) (map[string]string, error) {
 
 // SaveEnvValues writes `<id>/env.yaml` atomically.
 func (s *FileService) SaveEnvValues(id string, values map[string]string) error {
-	data, err := env.MarshalYAMLFile(values)
+	data, err := env.MarshalFile(values)
 	if err != nil {
 		return err
 	}

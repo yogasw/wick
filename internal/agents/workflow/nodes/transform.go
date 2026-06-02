@@ -23,7 +23,7 @@ func (e *TransformExecutor) Descriptor() wfengine.NodeDescriptor {
 		Badge:       "reshape data",
 		Description: "Pure-function transform via gotemplate/jsonpath/jq.",
 		WhenToUse:   "Reshape data between nodes without an LLM.",
-		Example:     "- id: build\n  type: transform\n  engine: gotemplate\n  expression: '{{index .Event.Payload \"text\" | upper}}'",
+		Example:     "{\n  \"id\": \"build\",\n  \"type\": \"transform\",\n  \"engine\": \"gotemplate\",\n  \"expression\": \"{{index .Event.Payload \\\"text\\\" | upper}}\"\n}",
 		Schema:      integration.StructSchema(transformSchema{}),
 		Output:      map[string]string{"result": "string — rendered output"},
 	}

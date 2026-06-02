@@ -197,18 +197,20 @@ func (h *handlers) writeFile(c *connector.Ctx) (any, error) {
 	path := c.Input("path")
 	content := []byte(c.Input("content"))
 
-	// Edits to the main workflow YAML go to draft (workflow.draft.yaml)
+	// Edits to the main workflow body go to draft (workflow.draft.json)
 	// so the live router keeps running the published version until the
 	// user explicitly calls workflow_publish. Other files (nodes/*.md,
-	// scripts, env.yaml, __tests__/) write through directly — they have
+	// env.json, __tests__/) write through directly — they have
 	// no draft/publish split.
-	if path == "workflow.yaml" {
-		// Parse the YAML so SaveDraft can validate + carry forward
-		// ID/CreatedAt fields. Fail-fast on bad YAML rather than writing
-		// a broken draft and surfacing it on next load.
+	if path == "workflow.json" || path == "workflow.yaml" {
+		// Parse so SaveDraft can validate + carry forward ID/CreatedAt
+		// fields. Fail-fast on bad body rather than writing a broken
+		// draft and surfacing it on next load. Body must be JSON now —
+		// callers passing the legacy `workflow.yaml` path are accepted
+		// but the content itself still needs to be JSON.
 		w, perr := parse.Parse(id, content)
 		if perr != nil {
-			return nil, fmt.Errorf("parse workflow.yaml: %w", perr)
+			return nil, fmt.Errorf("parse workflow body: %w", perr)
 		}
 		w = topDownLayout(w)
 		normalizeTriggerEntryNodes(&w)
@@ -308,7 +310,7 @@ func (h *handlers) publish(c *connector.Ctx) (any, error) {
 		"ok":      true,
 		"id":      w.ID,
 		"enabled": w.Enabled,
-		"message": "Draft promoted to live workflow.yaml.",
+		"message": "Draft promoted to live workflow.json.",
 	}, nil
 }
 

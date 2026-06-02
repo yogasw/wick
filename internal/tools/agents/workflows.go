@@ -141,9 +141,9 @@ func createWorkflow(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/workflows/edit/"+w.ID, http.StatusSeeOther)
 }
 
-// importWorkflow handles POST /workflows/import — receives a YAML file
-// upload, parses + validates it, creates the workflow folder, and
-// redirects to the editor.
+// importWorkflow handles POST /workflows/import — receives a workflow
+// JSON file upload, parses + validates it, creates the workflow
+// folder, and redirects to the editor.
 func importWorkflow(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -168,7 +168,7 @@ func importWorkflow(c *tool.Ctx) {
 
 	w, err := parse.Parse(uuid.NewString(), data)
 	if err != nil {
-		c.Error(http.StatusBadRequest, "invalid workflow YAML: "+err.Error())
+		c.Error(http.StatusBadRequest, "invalid workflow JSON: "+err.Error())
 		return
 	}
 
@@ -196,7 +196,9 @@ func importWorkflow(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/workflows/edit/"+created.ID, http.StatusSeeOther)
 }
 
-// downloadWorkflowYAML serves the published workflow.yaml as a file download.
+// downloadWorkflowYAML serves the published workflow body as a JSON
+// file download. Name kept (handler is referenced by route table) so
+// callers don't need to update; the served file is JSON now.
 func downloadWorkflowYAML(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -209,10 +211,10 @@ func downloadWorkflowYAML(c *tool.Ctx) {
 	}
 	data, err := parse.Marshal(w)
 	if err != nil {
-		c.Error(http.StatusInternalServerError, "marshal YAML: "+err.Error())
+		c.Error(http.StatusInternalServerError, "marshal body: "+err.Error())
 		return
 	}
-	filename := id + ".workflow.yaml"
+	filename := id + ".workflow.json"
 	if w.Name != "" {
 		safe := strings.Map(func(r rune) rune {
 			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -220,9 +222,9 @@ func downloadWorkflowYAML(c *tool.Ctx) {
 			}
 			return '-'
 		}, w.Name)
-		filename = safe + ".workflow.yaml"
+		filename = safe + ".workflow.json"
 	}
-	c.W.Header().Set("Content-Type", "application/x-yaml")
+	c.W.Header().Set("Content-Type", "application/json")
 	c.W.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	c.W.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	_, _ = c.W.Write(data)
