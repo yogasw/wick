@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
@@ -65,6 +66,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
+	r.POST("/api/workflows/template-test/{id}", spaTemplateTest)
 	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
 	r.POST("/api/workflows/move-nodes/{id}", spaMoveNodes)
 	r.POST("/api/workflows/auto-layout/{id}", spaAutoLayout)
@@ -482,6 +484,50 @@ func parseDateInput(v string, endOfDay bool) (time.Time, error) {
 		t = t.Add(24*time.Hour - time.Nanosecond)
 	}
 	return t.UTC(), nil
+}
+
+// templateTestRL limits template-test to 5 req/s (200ms min between calls).
+// Single bucket — fine for a local dev server where all traffic is one user.
+var templateTestRL = struct {
+	mu       sync.Mutex
+	last     time.Time
+	minGap   time.Duration
+}{minGap: 200 * time.Millisecond}
+
+func spaTemplateTest(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	templateTestRL.mu.Lock()
+	now := time.Now()
+	wait := templateTestRL.minGap - now.Sub(templateTestRL.last)
+	if wait > 0 {
+		templateTestRL.mu.Unlock()
+		c.JSON(http.StatusTooManyRequests, map[string]string{"error": "rate limited"})
+		return
+	}
+	templateTestRL.last = now
+	templateTestRL.mu.Unlock()
+
+	var body struct {
+		Template    string `json:"template"`
+		SampleEvent string `json:"sample_event"`
+		Context     string `json:"context"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	result, err := globalWorkflowMgr.MCP.TemplateTest(mcp.TemplateTestInput{
+		Template:    body.Template,
+		SampleEvent: body.SampleEvent,
+		Context:     body.Context,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func spaCanvasView(c *tool.Ctx) {

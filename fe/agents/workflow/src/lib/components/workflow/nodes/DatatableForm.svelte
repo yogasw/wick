@@ -23,8 +23,8 @@
   import Field from "../fields/Field.svelte";
   import ColumnCombobox from "../fields/ColumnCombobox.svelte";
 
-  type Props = { node: Node };
-  let { node }: Props = $props();
+  type Props = { node: Node; workflowId?: string; nodeLabels?: string[]; nodeOutputs?: Record<string, Record<string, unknown>> };
+  let { node, workflowId, nodeLabels = [], nodeOutputs = {} as Record<string, Record<string, unknown>> }: Props = $props();
 
   // ── workspace tables ───────────────────────────────────────────────
   // Same source v1 used: GET /api/data-tables returns workspace-level
@@ -250,6 +250,9 @@
 {#if showKey}
   <!-- ── get / upsert: primary key (single value) ─────────────────── -->
   <ArgField
+    {workflowId}
+    {nodeLabels}
+    {nodeOutputs}
     label="Primary key value"
     value={keyValue}
     mode={condMode("id")}
@@ -300,6 +303,9 @@
         </div>
         {#if cond.op !== "is_empty" && cond.op !== "is_not_empty"}
           <ArgField
+    {workflowId}
+    {nodeLabels}
+    {nodeOutputs}
             label="value"
             value={typeof cond.value === "string" ? cond.value : JSON.stringify(cond.value ?? "")}
             mode={condMode(cond.column)}
@@ -398,6 +404,9 @@
           >✕</button>
         </div>
         <ArgField
+    {workflowId}
+    {nodeLabels}
+    {nodeOutputs}
           label="value"
           value={typeof value === "string" ? value : JSON.stringify(value)}
           mode={rowMode(column)}
