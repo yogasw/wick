@@ -86,7 +86,6 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				</a>
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
-				@agentsNavLink(vm.Base+"/workflows-v2", "Workflows v2", vm.ActivePage == "workflows-v2")
 				@agentsNavLink(vm.Base+"/workspaces", "Workspaces", vm.ActivePage == "workspaces")
 				<details class="group" { agentsMoreOpenAttr(vm.ActivePage)... }>
 					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">

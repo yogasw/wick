@@ -12,7 +12,6 @@ import (
 // system palette.
 templ List(vm ListVM) {
 	@view.AgentsLayout(vm.Layout) {
-		@Shell(vm.Base)
 		<div class="max-w-6xl mx-auto px-6 py-8">
 			@listHeader(vm.Base)
 			@listTable(vm)
@@ -232,7 +231,7 @@ templ listTable(vm ListVM) {
 										YAML
 									</a>
 									<a
-										href={ templ.SafeURL(vm.Base + listEditPrefix(vm) + "/" + w.ID) }
+										href={ templ.SafeURL(vm.Base + "/workflows/edit/" + w.ID) }
 										class="text-sm font-semibold text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300"
 									>Open editor →</a>
 								</div>

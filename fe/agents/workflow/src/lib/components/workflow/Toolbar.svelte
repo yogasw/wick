@@ -84,7 +84,7 @@
     } finally {
       confirmDelete = false;
       // Navigate back to the list — full reload to drop stale state.
-      window.location.href = "/tools/agents/workflows-v2";
+      window.location.href = "/tools/agents/workflows";
     }
   }
 
@@ -146,7 +146,7 @@
 >
   <!-- Breadcrumb + inline-renamable name. -->
   <div class="flex items-center gap-2 text-sm font-medium min-w-0">
-    <a href="/tools/agents/workflows-v2" class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100">
+    <a href="/tools/agents/workflows" class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100">
       Workflows
     </a>
     <span class="text-slate-400">›</span>

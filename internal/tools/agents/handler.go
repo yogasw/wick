@@ -31,8 +31,6 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
-	wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
-	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/all"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -141,10 +139,8 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
 	r.Static("/static/", StaticFS)
-	r.Static("/static/nodes/", wfnodes.StaticFS)
 
-	// New Svelte SPA shell + assets. Sits alongside legacy templ routes
-	// during the migration (see internal/docs/workflow/svelte-migration.md).
+	// Svelte SPA shell + assets for the workflow editor.
 	registerSPA(r)
 	registerSPAWorkflows(r)
 	registerSPAWorkflowHistory(r)
@@ -249,41 +245,18 @@ func Register(r tool.Router) {
 
 	r.GET("/settings", settingsPage)
 
-	// Workflows tab — visual DAG editor (mockup §3).
+	// Workflows tab — Svelte v2 editor. `/workflows` lists; the editor
+	// page mounts the Svelte SPA via the templ shell.
 	r.GET("/workflows", workflowsPage)
 	r.POST("/workflows", createWorkflow)
 	r.POST("/workflows/import", importWorkflow)
 	r.GET("/workflows/edit/{id}/download", downloadWorkflowYAML)
-	// ID-bound routes live under /edit/ so Go 1.22's mux doesn't
-	// flag a conflict with /static/{path}. The ID is the folder name
-	// (UUID for canvas-created workflows) — stable across name renames.
-	r.GET("/workflows/edit/{id}", workflowEditorLegacy)
-
-	// Workflows v2 — Svelte editor mounted as a templ island. Same JSON
-	// API + repository under the hood; only the UI differs. Sidebar
-	// exposes both menu items during the migration so users can A/B.
-	r.GET("/workflows-v2", workflowsV2Page)
-	r.GET("/workflows-v2/edit/{id}", workflowEditor)
-	r.POST("/workflows/edit/{id}/save", saveWorkflow)
+	r.GET("/workflows/edit/{id}", workflowEditor)
 	r.POST("/workflows/edit/{id}/rename", renameWorkflow)
-	r.POST("/workflows/edit/{id}/publish", publishWorkflow)
-	r.POST("/workflows/edit/{id}/discard", discardWorkflowDraft)
-	r.POST("/workflows/edit/{id}/toggle", toggleWorkflow)
-	r.POST("/workflows/edit/{id}/run", runWorkflowNow)
-	r.POST("/workflows/edit/{id}/exec-node", execNodeStep)
 	r.GET("/workflows/edit/{id}/runs/{runID}/state", workflowRunStateAPI)
-	r.POST("/workflows/edit/{id}/runs/{runID}/copy-to-editor", copyRunToEditor)
 	r.POST("/workflows/edit/{id}/delete", deleteWorkflow)
-	r.GET("/workflows/edit/{id}/runs/{runID}", workflowRunDetail)
-	r.GET("/workflows/edit/{id}/executions", executionsPanel)
-	r.GET("/workflows/edit/{id}/executions/{runID}", executionDetail)
 	r.GET("/workflows/api/registry", workflowRegistryAPI)
 	r.GET("/workflows/api/lookup", workflowLookupAPI)
-	r.POST("/workflows/edit/{id}/test", runWorkflowTests)
-	r.GET("/workflows/edit/{id}/test-cases", listTestCases)
-	r.POST("/workflows/edit/{id}/test-cases", saveTestCase)
-	r.POST("/workflows/edit/{id}/test-cases/{name}/run", runOneTestCase)
-	r.DELETE("/workflows/edit/{id}/test-cases/{name}", deleteTestCase)
 
 	r.GET("/stream", streamSSE)
 	r.GET("/stream/snapshot", streamSnapshot)
