@@ -312,6 +312,12 @@ export const workflowAPI = {
   canvasView: (id: string): Promise<{ nodes: any[]; triggers: any[]; ascii: string; stats: any }> =>
     apiGet(`${BASE}/api/workflows/canvas/${encodeURIComponent(id)}`),
 
+  templateTest: (
+    id: string,
+    body: { template: string; sample_event?: string; context?: string },
+  ): Promise<{ ok: boolean; rendered?: string; error?: string; available_keys?: string[]; hint?: string }> =>
+    apiPost(`${BASE}/api/workflows/template-test/${encodeURIComponent(id)}`, body),
+
   // Bottom-panel content endpoints (Validation / Guard / Tests).
   validate: (id: string): Promise<ValidationReport> =>
     apiGet(`${BASE}/api/workflows/validate/${encodeURIComponent(id)}`),
