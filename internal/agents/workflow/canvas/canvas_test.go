@@ -567,3 +567,204 @@ func TestMutate_LoadMissingID_Error(t *testing.T) {
 		t.Fatal("expected error for unknown id")
 	}
 }
+
+// ── MoveNodes (batch) ────────────────────────────────────────────────────────
+
+func TestMoveNodes_BatchUpdatesPositions(t *testing.T) {
+	svc := newStub("wf")
+	// Add a second node so both IDs exist in the workflow.
+	w := svc.workflows["wf"]
+	w.Graph.Nodes = append(w.Graph.Nodes, workflow.Node{ID: "n2", Type: workflow.NodeEnd})
+	w.Graph.Edges = append(w.Graph.Edges, workflow.Edge{From: "start", To: "n2"})
+	svc.workflows["wf"] = w
+
+	c := newCanvas(svc)
+	moves := []NodeMove{
+		{NodeID: "start", X: 100, Y: 200},
+		{NodeID: "n2", X: 400, Y: 200},
+	}
+	got, err := c.MoveNodes("wf", moves)
+	if err != nil {
+		t.Fatalf("MoveNodes error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	for _, mv := range moves {
+		pos := positions[mv.NodeID].(map[string]any)
+		if pos["x"] != mv.X || pos["y"] != mv.Y {
+			t.Errorf("node %s: want x=%d y=%d, got %v", mv.NodeID, mv.X, mv.Y, pos)
+		}
+	}
+}
+
+func TestMoveNodes_EmptyMovesError(t *testing.T) {
+	c := newCanvas(newStub("wf"))
+	_, err := c.MoveNodes("wf", nil)
+	if err == nil {
+		t.Fatal("expected error for empty moves slice")
+	}
+}
+
+func TestMoveNodes_MissingNodeIDError(t *testing.T) {
+	c := newCanvas(newStub("wf"))
+	_, err := c.MoveNodes("wf", []NodeMove{{NodeID: "", X: 10, Y: 10}})
+	if err == nil {
+		t.Fatal("expected error for empty node_id")
+	}
+}
+
+func TestMoveNodes_PreservesUnlistedPositions(t *testing.T) {
+	svc := newStub("wf")
+	c := newCanvas(svc)
+	// Set start at known position first.
+	if _, err := c.MoveNode("wf", "start", 50, 50); err != nil {
+		t.Fatalf("setup MoveNode: %v", err)
+	}
+	// MoveNodes with a synthetic ID — start must be untouched.
+	w := svc.workflows["wf"]
+	w.Graph.Nodes = append(w.Graph.Nodes, workflow.Node{ID: "n2", Type: workflow.NodeEnd})
+	w.Graph.Edges = append(w.Graph.Edges, workflow.Edge{From: "start", To: "n2"})
+	svc.workflows["wf"] = w
+
+	got, err := c.MoveNodes("wf", []NodeMove{{NodeID: "n2", X: 200, Y: 300}})
+	if err != nil {
+		t.Fatalf("MoveNodes: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	startPos := positions["start"].(map[string]any)
+	if startPos["x"] != 50 || startPos["y"] != 50 {
+		t.Errorf("start position changed unexpectedly: %v", startPos)
+	}
+}
+
+// ── AutoLayout ────────────────────────────────────────────────────────────────
+
+// chainWorkflow builds wf with a linear A→B→C chain.
+func chainWorkflow(id string) workflow.Workflow {
+	return workflow.Workflow{
+		ID:      id,
+		Name:    id,
+		Enabled: false,
+		Triggers: []workflow.Trigger{
+			{ID: "trig-manual", Type: workflow.TriggerManual, EntryNode: "a"},
+		},
+		Graph: workflow.Graph{
+			Entry: "a",
+			Nodes: []workflow.Node{
+				{ID: "a", Type: workflow.NodeShell, Command: []string{"echo", "a"}},
+				{ID: "b", Type: workflow.NodeShell, Command: []string{"echo", "b"}},
+				{ID: "c", Type: workflow.NodeEnd},
+			},
+			Edges: []workflow.Edge{
+				{From: "a", To: "b"},
+				{From: "b", To: "c"},
+			},
+		},
+	}
+}
+
+func TestAutoLayout_LinearChainIncreasingX(t *testing.T) {
+	svc := &stubService{workflows: map[string]workflow.Workflow{"wf": chainWorkflow("wf")}}
+	c := newCanvas(svc)
+
+	got, err := c.AutoLayout("wf", nil)
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+
+	posFor := func(id string) (x, y int) {
+		p, ok := positions[id].(map[string]any)
+		if !ok {
+			t.Fatalf("position for %q not found (keys: %v)", id, func() []string {
+				var ks []string
+				for k := range positions {
+					ks = append(ks, k)
+				}
+				return ks
+			}())
+		}
+		x = p["x"].(int)
+		y = p["y"].(int)
+		return
+	}
+	// Top-down layout: a→b→c means a.Y < b.Y < c.Y (increasing depth).
+	// Each level has one node, so they're all centred at the same X.
+	_, ay := posFor("a")
+	_, by := posFor("b")
+	_, cy := posFor("c")
+	if !(ay < by && by < cy) {
+		t.Errorf("expected a.Y < b.Y < c.Y (top-down), got %d %d %d", ay, by, cy)
+	}
+}
+
+func TestAutoLayout_TriggerPlacedAboveEntryNode(t *testing.T) {
+	svc := &stubService{workflows: map[string]workflow.Workflow{"wf": chainWorkflow("wf")}}
+	c := newCanvas(svc)
+
+	got, err := c.AutoLayout("wf", nil)
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+
+	tpos, ok := positions["trig-manual"].(map[string]any)
+	if !ok {
+		t.Fatal("trigger position not set")
+	}
+	if tpos["y"].(int) != layoutYOrigin {
+		t.Errorf("trigger Y: want %d (layoutYOrigin), got %d", layoutYOrigin, tpos["y"].(int))
+	}
+	// Trigger should align horizontally with entry node "a".
+	apos := positions["a"].(map[string]any)
+	if tpos["x"].(int) != apos["x"].(int) {
+		t.Errorf("trigger X %d != entry node X %d", tpos["x"].(int), apos["x"].(int))
+	}
+}
+
+func TestAutoLayout_ScopedOnlyMovesListed(t *testing.T) {
+	svc := &stubService{workflows: map[string]workflow.Workflow{"wf": chainWorkflow("wf")}}
+	c := newCanvas(svc)
+
+	// Pre-position node "c" at a known spot.
+	if _, err := c.MoveNode("wf", "c", 999, 999); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Auto-layout only "a" and "b" — "c" must remain at 999,999.
+	got, err := c.AutoLayout("wf", []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("AutoLayout scoped error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	cpos := positions["c"].(map[string]any)
+	if cpos["x"].(int) != 999 || cpos["y"].(int) != 999 {
+		t.Errorf("node c unexpectedly moved: %v", cpos)
+	}
+}
+
+func TestAutoLayout_SameDepthSameY(t *testing.T) {
+	// Two root nodes (no incoming edges) → both depth 0 → same Y, different X.
+	svc := newStub("wf")
+	w := svc.workflows["wf"]
+	w.Graph.Nodes = append(w.Graph.Nodes,
+		workflow.Node{ID: "r1", Type: workflow.NodeEnd},
+		workflow.Node{ID: "r2", Type: workflow.NodeEnd},
+	)
+	svc.workflows["wf"] = w
+
+	c := newCanvas(svc)
+	got, err := c.AutoLayout("wf", []string{"r1", "r2"})
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	r1 := positions["r1"].(map[string]any)
+	r2 := positions["r2"].(map[string]any)
+	// Same depth → same Y row.
+	if r1["y"].(int) != r2["y"].(int) {
+		t.Errorf("same-depth nodes should share Y: r1=%v r2=%v", r1, r2)
+	}
+	// Different horizontal position within the row.
+	if r1["x"].(int) == r2["x"].(int) {
+		t.Errorf("same-depth nodes should differ in X: r1=%v r2=%v", r1, r2)
+	}
+}

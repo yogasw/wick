@@ -140,6 +140,15 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 		connector.Op("workflow_move_node", "Move Node",
 			"Update canvas position for a node (x, y pixels). Does not affect execution.",
 			moveNodeInput{}, h.moveNode, wickdocs.Docs{}),
+		connector.Op("workflow_move_nodes", "Move Nodes (Batch)",
+			"Move multiple nodes in one call. Pass moves as a JSON array of {node_id, x, y}. More efficient than calling workflow_move_node N times and avoids partial-update races.",
+			moveNodesInput{}, h.moveNodes, wickdocs.Docs{}),
+		connector.Op("workflow_auto_layout", "Auto Layout Canvas",
+			"Compute DAG-aware positions for all nodes and apply them in one mutation. Uses Kahn's BFS rank assignment: roots at the left, children to the right, triggers above their entry node. Pass node_ids to restrict re-layout to a subset — positions of nodes outside the list are kept.",
+			autoLayoutInput{}, h.autoLayout, wickdocs.Docs{}),
+		connector.Op("workflow_canvas_view", "View Canvas Layout",
+			"Return a human-readable table + ASCII sketch of the current canvas. Shows each node's ID (short), label, type, X, Y, and outgoing edges. Useful from MCP to understand the current layout before moving or auto-laying nodes.",
+			idInput{}, h.canvasView, wickdocs.Docs{}),
 		connector.Op("workflow_set_triggers", "Set Triggers",
 			"Replace the entire triggers list. Use workflow_get first to read current triggers before replacing. IMPORTANT: every trigger must include entry_node pointing to the graph node it should start from — omitting it disconnects the trigger from the graph.\n\nTrigger JSON uses Go PascalCase field names. match filter format: picker fields (channel_id, user) use [{\"id\":\"C123\",\"name\":\"#ch\"}] array — NOT plain string arrays. mode field controls filtering: \"all\"=no filter, \"whitelist\"=apply picker lists. match_enabled must be true for filters to apply. Example: {\"Type\":\"channel\",\"ChannelName\":\"slack\",\"Event\":\"message\",\"EntryNode\":\"start\",\"MatchEnabled\":true,\"Match\":{\"mode\":\"whitelist\",\"channel_id\":[{\"id\":\"C123\",\"name\":\"#general\"}]}}",
 			setTriggersInput{}, h.setTriggers, wickdocs.Docs{}),
@@ -388,6 +397,16 @@ type moveNodeInput struct {
 	NodeID string `wick:"required;desc=Node ID."`
 	X      int    `wick:"required;desc=Canvas X position in pixels."`
 	Y      int    `wick:"required;desc=Canvas Y position in pixels."`
+}
+
+type moveNodesInput struct {
+	ID    string `wick:"required;desc=Workflow ID."`
+	Moves string `wick:"required;textarea;desc=JSON array of moves: [{\"node_id\":\"abc\",\"x\":280,\"y\":160}, ...]. All nodes moved in one draft mutation."`
+}
+
+type autoLayoutInput struct {
+	ID      string `wick:"required;desc=Workflow ID."`
+	NodeIDs string `wick:"textarea;desc=Optional JSON array of node IDs to re-layout. Empty = lay out all nodes + triggers."`
 }
 
 type setTriggersInput struct {

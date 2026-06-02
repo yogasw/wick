@@ -742,101 +742,33 @@
     confirmDeleteNode = false;
   }
 
-  // Auto-format — layered top-down layout. BFS from triggers, group
-  // nodes by depth, sort each level by current x position to keep
-  // user intent within a level, then snap to a grid:
-  //   trigger row → y = 0
-  //   level 1     → y = 220
-  //   level 2     → y = 440
-  // x within a level is centred around midpoint, 260px apart.
-  function autoFormat() {
+  // Auto-format — delegates to backend DAG layout (Kahn's BFS rank
+  // assignment). Backend persists new positions to the draft so the
+  // result survives page refresh and is visible to AI via canvas_view.
+  async function autoFormat() {
     const wf = $draftWorkflow;
     if (!wf) return;
-    const nodes = wf.graph?.nodes ?? [];
-    const edges = wf.graph?.edges ?? [];
-    const triggers = wf.triggers ?? [];
-
-    const children = new Map<string, string[]>();
-    const indeg = new Map<string, number>();
-    for (const n of nodes) {
-      indeg.set(n.id, 0);
-      children.set(n.id, []);
-    }
-    for (const t of triggers) {
-      if (t.id) {
-        children.set(t.id, []);
-        indeg.set(t.id, 0);
-      }
-    }
-    for (const e of edges) {
-      children.get(e.from)?.push(e.to);
-      indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
-    }
-    for (const t of triggers) {
-      if (t.id && t.entry_node) {
-        children.get(t.id)?.push(t.entry_node);
-        indeg.set(t.entry_node, (indeg.get(t.entry_node) ?? 0) + 1);
-      }
-    }
-
-    const depth = new Map<string, number>();
-    const queue: string[] = [];
-    for (const [id, n] of indeg) {
-      if (n === 0) {
-        depth.set(id, 0);
-        queue.push(id);
-      }
-    }
-    while (queue.length) {
-      const cur = queue.shift()!;
-      const d = depth.get(cur)!;
-      for (const child of children.get(cur) ?? []) {
-        const next = d + 1;
-        if (!depth.has(child) || depth.get(child)! < next) depth.set(child, next);
-        queue.push(child);
-      }
-    }
-
-    const byLevel = new Map<number, string[]>();
-    for (const [id, d] of depth) {
-      const arr = byLevel.get(d) ?? [];
-      arr.push(id);
-      byLevel.set(d, arr);
-    }
-
-    const COL_GAP = 260;
-    const ROW_GAP = 220;
-    const ORIGIN_X = 420;
-    const ORIGIN_Y = 60;
-
-    const oldPos = ((wf as any)._canvas?.positions ?? {}) as Record<string, { x: number; y: number }>;
-    function currentX(id: string): number {
-      const n = nodes.find((nn) => nn.id === id);
-      if (n?._canvas?.x !== undefined) return n._canvas.x;
-      return oldPos[id]?.x ?? 0;
-    }
-
-    draftWorkflow.update((current) => {
-      if (!current) return current;
-      const canvas = ((current as any)._canvas ?? {}) as any;
-      canvas.positions = { ...(canvas.positions ?? {}) };
-      const levels = [...byLevel.keys()].sort((a, b) => a - b);
-      for (const lvl of levels) {
-        const ids = byLevel.get(lvl)!;
-        ids.sort((a, b) => currentX(a) - currentX(b));
-        const totalWidth = (ids.length - 1) * COL_GAP;
-        const startX = ORIGIN_X - totalWidth / 2;
-        ids.forEach((id, i) => {
-          const x = startX + i * COL_GAP;
-          const y = ORIGIN_Y + lvl * ROW_GAP;
-          canvas.positions[id] = { x, y };
+    try {
+      const updated = await workflowAPI.autoLayout(wf.id);
+      // Merge backend positions into local store so the canvas repaints
+      // immediately without a full reload.
+      draftWorkflow.update((current) => {
+        if (!current) return current;
+        const newPositions = (updated as any)._canvas?.positions as
+          Record<string, { x: number; y: number }> | undefined;
+        if (!newPositions) return current;
+        const canvas = ((current as any)._canvas ?? {}) as any;
+        canvas.positions = { ...(canvas.positions ?? {}), ...newPositions };
+        for (const [id, pos] of Object.entries(newPositions)) {
           const n = current.graph.nodes.find((nn) => nn.id === id);
-          if (n) n._canvas = { x, y };
-        });
-      }
-      (current as any)._canvas = canvas;
-      return current;
-    });
+          if (n) n._canvas = { x: pos.x, y: pos.y };
+        }
+        (current as any)._canvas = canvas;
+        return current;
+      });
+    } catch (e) {
+      toastError(`Auto-layout failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   let triggerPickerOpen = $state(false);

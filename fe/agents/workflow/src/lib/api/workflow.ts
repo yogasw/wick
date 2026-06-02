@@ -296,6 +296,22 @@ export const workflowAPI = {
     // does (404 surface back if path wrong).
     apiPost(`${BASE}/workflows/edit/${encodeURIComponent(id)}/delete`, {}),
 
+  // Canvas position ops — backend computes DAG-aware layout and persists
+  // to the draft so the result survives page refresh.
+  autoLayout: (id: string, nodeIDs?: string[]): Promise<Workflow> =>
+    apiPost(`${BASE}/api/workflows/auto-layout/${encodeURIComponent(id)}`, {
+      node_ids: nodeIDs ?? [],
+    }),
+
+  moveNodes: (
+    id: string,
+    moves: { node_id: string; x: number; y: number }[],
+  ): Promise<Workflow> =>
+    apiPost(`${BASE}/api/workflows/move-nodes/${encodeURIComponent(id)}`, { moves }),
+
+  canvasView: (id: string): Promise<{ nodes: any[]; triggers: any[]; ascii: string; stats: any }> =>
+    apiGet(`${BASE}/api/workflows/canvas/${encodeURIComponent(id)}`),
+
   // Bottom-panel content endpoints (Validation / Guard / Tests).
   validate: (id: string): Promise<ValidationReport> =>
     apiGet(`${BASE}/api/workflows/validate/${encodeURIComponent(id)}`),

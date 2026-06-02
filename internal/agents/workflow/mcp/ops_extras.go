@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -284,6 +285,232 @@ func (m *Ops) DiffVersions(id string, fromID, toID uint) (VersionDiff, error) {
 		return VersionDiff{}, fmt.Errorf("version %d does not belong to workflow %s", toID, id)
 	}
 	return VersionDiff{From: from, To: to}, nil
+}
+
+// CanvasViewRow is one entry in the canvas table (node or trigger).
+type CanvasViewRow struct {
+	ID      string   `json:"id"`
+	Label   string   `json:"label,omitempty"`
+	Type    string   `json:"type"`
+	X       int      `json:"x"`
+	Y       int      `json:"y"`
+	EdgesTo []string `json:"edges_to,omitempty"`
+}
+
+// CanvasStats summarises the canvas composition.
+type CanvasStats struct {
+	NodeCount    int `json:"node_count"`
+	TriggerCount int `json:"trigger_count"`
+	EdgeCount    int `json:"edge_count"`
+	Unpositioned int `json:"unpositioned"`
+}
+
+// CanvasViewResult is the response for workflow_canvas_view.
+type CanvasViewResult struct {
+	Nodes    []CanvasViewRow `json:"nodes"`
+	Triggers []CanvasViewRow `json:"triggers"`
+	ASCII    string          `json:"ascii"`
+	Stats    CanvasStats     `json:"stats"`
+}
+
+// CanvasView returns a human-readable table + ASCII sketch of the
+// workflow canvas. Pure read — no side effects.
+func (m *Ops) CanvasView(id string) (CanvasViewResult, error) {
+	if m.Service == nil {
+		return CanvasViewResult{}, errors.New("mcp: service not wired")
+	}
+	w, err := m.Service.LoadDraft(id)
+	if err != nil {
+		return CanvasViewResult{}, err
+	}
+	return buildCanvasView(w), nil
+}
+
+func buildCanvasView(w workflow.Workflow) CanvasViewResult {
+	var positions map[string]any
+	if w.Canvas != nil {
+		positions, _ = w.Canvas["positions"].(map[string]any)
+	}
+
+	getPos := func(id string) (x, y int) {
+		if positions == nil {
+			return
+		}
+		p, ok := positions[id].(map[string]any)
+		if !ok {
+			return
+		}
+		switch v := p["x"].(type) {
+		case float64:
+			x = int(v)
+		case int:
+			x = v
+		}
+		switch v := p["y"].(type) {
+		case float64:
+			y = int(v)
+		case int:
+			y = v
+		}
+		return
+	}
+
+	// Build outgoing edge map.
+	edgesFrom := make(map[string][]string)
+	for _, e := range w.Graph.Edges {
+		label := e.To
+		if e.Case != "" {
+			label = e.Case + ":" + e.To
+		}
+		edgesFrom[e.From] = append(edgesFrom[e.From], label)
+	}
+	for id := range edgesFrom {
+		sortStrings(edgesFrom[id])
+	}
+
+	unpositioned := 0
+	nodes := make([]CanvasViewRow, 0, len(w.Graph.Nodes))
+	for _, n := range w.Graph.Nodes {
+		x, y := getPos(n.ID)
+		if x == 0 && y == 0 {
+			unpositioned++
+		}
+		row := CanvasViewRow{
+			ID:      n.ID,
+			Label:   n.Label,
+			Type:    string(n.Type),
+			X:       x,
+			Y:       y,
+			EdgesTo: edgesFrom[n.ID],
+		}
+		nodes = append(nodes, row)
+	}
+	// Sort by Y then X so the table reads top-left → bottom-right.
+	sortCanvasRows(nodes)
+
+	triggers := make([]CanvasViewRow, 0, len(w.Triggers))
+	for _, t := range w.Triggers {
+		x, y := getPos(t.ID)
+		triggers = append(triggers, CanvasViewRow{
+			ID:      t.ID,
+			Label:   t.Label,
+			Type:    string(t.Type),
+			X:       x,
+			Y:       y,
+			EdgesTo: []string{t.EntryNode},
+		})
+	}
+	sortByX(triggers)
+
+	return CanvasViewResult{
+		Nodes:    nodes,
+		Triggers: triggers,
+		ASCII:    buildCanvasASCII(w.Name, nodes, triggers, w.Graph.Edges),
+		Stats: CanvasStats{
+			NodeCount:    len(nodes),
+			TriggerCount: len(triggers),
+			EdgeCount:    len(w.Graph.Edges),
+			Unpositioned: unpositioned,
+		},
+	}
+}
+
+// buildCanvasASCII renders a text table + edge list for human / AI
+// consumption. No pixel-perfect art — just readable column alignment.
+func buildCanvasASCII(name string, nodes, triggers []CanvasViewRow, edges []workflow.Edge) string {
+	var b strings.Builder
+	sep := strings.Repeat("─", 72)
+
+	fmt.Fprintf(&b, "CANVAS: %q\n%s\n", name, sep)
+
+	if len(triggers) > 0 {
+		fmt.Fprintf(&b, "\nTRIGGERS\n%-22s %-12s %-28s %6s %5s\n", "ID", "TYPE", "ENTRY→", "X", "Y")
+		fmt.Fprintln(&b, strings.Repeat("-", 72))
+		for _, t := range triggers {
+			entry := ""
+			if len(t.EdgesTo) > 0 {
+				entry = t.EdgesTo[0]
+			}
+			shortEntry := shortID(entry)
+			fmt.Fprintf(&b, "%-22s %-12s %-28s %6d %5d\n",
+				truncate(t.ID, 22), truncate(string(t.Type), 12), shortEntry, t.X, t.Y)
+		}
+	}
+
+	if len(nodes) > 0 {
+		fmt.Fprintf(&b, "\nNODES\n%-10s %-14s %-12s %6s %5s  %s\n", "ID (short)", "LABEL", "TYPE", "X", "Y", "→ EDGES")
+		fmt.Fprintln(&b, strings.Repeat("-", 72))
+		for _, n := range nodes {
+			edgeStr := ""
+			if len(n.EdgesTo) > 0 {
+				parts := make([]string, len(n.EdgesTo))
+				for i, e := range n.EdgesTo {
+					parts[i] = shortID(e)
+				}
+				edgeStr = "→ " + strings.Join(parts, ", ")
+			}
+			fmt.Fprintf(&b, "%-10s %-14s %-12s %6d %5d  %s\n",
+				shortID(n.ID), truncate(n.Label, 14), truncate(n.Type, 12), n.X, n.Y, edgeStr)
+		}
+	}
+
+	if len(edges) > 0 {
+		fmt.Fprintf(&b, "\nEDGE LIST\n")
+		fmt.Fprintln(&b, strings.Repeat("-", 40))
+		for _, e := range edges {
+			line := fmt.Sprintf("  %s  →  %s", shortID(e.From), shortID(e.To))
+			if e.Case != "" {
+				line += "  [case:" + e.Case + "]"
+			}
+			fmt.Fprintln(&b, line)
+		}
+	}
+
+	return b.String()
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+func sortCanvasRows(rows []CanvasViewRow) {
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0; j-- {
+			a, b := rows[j-1], rows[j]
+			if a.Y > b.Y || (a.Y == b.Y && a.X > b.X) {
+				rows[j-1], rows[j] = rows[j], rows[j-1]
+			} else {
+				break
+			}
+		}
+	}
+}
+
+func sortByX(rows []CanvasViewRow) {
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0 && rows[j].X < rows[j-1].X; j-- {
+			rows[j], rows[j-1] = rows[j-1], rows[j]
+		}
+	}
+}
+
+// shortID returns the first 8 chars of a UUID or the full string if shorter.
+func shortID(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
 }
 
 // ensureJSON keeps the legacy callers happy when they decode partial

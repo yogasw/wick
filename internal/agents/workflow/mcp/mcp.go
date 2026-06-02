@@ -181,6 +181,15 @@ func WorkspaceFormatContracts() map[string]any {
 				"open_modal":      "{{.Node.openmodal.view_id}}",
 			},
 		},
+		"canvas_ops": map[string]any{
+			"rule": "Always use canvas ops to read and organise node positions — never guess x/y coordinates.",
+			"ops": map[string]string{
+				"workflow_canvas_view": "Read current layout: returns table of {id, label, type, x, y, edges_to} + ASCII sketch. Call this FIRST when the user asks about canvas layout or before moving nodes.",
+				"workflow_move_nodes":  "Move one or more nodes in a single call. Pass moves=[{node_id,x,y},...]. More efficient than N workflow_move_node calls; safe to mix graph nodes and trigger IDs.",
+				"workflow_auto_layout": "Auto-arrange all nodes using DAG rank layout (Kahn's BFS). Triggers land at y=60 above their entry node; graph nodes fan left→right by rank. Pass node_ids=[] to scope; empty = all. Always publish after if the user wants the layout live.",
+			},
+			"workflow": "workflow_canvas_view → (understand layout) → workflow_move_nodes OR workflow_auto_layout → workflow_publish",
+		},
 	}
 }
 
@@ -344,6 +353,16 @@ func (m *Ops) Disconnect(id, from, to string) (workflow.Workflow, error) {
 // MoveNode wraps Canvas.MoveNode.
 func (m *Ops) MoveNode(id, nodeID string, x, y int) (workflow.Workflow, error) {
 	return m.Canvas.MoveNode(id, nodeID, x, y)
+}
+
+// MoveNodes wraps Canvas.MoveNodes — batch position update.
+func (m *Ops) MoveNodes(id string, moves []canvas.NodeMove) (workflow.Workflow, error) {
+	return m.Canvas.MoveNodes(id, moves)
+}
+
+// AutoLayout wraps Canvas.AutoLayout — DAG-aware position compute + apply.
+func (m *Ops) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, error) {
+	return m.Canvas.AutoLayout(id, nodeIDs)
 }
 
 // SetTriggers wraps Canvas.SetTriggers.

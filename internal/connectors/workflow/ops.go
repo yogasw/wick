@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfcanvas "github.com/yogasw/wick/internal/agents/workflow/canvas"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
@@ -248,6 +249,28 @@ func (h *handlers) disconnect(c *connector.Ctx) (any, error) {
 
 func (h *handlers) moveNode(c *connector.Ctx) (any, error) {
 	return h.ops.MoveNode(c.Input("id"), c.Input("node_id"), c.InputInt("x"), c.InputInt("y"))
+}
+
+func (h *handlers) moveNodes(c *connector.Ctx) (any, error) {
+	var moves []wfcanvas.NodeMove
+	if err := parseJSON(c.Input("moves"), &moves); err != nil {
+		return nil, fmt.Errorf("moves: %w", err)
+	}
+	return h.ops.MoveNodes(c.Input("id"), moves)
+}
+
+func (h *handlers) autoLayout(c *connector.Ctx) (any, error) {
+	var nodeIDs []string
+	if s := strings.TrimSpace(c.Input("node_ids")); s != "" {
+		if err := parseJSON(s, &nodeIDs); err != nil {
+			return nil, fmt.Errorf("node_ids: %w", err)
+		}
+	}
+	return h.ops.AutoLayout(c.Input("id"), nodeIDs)
+}
+
+func (h *handlers) canvasView(c *connector.Ctx) (any, error) {
+	return h.ops.CanvasView(c.Input("id"))
 }
 
 func (h *handlers) setTriggers(c *connector.Ctx) (any, error) {

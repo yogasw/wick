@@ -3,13 +3,10 @@
   // mirroring the legacy editor's `data-arg-mode` pill in
   // internal/tools/agents/view/workflow/editor_inspector.templ.
   //
-  // The mode itself is purely an editor hint stored on
-  // `node.arg_modes[<key>]`. The renderer treats every field as a Go
-  // template anyway — the pill signals intent: in Fixed mode the value
-  // is a literal string that happens to render through template
-  // (template-friendly text); in Expression mode the value is a
-  // template expression like `{{ .Event.Payload.user }}` and the
-  // editor styles it accordingly.
+  // The mode controls whether the engine renders the field as a Go template:
+  //   fixed      → value passed verbatim (engine skips template rendering)
+  //   expression → value rendered via Go template ({{ ... }} evaluated)
+  // Stored in `node.arg_modes[<key>]`. Absent key = expression (render).
   //
   // The parent owns where the value + mode live (node field vs
   // arg_modes map vs nested config), so this component takes pure
@@ -41,6 +38,10 @@
   }: Props = $props();
 
   let dragHover = $state(false);
+
+  // Warn when fixed mode is set but the value contains {{ — the template
+  // will NOT render and the literal {{ text will appear in the output.
+  let fixedWithTemplate = $derived(mode === "fixed" && value.includes("{{"));
 
   // Drop a draggable JSON leaf from the INPUT pane: inserts the
   // template ref at the cursor and auto-flips this field into
@@ -92,7 +93,7 @@
             class:text-slate-500={mode !== m}
             class:dark:text-slate-400={mode !== m}
             onclick={() => onModeChange?.(m as Mode)}
-            title={m === "fixed" ? "Literal value (still rendered as a Go template)" : "Go template expression — {{ ... }}"}
+            title={m === "fixed" ? "Literal value — {{ }} NOT rendered (verbatim output)" : "Go template — {{ ... }} evaluated at runtime"}
           >{m}</button>
         {/each}
       </div>
@@ -129,6 +130,12 @@
       ondragleave={onDragLeave}
       ondrop={onDrop}
     />
+  {/if}
+  {#if fixedWithTemplate}
+    <p class="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 12.5A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11zM7.25 5.5h1.5v4h-1.5zm0 5h1.5v1.5h-1.5z"/></svg>
+      mode=fixed — template will NOT render, set mode=expression
+    </p>
   {/if}
   {#if helper}
     <span class="text-[11px] text-slate-500 dark:text-slate-400">{helper}</span>

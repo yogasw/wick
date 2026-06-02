@@ -272,6 +272,116 @@ func TestOps_Versions_NoRepo(t *testing.T) {
 	}
 }
 
+// ── CanvasView ────────────────────────────────────────────────────────────────
+
+func TestOps_CanvasView_TablesAndASCII(t *testing.T) {
+	ops, svc := newOpsForExtras(t)
+
+	// Create a workflow with two nodes and one edge.
+	wf := workflow.Workflow{
+		ID:      "cv-wf",
+		Name:    "Canvas Test",
+		Enabled: false,
+		Triggers: []workflow.Trigger{
+			{ID: "trig-m", Type: workflow.TriggerManual, EntryNode: "n1"},
+		},
+		Graph: workflow.Graph{
+			Entry: "n1",
+			Nodes: []workflow.Node{
+				{ID: "n1", Type: workflow.NodeTransform, Label: "first", Engine: "gotemplate", Expression: "ok"},
+				{ID: "n2", Type: workflow.NodeEnd, Label: "done"},
+			},
+			Edges: []workflow.Edge{{From: "n1", To: "n2"}},
+		},
+		Canvas: map[string]any{
+			"positions": map[string]any{
+				"n1":     map[string]any{"x": 100, "y": 200},
+				"n2":     map[string]any{"x": 380, "y": 200},
+				"trig-m": map[string]any{"x": 100, "y": 60},
+			},
+		},
+	}
+	if err := svc.Create("cv-wf", wf); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	result, err := ops.CanvasView("cv-wf")
+	if err != nil {
+		t.Fatalf("CanvasView error: %v", err)
+	}
+
+	if result.Stats.NodeCount != 2 {
+		t.Errorf("NodeCount: want 2, got %d", result.Stats.NodeCount)
+	}
+	if result.Stats.TriggerCount != 1 {
+		t.Errorf("TriggerCount: want 1, got %d", result.Stats.TriggerCount)
+	}
+	if result.Stats.EdgeCount != 1 {
+		t.Errorf("EdgeCount: want 1, got %d", result.Stats.EdgeCount)
+	}
+	if result.ASCII == "" {
+		t.Error("expected non-empty ASCII output")
+	}
+	// n1 should have edge to n2.
+	var n1Row *CanvasViewRow
+	for i := range result.Nodes {
+		if result.Nodes[i].ID == "n1" {
+			n1Row = &result.Nodes[i]
+			break
+		}
+	}
+	if n1Row == nil {
+		t.Fatal("n1 not found in Nodes")
+	}
+	if len(n1Row.EdgesTo) == 0 || n1Row.EdgesTo[0] != "n2" {
+		t.Errorf("n1 edges: want [n2], got %v", n1Row.EdgesTo)
+	}
+	if n1Row.X != 100 || n1Row.Y != 200 {
+		t.Errorf("n1 position: want 100,200 got %d,%d", n1Row.X, n1Row.Y)
+	}
+	// trigger row
+	if len(result.Triggers) != 1 || result.Triggers[0].ID != "trig-m" {
+		t.Errorf("triggers: want [trig-m], got %v", result.Triggers)
+	}
+}
+
+func TestOps_CanvasView_NoService(t *testing.T) {
+	ops := &Ops{}
+	if _, err := ops.CanvasView("x"); err == nil {
+		t.Error("expected error when Service nil")
+	}
+}
+
+func TestOps_CanvasView_UnpositionedCounted(t *testing.T) {
+	ops, svc := newOpsForExtras(t)
+	wf := workflow.Workflow{
+		ID:   "upos",
+		Name: "upos",
+		Triggers: []workflow.Trigger{
+			{ID: "t", Type: workflow.TriggerManual, EntryNode: "n1"},
+		},
+		Graph: workflow.Graph{
+			Entry: "n1",
+			Nodes: []workflow.Node{
+				{ID: "n1", Type: workflow.NodeEnd},
+				{ID: "n2", Type: workflow.NodeEnd},
+			},
+			Edges: []workflow.Edge{{From: "n1", To: "n2"}},
+		},
+		// No canvas positions — both nodes at 0,0.
+	}
+	if err := svc.Create("upos", wf); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	result, err := ops.CanvasView("upos")
+	if err != nil {
+		t.Fatalf("CanvasView: %v", err)
+	}
+	if result.Stats.Unpositioned != 2 {
+		t.Errorf("Unpositioned: want 2, got %d", result.Stats.Unpositioned)
+	}
+}
+
 // _ keep refs for the imports used in the file even when tests
 // short-circuit on errors.
 var _ = errors.New

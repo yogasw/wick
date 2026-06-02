@@ -10,6 +10,7 @@ import (
 	"time"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfcanvas "github.com/yogasw/wick/internal/agents/workflow/canvas"
 	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
@@ -64,6 +65,9 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
+	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
+	r.POST("/api/workflows/move-nodes/{id}", spaMoveNodes)
+	r.POST("/api/workflows/auto-layout/{id}", spaAutoLayout)
 }
 
 type spaWorkflowSummary struct {
@@ -478,6 +482,58 @@ func parseDateInput(v string, endOfDay bool) (time.Time, error) {
 		t = t.Add(24*time.Hour - time.Nanosecond)
 	}
 	return t.UTC(), nil
+}
+
+func spaCanvasView(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	result, err := globalWorkflowMgr.MCP.CanvasView(c.PathValue("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func spaMoveNodes(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		Moves []wfcanvas.NodeMove `json:"moves"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.Canvas.MoveNodes(id, body.Moves)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, w)
+}
+
+func spaAutoLayout(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		NodeIDs []string `json:"node_ids"`
+	}
+	if err := c.BindJSON(&body); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.Canvas.AutoLayout(id, body.NodeIDs)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, w)
 }
 
 // spaExecNode runs one node in isolation — n8n's "Execute step"
