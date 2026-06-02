@@ -76,6 +76,29 @@
     const nodeType = e.dataTransfer?.getData("application/x-wick-node-type") as NodeType | "";
     const triggerType = e.dataTransfer?.getData("application/x-wick-trigger-type");
     const channelEventRaw = e.dataTransfer?.getData("application/x-wick-channel-event");
+    const actionPrefillRaw = e.dataTransfer?.getData("application/x-wick-action-prefill");
+    if (actionPrefillRaw) {
+      // Per-channel / per-connector palette row. Payload carries the
+      // node type + the channel or module to seed so the inspector
+      // opens already pointing at the right backend.
+      try {
+        const prefill = JSON.parse(actionPrefillRaw) as {
+          type: string;
+          channel?: string;
+          module?: string;
+        };
+        addNode({
+          id: "",
+          type: prefill.type as NodeType,
+          ...(prefill.channel ? { channel: prefill.channel } : {}),
+          ...(prefill.module ? { module: prefill.module } : {}),
+          _canvas: { x, y },
+        } as any);
+      } catch (err) {
+        console.warn("bad action-prefill drop payload:", err);
+      }
+      return;
+    }
     if (nodeType) {
       // Let addNode pick the next free `<type>_<N>` slot — drops in
       // quick succession get `http_1`, `http_2`, … instead of random

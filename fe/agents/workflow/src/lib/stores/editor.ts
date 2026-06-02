@@ -258,9 +258,18 @@ export function addNode(node: Node) {
     // Auto-fill label (and id when missing) with the next free
     // `<type>_<N>` slot so duplicates from quick drops don't trip
     // the validator. Operator can rename via the inspector after.
+    // For channel + connector drops, the user has already picked a
+    // specific backend (slack / github / …) — labelling them all
+    // `channel_1` / `connector_1` loses that signal. Key the slot on
+    // the channel name / module instead, so a Slack drop reads `slack_1`
+    // and a GitHub drop reads `github_1`.
     const filled = { ...node };
+    const labelKey =
+      (node.type === "channel" && (node as any).channel) ||
+      (node.type === "connector" && (node as any).module) ||
+      node.type;
     if (!filled.label) {
-      filled.label = nextNodeLabel(wf, node.type);
+      filled.label = nextNodeLabel(wf, labelKey);
     }
     if (!filled.id) {
       filled.id = filled.label;

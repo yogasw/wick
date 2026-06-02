@@ -10,11 +10,38 @@
   type Item = {
     type: string;          // raw drag payload (`classify`, `trigger:cron`, …)
     label: string;
-    badge?: string;        // short right-aligned tag (e.g. "on fail")
-    description?: string;  // multi-line subtitle rendered below label
+    badge?: string;        // short right-aligned tag ("channel", "SQL query")
+    description?: string;  // shown only on hover via title=, not in body
+    // Action prefill — set on per-channel / per-connector rows so the
+    // canvas drop handler can seed the new node's `channel` / `module`
+    // field. Keeps the palette flat (one row per channel + one per
+    // connector module) instead of a generic stub the user must then
+    // fill in via the inspector.
+    prefill?: { type: string; channel?: string; module?: string };
     children?: Item[];
   };
   type Group = { title: string; items: Item[] };
+
+  // Built-in node types get a short right-aligned hint that matches v1's
+  // palette ("SQL query", "GET / POST", "run command", "reshape data").
+  // Anything not listed here renders without a badge — the action label
+  // alone already reads as the verb.
+  const NODE_BADGE: Record<string, string> = {
+    http: "GET / POST",
+    db_query: "SQL query",
+    shell: "run command",
+    transform: "reshape data",
+    go_script: "Go script",
+    python: "Python",
+    agent: "AI agent",
+    classify: "AI classify",
+    session_init: "session",
+    branch: "if / else",
+    switch: "case",
+    parallel: "fan-out",
+    merge: "fan-in",
+    end: "halt",
+  };
 
   let groups = $state<Group[]>([]);
   let query = $state("");
@@ -83,29 +110,55 @@
       const logicItems: Item[] = [];
       const dataItems: Item[] = [];
       const datatableChildren: Item[] = [];
+      // Has the catalog declared a generic `channel` / `connector`
+      // node type? If so, we replace the single generic row with one
+      // row per registered channel / module (v1 parity). The catalog
+      // still drives availability — channels.length === 0 → no rows.
+      const hasChannelType = (cat.node_types ?? []).some((n) => n.type === "channel");
+      const hasConnectorType = (cat.node_types ?? []).some((n) => n.type === "connector");
       for (const n of cat.node_types ?? []) {
-        const cat = categoryFor(n.type);
-        // Each node type ships its own description via the engine
-        // descriptor — surface it as a 2-line subtitle so the
-        // palette reads like the v1 picker (label + short hint)
-        // instead of a bare type name.
+        if (n.type === "channel" || n.type === "connector") continue; // expanded below
+        const group = categoryFor(n.type);
         const item: Item = {
           type: n.type,
           label: prettyLabel(n.type),
-          description: n.description,
+          badge: NODE_BADGE[n.type],
+          description: n.description, // tooltip only — hover, not body
         };
         if (n.type.startsWith("datatable_")) {
-          datatableChildren.push({
-            type: n.type,
-            label: prettyLabel(n.type),
-            description: n.description,
-          });
+          datatableChildren.push(item);
           continue;
         }
-        if (cat === "AI") aiItems.push(item);
-        else if (cat === "LOGIC") logicItems.push(item);
-        else if (cat === "DATA") dataItems.push(item);
+        if (group === "AI") aiItems.push(item);
+        else if (group === "LOGIC") logicItems.push(item);
+        else if (group === "DATA") dataItems.push(item);
         else actionItems.push(item);
+      }
+      // Per-channel action rows. Drag = drop a `channel` node with the
+      // channel field prefilled — inspector then picks the op.
+      if (hasChannelType) {
+        for (const ch of cat.channels ?? []) {
+          actionItems.push({
+            type: `action:channel:${ch.name}`,
+            label: ch.name,
+            badge: "channel",
+            prefill: { type: "channel", channel: ch.name },
+          });
+        }
+      }
+      // Per-connector action rows. Catalog labels each connector with
+      // its display `name` (e.g. "GitHub", "HTTP / REST") and machine
+      // `module` (e.g. "github", "http"). Drag = drop a `connector`
+      // node with the module field prefilled.
+      if (hasConnectorType) {
+        for (const con of cat.connectors ?? []) {
+          actionItems.push({
+            type: `action:connector:${con.module}`,
+            label: con.name || con.module,
+            badge: "connector",
+            prefill: { type: "connector", module: con.module },
+          });
+        }
       }
       if (datatableChildren.length > 0) {
         dataItems.push({
@@ -142,7 +195,8 @@
       .filter((g) => g.items.length > 0),
   );
 
-  function ondragstart(e: DragEvent, type: string) {
+  function ondragstart(e: DragEvent, item: Item) {
+    const type = item.type;
     if (type.startsWith("trigger:channel:")) {
       // `trigger:channel:<channel>:<event>` — drop a fully-formed
       // channel trigger pre-populated with the picked event.
@@ -164,6 +218,14 @@
       return;
     } else if (type.startsWith("trigger:")) {
       e.dataTransfer?.setData("application/x-wick-trigger-type", type.slice("trigger:".length));
+    } else if (item.prefill) {
+      // Per-channel / per-connector action — Canvas seeds the new
+      // node's channel/module field from this payload so the user
+      // doesn't have to pick it again in the inspector.
+      e.dataTransfer?.setData(
+        "application/x-wick-action-prefill",
+        JSON.stringify(item.prefill),
+      );
     } else {
       e.dataTransfer?.setData("application/x-wick-node-type", type);
     }
@@ -223,18 +285,12 @@
                   {#each item.children as child}
                     <button
                       draggable="true"
-                      ondragstart={(e) => ondragstart(e, child.type)}
-                      class="w-full flex flex-col items-start gap-0.5 px-3 py-1.5 rounded text-left text-slate-100 bg-slate-800/70 hover:bg-slate-700 cursor-grab transition-colors"
+                      ondragstart={(e) => ondragstart(e, child)}
+                      class="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded text-left text-slate-100 bg-slate-800/70 hover:bg-slate-700 cursor-grab transition-colors"
                       title={child.description}
                     >
-                      <span class="text-xs font-medium truncate w-full">{child.label}</span>
-                      {#if child.description}
-                        <span class="text-[10px] text-slate-400 line-clamp-2 leading-snug w-full">
-                          {child.description}
-                        </span>
-                      {:else if child.badge}
-                        <span class="text-[10px] text-slate-400">{child.badge}</span>
-                      {/if}
+                      <span class="text-xs font-medium truncate">{child.label}</span>
+                      {#if child.badge}<span class="text-[10px] text-slate-400 shrink-0">{child.badge}</span>{/if}
                     </button>
                   {/each}
                 </div>
@@ -242,19 +298,12 @@
             {:else}
               <button
                 draggable="true"
-                ondragstart={(e) => ondragstart(e, item.type)}
-                class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-slate-100 bg-slate-800 hover:bg-slate-700 cursor-grab transition-colors"
+                ondragstart={(e) => ondragstart(e, item)}
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-slate-100 bg-slate-800 hover:bg-slate-700 cursor-grab transition-colors"
                 title={item.description}
               >
-                <div class="w-full flex items-center justify-between gap-2">
-                  <span class="text-sm font-medium truncate">{item.label}</span>
-                  {#if item.badge}<span class="text-[10px] text-slate-400 shrink-0">{item.badge}</span>{/if}
-                </div>
-                {#if item.description}
-                  <span class="text-[10px] text-slate-400 line-clamp-2 leading-snug">
-                    {item.description}
-                  </span>
-                {/if}
+                <span class="text-sm font-medium truncate">{item.label}</span>
+                {#if item.badge}<span class="text-[10px] text-slate-400 shrink-0">{item.badge}</span>{/if}
               </button>
             {/if}
           {/each}
