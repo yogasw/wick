@@ -79,34 +79,38 @@ const (
 	TriggerError      TriggerType = "error"
 )
 
-// Workflow is the root document parsed from `workflow.yaml`.
+// Workflow is the root document parsed from `workflow.yaml`. Field tags
+// carry both yaml + json so the same struct serialises identically for
+// the file store and the SPA JSON API. Keep the two in sync — drift
+// silently produces JSON keys with capitalised field names because Go
+// defaults to that without a json tag.
 //
 // ID is the stable folder name (UUID for canvas-created workflows,
 // arbitrary id for legacy hand-edited ones). Display title lives in
 // Name and is freely renameable — the folder/URL/log paths stay
 // anchored to ID so run history survives a rename.
 type Workflow struct {
-	ID             string           `yaml:"id"`
-	Version        int              `yaml:"version"`
-	Name           string           `yaml:"name"`
-	Description    string           `yaml:"description,omitempty"`
-	Enabled        bool             `yaml:"enabled"`
-	MaxDurationSec int              `yaml:"max_duration_sec,omitempty"`
-	Triggers       []Trigger          `yaml:"triggers"`
-	Queue          QueuePolicy        `yaml:"queue,omitempty"`
-	Env            []EnvField         `yaml:"env,omitempty"`
-	DataTables     []DataTableBinding `yaml:"data_tables,omitempty"`
-	Graph          Graph              `yaml:"graph"`
-	OnError        *OnErrorBinding  `yaml:"on_error,omitempty"`
-	CreatedBy      string           `yaml:"created_by,omitempty"`
-	CreatedAt      time.Time        `yaml:"created_at,omitempty"`
-	Canvas         map[string]any   `yaml:"_canvas,omitempty"`
+	ID             string             `yaml:"id"                       json:"id"`
+	Version        int                `yaml:"version"                  json:"version"`
+	Name           string             `yaml:"name"                     json:"name"`
+	Description    string             `yaml:"description,omitempty"    json:"description,omitempty"`
+	Enabled        bool               `yaml:"enabled"                  json:"enabled"`
+	MaxDurationSec int                `yaml:"max_duration_sec,omitempty" json:"max_duration_sec,omitempty"`
+	Triggers       []Trigger          `yaml:"triggers"                 json:"triggers"`
+	Queue          QueuePolicy        `yaml:"queue,omitempty"          json:"queue,omitempty"`
+	Env            []EnvField         `yaml:"env,omitempty"            json:"env,omitempty"`
+	DataTables     []DataTableBinding `yaml:"data_tables,omitempty"    json:"data_tables,omitempty"`
+	Graph          Graph              `yaml:"graph"                    json:"graph"`
+	OnError        *OnErrorBinding    `yaml:"on_error,omitempty"       json:"on_error,omitempty"`
+	CreatedBy      string             `yaml:"created_by,omitempty"     json:"created_by,omitempty"`
+	CreatedAt      time.Time          `yaml:"created_at,omitempty"     json:"created_at,omitempty"`
+	Canvas         map[string]any     `yaml:"_canvas,omitempty"        json:"_canvas,omitempty"`
 }
 
 // QueuePolicy controls per-workflow concurrency.
 type QueuePolicy struct {
-	MaxSize    int    `yaml:"max_size,omitempty"`
-	OnOverflow string `yaml:"on_overflow,omitempty"` // drop_oldest | drop_new | reject
+	MaxSize    int    `yaml:"max_size,omitempty"     json:"max_size,omitempty"`
+	OnOverflow string `yaml:"on_overflow,omitempty"  json:"on_overflow,omitempty"`
 }
 
 // Overflow policy values.
@@ -118,18 +122,18 @@ const (
 
 // Graph is the DAG body: flat node list + separate edge list.
 type Graph struct {
-	Entry string `yaml:"entry"`
-	Nodes []Node `yaml:"nodes"`
-	Edges []Edge `yaml:"edges"`
+	Entry string `yaml:"entry"  json:"entry"`
+	Nodes []Node `yaml:"nodes"  json:"nodes"`
+	Edges []Edge `yaml:"edges"  json:"edges"`
 }
 
 // Edge is a directed connection from one node to another. Case is
 // only meaningful when From is a classify or branch node.
 type Edge struct {
-	From  string `yaml:"from"`
-	To    string `yaml:"to"`
-	Case  string `yaml:"case,omitempty"`
-	Label string `yaml:"label,omitempty"`
+	From  string `yaml:"from"            json:"from"`
+	To    string `yaml:"to"              json:"to"`
+	Case  string `yaml:"case,omitempty"  json:"case,omitempty"`
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
 }
 
 // Node is a single step in the graph. Fields are a flat union — only
@@ -137,101 +141,94 @@ type Edge struct {
 // rejects nodes that set fields outside their type.
 type Node struct {
 	// Common
-	ID           string         `yaml:"id"`
-	Type         NodeType       `yaml:"type"`
-	Label        string         `yaml:"label,omitempty"`
-	Description  string         `yaml:"description,omitempty"`
-	TimeoutSec   int            `yaml:"timeout_sec,omitempty"`
-	Retry        *RetryPolicy   `yaml:"retry,omitempty"`
-	OnFailure    string         `yaml:"on_failure,omitempty"`
-	Fallback     string         `yaml:"fallback,omitempty"`
-	OutputSchema map[string]any `yaml:"output_schema,omitempty"`
+	ID           string         `yaml:"id"                       json:"id"`
+	Type         NodeType       `yaml:"type"                     json:"type"`
+	Label        string         `yaml:"label,omitempty"          json:"label,omitempty"`
+	Description  string         `yaml:"description,omitempty"    json:"description,omitempty"`
+	TimeoutSec   int            `yaml:"timeout_sec,omitempty"    json:"timeout_sec,omitempty"`
+	Retry        *RetryPolicy   `yaml:"retry,omitempty"          json:"retry,omitempty"`
+	OnFailure    string         `yaml:"on_failure,omitempty"     json:"on_failure,omitempty"`
+	Fallback     string         `yaml:"fallback,omitempty"       json:"fallback,omitempty"`
+	OutputSchema map[string]any `yaml:"output_schema,omitempty"  json:"output_schema,omitempty"`
 
 	// parallel
-	Branches []string `yaml:"branches,omitempty"`
+	Branches []string `yaml:"branches,omitempty" json:"branches,omitempty"`
 
 	// merge
-	Inputs   []string `yaml:"inputs,omitempty"`
-	Strategy string   `yaml:"strategy,omitempty"`
+	Inputs   []string `yaml:"inputs,omitempty"   json:"inputs,omitempty"`
+	Strategy string   `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// classify + agent
-	Provider   string `yaml:"provider,omitempty"`
-	Preset     string `yaml:"preset,omitempty"`
-	Prompt     string `yaml:"prompt,omitempty"`
-	PromptFile string `yaml:"prompt_file,omitempty"`
-	Session    string `yaml:"session,omitempty"` // agent: "new" → fresh UUID; "" → inherit rc.DefaultAgentSessionID. Also used by session_init for legacy aliasing.
+	Provider   string `yaml:"provider,omitempty"    json:"provider,omitempty"`
+	Preset     string `yaml:"preset,omitempty"      json:"preset,omitempty"`
+	Prompt     string `yaml:"prompt,omitempty"      json:"prompt,omitempty"`
+	PromptFile string `yaml:"prompt_file,omitempty" json:"prompt_file,omitempty"`
+	Session    string `yaml:"session,omitempty"     json:"session,omitempty"`
 
 	// agent override — copy resolved sessionID from another node in
 	// this run. Must reference an upstream agent or session_init node.
-	SessionFrom string `yaml:"session_from,omitempty"`
+	SessionFrom string `yaml:"session_from,omitempty" json:"session_from,omitempty"`
 
 	// session_init — preset shortcut OR rendered template id. Mutually
 	// exclusive; SessionID wins when both set. `Preset` reuses the
 	// classify/agent Preset field above for YAML brevity.
-	SessionID string `yaml:"session_id,omitempty"`
+	SessionID string `yaml:"session_id,omitempty" json:"session_id,omitempty"`
 
 	// classify
-	OutputCases         []string          `yaml:"output_cases,omitempty"`
-	StructuredOutput    *bool             `yaml:"structured_output,omitempty"`
-	Normalize           *bool             `yaml:"normalize,omitempty"`
-	FuzzyMatch          bool              `yaml:"fuzzy_match,omitempty"`
-	RetryOnMismatch     int               `yaml:"retry_on_mismatch,omitempty"`
-	ConfidenceThreshold float64           `yaml:"confidence_threshold,omitempty"`
-	Examples            []ClassifyExample `yaml:"examples,omitempty"`
+	OutputCases         []string          `yaml:"output_cases,omitempty"         json:"output_cases,omitempty"`
+	StructuredOutput    *bool             `yaml:"structured_output,omitempty"    json:"structured_output,omitempty"`
+	Normalize           *bool             `yaml:"normalize,omitempty"            json:"normalize,omitempty"`
+	FuzzyMatch          bool              `yaml:"fuzzy_match,omitempty"          json:"fuzzy_match,omitempty"`
+	RetryOnMismatch     int               `yaml:"retry_on_mismatch,omitempty"    json:"retry_on_mismatch,omitempty"`
+	ConfidenceThreshold float64           `yaml:"confidence_threshold,omitempty" json:"confidence_threshold,omitempty"`
+	Examples            []ClassifyExample `yaml:"examples,omitempty"             json:"examples,omitempty"`
 
 	// agent
-	Workspace string   `yaml:"workspace,omitempty"`
-	Skills    []string `yaml:"skills,omitempty"`
-	Tools     []string `yaml:"tools,omitempty"`
-	MaxTurns  int      `yaml:"max_turns,omitempty"`
+	Workspace string   `yaml:"workspace,omitempty"  json:"workspace,omitempty"`
+	Skills    []string `yaml:"skills,omitempty"     json:"skills,omitempty"`
+	Tools     []string `yaml:"tools,omitempty"      json:"tools,omitempty"`
+	MaxTurns  int      `yaml:"max_turns,omitempty"  json:"max_turns,omitempty"`
 
 	// channel (action) — Channel field name avoided clash with Event.Channel
-	ChannelName string         `yaml:"channel,omitempty"`
-	Op          string         `yaml:"op,omitempty"`
-	Args        map[string]any `yaml:"args,omitempty"`
-	// ArgModes records each arg's editor mode: "fixed" = literal value
-	// (executor skips template render), "expression" = Go template (the
-	// default behaviour kept for backward compat when ArgModes has no
-	// entry for a key). Persisted so the inspector restores the toggle
-	// state and so safer-by-default semantics survive a publish round
-	// trip. Defaults to template render when an arg key is missing
-	// here, matching pre-ArgModes workflows.
-	ArgModes map[string]string `yaml:"arg_modes,omitempty"`
+	ChannelName string            `yaml:"channel,omitempty"   json:"channel,omitempty"`
+	Op          string            `yaml:"op,omitempty"        json:"op,omitempty"`
+	Args        map[string]any    `yaml:"args,omitempty"      json:"args,omitempty"`
+	ArgModes    map[string]string `yaml:"arg_modes,omitempty" json:"arg_modes,omitempty"`
 
 	// connector — uses row_id for instance (datatable_* nodes own `row:`)
-	Module string `yaml:"module,omitempty"`
-	Row    string `yaml:"row_id,omitempty"`
+	Module string `yaml:"module,omitempty" json:"module,omitempty"`
+	Row    string `yaml:"row_id,omitempty" json:"row_id,omitempty"`
 
 	// shell
-	Command     []string          `yaml:"command,omitempty"`
-	ShellEnv    map[string]string `yaml:"env,omitempty"`
-	Cwd         string            `yaml:"cwd,omitempty"`
-	ParseOutput string            `yaml:"parse_output,omitempty"`
+	Command     []string          `yaml:"command,omitempty"      json:"command,omitempty"`
+	ShellEnv    map[string]string `yaml:"env,omitempty"          json:"env,omitempty"`
+	Cwd         string            `yaml:"cwd,omitempty"          json:"cwd,omitempty"`
+	ParseOutput string            `yaml:"parse_output,omitempty" json:"parse_output,omitempty"`
 
 	// http
-	Method        string            `yaml:"method,omitempty"`
-	URL           string            `yaml:"url,omitempty"`
-	Headers       map[string]string `yaml:"headers,omitempty"`
-	Query         map[string]string `yaml:"query,omitempty"`
-	Body          string            `yaml:"body,omitempty"`
-	ParseResponse string            `yaml:"parse_response,omitempty"`
+	Method        string            `yaml:"method,omitempty"         json:"method,omitempty"`
+	URL           string            `yaml:"url,omitempty"            json:"url,omitempty"`
+	Headers       map[string]string `yaml:"headers,omitempty"        json:"headers,omitempty"`
+	Query         map[string]string `yaml:"query,omitempty"          json:"query,omitempty"`
+	Body          string            `yaml:"body,omitempty"           json:"body,omitempty"`
+	ParseResponse string            `yaml:"parse_response,omitempty" json:"parse_response,omitempty"`
 
 	// db_query — uses `sql:` key (HTTP node already owns `query:` for query params)
-	Database string   `yaml:"database,omitempty"`
-	SQL      string   `yaml:"sql,omitempty"`
-	SQLArgs  []string `yaml:"sql_args,omitempty"`
+	Database string   `yaml:"database,omitempty" json:"database,omitempty"`
+	SQL      string   `yaml:"sql,omitempty"      json:"sql,omitempty"`
+	SQLArgs  []string `yaml:"sql_args,omitempty" json:"sql_args,omitempty"`
 
 	// transform
-	Engine     string `yaml:"engine,omitempty"`
-	Input      string `yaml:"input,omitempty"`
-	Expression string `yaml:"expression,omitempty"`
+	Engine     string `yaml:"engine,omitempty"     json:"engine,omitempty"`
+	Input      string `yaml:"input,omitempty"      json:"input,omitempty"`
+	Expression string `yaml:"expression,omitempty" json:"expression,omitempty"`
 
 	// go_script — full Go program. Engine pipes RenderCtx JSON to
 	// stdin, parses stdout as JSON for the result.
-	Code string `yaml:"code,omitempty"`
+	Code string `yaml:"code,omitempty" json:"code,omitempty"`
 
 	// branch
-	Expr string `yaml:"expr,omitempty"`
+	Expr string `yaml:"expr,omitempty" json:"expr,omitempty"`
 
 	// switch — first-match-wins rule list. Each rule's `when` is a Go
 	// template that renders to a bool (supports the same binary ops as
@@ -239,23 +236,23 @@ type Node struct {
 	// First rule whose `when` evaluates true wins; engine emits
 	// Verdict=<rule.case> so the edge `case: <label>` filter routes
 	// downstream. DefaultCase fires when no rule matches.
-	Cases       []SwitchCase `yaml:"cases,omitempty"`
-	DefaultCase string       `yaml:"default_case,omitempty"`
+	Cases       []SwitchCase `yaml:"cases,omitempty"        json:"cases,omitempty"`
+	DefaultCase string       `yaml:"default_case,omitempty" json:"default_case,omitempty"`
 
 	// datatable_*
-	Table          string              `yaml:"table,omitempty"`
-	Where          map[string]any      `yaml:"where,omitempty"`
-	Conditions     []DataTableCondYAML `yaml:"conditions,omitempty"`
-	ConditionModes map[string]string   `yaml:"condition_modes,omitempty"`
-	RowModes       map[string]string   `yaml:"row_modes,omitempty"`
-	Key            map[string]any      `yaml:"key,omitempty"`
-	RowValues      map[string]any      `yaml:"row,omitempty"`
-	OrderBy        []DataTableOrder    `yaml:"order_by,omitempty"`
-	Limit          int                 `yaml:"limit,omitempty"`
-	Offset         int                 `yaml:"offset,omitempty"`
+	Table          string              `yaml:"table,omitempty"           json:"table,omitempty"`
+	Where          map[string]any      `yaml:"where,omitempty"           json:"where,omitempty"`
+	Conditions     []DataTableCondYAML `yaml:"conditions,omitempty"      json:"conditions,omitempty"`
+	ConditionModes map[string]string   `yaml:"condition_modes,omitempty" json:"condition_modes,omitempty"`
+	RowModes       map[string]string   `yaml:"row_modes,omitempty"       json:"row_modes,omitempty"`
+	Key            map[string]any      `yaml:"key,omitempty"             json:"key,omitempty"`
+	RowValues      map[string]any      `yaml:"row,omitempty"             json:"row,omitempty"`
+	OrderBy        []DataTableOrder    `yaml:"order_by,omitempty"        json:"order_by,omitempty"`
+	Limit          int                 `yaml:"limit,omitempty"           json:"limit,omitempty"`
+	Offset         int                 `yaml:"offset,omitempty"          json:"offset,omitempty"`
 
 	// end
-	Result string `yaml:"result,omitempty"`
+	Result string `yaml:"result,omitempty" json:"result,omitempty"`
 }
 
 // OnFailure values.
@@ -297,63 +294,53 @@ const (
 
 // NodeSession is the per-agent-node session override. Empty struct
 // means "use rc.DefaultAgentSessionID (or the engine fallback)".
-//
-//   - From  — copy the resolved sessionID from another node in this run
-//     (must be an upstream agent/session_init node, validator
-//     rejects forward refs + cycles)
-//   - Mode  — "new" forces a fresh UUID per call; empty inherits
 type NodeSession struct {
-	From string `yaml:"from,omitempty"`
-	Mode string `yaml:"mode,omitempty"`
+	From string `yaml:"from,omitempty" json:"from,omitempty"`
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // RetryPolicy on a node.
 type RetryPolicy struct {
-	Max        int `yaml:"max"`
-	BackoffSec int `yaml:"backoff_sec,omitempty"`
+	Max        int `yaml:"max"                   json:"max"`
+	BackoffSec int `yaml:"backoff_sec,omitempty" json:"backoff_sec,omitempty"`
 }
 
 // ClassifyExample is a few-shot prompt example.
 type ClassifyExample struct {
-	Input  string `yaml:"input"`
-	Output string `yaml:"output"`
+	Input  string `yaml:"input"  json:"input"`
+	Output string `yaml:"output" json:"output"`
 }
 
-// SwitchCase is one rule row for `switch` nodes. `When` is a Go
-// template expression (e.g. `{{.Event.Payload.action}} == "approve"`)
-// rendered against the run context; `Case` is the verdict label the
-// engine emits when the rule wins, matched against outgoing edge
-// `case:` filters.
+// SwitchCase is one rule row for `switch` nodes.
 type SwitchCase struct {
-	When string `yaml:"when"`
-	Case string `yaml:"case"`
+	When string `yaml:"when" json:"when"`
+	Case string `yaml:"case" json:"case"`
 }
 
 // DataTableOrder is one order-by clause.
 type DataTableOrder struct {
-	Column    string `yaml:"column"`
-	Direction string `yaml:"direction,omitempty"`
+	Column    string `yaml:"column"              json:"column"`
+	Direction string `yaml:"direction,omitempty" json:"direction,omitempty"`
 }
 
 // DataTableCondYAML is one condition row declared in workflow.yaml.
-// Mirrors the n8n Data Table node condition shape.
 type DataTableCondYAML struct {
-	Column string `yaml:"column"`
-	Op     string `yaml:"op"`              // equals|not_equals|gt|gte|lt|lte|contains|in|is_empty|is_not_empty
-	Value  any    `yaml:"value,omitempty"`
+	Column string `yaml:"column"          json:"column"`
+	Op     string `yaml:"op"              json:"op"`
+	Value  any    `yaml:"value,omitempty" json:"value,omitempty"`
 }
 
 // EnvField is one entry of the workflow's env schema.
 type EnvField struct {
-	Name        string            `yaml:"name"`
-	Widget      string            `yaml:"widget,omitempty"`
-	Desc        string            `yaml:"desc,omitempty"`
-	Default     string            `yaml:"default,omitempty"`
-	Required    bool              `yaml:"required,omitempty"`
-	Locked      bool              `yaml:"locked,omitempty"`
-	Hidden      bool              `yaml:"hidden,omitempty"`
-	Options     []EnvOption       `yaml:"options,omitempty"`
-	VisibleWhen map[string]string `yaml:"visible_when,omitempty"`
+	Name        string            `yaml:"name"                  json:"name"`
+	Widget      string            `yaml:"widget,omitempty"      json:"widget,omitempty"`
+	Desc        string            `yaml:"desc,omitempty"        json:"desc,omitempty"`
+	Default     string            `yaml:"default,omitempty"     json:"default,omitempty"`
+	Required    bool              `yaml:"required,omitempty"    json:"required,omitempty"`
+	Locked      bool              `yaml:"locked,omitempty"      json:"locked,omitempty"`
+	Hidden      bool              `yaml:"hidden,omitempty"      json:"hidden,omitempty"`
+	Options     []EnvOption       `yaml:"options,omitempty"     json:"options,omitempty"`
+	VisibleWhen map[string]string `yaml:"visible_when,omitempty" json:"visible_when,omitempty"`
 }
 
 // IsSecret reports whether this field is the encrypted variant.
@@ -361,72 +348,59 @@ func (f EnvField) IsSecret() bool { return f.Widget == "secret" }
 
 // EnvOption is one choice for dropdown/picker widgets.
 type EnvOption struct {
-	ID   string `yaml:"id"`
-	Name string `yaml:"name"`
+	ID   string `yaml:"id"   json:"id"`
+	Name string `yaml:"name" json:"name"`
 }
 
 // DataTableBinding wires a workflow-local alias to a data table slug.
 type DataTableBinding struct {
-	Name string `yaml:"name"`
-	Ref  string `yaml:"ref"`
-	Mode string `yaml:"mode,omitempty"`
+	Name string `yaml:"name"           json:"name"`
+	Ref  string `yaml:"ref"            json:"ref"`
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // Trigger is one polymorphic trigger entry. Fields are a flat union
 // like Node — the validator gates each field to its Type.
-//
-// ID is the stable canvas identifier (e.g. "trigger_manual",
-// "trigger-cron-2"). The codec uses it to merge per-trigger
-// metadata (channel name, schedule, …) across save cycles so the
-// canvas can re-wire EntryNode without losing the config the user
-// typed in the inspector. Optional in YAML — workflows hand-edited
-// without canvas can omit it.
 type Trigger struct {
-	ID        string      `yaml:"id,omitempty"`
-	Type      TriggerType `yaml:"type"`
-	EntryNode string      `yaml:"entry_node,omitempty"`
+	ID        string      `yaml:"id,omitempty"         json:"id,omitempty"`
+	Type      TriggerType `yaml:"type"                 json:"type"`
+	EntryNode string      `yaml:"entry_node,omitempty" json:"entry_node,omitempty"`
 
 	// cron
-	Schedule string `yaml:"schedule,omitempty"`
-	Timezone string `yaml:"timezone,omitempty"`
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 
 	// channel
-	ChannelName string         `yaml:"channel,omitempty"`
-	Event       string         `yaml:"event,omitempty"`
-	Target      string         `yaml:"target,omitempty"`
-	Match       map[string]any `yaml:"match,omitempty"`
-	// MatchEnabled gates whether the router applies Match at dispatch
-	// time. false (default) = dump-all (every event of this type fires
-	// the workflow); true = router skips runs where Match values don't
-	// pair with the event payload. Backward compat for workflows that
-	// stored match: without an explicit toggle is to treat a populated
-	// Match map as enabled — see router.go for the resolution rule.
-	MatchEnabled bool              `yaml:"match_enabled,omitempty"`
-	MatchModes   map[string]string `yaml:"match_modes,omitempty"`
-	Whitelist    *Whitelist        `yaml:"whitelist,omitempty"`
-	DedupTTLSec  int               `yaml:"dedup_ttl_sec,omitempty"`
-	ReplySource  *bool             `yaml:"reply_source,omitempty"`
+	ChannelName  string            `yaml:"channel,omitempty"        json:"channel,omitempty"`
+	Event        string            `yaml:"event,omitempty"          json:"event,omitempty"`
+	Target       string            `yaml:"target,omitempty"         json:"target,omitempty"`
+	Match        map[string]any    `yaml:"match,omitempty"          json:"match,omitempty"`
+	MatchEnabled bool              `yaml:"match_enabled,omitempty"  json:"match_enabled,omitempty"`
+	MatchModes   map[string]string `yaml:"match_modes,omitempty"    json:"match_modes,omitempty"`
+	Whitelist    *Whitelist        `yaml:"whitelist,omitempty"      json:"whitelist,omitempty"`
+	DedupTTLSec  int               `yaml:"dedup_ttl_sec,omitempty"  json:"dedup_ttl_sec,omitempty"`
+	ReplySource  *bool             `yaml:"reply_source,omitempty"   json:"reply_source,omitempty"`
 
 	// webhook
-	Path      string `yaml:"path,omitempty"`
-	Method    string `yaml:"method,omitempty"`
-	SecretRef string `yaml:"secret_ref,omitempty"`
-	ParseBody string `yaml:"parse_body,omitempty"`
-	BodyToVar string `yaml:"body_to_var,omitempty"`
+	Path      string `yaml:"path,omitempty"       json:"path,omitempty"`
+	Method    string `yaml:"method,omitempty"     json:"method,omitempty"`
+	SecretRef string `yaml:"secret_ref,omitempty" json:"secret_ref,omitempty"`
+	ParseBody string `yaml:"parse_body,omitempty" json:"parse_body,omitempty"`
+	BodyToVar string `yaml:"body_to_var,omitempty" json:"body_to_var,omitempty"`
 
 	// manual
-	Label       string `yaml:"label,omitempty"`
-	ButtonLabel string `yaml:"button_label,omitempty"`
-	RequireRole string `yaml:"require_role,omitempty"`
+	Label       string `yaml:"label,omitempty"        json:"label,omitempty"`
+	ButtonLabel string `yaml:"button_label,omitempty" json:"button_label,omitempty"`
+	RequireRole string `yaml:"require_role,omitempty" json:"require_role,omitempty"`
 
 	// schedule_at
-	At          time.Time `yaml:"at,omitempty"`
-	DeleteAfter bool      `yaml:"delete_after,omitempty"`
+	At          time.Time `yaml:"at,omitempty"           json:"at,omitempty"`
+	DeleteAfter bool      `yaml:"delete_after,omitempty" json:"delete_after,omitempty"`
 
 	// error
-	SourceWorkflow string   `yaml:"source_workflow,omitempty"`
-	Severity       []string `yaml:"severity,omitempty"`
-	NodeTypes      []string `yaml:"node_types,omitempty"`
+	SourceWorkflow string   `yaml:"source_workflow,omitempty" json:"source_workflow,omitempty"`
+	Severity       []string `yaml:"severity,omitempty"        json:"severity,omitempty"`
+	NodeTypes      []string `yaml:"node_types,omitempty"      json:"node_types,omitempty"`
 }
 
 // MarshalYAML normalizes Match before serialization — picker values stored as
@@ -461,44 +435,26 @@ func (tr Trigger) MarshalYAML() (any, error) {
 
 // Whitelist filters who can fire a trigger.
 type Whitelist struct {
-	Users  []string `yaml:"users,omitempty"`
-	Groups []string `yaml:"groups,omitempty"`
-	IPs    []string `yaml:"ips,omitempty"`
+	Users  []string `yaml:"users,omitempty"  json:"users,omitempty"`
+	Groups []string `yaml:"groups,omitempty" json:"groups,omitempty"`
+	IPs    []string `yaml:"ips,omitempty"    json:"ips,omitempty"`
 }
 
 // OnErrorBinding declares which error-handler workflow to fire on failure.
 type OnErrorBinding struct {
-	TriggerWorkflow   string `yaml:"trigger_workflow"`
-	Severity          string `yaml:"severity,omitempty"`
-	IncludeState      bool   `yaml:"include_state,omitempty"`
-	IncludeNodeOutput bool   `yaml:"include_node_output,omitempty"`
+	TriggerWorkflow   string `yaml:"trigger_workflow"               json:"trigger_workflow"`
+	Severity          string `yaml:"severity,omitempty"             json:"severity,omitempty"`
+	IncludeState      bool   `yaml:"include_state,omitempty"        json:"include_state,omitempty"`
+	IncludeNodeOutput bool   `yaml:"include_node_output,omitempty"  json:"include_node_output,omitempty"`
 }
 
-// Event is the trigger payload passed to a run. Minimal envelope —
-// channel/transport-specific keys (user, text, thread, chat_id,
-// callback_id, path, …) live in Payload so each integration owns its
-// own shape. Workflow templates reference them as
-// `{{.Event.Payload.<key>}}`.
-//
-// Type identifies the trigger family ("channel" | "webhook" | "cron" |
-// "manual" | "error" | "schedule_at"). Subtype is the within-family
-// discriminator: for channel events it's the event name
-// ("message", "block_action", …); for webhooks empty; for cron the
-// schedule expression label; for error the source workflow.
-//
-// Channel is the module name when Type=="channel" ("slack",
-// "telegram", …). Empty for non-channel triggers.
+// Event is the trigger payload passed to a run.
 type Event struct {
 	Type    string         `json:"type"`
 	Subtype string         `json:"subtype,omitempty"`
 	Channel string         `json:"channel,omitempty"`
 	At      time.Time      `json:"at"`
 	Payload map[string]any `json:"payload,omitempty"`
-	// TriggerID is the workflow.Trigger.ID of the entry that matched
-	// this dispatch. Populated by the router immediately before
-	// enqueue; empty for manual / RunNow paths where no specific
-	// trigger fired. workflow_watch(trigger_id=...) reads this to
-	// filter runs back to the originating trigger.
 	TriggerID string `json:"trigger_id,omitempty"`
 }
 

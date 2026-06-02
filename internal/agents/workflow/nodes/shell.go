@@ -29,6 +29,9 @@ type shellSchema struct {
 
 func (e *ShellExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAction,
+		Label:       "Shell",
+		Badge:       "run command",
 		Description: "Execute a local shell command. Captures stdout/stderr/exit_code.",
 		WhenToUse:   "Operating on local files or running a CLI tool.",
 		Schema:      integration.StructSchema(shellSchema{}),

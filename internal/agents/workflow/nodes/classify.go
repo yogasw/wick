@@ -33,6 +33,9 @@ func (e *ClassifyExecutor) Dependencies(n workflow.Node) []engine.NodeDependency
 
 func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAI,
+		Label:       "Classify",
+		Badge:       "AI classify",
 		Description: "Classify natural-language input into an enum via LLM. Route downstream via case: labels matching verdict.",
 		WhenToUse:   "Input is free text and needs to be bucketed into a small set of cases.",
 		Example:     "- id: triage\n  type: classify\n  output_cases: [bug, feature, question]\n  input: '{{index .Event.Payload \"text\"}}'\n  provider: claude",

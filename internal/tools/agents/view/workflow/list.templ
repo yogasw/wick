@@ -12,7 +12,6 @@ import (
 // system palette.
 templ List(vm ListVM) {
 	@view.AgentsLayout(vm.Layout) {
-		@Shell(vm.Base)
 		<div class="max-w-6xl mx-auto px-6 py-8">
 			@listHeader(vm.Base)
 			@listTable(vm)

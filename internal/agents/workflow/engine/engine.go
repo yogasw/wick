@@ -41,6 +41,21 @@ import (
 // by the MCP `workflow_node_detail` op. Zero-value Docs = current
 // behaviour; populate per executor when worth it. See
 // internal/agents/workflow/docs and internal/docs/workflow/24-describe-contract.md.
+// PaletteCategory is the typed bucket label each descriptor declares.
+// Defined as a named string type (not a bare string field) so callers
+// can't typo "LOIGIC" — the compiler catches it at the descriptor site.
+// Adding a new category means adding a constant below; the palette
+// builder treats anything outside the known set as an extension bucket
+// rendered after the canonical ones.
+type PaletteCategory string
+
+const (
+	CategoryAI     PaletteCategory = "AI"
+	CategoryAction PaletteCategory = "ACTION"
+	CategoryLogic  PaletteCategory = "LOGIC"
+	CategoryData   PaletteCategory = "DATA"
+)
+
 type NodeDescriptor struct {
 	Type        workflow.NodeType
 	Description string
@@ -48,6 +63,13 @@ type NodeDescriptor struct {
 	Example     string
 	Schema      map[string]any    // reflected from per-node schema struct
 	Output      map[string]string // field → description
+	// Palette metadata — drives the editor "Add node" picker. Zero
+	// values fall back to sane defaults so executors that don't care
+	// still show up: Category defaults to CategoryAction, Label to a
+	// prettified version of Type, Badge to "" (no chip).
+	Category PaletteCategory // typed — see CategoryAI/Action/Logic/Data
+	Label    string          // display label ("HTTP / REST")
+	Badge    string          // short right-aligned hint ("GET / POST")
 	wickdocs.Docs
 }
 
@@ -334,7 +356,10 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		Status:     st.Status,
 		StartedAt:  st.StartedAt,
 		EndedAt:    st.EndedAt,
-		DurationMs: end.Sub(st.StartedAt).Milliseconds(),
+		DurationMs:  end.Sub(st.StartedAt).Milliseconds(),
+		Source:      indexEntrySource(st),
+		TriggerID:   indexEntryTrigger(st),
+		TriggerType: indexEntryTriggerType(st, w),
 	}); ierr != nil {
 		log.Ctx(ctx).Warn().Err(ierr).
 			Str("component", "wf").
@@ -348,6 +373,46 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
 	}
 	return st, err
+}
+
+// indexEntrySource pulls the source slug stamped on the event when
+// the run was kicked off. spaWorkflowRunNow sets "spa", wftest sets
+// "test", router-fired events leave it empty (those are automation).
+// Falls back to "" so the FE can treat it as "automation / unknown".
+func indexEntrySource(st workflow.RunState) string {
+	if s, _ := st.Event.Payload["source"].(string); s != "" {
+		return s
+	}
+	return ""
+}
+
+// indexEntryTrigger returns whichever trigger id is present on the
+// event. Router events stamp evt.TriggerID directly; spaWorkflowRunNow
+// stuffs it into the payload because that's where pickEntry reads it.
+func indexEntryTrigger(st workflow.RunState) string {
+	if st.Event.TriggerID != "" {
+		return st.Event.TriggerID
+	}
+	if tid, _ := st.Event.Payload["trigger_id"].(string); tid != "" {
+		return tid
+	}
+	return ""
+}
+
+// indexEntryTriggerType picks the canonical TriggerType for a run.
+// Prefer the workflow's own trigger row (rename-safe) and fall back
+// to the event type so trigger-less / legacy runs still record
+// something useful in the index.
+func indexEntryTriggerType(st workflow.RunState, w workflow.Workflow) string {
+	tid := indexEntryTrigger(st)
+	if tid != "" {
+		for i := range w.Triggers {
+			if w.Triggers[i].ID == tid {
+				return string(w.Triggers[i].Type)
+			}
+		}
+	}
+	return st.Event.Type
 }
 
 func (e *Engine) walk(ctx context.Context, w workflow.Workflow, start string, rc *workflow.RunContext, st *workflow.RunState) error {

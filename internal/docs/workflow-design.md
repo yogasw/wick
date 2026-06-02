@@ -83,3 +83,4 @@ Update terakhir: 2026-05-16.
 | [Mockup HTML](workflow/mockup.html) | 🟢 reference | Visual reference — canvas + run timeline + inspector + anatomy |
 | [Audit TODO](workflow/audit-todo.md) | 🟡 working | Gap audit doc-vs-code (2026-05-15) |
 | [Editor roadmap](workflow/editor-roadmap.md) | 🟡 working | Executions panel ✅ shipped; P0 items done; P1 Copy-to-editor + canvas read-only masih pending |
+| [Svelte FE migration](workflow/svelte-migration.md) | 🟡 in-progress | Replace templ+plain-JS with Svelte 5 SPA at `fe/agents/`, 1:1 component split, JSON protocol, BaseNode + per-type nodes |

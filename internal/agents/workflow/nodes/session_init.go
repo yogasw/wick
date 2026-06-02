@@ -8,6 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
 
@@ -31,6 +32,20 @@ type SessionInitExecutor struct {
 // RunContext, the pool side effect is skipped.
 func NewSessionInitExecutor(p *pool.Pool) *SessionInitExecutor {
 	return &SessionInitExecutor{Pool: p}
+}
+
+// Descriptor surfaces session_init in the editor palette and MCP
+// catalog. No schema yet — session_init's fields are declared inline
+// on the workflow.Node (mode, session_id) rather than via a tagged
+// struct.
+func (e *SessionInitExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Category:    engine.CategoryAI,
+		Label:       "Session Init",
+		Badge:       "session",
+		Description: "Resolve the AI session id early so downstream agent nodes share it and the sidebar row appears before the first turn.",
+		WhenToUse:   "Workflow uses agent nodes and you want the session sidebar entry visible immediately, or you want to pin a specific session id.",
+	}
 }
 
 // Execute resolves the sessionID, mutates RunContext, and ensures the

@@ -15,6 +15,9 @@ type endSchema struct {
 
 func (e *EndExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryLogic,
+		Label:       "End",
+		Badge:       "halt",
 		Description: "Terminator. Captures a final result template.",
 		WhenToUse:   "Explicit end-of-flow with a result payload.",
 		Schema:      integration.StructSchema(endSchema{}),

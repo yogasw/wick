@@ -18,6 +18,9 @@ type transformSchema struct {
 
 func (e *TransformExecutor) Descriptor() wfengine.NodeDescriptor {
 	return wfengine.NodeDescriptor{
+		Category:    wfengine.CategoryData,
+		Label:       "Transform",
+		Badge:       "reshape data",
 		Description: "Pure-function transform via gotemplate/jsonpath/jq.",
 		WhenToUse:   "Reshape data between nodes without an LLM.",
 		Example:     "- id: build\n  type: transform\n  engine: gotemplate\n  expression: '{{index .Event.Payload \"text\" | upper}}'",

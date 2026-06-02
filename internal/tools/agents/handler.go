@@ -26,12 +26,11 @@ import (
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
+	wfrepo "github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
-	wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
-	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/all"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -103,7 +102,21 @@ func SetConfigs(c *configs.Service) { globalConfigs = c }
 
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
-func SetDB(db *gorm.DB) { globalDB = db }
+func SetDB(db *gorm.DB) {
+	globalDB = db
+	// Best-effort one-shot importer: hydrate the workflows + workflow_versions
+	// tables from the file-based store on first boot after the DB lands.
+	// Idempotent — re-runs are no-ops. Soft-fail so a DB error doesn't
+	// take down the server; the file-based UI keeps working regardless.
+	if db != nil && globalWorkflowMgr != nil {
+		repo := workflowRepoFor(db)
+		if _, err := repo.ImportFromFiles(globalWorkflowMgr.Service); err != nil {
+			log.Warn().Err(err).Msg("workflow importer (file → DB) failed; file-store stays primary")
+		}
+	}
+}
+
+func workflowRepoFor(db *gorm.DB) *wfrepo.Repo { return wfrepo.New(db) }
 
 // SetChannelRegistry wires the live channel registry so picker fields
 // can issue lookup queries against each channel's upstream (Slack API,
@@ -126,7 +139,13 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
 	r.Static("/static/", StaticFS)
-	r.Static("/static/nodes/", wfnodes.StaticFS)
+
+	// Svelte SPA shell + assets for the workflow editor.
+	registerSPA(r)
+	registerSPAWorkflows(r)
+	registerSPAWorkflowHistory(r)
+	registerSPAPanels(r)
+	registerSPAPalette(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
@@ -226,35 +245,18 @@ func Register(r tool.Router) {
 
 	r.GET("/settings", settingsPage)
 
-	// Workflows tab — visual DAG editor (mockup §3).
+	// Workflows tab — Svelte v2 editor. `/workflows` lists; the editor
+	// page mounts the Svelte SPA via the templ shell.
 	r.GET("/workflows", workflowsPage)
 	r.POST("/workflows", createWorkflow)
 	r.POST("/workflows/import", importWorkflow)
 	r.GET("/workflows/edit/{id}/download", downloadWorkflowYAML)
-	// ID-bound routes live under /edit/ so Go 1.22's mux doesn't
-	// flag a conflict with /static/{path}. The ID is the folder name
-	// (UUID for canvas-created workflows) — stable across name renames.
 	r.GET("/workflows/edit/{id}", workflowEditor)
-	r.POST("/workflows/edit/{id}/save", saveWorkflow)
 	r.POST("/workflows/edit/{id}/rename", renameWorkflow)
-	r.POST("/workflows/edit/{id}/publish", publishWorkflow)
-	r.POST("/workflows/edit/{id}/discard", discardWorkflowDraft)
-	r.POST("/workflows/edit/{id}/toggle", toggleWorkflow)
-	r.POST("/workflows/edit/{id}/run", runWorkflowNow)
-	r.POST("/workflows/edit/{id}/exec-node", execNodeStep)
 	r.GET("/workflows/edit/{id}/runs/{runID}/state", workflowRunStateAPI)
-	r.POST("/workflows/edit/{id}/runs/{runID}/copy-to-editor", copyRunToEditor)
 	r.POST("/workflows/edit/{id}/delete", deleteWorkflow)
-	r.GET("/workflows/edit/{id}/runs/{runID}", workflowRunDetail)
-	r.GET("/workflows/edit/{id}/executions", executionsPanel)
-	r.GET("/workflows/edit/{id}/executions/{runID}", executionDetail)
 	r.GET("/workflows/api/registry", workflowRegistryAPI)
 	r.GET("/workflows/api/lookup", workflowLookupAPI)
-	r.POST("/workflows/edit/{id}/test", runWorkflowTests)
-	r.GET("/workflows/edit/{id}/test-cases", listTestCases)
-	r.POST("/workflows/edit/{id}/test-cases", saveTestCase)
-	r.POST("/workflows/edit/{id}/test-cases/{name}/run", runOneTestCase)
-	r.DELETE("/workflows/edit/{id}/test-cases/{name}", deleteTestCase)
 
 	r.GET("/stream", streamSSE)
 	r.GET("/stream/snapshot", streamSnapshot)

@@ -19,6 +19,9 @@ type branchSchema struct {
 
 func (e *BranchExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryLogic,
+		Label:       "Branch",
+		Badge:       "if / else",
 		Description: "Evaluates a Go template expression; routes to the edge whose case: label matches the result.",
 		WhenToUse:   "Routing logic is structured (no natural language).",
 		Example:     "- id: route\n  type: branch\n  expr: '{{index .Event.Payload \"action_id\"}}'",
