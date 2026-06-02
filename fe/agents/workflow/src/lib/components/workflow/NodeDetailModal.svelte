@@ -15,7 +15,9 @@
   // Field set tracked against the v1 audit — keep this 1:1; improve
   // where it helps but never reduce the surface.
 
-  import { detailNodeID, draftWorkflow, removeNode, updateNode, isValidLabel, LABEL_FORMAT_HINT } from "$lib/stores/editor";
+  import { detailNodeID, draftWorkflow, removeNode, updateNode, isValidLabel, LABEL_FORMAT_HINT, stepResultsByNode, type StepResult } from "$lib/stores/editor";
+  import JsonViewer from "./fields/JsonViewer.svelte";
+  import { inferSchema } from "./fields/jsonSchema";
   import { catalog } from "$lib/stores/catalog";
   import { workflowAPI } from "$lib/api/workflow";
   import { toastError } from "$lib/stores/toast";
@@ -104,48 +106,167 @@
     close();
   }
 
-  // Execute-step state — populated by runStep(). `lastRun.output`
-  // mirrors what the server's nodeOutputToJSON returns
-  // (verdict/confidence/result/...). Lives at component scope so
-  // re-opening the modal on the same node keeps the last result
-  // until another run lands.
-  type StepResult = {
-    ok: boolean;
-    output?: Record<string, unknown>;
-    error?: string;
-    latency_ms?: number;
-    at: number;
-  };
+  // Execute-step state. The result store survives modal close/reopen
+  // and lets a child node's INPUT pane read its parent's last output.
   let executing = $state(false);
-  let lastRun = $state<StepResult | null>(null);
+  const lastRun = $derived.by<StepResult | null>(() => {
+    if (!node) return null;
+    return $stepResultsByNode[node.id] ?? null;
+  });
 
-  async function runStep() {
+  // Find the upstream node id that flows into this node, if any. For
+  // merge / fan-in shapes we just take the first parent — Execute step
+  // is a debugging convenience, not a faithful replay.
+  const parentNodeID = $derived.by<string | null>(() => {
+    if (!node) return null;
+    const wf = $draftWorkflow;
+    const edge = wf?.graph?.edges?.find((e) => e.to === node!.id);
+    return edge?.from ?? null;
+  });
+
+  // Every node reachable upstream from this one (BFS through edges).
+  // Drives the INPUT-pane parent dropdown so the operator can read
+  // not just the direct parent's output but any earlier step's.
+  const upstreamIDs = $derived.by<string[]>(() => {
+    if (!node) return [];
+    const wf = $draftWorkflow;
+    const edges = wf?.graph?.edges ?? [];
+    const seen = new Set<string>();
+    const queue = [node.id];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      for (const e of edges) {
+        if (e.to !== cur || seen.has(e.from)) continue;
+        seen.add(e.from);
+        queue.push(e.from);
+      }
+    }
+    return [...seen];
+  });
+
+  // Upstream nodes that have a stored output, in upstream order.
+  const upstreamWithOutput = $derived.by(() => {
+    const wf = $draftWorkflow;
+    const all = wf?.graph?.nodes ?? [];
+    return upstreamIDs
+      .map((id) => {
+        const n = all.find((x) => x.id === id);
+        const run = $stepResultsByNode[id];
+        return { id, label: n?.label || id, run };
+      })
+      .filter((row) => row.run?.output);
+  });
+
+  // Which parent output is being shown in the INPUT pane. Defaults to
+  // direct parent when it has data, falls back to first available.
+  let selectedInputSource = $state<string | null>(null);
+  $effect(() => {
     if (!node) return;
-    let parsedMock: Record<string, unknown> | undefined;
+    const available = upstreamWithOutput.map((r) => r.id);
+    if (selectedInputSource && available.includes(selectedInputSource)) return;
+    if (parentNodeID && available.includes(parentNodeID)) {
+      selectedInputSource = parentNodeID;
+    } else {
+      selectedInputSource = available[0] ?? null;
+    }
+  });
+
+  // INPUT/OUTPUT view mode pills (JSON vs Schema) — local UI state.
+  let inputView = $state<"json" | "schema">("json");
+  let outputView = $state<"json" | "schema">("json");
+
+  // Resolved INPUT data. Two cases:
+  //   (a) The dropdown points at an upstream node — show that node's
+  //       output. The drag template prefix is `.Node.<label>` so refs
+  //       drop in as {{.Node.parent_label.row.id}} matching the engine's
+  //       Outputs map.
+  //   (b) No dropdown selection but a mock_input is set → show that
+  //       as the active sample (prefix `.Input` since that's how the
+  //       backend wires it into rc.Outputs["input"]).
+  const inputResolved = $derived.by<{ data: unknown; prefix: string; source: "upstream" | "mock" | "none"; sourceLabel: string }>(() => {
+    if (!node) return { data: null, prefix: "", source: "none", sourceLabel: "" };
+    if (selectedInputSource) {
+      const row = upstreamWithOutput.find((r) => r.id === selectedInputSource);
+      if (row?.run?.output) {
+        return {
+          data: row.run.output,
+          prefix: ".Node." + row.label,
+          source: "upstream",
+          sourceLabel: row.label,
+        };
+      }
+    }
     const mockRaw = (node as { mock_input?: string }).mock_input ?? "";
     if (mockRaw.trim()) {
       try {
-        parsedMock = JSON.parse(mockRaw);
+        return {
+          data: JSON.parse(mockRaw),
+          prefix: ".Input",
+          source: "mock",
+          sourceLabel: "mock",
+        };
+      } catch {
+        /* fall through */
+      }
+    }
+    return { data: null, prefix: "", source: "none", sourceLabel: "" };
+  });
+
+  async function runStep() {
+    if (!node) return;
+    const mockRaw = (node as { mock_input?: string }).mock_input ?? "";
+    if (mockRaw.trim()) {
+      try {
+        JSON.parse(mockRaw);
       } catch {
         toastError("Bad mock JSON", "Settings → Mock input must be valid JSON.");
         return;
       }
     }
+    // The middle-pane Execute uses whatever the INPUT pane is showing
+    // so it stays consistent with what the user just inspected.
+    const inputForRun = (inputResolved.data as Record<string, unknown> | null) ?? undefined;
+    const parentForRun = inputResolved.source === "upstream" ? selectedInputSource : null;
+    // Forward every upstream output the FE has cached. Backend
+    // hydrates rc.NodeOutputs from this so template refs
+    // {{.Node.<upstream_label>.row}} resolve in single-node runs the
+    // same way they do during full workflow runs.
+    const upstreamSnapshot: Record<string, Record<string, unknown>> = {};
+    for (const upID of upstreamIDs) {
+      const stored = $stepResultsByNode[upID];
+      if (stored?.output) upstreamSnapshot[upID] = stored.output;
+    }
     executing = true;
+    const nodeID = node.id;
     try {
       const wf = $draftWorkflow;
       if (!wf) return;
       const res = await workflowAPI.execNode(wf.id, {
         node,
-        input: parsedMock,
+        input: inputForRun,
+        parent_id: parentForRun ?? undefined,
+        node_outputs: Object.keys(upstreamSnapshot).length > 0 ? upstreamSnapshot : undefined,
       });
-      lastRun = { ...res, at: Date.now() };
+      const entry: StepResult = {
+        ok: res.ok,
+        output: res.output,
+        input: inputForRun,
+        parent_id: parentForRun ?? undefined,
+        error: res.error,
+        latency_ms: res.latency_ms,
+        at: Date.now(),
+      };
+      stepResultsByNode.update((m) => ({ ...m, [nodeID]: entry }));
       if (!res.ok) {
         toastError("Execute step failed", res.error ?? "Executor returned an error.");
       }
     } catch (e) {
-      lastRun = { ok: false, error: e instanceof Error ? e.message : String(e), at: Date.now() };
-      toastError("Execute step failed", lastRun.error ?? "");
+      const errMsg = e instanceof Error ? e.message : String(e);
+      stepResultsByNode.update((m) => ({
+        ...m,
+        [nodeID]: { ok: false, error: errMsg, input: inputForRun, parent_id: parentForRun ?? undefined, at: Date.now() },
+      }));
+      toastError("Execute step failed", errMsg);
     } finally {
       executing = false;
     }
@@ -275,15 +396,69 @@
 
       <!-- 3-column body. -->
       <div class="flex-1 grid divide-x divide-slate-200 dark:divide-slate-800 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
-        <!-- LEFT: input. -->
-        <section class="flex flex-col p-4 overflow-y-auto">
+        <!-- LEFT: input. Source dropdown picks which upstream node's
+             output feeds this pane (defaults to direct parent), then
+             JSON / Schema tabs flip the view. JSON leaves are
+             draggable — drop them on any ArgField in the middle pane
+             to insert {{.Node.<label>.path}} and auto-flip the field
+             into Expression mode. Matches the legacy editor's
+             renderInteractiveJSON UX. -->
+        <section class="flex flex-col p-3 overflow-y-auto">
           <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2">INPUT</div>
-          <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
-            <div class="text-2xl">⤓</div>
-            <div>No input data</div>
-            <button class="px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium">Execute previous nodes</button>
-            <div class="text-[11px]">to view input data</div>
-          </div>
+          {#if upstreamWithOutput.length > 0 || inputResolved.source === "mock"}
+            {#if upstreamWithOutput.length > 0}
+              <select
+                class="w-full mb-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs"
+                bind:value={selectedInputSource}
+              >
+                {#each upstreamWithOutput as src}
+                  <option value={src.id}>{src.label}</option>
+                {/each}
+              </select>
+            {:else}
+              <div class="mb-2 text-[10px] px-1.5 py-0.5 inline-block rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 self-start">mock</div>
+            {/if}
+
+            {#if inputResolved.data !== null}
+              <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
+                {#each ["json", "schema"] as v}
+                  <button
+                    type="button"
+                    class="px-2 py-0.5"
+                    class:bg-rose-500={inputView === v}
+                    class:text-white={inputView === v}
+                    class:text-slate-500={inputView !== v}
+                    onclick={() => (inputView = v as "json" | "schema")}
+                  >{v}</button>
+                {/each}
+              </div>
+              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-slate-900/40 p-2">
+                {#if inputView === "json"}
+                  <JsonViewer value={inputResolved.data} prefix={inputResolved.prefix} draggable={true} />
+                {:else}
+                  <pre class="font-mono text-[11px] text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{inferSchema(inputResolved.data)}</pre>
+                {/if}
+              </div>
+              <div class="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
+                Drag any value to an expression field on the right.
+              </div>
+            {/if}
+          {:else}
+            <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
+              <div class="text-2xl">⤓</div>
+              <div>No input data</div>
+              {#if parentNodeID}
+                {@const parentNode = $draftWorkflow?.graph?.nodes?.find((n) => n.id === parentNodeID)}
+                <div class="text-[11px] text-center max-w-[200px]">
+                  Run <span class="font-mono">{parentNode?.label || parentNodeID}</span> first, or set a Mock input under Settings.
+                </div>
+              {:else}
+                <div class="text-[11px] text-center max-w-[200px]">
+                  No upstream node. Set a Mock input under Settings to feed sample data.
+                </div>
+              {/if}
+            </div>
+          {/if}
         </section>
 
         <!-- MIDDLE: parameters. -->
@@ -1317,8 +1492,11 @@
           </div>
         </section>
 
-        <!-- RIGHT: output. -->
-        <section class="flex flex-col p-4 overflow-y-auto">
+        <!-- RIGHT: output. Same JSON / Schema toggle as the INPUT pane,
+             with status line + latency derived from the stored
+             stepResult so closing + reopening the modal keeps the
+             last run visible. -->
+        <section class="flex flex-col p-3 overflow-y-auto">
           <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2 flex items-center justify-between gap-2">
             <span>OUTPUT</span>
             {#if lastRun}
@@ -1333,17 +1511,41 @@
                 class:dark:bg-rose-900={!lastRun.ok}
                 class:dark:text-rose-300={!lastRun.ok}
               >
-                {lastRun.ok ? "ok" : "fail"} · {lastRun.latency_ms ?? 0}ms
+                {lastRun.ok ? "ok" : "fail"}{lastRun.latency_ms !== undefined ? ` · ${lastRun.latency_ms}ms` : ""}
               </span>
             {/if}
           </div>
           {#if lastRun}
             {#if lastRun.error}
-              <div class="text-[11px] text-rose-700 dark:text-rose-300 whitespace-pre-wrap mb-2">
-                {lastRun.error}
+              <div class="text-[11px] text-rose-700 dark:text-rose-300 whitespace-pre-wrap mb-2 rounded border border-rose-300 dark:border-rose-700 p-2 bg-rose-50 dark:bg-rose-950/40">
+                ✕ {lastRun.error}
+              </div>
+            {:else if lastRun.output}
+              <div class="text-[11px] text-emerald-700 dark:text-emerald-400 mb-2">
+                ✓ Last recorded output
               </div>
             {/if}
-            <pre class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-slate-900/40 p-2 text-[11px] font-mono text-slate-800 dark:text-slate-200">{JSON.stringify(lastRun.output ?? {}, null, 2)}</pre>
+            {#if lastRun.output}
+              <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
+                {#each ["json", "schema"] as v}
+                  <button
+                    type="button"
+                    class="px-2 py-0.5"
+                    class:bg-rose-500={outputView === v}
+                    class:text-white={outputView === v}
+                    class:text-slate-500={outputView !== v}
+                    onclick={() => (outputView = v as "json" | "schema")}
+                  >{v}</button>
+                {/each}
+              </div>
+              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-slate-900/40 p-2">
+                {#if outputView === "json"}
+                  <JsonViewer value={lastRun.output} prefix={`.Node.${node.label || node.id}`} draggable={true} />
+                {:else}
+                  <pre class="font-mono text-[11px] text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{inferSchema(lastRun.output)}</pre>
+                {/if}
+              </div>
+            {/if}
           {:else}
             <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
               <div class="text-2xl">⤒</div>

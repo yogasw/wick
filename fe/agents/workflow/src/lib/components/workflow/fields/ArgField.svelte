@@ -39,6 +39,43 @@
     onValueChange,
     onModeChange,
   }: Props = $props();
+
+  let dragHover = $state(false);
+
+  // Drop a draggable JSON leaf from the INPUT pane: inserts the
+  // template ref at the cursor and auto-flips this field into
+  // Expression mode. Same UX as the legacy attachTemplateDropTarget.
+  function onDragOver(e: DragEvent) {
+    if (!e.dataTransfer?.types.includes("text/plain")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    dragHover = true;
+  }
+  function onDragLeave() {
+    dragHover = false;
+  }
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    dragHover = false;
+    const text = e.dataTransfer?.getData("text/plain");
+    if (!text) return;
+    const el = e.currentTarget as HTMLInputElement | HTMLTextAreaElement;
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? value.length;
+    const next = value.slice(0, start) + text + value.slice(end);
+    onValueChange(next);
+    onModeChange?.("expression");
+    // Restore caret after Svelte updates the value.
+    requestAnimationFrame(() => {
+      try {
+        const caret = start + text.length;
+        el.setSelectionRange(caret, caret);
+        el.focus();
+      } catch {
+        /* element gone — ignore */
+      }
+    });
+  }
 </script>
 
 <div class="space-y-1">
@@ -63,22 +100,34 @@
   </div>
   {#if multiline}
     <textarea
-      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm transition-colors"
       class:text-emerald-700={mode === "expression"}
       class:dark:text-emerald-400={mode === "expression"}
+      class:border-emerald-500={dragHover}
+      class:bg-emerald-50={dragHover}
+      class:dark:bg-emerald-950={dragHover}
       {placeholder}
       {rows}
       {value}
       oninput={(e) => onValueChange((e.target as HTMLTextAreaElement).value)}
+      ondragover={onDragOver}
+      ondragleave={onDragLeave}
+      ondrop={onDrop}
     ></textarea>
   {:else}
     <input
-      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm transition-colors"
       class:text-emerald-700={mode === "expression"}
       class:dark:text-emerald-400={mode === "expression"}
+      class:border-emerald-500={dragHover}
+      class:bg-emerald-50={dragHover}
+      class:dark:bg-emerald-950={dragHover}
       {placeholder}
       {value}
       oninput={(e) => onValueChange((e.target as HTMLInputElement).value)}
+      ondragover={onDragOver}
+      ondragleave={onDragLeave}
+      ondrop={onDrop}
     />
   {/if}
   {#if helper}

@@ -322,6 +322,13 @@ func spaExecNode(c *tool.Ctx) {
 		Input    map[string]any `json:"input"`
 		Event    map[string]any `json:"event"`
 		ParentID string         `json:"parent_id"`
+		// Snapshot of upstream node outputs captured by the FE from
+		// prior workflow_run SSE events (or earlier step runs). Keyed
+		// by node id; values are the same flat output maps the
+		// executor returns. Populates rc.NodeOutputs so template refs
+		// like {{.Node.<upstream_label>.row}} resolve even though only
+		// this one node is being executed in isolation.
+		NodeOutputs map[string]map[string]any `json:"node_outputs"`
 	}
 	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
@@ -344,6 +351,25 @@ func spaExecNode(c *tool.Ctx) {
 	envVals, _ := globalWorkflowMgr.Service.LoadEnvValues(id)
 	outputs := map[string]any{}
 	nodeOutputs := map[string]wf.NodeOutput{}
+	// Hydrate every upstream output the FE knows about. Each entry
+	// becomes a NodeOutput.Fields blob — BuildRenderCtx already
+	// flattens Fields into the per-node template map plus aliases
+	// the same payload under the node's label. Special-cases verdict
+	// + result so classify/branch downstream refs stay intact.
+	for nodeID, out := range body.NodeOutputs {
+		if out == nil {
+			continue
+		}
+		no := wf.NodeOutput{Fields: out}
+		if v, ok := out["verdict"].(string); ok {
+			no.Verdict = v
+		}
+		if v, ok := out["result"]; ok {
+			no.Result = v
+		}
+		nodeOutputs[nodeID] = no
+		outputs[nodeID] = out
+	}
 	if body.ParentID != "" {
 		outputs[body.ParentID] = body.Input
 	}

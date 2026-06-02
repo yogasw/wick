@@ -5,6 +5,8 @@ import {
   draftWorkflow,
   triggerRunStatus,
   lastFiredTriggerID,
+  stepResultsByNode,
+  type StepResult,
 } from "./editor";
 
 // SSE wire event shape from `agents.Event` (internal/tools/agents/
@@ -107,14 +109,55 @@ function handle(raw: string, workflowID: string) {
   logLines.update((cur) => [line, ...cur].slice(0, 500));
 
   // Per-node status overlay drives the green check / red cross on each
-  // node card while the workflow runs.
+  // node card while the workflow runs. We also capture the input that
+  // entered the node and the output it produced so the inspector's
+  // INPUT/OUTPUT panes can render real data after a full workflow run
+  // (not just per-node Execute step).
   if (payload.node) {
+    const nodeID = payload.node;
+    const data = (payload.data ?? {}) as Record<string, unknown>;
     if (payload.event === "node_started") {
-      runStatusByNode.update((m) => ({ ...m, [payload.node!]: "running" }));
+      runStatusByNode.update((m) => ({ ...m, [nodeID]: "running" }));
+      const input = (data.input ?? undefined) as Record<string, unknown> | undefined;
+      // node_started lands before the result is known — seed an
+      // "in-flight" entry so the INPUT pane reflects what's about to
+      // run; node_completed / node_failed will fill in output + ok.
+      stepResultsByNode.update((m) => {
+        const next: StepResult = {
+          ok: false,
+          input,
+          at: Date.now(),
+        };
+        return { ...m, [nodeID]: next };
+      });
     } else if (payload.event === "node_completed") {
-      runStatusByNode.update((m) => ({ ...m, [payload.node!]: "success" }));
+      runStatusByNode.update((m) => ({ ...m, [nodeID]: "success" }));
+      const output = (data.output ?? undefined) as Record<string, unknown> | undefined;
+      const latency = typeof data.latency_ms === "number" ? data.latency_ms : undefined;
+      stepResultsByNode.update((m) => ({
+        ...m,
+        [nodeID]: {
+          ...(m[nodeID] ?? { at: Date.now() }),
+          ok: true,
+          output,
+          latency_ms: latency,
+          at: Date.now(),
+        },
+      }));
     } else if (payload.event === "node_failed") {
-      runStatusByNode.update((m) => ({ ...m, [payload.node!]: "failed" }));
+      runStatusByNode.update((m) => ({ ...m, [nodeID]: "failed" }));
+      const errMsg = typeof data.error === "string" ? data.error : undefined;
+      const latency = typeof data.latency_ms === "number" ? data.latency_ms : undefined;
+      stepResultsByNode.update((m) => ({
+        ...m,
+        [nodeID]: {
+          ...(m[nodeID] ?? { at: Date.now() }),
+          ok: false,
+          error: errMsg,
+          latency_ms: latency,
+          at: Date.now(),
+        },
+      }));
     }
   }
 
@@ -124,6 +167,7 @@ function handle(raw: string, workflowID: string) {
   if (payload.event === "workflow_started") {
     runStartedAt = Date.parse(payload.ts) || Date.now();
     runStatusByNode.set({}); // reset per-node overlay for the new run
+    stepResultsByNode.set({}); // and per-node input/output snapshots
     const fired = get(lastFiredTriggerID);
     if (fired) {
       triggerRunStatus.update((m) => ({ ...m, [fired]: "running" }));

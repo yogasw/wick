@@ -58,6 +58,21 @@ export const detailTriggerID = writable<string | null>(null);
 // them on the run's most recent state.
 export const runStatusByNode = writable<Record<string, "success" | "failed" | "running">>({});
 
+// Execute-step results retained across modal close/reopen. Keyed by
+// node id so the inspector's INPUT pane on a child node can read its
+// parent's last output, and OUTPUT pane keeps showing the most recent
+// run after the user closes + reopens. Cleared by loadWorkflow.
+export type StepResult = {
+  ok: boolean;
+  output?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+  parent_id?: string;
+  error?: string;
+  latency_ms?: number;
+  at: number;
+};
+export const stepResultsByNode = writable<Record<string, StepResult>>({});
+
 // Per-trigger run status — set when the user fires a trigger via the
 // Execute button + cleared on next workflow_started for the same id.
 // Backend RunEvent doesn't carry a trigger id, so we rely on the FE
@@ -165,6 +180,7 @@ export async function loadWorkflow(id: string) {
   lastSavedAt.set(null);
   validationReport.set(null);
   runStatusByNode.set({});
+  stepResultsByNode.set({});
   // First subscriber call fires immediately with the just-set value;
   // skip that and only react to genuine post-load edits.
   autosaveArmed = false;

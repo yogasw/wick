@@ -353,6 +353,11 @@ export const workflowAPI = {
       input?: Record<string, unknown>;
       event?: Record<string, unknown>;
       parent_id?: string;
+      // Snapshot of upstream node outputs so refs like
+      // {{.Node.<label>.row}} resolve when the FE runs a single
+      // node in isolation. Keyed by node id; backend builds the
+      // label aliases from the loaded workflow graph.
+      node_outputs?: Record<string, Record<string, unknown>>;
     },
   ): Promise<{
     ok: boolean;
