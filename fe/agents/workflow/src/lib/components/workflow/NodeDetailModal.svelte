@@ -53,14 +53,6 @@
     return $draftWorkflow.graph?.nodes?.find((n) => n.id === id) ?? null;
   });
 
-  // Passed to ArgField for autocomplete + preview.
-  const workflowId  = $derived($draftWorkflow?.id ?? "");
-  const nodeLabels  = $derived(
-    ($draftWorkflow?.graph?.nodes ?? [])
-      .map((n) => n.label || n.id)
-      .filter((l): l is string => !!l)
-  );
-
   let activeTab = $state<"params" | "settings">("params");
 
   function close() {
@@ -554,8 +546,6 @@
                   </select>
                 </label>
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="URL"
                   value={node.url ?? ""}
                   mode={modeFor("url")}
@@ -587,8 +577,6 @@
                 />
                 {#if (node.method ?? "GET") !== "GET"}
                   <ArgField
-                  {workflowId}
-                  {nodeLabels}
                     label="Body"
                     value={node.body ?? ""}
                     mode={modeFor("body")}
@@ -616,8 +604,6 @@
               <!-- ── shell ──────────────────────────────────────── -->
               {#if node.type === "shell"}
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Command"
                   value={(node.command ?? []).join("\n")}
                   mode={modeFor("command")}
@@ -643,8 +629,6 @@
                   onModeChange={(m) => patchModeMap("arg_modes", m)}
                 />
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Working directory"
                   value={node.cwd ?? ""}
                   mode={modeFor("cwd")}
@@ -679,8 +663,6 @@
               <!-- ── agent ──────────────────────────────────────── -->
               {#if node.type === "agent"}
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Prompt"
                   value={node.prompt ?? ""}
                   mode={modeFor("prompt")}
@@ -826,8 +808,6 @@
                   </div>
                 {/if}
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Input (text to classify)"
                   value={node.input ?? ""}
                   mode={modeFor("input")}
@@ -889,8 +869,6 @@
               <!-- ── branch ─────────────────────────────────────── -->
               {#if node.type === "branch"}
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Expression"
                   value={node.expr ?? ""}
                   mode={modeFor("expr")}
@@ -1032,8 +1010,6 @@
                   </select>
                 </label>
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Expression"
                   value={node.expression ?? ""}
                   mode={modeFor("expression")}
@@ -1044,8 +1020,6 @@
                   onModeChange={(m) => patchMode("expression", m)}
                 />
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Input (optional)"
                   value={node.input ?? ""}
                   mode={modeFor("input")}
@@ -1068,8 +1042,6 @@
                   />
                 </label>
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="SQL"
                   value={node.sql ?? ""}
                   mode={modeFor("sql")}
@@ -1099,8 +1071,6 @@
               <!-- ── end ───────────────────────────────────────── -->
               {#if node.type === "end"}
                 <ArgField
-                  {workflowId}
-                  {nodeLabels}
                   label="Result"
                   value={(node as unknown as { result?: string }).result ?? ""}
                   mode={modeFor("result")}
@@ -1147,8 +1117,6 @@
                   <div class="flex items-end gap-2">
                     <div class="flex-1">
                       <ArgField
-                  {workflowId}
-                  {nodeLabels}
                         label="Session ID"
                         value={node.session_id ?? ""}
                         mode={modeFor("session_id")}

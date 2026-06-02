@@ -65,7 +65,6 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
-	r.POST("/api/workflows/template-test/{id}", spaTemplateTest)
 	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
 	r.POST("/api/workflows/move-nodes/{id}", spaMoveNodes)
 	r.POST("/api/workflows/auto-layout/{id}", spaAutoLayout)
@@ -483,31 +482,6 @@ func parseDateInput(v string, endOfDay bool) (time.Time, error) {
 		t = t.Add(24*time.Hour - time.Nanosecond)
 	}
 	return t.UTC(), nil
-}
-
-func spaTemplateTest(c *tool.Ctx) {
-	if notReadyWorkflow(c) {
-		return
-	}
-	var body struct {
-		Template    string `json:"template"`
-		SampleEvent string `json:"sample_event"`
-		Context     string `json:"context"`
-	}
-	if err := c.BindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	result, err := globalWorkflowMgr.MCP.TemplateTest(mcp.TemplateTestInput{
-		Template:    body.Template,
-		SampleEvent: body.SampleEvent,
-		Context:     body.Context,
-	})
-	if err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, result)
 }
 
 func spaCanvasView(c *tool.Ctx) {
