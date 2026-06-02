@@ -30,6 +30,23 @@
   let zoom = $state(1);
   let dragging = $state<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
+  // Canvas lock — blocks every mutating gesture (drag node / trigger,
+  // create edge, drop from palette, right-click context menu) while
+  // leaving pan + zoom + selection + inspector reads alone. Persisted
+  // on `workflow._canvas.locked` so the lock travels with the file —
+  // anyone opening the same workflow sees the same locked state, and
+  // it survives across browsers / users.
+  const locked = $derived(!!($draftWorkflow as any)?._canvas?.locked);
+  function toggleLock() {
+    draftWorkflow.update((wf) => {
+      if (!wf) return wf;
+      const canvas = ((wf as any)._canvas ?? {}) as Record<string, unknown>;
+      canvas.locked = !canvas.locked;
+      (wf as any)._canvas = canvas;
+      return wf;
+    });
+  }
+
   // Auto fit-to-view once the workflow finishes loading. Compute the
   // bounding box of every node + trigger position, then pan + zoom so
   // the whole graph sits centred with a 60px margin. Matches the
@@ -69,6 +86,7 @@
 
   function ondrop(e: DragEvent) {
     e.preventDefault();
+    if (locked) return; // canvas frozen — no new nodes / triggers
     if (!canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
     const x = (e.clientX - rect.left - pan.x) / zoom;
@@ -254,6 +272,7 @@
   }
 
   function startConnect(e: PointerEvent, fromID: string, fromKind: "node" | "trigger" | "node-input") {
+    if (locked) return; // canvas frozen — no new edges
     // Only left-button drags create connections. Right-click goes to
     // the context menu instead — otherwise the dashed connect line
     // gets orphaned because contextmenu suppresses the pointerup that
@@ -396,10 +415,16 @@
 
   function onnodepointerdown(e: PointerEvent, nodeID: string) {
     e.stopPropagation();
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    dragging = { id: nodeID, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
-    dragKind = "node";
+    // When locked, click still selects (so the inspector + INPUT pane
+    // stay usable read-only) but we skip the drag bookkeeping so the
+    // card can't be moved.
+    if (!locked) {
+      const target = e.currentTarget as HTMLElement;
+      const rect = target.getBoundingClientRect();
+      dragging = { id: nodeID, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+      dragKind = "node";
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+    }
     // Shift-click adds to the selection; plain click resets to one.
     if (e.shiftKey) {
       selectedNodeIDs.update((s) => {
@@ -411,16 +436,18 @@
       selectedNodeIDs.set(new Set([nodeID]));
     }
     selectedNodeID.set(nodeID);
-    startMultiDragSnapshot(nodeID);
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    if (!locked) startMultiDragSnapshot(nodeID);
   }
 
   function ontriggerpointerdown(e: PointerEvent, triggerID: string) {
     e.stopPropagation();
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    dragging = { id: triggerID, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
-    dragKind = "trigger";
+    if (!locked) {
+      const target = e.currentTarget as HTMLElement;
+      const rect = target.getBoundingClientRect();
+      dragging = { id: triggerID, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+      dragKind = "trigger";
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+    }
     if (e.shiftKey) {
       selectedNodeIDs.update((s) => {
         const next = new Set(s);
@@ -431,8 +458,7 @@
       selectedNodeIDs.set(new Set([triggerID]));
     }
     selectedNodeID.set(triggerID);
-    startMultiDragSnapshot(triggerID);
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    if (!locked) startMultiDragSnapshot(triggerID);
   }
 
   function onpointermove(e: PointerEvent) {
@@ -1172,8 +1198,26 @@
        / fullscreen / zoom column. Lock + auto-layout are stubs (UX
        parity for now; behavior lands in the next pass). -->
   <div class="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col gap-1.5">
-    <button class="h-9 w-9 rounded bg-slate-800/80 text-amber-400 shadow flex items-center justify-center" title="Lock canvas" aria-label="Lock canvas">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    <button
+      class="h-9 w-9 rounded shadow flex items-center justify-center transition-colors"
+      class:bg-amber-500={locked}
+      class:text-white={locked}
+      class:bg-slate-800={!locked}
+      class:text-amber-400={!locked}
+      class:hover:bg-slate-700={!locked}
+      class:hover:bg-amber-600={locked}
+      onclick={toggleLock}
+      title={locked ? "Unlock canvas" : "Lock canvas (blocks drag, drop, connect)"}
+      aria-label={locked ? "Unlock canvas" : "Lock canvas"}
+      aria-pressed={locked}
+    >
+      {#if locked}
+        <!-- Closed padlock when locked. -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      {:else}
+        <!-- Open padlock when unlocked. -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v3"/></svg>
+      {/if}
     </button>
     <button class="h-9 w-9 rounded bg-slate-800/80 hover:bg-slate-800 text-slate-100 shadow flex items-center justify-center" title="Auto-format (layered T→B)" aria-label="Auto-format" onclick={autoFormat}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 10l7 7 7-7"/></svg>
