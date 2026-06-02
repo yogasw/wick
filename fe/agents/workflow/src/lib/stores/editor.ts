@@ -38,6 +38,11 @@ export const selectedNodeIDs = writable<Set<string>>(new Set());
 // it. Mirrors the legacy editor's "Add node" pattern.
 export const paletteOpen = writable<boolean>(false);
 
+// Search overlay open state — toggled from the top-right magnifier
+// button + Ctrl/Cmd+K. Centralised so EditorShell can mount the
+// overlay component and Canvas can flip it open without prop drilling.
+export const searchOpen = writable<boolean>(false);
+
 // Node detail modal — open on double-click. Single-click only sets
 // `selectedNodeID` (highlight ring). The modal shows a full n8n-style
 // 3-column layout (Input | Parameters+Settings+Execute step | Output)

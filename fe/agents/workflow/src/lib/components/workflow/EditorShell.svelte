@@ -6,6 +6,7 @@
   import TriggerDetailModal from "./TriggerDetailModal.svelte";
   import BottomTabs from "./BottomTabs.svelte";
   import ExecutionsPanel from "./ExecutionsPanel.svelte";
+  import SearchOverlay from "./SearchOverlay.svelte";
   import ToastHost from "$lib/components/shared/ToastHost.svelte";
   import { writable } from "svelte/store";
 
@@ -24,6 +25,7 @@
     removeNode,
     removeTrigger,
     savePinnedTrigger,
+    searchOpen,
   } from "$lib/stores/editor";
   import { toastOk } from "$lib/stores/toast";
   import { get } from "svelte/store";
@@ -95,6 +97,14 @@
     if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
       e.preventDefault();
       void saveDraft({ silent: false });
+      return;
+    }
+    // Ctrl/Cmd+K — toggle the search overlay. The overlay's own
+    // Escape handler closes it when open, so we only flip from
+    // closed → open here.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      searchOpen.update((v) => !v);
       return;
     }
     // Esc — close palette / inspector modals.
@@ -176,4 +186,5 @@
   {/if}
 </div>
 
+<SearchOverlay />
 <ToastHost />
