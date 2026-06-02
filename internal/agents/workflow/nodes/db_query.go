@@ -9,7 +9,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 
 	// register drivers used by workflow db_query nodes
 	_ "github.com/glebarez/go-sqlite"
@@ -53,7 +52,6 @@ func NewDBQueryExecutor() *DBQueryExecutor { return &DBQueryExecutor{} }
 
 // Execute connects, runs the SQL, and returns rows.
 func (e *DBQueryExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflow.RunContext) (workflow.NodeOutput, error) {
-	rctx := rc.RenderCtx()
 
 	// Resolve DSN: Database field is an env key name.
 	dsn := ""
@@ -70,23 +68,13 @@ func (e *DBQueryExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 		return workflow.NodeOutput{}, fmt.Errorf("db_query: database %q not found in workflow env", n.Database)
 	}
 
-	// Render SQL template.
-	query, err := template.Render(n.SQL, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("db_query: sql render: %w", err)
-	}
-	if query == "" {
+	if n.SQL == "" {
 		return workflow.NodeOutput{}, fmt.Errorf("db_query: sql is empty")
 	}
-
-	// Render positional args.
-	args := make([]any, 0, len(n.SQLArgs))
-	for i, raw := range n.SQLArgs {
-		rendered, err := template.Render(raw, rctx)
-		if err != nil {
-			return workflow.NodeOutput{}, fmt.Errorf("db_query: sql_args[%d] render: %w", i, err)
-		}
-		args = append(args, rendered)
+	query := n.SQL
+	args := make([]any, len(n.SQLArgs))
+	for i, v := range n.SQLArgs {
+		args[i] = v
 	}
 
 	// Open connection. Use pgx for postgres, go-sqlite for sqlite/file.

@@ -1380,12 +1380,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	return nil
 }
 
-// RunMCPStdio initialises only the connector layer (DB + connectors
-// bootstrap) and serves the MCP JSON-RPC protocol over stdin/stdout.
-// Intended for local clients that spawn wick as a child process (Claude
-// Desktop, Cursor, etc.). No auth — all connectors are visible as a
-// synthetic local-admin identity.
-func RunMCPStdio(version, commit, buildTime string) {
+// BuildMCPHandler initialises the connector layer (DB + connectors
+// bootstrap) and returns a ready-to-serve MCP handler + admin context.
+// Callers must either call ServeStdioOS (for the production stdio path)
+// or ServeStdio with a custom reader/writer (for exec/test paths).
+func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.Context) {
 	// When spawned by an MCP client (Claude Desktop, Cursor, etc.) the
 	// working directory is the client's, not the project root. Chdir to
 	// the project root (parent of the bin/ dir) so .env and wick.db
@@ -1463,6 +1462,10 @@ func RunMCPStdio(version, commit, buildTime string) {
 	// rather than silently returning empty lists.
 	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubSlack)
 	stdioWfMgr.WithDataTablesDB(db)
+	// DB-primary workflow store also needs wiring in stdio mode so
+	// workflow_versions / workflow_diff_versions / workflow_restore_version
+	// + the DBService backing the body don't 503 in MCP clients.
+	stdioWfMgr.WithDB(db)
 	if err := stdioWfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("stdio: workflow bootstrap failed; workflow_* ops unavailable")
 	} else {
@@ -1488,12 +1491,19 @@ func RunMCPStdio(version, commit, buildTime string) {
 	ctx := login.WithUser(context.Background(), localAdmin, nil)
 
 	root, _ := os.Getwd()
-	mcp.NewHandler(connSvc).
+	h := mcp.NewHandler(connSvc).
 		WithBuildInfo(version, commit, buildTime).
 		WithWickRoot(root).
 		WithAppURL(configsSvc.AppURL).
-		WithDB(db).
-		ServeStdioOS(ctx)
+		WithDB(db)
+	return h, ctx
+}
+
+// RunMCPStdio initialises the connector layer and serves MCP JSON-RPC
+// over stdin/stdout. Intended for local clients (Claude Desktop, Cursor).
+func RunMCPStdio(version, commit, buildTime string) {
+	h, ctx := BuildMCPHandler(version, commit, buildTime)
+	h.ServeStdioOS(ctx)
 }
 
 // resolveWickGateBin finds the wick-gate binary: next to this executable,

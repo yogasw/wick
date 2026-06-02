@@ -196,7 +196,11 @@ func (h *handlers) addNode(c *connector.Ctx) (any, error) {
 	if node.ID == "" {
 		node.ID = uuid.NewString()
 	}
-	return h.ops.AddNode(c.Input("id"), node)
+	wf, err := h.ops.AddNode(c.Input("id"), node)
+	if err != nil {
+		return nil, err
+	}
+	return withArgModesWarnings(h, c.Input("id"), wf), nil
 }
 
 func (h *handlers) updateNode(c *connector.Ctx) (any, error) {
@@ -204,7 +208,30 @@ func (h *handlers) updateNode(c *connector.Ctx) (any, error) {
 	if err := parseJSON(c.Input("patch"), &patch); err != nil {
 		return nil, fmt.Errorf("patch: %w", err)
 	}
-	return h.ops.UpdateNode(c.Input("id"), c.Input("node_id"), patch)
+	wf, err := h.ops.UpdateNode(c.Input("id"), c.Input("node_id"), patch)
+	if err != nil {
+		return nil, err
+	}
+	return withArgModesWarnings(h, c.Input("id"), wf), nil
+}
+
+// withArgModesWarnings wraps a workflow response with any arg_modes
+// warnings from the current draft — e.g. expression="fixed" but value
+// contains {{...}}, which means the template will NOT render at runtime.
+func withArgModesWarnings(h *handlers, id string, w any) any {
+	vr := h.ops.ValidateRich(id)
+	if len(vr.Warnings) == 0 {
+		return w
+	}
+	msgs := make([]string, 0, len(vr.Warnings))
+	for _, warn := range vr.Warnings {
+		msgs = append(msgs, warn.Path+": "+warn.Message)
+	}
+	return map[string]any{
+		"workflow":  w,
+		"warnings":  msgs,
+		"_hint":     "⚠ Some nodes have arg_modes=fixed but contain {{...}} — these templates will NOT render at runtime. Set arg_modes to expression or remove {{}} if you want static text.",
+	}
 }
 
 func (h *handlers) deleteNode(c *connector.Ctx) (any, error) {

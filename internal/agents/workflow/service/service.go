@@ -27,6 +27,12 @@ var ErrNotFound = errors.New("workflow not found")
 // stable file identifier.
 var ErrNameTaken = errors.New("workflow name already taken")
 
+// ErrLocked is returned by SaveDraft when the persisted workflow has
+// `_canvas.locked = true` and the incoming body would mutate
+// non-lock fields. Callers can unlock by writing a new body with
+// `_canvas.locked = false`.
+var ErrLocked = errors.New("workflow is locked — unlock first")
+
 // Service is the CRUD contract.
 type Service interface {
 	List() ([]string, error)
@@ -356,16 +362,26 @@ func (s *FileService) LoadDraft(id string) (workflow.Workflow, error) {
 	return s.Load(id)
 }
 
-// SaveDraft writes the workflow to workflow.draft.yaml. Never touches
-// workflow.yaml — Publish is the only path that promotes a draft to
-// live. Carries forward the published ID + CreatedAt when draft is
-// blank on those fields.
+// isLocked reports whether `w._canvas.locked` is truthy.
+func isLocked(w workflow.Workflow) bool {
+	locked, _ := w.Canvas["locked"].(bool)
+	return locked
+}
+
+// SaveDraft writes the workflow body to the draft slot. Never touches
+// the published copy — Publish is the only path that promotes a draft.
+// Rejects writes when the persisted draft is locked AND the incoming
+// body is also locked — that catches every mutation except an
+// explicit unlock (writing `_canvas.locked = false`).
 func (s *FileService) SaveDraft(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
 	}
 	if !storage.PathExists(s.Layout.WorkflowDir(id)) {
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	if prev, err := s.LoadDraft(id); err == nil && isLocked(prev) && isLocked(w) {
+		return ErrLocked
 	}
 	w.ID = id
 	if w.CreatedAt.IsZero() {

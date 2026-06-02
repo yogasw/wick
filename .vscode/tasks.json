@@ -62,6 +62,15 @@
       "problemMatcher": []
     },
     {
+      "label": "lab: build",
+      "type": "shell",
+      "command": "go build -o bin/wick-lab ./cmd/lab",
+      "windows": {
+        "command": "go build -o bin/wick-lab.exe ./cmd/lab"
+      },
+      "problemMatcher": ["$go"]
+    },
+    {
       "label": "gate: build",
       "type": "shell",
       "command": "go build -o bin/wick-lab-gate ./cmd/gate",

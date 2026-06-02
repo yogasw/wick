@@ -13,7 +13,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -139,49 +138,22 @@ func (e *HTTPExecutor) Descriptor() engine.NodeDescriptor {
 	}
 }
 
-// renderHTTPField honors per-field ArgModes: when n.ArgModes[key] is
-// "fixed" the value is returned verbatim (no template render), otherwise
-// it falls through template.Render. Default = expression (backward compat
-// with workflows authored before the inspector grew the toggle).
-func renderHTTPField(n workflow.Node, key, raw string, rctx workflow.RenderCtx) (string, error) {
-	if mode, ok := n.ArgModes[key]; ok && mode == "fixed" {
-		return raw, nil
-	}
-	return template.Render(raw, rctx)
-}
-
-// Execute runs the request described by node n.
+// Execute runs the request described by node n. Fields are pre-rendered
+// by the engine before this call.
 func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflow.RunContext) (workflow.NodeOutput, error) {
-	rctx := rc.RenderCtx()
 	method := strings.ToUpper(n.Method)
 	if method == "" {
 		method = http.MethodGet
 	}
-	urlStr, err := renderHTTPField(n, "url", n.URL, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("url: %w", err)
-	}
+	urlStr := n.URL
 	if len(n.Query) > 0 {
 		u, err := url.Parse(urlStr)
 		if err != nil {
 			return workflow.NodeOutput{}, fmt.Errorf("url parse: %w", err)
 		}
 		q := u.Query()
-		// Per-field mode applies to the whole `query` map — fixed
-		// means every value is taken verbatim, expression renders
-		// each through template.Render. Mixed modes per inner key
-		// are not exposed yet (the textarea is one widget).
-		fixedQuery := n.ArgModes["query"] == "fixed"
 		for k, v := range n.Query {
-			rv := v
-			if !fixedQuery {
-				rendered, rerr := template.Render(v, rctx)
-				if rerr != nil {
-					return workflow.NodeOutput{}, fmt.Errorf("query %q: %w", k, rerr)
-				}
-				rv = rendered
-			}
-			q.Set(k, rv)
+			q.Set(k, v)
 		}
 		u.RawQuery = q.Encode()
 		urlStr = u.String()
@@ -189,11 +161,7 @@ func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflo
 
 	body := io.Reader(nil)
 	if n.Body != "" {
-		rb, err := renderHTTPField(n, "body", n.Body, rctx)
-		if err != nil {
-			return workflow.NodeOutput{}, fmt.Errorf("body: %w", err)
-		}
-		body = strings.NewReader(rb)
+		body = strings.NewReader(n.Body)
 	}
 
 	timeout := time.Duration(n.TimeoutSec) * time.Second
@@ -221,17 +189,8 @@ func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflo
 		if err != nil {
 			return workflow.NodeOutput{}, fmt.Errorf("http build: %w", err)
 		}
-		fixedHeaders := n.ArgModes["headers"] == "fixed"
 		for k, v := range n.Headers {
-			rv := v
-			if !fixedHeaders {
-				rendered, rerr := template.Render(v, rctx)
-				if rerr != nil {
-					return workflow.NodeOutput{}, fmt.Errorf("header %q: %w", k, rerr)
-				}
-				rv = rendered
-			}
-			req.Header.Set(k, rv)
+			req.Header.Set(k, v)
 		}
 		resp, lastErr = e.client.Do(req)
 		if lastErr == nil && resp.StatusCode < 500 {

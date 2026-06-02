@@ -10,7 +10,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -110,11 +109,7 @@ func (e *ClassifyExecutor) Execute(ctx context.Context, n workflow.Node, rc *wor
 	if err != nil {
 		return workflow.NodeOutput{}, err
 	}
-	rctx := rc.RenderCtx()
-	prompt, err := template.Render(n.Prompt, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, err
-	}
+	prompt := n.Prompt
 	systemPrompt := classifySystemPrompt(n.OutputCases, false)
 	maxRetry := n.RetryOnMismatch
 

@@ -426,7 +426,67 @@ func validateMatchSpec(r *Result, path string, spec map[string]any) {
 	}
 }
 
+// validateArgModes warns when arg_modes[key] is "fixed" but the
+// corresponding field value contains a Go template `{{...}}` — the
+// engine will pass that string through literally, which is almost
+// always a mistake (user expected the template to render). The
+// inverse (mode=expression on a string without `{{`) is silent because
+// it's harmless.
+func validateArgModes(r *Result, path string, n workflow.Node) {
+	if len(n.ArgModes) == 0 {
+		return
+	}
+	hasTemplate := func(v any) bool {
+		s, ok := v.(string)
+		return ok && strings.Contains(s, "{{")
+	}
+	for key, mode := range n.ArgModes {
+		if mode != "fixed" {
+			continue
+		}
+		switch key {
+		case "prompt":
+			if strings.Contains(n.Prompt, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: fmt.Sprintf("mode=fixed but %q contains {{...}} — template will NOT render, set mode=expression if you want it evaluated", key),
+				})
+			}
+		case "url":
+			if strings.Contains(n.URL, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but url contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		case "body":
+			if strings.Contains(n.Body, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but body contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		case "expression":
+			if strings.Contains(n.Expression, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but expression contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		default:
+			// Inside the args map (channel + connector nodes).
+			if v, ok := n.Args[key]; ok && hasTemplate(v) {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: fmt.Sprintf("mode=fixed but args.%s contains {{...}} — template will NOT render, set mode=expression", key),
+				})
+			}
+		}
+	}
+}
+
 func validateNodeBody(r *Result, path string, n workflow.Node) {
+	validateArgModes(r, path, n)
 	switch n.Type {
 	case "":
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: "is required"})

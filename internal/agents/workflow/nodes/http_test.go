@@ -47,13 +47,14 @@ func TestHTTP_DefaultRendersTemplate(t *testing.T) {
 	ts := captureServer(t, &req, &body)
 	defer ts.Close()
 
+	// Values are pre-rendered by the engine; executor uses them directly.
 	exec := NewHTTPExecutor()
 	n := workflow.Node{
 		Type:   workflow.NodeHTTP,
 		URL:    ts.URL + `/echo`,
 		Method: "POST",
-		Query:  map[string]string{"msg": "{{.Event.Payload.text}}"},
-		Body:   `{"t":"{{.Event.Payload.text}}"}`,
+		Query:  map[string]string{"msg": "hello world"},
+		Body:   `{"t":"hello world"}`,
 	}
 
 	_, err := exec.Execute(context.Background(), n, newHTTPRC())

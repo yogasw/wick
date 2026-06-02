@@ -16,7 +16,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
 
 // yaegi reads YAEGI_SPECIAL_STDIO at interp.New() time to decide
@@ -91,10 +90,7 @@ func (e *GoScriptExecutor) Execute(ctx context.Context, n workflow.Node, rc *wor
 	}
 
 	rctx := rc.RenderCtx()
-	src, err := template.Render(n.Code, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("render code: %w", err)
-	}
+	src := n.Code
 
 	ctxJSON, err := marshalRenderCtx(rctx)
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 )
 
 // SessionInitExecutor implements the `session_init` node. It writes the
@@ -80,14 +79,7 @@ func (e *SessionInitExecutor) Execute(ctx context.Context, n workflow.Node, rc *
 // (template) wins over Preset when both are set.
 func resolveSessionInitID(n workflow.Node, rc *workflow.RunContext) (string, error) {
 	if n.SessionID != "" {
-		rendered, err := template.Render(n.SessionID, rc.RenderCtx())
-		if err != nil {
-			return "", fmt.Errorf("render session_id: %w", err)
-		}
-		if rendered == "" {
-			return "", fmt.Errorf("session_id template rendered to empty string")
-		}
-		return rendered, nil
+		return n.SessionID, nil
 	}
 	preset := n.Preset
 	if preset == "" {

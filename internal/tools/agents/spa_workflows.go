@@ -10,6 +10,7 @@ import (
 	"time"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/pkg/tool"
@@ -557,8 +558,13 @@ func spaExecNode(c *tool.Ctx) {
 		RunID:       "step-" + time.Now().UTC().Format("20060102T150405.000000000"),
 		NodeOutputs: nodeOutputs,
 	}
+	node, prerr := wfengine.PreRenderNode(body.Node, rc.RenderCtx())
+	if prerr != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "pre-render: " + prerr.Error()})
+		return
+	}
 	startedAt := time.Now()
-	out, runErr := exec.Execute(c.Context(), body.Node, rc)
+	out, runErr := exec.Execute(c.Context(), node, rc)
 	resp := map[string]any{
 		"ok":         runErr == nil,
 		"latency_ms": time.Since(startedAt).Milliseconds(),

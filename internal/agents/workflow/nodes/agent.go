@@ -12,7 +12,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -156,13 +155,6 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 		return workflow.NodeOutput{}, err
 	}
 	prompt := n.Prompt
-	if n.ArgModes["prompt"] != "fixed" {
-		rendered, err := template.Render(n.Prompt, rc.RenderCtx())
-		if err != nil {
-			return workflow.NodeOutput{}, err
-		}
-		prompt = rendered
-	}
 	if err := validateSkills(ctx, prov, n.Skills); err != nil {
 		return workflow.NodeOutput{}, err
 	}

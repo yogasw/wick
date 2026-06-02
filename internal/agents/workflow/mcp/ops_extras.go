@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/guard"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -184,8 +185,12 @@ func (m *Ops) ExecNode(ctx context.Context, id string, body ExecNodeInput) (map[
 		NodeOutputs: nodeOutputs,
 	}
 
+	node, prerr := wfengine.PreRenderNode(body.Node, rc.RenderCtx())
+	if prerr != nil {
+		return nil, fmt.Errorf("pre-render: %w", prerr)
+	}
 	started := time.Now()
-	out, runErr := exec.Execute(ctx, body.Node, rc)
+	out, runErr := exec.Execute(ctx, node, rc)
 	resp := map[string]any{
 		"ok":         runErr == nil,
 		"latency_ms": time.Since(started).Milliseconds(),

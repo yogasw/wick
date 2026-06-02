@@ -222,7 +222,9 @@ func (s *DBService) HasDraft(id string) bool {
 }
 
 // SaveDraft persists the canvas state. Appends a new draft snapshot to
-// workflow_versions; retention is enforced by Repo.SaveDraft.
+// workflow_versions; retention is enforced by Repo.SaveDraft. Rejects
+// writes when the persisted draft is locked unless the incoming body
+// also flips `_canvas.locked = false` (explicit unlock).
 func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
 	if err := parse.ValidateID(id); err != nil {
 		return err
@@ -232,6 +234,9 @@ func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
 			return fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 		return err
+	}
+	if prev, err := s.repo.LoadDraft(id); err == nil && isLocked(prev) && isLocked(w) {
+		return ErrLocked
 	}
 	w.ID = id
 	if w.CreatedAt.IsZero() {
