@@ -24,6 +24,9 @@ type dbQuerySchema struct {
 
 func (e *DBQueryExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAction,
+		Label:       "DB Query",
+		Badge:       "SQL query",
 		Description: "Run a parameterized SQL query against a configured DSN.",
 		WhenToUse:   "Reading from an external user database.",
 		Schema:      integration.StructSchema(dbQuerySchema{}),

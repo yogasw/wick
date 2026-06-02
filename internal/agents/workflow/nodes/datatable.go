@@ -47,56 +47,63 @@ type datatableCountSchema struct {
 // Used by setup/manager.go RegisterWithDesc since one executor handles
 // all 7 datatable types.
 func DataTableDescriptor(t workflow.NodeType) engine.NodeDescriptor {
+	// Category is the same for every datatable_* node — the palette
+	// groups them under a DATA → Data Tables drill, so we set Category
+	// once at the bottom and only the per-op label/badge/description
+	// vary in the switch.
+	d := engine.NodeDescriptor{Category: engine.CategoryData}
 	switch t {
 	case workflow.NodeDataTableGet:
-		return engine.NodeDescriptor{
-			Description: "Load one row by primary key. Branches on found/not_found.",
-			WhenToUse:   "Lookup a state row before deciding next action.",
-			Schema:      integration.StructSchema(datatableGetSchema{}),
-			Output:      map[string]string{"row": "map[string]any — loaded row (nil if not_found branch taken)"},
-		}
+		d.Label = "Get"
+		d.Badge = "load row"
+		d.Description = "Load one row by primary key. Branches on found/not_found."
+		d.WhenToUse = "Lookup a state row before deciding next action."
+		d.Schema = integration.StructSchema(datatableGetSchema{})
+		d.Output = map[string]string{"row": "map[string]any — loaded row (nil if not_found branch taken)"}
 	case workflow.NodeDataTableExists:
-		return engine.NodeDescriptor{
-			Description: "Check whether any row matches. Branches on true/false.",
-			WhenToUse:   "Dedup webhook events or guard against duplicate work.",
-			Schema:      integration.StructSchema(datatableWhereSchema{}),
-		}
+		d.Label = "Exists"
+		d.Badge = "true / false"
+		d.Description = "Check whether any row matches. Branches on true/false."
+		d.WhenToUse = "Dedup webhook events or guard against duplicate work."
+		d.Schema = integration.StructSchema(datatableWhereSchema{})
 	case workflow.NodeDataTableQuery:
-		return engine.NodeDescriptor{
-			Description: "Multi-row search with where/order_by/limit.",
-			WhenToUse:   "List or paginate stored rows.",
-			Schema:      integration.StructSchema(datatableQuerySchema{}),
-			Output:      map[string]string{"rows": "[]map[string]any — matched rows", "count": "int"},
-		}
+		d.Label = "Query"
+		d.Badge = "search rows"
+		d.Description = "Multi-row search with where/order_by/limit."
+		d.WhenToUse = "List or paginate stored rows."
+		d.Schema = integration.StructSchema(datatableQuerySchema{})
+		d.Output = map[string]string{"rows": "[]map[string]any — matched rows", "count": "int"}
 	case workflow.NodeDataTableCount:
-		return engine.NodeDescriptor{
-			Description: "Count rows matching where without loading them.",
-			WhenToUse:   "Cheap statistic for decisions.",
-			Schema:      integration.StructSchema(datatableCountSchema{}),
-			Output:      map[string]string{"count": "int — matching row count"},
-		}
+		d.Label = "Count"
+		d.Badge = "row count"
+		d.Description = "Count rows matching where without loading them."
+		d.WhenToUse = "Cheap statistic for decisions."
+		d.Schema = integration.StructSchema(datatableCountSchema{})
+		d.Output = map[string]string{"count": "int — matching row count"}
 	case workflow.NodeDataTableInsert:
-		return engine.NodeDescriptor{
-			Description: "Insert a new row; fails on PK conflict.",
-			WhenToUse:   "Idempotency-by-PK guard plus persistence.",
-			Schema:      integration.StructSchema(datatableUpsertSchema{}),
-			Output:      map[string]string{"key": "string — inserted primary key"},
-		}
+		d.Label = "Insert"
+		d.Badge = "new row"
+		d.Description = "Insert a new row; fails on PK conflict."
+		d.WhenToUse = "Idempotency-by-PK guard plus persistence."
+		d.Schema = integration.StructSchema(datatableUpsertSchema{})
+		d.Output = map[string]string{"key": "string — inserted primary key"}
 	case workflow.NodeDataTableUpsert:
-		return engine.NodeDescriptor{
-			Description: "Insert or update by primary key. Returns action: insert|update.",
-			WhenToUse:   "Idempotent record sync.",
-			Schema:      integration.StructSchema(datatableUpsertSchema{}),
-			Output:      map[string]string{"action": "string — insert|update"},
-		}
+		d.Label = "Upsert"
+		d.Badge = "insert / update"
+		d.Description = "Insert or update by primary key. Returns action: insert|update."
+		d.WhenToUse = "Idempotent record sync."
+		d.Schema = integration.StructSchema(datatableUpsertSchema{})
+		d.Output = map[string]string{"action": "string — insert|update"}
 	case workflow.NodeDataTableDelete:
-		return engine.NodeDescriptor{
-			Description: "Delete rows matching where.",
-			WhenToUse:   "Cleanup expired state.",
-			Schema:      integration.StructSchema(datatableWhereSchema{}),
-		}
+		d.Label = "Delete"
+		d.Badge = "remove rows"
+		d.Description = "Delete rows matching where."
+		d.WhenToUse = "Cleanup expired state."
+		d.Schema = integration.StructSchema(datatableWhereSchema{})
+	default:
+		return engine.NodeDescriptor{}
 	}
-	return engine.NodeDescriptor{}
+	return d
 }
 
 // DataTableExecutor handles all 7 datatable_* node types.

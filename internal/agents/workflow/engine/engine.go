@@ -41,6 +41,21 @@ import (
 // by the MCP `workflow_node_detail` op. Zero-value Docs = current
 // behaviour; populate per executor when worth it. See
 // internal/agents/workflow/docs and internal/docs/workflow/24-describe-contract.md.
+// PaletteCategory is the typed bucket label each descriptor declares.
+// Defined as a named string type (not a bare string field) so callers
+// can't typo "LOIGIC" — the compiler catches it at the descriptor site.
+// Adding a new category means adding a constant below; the palette
+// builder treats anything outside the known set as an extension bucket
+// rendered after the canonical ones.
+type PaletteCategory string
+
+const (
+	CategoryAI     PaletteCategory = "AI"
+	CategoryAction PaletteCategory = "ACTION"
+	CategoryLogic  PaletteCategory = "LOGIC"
+	CategoryData   PaletteCategory = "DATA"
+)
+
 type NodeDescriptor struct {
 	Type        workflow.NodeType
 	Description string
@@ -48,6 +63,13 @@ type NodeDescriptor struct {
 	Example     string
 	Schema      map[string]any    // reflected from per-node schema struct
 	Output      map[string]string // field → description
+	// Palette metadata — drives the editor "Add node" picker. Zero
+	// values fall back to sane defaults so executors that don't care
+	// still show up: Category defaults to CategoryAction, Label to a
+	// prettified version of Type, Badge to "" (no chip).
+	Category PaletteCategory // typed — see CategoryAI/Action/Logic/Data
+	Label    string          // display label ("HTTP / REST")
+	Badge    string          // short right-aligned hint ("GET / POST")
 	wickdocs.Docs
 }
 

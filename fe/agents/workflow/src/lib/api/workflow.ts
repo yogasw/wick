@@ -135,6 +135,34 @@ export type CatalogResponse = {
   providers: { name: string; is_default: boolean }[];
 };
 
+// Mirror of internal/tools/agents/spa_palette.go. The backend is the
+// single source of truth for category + label + badge + drill structure;
+// the FE just iterates and renders.
+export type PaletteDrag =
+  | { type: "node"; node_type: string; channel?: string; module?: string; op?: string }
+  | { type: "trigger"; trigger_type: string }
+  | { type: "channel-trigger"; channel: string; event: string };
+
+export type PaletteItem = {
+  kind: "drag" | "drill";
+  label: string;
+  badge?: string;
+  description?: string;
+  drag?: PaletteDrag;
+  drill_key?: string;
+};
+
+export type PaletteCategory = {
+  key: string;
+  title: string;
+  items: PaletteItem[];
+};
+
+export type PaletteResponse = {
+  categories: PaletteCategory[];
+  drills: Record<string, PaletteItem[]>;
+};
+
 // Mirror of wftest.Case / Input / Assertion (internal/agents/workflow/wftest).
 // Subjects use dotted paths like "nodes.<id>.output.<field>" or "trace.<idx>.status".
 // Operators: equals, not_equals, contains, not_contains, exists, not_exists,
@@ -280,6 +308,12 @@ export const workflowAPI = {
   // a superset.
   catalog: (): Promise<CatalogResponse> =>
     apiGet(`${BASE}/workflows/api/registry`),
+
+  // Editor "Add node" picker tree. Backend owns category + label +
+  // badge + drill structure so registering a new node executor /
+  // channel / connector lights up the picker with zero FE edits.
+  palette: (): Promise<PaletteResponse> =>
+    apiGet(`${BASE}/api/workflows/palette`),
 
   // Picker resolver — backs `wick:"picker=slack.channels"` fields in
   // event match schemas / config forms. Module is the channel name

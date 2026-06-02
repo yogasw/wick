@@ -74,6 +74,9 @@ func (e *AgentExecutor) Dependencies(n workflow.Node) []engine.NodeDependency {
 
 func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAI,
+		Label:       "Agent",
+		Badge:       "AI agent",
 		Description: "Spawn an AI agent with a prompt file and optional skills.",
 		WhenToUse:   "Multi-turn reasoning, summarization, or skill-driven action.",
 		Example:     "- id: summarize\n  type: agent\n  provider: claude\n  prompt_file: nodes/summarize.md",

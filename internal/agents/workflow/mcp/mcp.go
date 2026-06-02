@@ -460,6 +460,12 @@ type NodeTypeInfo struct {
 	Schema      map[string]any `json:"schema"`
 	Example     string         `json:"example,omitempty"`
 	WhenToUse   string         `json:"when_to_use"`
+	// Palette metadata mirrored from engine.NodeDescriptor so the
+	// editor's Add Node picker can render category/label/badge
+	// straight from this row instead of carrying a parallel map.
+	Category string `json:"category,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Badge    string `json:"badge,omitempty"`
 }
 
 // TriggerTypeInfo is one row of the trigger-type catalog.
@@ -492,6 +498,9 @@ func NodeTypesCatalog(eng *engine.Engine) []NodeTypeInfo {
 			WhenToUse:   desc.WhenToUse,
 			Example:     desc.Example,
 			Schema:      schema,
+			Category:    string(desc.Category),
+			Label:       desc.Label,
+			Badge:       desc.Badge,
 		})
 	}
 	return out

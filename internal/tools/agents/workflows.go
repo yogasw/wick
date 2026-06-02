@@ -828,6 +828,33 @@ func runResponse(c *tool.Ctx, status int, runID, errMsg string) {
 	c.Redirect(c.Base()+"/workflows/edit/"+c.PathValue("id"), http.StatusSeeOther)
 }
 
+// triggerLabel turns a TriggerType slug ("schedule_at") into a
+// human-readable palette label ("Schedule At"). Pure helper — no
+// hardcoded per-type map so adding a new trigger type to
+// DefaultTriggerDescriptors() doesn't need a label entry here.
+func triggerLabel(t string) string {
+	if t == "" {
+		return ""
+	}
+	out := make([]rune, 0, len(t))
+	upperNext := true
+	for _, r := range t {
+		if r == '_' {
+			out = append(out, ' ')
+			upperNext = true
+			continue
+		}
+		if upperNext {
+			if r >= 'a' && r <= 'z' {
+				r = r - 'a' + 'A'
+			}
+			upperNext = false
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
+
 // workflowRegistryAPI returns JSON catalog the editor uses to hydrate
 // pickers (channels, channel ops, connectors, providers). No free
 // text — every dropdown sources from this endpoint.
@@ -926,13 +953,22 @@ func workflowRegistryAPI(c *tool.Ctx) {
 	// node_types pulls from engine.Descriptors via MCP.NodeTypes —
 	// adding a node executor server-side surfaces here automatically.
 	nodeTypes := globalWorkflowMgr.MCP.NodeTypes()
-	triggerTypes := []map[string]any{
-		{"type": "cron", "label": "Cron schedule", "description": "Fire on a cron expression"},
-		{"type": "webhook", "label": "Webhook", "description": "HTTP POST trigger"},
-		{"type": "manual", "label": "Manual", "description": "Fired from the editor"},
-		{"type": "schedule_at", "label": "Schedule at", "description": "Fire once at a specific time"},
-		{"type": "channel", "label": "Channel", "description": "Inbound channel event (Slack, Telegram, …)"},
-		{"type": "error", "label": "Error", "description": "Fire when another workflow fails"},
+	// trigger_types pulls from engine.Triggers so registering a new
+	// descriptor in DefaultTriggerDescriptors() (or a channel-
+	// specific override) lights up the palette without touching this
+	// handler. Labels are derived from the type literal via
+	// triggerLabel — TriggerType is a slug like "schedule_at".
+	triggerTypes := []map[string]any{}
+	if globalWorkflowMgr.Engine != nil && globalWorkflowMgr.Engine.Triggers != nil {
+		for _, d := range globalWorkflowMgr.Engine.Triggers.List() {
+			triggerTypes = append(triggerTypes, map[string]any{
+				"type":        string(d.Type),
+				"label":       triggerLabel(string(d.Type)),
+				"description": d.Description,
+				"schema":      d.Schema,
+				"example":     d.Example,
+			})
+		}
 	}
 	c.JSON(http.StatusOK, map[string]any{
 		"channels":      channels,

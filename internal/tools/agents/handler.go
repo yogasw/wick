@@ -149,6 +149,7 @@ func Register(r tool.Router) {
 	registerSPAWorkflows(r)
 	registerSPAWorkflowHistory(r)
 	registerSPAPanels(r)
+	registerSPAPalette(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)

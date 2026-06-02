@@ -69,6 +69,9 @@ func (e *HTTPExecutor) TemplateableFields(n workflow.Node) map[string]string {
 // Descriptor exposes the schema + docs for the MCP catalog.
 func (e *HTTPExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAction,
+		Label:       "HTTP / REST",
+		Badge:       "GET / POST",
 		Description: "Make an HTTP request. URL/headers/query/body rendered as Go templates.",
 		WhenToUse:   "Direct external API calls without a connector module.",
 		Example:     "- id: call_api\n  type: http\n  method: POST\n  url: https://api.example.com/tickets\n  headers:\n    Content-Type: application/json\n  body: |\n    {\"title\": \"{{jsonEscape (index .Event.Payload \\\"text\\\")}}\"}",

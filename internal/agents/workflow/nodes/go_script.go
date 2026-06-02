@@ -69,6 +69,9 @@ func NewGoScriptExecutor() *GoScriptExecutor { return &GoScriptExecutor{} }
 // Descriptor exposes schema + docs for the MCP catalog.
 func (e *GoScriptExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAction,
+		Label:       "Go Script",
+		Badge:       "Go script",
 		Description: "Run a Go program (yaegi interpreter). Stdin = run context JSON, stdout = result JSON.",
 		WhenToUse:   "Logic that needs real Go code — string manipulation, math, JSON shaping, custom predicates. Use http/transform for I/O; this node is pure compute.",
 		Example:     "- id: shape_payload\n  type: go_script\n  code: |\n    package main\n    import (\"encoding/json\"; \"os\")\n    func main() {\n      var ctx map[string]any\n      json.NewDecoder(os.Stdin).Decode(&ctx)\n      ev := ctx[\"Event\"].(map[string]any)[\"Payload\"].(map[string]any)\n      json.NewEncoder(os.Stdout).Encode(map[string]any{\"upper\": ev[\"text\"]})\n    }\n",
