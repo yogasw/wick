@@ -1,9 +1,13 @@
 package agents
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	wftest "github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -16,6 +20,10 @@ func registerSPAPanels(r tool.Router) {
 	r.GET("/api/workflows/validate/{id}", spaWorkflowValidate)
 	r.GET("/api/workflows/guard/{id}", spaWorkflowGuard)
 	r.GET("/api/workflows/tests/{id}", spaWorkflowTestsList)
+	r.GET("/api/workflows/tests/{id}/{name}", spaWorkflowTestGet)
+	r.POST("/api/workflows/tests/{id}", spaWorkflowTestSave)
+	r.POST("/api/workflows/tests/{id}/{name}/run", spaWorkflowTestRun)
+	r.POST("/api/workflows/tests/{id}/{name}/delete", spaWorkflowTestDelete)
 }
 
 // spaWorkflowValidate runs the static validator against the draft.
@@ -86,4 +94,124 @@ func spaWorkflowTestsList(c *tool.Ctx) {
 		})
 	}
 	c.JSON(http.StatusOK, map[string]any{"cases": out})
+}
+
+// spaWorkflowTestGet returns one case fixture (input + assertions)
+// so the editor can pre-fill the modal.
+func spaWorkflowTestGet(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	name := c.PathValue("name")
+	path := "__tests__/" + name + ".json"
+	data, err := globalWorkflowMgr.MCP.ReadFile(id, path)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]any{"error": "test case not found"})
+		return
+	}
+	var tc wftest.Case
+	if err := json.Unmarshal(data, &tc); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid test case JSON"})
+		return
+	}
+	if tc.Name == "" {
+		tc.Name = name
+	}
+	c.JSON(http.StatusOK, tc)
+}
+
+// spaWorkflowTestSave creates or replaces a case fixture. Name is
+// validated slug-safe (matches v1 saveTestCase).
+func spaWorkflowTestSave(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		Name       string             `json:"name"`
+		Input      wftest.Input       `json:"input"`
+		Assertions []wftest.Assertion `json:"assertions"`
+	}
+	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "name is required"})
+		return
+	}
+	for _, ch := range body.Name {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+			c.JSON(http.StatusBadRequest, map[string]any{"error": "name must be slug-safe (a-z, 0-9, dash, underscore)"})
+			return
+		}
+	}
+	tc := wftest.Case{
+		Name:       body.Name,
+		Input:      body.Input,
+		Assertions: body.Assertions,
+	}
+	data, err := json.MarshalIndent(tc, "", "  ")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	path := "__tests__/" + body.Name + ".json"
+	if err := globalWorkflowMgr.MCP.WriteFile(id, path, data); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "name": body.Name})
+}
+
+// spaWorkflowTestRun executes a single case and returns the JSON
+// Result so the FE can render pass/fail + failures inline.
+func spaWorkflowTestRun(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	name := c.PathValue("name")
+	path := "__tests__/" + name + ".json"
+	data, err := globalWorkflowMgr.MCP.ReadFile(id, path)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]any{"error": "test case not found"})
+		return
+	}
+	var tc wftest.Case
+	if err := json.Unmarshal(data, &tc); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid test case JSON"})
+		return
+	}
+	w, err := globalWorkflowMgr.Service.Load(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	runner := wftest.New(globalWorkflowMgr.Engine, globalWorkflowMgr.Service, globalWorkflowMgr.Layout)
+	result := runner.RunOne(context.Background(), w, tc)
+	c.JSON(http.StatusOK, map[string]any{
+		"name":        result.Name,
+		"pass":        result.Pass,
+		"failures":    result.Failures,
+		"node_output": result.NodeOutput,
+		"duration_ms": result.Duration.Milliseconds(),
+	})
+}
+
+// spaWorkflowTestDelete removes a case fixture.
+func spaWorkflowTestDelete(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	name := c.PathValue("name")
+	path := "__tests__/" + name + ".json"
+	if err := globalWorkflowMgr.MCP.DeleteFile(id, path); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }

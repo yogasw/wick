@@ -135,6 +135,36 @@ export type CatalogResponse = {
   providers: { name: string; is_default: boolean }[];
 };
 
+// Mirror of wftest.Case / Input / Assertion (internal/agents/workflow/wftest).
+// Subjects use dotted paths like "nodes.<id>.output.<field>" or "trace.<idx>.status".
+// Operators: equals, not_equals, contains, not_contains, exists, not_exists,
+//            gt, gte, lt, lte, matches.
+export type TestAssertion = {
+  subject: string;
+  operator: string;
+  value?: unknown;
+};
+
+export type TestCaseInput = {
+  Event?: Record<string, unknown>;
+  Node?: Record<string, unknown>;
+};
+
+export type TestCase = {
+  name: string;
+  input: TestCaseInput;
+  expected_output?: Record<string, unknown>;
+  assertions: TestAssertion[];
+};
+
+export type TestRunResult = {
+  name: string;
+  pass: boolean;
+  failures: string[];
+  node_output: Record<string, unknown>;
+  duration_ms: number;
+};
+
 export type RunSummary = {
   // Backend field is `id`; legacy callers (and the Executions panel)
   // still reference `run_id`. Keep both readable — the API stub
@@ -209,6 +239,40 @@ export const workflowAPI = {
 
   tests: (id: string): Promise<{ cases: { name: string; assertions: number }[] }> =>
     apiGet(`${BASE}/api/workflows/tests/${encodeURIComponent(id)}`),
+
+  // Case CRUD + run — JSON variants of the legacy templ endpoints.
+  // `Input.Event` matches Go workflow.Event verbatim ({ Provider, ChannelID, … }).
+  testGet: (
+    id: string,
+    name: string,
+  ): Promise<TestCase> =>
+    apiGet(
+      `${BASE}/api/workflows/tests/${encodeURIComponent(id)}/${encodeURIComponent(name)}`,
+    ),
+
+  testSave: (
+    id: string,
+    body: TestCase,
+  ): Promise<{ ok: boolean; name: string }> =>
+    apiPost(`${BASE}/api/workflows/tests/${encodeURIComponent(id)}`, body),
+
+  testRun: (
+    id: string,
+    name: string,
+  ): Promise<TestRunResult> =>
+    apiPost(
+      `${BASE}/api/workflows/tests/${encodeURIComponent(id)}/${encodeURIComponent(name)}/run`,
+      {},
+    ),
+
+  testDelete: (
+    id: string,
+    name: string,
+  ): Promise<{ ok: boolean }> =>
+    apiPost(
+      `${BASE}/api/workflows/tests/${encodeURIComponent(id)}/${encodeURIComponent(name)}/delete`,
+      {},
+    ),
 
   // Editor palette catalog — extends the legacy registry endpoint
   // with node_types + trigger_types so the FE no longer hard-codes

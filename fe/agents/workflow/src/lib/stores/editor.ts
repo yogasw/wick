@@ -118,6 +118,14 @@ export const dirty = derived(
   },
 );
 
+// Activation gate — the runtime only schedules the *published* copy, so
+// flipping `enabled` true on a workflow with no published nodes is a
+// no-op that confuses operators. We treat the published copy as "real"
+// once it has at least one node beyond the empty bootstrap shell.
+export const canActivate = derived(publishedWorkflow, ($p) => {
+  return !!($p?.graph?.nodes && $p.graph.nodes.length > 0);
+});
+
 export const selectedNode = derived(
   [draftWorkflow, selectedNodeID],
   ([$wf, $id]) => {

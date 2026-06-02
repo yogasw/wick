@@ -9,6 +9,7 @@
     validationErrorCount,
     validationWarningCount,
     workflowState,
+    canActivate,
   } from "$lib/stores/editor";
 
   // Tick a local timestamp once per second so "Saved Xs ago" updates
@@ -252,8 +253,9 @@
        + label — matches n8n's "Active / Inactive" button + a leading
        status dot so the state reads at a glance. -->
   {#if $draftWorkflow}
+    {@const blocked = !$draftWorkflow.enabled && !$canActivate}
     <button
-      class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors"
+      class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
       class:bg-emerald-500={$draftWorkflow.enabled}
       class:border-emerald-500={$draftWorkflow.enabled}
       class:text-white={$draftWorkflow.enabled}
@@ -264,10 +266,15 @@
       class:dark:border-slate-600={!$draftWorkflow.enabled}
       class:text-slate-600={!$draftWorkflow.enabled}
       class:dark:text-slate-300={!$draftWorkflow.enabled}
-      class:hover:bg-slate-200={!$draftWorkflow.enabled}
-      class:dark:hover:bg-slate-700={!$draftWorkflow.enabled}
+      class:hover:bg-slate-200={!$draftWorkflow.enabled && !blocked}
+      class:dark:hover:bg-slate-700={!$draftWorkflow.enabled && !blocked}
       onclick={onToggle}
-      title={$draftWorkflow.enabled ? "Click to deactivate" : "Click to activate"}
+      disabled={blocked}
+      title={blocked
+        ? "Publish a version before activating — the runtime only schedules the published copy"
+        : $draftWorkflow.enabled
+          ? "Click to deactivate"
+          : "Click to activate"}
     >
       <span class="h-1.5 w-1.5 rounded-full"
             class:bg-white={$draftWorkflow.enabled}
