@@ -56,6 +56,7 @@
   import { componentFor } from "./nodes";
   import TriggerNode from "./nodes/TriggerNode.svelte";
   import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
+  import SearchOverlay from "./SearchOverlay.svelte";
   import type { NodeType, Edge } from "$lib/types/workflow";
 
   let canvasEl: HTMLDivElement | undefined = $state();
@@ -1393,6 +1394,12 @@
   <div class="absolute bottom-4 right-4 text-[10px] text-slate-400 tabular-nums select-none">
     {Math.round(zoom * 100)}%
   </div>
+
+  <!-- Workflow search overlay — mounted here so its inset-0 absolute
+       positioning anchors to the canvas area, not the viewport. That
+       keeps the palette visually centred on the editing surface (not
+       drifting under the global sidebar). -->
+  <SearchOverlay />
 
   <!-- Cursor-anchored "locked" hint. position:fixed so it tracks the
        client coords directly without the canvas pan transform mucking

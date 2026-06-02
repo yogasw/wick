@@ -6,7 +6,6 @@
   import TriggerDetailModal from "./TriggerDetailModal.svelte";
   import BottomTabs from "./BottomTabs.svelte";
   import ExecutionsPanel from "./ExecutionsPanel.svelte";
-  import SearchOverlay from "./SearchOverlay.svelte";
   import ToastHost from "$lib/components/shared/ToastHost.svelte";
   import { writable } from "svelte/store";
 
@@ -186,5 +185,4 @@
   {/if}
 </div>
 
-<SearchOverlay />
 <ToastHost />

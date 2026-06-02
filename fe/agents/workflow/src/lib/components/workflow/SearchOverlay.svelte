@@ -202,13 +202,20 @@
 </script>
 
 {#if $searchOpen}
+  <!-- absolute inset-0 (not fixed) so this overlay anchors to the
+       Canvas component it's mounted under — the palette ends up
+       centred on the canvas surface itself, not drifting over the
+       wick sidebar or the right panel chrome. Fixed-size 480px tall
+       so the box doesn't snap shorter when the result list empties
+       (user noticed the size jumping between empty and matched). -->
   <div
-    class="fixed inset-0 z-[70] bg-slate-900/40 flex items-center justify-center p-4"
+    class="absolute inset-0 z-[70] bg-slate-900/40 flex items-center justify-center p-4"
     onclick={close}
     role="presentation"
   >
     <div
-      class="w-[560px] max-w-[92vw] max-h-[80vh] rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col overflow-hidden"
+      class="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col overflow-hidden"
+      style="width: min(560px, 92%); height: min(480px, 92%);"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-label="Search workflow"
