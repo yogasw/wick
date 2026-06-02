@@ -549,6 +549,10 @@ func NewServer() *Server {
 	// Must run before Start so executors register against the Pg
 	// service, not MockService.
 	wfMgr.WithDataTablesDB(db)
+	// Swap the file-based workflow service for the DB-primary one. After
+	// this call, workflow body + draft + history + tests live in SQL;
+	// only state.json + env.json + runs/<id>/ stay on disk.
+	wfMgr.WithDB(db)
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}

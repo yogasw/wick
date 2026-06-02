@@ -84,15 +84,10 @@ func WorkflowEventHook(b *Broadcaster) func(id, runID string, ev wf.RunEvent) {
 var globalWorkflowMgr *setup.Manager
 
 // SetWorkflowManager wires in the workflow Manager constructed by
-// server.go. Also kicks the DB importer when both halves are ready.
+// server.go. After the JSON migration, workflow body is DB-primary —
+// no file→DB importer runs here.
 func SetWorkflowManager(m *setup.Manager) {
 	globalWorkflowMgr = m
-	if globalDB != nil && m != nil {
-		repo := workflowRepoFor(globalDB)
-		if _, err := repo.ImportFromFiles(m.Service); err != nil {
-			log.Warn().Err(err).Msg("workflow importer (file → DB) failed; file-store stays primary")
-		}
-	}
 }
 
 func notReadyWorkflow(c *tool.Ctx) bool {

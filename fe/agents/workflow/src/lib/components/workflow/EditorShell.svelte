@@ -179,7 +179,7 @@
     </div>
     <NodeDetailModal />
     <TriggerDetailModal />
-    <BottomTabs versions={versions} onRestoreVersion={onRestoreVersion} />
+    <BottomTabs workflowID={workflowID} versions={versions} onRestoreVersion={onRestoreVersion} />
   {:else}
     <ExecutionsPanel workflowID={workflowID} onReplay={onReplay} />
   {/if}

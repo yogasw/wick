@@ -26,7 +26,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
-	wfrepo "github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
@@ -102,21 +101,14 @@ func SetConfigs(c *configs.Service) { globalConfigs = c }
 
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
+//
+// Workflow data is DB-primary as of the JSON migration — legacy
+// folders on disk (workflow.yaml era) are not imported automatically.
+// Users who have legacy workflows must hand-port them once into the
+// new SPA / MCP flow, then delete the old folder.
 func SetDB(db *gorm.DB) {
 	globalDB = db
-	// Best-effort one-shot importer: hydrate the workflows + workflow_versions
-	// tables from the file-based store on first boot after the DB lands.
-	// Idempotent — re-runs are no-ops. Soft-fail so a DB error doesn't
-	// take down the server; the file-based UI keeps working regardless.
-	if db != nil && globalWorkflowMgr != nil {
-		repo := workflowRepoFor(db)
-		if _, err := repo.ImportFromFiles(globalWorkflowMgr.Service); err != nil {
-			log.Warn().Err(err).Msg("workflow importer (file → DB) failed; file-store stays primary")
-		}
-	}
 }
-
-func workflowRepoFor(db *gorm.DB) *wfrepo.Repo { return wfrepo.New(db) }
 
 // SetChannelRegistry wires the live channel registry so picker fields
 // can issue lookup queries against each channel's upstream (Slack API,

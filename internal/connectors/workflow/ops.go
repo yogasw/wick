@@ -819,3 +819,105 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// ── Lock / Guard / Versions / Execute step ───────────────────────────
+
+func (h *handlers) lock(c *connector.Ctx) (any, error) {
+	id := c.Input("id")
+	locked := c.InputBool("locked")
+	if err := h.ops.SetLock(id, locked); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true, "locked": locked}, nil
+}
+
+func (h *handlers) guardReport(c *connector.Ctx) (any, error) {
+	report, err := h.ops.GuardReport(ctxFrom(c), c.Input("id"))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":           report.OK,
+		"violations":   report.Violations,
+		"content_hash": report.ContentHash,
+	}, nil
+}
+
+func (h *handlers) versions(c *connector.Ctx) (any, error) {
+	rows, err := h.ops.Versions(c.Input("id"))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"versions": rows}, nil
+}
+
+func (h *handlers) versionDetail(c *connector.Ctx) (any, error) {
+	vid := c.InputInt("version_id")
+	if vid <= 0 {
+		return nil, fmt.Errorf("version_id is required")
+	}
+	row, err := h.ops.VersionDetail(uint(vid))
+	if err != nil {
+		return nil, err
+	}
+	if row.WorkflowID != c.Input("id") {
+		return nil, fmt.Errorf("version %d does not belong to workflow %q", vid, c.Input("id"))
+	}
+	return row, nil
+}
+
+func (h *handlers) restoreVersion(c *connector.Ctx) (any, error) {
+	vid := c.InputInt("version_id")
+	if vid <= 0 {
+		return nil, fmt.Errorf("version_id is required")
+	}
+	newID, err := h.ops.RestoreVersion(c.Input("id"), uint(vid), "")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":               true,
+		"draft_version_id": newID,
+		"message":          "Snapshot copied to draft. Call workflow_publish to make it live.",
+	}, nil
+}
+
+func (h *handlers) diffVersions(c *connector.Ctx) (any, error) {
+	from := c.InputInt("from")
+	to := c.InputInt("to")
+	if from <= 0 || to <= 0 {
+		return nil, fmt.Errorf("from and to version_ids are required")
+	}
+	diff, err := h.ops.DiffVersions(c.Input("id"), uint(from), uint(to))
+	if err != nil {
+		return nil, err
+	}
+	return diff, nil
+}
+
+func (h *handlers) execNode(c *connector.Ctx) (any, error) {
+	var node wf.Node
+	if err := parseJSON(c.Input("node"), &node); err != nil {
+		return nil, fmt.Errorf("invalid node JSON: %w", err)
+	}
+	body := wfmcp.ExecNodeInput{
+		Node:     node,
+		ParentID: c.Input("parent_id"),
+	}
+	if raw := c.Input("input"); strings.TrimSpace(raw) != "" {
+		if err := parseJSON(raw, &body.Input); err != nil {
+			return nil, fmt.Errorf("invalid input JSON: %w", err)
+		}
+	}
+	if raw := c.Input("event"); strings.TrimSpace(raw) != "" {
+		if err := parseJSON(raw, &body.Event); err != nil {
+			return nil, fmt.Errorf("invalid event JSON: %w", err)
+		}
+	}
+	if raw := c.Input("node_outputs"); strings.TrimSpace(raw) != "" {
+		if err := parseJSON(raw, &body.NodeOutputs); err != nil {
+			return nil, fmt.Errorf("invalid node_outputs JSON: %w", err)
+		}
+	}
+	return h.ops.ExecNode(ctxFrom(c), c.Input("id"), body)
+}

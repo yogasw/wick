@@ -17,9 +17,11 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/guard"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workflow/scaffold"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
@@ -39,6 +41,14 @@ type Ops struct {
 	DataTables  datatable.Service
 	StateStore  state.Store
 	Integration *integration.Registry
+	// Guard runs safety policy rules (destructive shell, secret leak,
+	// SQL injection, network allowlist). Powers workflow_guard. Nil
+	// when not wired — handler returns 503-equivalent.
+	Guard *guard.Guard
+	// Repo is the DB-backed workflow store. Nil when no DB is wired —
+	// version history + restore handlers fall back to the file-store
+	// equivalents the Service surfaces.
+	Repo *repository.Repo
 	// Pickers maps picker source names (e.g. "slack.channels") to
 	// resolver functions wired at setup. Powers workflow_picker_resolve.
 	// Always non-nil after New(); setup code registers sources via

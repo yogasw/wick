@@ -240,6 +240,29 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 				// ── Input structs ──────────────────────────────────────────────────────
 			}),
 
+		// ── Lock / Guard / Versions / Execute step ───────────────────
+		connector.Op("workflow_lock", "Toggle Canvas Lock",
+			"Freeze or unfreeze the canvas. Locked workflows still run — the engine ignores the flag — but every edit endpoint (save / publish / patch nodes / set triggers) rejects writes with 423 Locked. Use to protect production workflows from accidental edits.",
+			lockInput{}, h.lock, wickdocs.Docs{}),
+		connector.Op("workflow_guard", "Guard Safety Review",
+			"Run the deterministic guard rules (destructive shell, prompt injection, plaintext secret, unparameterized SQL, network allowlist) against the workflow draft. Separate from workflow_validate, which only checks structure (cycles, schema, dangling edges). Returns {ok, violations[], content_hash}. Use before workflow_publish on anything that touches data egress.",
+			idInput{}, h.guardReport, wickdocs.Docs{}),
+		connector.Op("workflow_versions", "List Version History",
+			"List every saved snapshot for a workflow (drafts + publishes), newest first. Each row carries kind (draft|published), message, created_by, created_at. Body bytes are held back — call workflow_version_detail to fetch one. Requires DB-backed storage.",
+			idInput{}, h.versions, wickdocs.Docs{}),
+		connector.Op("workflow_version_detail", "Get Version Detail",
+			"Fetch one snapshot including its full JSON body. Use to diff against the current draft or render in a viewer.",
+			versionDetailInput{}, h.versionDetail, wickdocs.Docs{}),
+		connector.Op("workflow_restore_version", "Restore Version to Draft",
+			"Copy a historic snapshot into the draft slot. Doesn't auto-publish — the user must hit workflow_publish to make the restore live. Returns the new draft snapshot id.",
+			restoreVersionInput{}, h.restoreVersion, wickdocs.Docs{}),
+		connector.Op("workflow_diff_versions", "Compare Two Versions",
+			"Return both snapshots' full body JSON for client-side diff rendering. Use to show what changed between two save points.",
+			diffVersionsInput{}, h.diffVersions, wickdocs.Docs{}),
+		connector.Op("workflow_exec_node", "Execute Single Node",
+			"Run one node in isolation (n8n's 'Execute step' pattern). Nothing persists to runs/. Pass node JSON + optional input + event + node_outputs map so template refs ({{.Node.<upstream>}}) resolve. Returns {ok, latency_ms, output}.",
+			execNodeInput{}, h.execNode, wickdocs.Docs{}),
+
 		// ── Data Tables (n8n-style shared key/value store) ───────────
 		connector.Op("datatable_list", "List Data Tables",
 			"List every registered data table with row count + column count. Use to discover what tables exist before referencing one in a workflow.",
@@ -486,6 +509,36 @@ type saveTestCaseInput struct {
 type deleteTestCaseInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
 	Name string `wick:"required;desc=Test case name (without .json)."`
+}
+
+type lockInput struct {
+	ID     string `wick:"required;desc=Workflow ID."`
+	Locked bool   `wick:"desc=true to freeze edits, false to unlock."`
+}
+
+type versionDetailInput struct {
+	ID        string `wick:"required;desc=Workflow ID — used to assert the snapshot belongs to this workflow."`
+	VersionID int    `wick:"required;number;key=version_id;desc=Snapshot ID from workflow_versions."`
+}
+
+type restoreVersionInput struct {
+	ID        string `wick:"required;desc=Workflow ID."`
+	VersionID int    `wick:"required;number;key=version_id;desc=Snapshot ID to copy into the draft slot."`
+}
+
+type diffVersionsInput struct {
+	ID   string `wick:"required;desc=Workflow ID."`
+	From int    `wick:"required;number;desc=Older snapshot ID."`
+	To   int    `wick:"required;number;desc=Newer snapshot ID."`
+}
+
+type execNodeInput struct {
+	ID          string `wick:"required;desc=Workflow ID. Engine loads the workflow shell + env for context."`
+	Node        string `wick:"textarea;required;desc=Node JSON object (single wf.Node) — must include type. ID auto-minted when omitted."`
+	Input       string `wick:"textarea;desc=Optional input map as JSON. Exposed as .Input and as the parent_id alias in the run context."`
+	Event       string `wick:"textarea;desc=Optional event envelope as JSON (Replay → Execute pattern). When empty a synthetic manual event wrapping Input is used."`
+	ParentID    string `wick:"key=parent_id;desc=Optional parent node id to alias the input under for {{.Node.<parent>}} refs."`
+	NodeOutputs string `wick:"textarea;key=node_outputs;desc=Optional map of upstream node outputs as JSON (id → flat map). Powers template refs to upstream nodes."`
 }
 
 // ── Handler struct ────────────────────────────────────────────────────

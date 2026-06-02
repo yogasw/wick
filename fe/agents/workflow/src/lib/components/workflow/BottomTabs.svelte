@@ -107,6 +107,7 @@
   ] as const;
 
   type Props = {
+    workflowID: string;
     validation?: any;
     guardHits?: any;
     tests?: any[];
@@ -115,6 +116,7 @@
     onRestoreVersion?: (id: number) => void;
   };
   let {
+    workflowID,
     validation = null,
     guardHits = null,
     tests = [],
@@ -170,7 +172,7 @@
       {:else if active === "tests"}<TestsTab cases={testsData.length > 0 ? testsData : tests} onRunAll={() => refreshPanel("tests")} running={panelLoading} />
       {:else if active === "logs"}<LogsTab lines={logs} />
       {:else if active === "json"}<JsonTab />
-      {:else if active === "history"}<HistoryTab versions={versions} onrestore={onRestoreVersion} />
+      {:else if active === "history"}<HistoryTab workflowID={workflowID} versions={versions} onrestore={onRestoreVersion} />
       {/if}
     </div>
   {/if}

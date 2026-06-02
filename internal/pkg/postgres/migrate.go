@@ -30,6 +30,18 @@ func Migrate(db *gorm.DB) {
 		log.Fatal().Msgf("migrate connector configs: %s", err.Error())
 	}
 
+	// One-shot drop of legacy workflow tables when the YAML→JSON column
+	// rename lands. The new schema is incompatible with the old (yaml_*
+	// columns renamed to body_*, removed entity.WorkflowFile, etc) and
+	// the user explicitly opted out of migration — nothing to preserve.
+	// AutoMigrate then recreates the 3 workflow tables with the new
+	// column shape.
+	migrator := db.Migrator()
+	if migrator.HasColumn(&entity.Workflow{}, "yaml_published") || migrator.HasColumn(&entity.Workflow{}, "yaml_draft") {
+		log.Warn().Msg("legacy workflow schema detected (yaml_* columns) — dropping workflows + workflow_versions + workflow_test_cases tables; rerun any save to repopulate")
+		_ = migrator.DropTable("workflow_test_cases", "workflow_versions", "workflow_files", "workflows")
+	}
+
 	err := db.AutoMigrate(
 		&entity.User{},
 		&entity.Session{},

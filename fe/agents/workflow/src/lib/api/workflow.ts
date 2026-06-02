@@ -421,4 +421,13 @@ export const workflowAPI = {
       `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/${versionID}/restore`,
       {},
     ),
+
+  diffVersions: (
+    id: string,
+    from: number,
+    to: number,
+  ): Promise<{ from: WorkflowVersion; to: WorkflowVersion }> =>
+    apiGet(
+      `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/diff?from=${from}&to=${to}`,
+    ),
 };
