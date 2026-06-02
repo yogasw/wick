@@ -11,6 +11,8 @@
     draftWorkflow,
     removeTrigger,
     updateTrigger,
+    isValidLabel,
+    LABEL_FORMAT_HINT,
   } from "$lib/stores/editor";
   import { catalog } from "$lib/stores/catalog";
   import type { Trigger } from "$lib/types/workflow";
@@ -211,19 +213,30 @@
                 <div class="font-mono text-[12px] text-slate-700 dark:text-slate-300 break-all">{trigger.id ?? "—"}</div>
               </div>
               {@const labelTaken = labelClashes(trigger)}
+              {@const labelBadFormat = !!trigger.label && !isValidLabel(trigger.label)}
+              {@const labelErr = labelTaken || labelBadFormat}
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5"
-                  class:border-rose-500={labelTaken}
-                  class:border-slate-200={!labelTaken}
-                  class:dark:border-slate-700={!labelTaken}
+                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                  class:border-rose-500={labelErr}
+                  class:border-slate-200={!labelErr}
+                  class:dark:border-slate-700={!labelErr}
                   value={trigger.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
+                  placeholder="manual_1"
                 />
-                {#if labelTaken}
+                {#if labelBadFormat}
+                  <span class="text-[11px] text-rose-600 dark:text-rose-400">
+                    Invalid format. Use {LABEL_FORMAT_HINT}.
+                  </span>
+                {:else if labelTaken}
                   <span class="text-[11px] text-rose-600 dark:text-rose-400">
                     Label "{trigger.label}" is already used by another trigger.
+                  </span>
+                {:else}
+                  <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                    {LABEL_FORMAT_HINT}
                   </span>
                 {/if}
               </label>

@@ -104,6 +104,16 @@ export const validationWarningCount = derived(validationReport, ($r) => {
 });
 
 // Current draft workflow document. Source-of-truth for canvas + inspector.
+// Label format gate — mirrors parse.LabelRe on the Go side (see
+// internal/agents/workflow/parse/parse.go). Lowercase letter or `_`
+// to start, lowercase letter / digit / `_` for the rest. Surfaced in
+// inspectors so the user sees the rule before save validation rejects.
+export const LABEL_RE = /^[a-z_][a-z0-9_]*$/;
+export const LABEL_FORMAT_HINT = "lowercase letters, digits and _ (must start with a letter or _)";
+export function isValidLabel(s: string): boolean {
+  return LABEL_RE.test(s);
+}
+
 export const draftWorkflow = writable<Workflow | null>(null);
 
 // Last loaded published copy — used for diff against draft + the
@@ -397,6 +407,20 @@ function findDuplicateLabels(wf: Workflow): string[] {
   return [...seen.entries()].filter(([, c]) => c > 1).map(([k]) => k);
 }
 
+// Returns labels that don't match LABEL_RE so save can short-circuit.
+// Backend's parse.Validate rejects on the same rule but only after the
+// round-trip; surfacing here keeps the editor responsive.
+function findInvalidLabels(wf: Workflow): string[] {
+  const out: string[] = [];
+  for (const n of wf.graph?.nodes ?? []) {
+    if (n.label && !isValidLabel(n.label)) out.push(n.label);
+  }
+  for (const t of wf.triggers ?? []) {
+    if (t.label && !isValidLabel(t.label)) out.push(t.label);
+  }
+  return out;
+}
+
 export async function saveDraft(opts: { silent?: boolean } = {}) {
   const wf = get(draftWorkflow);
   if (!wf) return;
@@ -409,6 +433,19 @@ export async function saveDraft(opts: { silent?: boolean } = {}) {
     toastError(
       "Cannot save — duplicate labels",
       `Used by more than one node: ${dups.join(", ")}. Rename via the inspector.`,
+    );
+    return;
+  }
+  // Same client-side guard for the label format — backend's parse
+  // validator enforces LABEL_RE (`^[a-z_][a-z0-9_]*$`); catching it
+  // here means the inspector's inline error explains the rule before
+  // the round-trip would reject.
+  const bad = findInvalidLabels(wf);
+  if (bad.length > 0) {
+    saveStatus.set("failed");
+    toastError(
+      "Cannot save — invalid label format",
+      `${bad.join(", ")} — ${LABEL_FORMAT_HINT}.`,
     );
     return;
   }

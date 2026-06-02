@@ -15,7 +15,7 @@
   // Field set tracked against the v1 audit — keep this 1:1; improve
   // where it helps but never reduce the surface.
 
-  import { detailNodeID, draftWorkflow, removeNode, updateNode } from "$lib/stores/editor";
+  import { detailNodeID, draftWorkflow, removeNode, updateNode, isValidLabel, LABEL_FORMAT_HINT } from "$lib/stores/editor";
   import { catalog } from "$lib/stores/catalog";
   import { workflowAPI } from "$lib/api/workflow";
   import { toastError } from "$lib/stores/toast";
@@ -318,19 +318,30 @@
                 <div class="font-mono text-[12px] text-slate-700 dark:text-slate-300">{node.id}</div>
               </div>
               {@const labelTaken = labelClashesWith(node)}
+              {@const labelBadFormat = !!node.label && !isValidLabel(node.label)}
+              {@const labelErr = labelTaken || labelBadFormat}
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5"
-                  class:border-rose-500={labelTaken}
-                  class:border-slate-200={!labelTaken}
-                  class:dark:border-slate-700={!labelTaken}
+                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                  class:border-rose-500={labelErr}
+                  class:border-slate-200={!labelErr}
+                  class:dark:border-slate-700={!labelErr}
                   value={node.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
+                  placeholder="my_step"
                 />
-                {#if labelTaken}
+                {#if labelBadFormat}
+                  <span class="text-[11px] text-rose-600 dark:text-rose-400">
+                    Invalid format. Use {LABEL_FORMAT_HINT}.
+                  </span>
+                {:else if labelTaken}
                   <span class="text-[11px] text-rose-600 dark:text-rose-400">
                     Label "{node.label}" is already used by another node — pick a unique value.
+                  </span>
+                {:else}
+                  <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                    {LABEL_FORMAT_HINT}
                   </span>
                 {/if}
               </label>

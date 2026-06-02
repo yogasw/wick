@@ -234,8 +234,14 @@ export const workflowAPI = {
   toggle: (id: string, enabled: boolean): Promise<{ ok: boolean }> =>
     apiPost(`${BASE}/api/workflows/toggle/${encodeURIComponent(id)}`, { enabled }),
 
-  runNow: (id: string): Promise<{ ok: boolean }> =>
-    apiPost(`${BASE}/api/workflows/run/${encodeURIComponent(id)}`, {}),
+  runNow: (
+    id: string,
+    triggerID: string,
+  ): Promise<{ ok: boolean }> =>
+    // trigger_id is required server-side. Pick one before calling —
+    // the editor pins from workflow.triggers[] before firing so the
+    // engine routes to the correct entry_node.
+    apiPost(`${BASE}/api/workflows/run/${encodeURIComponent(id)}`, { trigger_id: triggerID }),
 
   runs: async (id: string): Promise<{ runs: RunSummary[]; page: number; has_more: boolean }> => {
     const res = await apiGet<{ runs: any[]; page: number; has_more: boolean }>(

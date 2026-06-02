@@ -741,32 +741,69 @@
   }
 
   let triggerPickerOpen = $state(false);
-  function toggleTriggerPicker() {
+
+  // Per-workflow pinned trigger. Defaults to the first manual trigger
+  // (or just the first trigger) the moment a workflow is loaded; the
+  // user can pin a different one via the dropdown and the choice is
+  // persisted to localStorage so reloading the editor keeps it.
+  let pinnedTriggerID = $state<string | null>(null);
+  function pinStorageKey(workflowID: string) {
+    return `wick:wfv2:pinned-trigger:${workflowID}`;
+  }
+  $effect(() => {
     const wf = $draftWorkflow;
     if (!wf) return;
-    // One trigger → no need for a popup, fire directly. Multiple
-    // triggers (cron + slack, etc.) need disambiguation — show the
-    // picker matching the legacy "Pick trigger to fire" pattern.
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(pinStorageKey(wf.id))
+        : null;
     const triggers = wf.triggers ?? [];
-    if (triggers.length <= 1) {
-      void executeTrigger(triggers[0]?.id);
+    const known = (id: string | null) => !!triggers.find((t) => t.id === id);
+    if (stored && known(stored)) {
+      pinnedTriggerID = stored;
       return;
     }
-    triggerPickerOpen = !triggerPickerOpen;
+    // Fallback: first manual trigger, else first overall, else null.
+    const fallback =
+      triggers.find((t) => t.type === "manual")?.id ?? triggers[0]?.id ?? null;
+    pinnedTriggerID = fallback ?? null;
+  });
+
+  const pinnedTrigger = $derived.by(() => {
+    const wf = $draftWorkflow;
+    if (!wf) return undefined;
+    return (wf.triggers ?? []).find((t) => t.id === pinnedTriggerID);
+  });
+
+  function pinTrigger(id: string | undefined | null) {
+    const wf = $draftWorkflow;
+    if (!wf || !id) return;
+    pinnedTriggerID = id;
+    triggerPickerOpen = false;
+    try {
+      window.localStorage.setItem(pinStorageKey(wf.id), id);
+    } catch {
+      /* private mode / storage full — pin survives this session only */
+    }
   }
-  async function executeTrigger(triggerID?: string) {
+
+  async function executePinned() {
     const wf = $draftWorkflow;
     if (!wf) return;
-    triggerPickerOpen = false;
-    // Remember which trigger the user clicked so the SSE handler can
-    // paint the per-trigger status badge while the run is in flight.
-    // Falls back to the first manual trigger if the caller didn't
-    // specify (matches the "single-trigger workflow" shortcut path).
-    const fired =
-      triggerID ?? (wf.triggers ?? []).find((t) => t.type === "manual")?.id ?? wf.triggers?.[0]?.id ?? null;
-    lastFiredTriggerID.set(fired ?? null);
+    const triggers = wf.triggers ?? [];
+    if (triggers.length === 0) return;
+    // Pick must be explicit — backend rejects calls without a
+    // trigger_id, on purpose. The dropdown auto-pins the first
+    // trigger on load so this branch only fires after the user has
+    // wiped a pin somehow.
+    const fired = pinnedTriggerID ?? triggers[0]?.id;
+    if (!fired) {
+      console.warn("execute: no trigger pinned — pick one from the dropdown");
+      return;
+    }
+    lastFiredTriggerID.set(fired);
     try {
-      await workflowAPI.runNow(wf.id);
+      await workflowAPI.runNow(wf.id, fired);
     } catch (e) {
       console.error("execute workflow failed:", e);
       lastFiredTriggerID.set(null);
@@ -1158,20 +1195,32 @@
     <button class="h-9 w-9 rounded bg-slate-800/80 text-slate-100 shadow flex items-center justify-center text-base" onclick={() => (zoom = Math.min(2.5, zoom * 1.1))} title="Zoom in" aria-label="Zoom in">+</button>
   </div>
 
-  <!-- Bottom-center: Execute workflow CTA + trigger picker popup. -->
+  <!-- Bottom-center: Execute workflow CTA + trigger picker popup.
+       The CTA is split: the label half fires the pinned trigger, the
+       ▾ half opens the picker. Picker rows PIN the choice (don't fire)
+       so the next Execute click reuses it — matches what users expect
+       from CI-style "Run with config X" dropdowns. -->
   <div class="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
     {#if triggerPickerOpen}
       <div class="rounded-lg bg-slate-900/95 border border-slate-700 shadow-xl p-3 min-w-[280px] text-xs">
-        <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Pick trigger to fire</div>
+        <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Pin trigger to execute</div>
         {#each $draftWorkflow?.triggers ?? [] as t}
+          {@const isPinned = t.id === pinnedTriggerID}
+          {@const entryNode = ($draftWorkflow?.graph?.nodes ?? []).find((n) => n.id === t.entry_node)}
+          {@const entryLabel = entryNode?.label || t.entry_node || "?"}
           <button
             class="w-full flex items-center gap-2 px-2 py-2 rounded text-left hover:bg-slate-800 text-slate-100"
-            onclick={() => executeTrigger(t.id)}
+            class:bg-slate-800={isPinned}
+            onclick={() => pinTrigger(t.id)}
+            title="Pin this trigger — the Execute button will fire it"
           >
-            <span class="px-1.5 py-0.5 rounded bg-slate-700 text-[10px] uppercase tracking-wider">{t.type}</span>
-            <span class="font-mono text-[11px] truncate flex-1">{t.id ?? "—"}</span>
+            <span class="px-1.5 py-0.5 rounded bg-slate-700 text-[10px] uppercase tracking-wider shrink-0">{t.type}</span>
+            <span class="font-mono text-[11px] truncate flex-1">{t.label || t.id || "—"}</span>
             <span class="text-slate-500">→</span>
-            <span class="font-mono text-[10px] text-slate-500 truncate">{t.entry_node ?? "?"}</span>
+            <span class="font-mono text-[10px] text-slate-500 truncate">{entryLabel}</span>
+            {#if isPinned}
+              <span class="text-emerald-400 shrink-0" title="Pinned" aria-label="Pinned">✓</span>
+            {/if}
           </button>
         {/each}
         {#if ($draftWorkflow?.triggers ?? []).length === 0}
@@ -1179,15 +1228,32 @@
         {/if}
       </div>
     {/if}
-    <button
-      class="flex items-center gap-2 px-5 py-2 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold shadow-lg"
-      onclick={toggleTriggerPicker}
-      title="Execute workflow"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 2v7.3M14 9.3V2M8.5 2h7M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>
-      Execute workflow
-      <span class="text-white/80 text-xs">▾</span>
-    </button>
+    <div class="flex items-stretch rounded-full bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold shadow-lg overflow-hidden">
+      <button
+        class="flex items-center gap-2 pl-5 pr-3 py-2 disabled:opacity-60 disabled:cursor-not-allowed"
+        onclick={executePinned}
+        disabled={!pinnedTrigger}
+        title={pinnedTrigger ? `Execute: ${pinnedTrigger.label || pinnedTrigger.id}` : "Pin a trigger from the dropdown to enable Execute"}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 2v7.3M14 9.3V2M8.5 2h7M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>
+        <span>Execute</span>
+        {#if pinnedTrigger}
+          <span class="font-mono text-xs text-white/80 truncate max-w-[160px]">
+            {pinnedTrigger.label || pinnedTrigger.id}
+          </span>
+        {:else}
+          <span class="text-xs text-white/80">— pick trigger</span>
+        {/if}
+      </button>
+      {#if ($draftWorkflow?.triggers?.length ?? 0) > 1}
+        <button
+          class="px-3 border-l border-rose-400/40 hover:bg-rose-700"
+          onclick={() => (triggerPickerOpen = !triggerPickerOpen)}
+          title="Pin a different trigger"
+          aria-label="Pin a different trigger"
+        >▾</button>
+      {/if}
+    </div>
   </div>
 
   <!-- Bottom-right: zoom badge. -->

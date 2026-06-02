@@ -229,15 +229,50 @@ func spaWorkflowRunNow(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	// trigger_id is REQUIRED — the editor pins one before firing so the
+	// engine routes to the right entry_node. Refusing the call when
+	// it's missing means a future caller can't accidentally trip the
+	// "first-matching-trigger wins" path and run a different branch
+	// than what's visible in the UI.
+	var body struct {
+		TriggerID string `json:"trigger_id"`
+	}
+	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	body.TriggerID = strings.TrimSpace(body.TriggerID)
+	if body.TriggerID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "trigger_id is required — pick a trigger to fire"})
+		return
+	}
 	w, err := globalWorkflowMgr.Service.LoadDraft(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	// Resolve the trigger so we can stamp the right Type on the
+	// synthesized event (cron / channel / manual / …). pickEntry will
+	// still route via trigger_id; using the actual type keeps run logs
+	// + SSE events honest about which trigger fired.
+	var picked *wf.Trigger
+	for i := range w.Triggers {
+		if w.Triggers[i].ID == body.TriggerID {
+			picked = &w.Triggers[i]
+			break
+		}
+	}
+	if picked == nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "trigger_id not found in workflow"})
+		return
+	}
 	evt := wf.Event{
-		Type: string(wf.TriggerManual),
+		Type: string(picked.Type),
 		At:   time.Now().UTC(),
-		Payload: map[string]any{"source": "spa"},
+		Payload: map[string]any{
+			"source":     "spa",
+			"trigger_id": body.TriggerID,
+		},
 	}
 	if err := globalWorkflowMgr.MCP.RunNowWith(c.Context(), id, &w, evt); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
