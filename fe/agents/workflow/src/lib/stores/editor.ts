@@ -300,6 +300,14 @@ export function removeTrigger(id: string) {
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     wf.triggers = (wf.triggers ?? []).filter((t) => t.id !== id);
+    // Triggers store their canvas position on workflow._canvas.positions
+    // (the Node struct on the Go side has no _canvas field, so positions
+    // for both nodes and triggers share that map). Drop the stale entry
+    // so a re-added trigger with the same id doesn't snap to the ghost.
+    const canvas = ((wf as any)._canvas ?? {}) as any;
+    if (canvas.positions && id in canvas.positions) {
+      delete canvas.positions[id];
+    }
     return wf;
   });
 }

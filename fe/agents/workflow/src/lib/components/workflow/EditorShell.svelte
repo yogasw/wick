@@ -22,6 +22,7 @@
     detailNodeID,
     detailTriggerID,
     removeNode,
+    removeTrigger,
   } from "$lib/stores/editor";
   import { get } from "svelte/store";
   import { loadCatalog } from "$lib/stores/catalog";
@@ -108,13 +109,22 @@
         return;
       }
     }
-    // Delete / Backspace — remove selected node(s). Skip if user is
-    // typing in any form control so it doesn't eat the backspace key.
+    // Delete / Backspace — remove selected node(s) or trigger(s). The
+    // selection set mixes both ids; trigger entries live on
+    // `workflow.triggers` so we need a separate removeTrigger call,
+    // otherwise selecting "everything" silently leaves the trigger
+    // behind (which is what the user saw with Select-All + Delete).
     if (!inForm && (e.key === "Delete" || e.key === "Backspace")) {
+      const wf = get(draftWorkflow);
+      const triggerIDs = new Set((wf?.triggers ?? []).map((t) => t.id).filter(Boolean) as string[]);
+      const removeOne = (id: string) => {
+        if (triggerIDs.has(id)) removeTrigger(id);
+        else removeNode(id);
+      };
       const multi = get(selectedNodeIDs);
       if (multi && multi.size > 0) {
         e.preventDefault();
-        for (const id of multi) removeNode(id);
+        for (const id of multi) removeOne(id);
         selectedNodeIDs.set(new Set());
         selectedNodeID.set(null);
         return;
@@ -122,7 +132,7 @@
       const one = get(selectedNodeID);
       if (one) {
         e.preventDefault();
-        removeNode(one);
+        removeOne(one);
         selectedNodeID.set(null);
       }
     }
