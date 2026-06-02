@@ -73,3 +73,4 @@ wick
 ci-timing.txt
 node_modules/
 index-*
+fe/agents/workflow/vite.config.ts.timestamp-*

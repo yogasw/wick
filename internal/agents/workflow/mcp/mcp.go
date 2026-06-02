@@ -417,10 +417,17 @@ func (m *Ops) GetRuns(id string, limit int) ([]string, error) {
 // only displays the most recent N runs (default 20) and one
 // state.json read per run is cheap.
 type RunSummary struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	// Provenance fields — mirrored from the run's index entry so the
+	// editor can show source / trigger pills without re-loading each
+	// run's state.json. Empty for legacy runs that pre-date the
+	// IndexEntry change.
+	Source      string `json:"source,omitempty"`
+	TriggerID   string `json:"trigger_id,omitempty"`
+	TriggerType string `json:"trigger_type,omitempty"`
 }
 
 // GetRunSummaries returns one page of recent runs, newest first.
@@ -436,10 +443,13 @@ func (m *Ops) GetRunSummaries(id string, page, pageSize int) ([]RunSummary, bool
 	out := make([]RunSummary, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, RunSummary{
-			ID:        e.ID,
-			Status:    e.Status,
-			StartedAt: e.StartedAt,
-			EndedAt:   e.EndedAt,
+			ID:          e.ID,
+			Status:      e.Status,
+			StartedAt:   e.StartedAt,
+			EndedAt:     e.EndedAt,
+			Source:      e.Source,
+			TriggerID:   e.TriggerID,
+			TriggerType: e.TriggerType,
 		})
 	}
 	return out, hasMore, nil

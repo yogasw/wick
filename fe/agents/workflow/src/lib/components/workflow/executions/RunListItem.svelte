@@ -4,7 +4,7 @@
   // Active row gets an emerald ring instead of a heavy bg so the
   // selection reads clearly on both light and dark.
   import type { RunSummary } from "$lib/api/workflow";
-  import { fmtTimestamp, fmtDuration, statusBadgeClass, statusLabel, shortID, runKey } from "./runHelpers";
+  import { fmtTimestamp, fmtDuration, statusBadgeClass, statusLabel, shortID, runKey, runKind, kindBadgeClass, kindLabel } from "./runHelpers";
 
   type Props = {
     run: RunSummary;
@@ -12,6 +12,8 @@
     onpick: (runID: string) => void;
   };
   let { run, active, onpick }: Props = $props();
+
+  const kind = $derived(runKind(run));
 </script>
 
 <button
@@ -29,6 +31,12 @@
   <div class="flex items-center gap-2 text-xs">
     <span class={"px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider " + statusBadgeClass(run.status)}>
       {statusLabel(run.status)}
+    </span>
+    <span
+      class={"px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider " + kindBadgeClass(kind)}
+      title={run.trigger_type ? `trigger: ${run.trigger_type}` : kindLabel(kind)}
+    >
+      {kindLabel(kind)}
     </span>
     <span class="ml-auto text-slate-500 tabular-nums">{fmtDuration(run)}</span>
   </div>

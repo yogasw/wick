@@ -316,3 +316,74 @@ npm run e2e            # playwright, end-to-end
 ```
 
 Per-app tests live next to source under `src/**/*.test.ts`.
+
+## Svelte 5 gotchas
+
+Patterns the build will reject. Same list lives in the comment block
+of each app's `svelte.config.js` so it's two places to look at most.
+
+1. **`{@const}` placement.** Only legal as the immediate child of a
+   Svelte block (`{#if}`, `{#each}`, `{:else}`, `{:then}`, `{:catch}`,
+   `{#snippet}`, `<svelte:fragment>`, `<svelte:boundary>`, or a custom
+   component). It does **not** work directly under HTML elements
+   (`<button>`, `<div>`, …). When the surrounding tag is `<...>`,
+   hoist the value into the script block as `const x = $derived(...)`.
+
+   ```svelte
+   <!-- ✗ build error: "{@const} must be the immediate child of …" -->
+   <button onclick={...}>
+     {@const kind = bucket(row)}
+     <span>{kind}</span>
+   </button>
+
+   <!-- ✓ hoist into script -->
+   <script>
+     const kind = $derived(bucket(row));
+   </script>
+   <button>{kind}</button>
+
+   <!-- ✓ or wrap in {#if} when the const is conditional -->
+   {#if row}
+     {@const kind = bucket(row)}
+     <button>{kind}</button>
+   {/if}
+   ```
+
+2. **Class directives with `/`.** Tailwind opacity classes
+   (`bg-emerald-500/25`) parse as `class:bg-emerald-500` plus a stray
+   `/25` — the slash isn't legal in a directive name. Use the
+   ternary class binding instead:
+
+   ```svelte
+   <!-- ✗ parser error -->
+   <span class:bg-emerald-500/25={active}></span>
+
+   <!-- ✓ -->
+   <span class={active ? "bg-emerald-500/25" : ""}></span>
+   ```
+
+3. **`{{ … }}` in placeholders / attribute strings.** Svelte tries to
+   parse the inner braces as an expression. Wrap literal Go templates
+   in a JS string:
+
+   ```svelte
+   <!-- ✗ parser error -->
+   <input placeholder="{{.Event.Payload.id}}" />
+
+   <!-- ✓ -->
+   <input placeholder={"{{.Event.Payload.id}}"} />
+   ```
+
+4. **`<svelte:window>` inside `{#if}`.** Special elements must sit at
+   the component's top level. Gate the handler logic in JS instead of
+   conditionally rendering the element:
+
+   ```svelte
+   <!-- ✗ "<svelte:window> can only appear at top level" -->
+   {#if enabled}
+     <svelte:window onkeydown={onKey} />
+   {/if}
+
+   <!-- ✓ -->
+   <svelte:window onkeydown={(e) => enabled && onKey(e)} />
+   ```

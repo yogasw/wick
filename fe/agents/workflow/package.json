@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "lint:gotchas": "node scripts/check-svelte-gotchas.mjs",
+    "prebuild": "npm run lint:gotchas",
+    "prebuild:watch": "npm run lint:gotchas",
     "build": "vite build",
     "build:watch": "vite build --watch",
     "preview": "vite preview",

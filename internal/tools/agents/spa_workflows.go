@@ -291,6 +291,28 @@ type runsFilter struct {
 	From   time.Time
 	To     time.Time
 	Q      string // case-insensitive substring of the run id
+	Kind   string // "manual" | "automation" | "test" — coarse provenance bucket
+}
+
+// runKind derives the provenance bucket from index fields. Source is
+// authoritative (set by the API surface that fired the run); trigger
+// type is the fallback when older runs have an empty source.
+func runKind(r mcp.RunSummary) string {
+	switch r.Source {
+	case "spa":
+		return "manual"
+	case "test", "wftest":
+		return "test"
+	}
+	// Manual is sometimes fired by MCP / external API without setting
+	// source; fall through to trigger type to bucket those.
+	if r.TriggerType == "manual" {
+		return "manual"
+	}
+	if r.TriggerType == "cron" || r.TriggerType == "webhook" || r.TriggerType == "channel" || r.TriggerType == "schedule_at" || r.TriggerType == "error" {
+		return "automation"
+	}
+	return "automation"
 }
 
 func (f runsFilter) keep(r mcp.RunSummary) bool {
@@ -304,6 +326,9 @@ func (f runsFilter) keep(r mcp.RunSummary) bool {
 		return false
 	}
 	if f.Q != "" && !strings.Contains(strings.ToLower(r.ID), f.Q) {
+		return false
+	}
+	if f.Kind != "" && runKind(r) != f.Kind {
 		return false
 	}
 	return true
@@ -333,6 +358,7 @@ func spaWorkflowRuns(c *tool.Ctx) {
 	f := runsFilter{
 		Status: strings.TrimSpace(c.Query("status")),
 		Q:      strings.ToLower(strings.TrimSpace(c.Query("q"))),
+		Kind:   strings.ToLower(strings.TrimSpace(c.Query("kind"))),
 	}
 	if v := strings.TrimSpace(c.Query("from")); v != "" {
 		if t, err := parseDateInput(v, false); err == nil {
@@ -347,7 +373,7 @@ func spaWorkflowRuns(c *tool.Ctx) {
 
 	// No filters → fall back to the cheap paginated path. Saves a
 	// full-scan read when the FE is just polling for new runs.
-	noFilter := f.Status == "" && f.Q == "" && f.From.IsZero() && f.To.IsZero()
+	noFilter := f.Status == "" && f.Q == "" && f.Kind == "" && f.From.IsZero() && f.To.IsZero()
 	if noFilter {
 		runs, hasMore, err := globalWorkflowMgr.MCP.GetRunSummaries(id, page, pageSize)
 		if err != nil {

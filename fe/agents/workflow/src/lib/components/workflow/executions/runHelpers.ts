@@ -85,6 +85,37 @@ export function shortID(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
 }
 
+// runKind buckets a row into manual / automation / test using the
+// same rules as the backend (see runKind in spa_workflows.go). Kept
+// in sync so the FE pill matches the filter the API expects.
+export type RunKind = "manual" | "automation" | "test";
+export function runKind(r: { source?: string; trigger_type?: string }): RunKind {
+  switch (r.source) {
+    case "spa": return "manual";
+    case "test":
+    case "wftest":
+      return "test";
+  }
+  if (r.trigger_type === "manual") return "manual";
+  return "automation";
+}
+
+export function kindBadgeClass(kind: RunKind): string {
+  switch (kind) {
+    case "manual": return "bg-sky-500/15 text-sky-700 dark:text-sky-300";
+    case "automation": return "bg-violet-500/15 text-violet-700 dark:text-violet-300";
+    case "test": return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  }
+}
+
+export function kindLabel(kind: RunKind): string {
+  switch (kind) {
+    case "manual": return "manual";
+    case "automation": return "auto";
+    case "test": return "test";
+  }
+}
+
 // triggerIDOf extracts the trigger id that fired a run, looking in
 // the spots the backend writes it. Used by the replay action so the
 // editor can re-pin that trigger on switch.

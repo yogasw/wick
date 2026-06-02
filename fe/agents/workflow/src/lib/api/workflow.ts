@@ -203,7 +203,12 @@ export type RunSummary = {
   started_at: string;
   ended_at?: string;
   finished_at?: string;
+  // Provenance — `source` is the API surface that fired it ("spa" =
+  // editor button, "test" = wftest, "" = automation router). The FE
+  // collapses these into a Kind pill (manual / automation / test).
+  source?: string;
   trigger_id?: string;
+  trigger_type?: string;
   error?: string;
 };
 
@@ -252,6 +257,7 @@ export const workflowAPI = {
       from?: string; // yyyy-mm-dd
       to?: string;   // yyyy-mm-dd
       q?: string;    // substring of run id
+      kind?: "manual" | "automation" | "test"; // provenance bucket
     },
   ): Promise<{ runs: RunSummary[]; page: number; has_more: boolean; total: number }> => {
     const qs = new URLSearchParams();
@@ -261,6 +267,7 @@ export const workflowAPI = {
     if (opts?.from) qs.set("from", opts.from);
     if (opts?.to) qs.set("to", opts.to);
     if (opts?.q) qs.set("q", opts.q);
+    if (opts?.kind) qs.set("kind", opts.kind);
     const suffix = qs.toString() ? `?${qs}` : "";
     const res = await apiGet<{ runs: any[]; page: number; has_more: boolean; total?: number }>(
       `${BASE}/api/workflows/runs/${encodeURIComponent(id)}${suffix}`,

@@ -27,13 +27,14 @@
   // collapsible advanced inputs. Every input goes to the backend so
   // the search reaches runs older than the loaded page.
   let filter = $state<"all" | "success" | "failed" | "running">("all");
+  let kindFilter = $state<"all" | "manual" | "automation" | "test">("all");
   let showAdvanced = $state(false);
   let searchID = $state("");
   let fromDate = $state("");
   let toDate = $state("");
 
   const advancedActive = $derived(!!searchID || !!fromDate || !!toDate);
-  const filterActive = $derived(filter !== "all" || advancedActive);
+  const filterActive = $derived(filter !== "all" || kindFilter !== "all" || advancedActive);
 
   function clearAdvanced() {
     searchID = "";
@@ -47,6 +48,7 @@
     try {
       const res = await workflowAPI.runs(workflowID, {
         status: filter === "all" ? undefined : filter,
+        kind: kindFilter === "all" ? undefined : kindFilter,
         from: fromDate || undefined,
         to: toDate || undefined,
         q: searchID.trim() || undefined,
@@ -66,7 +68,7 @@
   let debounceID: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     // Track every filter input so the effect re-fires on any change.
-    searchID; fromDate; toDate; filter;
+    searchID; fromDate; toDate; filter; kindFilter;
     if (debounceID) clearTimeout(debounceID);
     debounceID = setTimeout(() => {
       untrack(() => void refresh());
@@ -145,6 +147,32 @@
         {showAdvanced ? "▾" : "▸"} advanced
         {#if advancedActive}<span class="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-500 inline-block align-middle"></span>{/if}
       </button>
+    </div>
+
+    <!-- Kind filter — manual / automation / test bucket. Sent to the
+         backend as `?kind=`; rules match runKind() in
+         spa_workflows.go so the FE pill in each row mirrors the
+         backend's bucketing. -->
+    <div class="flex items-center gap-1 px-2 py-1.5 border-b border-slate-200 dark:border-slate-700 text-[11px]">
+      <span class="px-2 text-slate-400 uppercase tracking-wider text-[10px]">kind</span>
+      {#each [
+        { key: "all", label: "All" },
+        { key: "manual", label: "Manual" },
+        { key: "automation", label: "Auto" },
+        { key: "test", label: "Test" },
+      ] as t}
+        <button
+          class="px-2 py-0.5 rounded transition-colors"
+          class:bg-slate-200={kindFilter === t.key}
+          class:dark:bg-slate-700={kindFilter === t.key}
+          class:text-slate-900={kindFilter === t.key}
+          class:dark:text-slate-100={kindFilter === t.key}
+          class:text-slate-500={kindFilter !== t.key}
+          onclick={() => (kindFilter = t.key as typeof kindFilter)}
+        >
+          {t.label}
+        </button>
+      {/each}
     </div>
 
     {#if showAdvanced}

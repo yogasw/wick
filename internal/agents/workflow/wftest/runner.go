@@ -174,7 +174,17 @@ func (r *Runner) RunOne(ctx context.Context, w workflow.Workflow, tc Case) Resul
 func (r *Runner) runOne(ctx context.Context, w workflow.Workflow, tc Case) Result {
 	start := time.Now()
 	res := Result{Name: tc.Name}
-	st, err := r.Engine.Run(ctx, w, tc.Input.Event)
+	// Stamp the event with source=test so the runs list can bucket
+	// these into the Test pill instead of mixing them with manual /
+	// automation fires. Preserves any existing payload values.
+	evt := tc.Input.Event
+	if evt.Payload == nil {
+		evt.Payload = map[string]any{}
+	}
+	if _, ok := evt.Payload["source"]; !ok {
+		evt.Payload["source"] = "test"
+	}
+	st, err := r.Engine.Run(ctx, w, evt)
 	res.State = st
 	res.NodeOutput = st.Outputs
 	res.Duration = time.Since(start)
