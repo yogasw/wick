@@ -1,6 +1,7 @@
 import { writable, derived, get } from "svelte/store";
 import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
 import { workflowAPI, type ValidationReport, type ValidationIssue, type WorkflowState } from "$lib/api/workflow";
+import { APIError } from "$lib/api/client";
 import { toastError, toastOk } from "./toast";
 
 // Decorate raw {Path, Message} issues with severity + node so consumers
@@ -220,6 +221,11 @@ export async function loadWorkflow(id: string) {
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let autosaveArmed = false;
 const AUTOSAVE_MS = 800;
+// Set before a draftWorkflow.update that should NOT arm the autosave
+// — used by the lock toggle which persists via its own endpoint, so
+// the regular save path doesn't reject "you can't edit a locked
+// workflow" against a workflow that's only being unlocked.
+let skipNextAutosave = false;
 
 draftWorkflow.subscribe((wf) => {
   if (!wf) return;
@@ -227,6 +233,10 @@ draftWorkflow.subscribe((wf) => {
     // First update after a load — the call that delivers the initial
     // value. Real edits land later.
     autosaveArmed = true;
+    return;
+  }
+  if (skipNextAutosave) {
+    skipNextAutosave = false;
     return;
   }
   saveStatus.set("pending");
@@ -238,6 +248,21 @@ draftWorkflow.subscribe((wf) => {
     saveDraft({ silent: true }).catch((e) => console.warn("auto-save failed:", e));
   }, AUTOSAVE_MS);
 });
+
+// setLockedField updates the local store's _canvas.locked without
+// arming autosave. Canvas.toggleLock calls workflowAPI.setLock first
+// (server is source of truth), then mirrors here so the rest of the
+// UI reacts immediately.
+export function setLockedField(locked: boolean) {
+  skipNextAutosave = true;
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    const canvas = ((wf as any)._canvas ?? {}) as Record<string, unknown>;
+    canvas.locked = locked;
+    (wf as any)._canvas = canvas;
+    return wf;
+  });
+}
 
 // hydrate normalises the workflow shape — backend may leave nullable
 // fields out when empty so the canvas can rely on `.nodes` + `.edges`
@@ -278,7 +303,27 @@ function ensureGraph(wf: Workflow): Workflow {
   return wf;
 }
 
+// Lock gate — every mutator below short-circuits when the workflow's
+// _canvas.locked flag is true. Only one path bypasses: the Canvas
+// component's toggleLock, which writes the flag directly via
+// draftWorkflow.update so it can clear the lock itself. Centralising
+// the gate here means a future MCP / API client can also call these
+// helpers without having to re-implement the check.
+function isWorkflowLocked(): boolean {
+  const wf = get(draftWorkflow);
+  return !!((wf as any)?._canvas?.locked);
+}
+function lockGuard(label: string): boolean {
+  if (!isWorkflowLocked()) return false;
+  toastError(
+    "Workflow is locked",
+    `Unlock the canvas before ${label}.`,
+  );
+  return true;
+}
+
 export function updateNode(id: string, patch: Partial<Node>) {
+  if (lockGuard("editing nodes")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     ensureGraph(wf);
@@ -305,6 +350,7 @@ function nextNodeLabel(wf: Workflow, type: string): string {
 }
 
 export function addNode(node: Node) {
+  if (lockGuard("adding nodes")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     ensureGraph(wf);
@@ -340,6 +386,7 @@ export function addNode(node: Node) {
 }
 
 export function updateTrigger(id: string, patch: Partial<Trigger>) {
+  if (lockGuard("editing triggers")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     const idx = (wf.triggers ?? []).findIndex((t) => t.id === id);
@@ -350,6 +397,7 @@ export function updateTrigger(id: string, patch: Partial<Trigger>) {
 }
 
 export function removeTrigger(id: string) {
+  if (lockGuard("deleting triggers")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     wf.triggers = (wf.triggers ?? []).filter((t) => t.id !== id);
@@ -366,6 +414,7 @@ export function removeTrigger(id: string) {
 }
 
 export function removeNode(id: string) {
+  if (lockGuard("deleting nodes")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     ensureGraph(wf);
@@ -378,6 +427,7 @@ export function removeNode(id: string) {
 }
 
 export function connect(edge: Edge) {
+  if (lockGuard("adding edges")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     ensureGraph(wf);
@@ -387,6 +437,7 @@ export function connect(edge: Edge) {
 }
 
 export function disconnect(from: string, to: string, caseKey?: string) {
+  if (lockGuard("removing edges")) return;
   draftWorkflow.update((wf) => {
     if (!wf) return wf;
     ensureGraph(wf);
@@ -499,7 +550,15 @@ export async function saveDraft(opts: { silent?: boolean } = {}) {
     res = await workflowAPI.saveDraft(wf.id, projected);
   } catch (e) {
     saveStatus.set("failed");
-    toastError("Save failed", e instanceof Error ? e.message : String(e));
+    // 423 Locked has its own friendlier shape — the message tells the
+    // operator exactly how to recover instead of dumping the URL the
+    // backend mentions. Everything else surfaces the server's
+    // {error: "..."} detail extracted by APIError.
+    if (e instanceof APIError && e.status === 423) {
+      toastError("Workflow is locked", "Unlock the canvas before saving edits.");
+    } else {
+      toastError("Save failed", e instanceof Error ? e.message : String(e));
+    }
     throw e;
   }
   saveStatus.set("saved");

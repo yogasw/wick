@@ -239,6 +239,13 @@ export const workflowAPI = {
   toggle: (id: string, enabled: boolean): Promise<{ ok: boolean }> =>
     apiPost(`${BASE}/api/workflows/toggle/${encodeURIComponent(id)}`, { enabled }),
 
+  // Dedicated lock endpoint — skips normal validation + works even
+  // when the workflow is already locked (otherwise you couldn't
+  // unlock once locked). FE Canvas calls this directly instead of
+  // round-tripping through autosave.
+  setLock: (id: string, locked: boolean): Promise<{ ok: boolean; locked: boolean }> =>
+    apiPost(`${BASE}/api/workflows/lock/${encodeURIComponent(id)}`, { locked }),
+
   runNow: (
     id: string,
     triggerID: string,

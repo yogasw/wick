@@ -75,6 +75,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/publish/{id}", spaWorkflowPublish)
 	r.POST("/api/workflows/discard/{id}", spaWorkflowDiscard)
 	r.POST("/api/workflows/toggle/{id}", spaWorkflowToggle)
+	r.POST("/api/workflows/lock/{id}", spaWorkflowLock)
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
@@ -162,6 +163,18 @@ func spaWorkflowSave(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "parse: " + err.Error()})
 		return
 	}
+	// Defense in depth: if the persisted draft is locked, reject any
+	// write here. Lock changes go through /api/workflows/lock so they
+	// don't trip this check. A direct API client that tries to edit a
+	// locked workflow gets 423 instead of silently overwriting.
+	if cur, err := globalWorkflowMgr.Service.LoadDraft(id); err == nil {
+		if locked, _ := cur.Canvas["locked"].(bool); locked {
+			c.JSON(http.StatusLocked, map[string]string{
+				"error": "workflow is locked — unlock it via /api/workflows/lock before saving edits",
+			})
+			return
+		}
+	}
 	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -223,6 +236,45 @@ func spaWorkflowToggle(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// spaWorkflowLock flips workflow._canvas.locked. Dedicated endpoint
+// rather than piggybacking on /save so we can:
+//   1. allow toggling lock even while the workflow IS locked (the
+//      regular save path rejects writes on a locked workflow);
+//   2. skip validation — locking shouldn't fail because the draft
+//      has a half-finished node, since locking is the user saying
+//      "freeze the current state".
+func spaWorkflowLock(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		Locked bool `json:"locked"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.Service.LoadDraft(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if w.Canvas == nil {
+		w.Canvas = map[string]any{}
+	}
+	if body.Locked {
+		w.Canvas["locked"] = true
+	} else {
+		delete(w.Canvas, "locked")
+	}
+	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "locked": body.Locked})
 }
 
 func spaWorkflowRunNow(c *tool.Ctx) {

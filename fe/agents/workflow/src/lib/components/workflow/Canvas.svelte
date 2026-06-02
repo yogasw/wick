@@ -5,20 +5,53 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField } from "$lib/stores/editor";
+  import { toastError } from "$lib/stores/toast";
 
-  // Map node.id → first validation error message. Populated from
-  // validationReport.errors via the Path regex. Drives the red badge
-  // overlay on the canvas card so validation issues surface without
-  // opening the Validation tab.
+  // Resolve a validation issue's Path/Message back to the node it
+  // points at. Errors usually carry `graph.nodes[<label>]…` in Path,
+  // but warnings like "node 'http_1' is unreachable from entry" only
+  // name the node inside Message. We accept either: Path bracket form
+  // first, message quote form second, so both surface on the canvas.
+  function issueNodeKey(path: string | undefined, message: string | undefined): string | null {
+    const p = (path ?? "").match(/graph\.nodes\[([^\]]+)\]/);
+    if (p) return p[1];
+    const m = (message ?? "").match(/node ["']([^"']+)["']/);
+    if (m) return m[1];
+    return null;
+  }
+
+  // Map identifier (id OR label, since the validator returns whichever
+  // the user typed) → first error / warning message. Errors take a red
+  // pin; warnings take an amber pin and only show when there's no
+  // error on the same node. Both drive on-canvas badges so issues
+  // surface without opening the Validation tab.
   const nodeErrors = $derived.by<Record<string, string>>(() => {
     const out: Record<string, string> = {};
     for (const e of $validationReport?.errors ?? []) {
-      const m = (e.Path ?? "").match(/graph\.nodes\[([^\]]+)\]/);
-      if (m && !out[m[1]]) out[m[1]] = e.Message ?? "Invalid";
+      const k = issueNodeKey(e.Path, e.Message);
+      if (k && !out[k]) out[k] = e.Message ?? "Invalid";
     }
     return out;
   });
+  const nodeWarnings = $derived.by<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const w of $validationReport?.warnings ?? []) {
+      const k = issueNodeKey(w.Path, w.Message);
+      if (k && !out[k]) out[k] = w.Message ?? "Warning";
+    }
+    return out;
+  });
+
+  // Validator references nodes by label when set, else id. Look both
+  // up so a badge can hit whichever one matched.
+  function nodeIssue(node: { id: string; label?: string }): { kind: "error" | "warning"; msg: string } | null {
+    const err = nodeErrors[node.id] ?? (node.label ? nodeErrors[node.label] : undefined);
+    if (err) return { kind: "error", msg: err };
+    const warn = nodeWarnings[node.id] ?? (node.label ? nodeWarnings[node.label] : undefined);
+    if (warn) return { kind: "warning", msg: warn };
+    return null;
+  }
   import { workflowAPI } from "$lib/api/workflow";
   import { componentFor } from "./nodes";
   import TriggerNode from "./nodes/TriggerNode.svelte";
@@ -31,20 +64,46 @@
   let dragging = $state<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
   // Canvas lock — blocks every mutating gesture (drag node / trigger,
-  // create edge, drop from palette, right-click context menu) while
-  // leaving pan + zoom + selection + inspector reads alone. Persisted
-  // on `workflow._canvas.locked` so the lock travels with the file —
-  // anyone opening the same workflow sees the same locked state, and
-  // it survives across browsers / users.
-  const locked = $derived(!!($draftWorkflow as any)?._canvas?.locked);
-  function toggleLock() {
-    draftWorkflow.update((wf) => {
-      if (!wf) return wf;
-      const canvas = ((wf as any)._canvas ?? {}) as Record<string, unknown>;
-      canvas.locked = !canvas.locked;
-      (wf as any)._canvas = canvas;
-      return wf;
-    });
+  // create edge, drop from palette) while leaving pan + zoom +
+  // selection + inspector reads alone. Persisted on
+  // `workflow._canvas.locked` so the lock travels with the file —
+  // anyone opening the same workflow sees the same locked state.
+  // Default OFF so a fresh / unflagged workflow stays draggable.
+  let locked = $state(false);
+  $effect(() => {
+    const wf = $draftWorkflow;
+    const next = !!((wf as any)?._canvas?.locked);
+    if (next !== locked) locked = next;
+  });
+  async function toggleLock() {
+    const wf = $draftWorkflow;
+    if (!wf) return;
+    const next = !locked;
+    // Optimistically flip locally so the cursor / banner reflect the
+    // change immediately. setLockedField doesn't arm autosave; the
+    // dedicated /lock endpoint persists. Roll back on error.
+    locked = next;
+    setLockedField(next);
+    try {
+      await workflowAPI.setLock(wf.id, next);
+    } catch (e) {
+      locked = !next;
+      setLockedField(!next);
+      toastError("Lock toggle failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Cursor-anchored hint pops at the click point whenever a blocked
+  // gesture lands on a locked canvas — top banner is for orientation,
+  // this is the "why is nothing happening here" beat that fires at
+  // the exact pixel the operator was reaching for. Fades on its own
+  // so multi-click frustration doesn't accumulate stacked chips.
+  let lockedHint = $state<{ x: number; y: number; key: number } | null>(null);
+  let lockedHintTimer: ReturnType<typeof setTimeout> | null = null;
+  function showLockedHint(e: { clientX: number; clientY: number }) {
+    lockedHint = { x: e.clientX, y: e.clientY, key: Date.now() };
+    if (lockedHintTimer) clearTimeout(lockedHintTimer);
+    lockedHintTimer = setTimeout(() => (lockedHint = null), 1400);
   }
 
   // Auto fit-to-view once the workflow finishes loading. Compute the
@@ -86,7 +145,10 @@
 
   function ondrop(e: DragEvent) {
     e.preventDefault();
-    if (locked) return; // canvas frozen — no new nodes / triggers
+    if (locked) {
+      showLockedHint(e);
+      return; // canvas frozen — no new nodes / triggers
+    }
     if (!canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
     const x = (e.clientX - rect.left - pan.x) / zoom;
@@ -272,7 +334,10 @@
   }
 
   function startConnect(e: PointerEvent, fromID: string, fromKind: "node" | "trigger" | "node-input") {
-    if (locked) return; // canvas frozen — no new edges
+    if (locked) {
+      showLockedHint(e);
+      return; // canvas frozen — no new edges
+    }
     // Only left-button drags create connections. Right-click goes to
     // the context menu instead — otherwise the dashed connect line
     // gets orphaned because contextmenu suppresses the pointerup that
@@ -417,7 +482,11 @@
     e.stopPropagation();
     // When locked, click still selects (so the inspector + INPUT pane
     // stay usable read-only) but we skip the drag bookkeeping so the
-    // card can't be moved.
+    // card can't be moved. Pop the cursor hint so the operator sees
+    // why the card refused to follow the pointer.
+    if (locked) {
+      showLockedHint(e);
+    }
     if (!locked) {
       const target = e.currentTarget as HTMLElement;
       const rect = target.getBoundingClientRect();
@@ -441,6 +510,9 @@
 
   function ontriggerpointerdown(e: PointerEvent, triggerID: string) {
     e.stopPropagation();
+    if (locked) {
+      showLockedHint(e);
+    }
     if (!locked) {
       const target = e.currentTarget as HTMLElement;
       const rect = target.getBoundingClientRect();
@@ -940,6 +1012,7 @@
   class="flex-1 relative overflow-hidden wf-canvas-bg"
   class:cursor-grab={spaceHeld && !panDrag}
   class:cursor-grabbing={panDrag}
+  class:wf-canvas-locked={locked && !spaceHeld && !panDrag}
   ondragover={(e) => e.preventDefault()}
   ondrop={ondrop}
   onwheel={onwheel}
@@ -1025,7 +1098,7 @@
       {#each $draftWorkflow.graph.nodes ?? [] as node (node.id)}
         {@const Comp = componentFor(node.type)}
         {@const status = $runStatusByNode[node.id]}
-        {@const validationErr = nodeErrors[node.id]}
+        {@const issue = nodeIssue(node)}
         <div
           class="absolute"
           style="left: {node._canvas?.x ?? 0}px; top: {node._canvas?.y ?? 0}px;"
@@ -1039,20 +1112,24 @@
             node={node}
             selected={$selectedNodeIDs.has(node.id) || $selectedNodeID === node.id}
             running={status === "running"}
-            errored={status === "failed" || !!validationErr}
+            errored={status === "failed" || issue?.kind === "error"}
             onselect={() => selectedNodeID.set(node.id)}
           />
-          {#if validationErr}
-            <!-- Validation badge — red "!" pin at top-right of the
-                 card. Tooltip carries the first error message so
+          {#if issue}
+            <!-- Validation badge — red "!" pin for errors, amber "△"
+                 pin for warnings. Tooltip carries the first message so
                  hover reveals what's wrong without leaving the canvas. -->
             <button
               type="button"
-              class="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold flex items-center justify-center shadow-md ring-2 ring-white dark:ring-slate-900"
-              title={validationErr}
+              class="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full text-white text-[11px] font-bold flex items-center justify-center shadow-md ring-2 ring-white dark:ring-slate-900"
+              class:bg-rose-500={issue.kind === "error"}
+              class:hover:bg-rose-600={issue.kind === "error"}
+              class:bg-amber-500={issue.kind === "warning"}
+              class:hover:bg-amber-600={issue.kind === "warning"}
+              title={issue.msg}
               onclick={(e) => { e.stopPropagation(); detailNodeID.set(node.id); }}
-              aria-label="Validation error — click to open inspector"
-            >!</button>
+              aria-label={issue.kind === "error" ? "Validation error — click to open inspector" : "Validation warning — click to open inspector"}
+            >{issue.kind === "error" ? "!" : "△"}</button>
           {/if}
           <!-- Output port — drag from here to another node's body to
                create an edge. Transparent overlay sits on BaseNode's
@@ -1110,9 +1187,14 @@
         ></div>
       {/if}
 
-      <!-- In-progress connection preview while user drags from a port. -->
+      <!-- In-progress connection preview while user drags from a port.
+           1×1 SVG with overflow:visible so the dashed line keeps
+           painting outside the inset bounding box — the dashed line
+           used to clip mid-drag once the cursor passed the old fixed
+           8000×8000 size (same kind of bug the snap-guides above
+           sidestep with the same trick). -->
       {#if connecting && connectCursor}
-        <svg class="absolute inset-0 w-[8000px] h-[8000px] pointer-events-none">
+        <svg class="absolute inset-0 pointer-events-none overflow-visible" style="width:1px;height:1px;">
           <line
             x1={connecting.startX}
             y1={connecting.startY}
@@ -1121,6 +1203,7 @@
             stroke="#facc15"
             stroke-width="2"
             stroke-dasharray="6 4"
+            vector-effect="non-scaling-stroke"
           />
         </svg>
       {/if}
@@ -1174,6 +1257,21 @@
       </div>
     {/if}
   </div>
+
+  <!-- Lock banner — only visible while the canvas is locked. Calls
+       out the state and offers a one-click unlock so the operator
+       doesn't have to hunt for the lock icon on the left rail. -->
+  {#if locked}
+    <div class="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/95 text-white text-xs font-medium shadow-lg">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      Canvas locked
+      <button
+        type="button"
+        class="ml-1 px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-[11px]"
+        onclick={toggleLock}
+      >unlock</button>
+    </div>
+  {/if}
 
   <!-- Top-right: add node + search. Matches the legacy editor toolbar
        overlay. Search is a stub for now; it'll wire to a fuzzy filter
@@ -1294,6 +1392,22 @@
   <div class="absolute bottom-4 right-4 text-[10px] text-slate-400 tabular-nums select-none">
     {Math.round(zoom * 100)}%
   </div>
+
+  <!-- Cursor-anchored "locked" hint. position:fixed so it tracks the
+       client coords directly without the canvas pan transform mucking
+       with placement. Keyed by `key` so a fresh pointerdown re-mounts
+       the chip and restarts the fade animation cleanly. -->
+  {#if lockedHint}
+    {#key lockedHint.key}
+      <div
+        class="wf-locked-hint fixed z-[90] px-2 py-1 rounded-full bg-amber-500 text-white text-[11px] font-medium shadow-lg flex items-center gap-1.5"
+        style="left:{lockedHint.x}px;top:{lockedHint.y}px;"
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Canvas locked
+      </div>
+    {/key}
+  {/if}
 </div>
 
 <ConfirmDialog
@@ -1357,5 +1471,27 @@
   :global(.dark) .wf-canvas-bg {
     background-color: #131c2f;
     background-image: radial-gradient(circle, #2c3a5a 1px, transparent 1px);
+  }
+  /* Locked canvas — every nested cursor (default + grab + grabbing
+     stamped on node cards) gets overridden to the universal "no"
+     glyph so the operator sees instant feedback before clicking.
+     `:global` + `*` so the rule reaches into the BaseNode shadowed
+     scopes the canvas hosts. */
+  .wf-canvas-locked,
+  .wf-canvas-locked :global(*) {
+    cursor: not-allowed !important;
+  }
+  /* Pop-up chip near the cursor when a locked gesture is rejected.
+     Fades out via the keyframe so dragging hand around stops piling
+     duplicates — each new pointerdown bumps the chip's `key` which
+     re-runs the keyframe from 0. */
+  .wf-locked-hint {
+    animation: wfLockedHintFade 1.4s ease-out forwards;
+    pointer-events: none;
+  }
+  @keyframes wfLockedHintFade {
+    0% { opacity: 0; transform: translate(-50%, calc(-100% - 4px)) scale(0.9); }
+    15% { opacity: 1; transform: translate(-50%, calc(-100% - 8px)) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, calc(-100% - 16px)) scale(1); }
   }
 </style>
