@@ -88,12 +88,12 @@ Pick the one that matches where you're running. Each page has its own quickstart
 
 1. **Add a provider** — go to `/tools/agents` → Providers, point wick at your Claude / Codex / Gemini binary and your PAT.
 2. **Connect a channel** — Slack (Socket Mode bot token), Telegram bot token, or just use the always-on Web UI.
-3. **Create a workspace** — a folder on disk the agent uses as its working directory. The `default` workspace is created automatically.
+3. **Create a project** — a folder on disk the agent uses as its working directory. The `default` project is created automatically.
 4. **Start a conversation** — send a message in the web UI, Slack thread, or Telegram chat. Wick spawns the agent and routes the conversation.
 
 See [AI Agents](/guide/agents) for the full breakdown, or jump to:
 
 - [Providers](/guide/agents/providers) — binary path, PAT, multi-instance
 - [Channels](/guide/agents/channels) — Slack, Telegram, Web UI setup
-- [Workspaces](/guide/agents/workspaces) — workspace management
+- [Projects](/guide/agents/projects) — project management
 - [Command Gate](/guide/command-gate) — what the gate sidecar does and why it matters

@@ -101,4 +101,4 @@ POST /skills-sync/{provider}/{path...}    # sync a provider folder to all others
 ## See also
 
 - [Providers](./providers) — provider instances that use these skill dirs.
-- [Workspaces](./workspaces) — agent `cwd` at spawn time; separate from skill dirs.
+- [Projects](./projects) — agent `cwd` at spawn time; separate from skill dirs.

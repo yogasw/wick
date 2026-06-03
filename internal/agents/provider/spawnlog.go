@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,7 +23,14 @@ import (
 // recent files (newest first) and renders one event timeline per file.
 type SpawnLogger struct {
 	BaseDir string // <agents-base>/providers/spawns
+
+	pruneMu sync.Mutex // serializes Prune so concurrent spawns don't race
 }
+
+// MaxSpawnLogs is how many spawn log files are retained. The newest N
+// are kept; older ones are deleted on every new spawn. Keeps the
+// Recent Spawns list bounded + the spawns/ dir from growing unbounded.
+const MaxSpawnLogs = 50
 
 // NewSpawnLogger returns a logger rooted at <agentsBase>/providers/spawns.
 // agentsBase is typically Layout.BaseDir.
@@ -65,6 +73,11 @@ type SpawnEvent struct {
 	// event after Spawner.Spawn returns; carried on `exit` so listings
 	// can verify the same pid was reaped. 0 = test fake or unknown.
 	PID int `json:"pid,omitempty"`
+	// Origin is the session origin that triggered the spawn (e.g. "slack",
+	// "telegram", "rest", "ui"). Written once on the initial start event
+	// so the Recent Spawns list can show the channel without a session
+	// registry lookup.
+	Origin string `json:"origin,omitempty"`
 	// FirstUserMessage is a short prefix of the user input that
 	// triggered the spawn (truncated). Surfaces in the Backends UI
 	// "Recent Spawns" list so operators see what each spawn was for.
@@ -89,9 +102,58 @@ func (s *SpawnLogger) Append(path string, ev SpawnEvent) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	enc := json.NewEncoder(f)
-	return enc.Encode(ev)
+	encErr := enc.Encode(ev)
+	_ = f.Close()
+	// A `start` event marks a fresh spawn file — prune old ones so the
+	// spawns/ dir stays bounded at MaxSpawnLogs. Best-effort.
+	if ev.Type == "start" {
+		_ = s.Prune(MaxSpawnLogs)
+	}
+	return encErr
+}
+
+// Prune keeps the newest `keep` spawn log files and deletes the rest.
+// Serialized so concurrent spawns don't double-delete. Best-effort:
+// individual delete errors are ignored (a missing file is already gone).
+func (s *SpawnLogger) Prune(keep int) error {
+	if keep < 0 {
+		return nil
+	}
+	s.pruneMu.Lock()
+	defer s.pruneMu.Unlock()
+
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	type fileTime struct {
+		path string
+		ts   int64
+	}
+	files := make([]fileTime, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		f, ok := parseSpawnLogName(e.Name())
+		if !ok {
+			continue
+		}
+		files = append(files, fileTime{filepath.Join(s.BaseDir, e.Name()), f.StartedAt.UnixMilli()})
+	}
+	if len(files) <= keep {
+		return nil
+	}
+	// Newest first; delete everything past `keep`.
+	sort.Slice(files, func(i, j int) bool { return files[i].ts > files[j].ts })
+	for _, f := range files[keep:] {
+		_ = os.Remove(f.path)
+	}
+	return nil
 }
 
 // SpawnLogFile is a parsed metadata view of one spawn log filename —
@@ -106,6 +168,7 @@ type SpawnLogFile struct {
 	SessionID        string
 	StartedAt        time.Time
 	PID              int
+	Origin           string // session origin (slack/telegram/rest/ui/…)
 	FirstUserMessage string
 	Binary           string
 	Argv             []string
@@ -209,6 +272,9 @@ func (s *SpawnLogger) enrichFromEvents(f *SpawnLogFile) {
 		case "start":
 			if ev.PID != 0 {
 				f.PID = ev.PID
+			}
+			if ev.Origin != "" && f.Origin == "" {
+				f.Origin = ev.Origin
 			}
 			if ev.FirstUserMessage != "" {
 				f.FirstUserMessage = ev.FirstUserMessage

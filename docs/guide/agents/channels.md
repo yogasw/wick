@@ -77,7 +77,7 @@ Channels declare exactly the interfaces they need; unused ones are simply not im
 
 ## Slack
 
-> **📸 Screenshot needed:** `agents-slack-config.png` — capture `/tools/agents/channels/slack` showing the form (Mode, Bot Token, App Token, Access Mode, Workspace dropdown). Save to `docs/public/screenshots/agents-slack-config.png`.
+> **📸 Screenshot needed:** `agents-slack-config.png` — capture `/tools/agents/channels/slack` showing the form (Mode, Bot Token, App Token, Access Mode, Project dropdown). Save to `docs/public/screenshots/agents-slack-config.png`.
 
 > **📸 Screenshot needed:** `agents-slack-thread.png` — capture a Slack thread mid-conversation: user message with ⏳/⚙️/✅ reaction lifecycle visible, bot reply chunked. Save to `docs/public/screenshots/agents-slack-thread.png`.
 
@@ -183,9 +183,9 @@ When all probes pass the panel shows a single "✓ All checks passed" line.
 
 Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is `Add`ed to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); the fingerprint covers the credentials (`Mode`, `BotToken`, `AppToken`, `SigningSecret`, `pubURL`) plus every access-control field (`UsersMode`, `AllowedUsers`, `GroupsMode`, `AllowedGroups`, `ChannelsMode`, `AllowedChannels`) and the approver block (`GateApprovers`, `GateApproverUsers`, `GateApproverGroups`). When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
 
-### Workspace selection
+### Project selection
 
-When **only one workspace exists**, Slack uses it without asking — the operator doesn't need to set `Workspace`. With multiple workspaces, the `Workspace` config field picks one.
+When **only one project exists**, Slack uses it without asking — the operator doesn't need to set `ProjectID`. With multiple projects, the `ProjectID` config field picks one.
 
 ### App manifest
 
@@ -193,7 +193,7 @@ A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](h
 
 ## Telegram
 
-> **📸 Screenshot needed:** `agents-telegram-config.png` — capture `/tools/agents/channels/telegram` showing the form (Bot Token, Allowed IDs, Workspace). Save to `docs/public/screenshots/agents-telegram-config.png`.
+> **📸 Screenshot needed:** `agents-telegram-config.png` — capture `/tools/agents/channels/telegram` showing the form (Bot Token, Allowed IDs, Project). Save to `docs/public/screenshots/agents-telegram-config.png`.
 
 > **📸 Screenshot needed:** `agents-telegram-chat.png` — capture a Telegram chat with the bot: user message → bot reply, plus an inline-keyboard approval message (Approve / Block buttons). Save to `docs/public/screenshots/agents-telegram-chat.png`.
 
@@ -209,13 +209,13 @@ The token is validated at config-save time. Invalid token → channel stays in *
 
 One Telegram chat = one wick session, keyed `tg-<chatID>` ([telegram.go:242](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L242)). The session lives across messages in that chat.
 
-::: warning Default workspace fallback
-When the Telegram config has no `Workspace` set, it falls back to the literal `"main"` ([telegram.go:262-265](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L262)), not the built-in `default` workspace. So if you set up Telegram on a fresh install with the default workspace only, the agent will fail to spawn until you either (a) create a workspace named `main`, or (b) set `Workspace` to `default` in the channel config.
+::: warning Default project fallback
+When the Telegram config has no `ProjectID` set, it falls back to the literal `"main"` ([telegram.go:262-265](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L262)), not the built-in `default` project. So if you set up Telegram on a fresh install with the default project only, the agent will fail to spawn until you either (a) create a project named `main`, or (b) set `ProjectID` to `default` in the channel config.
 :::
 
 ### Connection: long polling
 
-Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 60-second timeout ([telegram.go:158-175](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L158)). No public URL needed. Hot-reload works the same way as Slack — [`telegram/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/source.go) fingerprints `BotToken + AllowedIDs + Workspace`; `Registry.WatchConfigs` calls `Reload` on change.
+Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 60-second timeout ([telegram.go:158-175](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L158)). No public URL needed. Hot-reload works the same way as Slack — [`telegram/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/source.go) fingerprints `BotToken + AllowedIDs + ProjectID`; `Registry.WatchConfigs` calls `Reload` on change.
 
 ### Approvals via inline keyboard
 
@@ -290,7 +290,7 @@ The reason wick ships its own AskUser MCP tool instead of relying on Claude Code
 
 ## REST (OpenAI-compatible)
 
-> **📸 Screenshot needed:** `agents-rest-config.png` — capture `/tools/agents/channels/rest` showing the form (Enabled toggle, Workspace) and the docs panel with three tabs (Chat Completions / Responses / Models). Save to `docs/public/screenshots/agents-rest-config.png`.
+> **📸 Screenshot needed:** `agents-rest-config.png` — capture `/tools/agents/channels/rest` showing the form (Enabled toggle, Project) and the docs panel with three tabs (Chat Completions / Responses / Models). Save to `docs/public/screenshots/agents-rest-config.png`.
 
 OpenAI Chat Completions, Responses, and Models APIs exposed at `/integrations/rest/api/v1/openai/*`. Any OpenAI SDK (`openai-python`, `openai-node`, LangChain, LiteLLM, …) works by pointing `base_url` at that path and using a wick Personal Access Token as the API key. Source: [`channels/rest/`](https://github.com/yogasw/wick/tree/master/internal/agents/channels/rest).
 
@@ -381,7 +381,7 @@ Two safeguards:
 
 ### Hot-reload
 
-Same pattern as the other channels: [`rest/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/source.go) fingerprints `Enabled + Workspace`. `Registry.WatchConfigs` calls `Reload` on change. Toggle the channel from `/tools/agents/channels/rest` and it activates within 30 seconds without a server restart.
+Same pattern as the other channels: [`rest/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/source.go) fingerprints `Enabled + ProjectID`. `Registry.WatchConfigs` calls `Reload` on change. Toggle the channel from `/tools/agents/channels/rest` and it activates within 30 seconds without a server restart.
 
 ## Meta-commands
 
@@ -438,6 +438,6 @@ See [Workflows ▶ channel node](/workflow/nodes/channel) for the full surface.
 ## See also
 
 - [Pool & Sessions](./pool) — how `SendFunc` actually does the dispatch.
-- [Workspaces](./workspaces) — per-channel `Workspace` config field.
+- [Projects](./projects) — per-channel `ProjectID` config field.
 - [Workflows](/workflow/) — typed channel events + outbound actions inside a workflow DAG.
 - [Command Gate](../command-gate) — the approval modal in the web UI is the same approval Slack/Telegram render.

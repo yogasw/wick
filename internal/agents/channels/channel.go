@@ -25,6 +25,30 @@ import (
 // meta-command checks.
 type SendFunc func(ctx context.Context, sessionID, agentName, source, role, text string) error
 
+// projectOverrideKey carries a per-request project id through the send
+// context, letting a channel override its configured default project on
+// a single dispatch (e.g. a REST request that names a project in its
+// body). The pool's SendFunc closure reads it via ProjectOverride.
+type projectOverrideKey struct{}
+
+// WithProjectOverride returns ctx carrying a per-request project id. The
+// pool send closure prefers this over the channel's configured project.
+func WithProjectOverride(ctx context.Context, projectID string) context.Context {
+	if projectID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, projectOverrideKey{}, projectID)
+}
+
+// ProjectOverride returns the per-request project id set via
+// WithProjectOverride, or "" when none.
+func ProjectOverride(ctx context.Context) string {
+	if v, ok := ctx.Value(projectOverrideKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ApproveFn resolves a gate approval request originating from a channel.
 // sessionID is the wick session, requestID is the gate request UUID,
 // decision is one of the gate.Decision* constants. channelName is the

@@ -1,15 +1,17 @@
 // Package session manages on-disk session entries at
 // `<BaseDir>/sessions/<id>/`. A session is one Slack thread or one UI
 // conversation: routing key, status, agent registry, log files, and an
-// optional reference to a workspace whose folder is the agent cwd.
+// optional reference to a project whose folder is the agent cwd.
 //
-// Sessions own no workspace files of their own — workspace is a
-// shared folder (see internal/agents/workspace) that the pool resolves
-// to a cwd at spawn time. See agents-design.md §0.2 for the refactor
-// that removed the per-session git worktree.
+// Sessions own no project files of their own — a project is a
+// shared bundle (see internal/agents/project) whose folder the pool
+// resolves to a cwd at spawn time. See agents-design.md §0.2 for the
+// refactor that removed the per-session git worktree, and the project
+// design (internal/docs/project/design.md) for the Workspace→Project
+// rename.
 //
 // Files in this package:
-//   - session.go — Meta + lifecycle (Create/Load/Save/Delete/SwitchWorkspace)
+//   - session.go — Meta + lifecycle (Create/Load/Save/Delete/SetProject)
 //   - agents.go  — per-session AgentEntry + Add/SetActive
 package session
 
@@ -20,8 +22,8 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/storage"
-	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
 // Origin identifies where the session was first created from. Slack
@@ -30,9 +32,10 @@ import (
 type Origin string
 
 const (
-	OriginSlack Origin = "slack"
-	OriginUI    Origin = "ui"
-	OriginAPI   Origin = "api"
+	OriginSlack    Origin = "slack"
+	OriginTelegram Origin = "telegram"
+	OriginREST     Origin = "rest"
+	OriginUI       Origin = "ui"
 )
 
 // Status is the high-level pool view: idle (no subprocess), queued
@@ -49,7 +52,9 @@ const (
 // the message buffer that survives wick restart so a session that was
 // queued at shutdown gets its messages drained on next boot.
 type Meta struct {
-	Workspace    string    `json:"workspace,omitempty"`
+	// ProjectID references the project this session belongs to. Empty =
+	// unscoped (pool falls back to the tools-config default project).
+	ProjectID    string    `json:"project_id,omitempty"`
 	Origin       Origin    `json:"origin"`
 	ChannelID    string    `json:"channel_id,omitempty"`
 	ActiveAgent  string    `json:"active_agent,omitempty"`
@@ -74,13 +79,13 @@ type Session struct {
 	Agents []AgentEntry `json:"agents"`
 }
 
-// CreateOptions describes a new session. Workspace is optional — a
+// CreateOptions describes a new session. ProjectID is optional — a
 // session may be created without one, in which case the pool falls
-// back to the tools-config default workspace (or a per-session temp
+// back to the tools-config default project (or a per-session temp
 // dir if no default is set).
 type CreateOptions struct {
 	ID        string
-	Workspace string
+	ProjectID string
 	Origin    Origin
 	ChannelID string
 	// Preset is the preset name to associate with this session.
@@ -89,9 +94,9 @@ type CreateOptions struct {
 }
 
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
-// array), agent.md snapshot. No filesystem work touches the workspace
-// — workspace folders live under workspaces/<name>/ and are shared
-// across sessions; the session simply stores the workspace name as a
+// array), agent.md snapshot. No filesystem work touches the project
+// folder — project folders live under projects/<id>/ and are shared
+// across sessions; the session simply stores the project id as a
 // reference.
 func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session, error) {
 	if err := storage.ValidateSessionID(opt.ID); err != nil {
@@ -100,8 +105,8 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 	if opt.Origin == "" {
 		opt.Origin = OriginUI
 	}
-	if opt.Workspace != "" && !workspace.Exists(layout, opt.Workspace) {
-		return Session{}, fmt.Errorf("workspace %q not found", opt.Workspace)
+	if opt.ProjectID != "" && !project.Exists(layout, opt.ProjectID) {
+		return Session{}, fmt.Errorf("project %q not found", opt.ProjectID)
 	}
 	dir := layout.SessionDir(opt.ID)
 	if storage.PathExists(dir) {
@@ -113,7 +118,7 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 
 	now := time.Now().UTC()
 	meta := Meta{
-		Workspace:  opt.Workspace,
+		ProjectID:  opt.ProjectID,
 		Origin:     opt.Origin,
 		ChannelID:  opt.ChannelID,
 		Preset:     opt.Preset,
@@ -167,8 +172,8 @@ func List(layout config.Layout) ([]string, error) {
 	return storage.ScanDirNames(layout.SessionsDir())
 }
 
-// Delete removes the session folder. The workspace it points at is
-// left untouched — workspaces are shared, so deleting a session must
+// Delete removes the session folder. The project it points at is
+// left untouched — projects are shared, so deleting a session must
 // not delete its files.
 func Delete(_ context.Context, layout config.Layout, id string) error {
 	if err := storage.ValidateSessionID(id); err != nil {
@@ -177,22 +182,22 @@ func Delete(_ context.Context, layout config.Layout, id string) error {
 	return os.RemoveAll(layout.SessionDir(id))
 }
 
-// SwitchWorkspace changes the workspace a session points at. No
-// filesystem work — the next agent spawn will resolve the new
-// workspace path. Conversation, agent registry, and logs are
-// preserved.
-func SwitchWorkspace(_ context.Context, layout config.Layout, id, newWorkspace string) error {
-	if newWorkspace != "" && !workspace.Exists(layout, newWorkspace) {
-		return fmt.Errorf("workspace %q not found", newWorkspace)
+// SetProject changes the project a session points at. No filesystem
+// work — the next agent spawn will resolve the new project's folder
+// as cwd. Conversation, agent registry, and logs are preserved.
+// Empty newProjectID unscopes the session.
+func SetProject(_ context.Context, layout config.Layout, id, newProjectID string) error {
+	if newProjectID != "" && !project.Exists(layout, newProjectID) {
+		return fmt.Errorf("project %q not found", newProjectID)
 	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err
 	}
-	if sess.Meta.Workspace == newWorkspace {
+	if sess.Meta.ProjectID == newProjectID {
 		return nil
 	}
-	sess.Meta.Workspace = newWorkspace
+	sess.Meta.ProjectID = newProjectID
 	sess.Meta.LastActive = time.Now().UTC()
 	return SaveMeta(layout, id, sess.Meta)
 }

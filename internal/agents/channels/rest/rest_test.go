@@ -62,7 +62,7 @@ type sentCall struct {
 // mutex so concurrent dispatches don't race.
 func newTestChannel(t *testing.T, reply string, onUserSend func(sessionID string)) (*Channel, *sync.Mutex, *[]sentCall) {
 	t.Helper()
-	ch := New(agentconfig.RestChannelConfig{Enabled: "true", Workspace: "main"}, &fakeAuth{wantToken: "good", userID: "user-1"})
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "user-1"})
 
 	var mu sync.Mutex
 	var captured []sentCall
@@ -580,7 +580,7 @@ func TestResponses_ConversationFieldKeysSession(t *testing.T) {
 // a fake reply.
 func TestChatCompletions_PoolDispatchError(t *testing.T) {
 	stubModels(t, "claude")
-	ch := New(agentconfig.RestChannelConfig{Enabled: "true", Workspace: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
 	ch.SetSessionChecker(fakeSessions{exists: true}) // skip inject so error comes from the user-role send
 	ch.SetSendFunc(func(_ context.Context, _, _, _, _, _ string) error {
 		return errAuth("pool closed")
@@ -603,7 +603,7 @@ func TestChatCompletions_PoolDispatchError(t *testing.T) {
 // completion model instead of returning early on send-accept.
 func TestChatCompletions_WaitsForDone(t *testing.T) {
 	stubModels(t, "claude")
-	ch := New(agentconfig.RestChannelConfig{Enabled: "true", Workspace: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
 	ch.SetSessionChecker(fakeSessions{exists: true})
 
 	doneReleased := make(chan struct{})
@@ -654,7 +654,7 @@ func TestChatCompletions_WaitsForDone(t *testing.T) {
 // reply without state crossing between sessions.
 func TestChatCompletions_ParallelDistinctSessions(t *testing.T) {
 	stubModels(t, "claude")
-	ch := New(agentconfig.RestChannelConfig{Enabled: "true", Workspace: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
 	ch.SetSessionChecker(fakeSessions{exists: true})
 
 	var mu sync.Mutex

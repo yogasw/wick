@@ -13,34 +13,85 @@ templ SessionsList(vm SessionsListVM) {
 	@AgentsLayout(vm.Layout) {
 		<div class="max-w-5xl mx-auto space-y-5" data-base={ vm.Base }>
 			<!-- Header -->
-			<div class="flex items-center justify-between">
-				<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">All chats</h1>
-				<button
-					onclick="document.getElementById('create-session-modal').classList.remove('hidden')"
-					class="inline-flex items-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
-				>
-					<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M8 3v10M3 8h10" stroke-linecap="round"></path>
+			if vm.ScopedProjectID != "" {
+				<!-- Claude-style project landing: big title → compose → chats -->
+				<a href={ templ.SafeURL(vm.Base + "/sessions") } class="inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-colors">← All chats</a>
+				<div class="flex items-start gap-3">
+					<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white-200 dark:bg-navy-800 text-2xl select-none">{ vm.Layout.ProjectIcon(vm.ScopedProjectID) }</div>
+					<div class="min-w-0 flex-1">
+						<h1 class="text-2xl font-bold text-black-900 dark:text-white-100 truncate">{ vm.ProjectName(vm.ScopedProjectID) }</h1>
+						<p class="mt-0.5 flex items-center gap-2 text-xs text-black-700 dark:text-black-600">
+							<span>{ fmtCount(vm.Layout.ProjectCounts[vm.ScopedProjectID]) } chats</span>
+							if folder := vm.Layout.ScopedFolder(); folder != "" {
+								<span class="text-black-600 dark:text-black-700">·</span>
+								<span class="font-mono truncate">{ folder }</span>
+							}
+						</p>
+					</div>
+					{{ isPinned := vm.Layout.PinnedProjectID == vm.ScopedProjectID }}
+					<button
+						type="button"
+						data-pin-project={ vm.ScopedProjectID }
+						title={ pinTitle(isPinned) }
+						class={
+							"shrink-0 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+							templ.KV("border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-300", isPinned),
+							templ.KV("border-white-400 dark:border-navy-600 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100", !isPinned),
+						}
+					>
+						if isPinned {
+							📌 Pinned
+						} else {
+							📌 Pin as default
+						}
+					</button>
+					<a href={ templ.SafeURL(vm.Base + "/projects/" + vm.ScopedProjectID) } title="Project settings" class="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors">⚙ Settings</a>
+				</div>
+				<!-- Compose box scoped to this project -->
+				@composerCard(vm.Composer)
+				<!-- Chats in this project -->
+				<div class="relative">
+					<svg viewBox="0 0 16 16" class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-black-600 dark:text-black-700 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
+						<circle cx="6.5" cy="6.5" r="4.5"></circle>
+						<path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
 					</svg>
-					New chat
-				</button>
-			</div>
-			<!-- Search -->
-			<div class="relative">
-				<svg viewBox="0 0 16 16" class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-black-600 dark:text-black-700 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
-					<circle cx="6.5" cy="6.5" r="4.5"></circle>
-					<path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
-				</svg>
-				<input
-					type="text"
-					placeholder="Search chats..."
-					data-session-search
-					class="w-full rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 pl-9 pr-4 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
-				/>
-			</div>
-			<!-- Session list -->
-			@sessionCreateModal(vm)
-			@sessionsFullList(vm)
+					<input
+						type="text"
+						placeholder="Search chats in this project..."
+						data-session-search
+						class="w-full rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 pl-9 pr-4 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+					/>
+				</div>
+				@sessionsFullList(vm)
+			} else {
+				<div class="flex items-center justify-between">
+					<h1 class="text-xl font-semibold text-black-900 dark:text-white-100">All chats</h1>
+					<button
+						onclick="document.getElementById('create-session-modal').classList.remove('hidden')"
+						class="inline-flex items-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+					>
+						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M8 3v10M3 8h10" stroke-linecap="round"></path>
+						</svg>
+						New chat
+					</button>
+				</div>
+				<!-- Search -->
+				<div class="relative">
+					<svg viewBox="0 0 16 16" class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-black-600 dark:text-black-700 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.5">
+						<circle cx="6.5" cy="6.5" r="4.5"></circle>
+						<path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
+					</svg>
+					<input
+						type="text"
+						placeholder="Search chats..."
+						data-session-search
+						class="w-full rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 pl-9 pr-4 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+					/>
+				</div>
+				@sessionCreateModal(vm)
+				@sessionsFullList(vm)
+			}
 		</div>
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
 	}
@@ -63,14 +114,14 @@ templ sessionCreateModal(vm SessionsListVM) {
 			</div>
 			<form method="POST" action={ templ.SafeURL(vm.Base + "/sessions") } class="space-y-4">
 				<div>
-					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Workspace <span class="font-normal text-black-600 dark:text-black-700">(optional)</span></label>
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Project <span class="font-normal text-black-600 dark:text-black-700">(optional)</span></label>
 					<select
-						name="workspace"
+						name="project_id"
 						class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
 					>
-						<option value="">— no workspace —</option>
-						for _, name := range vm.WorkspaceList {
-							<option value={ name }>{ name }</option>
+						<option value="">— no project —</option>
+						for _, pid := range vm.ProjectList {
+							<option value={ pid }>{ vm.ProjectName(pid) }</option>
 						}
 					</select>
 				</div>
@@ -116,7 +167,7 @@ templ sessionsFullList(vm SessionsListVM) {
 			<p class="text-sm text-black-700 dark:text-black-600">No sessions yet.</p>
 		</div>
 	} else {
-		<div data-session-list class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden divide-y divide-white-300 dark:divide-navy-600">
+		<div data-session-list data-page-size="10" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden divide-y divide-white-300 dark:divide-navy-600">
 			for _, id := range vm.IDs {
 				if sess, ok := vm.Sessions[id]; ok {
 					@sessionsFullRow(vm, id, sess)
@@ -124,22 +175,37 @@ templ sessionsFullList(vm SessionsListVM) {
 			}
 			<p data-search-empty class="hidden px-5 py-8 text-center text-sm text-black-600 dark:text-black-700">No chats match your search.</p>
 		</div>
-		if vm.Page > 1 || vm.HasNext {
-			@sessionPager(SessionsTableVM{Base: vm.Base, Page: vm.Page, HasNext: vm.HasNext})
-		}
+		<!-- Client-side pager: pages the rows above 10/page without a reload
+		     so the compose box + search text are never lost. Hidden when a
+		     single page covers everything; populated by agents.js. -->
+		<div data-client-pager class="hidden items-center justify-between pt-2">
+			<button type="button" data-pager-prev class="inline-flex items-center gap-1 text-sm text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-default disabled:no-underline" disabled>
+				<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+				Prev
+			</button>
+			<span class="text-xs text-black-700 dark:text-black-600" data-pager-label>Page 1</span>
+			<button type="button" data-pager-next class="inline-flex items-center gap-1 text-sm text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-default disabled:no-underline">
+				Next
+				<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+			</button>
+		</div>
 	}
 }
 
 templ sessionsFullRow(vm SessionsListVM, id string, sess session.Session) {
 	{{ label := vm.Labels[id] }}
+	{{ projectName := vm.ProjectName(sess.Meta.ProjectID) }}
 	<div
 		data-row-link={ vm.Base + "/sessions/" + id }
+		draggable="true"
+		data-session-drag={ id }
+		title="Drag onto a project in the sidebar to move"
 		data-search-row
 		data-search-text={
 			func() string {
 				s := label
-				if sess.Meta.Workspace != "" {
-					s += " " + sess.Meta.Workspace
+				if projectName != "" {
+					s += " " + projectName
 				}
 				return s
 			}(),
@@ -150,15 +216,15 @@ templ sessionsFullRow(vm SessionsListVM, id string, sess session.Session) {
 			<p class="truncate text-sm font-medium text-black-900 dark:text-white-100">
 				if label != "" {
 					{ label }
-				} else if sess.Meta.Workspace != "" {
-					{ sess.Meta.Workspace }
+				} else if projectName != "" {
+					{ projectName }
 				} else {
 					New session
 				}
 			</p>
 			<div class="flex items-center gap-2 mt-0.5">
-				if sess.Meta.Workspace != "" && label != "" {
-					<span class="text-xs text-black-700 dark:text-black-600">{ sess.Meta.Workspace }</span>
+				if projectName != "" && label != "" {
+					<span class="text-xs text-black-700 dark:text-black-600">{ projectName }</span>
 					<span class="text-black-400 dark:text-black-700">·</span>
 				}
 				<span class="text-xs text-black-600 dark:text-black-700">{ relTime(sess.Meta.LastActive) }</span>
@@ -210,10 +276,10 @@ templ sessionCard(vm SessionsTableVM, id string, sess session.Session) {
 		<div class="flex items-start justify-between gap-4">
 			<div class="min-w-0 flex-1">
 				<div class="flex flex-wrap items-center gap-2 mb-1.5">
-					if sess.Meta.Workspace != "" {
-						<span class="font-semibold text-sm text-black-900 dark:text-white-100">{ sess.Meta.Workspace }</span>
+					if pn := vm.ProjectName(sess.Meta.ProjectID); pn != "" {
+						<span class="font-semibold text-sm text-black-900 dark:text-white-100">{ pn }</span>
 					} else {
-						<span class="font-medium text-sm text-black-700 dark:text-black-600 italic">No workspace</span>
+						<span class="font-medium text-sm text-black-700 dark:text-black-600 italic">No project</span>
 					}
 					if lc, ok := vm.Lifecycle[id]; ok {
 						@lifecycleBadge(lc.Lifecycle, lc.PID, lc.LastActiveMs, vm.IdleTimeoutMs)
@@ -289,8 +355,8 @@ templ SessionDetail(vm SessionDetailVM) {
 				@sessionDetailTabs(vm)
 				<!-- Right: info + actions -->
 				<div class="flex items-center gap-2 shrink-0">
-					if vm.Session.Meta.Workspace != "" {
-						<span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{ vm.Session.Meta.Workspace }</span>
+					if pn := vm.ProjectName(vm.Session.Meta.ProjectID); pn != "" {
+						<span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{ pn }</span>
 					}
 					if activeAgent != "" || activeProvider != "" {
 						<span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{ formatTurnLabel(activeAgent, activeProvider) }</span>
@@ -348,10 +414,10 @@ templ SessionDetail(vm SessionDetailVM) {
 
 templ sessionDetailHeader(vm SessionDetailVM) {
 	<div class="flex items-center gap-3 min-w-0">
-		<!-- Left: workspace/agent + badge, session ID as tooltip -->
+		<!-- Left: project/agent + badge, session ID as tooltip -->
 		<div class="flex items-center gap-2 min-w-0 flex-1">
-			if vm.Session.Meta.Workspace != "" {
-				<span class="font-semibold text-sm text-black-900 dark:text-white-100" data-tooltip={ vm.Session.ID }>{ vm.Session.Meta.Workspace }</span>
+			if pn := vm.ProjectName(vm.Session.Meta.ProjectID); pn != "" {
+				<span class="font-semibold text-sm text-black-900 dark:text-white-100" data-tooltip={ vm.Session.ID }>{ pn }</span>
 			} else {
 				<span class="font-mono text-xs text-black-600 dark:text-black-700 truncate" data-tooltip={ vm.Session.ID }>{ vm.Session.ID[:12] }…</span>
 			}
@@ -507,31 +573,38 @@ templ chatComposer(vm SessionDetailVM) {
 							</div>
 						</div>
 					}
-					if len(vm.WorkspaceList) > 0 {
+					if len(vm.ProjectList) > 0 {
 						<div class="relative" data-row-action="">
 							<button
 								type="button"
-								data-workspace-menu-toggle
+								data-project-menu-toggle
 								class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 px-2.5 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
 							>
 								<svg viewBox="0 0 12 12" class="h-3 w-3 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="10" height="8" rx="1"></rect><path d="M4 3V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V3" stroke-linecap="round"></path></svg>
-								<span data-active-workspace-label>
-									if vm.ActiveWorkspace != "" {
-										{ vm.ActiveWorkspace }
+								<span data-active-project-label>
+									if pn := vm.ProjectName(vm.ActiveProjectID); pn != "" {
+										{ pn }
 									} else {
 										default
 									}
 								</span>
 								<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
 							</button>
-							<div data-workspace-menu class="hidden absolute bottom-full left-0 mb-1 z-20 min-w-[140px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1">
-								for _, ws := range vm.WorkspaceList {
+							<div data-project-menu class="hidden absolute bottom-full left-0 mb-1 z-20 min-w-[160px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1">
+								<button
+									type="button"
+									data-project-choice=""
+									class="w-full text-left px-3 py-2 text-xs text-black-700 dark:text-black-600 italic hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+								>
+									— no project —
+								</button>
+								for _, pid := range vm.ProjectList {
 									<button
 										type="button"
-										data-workspace-choice={ ws }
+										data-project-choice={ pid }
 										class="w-full text-left px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
 									>
-										{ ws }
+										{ vm.ProjectName(pid) }
 									</button>
 								}
 							</div>

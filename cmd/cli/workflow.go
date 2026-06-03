@@ -30,7 +30,7 @@ func workflowTestCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
-			layout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentconfig.WorkspaceConfig{}))
+			layout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentconfig.StorageConfig{}))
 			svc := service.New(layout)
 			eng := engine.New(layout, svc, nil)
 			runner := wftest.New(eng, svc, layout)

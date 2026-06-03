@@ -30,6 +30,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
+	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
@@ -41,7 +42,6 @@ import (
 	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
-	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
@@ -283,17 +283,20 @@ func NewServer() *Server {
 	// Bootstrap reads or creates the on-disk layout (~/.wick/agents/) and
 	// loads the in-memory registry. Pool is wired with the production
 	// ClaudeFactory and the SSE event broadcaster.
-	agentsWorkspaceCfg := agentconfig.WorkspaceConfig{
+	agentsStorageCfg := agentconfig.StorageConfig{
 		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
-		DefaultWorkspace: configsSvc.GetOwned("agents", "default_workspace"),
+		DefaultProjectID: configsSvc.GetOwned("agents", "default_project_id"),
 	}
-	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentsWorkspaceCfg))
+	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentsStorageCfg))
 	agentsMgr, agentsBootErr := agentregistry.Bootstrap(agentsLayout)
 	if agentsBootErr != nil {
 		log.Fatal().Msgf("agents bootstrap: %s", agentsBootErr.Error())
 	}
 	agentsBcast := agentstool.NewBroadcaster()
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
+	// Trim any backlog of spawn logs from before pruning existed so the
+	// dir is bounded immediately, not only after the next spawn.
+	_ = agentsSpawnLogger.Prune(provider.MaxSpawnLogs)
 
 	// One-shot migration: the deprecated agents.bypass_permissions checkbox
 	// folded into the new GateConfig.PermissionMode dropdown. When the
@@ -421,7 +424,7 @@ func NewServer() *Server {
 		return &agentpool.GateConfig{
 			GateBinary:   resolvedGateBin,
 			AppName:      appname.Resolve(),
-			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
+			DefaultScope: agentsLayout.ProjectsDir(),
 		}
 	}
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
@@ -432,7 +435,7 @@ func NewServer() *Server {
 		PreemptIdle:      preemptIdle,
 		Layout:           agentsLayout,
 		Factory:          agentsFactory,
-		DefaultWorkspace: agentsWorkspaceCfg.DefaultWorkspace,
+		DefaultProjectID: agentsStorageCfg.DefaultProjectID,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
@@ -464,6 +467,7 @@ func NewServer() *Server {
 	agentstool.SetLayout(agentsLayout)
 	agentstool.SetSpawnLogger(agentsSpawnLogger)
 	agentstool.SetConfigs(configsSvc)
+	agentstool.SetAuth(authSvc)
 	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
 	agentstool.SetChannelRegistry(channelReg)
@@ -623,7 +627,7 @@ func NewServer() *Server {
 		initialRules := parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds"))
 		if wsErr := gate.WriteSharedSpec(appname.Resolve(), gate.Spec{
 			Rules:        initialRules,
-			DefaultScope: agentsLayout.WorkspaceManagedPath("default"),
+			DefaultScope: agentsLayout.ProjectsDir(),
 		}); wsErr != nil {
 			log.Warn().Err(wsErr).Msg("agents: write initial spec.json failed")
 		}
@@ -646,21 +650,28 @@ func NewServer() *Server {
 		})
 	}
 
-	// sendFnFor returns a pool-dispatch closure that re-reads the workspace
-	// from agent_channels on every send, so UI changes take effect without
-	// a restart. One closure per channel type so workspaces can differ.
+	// sendFnFor returns a pool-dispatch closure that re-reads the project
+	// binding from agent_channels on every send, so UI changes take effect
+	// without a restart. One closure per channel type so projects can differ.
 	sendFnFor := func(channelType string) agentchannels.SendFunc {
 		raw := agentchannels.SendFunc(func(ctx context.Context, sessionID, agentName, source, role, text string) error {
-			ws := ""
-			if m, err := agentchannels.GetChannelConfigMap(db, channelType); err == nil {
-				ws = m["workspace"]
+			pid := ""
+			// Per-request override (e.g. REST body `project`) wins, when it
+			// names a real project; otherwise fall back to channel config.
+			if ov := agentchannels.ProjectOverride(ctx); ov != "" && agentproject.Exists(agentsLayout, ov) {
+				pid = ov
 			}
-			if ws == "" {
-				if wsNames, err := agentworkspace.List(agentsLayout); err == nil && len(wsNames) == 1 {
-					ws = wsNames[0]
+			if pid == "" {
+				if m, err := agentchannels.GetChannelConfigMap(db, channelType); err == nil {
+					pid = m["project_id"]
 				}
 			}
-			return agentsPool.SendWithWorkspace(ctx, sessionID, agentName, source, role, text, ws)
+			if pid == "" {
+				if ids, err := agentproject.List(agentsLayout); err == nil && len(ids) == 1 {
+					pid = ids[0]
+				}
+			}
+			return agentsPool.SendWithProject(ctx, sessionID, agentName, source, role, text, pid)
 		})
 		return agentchannels.WrapSendFunc(raw, agentsLayout, agentsPool, func(sessionID, agentName, source, text string) {
 			if err := agentsMgr.RefreshSession(sessionID); err != nil {
@@ -890,19 +901,32 @@ func NewServer() *Server {
 		}
 	}
 	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
-		wsNames, _ := agentworkspace.List(agentsLayout)
-		// Build "label::path" options for the allowed_cmds scope column.
+		projectIDs, _ := agentproject.List(agentsLayout)
+		// Build "label::path" options for the allowed_cmds scope column and
+		// "label::id" options for the default_project_id dropdown.
 		var scopeOpts string
-		if len(wsNames) > 0 {
-			var parts []string
-			for _, name := range wsNames {
-				path, err := agentworkspace.ResolvePath(agentsLayout, name)
-				if err == nil && path != "" {
-					parts = append(parts, name+"::"+path)
+		var projectOpts string
+		if len(projectIDs) > 0 {
+			var scopeParts, projParts []string
+			for _, id := range projectIDs {
+				p, lerr := agentproject.Load(agentsLayout, id)
+				if lerr != nil {
+					continue
+				}
+				label := p.Meta.Name
+				if label == "" {
+					label = id
+				}
+				projParts = append(projParts, label+"::"+id)
+				if path, err := agentproject.ResolvePath(agentsLayout, id); err == nil && path != "" {
+					scopeParts = append(scopeParts, label+"::"+path)
 				}
 			}
-			if len(parts) > 0 {
-				scopeOpts = strings.Join(parts, "|")
+			if len(scopeParts) > 0 {
+				scopeOpts = strings.Join(scopeParts, "|")
+			}
+			if len(projParts) > 0 {
+				projectOpts = strings.Join(projParts, "|")
 			}
 		}
 		// Return only rows not managed by a dedicated UI page, with ColOptions injected.
@@ -913,6 +937,9 @@ func NewServer() *Server {
 			}
 			if r.Key == "allowed_cmds" && scopeOpts != "" {
 				r.ColOptions = map[string]string{"scope": scopeOpts}
+			}
+			if r.Key == "default_project_id" {
+				r.Options = projectOpts
 			}
 			out = append(out, r)
 		}
@@ -1442,9 +1469,9 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	// test workflows. Engine has no live channel / provider wiring here
 	// so type:channel + type:agent nodes will fail at run time; everything
 	// else (validate/simulate/test/file ops/canvas mutations) works.
-	stdioAgentsCfg := agentconfig.WorkspaceConfig{
+	stdioAgentsCfg := agentconfig.StorageConfig{
 		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
-		DefaultWorkspace: configsSvc.GetOwned("agents", "default_workspace"),
+		DefaultProjectID: configsSvc.GetOwned("agents", "default_project_id"),
 	}
 	stdioWfLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(stdioAgentsCfg))
 	stdioWfMgr := wfsetup.New(stdioWfLayout)

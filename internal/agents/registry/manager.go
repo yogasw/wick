@@ -5,37 +5,37 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/preset"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
-// WorkspaceHookWriter writes (or removes) the gate hook config into a
-// workspace directory's .claude/settings.local.json. Implemented by
+// ProjectHookWriter writes (or removes) the gate hook config into a
+// project's folder .claude/settings.local.json. Implemented by
 // gate.hookConfigWriter; the interface keeps the registry package free
 // of a direct gate import.
 //
-// Write must be idempotent — it is called on every CreateWorkspace and
-// SwitchWorkspace, even when the file already exists with the same content.
+// Write must be idempotent — it is called on every CreateProject and
+// MoveSession, even when the file already exists with the same content.
 // Remove is best-effort: callers log but do not hard-fail when it errors.
-type WorkspaceHookWriter interface {
-	// Write installs the hook config at <workspace>/.claude/settings.local.json.
-	Write(workspace, gateBin string) error
+type ProjectHookWriter interface {
+	// Write installs the hook config at <folder>/.claude/settings.local.json.
+	Write(folder, gateBin string) error
 	// Remove deletes the hook config. Idempotent — missing file is not an error.
-	Remove(workspace string) error
+	Remove(folder string) error
 }
 
 // Manager wraps Registry with mutators that keep disk and memory in
-// sync. Pure-disk functions in the workspace / session / preset
+// sync. Pure-disk functions in the project / session / preset
 // packages stay usable on their own — Manager just glues a
 // Reload-on-mutate strategy for callers that want one entry point.
 // UI handlers and CLI commands use Manager; integration tests use
 // the bare functions.
 type Manager struct {
 	reg *Registry
-	// HookWriter, when non-nil, is called after every CreateWorkspace and
-	// SwitchWorkspace to ensure .claude/settings.local.json exists in the
-	// target workspace. Nil = skip hook injection (tests, non-claude setups).
-	HookWriter WorkspaceHookWriter
+	// HookWriter, when non-nil, is called after every CreateProject and
+	// MoveSession to ensure .claude/settings.local.json exists in the
+	// target project folder. Nil = skip hook injection (tests, non-claude setups).
+	HookWriter ProjectHookWriter
 	// GateBinLoader returns the current gate binary path. Called on every
 	// inject so live config changes take effect without a server restart.
 	// Nil, or a loader that returns "", disables injection silently.
@@ -44,44 +44,44 @@ type Manager struct {
 
 func NewManager(reg *Registry) *Manager { return &Manager{reg: reg} }
 
-// injectHook resolves the workspace path and writes the hook config into
+// injectHook resolves the project folder and writes the hook config into
 // it. All outcomes — skip, success, failure — are logged so a missing
 // .claude/settings.local.json is always traceable.
-func (m *Manager) injectHook(ctx context.Context, workspaceName string) {
+func (m *Manager) injectHook(_ context.Context, projectID string) {
 	if m.HookWriter == nil {
-		log.Debug().Str("workspace", workspaceName).Msg("registry.manager: hook injection skipped (no HookWriter configured)")
+		log.Debug().Str("project", projectID).Msg("registry.manager: hook injection skipped (no HookWriter configured)")
 		return
 	}
 	if m.GateBinLoader == nil {
-		log.Debug().Str("workspace", workspaceName).Msg("registry.manager: hook injection skipped (no GateBinLoader configured)")
+		log.Debug().Str("project", projectID).Msg("registry.manager: hook injection skipped (no GateBinLoader configured)")
 		return
 	}
 	gateBin := m.GateBinLoader()
 	if gateBin == "" {
-		log.Warn().Str("workspace", workspaceName).Msg("registry.manager: hook injection skipped — GateBinLoader returned empty path")
+		log.Warn().Str("project", projectID).Msg("registry.manager: hook injection skipped — GateBinLoader returned empty path")
 		return
 	}
-	path, err := workspace.ResolvePath(m.reg.layout, workspaceName)
+	path, err := project.ResolvePath(m.reg.layout, projectID)
 	if err != nil {
-		log.Error().Err(err).Str("workspace", workspaceName).Msg("registry.manager: hook injection failed — cannot resolve workspace path")
+		log.Error().Err(err).Str("project", projectID).Msg("registry.manager: hook injection failed — cannot resolve project path")
 		return
 	}
 	log.Debug().
-		Str("workspace", workspaceName).
+		Str("project", projectID).
 		Str("path", path).
 		Str("gate_bin", gateBin).
-		Msg("registry.manager: injecting hook config into workspace")
+		Msg("registry.manager: injecting hook config into project")
 	if err := m.HookWriter.Write(path, gateBin); err != nil {
 		log.Error().
 			Err(err).
-			Str("workspace", workspaceName).
+			Str("project", projectID).
 			Str("path", path).
 			Str("gate_bin", gateBin).
 			Msg("registry.manager: hook injection failed — Write returned error")
 		return
 	}
 	log.Info().
-		Str("workspace", workspaceName).
+		Str("project", projectID).
 		Str("path", path).
 		Msg("registry.manager: hook config injected successfully")
 }
@@ -89,38 +89,51 @@ func (m *Manager) injectHook(ctx context.Context, workspaceName string) {
 // Registry exposes the underlying registry for read paths.
 func (m *Manager) Registry() *Registry { return m.reg }
 
-// CreateWorkspace runs the disk create + refreshes registry cache, then
-// injects the gate hook config into the new workspace directory.
-func (m *Manager) CreateWorkspace(ctx context.Context, opt workspace.CreateOptions) (workspace.Workspace, error) {
-	log.Debug().Str("workspace", opt.Name).Str("custom_path", opt.CustomPath).Msg("registry.manager: creating workspace")
-	w, err := workspace.Create(m.reg.layout, opt)
+// CreateProject runs the disk create + refreshes registry cache, then
+// injects the gate hook config into the new project folder.
+func (m *Manager) CreateProject(ctx context.Context, opt project.CreateOptions) (project.Project, error) {
+	log.Debug().Str("project", opt.Name).Str("custom_path", opt.CustomPath).Msg("registry.manager: creating project")
+	p, err := project.Create(m.reg.layout, opt)
 	if err != nil {
-		log.Error().Err(err).Str("workspace", opt.Name).Msg("registry.manager: workspace create failed")
-		return workspace.Workspace{}, err
+		log.Error().Err(err).Str("project", opt.Name).Msg("registry.manager: project create failed")
+		return project.Project{}, err
 	}
-	log.Info().Str("workspace", opt.Name).Msg("registry.manager: workspace created")
-	m.reg.upsertWorkspace(w)
-	m.injectHook(ctx, opt.Name)
-	return w, nil
+	log.Info().Str("project", p.Meta.ID).Str("name", opt.Name).Msg("registry.manager: project created")
+	m.reg.upsertProject(p)
+	m.injectHook(ctx, p.Meta.ID)
+	return p, nil
 }
 
-// DeleteWorkspace removes the workspace metadata folder and detaches
-// dependent sessions. The workspace folder contents (managed `files/`
-// or the user's custom path) are deleted only for managed workspaces;
+// UpdateProject rewrites project meta + refreshes cache.
+func (m *Manager) UpdateProject(_ context.Context, id string, meta project.Meta) (project.Project, error) {
+	if err := project.SaveMeta(m.reg.layout, id, meta); err != nil {
+		return project.Project{}, err
+	}
+	p, err := project.Load(m.reg.layout, id)
+	if err != nil {
+		return project.Project{}, err
+	}
+	m.reg.upsertProject(p)
+	return p, nil
+}
+
+// DeleteProject removes the project metadata folder and unscopes
+// dependent sessions (sets their ProjectID to ""). The project folder
+// contents (managed `files/`) are deleted only for managed projects;
 // custom paths are left untouched because wick never owned them.
-func (m *Manager) DeleteWorkspace(_ context.Context, name string) error {
-	for id, s := range m.reg.Sessions() {
-		if s.Meta.Workspace != name {
+func (m *Manager) DeleteProject(_ context.Context, id string) error {
+	for sid, s := range m.reg.Sessions() {
+		if s.Meta.ProjectID != id {
 			continue
 		}
-		s.Meta.Workspace = ""
-		_ = session.SaveMeta(m.reg.layout, id, s.Meta)
+		s.Meta.ProjectID = ""
+		_ = session.SaveMeta(m.reg.layout, sid, s.Meta)
 		m.reg.upsertSession(s)
 	}
-	if err := workspace.Delete(m.reg.layout, name); err != nil {
+	if err := project.Delete(m.reg.layout, id); err != nil {
 		return err
 	}
-	m.reg.deleteWorkspace(name)
+	m.reg.deleteProject(id)
 	return nil
 }
 
@@ -163,13 +176,14 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	return nil
 }
 
-// SwitchWorkspace moves a session to a different workspace + refreshes
-// cache, then injects the gate hook config into the target workspace so
+// MoveSession moves a session to a different project + refreshes cache,
+// then injects the gate hook config into the target project folder so
 // the next spawn picks up a correctly-configured .claude/settings.local.json.
-func (m *Manager) SwitchWorkspace(ctx context.Context, id, newWorkspace string) error {
-	log.Debug().Str("session", id).Str("workspace", newWorkspace).Msg("registry.manager: switching workspace")
-	if err := session.SwitchWorkspace(ctx, m.reg.layout, id, newWorkspace); err != nil {
-		log.Error().Err(err).Str("session", id).Str("workspace", newWorkspace).Msg("registry.manager: workspace switch failed")
+// Empty newProjectID unscopes the session.
+func (m *Manager) MoveSession(ctx context.Context, id, newProjectID string) error {
+	log.Debug().Str("session", id).Str("project", newProjectID).Msg("registry.manager: moving session to project")
+	if err := session.SetProject(ctx, m.reg.layout, id, newProjectID); err != nil {
+		log.Error().Err(err).Str("session", id).Str("project", newProjectID).Msg("registry.manager: session move failed")
 		return err
 	}
 	s, err := session.Load(m.reg.layout, id)
@@ -177,11 +191,11 @@ func (m *Manager) SwitchWorkspace(ctx context.Context, id, newWorkspace string) 
 		return err
 	}
 	m.reg.upsertSession(s)
-	log.Info().Str("session", id).Str("workspace", newWorkspace).Msg("registry.manager: workspace switched")
-	if newWorkspace != "" {
-		m.injectHook(ctx, newWorkspace)
+	log.Info().Str("session", id).Str("project", newProjectID).Msg("registry.manager: session moved")
+	if newProjectID != "" {
+		m.injectHook(ctx, newProjectID)
 	} else {
-		log.Debug().Str("session", id).Msg("registry.manager: hook injection skipped — workspace unbound (empty)")
+		log.Debug().Str("session", id).Msg("registry.manager: hook injection skipped — project unbound (empty)")
 	}
 	return nil
 }

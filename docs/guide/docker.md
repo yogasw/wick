@@ -15,7 +15,7 @@ docker run -d \
 Web UI at `http://localhost:9425`. First-boot credentials print to container logs.
 
 ::: tip Persist your data
-Mount `/root/.wick` to a volume or bind mount. That directory holds SQLite DB, sessions, workspaces, credentials. No mount = everything lost on restart.
+Mount `/root/.wick` to a volume or bind mount. That directory holds SQLite DB, sessions, projects, credentials. No mount = everything lost on restart.
 :::
 
 ## Configure via env

@@ -231,6 +231,11 @@ type chatRequest struct {
 	Metadata     map[string]string `json:"metadata"`
 	Stream       bool              `json:"stream"`
 	Messages     []chatMessage     `json:"messages"`
+	// Project optionally names the wick Project (id) for this request,
+	// overriding the channel's configured default. Also accepted via
+	// metadata.project / metadata.project_id for SDKs that only expose
+	// the standard OpenAI `metadata` map.
+	Project string `json:"project"`
 }
 
 type chatMessage struct {
@@ -308,7 +313,7 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused)
+	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata))
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -354,6 +359,24 @@ func resolveConversation(conversation string, metadata map[string]string) string
 	return ""
 }
 
+// resolveProject picks the per-request project id from the explicit
+// `project` field or, failing that, metadata.project / metadata.project_id.
+// Empty means "use the channel's configured default project".
+func resolveProject(project string, metadata map[string]string) string {
+	if v := strings.TrimSpace(project); v != "" {
+		return v
+	}
+	if metadata != nil {
+		if v := strings.TrimSpace(metadata["project"]); v != "" {
+			return v
+		}
+		if v := strings.TrimSpace(metadata["project_id"]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // checkReady returns a non-zero (status, msg) when the channel cannot
 // serve requests (disabled, not wired, no auth). status 0 means OK.
 func (c *Channel) checkReady() (int, string) {
@@ -393,13 +416,16 @@ type dispatchResult struct {
 // dispatch claims sessionID, optionally injects origin context, sends the
 // prompt to the agent pool, and waits for Done. Returns either a result
 // (status 0) or an HTTP error (non-zero status + msg).
-func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, prompt string, reused bool) (dispatchResult, int, string) {
-	c.cfgMu.Lock()
-	workspace := c.cfg.Workspace
-	c.cfgMu.Unlock()
-	if workspace == "" {
-		workspace = "main"
-	}
+func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, prompt string, reused bool, projectOverride string) (dispatchResult, int, string) {
+	// agentName is the pool agent to route to; default "main". The
+	// project binding (cwd) is resolved by the pool send closure from
+	// the channel's configured project_id — unless the request named a
+	// project, in which case projectOverride wins (threaded via ctx).
+	agentName := "main"
+	// sendCtx is detached from the HTTP request (the pool spawns the CLI
+	// with this ctx; inheriting the request ctx would kill it on return)
+	// but still carries the per-request project override.
+	sendCtx := agentchannels.WithProjectOverride(context.Background(), projectOverride)
 
 	tn := &turn{done: make(chan struct{})}
 	c.mu.Lock()
@@ -426,7 +452,7 @@ func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, pr
 			"[REST request context — sent automatically by wick]\nUser: %s\nSession: %s",
 			userLabel, sessionID,
 		)
-		if err := c.sendFn(context.Background(), sessionID, workspace, "rest", "system", ctxText); err != nil {
+		if err := c.sendFn(sendCtx, sessionID, agentName, "rest", "system", ctxText); err != nil {
 			log.Warn().Str("channel", "rest").Err(err).Msg("inject session context failed")
 		}
 		if hook := c.onSessionStart; hook != nil {
@@ -434,7 +460,7 @@ func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, pr
 		}
 	}
 
-	if err := c.sendFn(context.Background(), sessionID, workspace, "rest", "user", prompt); err != nil {
+	if err := c.sendFn(sendCtx, sessionID, agentName, "rest", "user", prompt); err != nil {
 		return dispatchResult{}, http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
 	}
 

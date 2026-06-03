@@ -36,6 +36,9 @@ type responsesRequest struct {
 	User               string            `json:"user"`
 	Stream             bool              `json:"stream"`
 	Metadata           map[string]string `json:"metadata"`
+	// Project optionally names the wick Project (id) for this request,
+	// overriding the channel default. Also via metadata.project[_id].
+	Project string `json:"project"`
 }
 
 // inputItem is one entry of the array form of `input`. content is either
@@ -153,7 +156,7 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused)
+	res, status, msg := c.dispatch(r.Context(), sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata))
 	if status != 0 {
 		writeError(w, status, msg)
 		return

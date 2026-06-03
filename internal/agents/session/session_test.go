@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/storage"
-	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
 func newLayout(t *testing.T) config.Layout {
@@ -18,7 +18,15 @@ func newLayout(t *testing.T) config.Layout {
 	return layout
 }
 
-func TestCreateNoWorkspace(t *testing.T) {
+// mkProject creates a managed project with the given id+name for tests.
+func mkProject(t *testing.T, layout config.Layout, id, name string) {
+	t.Helper()
+	if _, err := project.Create(layout, project.CreateOptions{ID: id, Name: name}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateNoProject(t *testing.T) {
 	layout := newLayout(t)
 	s, err := Create(context.Background(), layout, CreateOptions{
 		ID:     "T123",
@@ -36,41 +44,39 @@ func TestCreateNoWorkspace(t *testing.T) {
 	if !storage.PathExists(layout.SessionAgents("T123")) {
 		t.Fatal("agents.json missing")
 	}
-	if s.Meta.Workspace != "" {
-		t.Fatalf("workspace ref should be empty, got %q", s.Meta.Workspace)
+	if s.Meta.ProjectID != "" {
+		t.Fatalf("project ref should be empty, got %q", s.Meta.ProjectID)
 	}
 }
 
-func TestWithWorkspace(t *testing.T) {
+func TestWithProject(t *testing.T) {
 	layout := newLayout(t)
-	if _, err := workspace.Create(layout, workspace.CreateOptions{Name: "frontend"}); err != nil {
-		t.Fatal(err)
-	}
+	mkProject(t, layout, "p-frontend", "frontend")
 	s, err := Create(context.Background(), layout, CreateOptions{
 		ID:        "T999",
-		Workspace: "frontend",
+		ProjectID: "p-frontend",
 		Origin:    OriginSlack,
 	})
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	if s.Meta.Workspace != "frontend" {
-		t.Fatalf("workspace: %q", s.Meta.Workspace)
+	if s.Meta.ProjectID != "p-frontend" {
+		t.Fatalf("project: %q", s.Meta.ProjectID)
 	}
-	// Workspace folder lives under workspaces/, not sessions/.
-	if !storage.PathExists(layout.WorkspaceManagedPath("frontend")) {
-		t.Fatal("managed workspace files dir missing")
+	// Project folder lives under projects/, not sessions/.
+	if !storage.PathExists(layout.ProjectManagedPath("p-frontend")) {
+		t.Fatal("managed project files dir missing")
 	}
 }
 
-func TestCreateUnknownWorkspaceRejected(t *testing.T) {
+func TestCreateUnknownProjectRejected(t *testing.T) {
 	layout := newLayout(t)
 	if _, err := Create(context.Background(), layout, CreateOptions{
 		ID:        "T_bad",
-		Workspace: "ghost",
+		ProjectID: "ghost",
 		Origin:    OriginUI,
 	}); err == nil {
-		t.Fatal("expected error for unknown workspace")
+		t.Fatal("expected error for unknown project")
 	}
 }
 
@@ -101,8 +107,8 @@ func TestAddAgent(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	layout := newLayout(t)
-	_, _ = workspace.Create(layout, workspace.CreateOptions{Name: "p"})
-	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S2", Workspace: "p", Origin: OriginUI})
+	mkProject(t, layout, "p-del", "p")
+	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S2", ProjectID: "p-del", Origin: OriginUI})
 
 	if err := Delete(context.Background(), layout, "S2"); err != nil {
 		t.Fatal(err)
@@ -110,24 +116,24 @@ func TestDelete(t *testing.T) {
 	if storage.PathExists(layout.SessionDir("S2")) {
 		t.Fatal("session dir still exists")
 	}
-	// Deleting a session must NOT delete the shared workspace.
-	if !storage.PathExists(layout.WorkspaceDir("p")) {
-		t.Fatal("workspace deleted by session delete — must stay")
+	// Deleting a session must NOT delete the shared project.
+	if !storage.PathExists(layout.ProjectDir("p-del")) {
+		t.Fatal("project deleted by session delete — must stay")
 	}
 }
 
-func TestSwitchWorkspace(t *testing.T) {
+func TestSetProject(t *testing.T) {
 	layout := newLayout(t)
-	_, _ = workspace.Create(layout, workspace.CreateOptions{Name: "a"})
-	_, _ = workspace.Create(layout, workspace.CreateOptions{Name: "b"})
-	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S3", Workspace: "a", Origin: OriginUI})
+	mkProject(t, layout, "p-a", "a")
+	mkProject(t, layout, "p-b", "b")
+	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S3", ProjectID: "p-a", Origin: OriginUI})
 
-	if err := SwitchWorkspace(context.Background(), layout, "S3", "b"); err != nil {
-		t.Fatalf("switch: %v", err)
+	if err := SetProject(context.Background(), layout, "S3", "p-b"); err != nil {
+		t.Fatalf("move: %v", err)
 	}
 	s, _ := Load(layout, "S3")
-	if s.Meta.Workspace != "b" {
-		t.Fatalf("workspace after switch: %q", s.Meta.Workspace)
+	if s.Meta.ProjectID != "p-b" {
+		t.Fatalf("project after move: %q", s.Meta.ProjectID)
 	}
 }
 

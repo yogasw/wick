@@ -6,7 +6,7 @@ package config
 type TelegramChannelConfig struct {
 	BotToken   string `wick:"secret;hidden;key=bot_token;desc=Bot token from @BotFather (format: 123456:ABC-...)."`
 	AllowedIDs string `wick:"kvlist;hidden;key=allowed_ids;desc=Allowed Telegram chat IDs. Leave empty to allow all chats."`
-	Workspace  string `wick:"dropdown;hidden;key=workspace;desc=Workspace to use for sessions from this Telegram channel. Leave empty to use the global default."`
+	ProjectID  string `wick:"dropdown;hidden;key=project_id;desc=Project to use for sessions from this Telegram channel. Leave empty to use the global default."`
 }
 
 // DefaultTelegramChannelConfig returns the empty Telegram defaults.

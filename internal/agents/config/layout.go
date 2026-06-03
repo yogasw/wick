@@ -1,5 +1,5 @@
 // Package config holds the runtime-editable Agents config (General /
-// Slack / Workspace structs reflected into the configs DB table) plus
+// Slack / Storage structs reflected into the configs DB table) plus
 // the on-disk Layout — the single source of truth for path math under
 // the platform default data directory (~/.<app>/agents). Every other
 // agents subpackage receives a Layout, never hand-rolls paths.
@@ -15,7 +15,7 @@ import (
 // Layout describes the on-disk folder layout rooted at BaseDir.
 //
 // Tests construct a Layout pointing at `t.TempDir()`; production code
-// builds one from WorkspaceConfig.BaseDir (or the platform default).
+// builds one from StorageConfig.BaseDir (or the platform default).
 type Layout struct {
 	BaseDir string
 }
@@ -24,6 +24,7 @@ func NewLayout(baseDir string) Layout { return Layout{BaseDir: baseDir} }
 
 func (l Layout) PresetsDir() string    { return filepath.Join(l.BaseDir, "presets") }
 func (l Layout) WorkspacesDir() string { return filepath.Join(l.BaseDir, "workspaces") }
+func (l Layout) ProjectsDir() string   { return filepath.Join(l.BaseDir, "projects") }
 func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessions") }
 func (l Layout) WorkflowsDir() string  { return filepath.Join(l.BaseDir, "workflows") }
 
@@ -95,6 +96,25 @@ func (l Layout) WorkspaceManagedPath(name string) string {
 	return filepath.Join(l.WorkspaceDir(name), "files")
 }
 
+// ProjectDir is the metadata folder for one project
+// (`projects/<id>/`). For managed projects this also contains the
+// `files/` subfolder used as the agent cwd; custom projects store no
+// files here, only meta.json.
+func (l Layout) ProjectDir(id string) string {
+	return filepath.Join(l.ProjectsDir(), id)
+}
+func (l Layout) ProjectMeta(id string) string {
+	return filepath.Join(l.ProjectDir(id), "meta.json")
+}
+
+// ProjectManagedPath is the cwd folder for a managed project
+// (`projects/<id>/files/`). Use project.ResolvePath() instead of
+// calling this directly — it transparently handles the custom path
+// case.
+func (l Layout) ProjectManagedPath(id string) string {
+	return filepath.Join(l.ProjectDir(id), "files")
+}
+
 func (l Layout) SessionDir(id string) string  { return filepath.Join(l.SessionsDir(), id) }
 func (l Layout) SessionMeta(id string) string { return filepath.Join(l.SessionDir(id), "meta.json") }
 func (l Layout) SessionAgents(id string) string {
@@ -128,7 +148,7 @@ func (l Layout) SessionInflight(id string) string {
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {
-	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir(), l.WorkflowsDir()} {
+	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.ProjectsDir(), l.SessionsDir(), l.WorkflowsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -138,7 +158,7 @@ func (l Layout) EnsureLayout() error {
 
 // ResolveBaseDir returns the platform default base directory (~/.wick/agents).
 // The cfg parameter is kept for call-site compatibility.
-func ResolveBaseDir(_ WorkspaceConfig) string {
+func ResolveBaseDir(_ StorageConfig) string {
 	return defaultBaseDir()
 }
 

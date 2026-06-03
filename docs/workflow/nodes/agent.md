@@ -52,6 +52,6 @@ For non-pool providers (codex / gemini), the executor falls back to the direct `
 
 ## Pair with
 
-- [`session_init`](./session_init) — inject a first-turn context (workspace / chat / user / link) before the agent runs.
+- [`session_init`](./session_init) — inject a first-turn context (project / chat / user / link) before the agent runs.
 - [`classify`](./classify) — cheap routing in front of an expensive agent call.
 - [`channel`](./channel) — post the agent's reply back to the inbound channel.

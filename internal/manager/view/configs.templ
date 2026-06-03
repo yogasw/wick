@@ -150,8 +150,8 @@ templ simpleFieldWidgetInner(row entity.Config) {
 				<select data-field-key={ row.Key } data-server-value={ row.Value } class={ cfgInputClass + " cursor-pointer appearance-none" }>
 					<option value="">— select —</option>
 					if row.Options != "" {
-						for _, opt := range strings.Split(row.Options, "|") {
-							<option value={ opt }>{ opt }</option>
+						for _, pair := range parseColOpts(row.Options) {
+							<option value={ pair[1] }>{ pair[0] }</option>
 						}
 					}
 				</select>

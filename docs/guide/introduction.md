@@ -73,7 +73,7 @@ Connectors are exposed to LLM clients via the [Model Context Protocol](./mcp). E
 
 ### AI Agents (Slack / Telegram / Web)
 
-Wick can host AI coding agents — Claude, Codex, Gemini — as long-lived subprocesses, reachable from **Slack threads, Telegram chats, and the web UI** at the same time. Each conversation = a wick session, sharing a workspace folder and a multi-instance provider config.
+Wick can host AI coding agents — Claude, Codex, Gemini — as long-lived subprocesses, reachable from **Slack threads, Telegram chats, and the web UI** at the same time. Each conversation = a wick session, sharing a project folder and a multi-instance provider config.
 
 - **Multi-channel routing** — same agent reachable from three transports.
 - **Multi-session pool** — concurrent slot cap, FIFO queue, idle-kill, `--resume` revive.

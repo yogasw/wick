@@ -49,14 +49,14 @@ templ ProvidersPage(vm ProvidersVM) {
 			<!-- MCP Wick install status -->
 			@mcpWickCard(vm.MCP, vm.Base)
 			<!-- Recent spawns -->
-			<details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
+			<details data-remember-open="spawns" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
 				<summary class="px-5 py-3 flex items-center gap-2 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 					<svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
 					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
 					if len(vm.Spawns) > 0 {
 						<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", len(vm.Spawns)) }</span>
 					}
-					<span class="text-xs text-black-700 dark:text-black-600 ml-1">one file per spawn under <code class="font-mono">~/.wick/agents/backends/spawns/</code></span>
+					<span class="text-xs text-black-700 dark:text-black-600 ml-1">one file per spawn under <code class="font-mono">~/.&lt;app&gt;/agents/providers/spawns/</code> — only the latest 50 are kept; older spawns are pruned automatically.</span>
 				</summary>
 				<div class="border-t border-white-300 dark:divide-navy-600">
 					if len(vm.Spawns) == 0 {
@@ -66,6 +66,8 @@ templ ProvidersPage(vm ProvidersVM) {
 							<thead>
 								<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
 									<th class="px-5 py-2.5 text-left">Started</th>
+									<th class="px-5 py-2.5 text-left">Session</th>
+									<th class="px-5 py-2.5 text-left">Channel</th>
 									<th class="px-5 py-2.5 text-left">Provider</th>
 									<th class="px-5 py-2.5 text-left">PID</th>
 									<th class="px-5 py-2.5 text-left">First Message</th>
@@ -78,6 +80,20 @@ templ ProvidersPage(vm ProvidersVM) {
 										class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
 									>
 										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
+										<td class="px-5 py-3 font-mono text-xs text-black-800 dark:text-black-600">
+											if f.SessionID != "" {
+												{ shortID(f.SessionID) }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
+										<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600">
+											if f.Origin != "" {
+												{ f.Origin }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
 										<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
 										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
 											if f.PID > 0 {
@@ -563,6 +579,12 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 				</div>
 				<a href={ templ.SafeURL(vm.Base + "/providers") } class="text-xs text-green-600 dark:text-green-400 hover:underline">← Back</a>
 			</div>
+			if vm.SessionDeleted {
+				<div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 flex items-start gap-2">
+					<span class="text-amber-600 dark:text-amber-400 text-sm">⚠</span>
+					<p class="text-xs text-amber-800 dark:text-amber-300">This session has been <strong>deleted</strong>. This is a historical spawn log — its session and the <code class="font-mono">cwd</code> path below may no longer exist.</p>
+				</div>
+			}
 			if vm.File.Binary != "" || len(vm.File.Argv) > 0 {
 				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-4 space-y-2">
 					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Reproduce</h2>

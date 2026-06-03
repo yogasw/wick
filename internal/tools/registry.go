@@ -80,7 +80,7 @@ func RegisterBuiltins() {
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedGateConfig()...)
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedSlackChannelConfig()...)
 	agentsConfigs = append(agentsConfigs, agentconfig.SeedTelegramChannelConfig()...)
-	agentsConfigs = append(agentsConfigs, agentconfig.SeedWorkspaceConfig()...)
+	agentsConfigs = append(agentsConfigs, agentconfig.SeedStorageConfig()...)
 	registerOnce(tool.Module{
 		Meta: tool.Tool{
 			Key:               "agents",

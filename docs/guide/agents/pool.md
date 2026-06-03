@@ -6,11 +6,11 @@ outline: deep
 
 The **pool** caps how many agent subprocesses run at once across all sessions, FIFO-queues the rest, kills idle ones, and revives them with `--resume` when new messages arrive.
 
-A **session** is what holds the conversation: routing key, agent registry, log files, optional workspace binding.
+A **session** is what holds the conversation: routing key, agent registry, log files, optional project binding.
 
 ::: info Source
 Pool: [`internal/agents/pool/`](https://github.com/yogasw/wick/blob/master/internal/agents/pool) — [`pool.go`](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go) (slot allocation), [`buffer.go`](https://github.com/yogasw/wick/blob/master/internal/agents/pool/buffer.go) (message buffer), [`factory.go`](https://github.com/yogasw/wick/blob/master/internal/agents/pool/factory.go) (build agents).
-Session: [`internal/agents/session/`](https://github.com/yogasw/wick/blob/master/internal/agents/session) — [`session.go`](https://github.com/yogasw/wick/blob/master/internal/agents/session/session.go) (Meta, Create/Load/SwitchWorkspace), [`agents.go`](https://github.com/yogasw/wick/blob/master/internal/agents/session/agents.go) (per-session AgentEntry).
+Session: [`internal/agents/session/`](https://github.com/yogasw/wick/blob/master/internal/agents/session) — [`session.go`](https://github.com/yogasw/wick/blob/master/internal/agents/session/session.go) (Meta, Create/Load/SetProject), [`agents.go`](https://github.com/yogasw/wick/blob/master/internal/agents/session/agents.go) (per-session AgentEntry).
 :::
 
 ## Mental model
@@ -38,7 +38,7 @@ Session: [`internal/agents/session/`](https://github.com/yogasw/wick/blob/master
 | `KillAfterIdle` | 0 | Extra grace seconds after idle timeout. | [pool.go:56](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L56) |
 | Queue | FIFO | Sessions waiting for a slot. | [pool.go:38](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L38) |
 | Revive | automatic | New message → spawn with `--resume <cli_session_id>`. | [pool.go:264](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L264) |
-| `DefaultWorkspace` | _(empty)_ | Fallback workspace name when session has none. Empty = per-session temp dir. | [pool.go:59](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L59) |
+| `DefaultProjectID` | _(empty)_ | Fallback project when session has none. Empty = per-session temp dir. | [pool.go:59](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L59) |
 
 ## Session anatomy
 
@@ -58,7 +58,7 @@ sessions/<id>/
 
 ```go
 type Meta struct {
-    Workspace    string    // workspace name; "" = use DefaultWorkspace
+    ProjectID    string    // project id; "" = use DefaultProjectID
     Origin       Origin    // "slack" | "ui" | "api"
     ChannelID    string    // Slack channel ID (Slack-only)
     ActiveAgent  string    // current agent in agents.json
@@ -119,7 +119,7 @@ When a message arrives ([pool.go: `Send`](https://github.com/yogasw/wick/blob/ma
                   return
 
 5. spawn():
-   - load session.Meta → resolve workspace cwd (workspace.ResolvePath, fallback chain)
+   - load session.Meta → resolve project cwd (project.ResolvePath, fallback chain)
    - look up CLISessionID for resume
    - factory.Build(FactoryOptions) → returns Agent + State + Store + OnStarted hook
    - drain Buffer into one combined input
@@ -207,12 +207,12 @@ The format of the resume ID is CLI-specific:
 
 Today, only Claude is wired end-to-end. Codex / Gemini parsers are stubs in [`internal/agents/event/`](https://github.com/yogasw/wick/blob/master/internal/agents/event); resume flow ships when those parsers land.
 
-## Workspace cwd resolution
+## Project cwd resolution
 
 [`pool.resolveCwd`](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go) at spawn time:
 
-1. `sess.Meta.Workspace` non-empty → `workspace.ResolvePath(layout, name)`. Returns custom path or `<base>/workspaces/<name>/files/`.
-2. Empty → `cfg.DefaultWorkspace` set? → resolve that.
+1. `sess.Meta.ProjectID` non-empty → `project.ResolvePath(layout, id)`. Returns custom path or `<base>/projects/<id>/files/`.
+2. Empty → `cfg.DefaultProjectID` set? → resolve that.
 3. Both empty → per-session temp dir at `sessions/<id>/cwd/`. Created on demand.
 
 The pool `MkdirAll`s managed paths before `exec.Cmd.Dir`. Custom paths are assumed to still exist; if you deleted yours, spawn surfaces a clean error.
@@ -248,7 +248,7 @@ Session delete ([`session.Delete`](https://github.com/yogasw/wick/blob/master/in
 ```
 1. Kill subprocess if alive
 2. rm -rf sessions/<id>/
-3. Workspace files left alone (workspaces are shared)
+3. Project files left alone (projects are shared)
 ```
 
 ## Telemetry hooks
@@ -265,6 +265,6 @@ Pool fires two callbacks the UI subscribes to:
 ## See also
 
 - [Channels](./channels) — where `SendFunc` is called from.
-- [Workspaces](./workspaces) — `cwd` resolution.
+- [Projects](./projects) — `cwd` resolution.
 - [Providers](./providers) — `FactoryOptions.ProviderType` / `ProviderName` forwarding.
 - [Command Gate](../command-gate) — gate's PreToolUse hook fires inside the spawned subprocess; pool doesn't see it.

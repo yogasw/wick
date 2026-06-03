@@ -96,7 +96,7 @@ export default withMermaid(defineConfig({
             ],
           },
           { text: 'Overview', link: '/guide/agents' },
-          { text: 'Workspaces', link: '/guide/agents/workspaces' },
+          { text: 'Projects', link: '/guide/agents/projects' },
           { text: 'Providers', link: '/guide/agents/providers' },
           { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },

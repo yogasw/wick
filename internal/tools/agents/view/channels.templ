@@ -229,6 +229,10 @@ templ RestDocs(vm RestDocsVM) {
 					<li><b>Stateful</b>: reuse the same <code class="font-mono">conversation</code> id across calls, or chain Responses turns with <code class="font-mono">previous_response_id</code> — wick keeps the history and only the new turn is sent.</li>
 				</ul>
 			</dd>
+			<dt class="text-black-700 dark:text-black-600">Project</dt>
+			<dd class="text-xs text-black-900 dark:text-white-100">
+				Optional <code class="font-mono">project</code> field (a project id) picks which wick Project the session runs in — its folder becomes the agent cwd and its preset/provider defaults apply. Omit it for the channel's configured default project. Also accepted as <code class="font-mono">metadata.project</code> / <code class="font-mono">metadata.project_id</code>.
+			</dd>
 			<dt class="text-black-700 dark:text-black-600">Streaming</dt>
 			<dd class="text-xs text-black-900 dark:text-white-100">Not supported. Set <code class="font-mono">stream:false</code> (the default).</dd>
 			<dt class="text-black-700 dark:text-black-600">Approvals</dt>
@@ -260,6 +264,9 @@ templ RestDocs(vm RestDocsVM) {
 			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — stateless</h3>
 			<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "curl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Hello, who are you?\" }\n    ]\n  }'" }</code></pre>
 
+			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — pick a project</h3>
+			<p class="text-xs text-black-700 dark:text-black-600 mb-2">Add <code class="font-mono">project</code> (a project id) to run in a specific project's folder + defaults. Omit it to use the channel's default project.</p>
+			<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "curl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"project\": \"PROJECT_ID\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Hello, who are you?\" }\n    ]\n  }'" }</code></pre>
 			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — stateful (reuse session)</h3>
 			<p class="text-xs text-black-700 dark:text-black-600 mb-2">Send the same <code class="font-mono">conversation</code> id on each call. Only the last user message is sent — wick remembers prior turns.</p>
 			<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "# Turn 1\ncurl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"conversation\": \"chat-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Remember the number 7.\" }\n    ]\n  }'\n\n# Turn 2 — same conversation, no history needed\ncurl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"conversation\": \"chat-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"What number did I ask you to remember?\" }\n    ]\n  }'" }</code></pre>
