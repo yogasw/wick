@@ -43,6 +43,6 @@
   icon="▸"
 >
   {#snippet body()}
-    <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">{sub}</div>
+    <div class="text-[11px] text-black-700 dark:text-black-600 truncate">{sub}</div>
   {/snippet}
 </BaseNode>

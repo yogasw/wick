@@ -16,7 +16,7 @@ import (
 // `workflow/`); the SPA shell handler rewrites unknown paths to the
 // matching app's index.html so client-side routing works without server
 // rewrites.
-const spaPrefix = "/agents-v2/"
+const spaPrefix = "/workflow/"
 
 // registerSPA wires the SPA shell + asset handler onto the agents
 // router. We use HandleRaw with one internal mux so we own the
@@ -29,7 +29,7 @@ func registerSPA(r tool.Router) {
 	// HandleRaw handler WITHOUT stripping the prefix, so the handler
 	// sees the full URL path. We strip here so spaHandler can work in
 	// SPA-root-relative terms (e.g. "workflow/edit/abc" instead of
-	// "/tools/agents/agents-v2/workflow/edit/abc").
+	// "/tools/agents/workflow/workflow/edit/abc").
 	mount := strings.TrimSuffix(r.Meta().Path+spaPrefix, "/")
 	r.HandleRaw(spaPrefix, func(_ tool.ConfigReader) http.Handler {
 		return http.StripPrefix(mount, http.HandlerFunc(spaHandler))
@@ -38,7 +38,7 @@ func registerSPA(r tool.Router) {
 
 // spaHandler serves /assets/* from the embed and any other path with
 // the matching app's index.html. The Vite config bakes the SPA's base
-// URL as `/tools/agents-v2/<app>/` so asset references in index.html
+// URL as `/tools/workflow/<app>/` so asset references in index.html
 // land back on this handler.
 func spaHandler(w http.ResponseWriter, r *http.Request) {
 	// Request path arrives stripped of the agents mount prefix already

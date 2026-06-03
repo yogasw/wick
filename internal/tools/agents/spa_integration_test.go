@@ -90,7 +90,7 @@ func skipIfNoSPAShell(t *testing.T) {
 	}
 }
 
-// TestSPAShellServes ensures hitting /tools/agents/agents-v2/workflow/
+// TestSPAShellServes ensures hitting /tools/agents/workflow/workflow/
 // returns the Vite-built index.html with the right base URL injected.
 func TestSPAShellServes(t *testing.T) {
 	skipIfNoSPAShell(t)
@@ -100,7 +100,7 @@ func TestSPAShellServes(t *testing.T) {
 	srv := httptest.NewServer(r.mux)
 	defer srv.Close()
 
-	res, err := http.Get(srv.URL + "/tools/agents/agents-v2/workflow/")
+	res, err := http.Get(srv.URL + "/tools/agents/workflow/workflow/")
 	if err != nil {
 		t.Fatalf("GET shell: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestSPAShellServes(t *testing.T) {
 		t.Errorf("content-type: got %q want text/html", ct)
 	}
 	body, _ := io.ReadAll(res.Body)
-	if !strings.Contains(string(body), "/tools/agents/agents-v2/workflow/") {
+	if !strings.Contains(string(body), "/tools/agents/workflow/workflow/") {
 		t.Errorf("shell missing SPA base URL; body: %s", string(body))
 	}
 }
@@ -126,7 +126,7 @@ func TestSPAShellClientRoute(t *testing.T) {
 	srv := httptest.NewServer(r.mux)
 	defer srv.Close()
 
-	res, err := http.Get(srv.URL + "/tools/agents/agents-v2/workflow/edit/abc-123")
+	res, err := http.Get(srv.URL + "/tools/agents/workflow/workflow/edit/abc-123")
 	if err != nil {
 		t.Fatalf("GET client route: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestSPAShellClientRoute(t *testing.T) {
 		t.Fatalf("status: got %d want 200", res.StatusCode)
 	}
 	body, _ := io.ReadAll(res.Body)
-	if !strings.Contains(string(body), "/tools/agents/agents-v2/workflow/") {
+	if !strings.Contains(string(body), "/tools/agents/workflow/workflow/") {
 		t.Errorf("client route shell missing base URL; body: %s", string(body))
 	}
 }
@@ -165,7 +165,7 @@ func TestSPAAssetServes(t *testing.T) {
 		t.Skip("no .js asset")
 	}
 
-	res, err := http.Get(srv.URL + "/tools/agents/agents-v2/workflow/assets/" + jsName)
+	res, err := http.Get(srv.URL + "/tools/agents/workflow/workflow/assets/" + jsName)
 	if err != nil {
 		t.Fatalf("GET asset: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestSPAAssetServes(t *testing.T) {
 	}
 }
 
-// TestSPABareRedirect ensures hitting the bare /agents-v2/ root lands
+// TestSPABareRedirect ensures hitting the bare /workflow/ root lands
 // on the workflow app.
 func TestSPABareRedirect(t *testing.T) {
 	r := newTestRouter()
@@ -192,7 +192,7 @@ func TestSPABareRedirect(t *testing.T) {
 			return http.ErrUseLastResponse
 		},
 	}
-	res, err := c.Get(srv.URL + "/tools/agents/agents-v2/")
+	res, err := c.Get(srv.URL + "/tools/agents/workflow/")
 	if err != nil {
 		t.Fatalf("GET root: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestSPABareRedirect(t *testing.T) {
 	}
 	loc := res.Header.Get("Location")
 	// Relative redirect — browser resolves against the current path
-	// (/tools/agents/agents-v2/), so "workflow/" lands at the right
+	// (/tools/agents/workflow/), so "workflow/" lands at the right
 	// SPA root. The absolute-URL path is hidden by HandleRaw's
 	// StripPrefix so the handler emits a relative target.
 	if !strings.HasSuffix(loc, "/workflow/") {

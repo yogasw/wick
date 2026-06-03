@@ -260,13 +260,13 @@
   <span class="text-xs">{rows.length} test case{rows.length === 1 ? "" : "s"}</span>
   <div class="flex items-center gap-2">
     <button
-      class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] text-xs hover:bg-slate-100 dark:hover:bg-[#1e293b]"
+      class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] text-xs hover:bg-white-200 dark:hover:bg-[#1e293b]"
       onclick={openCreate}
     >
       + Add case
     </button>
     <button
-      class="px-2 py-1 rounded bg-emerald-500 text-white text-xs disabled:opacity-50"
+      class="px-2 py-1 rounded bg-emerald-500 text-white-100 text-xs disabled:opacity-50"
       onclick={() => refresh()}
       disabled={running}
     >
@@ -276,12 +276,12 @@
 </div>
 
 {#if rows.length === 0}
-  <p class="text-xs text-slate-500 dark:text-slate-400">
+  <p class="text-xs text-black-700 dark:text-black-600">
     No test cases yet. Click <strong>+ Add case</strong> to create one, or capture
     a real run from the Runs panel.
   </p>
 {:else}
-  <ul class="divide-y divide-slate-200 dark:divide-[#2c3a5a]">
+  <ul class="divide-y divide-white-300 dark:divide-navy-600 dark:divide-[#2c3a5a]">
     {#each rows as c (c.name)}
       <li class="py-1.5 text-xs">
         <div class="flex items-center gap-3">
@@ -292,9 +292,9 @@
           >
             {c.name}
           </button>
-          <span class="text-slate-500 dark:text-slate-400">{c.assertions} assert</span>
+          <span class="text-black-700 dark:text-black-600">{c.assertions} assert</span>
           {#if c.duration_ms !== undefined}
-            <span class="text-slate-400 dark:text-slate-500">{c.duration_ms}ms</span>
+            <span class="text-black-700 dark:text-black-600">{c.duration_ms}ms</span>
           {/if}
           {#if c.last_result === "pass"}
             <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">pass</span>
@@ -334,15 +334,15 @@
         <h3 class="text-sm font-semibold">
           {editingExisting ? "Edit test case" : "Add test case"}
         </h3>
-        <button class="text-slate-500 hover:text-slate-900 dark:hover:text-slate-100" onclick={closeModal}>✕</button>
+        <button class="text-black-700 dark:text-black-600 hover:text-slate-900 dark:hover:text-black-800 dark:text-white-100" onclick={closeModal}>✕</button>
       </header>
 
       <div class="flex-1 overflow-y-auto p-4 space-y-3 text-xs">
         {#if modalLoading}
-          <p class="text-slate-500">Loading…</p>
+          <p class="text-black-700 dark:text-black-600">Loading…</p>
         {:else}
           <label class="block">
-            <span class="block mb-1 text-slate-600 dark:text-slate-300">Name</span>
+            <span class="block mb-1 text-black-600 dark:text-black-600">Name</span>
             <input
               type="text"
               class="w-full px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] font-mono disabled:opacity-50"
@@ -351,12 +351,12 @@
               disabled={editingExisting}
             />
             {#if editingExisting}
-              <span class="text-[10px] text-slate-400">Name is the file slug and can't be renamed.</span>
+              <span class="text-[10px] text-black-700 dark:text-black-500">Name is the file slug and can't be renamed.</span>
             {/if}
           </label>
 
           <label class="block">
-            <span class="block mb-1 text-slate-600 dark:text-slate-300">Trigger event (JSON)</span>
+            <span class="block mb-1 text-black-600 dark:text-black-600">Trigger event (JSON)</span>
             <textarea
               class="w-full h-32 px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] font-mono text-[11px]"
               bind:value={inputJson}
@@ -365,17 +365,17 @@
             {#if inputErr}
               <span class="text-rose-600">{inputErr}</span>
             {:else}
-              <span class="text-[10px] text-slate-400">Matches Go workflow.Event — fields like Provider, ChannelID, Body.</span>
+              <span class="text-[10px] text-black-700 dark:text-black-500">Matches Go workflow.Event — fields like Provider, ChannelID, Body.</span>
             {/if}
           </label>
 
           <div>
             <div class="flex items-center justify-between mb-1">
-              <span class="text-slate-600 dark:text-slate-300">Assertions</span>
+              <span class="text-black-600 dark:text-black-600">Assertions</span>
               <button class="text-emerald-600 hover:underline" onclick={addAssertion}>+ add assertion</button>
             </div>
             {#if modalCase.assertions.length === 0}
-              <p class="text-slate-400 italic">No assertions — the case will only check that the workflow runs without error.</p>
+              <p class="text-black-700 dark:text-black-500 italic">No assertions — the case will only check that the workflow runs without error.</p>
             {:else}
               <ul class="space-y-1.5">
                 {#each modalCase.assertions as a, idx}
@@ -402,7 +402,7 @@
                         placeholder="true / 42 / hello"
                       />
                     {:else}
-                      <span class="text-slate-400 italic px-2">no value</span>
+                      <span class="text-black-700 dark:text-black-500 italic px-2">no value</span>
                     {/if}
                     <button
                       class="text-rose-600 hover:underline px-1"
@@ -414,7 +414,7 @@
                   </li>
                 {/each}
               </ul>
-              <p class="mt-1 text-[10px] text-slate-400">
+              <p class="mt-1 text-[10px] text-black-700 dark:text-black-500">
                 Subjects use dotted paths: <code>nodes.&lt;id&gt;.output.&lt;field&gt;</code>,
                 <code>trace.&lt;idx&gt;.status</code>. Values auto-coerce
                 (<code>true</code>, <code>42</code>, <code>3.14</code>, <code>null</code>, JSON literals).
@@ -430,14 +430,14 @@
 
       <footer class="px-4 py-2 border-t border-slate-200 dark:border-[#2c3a5a] flex items-center justify-end gap-2">
         <button
-          class="px-3 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] text-xs hover:bg-slate-100 dark:hover:bg-[#1e293b]"
+          class="px-3 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] text-xs hover:bg-white-200 dark:hover:bg-[#1e293b]"
           onclick={closeModal}
           disabled={modalSaving}
         >
           Cancel
         </button>
         <button
-          class="px-3 py-1 rounded bg-emerald-500 text-white text-xs disabled:opacity-50"
+          class="px-3 py-1 rounded bg-emerald-500 text-white-100 text-xs disabled:opacity-50"
           onclick={saveCase}
           disabled={modalSaving || modalLoading}
         >

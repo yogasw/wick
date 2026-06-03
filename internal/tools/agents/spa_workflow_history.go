@@ -16,6 +16,7 @@ import (
 
 func registerSPAWorkflowHistory(r tool.Router) {
 	r.GET("/api/workflows/versions/{id}", spaWorkflowVersions)
+	r.GET("/api/workflows/versions/{id}/diff", spaWorkflowVersionDiff)
 	r.GET("/api/workflows/versions/{id}/{versionID}", spaWorkflowVersionDetail)
 	r.POST("/api/workflows/versions/{id}/{versionID}/restore", spaWorkflowVersionRestore)
 }
@@ -80,20 +81,47 @@ func spaWorkflowVersionRestore(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid versionID"})
 		return
 	}
-	// Restore writes a new draft via the repo; we also reflect the change
-	// to the file-based service so the existing engine reads stay
-	// consistent during the parallel window.
 	newDraftID, err := repo.Restore(id, uint(vid), "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// Mirror to file store so legacy MCP / engine paths see the same
-	// draft. Soft-fail — the DB write is the source of truth.
-	if globalWorkflowMgr != nil {
-		if w, err := repo.LoadDraft(id); err == nil {
-			_ = globalWorkflowMgr.Service.SaveDraft(id, w)
-		}
-	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true, "new_draft_version_id": newDraftID})
+}
+
+// spaWorkflowVersionDiff returns both snapshots' full body so the FE
+// can render a side-by-side diff. Query string carries the version
+// ids: ?from=<id>&to=<id>. Both must belong to the same workflow.
+func spaWorkflowVersionDiff(c *tool.Ctx) {
+	repo := newWorkflowRepo()
+	if repo == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "DB not wired"})
+		return
+	}
+	id := c.PathValue("id")
+	from, err := strconv.ParseUint(c.Query("from"), 10, 32)
+	if err != nil || from == 0 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "from query param is required (numeric version id)"})
+		return
+	}
+	to, err := strconv.ParseUint(c.Query("to"), 10, 32)
+	if err != nil || to == 0 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "to query param is required (numeric version id)"})
+		return
+	}
+	fromRow, err := repo.Version(uint(from))
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "from: " + err.Error()})
+		return
+	}
+	toRow, err := repo.Version(uint(to))
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "to: " + err.Error()})
+		return
+	}
+	if fromRow.WorkflowID != id || toRow.WorkflowID != id {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "one or both versions do not belong to this workflow"})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"from": fromRow, "to": toRow})
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/nodes"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
 	"github.com/yogasw/wick/internal/agents/workflow/trigger"
@@ -32,7 +33,11 @@ import (
 // to consumers (UI handlers, MCP transport, jobs).
 type Manager struct {
 	Layout     config.Layout
-	Service    *service.FileService
+	Service    service.Service
+	// Repo is the DB-backed workflow repository. Nil when no DB is
+	// wired (test paths) — every consumer that touches it must
+	// nil-check first. Populated by WithDB.
+	Repo       *repository.Repo
 	StateStore *state.FileStore
 	Engine     *engine.Engine
 	Router     *trigger.Router
@@ -106,6 +111,7 @@ func New(layout config.Layout) *Manager {
 	}
 
 	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dtSvc, ss).WithIntegration(intReg)
+	ops.Guard = g
 
 	return &Manager{
 		Layout:      layout,
@@ -125,6 +131,41 @@ func New(layout config.Layout) *Manager {
 		Cost:        c,
 		MCP:         ops,
 	}
+}
+
+// WithDB switches the workflow Service from the file-based store to
+// the DB-primary one. Workflow body + draft + version history + test
+// cases now live in SQL; runtime concerns (state.json, env.json,
+// runs/) keep their on-disk paths via the embedded FileService.
+//
+// Idempotent — call once at boot with the shared *gorm.DB. Passing nil
+// leaves the file-based Service in place (test path).
+func (m *Manager) WithDB(db *gorm.DB) *Manager {
+	if db == nil {
+		return m
+	}
+	repo := repository.New(db)
+	m.Repo = repo
+	dbsvc := service.NewDB(m.Layout, repo)
+	m.Service = dbsvc
+	// Re-wire downstream consumers that captured the previous Service
+	// pointer. Engine, router, canvas, and MCP all close over the
+	// reference at New() time — without rewiring they'd keep reading
+	// from the file store and the SPA would see drift.
+	if m.Engine != nil {
+		m.Engine.Service = dbsvc
+	}
+	if m.Router != nil {
+		m.Router.SetService(dbsvc)
+	}
+	if m.Canvas != nil {
+		m.Canvas.Service = dbsvc
+	}
+	if m.MCP != nil {
+		m.MCP.Service = dbsvc
+		m.MCP.Repo = repo
+	}
+	return m
 }
 
 // WithDataTablesDB swaps the in-memory data table store for the
@@ -168,6 +209,9 @@ func (m *Manager) WithProvider(p provider.Provider) *Manager {
 // WithGuardConfig replaces the guard configuration.
 func (m *Manager) WithGuardConfig(cfg guard.Config) *Manager {
 	m.Guard = guard.New(cfg)
+	if m.MCP != nil {
+		m.MCP.Guard = m.Guard
+	}
 	return m
 }
 

@@ -25,19 +25,19 @@ workflow_workspace            ← entry point, returns base_dir + node_types + t
   → workflow_request_review    ← admin enables manually
 ```
 
-After every edit (`workflow_add_node`, `workflow_connect`, `workflow_write_file workflow.yaml`, …) the change lands in `workflow.draft.yaml`. Call `workflow_publish` to promote — and **always ask the user first**.
+After every edit (`workflow_add_node`, `workflow_connect`, `workflow_set_triggers`, `workflow_update_node`, …) the change lands in the workflow's draft slot. Call `workflow_publish` to promote — and **always ask the user first**.
 
-## Two ways to edit the same file
+## Two ways to edit the same workflow
 
-The canvas and MCP write through the same engine validator. The LLM can scaffold a graph over MCP, you tighten it in the canvas, and version control sees a single `workflow.yaml`.
+The canvas and MCP write through the same engine validator. The LLM scaffolds a graph over MCP, you tighten it in the canvas, both go through the validator before the body lands in the draft slot of the `workflows` table.
 
 ```
 Canvas ─┐
-         ├─→ engine validator ─→ workflow.draft.yaml ─→ publish ─→ workflow.yaml
+         ├─→ engine validator ─→ body_draft (DB) ─→ publish ─→ body_published (DB)
 MCP op ─┘
 ```
 
-No separate "AI mode" / "canvas mode". The validator is the source of truth for what counts as a valid edit; both paths fail the same way on a broken edge or schema mismatch.
+No separate "AI mode" / "canvas mode". The validator is the source of truth; both paths fail the same way on a broken edge or schema mismatch. Every save also appends a row to `workflow_versions` for history + compare + restore.
 
 ## Discovery ops
 
@@ -46,7 +46,7 @@ These are the read-only ops the LLM should call **before** any edit, in this ord
 | Op | Why |
 |---|---|
 | `workflow_workspace` | One call returns base directory, every node type, every trigger type, every workflow template. Most efficient way to orient. |
-| `workflow_node_types` | Full schema + example YAML + `when_to_use` per node type — what the LLM needs before `workflow_add_node`. |
+| `workflow_node_types` | Full schema + example body + `when_to_use` per node type — what the LLM needs before `workflow_add_node`. |
 | `workflow_trigger_types` | Same for triggers. |
 | `workflow_integration` | Per-channel event + action catalog with `match_schema` / `payload_schema` / `input_schema` / `output_schema`. Use to know exact filter shapes for `trigger.match` and exact arg shapes for `channel` nodes. |
 | `workflow_connectors` | Every connector module + its operations — needed for `connector` nodes. |
@@ -65,13 +65,32 @@ These are the read-only ops the LLM should call **before** any edit, in this ord
 
 ## Test fixtures
 
-Workflow fixtures live in `<workflow>/__tests__/` and run via `workflow_test`. To author one:
+Test cases live in the `workflow_test_cases` table — each case has a slug-safe `name`, a JSON `body` with the pinned event + per-node assertions. Author through these ops:
 
-- `workflow_record_test` — capture a real run's event + per-node outputs into a fresh fixture YAML.
-- `workflow_capture_fixture` — snapshot one node's output as a unit-test fixture under `__tests__/nodes/`.
-- `workflow_save_test_case` — create or update one `__tests__/<name>.json` fixture (slug-safe names only).
+- `workflow_save_test_case` — create or update one case by name.
+- `workflow_list_test_cases` — list case names + assertion counts.
+- `workflow_record_test` — capture a real run's event + per-node outputs into a fresh case.
+- `workflow_capture_fixture` — snapshot one node's output as a unit-test case.
 
-Fixtures pin the trigger event and assert per-node outputs; the `workflow_test` runner re-executes the graph against the recorded payload and reports `[{case, pass, error, diff}]` plus coverage.
+The `workflow_test` runner re-executes the graph against the recorded payload and reports `[{case, pass, error, diff}]` plus coverage.
+
+## History, compare, restore
+
+Every save appends to `workflow_versions`. AI surface:
+
+- `workflow_versions` — list snapshots newest first; metadata only (kind, message, created_at, by).
+- `workflow_version_detail` — fetch one snapshot's full body.
+- `workflow_diff_versions` — return two snapshots' bodies side-by-side for diff rendering.
+- `workflow_restore_version` — copy a snapshot back into the draft slot (no auto-publish).
+
+## Canvas lock + guard
+
+- `workflow_lock` — freeze edits on a workflow. The engine ignores the flag (runs continue); every edit op rejects the write while locked. Use for production workflows.
+- `workflow_guard` — separate from `workflow_validate`. Runs the safety rule pack (destructive shell, secret leak, unparameterized SQL, network allowlist, prompt injection patterns) and returns `{ok, violations[], content_hash}`. Call before `workflow_publish` on anything that touches data egress.
+
+## Execute step
+
+- `workflow_exec_node` — run one node in isolation (n8n's "Execute step" pattern). Pass the node JSON, optional `input`, optional `event`, optional `node_outputs` map keyed by upstream node id. Returns `{ok, latency_ms, output}`. Nothing persists to runs/.
 
 ## Watching live runs
 

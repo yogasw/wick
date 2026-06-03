@@ -20,8 +20,8 @@
 
 <aside class="flex flex-col h-full w-[360px] border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800">
   <header class="px-4 py-3 border-b border-white-300 dark:border-navy-600">
-    <div class="text-[10px] uppercase tracking-wide text-black-500 dark:text-white-700">{node.type}</div>
-    <div class="text-sm font-semibold text-black-900 dark:text-white-100">{title ?? node.label ?? node.id}</div>
+    <div class="text-[10px] uppercase tracking-wide text-black-500 dark:text-white-100-700">{node.type}</div>
+    <div class="text-sm font-semibold text-black-800 dark:text-white-100">{title ?? node.label ?? node.id}</div>
   </header>
 
   <nav class="flex border-b border-white-300 dark:border-navy-600 text-xs">
@@ -29,7 +29,7 @@
       <button
         class="flex-1 py-2 capitalize transition-colors"
         class:bg-white-200={activeTab === t}
-        class:dark:bg-navy-700={activeTab === t}
+        class:bg-navy-700={activeTab === t}
         class:text-emerald-600={activeTab === t}
         onclick={() => (activeTab = t as typeof activeTab)}
       >{t}</button>
@@ -43,7 +43,7 @@
       {#if advanced}
         {@render advanced()}
       {:else}
-        <p class="text-black-500 dark:text-white-700 italic">No advanced settings for {node.type}.</p>
+        <p class="text-black-500 dark:text-white-100-700 italic">No advanced settings for {node.type}.</p>
       {/if}
     {:else if activeTab === "notes"}
       <label class="flex flex-col gap-1">
@@ -59,6 +59,6 @@
 
   <footer class="flex gap-2 p-3 border-t border-white-300 dark:border-navy-600">
     <button class="px-3 py-1.5 rounded bg-emerald-500 text-white-100 text-xs font-medium" onclick={onSave}>Save</button>
-    <button class="px-3 py-1.5 rounded text-xs text-black-700 dark:text-white-300" onclick={onCancel}>Cancel</button>
+    <button class="px-3 py-1.5 rounded text-xs text-black-700 dark:text-white-100-300" onclick={onCancel}>Cancel</button>
   </footer>
 </aside>

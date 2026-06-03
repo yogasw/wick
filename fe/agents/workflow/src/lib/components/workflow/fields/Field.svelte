@@ -64,13 +64,13 @@
   }: Props = $props();
 
   const baseInput =
-    "rounded border bg-white dark:bg-slate-800 px-3 py-1.5 text-sm";
+    "rounded border bg-white dark:bg-navy-700 px-3 py-1.5 text-sm";
   // Error wins the colour, then required-empty (amber), else slate.
   function borderClass(hasError: boolean): string {
     if (hasError) {
       return "border-rose-500";
     }
-    return "border-slate-200 dark:border-slate-700";
+    return "border-slate-200 dark:border-navy-600";
   }
 
   function isObjOption(o: SelectOption): o is { label: string; value: string } {
@@ -174,7 +174,7 @@
     {#if error}
       <span class="text-[11px] text-rose-600 dark:text-rose-400">{error}</span>
     {:else if helper}
-      <span class="text-[11px] text-slate-500 dark:text-slate-400">{helper}</span>
+      <span class="text-[11px] text-black-700 dark:text-black-600">{helper}</span>
     {/if}
   {/if}
 </div>

@@ -31,7 +31,7 @@
 </script>
 
 {#if !runDetail}
-  <p class="text-xs text-slate-500">Loading…</p>
+  <p class="text-xs text-black-700 dark:text-black-600">Loading…</p>
 {:else}
   {@const events = runDetail.events ?? []}
   {@const completed = runDetail.completed ?? []}
@@ -41,21 +41,21 @@
       <span class={"px-2 py-0.5 rounded text-[10px] uppercase tracking-wider " + statusBadgeClass(runDetail.status)}>
         {statusLabel(runDetail.status)}
       </span>
-      <span class="font-mono text-xs text-slate-700 dark:text-slate-200 break-all">{runID}</span>
+      <span class="font-mono text-xs text-black-500 dark:text-white-100 break-all">{runID}</span>
       <div class="flex-1"></div>
       <RunActions {runID} {runDetail} {onReplay} />
     </div>
-    <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+    <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-black-700 dark:text-black-600">
       <span class="flex items-center gap-1.5">
         <span class="uppercase tracking-wider text-[10px]">trigger</span>
         {#if triggerInfo.kind}
-          <span class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-wider">{triggerInfo.kind}</span>
+          <span class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-navy-600 text-black-500 dark:text-black-600 uppercase text-[10px] tracking-wider">{triggerInfo.kind}</span>
         {/if}
-        <span class="font-mono text-slate-700 dark:text-slate-200">{triggerInfo.label}</span>
+        <span class="text-black-500 dark:text-white-100">{triggerInfo.label}</span>
       </span>
-      <span class="text-slate-400">·</span>
+      <span class="text-black-700 dark:text-black-500">·</span>
       <span>{fmtTimestamp(runDetail.started_at)}</span>
-      <span class="text-slate-400">·</span>
+      <span class="text-black-700 dark:text-black-500">·</span>
       <span class="tabular-nums">{fmtDuration(runDetail)}</span>
     </div>
   </header>

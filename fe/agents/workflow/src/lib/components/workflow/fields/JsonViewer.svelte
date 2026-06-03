@@ -60,7 +60,7 @@
   function walk(v: unknown, path: string, depth: number, out: Leaf[]) {
     const pad = "  ".repeat(depth);
     if (v === null) {
-      out.push({ kind: "leaf", path, display: "null", cls: "text-slate-400" });
+      out.push({ kind: "leaf", path, display: "null", cls: "text-black-700 dark:text-black-500" });
       return;
     }
     if (Array.isArray(v)) {
@@ -126,10 +126,10 @@
   }
 </script>
 
-<pre class="font-mono text-[11px] text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-snug">{#each tokens as t}{#if t.kind === "text"}{t.text}{:else}<span
+<pre class="font-mono text-[11px] text-slate-800 dark:text-white-100 whitespace-pre-wrap leading-snug">{#each tokens as t}{#if t.kind === "text"}{t.text}{:else}<span
         class={"rounded px-0.5 cursor-grab " + (t.cls ?? "")}
         class:hover:bg-emerald-100={draggable}
-        class:dark:hover:bg-emerald-900={draggable}
+        class:hover:bg-emerald-900={draggable}
         draggable={draggable}
         title={draggable ? `Drag to an expression field — inserts {{${t.path}}}` : ""}
         ondragstart={(e) => onDragStart(e, t.path!)}

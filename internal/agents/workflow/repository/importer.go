@@ -4,10 +4,10 @@ import (
 	"errors"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -50,7 +50,7 @@ func (r *Repo) ImportFromFiles(svc FileLister) (int, error) {
 			// Could be a folder with no workflow.yaml — log + skip.
 			continue
 		}
-		yamlBytes, err := yaml.Marshal(w)
+		bodyBytes, err := parse.Marshal(w)
 		if err != nil {
 			return imported, err
 		}
@@ -63,15 +63,15 @@ func (r *Repo) ImportFromFiles(svc FileLister) (int, error) {
 			Name:          w.Name,
 			Enabled:       w.Enabled,
 			Version:       w.Version,
-			YAMLPublished: string(yamlBytes),
+			BodyPublished: string(bodyBytes),
 			CreatedAt:     time.Now(),
 			UpdatedAt:     time.Now(),
 		}
 		// Layer in a draft if the file store has one.
 		if svc.HasDraft(id) {
 			if dw, err := svc.LoadDraft(id); err == nil {
-				if draftBytes, err := yaml.Marshal(dw); err == nil {
-					row.YAMLDraft = string(draftBytes)
+				if draftBytes, err := parse.Marshal(dw); err == nil {
+					row.BodyDraft = string(draftBytes)
 					row.HasDraft = true
 				}
 			}
@@ -84,7 +84,7 @@ func (r *Repo) ImportFromFiles(svc FileLister) (int, error) {
 			snap := entity.WorkflowVersion{
 				WorkflowID: id,
 				Kind:       KindPublished,
-				YAML:       row.YAMLPublished,
+				Body:       row.BodyPublished,
 				Message:    "initial import",
 				CreatedAt:  row.CreatedAt,
 			}
@@ -95,7 +95,7 @@ func (r *Repo) ImportFromFiles(svc FileLister) (int, error) {
 				draftSnap := entity.WorkflowVersion{
 					WorkflowID: id,
 					Kind:       KindDraft,
-					YAML:       row.YAMLDraft,
+					Body:       row.BodyDraft,
 					Message:    "initial import — draft",
 					CreatedAt:  row.CreatedAt,
 				}

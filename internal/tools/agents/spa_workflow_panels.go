@@ -104,8 +104,7 @@ func spaWorkflowTestGet(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	name := c.PathValue("name")
-	path := "__tests__/" + name + ".json"
-	data, err := globalWorkflowMgr.MCP.ReadFile(id, path)
+	data, err := globalWorkflowMgr.MCP.GetTest(id, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]any{"error": "test case not found"})
 		return
@@ -158,8 +157,7 @@ func spaWorkflowTestSave(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	path := "__tests__/" + body.Name + ".json"
-	if err := globalWorkflowMgr.MCP.WriteFile(id, path, data); err != nil {
+	if err := globalWorkflowMgr.MCP.SaveTest(id, body.Name, data); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -174,8 +172,7 @@ func spaWorkflowTestRun(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	name := c.PathValue("name")
-	path := "__tests__/" + name + ".json"
-	data, err := globalWorkflowMgr.MCP.ReadFile(id, path)
+	data, err := globalWorkflowMgr.MCP.GetTest(id, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]any{"error": "test case not found"})
 		return
@@ -208,8 +205,7 @@ func spaWorkflowTestDelete(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	name := c.PathValue("name")
-	path := "__tests__/" + name + ".json"
-	if err := globalWorkflowMgr.MCP.DeleteFile(id, path); err != nil {
+	if err := globalWorkflowMgr.MCP.DeleteTest(id, name); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}

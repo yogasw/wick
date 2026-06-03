@@ -53,6 +53,27 @@
     return $draftWorkflow.graph?.nodes?.find((n) => n.id === id) ?? null;
   });
 
+  // Passed to ArgField for autocomplete + preview.
+  const workflowId  = $derived($draftWorkflow?.id ?? "");
+  const nodeLabels  = $derived(
+    ($draftWorkflow?.graph?.nodes ?? [])
+      .map((n) => n.label || n.id)
+      .filter((l): l is string => !!l)
+  );
+  // Map label → full output values from actual run results.
+  // Powers autocomplete (keys) + template_test context (values).
+  const nodeOutputs = $derived.by<Record<string, Record<string, unknown>>>(() => {
+    const all = $draftWorkflow?.graph?.nodes ?? [];
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const n of all) {
+      const label = n.label || n.id;
+      const result = $stepResultsByNode[n.id];
+      if (!result?.output) continue;
+      out[label] = result.output as Record<string, unknown>;
+    }
+    return out;
+  });
+
   let activeTab = $state<"params" | "settings">("params");
 
   function close() {
@@ -372,7 +393,7 @@
 
 {#if node}
   <div
-    class="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm"
+    class="fixed inset-0 z-50 bg-white-100 dark:bg-navy-800/70 backdrop-blur-sm"
     role="dialog"
     aria-modal="true"
     aria-label="Edit node"
@@ -380,22 +401,22 @@
   >
     <div
       class="rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
-             text-slate-900 dark:text-slate-100 shadow-2xl flex flex-col"
+             text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
       style="position:absolute; left:16px; right:16px; top:32px; bottom:32px;"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
       <!-- Header. -->
-      <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+      <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-navy-600">
         <span class="h-2 w-2 rounded-full bg-amber-400"></span>
         <span class="text-sm font-semibold">{node.label || node.id}</span>
-        <span class="text-xs text-slate-500 font-mono">{node.type}</span>
+        <span class="text-xs text-black-700 dark:text-black-600">{node.type}</span>
         <div class="flex-1"></div>
-        <button class="text-slate-400 hover:text-slate-100 text-xl leading-none" onclick={close} aria-label="Close">✕</button>
+        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none" onclick={close} aria-label="Close">✕</button>
       </header>
 
       <!-- 3-column body. -->
-      <div class="flex-1 grid divide-x divide-slate-200 dark:divide-slate-800 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
+      <div class="flex-1 grid divide-x divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
         <!-- LEFT: input. Source dropdown picks which upstream node's
              output feeds this pane (defaults to direct parent), then
              JSON / Schema tabs flip the view. JSON leaves are
@@ -404,11 +425,11 @@
              into Expression mode. Matches the legacy editor's
              renderInteractiveJSON UX. -->
         <section class="flex flex-col p-3 overflow-y-auto">
-          <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2">INPUT</div>
+          <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">INPUT</div>
           {#if upstreamWithOutput.length > 0 || inputResolved.source === "mock"}
             {#if upstreamWithOutput.length > 0}
               <select
-                class="w-full mb-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs"
+                class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 text-xs"
                 bind:value={selectedInputSource}
               >
                 {#each upstreamWithOutput as src}
@@ -420,31 +441,31 @@
             {/if}
 
             {#if inputResolved.data !== null}
-              <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
+              <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
                 {#each ["json", "schema"] as v}
                   <button
                     type="button"
                     class="px-2 py-0.5"
                     class:bg-rose-500={inputView === v}
-                    class:text-white={inputView === v}
-                    class:text-slate-500={inputView !== v}
+                    class:text-white-100={inputView === v}
+                    class:text-black-700={inputView !== v}
                     onclick={() => (inputView = v as "json" | "schema")}
                   >{v}</button>
                 {/each}
               </div>
-              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-slate-900/40 p-2">
+              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-navy-800/40 p-2">
                 {#if inputView === "json"}
                   <JsonViewer value={inputResolved.data} prefix={inputResolved.prefix} draggable={true} />
                 {:else}
-                  <pre class="font-mono text-[11px] text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{inferSchema(inputResolved.data)}</pre>
+                  <pre class="font-mono text-[11px] text-black-500 dark:text-black-600 whitespace-pre-wrap">{inferSchema(inputResolved.data)}</pre>
                 {/if}
               </div>
-              <div class="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
+              <div class="mt-2 text-[10px] text-black-700 dark:text-black-600">
                 Drag any value to an expression field on the right.
               </div>
             {/if}
           {:else}
-            <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
+            <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
               <div class="text-2xl">⤓</div>
               <div>No input data</div>
               {#if parentNodeID}
@@ -463,20 +484,20 @@
 
         <!-- MIDDLE: parameters. -->
         <section class="flex flex-col overflow-y-auto">
-          <nav class="flex items-center border-b border-slate-200 dark:border-slate-700 px-4 text-sm">
+          <nav class="flex items-center border-b border-slate-200 dark:border-navy-600 px-4 text-sm">
             {#each ["params", "settings"] as t}
               <button
                 class="px-3 py-2 capitalize border-b-2 transition-colors"
                 class:border-rose-500={activeTab === t}
                 class:text-rose-600={activeTab === t}
                 class:border-transparent={activeTab !== t}
-                class:text-slate-500={activeTab !== t}
+                class:text-black-700={activeTab !== t}
                 onclick={() => (activeTab = t as typeof activeTab)}
               >{t === "params" ? "Parameters" : "Settings"}</button>
             {/each}
             <div class="flex-1"></div>
             <button
-              class="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium disabled:opacity-50"
+              class="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white-100 text-xs font-medium disabled:opacity-50"
               onclick={runStep}
               disabled={executing}
               title="Run only this node with the current input (no persistence)"
@@ -489,8 +510,8 @@
             {#if activeTab === "params"}
               <!-- ── Common: id + label + description ────────────── -->
               <div>
-                <div class="text-[11px] text-slate-500 uppercase mb-1">Node ID</div>
-                <div class="font-mono text-[12px] text-slate-700 dark:text-slate-300">{node.id}</div>
+                <div class="text-[11px] text-black-700 dark:text-black-600 uppercase mb-1">Node ID</div>
+                <div class="font-mono text-[12px] text-black-500 dark:text-black-600">{node.id}</div>
               </div>
               {@const labelTaken = labelClashesWith(node)}
               {@const labelBadFormat = !!node.label && !isValidLabel(node.label)}
@@ -498,10 +519,10 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   class:border-rose-500={labelErr}
-                  class:border-slate-200={!labelErr}
-                  class:dark:border-slate-700={!labelErr}
+                  class:border-white-400={!labelErr}
+                  class:border-navy-600={!labelErr}
                   value={node.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
                   placeholder="my_step"
@@ -515,7 +536,7 @@
                     Label "{node.label}" is already used by another node — pick a unique value.
                   </span>
                 {:else}
-                  <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
                     {LABEL_FORMAT_HINT}
                   </span>
                 {/if}
@@ -523,7 +544,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Description</span>
                 <textarea
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 text-sm"
                   rows="2"
                   placeholder="Notes for collaborators (optional)"
                   value={node.description ?? ""}
@@ -536,7 +557,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.method ?? "GET"}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
@@ -546,6 +567,9 @@
                   </select>
                 </label>
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="URL"
                   value={node.url ?? ""}
                   mode={modeFor("url")}
@@ -577,6 +601,9 @@
                 />
                 {#if (node.method ?? "GET") !== "GET"}
                   <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                     label="Body"
                     value={node.body ?? ""}
                     mode={modeFor("body")}
@@ -590,7 +617,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Parse response</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.parse_response ?? "json"}
                     onchange={(e) => patch("parse_response", (e.target as HTMLSelectElement).value)}
                   >
@@ -604,6 +631,9 @@
               <!-- ── shell ──────────────────────────────────────── -->
               {#if node.type === "shell"}
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Command"
                   value={(node.command ?? []).join("\n")}
                   mode={modeFor("command")}
@@ -629,6 +659,9 @@
                   onModeChange={(m) => patchModeMap("arg_modes", m)}
                 />
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Working directory"
                   value={node.cwd ?? ""}
                   mode={modeFor("cwd")}
@@ -639,7 +672,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Parse output</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.parse_output ?? "raw"}
                     onchange={(e) => patch("parse_output", (e.target as HTMLSelectElement).value)}
                   >
@@ -651,18 +684,21 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Timeout</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="30s"
                     value={node.timeout ?? ""}
                     oninput={(e) => patch("timeout", (e.target as HTMLInputElement).value)}
                   />
-                  <span class="text-[11px] text-slate-500">Go duration string (e.g. <code>30s</code>, <code>2m</code>).</span>
+                  <span class="text-[11px] text-black-700 dark:text-black-600">Go duration string (e.g. <code>30s</code>, <code>2m</code>).</span>
                 </label>
               {/if}
 
               <!-- ── agent ──────────────────────────────────────── -->
               {#if node.type === "agent"}
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Prompt"
                   value={node.prompt ?? ""}
                   mode={modeFor("prompt")}
@@ -675,7 +711,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="prompts/my-prompt.md"
                     value={node.prompt_file ?? ""}
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
@@ -703,7 +739,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Skills (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder="skill_a&#10;skill_b"
                     value={(node.skills ?? []).join("\n")}
@@ -717,7 +753,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Tools (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder="tool_a&#10;tool_b"
                     value={(node.tools ?? []).join("\n")}
@@ -732,7 +768,7 @@
                   <span class="text-xs font-medium">Max turns</span>
                   <input
                     type="number"
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     placeholder="0 = unlimited"
                     value={node.max_turns ?? 0}
                     oninput={(e) => patch("max_turns", Number((e.target as HTMLInputElement).value) || 0)}
@@ -741,7 +777,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Session override</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.session ?? ""}
                     onchange={(e) => patch("session", (e.target as HTMLSelectElement).value)}
                   >
@@ -752,7 +788,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Reuse session from node</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="(node id of an upstream agent/session_init)"
                     value={node.session_from ?? ""}
                     oninput={(e) => patch("session_from", (e.target as HTMLInputElement).value)}
@@ -765,7 +801,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Output cases (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="4"
                     placeholder="positive&#10;negative&#10;neutral"
                     value={(node.output_cases ?? []).join("\n")}
@@ -782,8 +818,8 @@
                        editor_inspector.templ "Cases (branches)"
                        panel so the operator catches unrouted cases
                        before they fail at runtime. -->
-                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-1">
-                    <div class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
+                    <div class="text-[11px] font-medium text-black-700 dark:text-black-600">
                       Branch routing
                     </div>
                     {#each node.output_cases ?? [] as caseLabel}
@@ -793,7 +829,7 @@
                         {#if routedEdges.length === 0}
                           <span class="text-rose-600 dark:text-rose-400 text-[11px] italic">unrouted — no outgoing edge with this case</span>
                         {:else}
-                          <span class="text-slate-400">→</span>
+                          <span class="text-black-700 dark:text-black-500">→</span>
                           {#each routedEdges as edge}
                             <button
                               type="button"
@@ -808,6 +844,9 @@
                   </div>
                 {/if}
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Input (text to classify)"
                   value={node.input ?? ""}
                   mode={modeFor("input")}
@@ -839,7 +878,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="prompts/classify.md"
                     value={node.prompt_file ?? ""}
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
@@ -858,7 +897,7 @@
                   <span class="text-xs font-medium">Retry on mismatch</span>
                   <input
                     type="number"
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     placeholder="0"
                     value={node.retry_on_mismatch ?? 0}
                     oninput={(e) => patch("retry_on_mismatch", Number((e.target as HTMLInputElement).value) || 0)}
@@ -869,6 +908,9 @@
               <!-- ── branch ─────────────────────────────────────── -->
               {#if node.type === "branch"}
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Expression"
                   value={node.expr ?? ""}
                   mode={modeFor("expr")}
@@ -895,10 +937,10 @@
                   {#each node.cases ?? [] as rule, i (i)}
                     <div
                       class="rounded border p-2 space-y-2 transition-colors"
-                      class:border-slate-200={switchDragOver !== i}
-                      class:dark:border-slate-700={switchDragOver !== i}
+                      class:border-white-400={switchDragOver !== i}
+                      class:border-navy-600={switchDragOver !== i}
                       class:border-emerald-400={switchDragOver === i}
-                      class:dark:border-emerald-500={switchDragOver === i}
+                      class:border-emerald-500={switchDragOver === i}
                       class:opacity-50={switchDragFrom === i}
                       draggable="true"
                       ondragstart={(e) => onSwitchDragStart(i, e)}
@@ -909,16 +951,16 @@
                     >
                       <div class="flex items-center gap-2 -mt-1 -mx-1">
                         <span
-                          class="text-slate-400 dark:text-slate-500 text-xs cursor-grab select-none"
+                          class="text-black-700 dark:text-black-600 text-xs cursor-grab select-none"
                           title="Drag to reorder — first match wins"
                           aria-label="Reorder handle"
                         >⋮⋮</span>
-                        <span class="text-[10px] text-slate-400">#{i + 1}</span>
+                        <span class="text-[10px] text-black-700 dark:text-black-500">#{i + 1}</span>
                       </div>
                       <label class="flex flex-col gap-1">
-                        <span class="text-[11px] text-slate-500">When</span>
+                        <span class="text-[11px] text-black-700 dark:text-black-600">When</span>
                         <input
-                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px]"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
                           placeholder={'{{ eq .Node.x.case "yes" }}'}
                           value={rule.when}
                           oninput={(e) => {
@@ -930,7 +972,7 @@
                       </label>
                       <div class="flex items-center gap-2">
                         <input
-                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="case-label"
                           value={rule.case}
                           oninput={(e) => {
@@ -954,12 +996,12 @@
                   <label class="flex flex-col gap-1">
                     <span class="text-xs font-medium">Default case</span>
                     <input
-                      class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                      class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                       placeholder="fallback-label"
                       value={node.default_case ?? ""}
                       oninput={(e) => patch("default_case", (e.target as HTMLInputElement).value)}
                     />
-                    <span class="text-[11px] text-slate-500">Verdict emitted when no rule matches. Leave blank to fail closed.</span>
+                    <span class="text-[11px] text-black-700 dark:text-black-600">Verdict emitted when no rule matches. Leave blank to fail closed.</span>
                   </label>
                 </div>
               {/if}
@@ -969,15 +1011,15 @@
                 <div class="space-y-1">
                   <div class="flex items-center justify-between gap-2">
                     <span class="text-xs font-medium">Code</span>
-                    <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide">
+                    <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
                       {#each ["fixed", "expression"] as m}
                         <button
                           type="button"
                           class="px-2 py-0.5 transition-colors"
                           class:bg-emerald-500={modeFor("code") === m}
-                          class:text-white={modeFor("code") === m}
-                          class:text-slate-500={modeFor("code") !== m}
-                          class:dark:text-slate-400={modeFor("code") !== m}
+                          class:text-white-100={modeFor("code") === m}
+                          class:text-black-700={modeFor("code") !== m}
+                          class:text-black-600={modeFor("code") !== m}
                           onclick={() => patchMode("code", m)}
                         >{m}</button>
                       {/each}
@@ -989,7 +1031,7 @@
                     rows={14}
                     onChange={(v) => patch("code", v)}
                   />
-                  <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
                     Full {node.type === "go_script" ? "Go" : "Python"} program. stdin = RenderCtx JSON, stdout = result JSON. Runs in a sandboxed subprocess.
                   </span>
                 </div>
@@ -1000,7 +1042,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Engine</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.engine ?? "gotemplate"}
                     onchange={(e) => patch("engine", (e.target as HTMLSelectElement).value)}
                   >
@@ -1010,6 +1052,9 @@
                   </select>
                 </label>
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Expression"
                   value={node.expression ?? ""}
                   mode={modeFor("expression")}
@@ -1020,6 +1065,9 @@
                   onModeChange={(m) => patchMode("expression", m)}
                 />
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Input (optional)"
                   value={node.input ?? ""}
                   mode={modeFor("input")}
@@ -1035,13 +1083,16 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Database</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="DSN ref configured in workspace"
                     value={node.database ?? ""}
                     oninput={(e) => patch("database", (e.target as HTMLInputElement).value)}
                   />
                 </label>
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="SQL"
                   value={node.sql ?? ""}
                   mode={modeFor("sql")}
@@ -1055,7 +1106,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">SQL args (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder={"{{.Event.Payload.user_id}}"}
                     value={(node.sql_args ?? []).join("\n")}
@@ -1071,6 +1122,9 @@
               <!-- ── end ───────────────────────────────────────── -->
               {#if node.type === "end"}
                 <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                   label="Result"
                   value={(node as unknown as { result?: string }).result ?? ""}
                   mode={modeFor("result")}
@@ -1089,7 +1143,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Sharing mode</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={sessionMode}
                     onchange={(e) => {
                       const m = (e.target as HTMLSelectElement).value;
@@ -1117,6 +1171,9 @@
                   <div class="flex items-end gap-2">
                     <div class="flex-1">
                       <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
                         label="Session ID"
                         value={node.session_id ?? ""}
                         mode={modeFor("session_id")}
@@ -1128,7 +1185,7 @@
                     </div>
                     <button
                       type="button"
-                      class="h-9 px-3 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs hover:bg-slate-50 dark:hover:bg-slate-700"
+                      class="h-9 px-3 rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 text-xs hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
                       title="Generate a fresh UUID"
                       onclick={() => patch("session_id", crypto?.randomUUID?.() ?? "")}
                     >regen</button>
@@ -1137,7 +1194,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Workspace override (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="(use run workspace)"
                     value={node.workspace ?? ""}
                     oninput={(e) => patch("workspace", (e.target as HTMLInputElement).value)}
@@ -1150,20 +1207,20 @@
                 {#if node.channel && node.op}
                   <!-- Locked channel + op — set by the palette drill
                        drop. Same rationale as the connector lock above. -->
-                  <div class="rounded border border-slate-200 dark:border-slate-700 px-3 py-2 bg-slate-50 dark:bg-slate-800/40">
+                  <div class="rounded border border-slate-200 dark:border-navy-600 px-3 py-2 bg-slate-50 dark:bg-navy-700/40">
                     <div class="flex items-center justify-between gap-2">
                       <div class="flex flex-col">
-                        <span class="text-[10px] uppercase tracking-wider text-slate-500">Action</span>
+                        <span class="text-[10px] uppercase tracking-wider text-black-700 dark:text-black-600">Action</span>
                         <span class="text-sm font-medium">
                           {node.channel}
-                          <span class="text-slate-400 mx-1">›</span>
+                          <span class="text-black-700 dark:text-black-500 mx-1">›</span>
                           {node.op}
                         </span>
                       </div>
-                      <span class="text-[10px] text-slate-400">locked</span>
+                      <span class="text-[10px] text-black-700 dark:text-black-500">locked</span>
                     </div>
                     {#if currentChannelOp?.description}
-                      <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                      <div class="text-[11px] text-black-700 dark:text-black-600 mt-1">
                         {currentChannelOp.description}
                       </div>
                     {/if}
@@ -1206,7 +1263,7 @@
                       ]}
                     />
                     {#if currentChannelOp?.description}
-                      <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                      <div class="text-[11px] text-black-700 dark:text-black-600 -mt-1">
                         {currentChannelOp.description}
                       </div>
                     {/if}
@@ -1216,7 +1273,7 @@
                   <!-- Schema-driven args — fields, types, picker
                        sources, visible_when predicates all come from
                        the Go ActionDescriptor.InputType wick tags. -->
-                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2">
+                  <div class="rounded border border-slate-200 dark:border-navy-600 p-2">
                     <SchemaForm
                       schema={currentChannelOp.args_schema}
                       values={(node.args ?? {}) as Record<string, unknown>}
@@ -1252,20 +1309,20 @@
                        drop. Changing them would invalidate the args
                        schema; if the user wants a different op they
                        delete the node and drop a new one. -->
-                  <div class="rounded border border-slate-200 dark:border-slate-700 px-3 py-2 bg-slate-50 dark:bg-slate-800/40">
+                  <div class="rounded border border-slate-200 dark:border-navy-600 px-3 py-2 bg-slate-50 dark:bg-navy-700/40">
                     <div class="flex items-center justify-between gap-2">
                       <div class="flex flex-col">
-                        <span class="text-[10px] uppercase tracking-wider text-slate-500">Action</span>
+                        <span class="text-[10px] uppercase tracking-wider text-black-700 dark:text-black-600">Action</span>
                         <span class="text-sm font-medium">
                           {($catalog?.connectors ?? []).find((c) => c.module === node.module)?.name || node.module}
-                          <span class="text-slate-400 mx-1">›</span>
+                          <span class="text-black-700 dark:text-black-500 mx-1">›</span>
                           {currentConnectorOp?.name || node.op}
                         </span>
                       </div>
-                      <span class="text-[10px] text-slate-400">locked</span>
+                      <span class="text-[10px] text-black-700 dark:text-black-500">locked</span>
                     </div>
                     {#if currentConnectorOp?.description}
-                      <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                      <div class="text-[11px] text-black-700 dark:text-black-600 mt-1">
                         {currentConnectorOp.description}
                       </div>
                     {/if}
@@ -1310,14 +1367,14 @@
                       ]}
                     />
                     {#if currentConnectorOp?.description}
-                      <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                      <div class="text-[11px] text-black-700 dark:text-black-600 -mt-1">
                         {currentConnectorOp.description}
                       </div>
                     {/if}
                   {/if}
                 {/if}
                 {#if currentConnectorOp?.args_schema && currentConnectorOp.args_schema.length > 0}
-                  <div class="rounded border border-slate-200 dark:border-slate-700 p-2">
+                  <div class="rounded border border-slate-200 dark:border-navy-600 p-2">
                     <SchemaForm
                       schema={currentConnectorOp.args_schema}
                       values={(node.args ?? {}) as Record<string, unknown>}
@@ -1348,7 +1405,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Branches (one node id per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="5"
                     placeholder="step_a&#10;step_b&#10;step_c"
                     value={(node.branches ?? []).join("\n")}
@@ -1366,7 +1423,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Inputs (one node id per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="4"
                     placeholder="step_a&#10;step_b"
                     value={(node.inputs ?? []).join("\n")}
@@ -1380,7 +1437,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Strategy</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.strategy ?? "all"}
                     onchange={(e) => patch("strategy", (e.target as HTMLSelectElement).value)}
                   >
@@ -1392,7 +1449,7 @@
 
               <!-- ── datatable_* (table + per-op builders) ──────── -->
               {#if node.type?.startsWith?.("datatable_")}
-                <DatatableForm {node} />
+                <DatatableForm {node} {workflowId} {nodeLabels} {nodeOutputs} />
               {/if}
 
               <!-- ── Output refs available ──────────────────────── -->
@@ -1416,7 +1473,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Mock input (JSON)</span>
                 <textarea
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   rows="6"
                   placeholder={'{ "text": "hello" }'}
                   value={(node as unknown as { mock_input?: string }).mock_input ?? ""}
@@ -1426,7 +1483,7 @@
                       mock_input: (e.target as HTMLTextAreaElement).value,
                     } as unknown as Partial<Node>)}
                 ></textarea>
-                <span class="text-[11px] text-slate-500">
+                <span class="text-[11px] text-black-700 dark:text-black-600">
                   Used when Execute step has no parent output to read from.
                 </span>
               </label>
@@ -1434,7 +1491,7 @@
                 <span class="text-xs font-medium">Timeout (sec)</span>
                 <input
                   type="number"
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                   placeholder="0"
                   value={node.timeout_sec ?? 0}
                   oninput={(e) => patch("timeout_sec", Number((e.target as HTMLInputElement).value) || 0)}
@@ -1443,7 +1500,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">On failure</span>
                 <select
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                   value={node.on_failure ?? "halt"}
                   onchange={(e) => patch("on_failure", (e.target as HTMLSelectElement).value)}
                 >
@@ -1455,7 +1512,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Fallback node</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="(node id used when on_failure = fallback)"
                   value={node.fallback ?? ""}
                   oninput={(e) => patch("fallback", (e.target as HTMLInputElement).value)}
@@ -1465,7 +1522,7 @@
                 <span class="text-xs font-medium">Retry — max attempts</span>
                 <input
                   type="number"
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                   placeholder="0"
                   value={node.retry?.max ?? 0}
                   oninput={(e) =>
@@ -1478,7 +1535,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Retry — backoff</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="exponential / 500ms / 2s"
                   value={node.retry?.backoff ?? ""}
                   oninput={(e) =>
@@ -1497,19 +1554,19 @@
              stepResult so closing + reopening the modal keeps the
              last run visible. -->
         <section class="flex flex-col p-3 overflow-y-auto">
-          <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2 flex items-center justify-between gap-2">
+          <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2 flex items-center justify-between gap-2">
             <span>OUTPUT</span>
             {#if lastRun}
               <span
                 class="px-1.5 py-0.5 rounded text-[10px]"
                 class:bg-emerald-100={lastRun.ok}
                 class:text-emerald-700={lastRun.ok}
-                class:dark:bg-emerald-900={lastRun.ok}
-                class:dark:text-emerald-300={lastRun.ok}
+                class:bg-emerald-900={lastRun.ok}
+                class:text-emerald-300={lastRun.ok}
                 class:bg-rose-100={!lastRun.ok}
                 class:text-rose-700={!lastRun.ok}
-                class:dark:bg-rose-900={!lastRun.ok}
-                class:dark:text-rose-300={!lastRun.ok}
+                class:bg-rose-900={!lastRun.ok}
+                class:text-rose-300={!lastRun.ok}
               >
                 {lastRun.ok ? "ok" : "fail"}{lastRun.latency_ms !== undefined ? ` · ${lastRun.latency_ms}ms` : ""}
               </span>
@@ -1526,33 +1583,33 @@
               </div>
             {/if}
             {#if lastRun.output}
-              <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
+              <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide self-start mb-2">
                 {#each ["json", "schema"] as v}
                   <button
                     type="button"
                     class="px-2 py-0.5"
                     class:bg-rose-500={outputView === v}
-                    class:text-white={outputView === v}
-                    class:text-slate-500={outputView !== v}
+                    class:text-white-100={outputView === v}
+                    class:text-black-700={outputView !== v}
                     onclick={() => (outputView = v as "json" | "schema")}
                   >{v}</button>
                 {/each}
               </div>
-              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-slate-900/40 p-2">
+              <div class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-navy-800/40 p-2">
                 {#if outputView === "json"}
                   <JsonViewer value={lastRun.output} prefix={`.Node.${node.label || node.id}`} draggable={true} />
                 {:else}
-                  <pre class="font-mono text-[11px] text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{inferSchema(lastRun.output)}</pre>
+                  <pre class="font-mono text-[11px] text-black-500 dark:text-black-600 whitespace-pre-wrap">{inferSchema(lastRun.output)}</pre>
                 {/if}
               </div>
             {/if}
           {:else}
-            <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
+            <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
               <div class="text-2xl">⤒</div>
               <div>No output data</div>
               <button
                 type="button"
-                class="px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium disabled:opacity-50"
+                class="px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white-100 text-xs font-medium disabled:opacity-50"
                 onclick={runStep}
                 disabled={executing}
               >{executing ? "Running…" : "Execute step"}</button>

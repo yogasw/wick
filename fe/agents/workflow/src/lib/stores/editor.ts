@@ -583,9 +583,7 @@ export async function publish(message?: string) {
   // backend gate is still authoritative — a stale UI state can
   // still hit the server and get back the "cannot publish" JSON,
   // which we surface via the regular catch path.
-  const errCount = (get(validationReport)?.issues ?? []).filter(
-    (i) => i.severity === "error",
-  ).length;
+  const errCount = (get(validationReport)?.errors ?? []).length;
   if (errCount > 0) {
     toastError(
       "Cannot publish",

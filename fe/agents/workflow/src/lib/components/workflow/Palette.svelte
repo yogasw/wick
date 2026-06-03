@@ -113,10 +113,10 @@
 
 <aside
   class="absolute top-0 right-0 h-full w-[300px] z-30 flex flex-col
-         bg-slate-900/95 backdrop-blur border-l border-slate-800
-         shadow-xl text-slate-100"
+         bg-white-100 dark:bg-navy-800/95 backdrop-blur border-l border-white-300 dark:border-navy-600
+         shadow-xl text-black-800 dark:text-white-100"
 >
-  <header class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+  <header class="flex items-center justify-between px-4 py-3 border-b border-white-300 dark:border-navy-600">
     {#if drill}
       <button
         class="flex items-center gap-2 text-sm font-semibold hover:text-emerald-400"
@@ -129,21 +129,21 @@
     {:else}
       <span class="text-sm font-semibold">Add node</span>
     {/if}
-    <button class="text-slate-400 hover:text-slate-100" onclick={close} aria-label="Close">✕</button>
+    <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100" onclick={close} aria-label="Close">✕</button>
   </header>
 
-  <div class="px-3 py-2 border-b border-slate-800">
+  <div class="px-3 py-2 border-b border-white-300 dark:border-navy-600">
     <input
       type="search"
       placeholder={drill ? `Search ${drill.label}...` : "Search nodes..."}
-      class="w-full rounded bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+      class="w-full rounded bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600 px-3 py-1.5 text-sm placeholder-black-700 dark:placeholder-black-600 focus:outline-none focus:border-emerald-500"
       bind:value={query}
     />
   </div>
 
   <div class="flex-1 overflow-y-auto py-2">
     {#if loading}
-      <p class="px-4 py-6 text-xs text-slate-500 italic">Loading palette…</p>
+      <p class="px-4 py-6 text-xs text-black-700 dark:text-black-600 italic">Loading palette…</p>
     {:else if error}
       <p class="px-4 py-6 text-xs text-rose-400">Palette failed: {error}</p>
     {:else if drill}
@@ -152,38 +152,38 @@
           <button
             draggable="true"
             ondragstart={(e) => ondragstart(e, item)}
-            class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-slate-100 bg-slate-800 hover:bg-slate-700 cursor-grab transition-colors"
+            class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
             title={item.description}
           >
             <div class="w-full flex items-center justify-between gap-2">
               <span class="text-sm font-medium truncate">{item.label}</span>
-              {#if item.badge}<span class="text-[10px] text-slate-400 shrink-0">{item.badge}</span>{/if}
+              {#if item.badge}<span class="text-[10px] text-black-700 dark:text-black-500 shrink-0">{item.badge}</span>{/if}
             </div>
             {#if item.description}
-              <span class="text-[10px] text-slate-400 line-clamp-2 leading-snug w-full">
+              <span class="text-[10px] text-black-700 dark:text-black-500 line-clamp-2 leading-snug w-full">
                 {item.description}
               </span>
             {/if}
           </button>
         {/each}
         {#if drillItems.length === 0}
-          <p class="px-1 py-4 text-xs text-slate-500 italic">
+          <p class="px-1 py-4 text-xs text-black-700 dark:text-black-600 italic">
             {query ? `No matches for "${query}".` : "Nothing registered."}
           </p>
         {/if}
       </div>
     {:else}
       {#each filteredCategories as group}
-        <div class="px-3 py-1.5 text-[11px] font-semibold tracking-wider text-slate-500">{group.title}</div>
+        <div class="px-3 py-1.5 text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600">{group.title}</div>
         <div class="px-2 space-y-1">
           {#each group.items as item}
             {#if item.kind === "drill"}
               <button
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-slate-100 bg-slate-800 hover:bg-slate-700 transition-colors"
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 transition-colors"
                 onclick={() => enterDrill(item)}
               >
                 <span class="text-sm font-medium truncate">{item.label}</span>
-                <span class="flex items-center gap-1.5 text-[10px] text-slate-400 shrink-0">
+                <span class="flex items-center gap-1.5 text-[10px] text-black-700 dark:text-black-500 shrink-0">
                   {#if item.badge}<span>{item.badge}</span>{/if}
                   <span aria-hidden="true">›</span>
                 </span>
@@ -192,18 +192,18 @@
               <button
                 draggable="true"
                 ondragstart={(e) => ondragstart(e, item)}
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-slate-100 bg-slate-800 hover:bg-slate-700 cursor-grab transition-colors"
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
                 title={item.description}
               >
                 <span class="text-sm font-medium truncate">{item.label}</span>
-                {#if item.badge}<span class="text-[10px] text-slate-400 shrink-0">{item.badge}</span>{/if}
+                {#if item.badge}<span class="text-[10px] text-black-700 dark:text-black-500 shrink-0">{item.badge}</span>{/if}
               </button>
             {/if}
           {/each}
         </div>
       {/each}
       {#if filteredCategories.length === 0}
-        <p class="px-4 py-6 text-xs text-slate-500 italic">
+        <p class="px-4 py-6 text-xs text-black-700 dark:text-black-600 italic">
           {query ? `No matches for "${query}".` : "Palette is empty."}
         </p>
       {/if}

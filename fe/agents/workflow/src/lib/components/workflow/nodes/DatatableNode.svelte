@@ -35,8 +35,8 @@
   outputs={isBranchy ? 2 : 1}
 >
   {#snippet body()}
-    <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">{sub}</div>
-    {#if node.module}<div class="text-[10px] text-slate-500 dark:text-slate-400 truncate">{node.module}</div>{/if}
+    <div class="text-[11px] text-black-700 dark:text-black-600 truncate">{sub}</div>
+    {#if node.module}<div class="text-[10px] text-black-700 dark:text-black-600 truncate">{node.module}</div>{/if}
     {#if isBranchy}
       <div class="mt-1 flex gap-1 text-[10px]">
         {#if node.type === "datatable_exists"}

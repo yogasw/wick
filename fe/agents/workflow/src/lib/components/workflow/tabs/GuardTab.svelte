@@ -24,7 +24,7 @@
       case "warn":
         return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
       default:
-        return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+        return "bg-slate-100 text-black-500 dark:text-black-700 dark:bg-navy-700 dark:text-black-600";
     }
   }
 
@@ -42,7 +42,7 @@
 </script>
 
 {#if !hits}
-  <p class="text-xs text-slate-500 dark:text-slate-400 italic">
+  <p class="text-xs text-black-700 dark:text-black-600 italic">
     Guard scan not run yet. Run the workflow once or hit Save to populate.
   </p>
 {:else if hits.length === 0}
@@ -52,7 +52,7 @@
 {:else}
   <ul class="space-y-1.5 text-xs">
     {#each hits as h}
-      <li class="flex items-start gap-2 rounded border border-slate-200 dark:border-slate-700 px-2 py-1.5">
+      <li class="flex items-start gap-2 rounded border border-slate-200 dark:border-navy-600 px-2 py-1.5">
         <span class="text-amber-500">⚠</span>
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap">
@@ -60,7 +60,7 @@
               {h.rule}
             </span>
             {#if h.node}
-              <span class="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+              <span class="font-mono text-[11px] text-black-700 dark:text-black-600">
                 @ {h.node}
               </span>
             {/if}
@@ -68,7 +68,7 @@
               {h.severity ?? "warning"}
             </span>
           </div>
-          <div class="mt-0.5 text-slate-700 dark:text-slate-200">{h.message}</div>
+          <div class="mt-0.5 text-black-500 dark:text-white-100">{h.message}</div>
         </div>
         {#if h.node}
           <button

@@ -17,7 +17,7 @@ const WATCH = process.argv.includes("--watch") || process.argv.includes("-w");
 
 export default defineConfig({
   plugins: [svelte()],
-  base: "/tools/agents/agents-v2/workflow/",
+  base: "/tools/agents/workflow/workflow/",
   build: {
     outDir: OUT_DIR,
     emptyOutDir: !WATCH,
@@ -44,7 +44,7 @@ export default defineConfig({
         target: process.env.WICK_PROXY ?? "http://localhost:9425",
         changeOrigin: true,
         bypass: (req) => {
-          if (req.url?.startsWith("/tools/agents/agents-v2/workflow/")) {
+          if (req.url?.startsWith("/tools/agents/workflow/workflow/")) {
             return req.url;
           }
         },

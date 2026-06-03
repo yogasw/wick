@@ -54,7 +54,7 @@ func (e *ChannelExecutor) Descriptor() engine.NodeDescriptor {
 		Label:       "Channel",
 		Description: "Invoke a channel action (send_message, open_modal, …). Call workflow_integration for available ops + schemas.",
 		WhenToUse:   "Send messages, open modals, react, reply via Slack/Telegram/etc.",
-		Example:     "- id: sendmsg\n  type: channel\n  channel: slack\n  op: send_message\n  args:\n    channel: '{{index .Event.Payload \"channel_id\"}}'\n    text: Hello\n  arg_modes:\n    channel: expression\n    text: fixed",
+		Example:     "{\n  \"id\": \"sendmsg\",\n  \"type\": \"channel\",\n  \"channel\": \"slack\",\n  \"op\": \"send_message\",\n  \"args\": {\n    \"channel\": \"{{index .Event.Payload \\\"channel_id\\\"}}\",\n    \"text\": \"Hello\"\n  },\n  \"arg_modes\": { \"channel\": \"expression\", \"text\": \"fixed\" }\n}",
 		Schema:      integration.StructSchema(channelSchema{}),
 		Output: map[string]string{
 			"ts":        "channel-dependent (Slack: message timestamp)",

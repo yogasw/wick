@@ -84,15 +84,10 @@ func WorkflowEventHook(b *Broadcaster) func(id, runID string, ev wf.RunEvent) {
 var globalWorkflowMgr *setup.Manager
 
 // SetWorkflowManager wires in the workflow Manager constructed by
-// server.go. Also kicks the DB importer when both halves are ready.
+// server.go. After the JSON migration, workflow body is DB-primary —
+// no file→DB importer runs here.
 func SetWorkflowManager(m *setup.Manager) {
 	globalWorkflowMgr = m
-	if globalDB != nil && m != nil {
-		repo := workflowRepoFor(globalDB)
-		if _, err := repo.ImportFromFiles(m.Service); err != nil {
-			log.Warn().Err(err).Msg("workflow importer (file → DB) failed; file-store stays primary")
-		}
-	}
 }
 
 func notReadyWorkflow(c *tool.Ctx) bool {
@@ -106,18 +101,10 @@ func notReadyWorkflow(c *tool.Ctx) bool {
 // ── List + Create ───────────────────────────────────────────────────
 
 func workflowsPage(c *tool.Ctx) {
-	if notReadyWorkflow(c) {
-		return
-	}
-	summaries, err := globalWorkflowMgr.MCP.List()
-	if err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-	c.HTML(wfview.List(wfview.ListVM{
-		Layout:    sidebarVM(c, "workflows", ""),
-		Base:      c.Base(),
-		Workflows: summaries,
+	c.HTML(wfview.SvelteList(wfview.SvelteListVM{
+		Layout:   sidebarVM(c, "workflows", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("workflow"),
 	}))
 }
 
@@ -141,9 +128,9 @@ func createWorkflow(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/workflows/edit/"+w.ID, http.StatusSeeOther)
 }
 
-// importWorkflow handles POST /workflows/import — receives a YAML file
-// upload, parses + validates it, creates the workflow folder, and
-// redirects to the editor.
+// importWorkflow handles POST /workflows/import — receives a workflow
+// JSON file upload, parses + validates it, creates the workflow
+// folder, and redirects to the editor.
 func importWorkflow(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -168,7 +155,7 @@ func importWorkflow(c *tool.Ctx) {
 
 	w, err := parse.Parse(uuid.NewString(), data)
 	if err != nil {
-		c.Error(http.StatusBadRequest, "invalid workflow YAML: "+err.Error())
+		c.Error(http.StatusBadRequest, "invalid workflow JSON: "+err.Error())
 		return
 	}
 
@@ -196,7 +183,9 @@ func importWorkflow(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/workflows/edit/"+created.ID, http.StatusSeeOther)
 }
 
-// downloadWorkflowYAML serves the published workflow.yaml as a file download.
+// downloadWorkflowYAML serves the published workflow body as a JSON
+// file download. Name kept (handler is referenced by route table) so
+// callers don't need to update; the served file is JSON now.
 func downloadWorkflowYAML(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -209,10 +198,10 @@ func downloadWorkflowYAML(c *tool.Ctx) {
 	}
 	data, err := parse.Marshal(w)
 	if err != nil {
-		c.Error(http.StatusInternalServerError, "marshal YAML: "+err.Error())
+		c.Error(http.StatusInternalServerError, "marshal body: "+err.Error())
 		return
 	}
-	filename := id + ".workflow.yaml"
+	filename := id + ".workflow.json"
 	if w.Name != "" {
 		safe := strings.Map(func(r rune) rune {
 			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -220,9 +209,9 @@ func downloadWorkflowYAML(c *tool.Ctx) {
 			}
 			return '-'
 		}, w.Name)
-		filename = safe + ".workflow.yaml"
+		filename = safe + ".workflow.json"
 	}
-	c.W.Header().Set("Content-Type", "application/x-yaml")
+	c.W.Header().Set("Content-Type", "application/json")
 	c.W.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	c.W.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	_, _ = c.W.Write(data)
@@ -303,7 +292,7 @@ func renameWorkflow(c *tool.Ctx) {
 	svc := globalWorkflowMgr.Service
 	if pub, err := svc.Load(id); err == nil {
 		pub.Name = name
-		if err := svc.Update(id, pub, nil); err != nil {
+		if err := svc.Update(id, pub); err != nil {
 			c.Error(http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -501,7 +490,15 @@ func deleteWorkflow(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	if err := globalWorkflowMgr.MCP.Delete(id); err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
+		if c.R.Header.Get("Accept") == "application/json" {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		} else {
+			c.Error(http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	if c.R.Header.Get("Accept") == "application/json" {
+		c.JSON(http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 	c.Redirect(c.Base()+"/workflows", http.StatusSeeOther)
@@ -575,19 +572,15 @@ func workflowRunStateAPI(c *tool.Ctx) {
 	})
 }
 
-// loadTestCaseItems reads __tests__/*.json for an id and returns items.
+// loadTestCaseItems reads every test case for the workflow.
 func loadTestCaseItems(id string) ([]TestCaseItem, error) {
-	files, err := globalWorkflowMgr.MCP.ListFiles(id)
+	names, err := globalWorkflowMgr.MCP.ListTests(id)
 	if err != nil {
 		return nil, err
 	}
 	var items []TestCaseItem
-	for _, f := range files {
-		if !strings.HasPrefix(f, "__tests__/") || !strings.HasSuffix(f, ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(strings.TrimPrefix(f, "__tests__/"), ".json")
-		data, err := globalWorkflowMgr.MCP.ReadFile(id, f)
+	for _, name := range names {
+		data, err := globalWorkflowMgr.MCP.GetTest(id, name)
 		if err != nil {
 			continue
 		}

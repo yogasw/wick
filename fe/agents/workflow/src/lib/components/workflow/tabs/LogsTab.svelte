@@ -13,8 +13,8 @@
     s === "completed" ? "bg-emerald-500/20 text-emerald-300"
     : s === "started" ? "bg-amber-500/20 text-amber-300"
     : s === "failed" ? "bg-rose-500/20 text-rose-300"
-    : s === "skipped" ? "bg-slate-500/20 text-slate-400"
-    : "bg-slate-700/30 text-slate-300";
+    : s === "skipped" ? "bg-slate-500/20 text-black-700 dark:text-black-500"
+    : "bg-white-300 dark:bg-navy-600/30 text-black-800 dark:text-black-400";
 
   // Optional `lines` prop kept for compatibility with the older
   // placeholder caller; live store wins when populated.
@@ -24,19 +24,19 @@
 </script>
 
 {#if rows.length === 0}
-  <p class="text-xs text-slate-500">No log lines yet. Hit <em>Execute workflow</em> to fire a run.</p>
+  <p class="text-xs text-black-700 dark:text-black-600">No log lines yet. Hit <em>Execute workflow</em> to fire a run.</p>
 {:else}
-  <ul class="divide-y divide-slate-200 dark:divide-slate-700 font-mono text-[11px]">
+  <ul class="divide-y divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 font-mono text-[11px]">
     {#each rows as line}
       <li class="flex items-center gap-3 py-1.5">
         <span class={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusColor(line.status)}`}>{line.status}</span>
-        <span class="text-slate-500">{line.ts.slice(11, 23)}</span>
+        <span class="text-black-700 dark:text-black-600">{line.ts.slice(11, 23)}</span>
         <span class="flex-1 truncate">
           {line.event}
-          {#if line.node}<span class="text-slate-400 ml-1">{line.node}</span>{/if}
-          {#if line.case}<span class="ml-1 px-1 rounded bg-slate-700 text-[10px]">case={line.case}</span>{/if}
+          {#if line.node}<span class="text-black-700 dark:text-black-500 ml-1">{line.node}</span>{/if}
+          {#if line.case}<span class="ml-1 px-1 rounded bg-white-300 dark:bg-navy-600 text-[10px]">case={line.case}</span>{/if}
         </span>
-        <button class="text-slate-400 hover:text-slate-100 text-[10px]" onclick={() => copyLine(line)}>copy</button>
+        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-[10px]" onclick={() => copyLine(line)}>copy</button>
       </li>
     {/each}
   </ul>

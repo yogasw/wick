@@ -47,7 +47,7 @@ func registerEventCommand(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "open_modal_from_command",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: command
   entry_node: open_ticket_modal`,

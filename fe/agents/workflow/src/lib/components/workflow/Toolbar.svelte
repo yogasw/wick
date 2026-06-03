@@ -141,18 +141,18 @@
 </script>
 
 <header
-  class="flex items-center gap-3 px-4 py-2 border-b border-slate-200 dark:border-[#2c3a5a]
-         bg-white dark:bg-[#0f172a] text-slate-800 dark:text-slate-100"
+  class="flex items-center gap-3 px-4 py-2 border-b border-white-300 dark:border-navy-600
+         bg-white-100 dark:bg-navy-800 text-black-800 dark:text-white-100"
 >
   <!-- Breadcrumb + inline-renamable name. -->
   <div class="flex items-center gap-2 text-sm font-medium min-w-0">
-    <a href="/tools/agents/workflows" class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100">
+    <a href="/tools/agents/workflows" class="text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100">
       Workflows
     </a>
-    <span class="text-slate-400">›</span>
+    <span class="text-black-700 dark:text-black-500">›</span>
     {#if editingName}
       <input
-        class="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-0.5 text-sm"
+        class="rounded border border-slate-300 dark:border-navy-500 bg-white dark:bg-navy-700 px-2 py-0.5 text-sm"
         bind:value={nameDraft}
         onblur={commitRename}
         onkeydown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") cancelRename(); }}
@@ -168,15 +168,17 @@
   </div>
 
   <!-- Editor / Executions tab toggle. -->
-  <div class="flex items-center bg-slate-100 dark:bg-slate-800 rounded-md p-0.5 text-xs">
+  <div class="flex items-center bg-white-300 dark:bg-navy-700 rounded-lg p-0.5 text-xs gap-0.5">
     {#each ["editor", "executions"] as t}
       <button
-        class="px-3 py-1 rounded capitalize transition-colors"
-        class:bg-white={$topTab === t}
-        class:dark:bg-slate-700={$topTab === t}
+        class="px-3 py-1 rounded font-medium capitalize transition-colors"
+        class:bg-white-100={$topTab === t}
+        class:dark:bg-navy-600={$topTab === t}
         class:shadow-sm={$topTab === t}
-        class:text-slate-500={$topTab !== t}
-        class:dark:text-slate-400={$topTab !== t}
+        class:text-black-800={$topTab === t}
+        class:dark:text-white-100={$topTab === t}
+        class:text-black-700={$topTab !== t}
+        class:dark:text-black-500={$topTab !== t}
         onclick={() => topTab.set(t as "editor" | "executions")}
       >{t}</button>
     {/each}
@@ -190,12 +192,12 @@
   {#if $saveStatus !== "idle"}
     <span
       class="text-[11px] italic"
-      class:text-slate-500={$saveStatus === "saving" || $saveStatus === "saved"}
-      class:dark:text-slate-400={$saveStatus === "saving" || $saveStatus === "saved"}
+      class:text-black-700={$saveStatus === "saving" || $saveStatus === "saved"}
+      class:text-black-600={$saveStatus === "saving" || $saveStatus === "saved"}
       class:text-amber-600={$saveStatus === "pending"}
-      class:dark:text-amber-400={$saveStatus === "pending"}
+      class:text-amber-400={$saveStatus === "pending"}
       class:text-rose-600={$saveStatus === "failed"}
-      class:dark:text-rose-400={$saveStatus === "failed"}
+      class:text-rose-400={$saveStatus === "failed"}
     >
       {#if $saveStatus === "pending"}Pending…
       {:else if $saveStatus === "saving"}⟳ Saving…
@@ -258,16 +260,11 @@
       class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
       class:bg-emerald-500={$draftWorkflow.enabled}
       class:border-emerald-500={$draftWorkflow.enabled}
-      class:text-white={$draftWorkflow.enabled}
+      class:text-white-100={$draftWorkflow.enabled}
       class:hover:bg-emerald-600={$draftWorkflow.enabled}
-      class:bg-slate-100={!$draftWorkflow.enabled}
-      class:dark:bg-slate-800={!$draftWorkflow.enabled}
-      class:border-slate-300={!$draftWorkflow.enabled}
-      class:dark:border-slate-600={!$draftWorkflow.enabled}
-      class:text-slate-600={!$draftWorkflow.enabled}
-      class:dark:text-slate-300={!$draftWorkflow.enabled}
-      class:hover:bg-slate-200={!$draftWorkflow.enabled && !blocked}
-      class:dark:hover:bg-slate-700={!$draftWorkflow.enabled && !blocked}
+      class:bg-white-200={!$draftWorkflow.enabled}
+      class:border-white-400={!$draftWorkflow.enabled}
+      class:text-black-700={!$draftWorkflow.enabled}
       onclick={onToggle}
       disabled={blocked}
       title={blocked
@@ -278,14 +275,14 @@
     >
       <span class="h-1.5 w-1.5 rounded-full"
             class:bg-white={$draftWorkflow.enabled}
-            class:bg-slate-400={!$draftWorkflow.enabled}></span>
+            class:bg-white-200={!$draftWorkflow.enabled}></span>
       {$draftWorkflow.enabled ? "Active" : "Inactive"}
     </button>
   {/if}
 
   <!-- Save draft. -->
   <button
-    class="px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50"
+    class="px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-navy-600 hover:bg-slate-200 dark:hover:bg-white-400 dark:bg-navy-500 disabled:opacity-50"
     onclick={onSave}
     disabled={saving || !$dirty}
   >{saving ? "Saving…" : "Save"}</button>
@@ -293,7 +290,7 @@
   <!-- Publish split button. -->
   <div class="relative flex">
     <button
-      class="px-3 py-1.5 rounded-l text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+      class="px-3 py-1.5 rounded-l text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white-100 disabled:opacity-50 disabled:cursor-not-allowed"
       onclick={onPublish}
       disabled={publishing || !$draftWorkflow || $validationErrorCount > 0}
       title={$validationErrorCount > 0
@@ -301,21 +298,21 @@
         : "Publish the draft as the live version"}
     >{publishing ? "…" : "Publish"}</button>
     <button
-      class="px-2 py-1.5 rounded-r text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-l border-emerald-700"
+      class="px-2 py-1.5 rounded-r text-xs bg-emerald-600 hover:bg-emerald-700 text-white-100 border-l border-emerald-700"
       onclick={() => (publishMenuOpen = !publishMenuOpen)}
       aria-haspopup="menu"
       aria-expanded={publishMenuOpen}
       aria-label="Publish menu"
     >▾</button>
     {#if publishMenuOpen}
-      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs z-20">
+      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-20">
         <button
-          class="w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
+          class="w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600 disabled:opacity-50"
           disabled={!$dirty}
           onclick={() => { publishMenuOpen = false; confirmDiscard = true; }}
         >Discard draft</button>
         <button
-          class="w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700 text-amber-700 dark:text-amber-300"
+          class="w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600 text-amber-700 dark:text-amber-300"
           onclick={() => { publishMenuOpen = false; confirmUnpublish = true; }}
         >Unpublish (deactivate)</button>
       </div>
@@ -324,7 +321,7 @@
 
   <!-- History icon. -->
   <button
-    class="h-7 w-7 rounded flex items-center justify-center text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+    class="h-7 w-7 rounded flex items-center justify-center text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
     title="Show execution history"
     aria-label="History"
   >
@@ -334,7 +331,7 @@
   <!-- More menu (kebab). -->
   <div class="relative">
     <button
-      class="h-7 w-7 rounded flex items-center justify-center text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+      class="h-7 w-7 rounded flex items-center justify-center text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
       onclick={() => (moreMenuOpen = !moreMenuOpen)}
       title="More actions"
       aria-haspopup="menu"
@@ -344,13 +341,13 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
     </button>
     {#if moreMenuOpen}
-      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs z-20">
+      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-20">
         <a
-          class="block w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700"
+          class="block w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
           href={`/tools/agents/workflows/edit/${$draftWorkflow?.id ?? ""}/download`}
-        >Download YAML</a>
+        >Download JSON</a>
         <button
-          class="w-full px-3 py-2 text-left text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+          class="w-full px-3 py-2 text-left text-rose-600 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
           onclick={() => { moreMenuOpen = false; confirmDelete = true; }}
         >Delete workflow</button>
       </div>

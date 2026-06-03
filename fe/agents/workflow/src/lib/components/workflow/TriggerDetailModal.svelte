@@ -144,7 +144,7 @@
 
 {#if trigger}
   <div
-    class="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm"
+    class="fixed inset-0 z-50 bg-white-100 dark:bg-navy-800/70 backdrop-blur-sm"
     role="dialog"
     aria-modal="true"
     aria-label="Edit trigger"
@@ -152,26 +152,26 @@
   >
     <div
       class="rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
-             text-slate-900 dark:text-slate-100 shadow-2xl flex flex-col"
+             text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
       style="position:absolute; left:16px; right:16px; top:32px; bottom:32px;"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
       <!-- Header. -->
-      <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+      <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-navy-600">
         <span class="h-2 w-2 rounded-full {triggerHeadColour[trigger.type] ?? 'bg-amber-400'}"></span>
         <span class="text-sm font-semibold">{trigger.label || trigger.type}</span>
-        <span class="text-xs text-slate-500 font-mono">trigger · {trigger.type}</span>
+        <span class="text-xs text-black-700 dark:text-black-600 font-mono">trigger · {trigger.type}</span>
         <div class="flex-1"></div>
-        <button class="text-slate-400 hover:text-slate-100 text-xl leading-none" onclick={close} aria-label="Close">✕</button>
+        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none" onclick={close} aria-label="Close">✕</button>
       </header>
 
       <!-- 3-column body. -->
-      <div class="flex-1 grid divide-x divide-slate-200 dark:divide-slate-800 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
+      <div class="flex-1 grid divide-x divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
         <!-- LEFT: trigger has no upstream by definition. -->
         <section class="flex flex-col p-4 overflow-y-auto">
-          <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2">INPUT</div>
-          <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
+          <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">INPUT</div>
+          <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
             <div class="text-2xl">⤓</div>
             <div>No upstream</div>
             <div class="text-[11px] text-center max-w-[180px]">
@@ -182,21 +182,21 @@
 
         <!-- MIDDLE: parameters + settings. -->
         <section class="flex flex-col overflow-y-auto">
-          <nav class="flex items-center border-b border-slate-200 dark:border-slate-700 px-4 text-sm">
+          <nav class="flex items-center border-b border-slate-200 dark:border-navy-600 px-4 text-sm">
             {#each ["params", "settings"] as t}
               <button
                 class="px-3 py-2 capitalize border-b-2 transition-colors"
                 class:border-rose-500={activeTab === t}
                 class:text-rose-600={activeTab === t}
                 class:border-transparent={activeTab !== t}
-                class:text-slate-500={activeTab !== t}
+                class:text-black-700={activeTab !== t}
                 onclick={() => (activeTab = t as typeof activeTab)}
               >{t === "params" ? "Parameters" : "Settings"}</button>
             {/each}
             <div class="flex-1"></div>
             {#if trigger.type === "manual"}
               <button
-                class="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white text-xs font-medium"
+                class="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white-100 text-xs font-medium"
                 onclick={runManual}
                 title="Fire this manual trigger now"
               >
@@ -209,8 +209,8 @@
             {#if activeTab === "params"}
               <!-- Common: id + label always visible. -->
               <div>
-                <div class="text-[11px] text-slate-500 uppercase mb-1">Trigger ID</div>
-                <div class="font-mono text-[12px] text-slate-700 dark:text-slate-300 break-all">{trigger.id ?? "—"}</div>
+                <div class="text-[11px] text-black-700 dark:text-black-600 uppercase mb-1">Trigger ID</div>
+                <div class="font-mono text-[12px] text-black-500 dark:text-black-600 break-all">{trigger.id ?? "—"}</div>
               </div>
               {@const labelTaken = labelClashes(trigger)}
               {@const labelBadFormat = !!trigger.label && !isValidLabel(trigger.label)}
@@ -218,10 +218,10 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   class:border-rose-500={labelErr}
-                  class:border-slate-200={!labelErr}
-                  class:dark:border-slate-700={!labelErr}
+                  class:border-white-400={!labelErr}
+                  class:border-navy-600={!labelErr}
                   value={trigger.label ?? ""}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
                   placeholder="manual_1"
@@ -235,7 +235,7 @@
                     Label "{trigger.label}" is already used by another trigger.
                   </span>
                 {:else}
-                  <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                  <span class="text-[11px] text-black-700 dark:text-black-600">
                     {LABEL_FORMAT_HINT}
                   </span>
                 {/if}
@@ -246,17 +246,17 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Schedule (cron)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="0 */15 * * * *"
                     value={trigger.schedule ?? ""}
                     oninput={(e) => patch("schedule", (e.target as HTMLInputElement).value)}
                   />
-                  <span class="text-[11px] text-slate-500">6-field cron: sec min hour dom mon dow</span>
+                  <span class="text-[11px] text-black-700 dark:text-black-600">6-field cron: sec min hour dom mon dow</span>
                 </label>
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Timezone</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="Asia/Jakarta"
                     value={trigger.timezone ?? ""}
                     oninput={(e) => patch("timezone", (e.target as HTMLInputElement).value)}
@@ -269,7 +269,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Path</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="/hooks/my-hook"
                     value={trigger.path ?? ""}
                     oninput={(e) => patch("path", (e.target as HTMLInputElement).value)}
@@ -278,7 +278,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={trigger.method ?? ""}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
@@ -291,7 +291,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Secret ref (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="env:WEBHOOK_SECRET"
                     value={trigger.secret_ref ?? ""}
                     oninput={(e) => patch("secret_ref", (e.target as HTMLInputElement).value)}
@@ -304,7 +304,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Button label</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     placeholder="Run now"
                     value={trigger.button_label ?? ""}
                     oninput={(e) => patch("button_label", (e.target as HTMLInputElement).value)}
@@ -313,7 +313,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Require role (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     placeholder="admin"
                     value={trigger.require_role ?? ""}
                     oninput={(e) => patch("require_role", (e.target as HTMLInputElement).value)}
@@ -363,7 +363,7 @@
                     ]}
                   />
                   {#if currentEvent?.description}
-                    <div class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                    <div class="text-[11px] text-black-700 dark:text-black-600 -mt-1">
                       {currentEvent.description}
                     </div>
                   {/if}
@@ -383,7 +383,7 @@
                          docs/reference/config-tags.md). SchemaForm
                          handles visible_when, hidden, and per-row
                          widget pick. -->
-                    <div class="rounded border border-slate-200 dark:border-slate-700 p-2">
+                    <div class="rounded border border-slate-200 dark:border-navy-600 p-2">
                       <SchemaForm
                         schema={matchSchema}
                         values={(trigger.match ?? {}) as Record<string, unknown>}
@@ -395,33 +395,33 @@
                     <!-- Fallback free-form key/value editor for events
                          without a declared schema (or when catalog
                          hasn't loaded yet). -->
-                    <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-2">
-                      <div class="text-[11px] text-slate-500">
+                    <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-2">
+                      <div class="text-[11px] text-black-700 dark:text-black-600">
                         Match keys — exact-string filter on the event payload.
                       </div>
                       {#each Object.entries(trigger.match ?? {}) as [k, v] (k)}
                         <div class="flex items-center gap-2">
                           <input
-                            class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                            class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                             value={k}
                             readonly
                           />
                           <input
-                            class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                            class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                             value={typeof v === "string" ? v : JSON.stringify(v)}
                             oninput={(e) => patchMatchEntry(k, (e.target as HTMLInputElement).value)}
                           />
                           <button class="text-rose-500 text-xs px-2" onclick={() => removeMatchEntry(k)}>✕</button>
                         </div>
                       {/each}
-                      <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-slate-700">
+                      <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-navy-600">
                         <input
-                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="key"
                           bind:value={newMatchKey}
                         />
                         <input
-                          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="value"
                           bind:value={newMatchValue}
                           onkeydown={(e) => e.key === "Enter" && addMatchEntry()}
@@ -438,7 +438,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Fire at (ISO 8601)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="2026-12-31T15:00:00Z"
                     value={trigger.at ?? ""}
                     oninput={(e) => patch("at", (e.target as HTMLInputElement).value)}
@@ -457,7 +457,7 @@
 
               <!-- error-specific fields: no extra knobs, just the entry-node binding. -->
               {#if trigger.type === "error"}
-                <div class="text-[11px] text-slate-500 italic mt-2">
+                <div class="text-[11px] text-black-700 dark:text-black-600 italic mt-2">
                   Error triggers run when any other trigger fails. They take
                   the failed run's error payload as input — wire the entry
                   node from the trigger output port.
@@ -474,12 +474,12 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Entry node ID</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="(set by drawing an edge from the trigger output port)"
                   value={trigger.entry_node ?? ""}
                   oninput={(e) => patch("entry_node", (e.target as HTMLInputElement).value)}
                 />
-                <span class="text-[11px] text-slate-500">
+                <span class="text-[11px] text-black-700 dark:text-black-600">
                   Usually populated by the canvas when you connect the trigger
                   to a node. Edit only if you want to force the entry without
                   redrawing the edge.
@@ -493,8 +493,8 @@
              stream surfaces a payload — same n8n-style affordance as
              NodeDetailModal's output column. -->
         <section class="flex flex-col p-4 overflow-y-auto">
-          <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2">OUTPUT</div>
-          <div class="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs gap-3">
+          <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">OUTPUT</div>
+          <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
             <div class="text-2xl">⤒</div>
             <div>No event data</div>
             <div class="text-[11px] text-center max-w-[180px]">

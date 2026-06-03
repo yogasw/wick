@@ -8,6 +8,8 @@ export type WorkflowSummary = {
   name: string;
   enabled: boolean;
   has_draft: boolean;
+  version?: number;
+  created_at?: string;
   updated_at?: string;
 };
 
@@ -220,6 +222,15 @@ export type WorkflowsRegistry = {
 export const workflowAPI = {
   list: (): Promise<WorkflowsRegistry> => apiGet(`${BASE}/api/workflows/list`),
 
+  templates: (): Promise<{ templates: { value: string; label: string; desc: string }[] }> =>
+    apiGet(`${BASE}/api/workflows/templates`),
+
+  create: (body: { name: string; template?: string }): Promise<{ id: string; name: string }> =>
+    apiPost(`${BASE}/api/workflows/create`, body),
+
+  duplicate: (id: string): Promise<{ id: string; name: string }> =>
+    apiPost(`${BASE}/api/workflows/duplicate/${encodeURIComponent(id)}`, {}),
+
   get: (id: string): Promise<WorkflowGetResponse> =>
     apiGet(`${BASE}/api/workflows/get/${encodeURIComponent(id)}`),
 
@@ -295,6 +306,29 @@ export const workflowAPI = {
     // the path param. Falls through to whatever the legacy templ flow
     // does (404 surface back if path wrong).
     apiPost(`${BASE}/workflows/edit/${encodeURIComponent(id)}/delete`, {}),
+
+  // Canvas position ops — backend computes DAG-aware layout and persists
+  // to the draft so the result survives page refresh.
+  autoLayout: (id: string, nodeIDs?: string[]): Promise<Workflow> =>
+    apiPost(`${BASE}/api/workflows/auto-layout/${encodeURIComponent(id)}`, {
+      node_ids: nodeIDs ?? [],
+    }),
+
+  moveNodes: (
+    id: string,
+    moves: { node_id: string; x: number; y: number }[],
+  ): Promise<Workflow> =>
+    apiPost(`${BASE}/api/workflows/move-nodes/${encodeURIComponent(id)}`, { moves }),
+
+  canvasView: (id: string): Promise<{ nodes: any[]; triggers: any[]; ascii: string; stats: any }> =>
+    apiGet(`${BASE}/api/workflows/canvas/${encodeURIComponent(id)}`),
+
+  templateTest: (
+    id: string,
+    body: { template: string; sample_event?: string; context?: string },
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; rendered?: string; error?: string; available_keys?: string[]; hint?: string }> =>
+    apiPost(`${BASE}/api/workflows/template-test/${encodeURIComponent(id)}`, body, signal),
 
   // Bottom-panel content endpoints (Validation / Guard / Tests).
   validate: (id: string): Promise<ValidationReport> =>
@@ -420,5 +454,14 @@ export const workflowAPI = {
     apiPost(
       `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/${versionID}/restore`,
       {},
+    ),
+
+  diffVersions: (
+    id: string,
+    from: number,
+    to: number,
+  ): Promise<{ from: WorkflowVersion; to: WorkflowVersion }> =>
+    apiGet(
+      `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/diff?from=${from}&to=${to}`,
     ),
 };

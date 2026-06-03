@@ -29,12 +29,12 @@ import (
 func LiveDiskFS(toolName string) (fs.FS, bool) {
 	root := os.Getenv("WICK_DEV_REPO_ROOT")
 	if root == "" {
-		fmt.Fprintf(os.Stderr, "[spa] %s: WICK_DEV_REPO_ROOT unset — using embed\n", toolName)
+		// fmt.Fprintf(os.Stderr, "[spa] %s: WICK_DEV_REPO_ROOT unset — using embed\n", toolName)
 		return nil, false
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[spa] WICK_DEV_REPO_ROOT resolve failed: %v — falling back to embed\n", err)
+		// fmt.Fprintf(os.Stderr, "[spa] WICK_DEV_REPO_ROOT resolve failed: %v — falling back to embed\n", err)
 		return nil, false
 	}
 	toolDir := filepath.Join(abs, "internal", "tools", toolName)

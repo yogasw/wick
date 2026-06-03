@@ -76,10 +76,10 @@ func TestSaveDraftThenPublish(t *testing.T) {
 	if !row.HasDraft {
 		t.Error("has_draft should flip true after save")
 	}
-	if !strings.Contains(row.YAMLDraft, "name: Beta draft") {
-		t.Errorf("draft yaml missing renamed value: %s", row.YAMLDraft)
+	if !strings.Contains(row.BodyDraft, `"name": "Beta draft"`) {
+		t.Errorf("draft body missing renamed value: %s", row.BodyDraft)
 	}
-	if row.YAMLPublished != "" {
+	if row.BodyPublished != "" {
 		t.Error("published yaml should still be empty before publish")
 	}
 
@@ -90,11 +90,11 @@ func TestSaveDraftThenPublish(t *testing.T) {
 	if row.HasDraft {
 		t.Error("has_draft should be false after publish")
 	}
-	if !strings.Contains(row.YAMLPublished, "name: Beta draft") {
-		t.Errorf("published yaml missing renamed value: %s", row.YAMLPublished)
+	if !strings.Contains(row.BodyPublished, `"name": "Beta draft"`) {
+		t.Errorf("published body missing renamed value: %s", row.BodyPublished)
 	}
-	if row.YAMLDraft != "" {
-		t.Errorf("draft yaml should be cleared after publish: %s", row.YAMLDraft)
+	if row.BodyDraft != "" {
+		t.Errorf("draft yaml should be cleared after publish: %s", row.BodyDraft)
 	}
 
 	vs, err := r.Versions("beta")
@@ -119,8 +119,8 @@ func TestDiscardDraft(t *testing.T) {
 		t.Fatalf("discard: %v", err)
 	}
 	row, _ := r.Get("g")
-	if row.HasDraft || row.YAMLDraft != "" {
-		t.Errorf("draft not cleared: has=%v yaml=%q", row.HasDraft, row.YAMLDraft)
+	if row.HasDraft || row.BodyDraft != "" {
+		t.Errorf("draft not cleared: has=%v yaml=%q", row.HasDraft, row.BodyDraft)
 	}
 }
 
@@ -148,11 +148,11 @@ func TestRestoreCopiesIntoDraft(t *testing.T) {
 	if !row.HasDraft {
 		t.Error("restore should leave HasDraft=true")
 	}
-	if !strings.Contains(row.YAMLDraft, "name: rev-1") {
-		t.Errorf("restored draft missing rev-1: %s", row.YAMLDraft)
+	if !strings.Contains(row.BodyDraft, `"name": "rev-1"`) {
+		t.Errorf("restored draft missing rev-1: %s", row.BodyDraft)
 	}
-	if !strings.Contains(row.YAMLPublished, "name: rev-2") {
-		t.Errorf("published should still be rev-2; got: %s", row.YAMLPublished)
+	if !strings.Contains(row.BodyPublished, `"name": "rev-2"`) {
+		t.Errorf("published should still be rev-2; got: %s", row.BodyPublished)
 	}
 }
 

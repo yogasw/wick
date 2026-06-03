@@ -2,30 +2,23 @@ package entity
 
 import "time"
 
-// Workflow is the DB representation of a workflow document. Mirror of
-// the YAML side (internal/agents/workflow.Workflow) but flattened for
-// SQL — `YAMLPublished` and `YAMLDraft` hold the canonical text;
-// metadata columns (Name, Enabled) duplicate yaml fields so the list
-// page can render without parsing every row.
-//
-// The DB schema is additive — the file-based store keeps writing in
-// parallel during the migration so a roll-back to the templ UI is
-// always one boot away. See internal/docs/workflow/svelte-migration.md
-// for the phased switch-over plan.
+// Workflow is the DB representation of a workflow document. Body
+// columns hold the canonical JSON; metadata columns (Name, Enabled)
+// duplicate body fields so the list page can render without parsing
+// every row.
 type Workflow struct {
-	// ID is the stable folder name (UUID for canvas-created workflows,
-	// arbitrary slug for legacy hand-edited ones). Matches Workflow.ID
-	// on the YAML side.
-	ID        string `gorm:"primaryKey;type:varchar(64)"`
-	Name      string `gorm:"type:varchar(256);not null;default:''"`
-	Enabled   bool   `gorm:"not null;default:false"`
-	Version   int    `gorm:"not null;default:0"`
-	// YAMLPublished is the last-published workflow.yaml. Mutated only
-	// by the publish path. Empty until first publish.
-	YAMLPublished string `gorm:"type:text;not null;default:''"`
-	// YAMLDraft is the in-progress edit. Mutated on every save. Empty
+	// ID is the stable UUID minted by the canvas / MCP create flow.
+	// Matches Workflow.ID on the in-memory side.
+	ID      string `gorm:"primaryKey;type:varchar(64)"`
+	Name    string `gorm:"type:varchar(256);not null;default:''"`
+	Enabled bool   `gorm:"not null;default:false"`
+	Version int    `gorm:"not null;default:0"`
+	// BodyPublished is the last-published JSON body. Mutated only by
+	// the publish path. Empty until first publish.
+	BodyPublished string `gorm:"type:text;not null;default:''"`
+	// BodyDraft is the in-progress edit. Mutated on every save. Empty
 	// when there is no draft (cleared on publish + discard).
-	YAMLDraft string `gorm:"type:text;not null;default:''"`
+	BodyDraft string `gorm:"type:text;not null;default:''"`
 	HasDraft  bool   `gorm:"not null;default:false"`
 	CreatedBy string `gorm:"type:varchar(128);default:''"`
 	CreatedAt time.Time
@@ -50,7 +43,7 @@ type WorkflowVersion struct {
 	ID         uint   `gorm:"primaryKey;autoIncrement"`
 	WorkflowID string `gorm:"type:varchar(64);not null;index"`
 	Kind       string `gorm:"type:varchar(16);not null;index"` // "draft" | "published"
-	YAML       string `gorm:"type:text;not null"`
+	Body       string `gorm:"type:text;not null"`
 	Message    string `gorm:"type:varchar(512);default:''"`
 	CreatedBy  string `gorm:"type:varchar(128);default:''"`
 	CreatedAt  time.Time
@@ -59,7 +52,7 @@ type WorkflowVersion struct {
 func (WorkflowVersion) TableName() string { return "workflow_versions" }
 
 // WorkflowTestCase mirrors the file-based `__tests__/<name>.json`
-// fixtures. Migrated alongside the YAML so workflow tests survive the
+// fixtures. Migrated alongside the body so workflow tests survive the
 // move and stay editable through the SPA.
 type WorkflowTestCase struct {
 	ID         uint   `gorm:"primaryKey;autoIncrement"`
@@ -70,3 +63,4 @@ type WorkflowTestCase struct {
 }
 
 func (WorkflowTestCase) TableName() string { return "workflow_test_cases" }
+

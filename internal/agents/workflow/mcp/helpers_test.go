@@ -24,23 +24,23 @@ func (s *stubService) Load(id string) (workflow.Workflow, error) { return s.wf, 
 
 // Catch-all stubs — return zero values; tests that exercise these
 // methods should construct a richer fake.
-func (s *stubService) List() ([]string, error)                                { return []string{s.wf.ID}, nil }
-func (s *stubService) Create(string, workflow.Workflow, map[string][]byte) error { return nil }
-func (s *stubService) Update(string, workflow.Workflow, map[string][]byte) error { return nil }
-func (s *stubService) Delete(string) error                                    { return nil }
-func (s *stubService) Toggle(string, bool) error                              { return nil }
-func (s *stubService) FindByName(string, string) (string, error)              { return "", nil }
+func (s *stubService) List() ([]string, error)                   { return []string{s.wf.ID}, nil }
+func (s *stubService) Create(string, workflow.Workflow) error    { return nil }
+func (s *stubService) Update(string, workflow.Workflow) error    { return nil }
+func (s *stubService) Delete(string) error                       { return nil }
+func (s *stubService) Toggle(string, bool) error                 { return nil }
+func (s *stubService) FindByName(string, string) (string, error) { return "", nil }
 func (s *stubService) LoadDraft(string) (workflow.Workflow, error) {
 	return workflow.Workflow{}, service.ErrNotFound
 }
-func (s *stubService) HasDraft(string) bool                            { return false }
-func (s *stubService) SaveDraft(string, workflow.Workflow) error       { return nil }
-func (s *stubService) Publish(string) (workflow.Workflow, error)       { return s.wf, nil }
-func (s *stubService) DiscardDraft(string) error                       { return nil }
-func (s *stubService) ListFiles(string) ([]string, error)              { return nil, nil }
-func (s *stubService) ReadFile(string, string) ([]byte, error)         { return nil, fmt.Errorf("stub") }
-func (s *stubService) WriteFile(string, string, []byte) error          { return nil }
-func (s *stubService) DeleteFile(string, string) error                 { return nil }
+func (s *stubService) HasDraft(string) bool                      { return false }
+func (s *stubService) SaveDraft(string, workflow.Workflow) error { return nil }
+func (s *stubService) Publish(string) (workflow.Workflow, error) { return s.wf, nil }
+func (s *stubService) DiscardDraft(string) error                 { return nil }
+func (s *stubService) ListTests(string) ([]string, error)        { return nil, nil }
+func (s *stubService) GetTest(string, string) ([]byte, error)    { return nil, fmt.Errorf("stub") }
+func (s *stubService) SaveTest(string, string, []byte) error     { return nil }
+func (s *stubService) DeleteTest(string, string) error           { return nil }
 func (s *stubService) LoadState(string) (workflow.WorkflowState, error) {
 	return workflow.WorkflowState{}, nil
 }

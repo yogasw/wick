@@ -57,25 +57,24 @@
 <div
   data-node-id={id}
   data-node-type={type}
-  class="relative rounded-md overflow-hidden shadow-sm
+  class="relative rounded-md overflow-hidden shadow-md
          transition-all duration-150 ease-out cursor-pointer
          w-[220px] select-none
-         bg-white text-slate-900
-         dark:bg-[#1e2942] dark:text-slate-100
+         bg-white-100 dark:bg-navy-700 text-black-800 dark:text-white-100
          border {color}"
   class:ring-2={selected}
   class:ring-emerald-400={selected && !errored}
   class:ring-rose-500={errored}
   class:border-amber-400={running}
-  class:border-slate-200={!running && !errored}
-  class:dark:border-[#2c3a5a]={!running && !errored}
+  class:border-white-400={!running && !errored}
+  class:dark:border-navy-500={!running && !errored}
   onclick={onselect}
   role="button"
   tabindex="0"
   onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onselect?.()}
 >
   <header
-    class="px-3 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-white flex items-center gap-1.5"
+    class="px-3 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-white-100 flex items-center gap-1.5"
     style:background-color={headBg ?? "#475569"}
   >
     {#if icon}<span class="text-[11px] leading-none">{icon}</span>{/if}
@@ -88,9 +87,9 @@
   </header>
 
   <div class="px-3 py-2">
-    <div class="text-xs font-semibold truncate">{label ?? id}</div>
+    <div class="text-xs font-medium text-black-800 dark:text-white-100 truncate">{label ?? id}</div>
     {#if body}
-      <div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+      <div class="mt-1 text-[11px] text-black-700 dark:text-black-600">
         {@render body()}
       </div>
     {/if}
@@ -102,13 +101,13 @@
        parent Canvas.svelte; here we just paint the visual handle. -->
   {#if inputs > 0}
     <span
-      class="absolute left-1/2 -translate-x-1/2 -top-[7px] h-[14px] w-[14px] rounded-full bg-white border-2 border-slate-400 dark:border-slate-500 shadow"
+      class="absolute left-1/2 -translate-x-1/2 -top-[7px] h-[14px] w-[14px] rounded-full bg-white-100 border-2 border-white-400 dark:border-navy-500 shadow"
       data-port="in"
     ></span>
   {/if}
   {#if outputs > 0}
     <span
-      class="absolute left-1/2 -translate-x-1/2 -bottom-[7px] h-[14px] w-[14px] rounded-full bg-white border-2 border-slate-400 dark:border-slate-500 shadow"
+      class="absolute left-1/2 -translate-x-1/2 -bottom-[7px] h-[14px] w-[14px] rounded-full bg-white border-2 border-slate-400 dark:border-navy-500 shadow"
       data-port="out"
     ></span>
   {/if}

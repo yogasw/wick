@@ -77,7 +77,7 @@ func registerEventBlockAction(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "route_by_action_id",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: block_action
   entry_node: open_modal_skeleton

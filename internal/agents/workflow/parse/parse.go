@@ -1,4 +1,4 @@
-// Package parse decodes and validates workflow.yaml bodies. Pure
+// Package parse decodes and validates workflow JSON bodies. Pure
 // in-memory transforms over the types defined in `workflow` root pkg
 // — no filesystem, no engine, no executors.
 //
@@ -16,7 +16,6 @@ import (
 	gotemplate "text/template"
 
 	"github.com/google/uuid"
-	"gopkg.in/yaml.v3"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
@@ -105,14 +104,14 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
-// Parse decodes a workflow.yaml body. The folder name is the
-// authoritative ID — it overwrites whatever `id:` happens to be in the
-// YAML so renaming a folder always wins over a stale value. The
+// Parse decodes a workflow JSON body. The folder name (or DB id) is the
+// authoritative ID — it overwrites whatever `id` happens to be in the
+// body so renaming the workflow always wins over a stale value. The
 // returned workflow has not yet been validated; call Validate after.
 func Parse(id string, data []byte) (workflow.Workflow, error) {
 	var w workflow.Workflow
-	if err := yaml.Unmarshal(data, &w); err != nil {
-		return workflow.Workflow{}, Error{Path: "yaml", Message: err.Error()}
+	if err := json.Unmarshal(data, &w); err != nil {
+		return workflow.Workflow{}, Error{Path: "json", Message: err.Error()}
 	}
 	w.ID = id
 	if w.ID == "" {
@@ -121,9 +120,9 @@ func Parse(id string, data []byte) (workflow.Workflow, error) {
 	return w, nil
 }
 
-// Marshal serializes a Workflow back to YAML.
+// Marshal serializes a Workflow back to indented JSON.
 func Marshal(w workflow.Workflow) ([]byte, error) {
-	return yaml.Marshal(w)
+	return json.MarshalIndent(w, "", "  ")
 }
 
 // Result is the aggregate of static checks performed by Validate.
@@ -427,21 +426,81 @@ func validateMatchSpec(r *Result, path string, spec map[string]any) {
 	}
 }
 
+// validateArgModes warns when arg_modes[key] is "fixed" but the
+// corresponding field value contains a Go template `{{...}}` — the
+// engine will pass that string through literally, which is almost
+// always a mistake (user expected the template to render). The
+// inverse (mode=expression on a string without `{{`) is silent because
+// it's harmless.
+func validateArgModes(r *Result, path string, n workflow.Node) {
+	if len(n.ArgModes) == 0 {
+		return
+	}
+	hasTemplate := func(v any) bool {
+		s, ok := v.(string)
+		return ok && strings.Contains(s, "{{")
+	}
+	for key, mode := range n.ArgModes {
+		if mode != "fixed" {
+			continue
+		}
+		switch key {
+		case "prompt":
+			if strings.Contains(n.Prompt, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: fmt.Sprintf("mode=fixed but %q contains {{...}} — template will NOT render, set mode=expression if you want it evaluated", key),
+				})
+			}
+		case "url":
+			if strings.Contains(n.URL, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but url contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		case "body":
+			if strings.Contains(n.Body, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but body contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		case "expression":
+			if strings.Contains(n.Expression, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but expression contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		default:
+			// Inside the args map (channel + connector nodes).
+			if v, ok := n.Args[key]; ok && hasTemplate(v) {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: fmt.Sprintf("mode=fixed but args.%s contains {{...}} — template will NOT render, set mode=expression", key),
+				})
+			}
+		}
+	}
+}
+
 func validateNodeBody(r *Result, path string, n workflow.Node) {
+	validateArgModes(r, path, n)
 	switch n.Type {
 	case "":
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: "is required"})
 	case workflow.NodeClassify:
-		if n.Prompt == "" && n.PromptFile == "" {
-			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt or prompt_file"})
+		if n.Prompt == "" {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt"})
 		}
 		checkTemplate(r, path, "prompt", n.Prompt)
 		if len(n.OutputCases) == 0 {
 			r.Warnings = append(r.Warnings, Error{Path: path + ".output_cases", Message: "classify without output_cases will accept any verdict (defeats normalize/fuzzy)"})
 		}
 	case workflow.NodeAgent:
-		if n.Prompt == "" && n.PromptFile == "" {
-			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt or prompt_file"})
+		if n.Prompt == "" {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt"})
 		}
 		checkTemplate(r, path, "prompt", n.Prompt)
 	case workflow.NodeChannel:

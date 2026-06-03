@@ -503,6 +503,10 @@ func (e *Engine) runOne(ctx context.Context, n workflow.Node, rc *workflow.RunCo
 				"config": truncateForEvent(nodeConfigForEvent(n)),
 			},
 		})
+		n, prerr := preRenderNode(n, rc.RenderCtx())
+		if prerr != nil {
+			return workflow.NodeOutput{}, prerr
+		}
 		out, err := exec.Execute(ctx, n, rc)
 		if err == nil {
 			return out, nil

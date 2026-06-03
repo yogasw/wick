@@ -92,7 +92,7 @@
 
 <div class="flex flex-col h-full">
   <header
-    class="flex items-center gap-3 px-3 py-1.5 text-[11px] border-b border-slate-200 dark:border-slate-700"
+    class="flex items-center gap-3 px-3 py-1.5 text-[11px] border-b border-slate-200 dark:border-navy-600"
   >
     <span class="font-semibold tracking-wide uppercase text-emerald-600 dark:text-emerald-400">
       Live (draft)
@@ -100,32 +100,32 @@
     {#if $dirty}
       <span class="text-amber-600 dark:text-amber-400">●&nbsp;unpublished changes</span>
     {:else}
-      <span class="text-slate-500 dark:text-slate-400">in sync</span>
+      <span class="text-black-700 dark:text-black-600">in sync</span>
     {/if}
-    <div class="ml-auto inline-flex rounded border border-slate-300 dark:border-slate-600 overflow-hidden text-[10px] uppercase tracking-wide">
+    <div class="ml-auto inline-flex rounded border border-slate-300 dark:border-navy-500 overflow-hidden text-[10px] uppercase tracking-wide">
       {#each ["all", "diff"] as v}
         <button
           type="button"
           class="px-2 py-0.5 transition-colors"
           class:bg-emerald-500={view === v}
-          class:text-white={view === v}
-          class:text-slate-500={view !== v}
-          class:dark:text-slate-400={view !== v}
+          class:text-white-100={view === v}
+          class:text-black-700={view !== v}
+          class:text-black-600={view !== v}
           onclick={() => (view = v as typeof view)}
         >{v === "all" ? "All" : "Diff only"}</button>
       {/each}
     </div>
-    <span class="font-semibold tracking-wide uppercase text-slate-500 dark:text-slate-400">
+    <span class="font-semibold tracking-wide uppercase text-black-700 dark:text-black-600">
       Published
     </span>
   </header>
-  <div class="flex-1 grid grid-cols-2 divide-x divide-slate-200 dark:divide-slate-800 min-h-0">
+  <div class="flex-1 grid grid-cols-2 divide-x divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 min-h-0">
     <section
       bind:this={leftEl}
       onscroll={() => onScroll("left")}
       class="overflow-auto p-2"
     >
-      <pre class="font-mono text-[11px] leading-tight">{#each draftView as row}{#if "ellipsis" in row}<div class="text-slate-400 dark:text-slate-500 select-none">  … unchanged …</div>{:else}<div
+      <pre class="font-mono text-[11px] leading-tight">{#each draftView as row}{#if "ellipsis" in row}<div class="text-black-700 dark:text-black-600 select-none">  … unchanged …</div>{:else}<div
             class={row.changed
               ? "whitespace-pre px-1 -mx-1 rounded-sm bg-emerald-500/25 text-emerald-600 dark:text-emerald-300"
               : "whitespace-pre px-1 -mx-1 rounded-sm"}
@@ -137,11 +137,11 @@
       class="overflow-auto p-2"
     >
       {#if !hasPublished}
-        <div class="h-full flex items-center justify-center text-slate-400 dark:text-slate-500 text-xs italic px-4 text-center">
+        <div class="h-full flex items-center justify-center text-black-700 dark:text-black-600 text-xs italic px-4 text-center">
           No published version yet. Publish the draft to populate this pane.
         </div>
       {:else}
-        <pre class="font-mono text-[11px] leading-tight">{#each publishedView as row}{#if "ellipsis" in row}<div class="text-slate-400 dark:text-slate-500 select-none">  … unchanged …</div>{:else}<div
+        <pre class="font-mono text-[11px] leading-tight">{#each publishedView as row}{#if "ellipsis" in row}<div class="text-black-700 dark:text-black-600 select-none">  … unchanged …</div>{:else}<div
               class={row.changed
                 ? "whitespace-pre px-1 -mx-1 rounded-sm bg-rose-500/25 text-rose-700 dark:text-rose-300"
                 : "whitespace-pre px-1 -mx-1 rounded-sm"}

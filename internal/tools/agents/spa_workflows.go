@@ -7,18 +7,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfcanvas "github.com/yogasw/wick/internal/agents/workflow/canvas"
+	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// readBodyAll captures the request body once so we can sniff its shape
-// (yaml-envelope vs. raw workflow JSON) without consuming the reader.
+// readBodyAll captures the request body so handlers can sniff or
+// validate before unmarshalling.
 func readBodyAll(c *tool.Ctx) ([]byte, error) {
 	if c.R.Body == nil {
 		return nil, errors.New("empty body")
@@ -27,37 +28,23 @@ func readBodyAll(c *tool.Ctx) ([]byte, error) {
 	return io.ReadAll(c.R.Body)
 }
 
-// normaliseWorkflowBody returns YAML bytes ready for parse.Parse. The
-// FE may send either {"yaml": "..."} or the full workflow as JSON
-// (a JSON object that lacks a `yaml` field). Strip whitespace first
-// because an empty buffer is treated as "no body".
+// normaliseWorkflowBody returns canonical JSON bytes ready for
+// parse.Parse. The FE sends the full workflow as JSON; this helper
+// keeps the validate seam in case callers want to wrap the body later
+// (e.g. envelope with metadata). Currently it just round-trips JSON to
+// guarantee the shape parses cleanly into wf.Workflow.
 func normaliseWorkflowBody(id string, raw []byte) ([]byte, error) {
-	trim := strings.TrimSpace(string(raw))
-	if trim == "" {
+	if strings.TrimSpace(string(raw)) == "" {
 		return nil, errors.New("body is required")
 	}
-	// yaml-envelope shape.
-	var env struct {
-		YAML string `json:"yaml"`
-	}
-	if err := json.Unmarshal(raw, &env); err == nil && strings.TrimSpace(env.YAML) != "" {
-		return []byte(env.YAML), nil
-	}
-	// Raw workflow JSON — marshal back to YAML so the parser sees one
-	// shape. yaml.v3 round-trips a Workflow cleanly because every YAML
-	// tag on the struct doubles as a JSON-compatible key.
 	var w wf.Workflow
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, errors.New("body must be either {\"yaml\":...} or a workflow JSON object: " + err.Error())
+		return nil, errors.New("body must be a workflow JSON object: " + err.Error())
 	}
 	if w.ID == "" {
 		w.ID = id
 	}
-	out, err := yaml.Marshal(w)
-	if err != nil {
-		return nil, errors.New("marshal workflow → yaml: " + err.Error())
-	}
-	return out, nil
+	return json.Marshal(w)
 }
 
 // JSON-only API wrappers consumed by the Svelte SPA under
@@ -70,6 +57,9 @@ func normaliseWorkflowBody(id string, raw []byte) ([]byte, error) {
 // because /api/workflows/* paths don't overlap any existing pattern.
 func registerSPAWorkflows(r tool.Router) {
 	r.GET("/api/workflows/list", spaWorkflowList)
+	r.GET("/api/workflows/templates", spaWorkflowTemplates)
+	r.POST("/api/workflows/create", spaWorkflowCreate)
+	r.POST("/api/workflows/duplicate/{id}", spaWorkflowDuplicate)
 	r.GET("/api/workflows/get/{id}", spaWorkflowGet)
 	r.POST("/api/workflows/save/{id}", spaWorkflowSave)
 	r.POST("/api/workflows/publish/{id}", spaWorkflowPublish)
@@ -79,6 +69,10 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
+	r.POST("/api/workflows/template-test/{id}", spaTemplateTest)
+	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
+	r.POST("/api/workflows/move-nodes/{id}", spaMoveNodes)
+	r.POST("/api/workflows/auto-layout/{id}", spaAutoLayout)
 }
 
 type spaWorkflowSummary struct {
@@ -86,7 +80,80 @@ type spaWorkflowSummary struct {
 	Name      string `json:"name"`
 	Enabled   bool   `json:"enabled"`
 	HasDraft  bool   `json:"has_draft"`
+	Version   int    `json:"version"`
+	CreatedAt string `json:"created_at,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+var workflowTemplates = []map[string]string{
+	{"value": "empty",             "label": "Empty",             "desc": "Blank canvas — start from scratch"},
+	{"value": "support-triage",    "label": "Support Triage",    "desc": "Classify inbound support messages and route to the right handler"},
+	{"value": "incident-response", "label": "Incident Response", "desc": "Webhook-triggered incident response with parallel data gathering"},
+	{"value": "daily-digest",      "label": "Daily Digest",      "desc": "Cron-triggered daily summary"},
+}
+
+func spaWorkflowTemplates(c *tool.Ctx) {
+	c.JSON(http.StatusOK, map[string]any{"templates": workflowTemplates})
+}
+
+func spaWorkflowCreate(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	var body struct {
+		Name     string `json:"name"`
+		Template string `json:"template"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
+		Name:     body.Name,
+		Template: body.Template,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
+}
+
+func spaWorkflowDuplicate(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	src, err := globalWorkflowMgr.Service.Load(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
+		Name:     src.Name + " copy",
+		Template: "empty",
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// Copy graph + triggers from source.
+	src.ID = w.ID
+	src.Name = w.Name
+	src.Enabled = false
+	if err := globalWorkflowMgr.Service.SaveDraft(w.ID, src); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := globalWorkflowMgr.Service.Publish(w.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
 func spaWorkflowList(c *tool.Ctx) {
@@ -100,12 +167,20 @@ func spaWorkflowList(c *tool.Ctx) {
 	}
 	out := make([]spaWorkflowSummary, 0, len(summaries))
 	for _, s := range summaries {
-		out = append(out, spaWorkflowSummary{
+		row := spaWorkflowSummary{
 			ID:       s.ID,
 			Name:     s.Name,
 			Enabled:  s.Enabled,
+			Version:  s.Version,
 			HasDraft: globalWorkflowMgr.Service.HasDraft(s.ID),
-		})
+		}
+		if !s.CreatedAt.IsZero() {
+			row.CreatedAt = s.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		if !s.UpdatedAt.IsZero() {
+			row.UpdatedAt = s.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
 	}
 	c.JSON(http.StatusOK, map[string]any{"workflows": out})
 }
@@ -495,6 +570,102 @@ func parseDateInput(v string, endOfDay bool) (time.Time, error) {
 	return t.UTC(), nil
 }
 
+// templateTestRL limits template-test to 5 req/s (200ms min between calls).
+// Single bucket — fine for a local dev server where all traffic is one user.
+var templateTestRL = struct {
+	mu       sync.Mutex
+	last     time.Time
+	minGap   time.Duration
+}{minGap: 200 * time.Millisecond}
+
+func spaTemplateTest(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	templateTestRL.mu.Lock()
+	now := time.Now()
+	wait := templateTestRL.minGap - now.Sub(templateTestRL.last)
+	if wait > 0 {
+		templateTestRL.mu.Unlock()
+		c.JSON(http.StatusTooManyRequests, map[string]string{"error": "rate limited"})
+		return
+	}
+	templateTestRL.last = now
+	templateTestRL.mu.Unlock()
+
+	var body struct {
+		Template    string `json:"template"`
+		SampleEvent string `json:"sample_event"`
+		Context     string `json:"context"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	result, err := globalWorkflowMgr.MCP.TemplateTest(mcp.TemplateTestInput{
+		Template:    body.Template,
+		SampleEvent: body.SampleEvent,
+		Context:     body.Context,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func spaCanvasView(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	result, err := globalWorkflowMgr.MCP.CanvasView(c.PathValue("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func spaMoveNodes(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		Moves []wfcanvas.NodeMove `json:"moves"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.Canvas.MoveNodes(id, body.Moves)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, w)
+}
+
+func spaAutoLayout(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var body struct {
+		NodeIDs []string `json:"node_ids"`
+	}
+	if err := c.BindJSON(&body); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.Canvas.AutoLayout(id, body.NodeIDs)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, w)
+}
+
 // spaExecNode runs one node in isolation — n8n's "Execute step"
 // pattern, JSON-only twin of the legacy execNodeStep handler. Accepts
 // a raw wf.Node JSON object (not a drawflow node blob) so the v2
@@ -573,8 +744,13 @@ func spaExecNode(c *tool.Ctx) {
 		RunID:       "step-" + time.Now().UTC().Format("20060102T150405.000000000"),
 		NodeOutputs: nodeOutputs,
 	}
+	node, prerr := wfengine.PreRenderNode(body.Node, rc.RenderCtx())
+	if prerr != nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "pre-render: " + prerr.Error()})
+		return
+	}
 	startedAt := time.Now()
-	out, runErr := exec.Execute(c.Context(), body.Node, rc)
+	out, runErr := exec.Execute(c.Context(), node, rc)
 	resp := map[string]any{
 		"ok":         runErr == nil,
 		"latency_ms": time.Since(startedAt).Milliseconds(),

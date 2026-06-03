@@ -23,8 +23,8 @@ func TestSPAEmbedHasWorkflowApp(t *testing.T) {
 	body := string(idx)
 	// Spot-check the shell — the Vite-injected base URL must point at
 	// the SPA mount, otherwise asset paths break in the browser.
-	if !strings.Contains(body, "/tools/agents/agents-v2/workflow/") {
-		t.Errorf("index.html missing /tools/agents/agents-v2/workflow/ base; got: %s", body)
+	if !strings.Contains(body, "/tools/agents/workflow/workflow/") {
+		t.Errorf("index.html missing /tools/agents/workflow/workflow/ base; got: %s", body)
 	}
 	// Sanity: at least one asset is referenced.
 	if !strings.Contains(body, "/assets/") {

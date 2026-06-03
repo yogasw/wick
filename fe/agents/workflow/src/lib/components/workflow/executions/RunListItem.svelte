@@ -18,14 +18,14 @@
 
 <button
   type="button"
-  class="w-full text-left px-4 py-3 border-b border-slate-200 dark:border-slate-800 transition-colors"
-  class:bg-slate-100={active}
-  class:dark:bg-slate-800={active}
+  class="w-full text-left px-4 py-3 border-b border-slate-200 dark:border-navy-600 transition-colors"
+  class:bg-white-200={active}
+  class:bg-navy-700={active}
   class:ring-1={active}
   class:ring-inset={active}
   class:ring-emerald-500={active}
-  class:hover:bg-slate-50={!active}
-  class:dark:hover:bg-slate-800={!active}
+  
+  class:hover:bg-white-200={(!active)}
   onclick={() => onpick(runKey(run))}
 >
   <div class="flex items-center gap-2 text-xs">
@@ -38,10 +38,10 @@
     >
       {kindLabel(kind)}
     </span>
-    <span class="ml-auto text-slate-500 tabular-nums">{fmtDuration(run)}</span>
+    <span class="ml-auto text-black-700 dark:text-black-600 tabular-nums">{fmtDuration(run)}</span>
   </div>
-  <div class="mt-1 flex items-center gap-2 text-[11px] font-mono text-slate-500">
-    <span class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">{shortID(runKey(run))}</span>
+  <div class="mt-1 flex items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
+    <span class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-navy-600 text-black-500 dark:text-black-600">{shortID(runKey(run))}</span>
     <span>{fmtTimestamp(run.started_at)}</span>
   </div>
 </button>

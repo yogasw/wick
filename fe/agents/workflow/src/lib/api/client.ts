@@ -44,6 +44,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
@@ -53,6 +54,7 @@ export async function apiPost<T>(
     },
     credentials: "same-origin",
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   if (!res.ok) throw new APIError(res.status, await res.text());
   return (await res.json()) as T;

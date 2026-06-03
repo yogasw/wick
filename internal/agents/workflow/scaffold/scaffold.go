@@ -35,7 +35,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	case "support-triage":
 		base.Name = "Support triage"
 		base.Description = "Classify inbound support messages and route to the right handler."
-		base.Triggers = []workflow.Trigger{{Type: workflow.TriggerChannel, ChannelName: "slack", Event: "message", Target: "#support", EntryNode: "classify"}}
+		base.Triggers = []workflow.Trigger{{ID: "trigger-slack-message", Type: workflow.TriggerChannel, ChannelName: "slack", Event: "message", Target: "#support", EntryNode: "classify", Label: "Slack message"}}
 		base.Graph = workflow.Graph{
 			Entry: "classify",
 			Nodes: []workflow.Node{
@@ -55,7 +55,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	case "incident-response":
 		base.Name = "Incident response"
 		base.Description = "Webhook-triggered incident response with parallel data gathering."
-		base.Triggers = []workflow.Trigger{{Type: workflow.TriggerWebhook, Path: "/hooks/alerts", EntryNode: "gather"}}
+		base.Triggers = []workflow.Trigger{{ID: "trigger-webhook", Type: workflow.TriggerWebhook, Path: "/hooks/alerts", EntryNode: "gather", Label: "Webhook"}}
 		base.Graph = workflow.Graph{
 			Entry: "gather",
 			Nodes: []workflow.Node{
@@ -76,7 +76,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	case "daily-digest":
 		base.Name = "Daily digest"
 		base.Description = "Cron-triggered daily summary."
-		base.Triggers = []workflow.Trigger{{Type: workflow.TriggerCron, Schedule: "0 8 * * *", Timezone: "UTC", EntryNode: "fetch"}}
+		base.Triggers = []workflow.Trigger{{ID: "trigger-cron", Type: workflow.TriggerCron, Schedule: "0 8 * * *", Timezone: "UTC", EntryNode: "fetch", Label: "Daily 8am"}}
 		base.Graph = workflow.Graph{
 			Entry: "fetch",
 			Nodes: []workflow.Node{
@@ -88,7 +88,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	default:
 		base.Name = "Untitled workflow"
 		base.Description = "Empty workflow scaffold. Add nodes via canvas or YAML."
-		base.Triggers = []workflow.Trigger{{Type: workflow.TriggerManual, Label: "run", EntryNode: "start"}}
+		base.Triggers = []workflow.Trigger{{ID: "trigger-manual", Type: workflow.TriggerManual, Label: "run", EntryNode: "start"}}
 		base.Graph = workflow.Graph{
 			Entry: "start",
 			Nodes: []workflow.Node{{ID: "start", Type: workflow.NodeEnd, Result: "ok"}},

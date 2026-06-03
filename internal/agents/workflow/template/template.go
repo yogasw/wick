@@ -124,7 +124,8 @@ var BuiltinFuncDocs = map[string]string{
 	"toJSON v":       "marshal any value to JSON string — safe for body: fields (aliases: toJson, tojson)",
 	"fromJSON s":     "parse JSON string to map/slice/scalar — use to read fields out of stringified JSON (aliases: fromJson, fromjson)",
 	"jsonEscape str": "escape string for embedding inside a JSON string literal",
-	"now format":     "current UTC time — format uses Go ref time e.g. '2006-01-02T15:04:05Z07:00'",
+	"now format":           "current UTC time — format uses Go ref time e.g. '2006-01-02T15:04:05Z07:00'",
+	"timeFormat t format": "format a time.Time from context (e.g. .Event.At) — same Go ref-time format. Example: {{.Event.At | timeFormat \"2006-01-02T15:04:05Z\"}}",
 }
 
 func toJSON(v any) (string, error) {
@@ -191,5 +192,14 @@ var BuiltinFuncs = gotemplate.FuncMap{
 			format = time.RFC3339
 		}
 		return time.Now().UTC().Format(format)
+	},
+	// timeFormat formats a time.Time value from the render context.
+	// Use for .Event.At or any time.Time field.
+	// Example: {{.Event.At | timeFormat "2006-01-02T15:04:05Z"}}
+	"timeFormat": func(t time.Time, format string) string {
+		if format == "" {
+			format = time.RFC3339
+		}
+		return t.UTC().Format(format)
 	},
 }
