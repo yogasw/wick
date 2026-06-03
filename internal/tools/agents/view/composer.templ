@@ -1,0 +1,110 @@
+package view
+
+// composerCard is the shared "start a session" input: textarea + attach
+// + project/provider/preset dropdowns + send. Used standalone on the New
+// Session page and embedded at the top of a scoped project landing.
+// Posts to vm.Base ("/") — startNewSession creates the session on submit.
+templ composerCard(vm ComposerVM) {
+	if len(vm.Providers) == 0 {
+		<div class="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
+			<p class="text-sm text-amber-700 dark:text-amber-300">
+				No healthy providers found. Configure one in
+				<a class="font-medium underline" href={ templ.SafeURL(vm.Base + "/providers") }>Providers</a>
+				first.
+			</p>
+		</div>
+	} else {
+		{{ selectedPID := vm.SelectedProjectID() }}
+		<form method="POST" action={ templ.SafeURL(vm.Base) } class="w-full" data-ns-form enctype="multipart/form-data">
+			if !vm.ShowProjectPicker {
+				<input type="hidden" name="project_id" value={ selectedPID }/>
+			}
+			<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden" data-composer-drop>
+				<div data-attach-chips class="hidden flex-wrap gap-2 px-3 pt-3"></div>
+				<input type="file" name="files" multiple class="hidden" data-attach-input/>
+				<textarea
+					name="message"
+					rows="3"
+					placeholder="Ask anything... (Shift+Enter for new line)"
+					class="block w-full resize-none border-0 bg-transparent px-4 pt-3.5 pb-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:outline-none focus:ring-0"
+					data-ns-textarea
+				>{ vm.Message }</textarea>
+				<div class="flex flex-wrap items-center gap-2 border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
+					<button
+						type="button"
+						data-attach-toggle
+						class="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+						title="Attach file"
+					>
+						<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+						</svg>
+					</button>
+					if vm.ShowProjectPicker && len(vm.Projects) > 0 {
+						<label class="sr-only" for="ns-project">Project</label>
+						<select
+							id="ns-project"
+							name="project_id"
+							class={ nsSelectBase,
+								templ.KV(nsSelectInherited, vm.Scoped),
+								templ.KV(nsSelectNeutral, !vm.Scoped) }
+						>
+							<option value="">— no project —</option>
+							for _, p := range vm.Projects {
+								if p.ID == selectedPID {
+									<option value={ p.ID } selected>{ p.Icon } { p.Name }</option>
+								} else {
+									<option value={ p.ID }>{ p.Icon } { p.Name }</option>
+								}
+							}
+						</select>
+					}
+					<label class="sr-only" for="ns-provider">Provider</label>
+					<select
+						id="ns-provider"
+						name="provider"
+						class={ nsSelectBase,
+							templ.KV(nsSelectInherited, vm.Scoped),
+							templ.KV(nsSelectNeutral, !vm.Scoped) }
+					>
+						for _, p := range vm.Providers {
+							if p.Type == vm.DefaultProvider {
+								<option value={ p.Type } selected>{ p.Type } · { p.Name }</option>
+							} else {
+								<option value={ p.Type }>{ p.Type } · { p.Name }</option>
+							}
+						}
+					</select>
+					if len(vm.Presets) > 0 {
+						<label class="sr-only" for="ns-preset">Preset</label>
+						<select
+							id="ns-preset"
+							name="preset"
+							class={ nsSelectBase,
+								templ.KV(nsSelectInherited, vm.Scoped),
+								templ.KV(nsSelectNeutral, !vm.Scoped) }
+						>
+							<option value="">— preset (default) —</option>
+							for _, name := range vm.Presets {
+								if name == vm.DefaultPreset {
+									<option value={ name } selected>{ name }</option>
+								} else {
+									<option value={ name }>{ name }</option>
+								}
+							}
+						</select>
+					}
+					<button
+						type="submit"
+						class="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
+					>
+						<span>Send</span>
+						<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
+							<path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
+						</svg>
+					</button>
+				</div>
+			</div>
+		</form>
+	}
+}

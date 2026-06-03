@@ -32,7 +32,7 @@ func (s *ConfigSource) load() agentconfig.TelegramChannelConfig {
 // Hash fingerprints fields that meaningfully affect connection state.
 func (s *ConfigSource) Hash() string {
 	cfg := s.load()
-	return cfg.BotToken + "|" + cfg.AllowedIDs + "|" + cfg.Workspace
+	return cfg.BotToken + "|" + cfg.AllowedIDs + "|" + cfg.ProjectID
 }
 
 // Reload re-reads the config and applies it to the bound channel.

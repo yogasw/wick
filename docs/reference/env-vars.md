@@ -66,7 +66,7 @@ The `~/.<app>/` tree currently includes:
 | `~/.<app>/config.json` | Userconfig — provider instances, status cache, misc kv |
 | `~/.<app>/INITIAL_CREDENTIALS.txt` | Auto-generated admin passphrase (deleted on first password rotation) |
 | `~/.<app>/logs/{app,server,worker,gate}-YYYY-MM-DD.log` | Daily tail logs |
-| `~/.<app>/agents/` | [Agents](../guide/agents) subsystem state — workspaces, sessions, presets, gate spec/socket |
+| `~/.<app>/agents/` | [Agents](../guide/agents) subsystem state — projects, sessions, presets, gate spec/socket |
 
 ```env
 APP_NAME=My Internal Tools

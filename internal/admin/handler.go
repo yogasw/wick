@@ -261,7 +261,14 @@ func requiredMissingKeys(rows []entity.Config) []string {
 func (h *Handler) variablesPage(w http.ResponseWriter, r *http.Request) {
 	user := login.GetUser(r.Context())
 	editKey := r.URL.Query().Get("edit")
-	view.VariablesPage(h.configs.List(), editKey, user).Render(r.Context(), w)
+	all := h.configs.List()
+	rows := all[:0:len(all)]
+	for _, r := range all {
+		if !r.Hidden {
+			rows = append(rows, r)
+		}
+	}
+	view.VariablesPage(rows, editKey, user).Render(r.Context(), w)
 }
 
 func (h *Handler) setVariable(w http.ResponseWriter, r *http.Request) {

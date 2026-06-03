@@ -9,7 +9,7 @@ Wick **Agents** spawn AI CLIs (Claude, Codex, Gemini) as long-lived subprocesses
 The point isn't to wrap a model — it's to let the AI keep its native CLI runtime (its MCP servers, skills, memory, settings) while wick handles session storage, command approval, multi-instance config, and concurrency.
 
 ::: tip Why this is interesting
-Most "AI agent" tools either lock you into their own runtime, or expose a chat-only UI. Wick goes the other way: bring your own Claude / Codex / Gemini install, and wick gives it a place to run safely with **multi-channel routing (Slack + Telegram + UI)**, multi-session concurrency, real workspaces on disk, and a per-command [approval gate](./command-gate). One agent — many ways to talk to it.
+Most "AI agent" tools either lock you into their own runtime, or expose a chat-only UI. Wick goes the other way: bring your own Claude / Codex / Gemini install, and wick gives it a place to run safely with **multi-channel routing (Slack + Telegram + UI)**, multi-session concurrency, real projects on disk, and a per-command [approval gate](./command-gate). One agent — many ways to talk to it.
 :::
 
 ## What you get
@@ -19,7 +19,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 | **Multi-channel routing** — same agent reachable from Slack, Telegram, and the web UI; each thread / chat / conversation = its own session | [Channels](./agents/channels) |
 | **Multi-session concurrency** — pool caps subprocess count, FIFO-queues the rest, idle-kills + resumes via `--resume <cli_session_id>` | [Pool & Sessions](./agents/pool) |
 | **Workflows** — YAML DAG of classify / agent / connector / http / channel / datatable / branch / parallel nodes triggered by cron, channel events, webhooks, or manual runs; replayable per-run state on disk; visual canvas + MCP `workflow_*` ops | [Workflows](/workflow/) |
-| **Workspaces** — folders on disk (managed or any custom path) used as the agent's `cwd`. Multiple sessions can share one | [Workspaces](./agents/workspaces) |
+| **Projects** — folders on disk (managed or any custom path) used as the agent's `cwd`. Multiple sessions can share one | [Projects](./agents/projects) |
 | **Multi-instance providers** — two `claude/...` profiles with different PATs, plus codex / gemini side-by-side | [Providers](./agents/providers) |
 | **Skills Manager** — browse, preview, sync, and delete skill `.md` files across all provider skill dirs (`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`) from one UI | [Skills Manager](./agents/skills-manager) |
 | **Command Gate** — `<app>-gate` sidecar binary intercepts every Bash command for whitelist + 4-mode interactive approval | [Command Gate](./command-gate) |
@@ -37,11 +37,11 @@ After boot, head to `/tools/agents`.
 |---|---|
 | **Overview** | Pool stats (active / max / queue), running list, recent sessions. |
 | **Sessions** | List, open, delete sessions. Detail tabs: Conversation, Commands (gate audit), Raw events. Composer at the bottom posts a new message. |
-| **Workspaces** | Create / delete workspaces. New = empty managed folder unless pointed at a custom path. |
-| **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no workspace (or the workspace has no `DefaultPreset`); it cannot be deleted, only edited. |
+| **Projects** | Create / delete projects. New = empty managed folder unless pointed at a custom path. |
+| **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
 | **Skills** | Browse, preview, sync, and delete skill files across all provider skill dirs. |
-| **Channels** | Slack + Telegram bot config (tokens, access control, default workspace). Web UI is always-on. |
+| **Channels** | Slack + Telegram bot config (tokens, access control, default project). Web UI is always-on. |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.
 
@@ -55,14 +55,14 @@ Everything lives under `~/.<app>/agents/`. The `<app>` part is whatever the bina
 ├── presets/
 │   └── default/agent.md
 │
-├── workspaces/                           ← managed workspace metadata (custom paths live elsewhere)
-│   └── <name>/
-│       ├── meta.json                     ← workspace.Meta — custom_path, default_preset, ...
+├── projects/                             ← managed project metadata (custom paths live elsewhere)
+│   └── <id>/
+│       ├── meta.json                     ← project.Meta — custom_path, default_preset, ...
 │       └── files/                        ← managed cwd (skipped when CustomPath is set)
 │
 ├── sessions/
 │   ├── T123ABC/                          ← Slack thread_ts
-│   │   ├── meta.json                     ← session.Meta — workspace ref, status, pending_input
+│   │   ├── meta.json                     ← session.Meta — project_id ref, status, pending_input
 │   │   ├── agents.json                   ← []AgentEntry — cli_session_id, status per agent
 │   │   ├── agent.md                      ← snapshot of the active preset
 │   │   ├── conversation.jsonl            ← user/assistant turns (append-only)
@@ -110,7 +110,7 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 
 ## Context file panel
 
-Every session-detail page has a vertically-labeled **Context** tab pinned to the right edge of the chat (shortcut `Ctrl+B`). Click or hit the shortcut and a slide-over panel reveals a file tree rooted at the session's resolved `cwd` — the same directory the agent process spawns in (a managed workspace's `files/`, the workspace's `CustomPath`, or the per-session fallback `<SessionDir>/cwd/`).
+Every session-detail page has a vertically-labeled **Context** tab pinned to the right edge of the chat (shortcut `Ctrl+B`). Click or hit the shortcut and a slide-over panel reveals a file tree rooted at the session's resolved `cwd` — the same directory the agent process spawns in (a managed project's `files/`, the project's `CustomPath`, or the per-session fallback `<SessionDir>/cwd/`).
 
 The panel is the single place to inspect what the agent has actually written, without leaving the chat.
 
@@ -123,7 +123,7 @@ The panel is the single place to inspect what the agent has actually written, wi
 | **Create** | `+ file` and `+ folder` icons in the panel header, plus a "new file here" icon on hover of each folder row. |
 | **Delete** | Per-row trash icon. Folders recurse. The session `cwd` itself is refused. |
 
-Heavy build artifact directories (`node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `target`, `.cache`, `.next`) are pruned from the walk and the listing caps at 5000 entries so the panel stays responsive on large workspaces.
+Heavy build artifact directories (`node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `target`, `.cache`, `.next`) are pruned from the walk and the listing caps at 5000 entries so the panel stays responsive on large projects.
 
 ### Sandbox
 
@@ -152,7 +152,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 
 ## Sub-pages
 
-- [**Workspaces**](./agents/workspaces) — folders on disk; managed vs custom path; built-in `default`.
+- [**Projects**](./agents/projects) — folders on disk; managed vs custom path; built-in `default`.
 - [**Providers**](./agents/providers) — multi-instance config, binary resolution chain, status cache.
 - [**Channels**](./agents/channels) — Slack, Telegram, web UI; access control; meta-commands.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.

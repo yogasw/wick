@@ -7,7 +7,7 @@
 // Dependencies:
 //   - internal/agents/channels (store helpers)
 //   - internal/agents/config   (seed / typed config)
-//   - internal/agents/workspace (workspace list for dropdown)
+//   - internal/agents/project   (project list for dropdown)
 //   - internal/entity           (entity.Config for ConfigsTable UI)
 //
 // Main Functions:
@@ -27,7 +27,7 @@ import (
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
+	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
@@ -81,7 +81,7 @@ func slackChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "workspace")
+	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "project_id")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -98,7 +98,7 @@ func restChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "workspace")
+	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "project_id")
 
 	appURL := ""
 	if globalConfigs != nil {
@@ -128,7 +128,7 @@ func telegramChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "workspace")
+	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "project_id")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -259,10 +259,11 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 
 // loadChannelRows returns entity.Config rows (for the ConfigsTable UI component)
 // with values populated from the agent_channels JSON config.
-// workspaceKey is the key whose Options should be set to the live workspace list.
+// projectKey is the key whose Options should be set to the live project list
+// (formatted "name::id" so the dropdown shows names but stores the id).
 // Secret values stored as wick_cenc_ tokens are decrypted before render so the
 // UI can show the "stored" badge correctly (non-empty value = stored).
-func loadChannelRows(channelType string, seed []entity.Config, workspaceKey string) []entity.Config {
+func loadChannelRows(channelType string, seed []entity.Config, projectKey string) []entity.Config {
 	rows := make([]entity.Config, len(seed))
 	copy(rows, seed)
 
@@ -284,13 +285,28 @@ func loadChannelRows(channelType string, seed []entity.Config, workspaceKey stri
 		}
 	}
 
-	// Populate workspace dropdown options.
-	if globalLayout.BaseDir != "" && workspaceKey != "" {
-		wsNames, err := agentworkspace.List(globalLayout)
-		if err == nil && len(wsNames) > 0 {
-			for i := range rows {
-				if rows[i].Key == workspaceKey {
-					rows[i].Options = strings.Join(wsNames, "|")
+	// Populate project dropdown options as "name::id" pairs so the
+	// dropdown shows display names but stores the project id.
+	if globalLayout.BaseDir != "" && projectKey != "" {
+		ids, err := agentproject.List(globalLayout)
+		if err == nil && len(ids) > 0 {
+			var opts []string
+			for _, id := range ids {
+				p, lerr := agentproject.Load(globalLayout, id)
+				if lerr != nil {
+					continue
+				}
+				label := p.Meta.Name
+				if label == "" {
+					label = id
+				}
+				opts = append(opts, label+"::"+id)
+			}
+			if len(opts) > 0 {
+				for i := range rows {
+					if rows[i].Key == projectKey {
+						rows[i].Options = strings.Join(opts, "|")
+					}
 				}
 			}
 		}

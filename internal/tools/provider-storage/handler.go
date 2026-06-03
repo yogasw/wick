@@ -571,7 +571,7 @@ func knownProviderPaths(providerType, home string) []detectedPath {
 			{Label: "Gemini config folder", SyncPath: filepath.Join(home, ".gemini"), Mode: "folder"},
 		}
 	case "wick":
-		agentsBase := agentconfig.ResolveBaseDir(agentconfig.WorkspaceConfig{})
+		agentsBase := agentconfig.ResolveBaseDir(agentconfig.StorageConfig{})
 		return []detectedPath{
 			{Label: "Wick config folder", SyncPath: filepath.Dir(agentsBase), Mode: "folder"},
 			{Label: "Wick agents folder", SyncPath: agentsBase, Mode: "folder"},

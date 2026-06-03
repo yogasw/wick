@@ -6,7 +6,7 @@ package config
 // Bearer.
 type RestChannelConfig struct {
 	Enabled   string `wick:"dropdown=true|false;hidden;key=enabled;desc=Enable the OpenAI-compatible REST endpoint at /integrations/rest/api/v1/openai/chat/completions."`
-	Workspace string `wick:"dropdown;hidden;key=workspace;desc=Workspace to use for sessions from REST requests. Leave empty to use the global default."`
+	ProjectID string `wick:"dropdown;hidden;key=project_id;desc=Default project for REST sessions. A request can override it per-call with a \"project\" field (or metadata.project) in the body. Leave empty to use the global default."`
 }
 
 // DefaultRestChannelConfig returns the empty REST defaults. REST stays off
