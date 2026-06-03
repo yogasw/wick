@@ -8,7 +8,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/workflow"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
 )
 
 // SessionInitExecutor implements the `session_init` node. It writes the
@@ -31,6 +31,20 @@ type SessionInitExecutor struct {
 // RunContext, the pool side effect is skipped.
 func NewSessionInitExecutor(p *pool.Pool) *SessionInitExecutor {
 	return &SessionInitExecutor{Pool: p}
+}
+
+// Descriptor surfaces session_init in the editor palette and MCP
+// catalog. No schema yet — session_init's fields are declared inline
+// on the workflow.Node (mode, session_id) rather than via a tagged
+// struct.
+func (e *SessionInitExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Category:    engine.CategoryAI,
+		Label:       "Session Init",
+		Badge:       "session",
+		Description: "Resolve the AI session id early so downstream agent nodes share it and the sidebar row appears before the first turn.",
+		WhenToUse:   "Workflow uses agent nodes and you want the session sidebar entry visible immediately, or you want to pin a specific session id.",
+	}
 }
 
 // Execute resolves the sessionID, mutates RunContext, and ensures the
@@ -65,14 +79,7 @@ func (e *SessionInitExecutor) Execute(ctx context.Context, n workflow.Node, rc *
 // (template) wins over Preset when both are set.
 func resolveSessionInitID(n workflow.Node, rc *workflow.RunContext) (string, error) {
 	if n.SessionID != "" {
-		rendered, err := template.Render(n.SessionID, rc.RenderCtx())
-		if err != nil {
-			return "", fmt.Errorf("render session_id: %w", err)
-		}
-		if rendered == "" {
-			return "", fmt.Errorf("session_id template rendered to empty string")
-		}
-		return rendered, nil
+		return n.SessionID, nil
 	}
 	preset := n.Preset
 	if preset == "" {

@@ -1,0 +1,35 @@
+package workflow
+
+import (
+	"github.com/yogasw/wick/internal/tools/agents/view"
+)
+
+type SvelteListVM struct {
+	Layout   view.AgentsLayoutVM
+	Base     string
+	AssetURL string
+}
+
+// SvelteList renders the workflow list as a Svelte island inside the
+// agents shell. Same island pattern as SvelteEditor — templ owns the
+// sidebar/chrome, Svelte owns the list content.
+templ SvelteList(vm SvelteListVM) {
+	@view.AgentsLayout(vm.Layout) {
+		<div class="h-[calc(100vh-3.5rem)]" data-wick-island-root>
+			if vm.AssetURL == "" {
+				<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+					Workflow bundle not built yet. Run
+					<code class="font-mono">npm run build:workflow</code>
+					in <code class="font-mono">fe/</code> and refresh.
+				</div>
+			} else {
+				<div
+					data-island="WorkflowList"
+					data-props={ `{"base":"` + vm.Base + `"}` }
+					class="h-full"
+				></div>
+				<script type="module" src={ vm.AssetURL }></script>
+			}
+		</div>
+	}
+}

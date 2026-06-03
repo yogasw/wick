@@ -50,7 +50,7 @@ func newTestOps(t *testing.T) *Ops {
 		Output:      map[string]string{"result": "test output"},
 		Docs: wickdocs.Docs{
 			Quirks:   []string{"test quirk"},
-			Examples: []wickdocs.Example{{Name: "basic", YAML: "- id: t\n  type: test_node"}},
+			Examples: []wickdocs.Example{{Name: "basic", Body: "- id: t\n  type: test_node"}},
 		},
 	})
 

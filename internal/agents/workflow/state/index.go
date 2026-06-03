@@ -15,6 +15,19 @@ type IndexEntry struct {
 	StartedAt  time.Time  `json:"at"`
 	EndedAt    *time.Time `json:"end,omitempty"`
 	DurationMs int64      `json:"ms,omitempty"`
+	// Source tags how the run was kicked off so the editor can
+	// distinguish manual vs automation vs test fires in the runs
+	// list. Persisted as a short slug; the FE maps it to a coloured
+	// pill. Empty = legacy / unknown.
+	Source string `json:"src,omitempty"`
+	// TriggerID is the workflow.Trigger that fired, when one was
+	// identified. Empty for runs that fell back to graph.entry.
+	TriggerID string `json:"trig,omitempty"`
+	// TriggerType mirrors workflow.TriggerType for the firing
+	// trigger ("manual" / "cron" / "channel" / …). Kept separate
+	// from Source so the FE can show "automation" buckets without
+	// re-loading each run's state.json.
+	TriggerType string `json:"tt,omitempty"`
 }
 
 // indexStores caches one shardedlog.Store per id so concurrent

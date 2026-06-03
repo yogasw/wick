@@ -76,6 +76,12 @@ type triggerRef struct {
 	TriggerIdx int
 }
 
+// SetService swaps the workflow service this router reads from. Used
+// at boot when the DB-backed service replaces the file-based one — the
+// router caches a Service pointer at New() time, so re-wiring after
+// the swap keeps the queues + dedup tables pointing at the same data.
+func (r *Router) SetService(svc service.Service) { r.service = svc }
+
 // NewRouter wires a Router to an Engine + Service.
 func NewRouter(e *engine.Engine, svc service.Service) *Router {
 	return &Router{

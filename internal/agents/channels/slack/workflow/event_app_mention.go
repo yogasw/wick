@@ -42,7 +42,7 @@ func registerEventAppMention(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "mention_handler",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: app_mention
   entry_node: classify`,
