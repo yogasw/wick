@@ -290,24 +290,53 @@
     document.addEventListener("click", chatLinkClick);
 
 
-    // ── Session search (All chats page) ──────────────────────────────
-    var searchInput = document.querySelector("[data-session-search]");
-    if (searchInput) {
-      searchInput.addEventListener("input", function () {
-        var q = searchInput.value.trim().toLowerCase();
-        var rows = document.querySelectorAll("[data-search-row]");
-        var visible = 0;
-        rows.forEach(function (row) {
-          var text = (row.dataset.searchText || "").toLowerCase();
-          var show = !q || text.includes(q);
-          row.style.display = show ? "" : "none";
-          if (show) visible++;
+    // ── Session search + client-side pagination ───────────────────────
+    // All rows are rendered server-side; search filters them and we page
+    // the matches 10-at-a-time entirely in the browser. Paging never
+    // reloads, so the compose box + search text stay put.
+    (function () {
+      var list = document.querySelector("[data-session-list]");
+      var searchInput = document.querySelector("[data-session-search]");
+      if (!list) return;
+      var pageSize = parseInt(list.dataset.pageSize || "10", 10) || 10;
+      var rows = Array.prototype.slice.call(list.querySelectorAll("[data-search-row]"));
+      var empty = document.querySelector("[data-search-empty]");
+      var pager = document.querySelector("[data-client-pager]");
+      var prevBtn = pager && pager.querySelector("[data-pager-prev]");
+      var nextBtn = pager && pager.querySelector("[data-pager-next]");
+      var label = pager && pager.querySelector("[data-pager-label]");
+      var page = 1;
+
+      function render() {
+        var q = searchInput ? searchInput.value.trim().toLowerCase() : "";
+        var matched = rows.filter(function (row) {
+          return !q || (row.dataset.searchText || "").toLowerCase().includes(q);
         });
-        var empty = document.querySelector("[data-search-empty]");
-        if (empty) empty.classList.toggle("hidden", visible > 0 || !q);
-      });
-      searchInput.focus();
-    }
+        var totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+        if (page > totalPages) page = totalPages;
+        if (page < 1) page = 1;
+        var startI = (page - 1) * pageSize;
+        var endI = startI + pageSize;
+        // Hide everything, then show only this page's matched slice.
+        rows.forEach(function (row) { row.style.display = "none"; });
+        matched.slice(startI, endI).forEach(function (row) { row.style.display = ""; });
+        if (empty) empty.classList.toggle("hidden", matched.length > 0);
+        if (pager) {
+          pager.classList.toggle("hidden", matched.length <= pageSize);
+          if (label) label.textContent = "Page " + page + " / " + totalPages;
+          if (prevBtn) prevBtn.disabled = page <= 1;
+          if (nextBtn) nextBtn.disabled = page >= totalPages;
+        }
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener("input", function () { page = 1; render(); });
+        searchInput.focus();
+      }
+      if (prevBtn) prevBtn.addEventListener("click", function () { if (page > 1) { page--; render(); } });
+      if (nextBtn) nextBtn.addEventListener("click", function () { page++; render(); });
+      render();
+    })();
 
     var root = document.querySelector("[data-session-id]");
     var base = root ? root.dataset.base : null;
@@ -1533,38 +1562,109 @@
       });
     }
 
-    // ── Workspace switcher (in-place, kills subprocess) ───────────────
-    var workspaceMenuToggle = document.querySelector("[data-workspace-menu-toggle]");
-    var workspaceMenu = document.querySelector("[data-workspace-menu]");
-    if (workspaceMenuToggle && workspaceMenu) {
-      workspaceMenuToggle.addEventListener("click", function (e) {
+    // ── Project move menu (in-place, kills subprocess) ────────────────
+    var projectMenuToggle = document.querySelector("[data-project-menu-toggle]");
+    var projectMenu = document.querySelector("[data-project-menu]");
+    if (projectMenuToggle && projectMenu) {
+      projectMenuToggle.addEventListener("click", function (e) {
         e.stopPropagation();
-        workspaceMenu.classList.toggle("hidden");
+        projectMenu.classList.toggle("hidden");
       });
       document.addEventListener("click", function () {
-        workspaceMenu.classList.add("hidden");
+        projectMenu.classList.add("hidden");
       });
-      workspaceMenu.querySelectorAll("[data-workspace-choice]").forEach(function (btn) {
+      projectMenu.querySelectorAll("[data-project-choice]").forEach(function (btn) {
         btn.addEventListener("click", function (e) {
           e.stopPropagation();
-          workspaceMenu.classList.add("hidden");
-          var ws = btn.dataset.workspaceChoice;
+          projectMenu.classList.add("hidden");
+          var pid = btn.dataset.projectChoice;
           var b = base || resolveBase();
           if (!b || !sessionID) return;
           btn.disabled = true;
-          fetch(b + "/sessions/" + encodeURIComponent(sessionID) + "/workspace", {
+          fetch(b + "/sessions/" + encodeURIComponent(sessionID) + "/project", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workspace: ws }),
+            body: JSON.stringify({ project_id: pid }),
           }).then(function (r) { return r.json(); }).then(function (res) {
-            if (res.status === "switched") {
-              var label = document.querySelector("[data-active-workspace-label]");
-              if (label) label.textContent = res.workspace || "default";
+            if (res.status === "moved") {
+              var label = document.querySelector("[data-active-project-label]");
+              if (label) label.textContent = btn.textContent.trim() || "default";
             }
           }).catch(function () {}).finally(function () { btn.disabled = false; });
         });
       });
     }
+
+    // ── Composer: Enter submits, Shift+Enter newline (shared card) ────
+    document.querySelectorAll("[data-ns-form]").forEach(function (form) {
+      var ta = form.querySelector("[data-ns-textarea]");
+      if (!ta) return;
+      var input = form.querySelector("[data-attach-input]");
+      function hasFiles() { return input && input.files && input.files.length > 0; }
+      ta.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          if (ta.value.trim() || hasFiles()) form.submit();
+        }
+      });
+    });
+
+    // ── Pin project as personal default (1 per user, UserMetadata) ────
+    document.querySelectorAll("[data-pin-project]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var id = btn.dataset.pinProject;
+        var b = resolveBase();
+        if (!id || !b) return;
+        btn.disabled = true;
+        fetch(b + "/projects/" + encodeURIComponent(id) + "/pin", { method: "POST" })
+          .then(function (r) { return r.json(); })
+          .then(function () { location.reload(); })
+          .catch(function (err) { console.error("pin failed:", err); btn.disabled = false; });
+      });
+    });
+
+    // ── Drag a session onto a project to move it (mockup ③) ───────────
+    // Session rows are draggable; project rows in the sidebar are drop
+    // targets. Drop → POST /sessions/{sid}/project → reload.
+    (function () {
+      var dragSid = null;
+      document.querySelectorAll("[data-session-drag]").forEach(function (row) {
+        row.addEventListener("dragstart", function (e) {
+          dragSid = row.dataset.sessionDrag;
+          if (e.dataTransfer) {
+            e.dataTransfer.setData("text/plain", dragSid);
+            e.dataTransfer.effectAllowed = "move";
+          }
+        });
+        row.addEventListener("dragend", function () { dragSid = null; });
+      });
+      var dropHi = "ring-2 ring-green-400 ring-inset";
+      document.querySelectorAll("[data-project-drop]").forEach(function (target) {
+        target.addEventListener("dragover", function (e) {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          dropHi.split(" ").forEach(function (c) { target.classList.add(c); });
+        });
+        target.addEventListener("dragleave", function () {
+          dropHi.split(" ").forEach(function (c) { target.classList.remove(c); });
+        });
+        target.addEventListener("drop", function (e) {
+          e.preventDefault();
+          dropHi.split(" ").forEach(function (c) { target.classList.remove(c); });
+          var sid = (e.dataTransfer && e.dataTransfer.getData("text/plain")) || dragSid;
+          var pid = target.dataset.projectDrop;
+          var b = resolveBase();
+          if (!sid || !b) return;
+          fetch(b + "/sessions/" + encodeURIComponent(sid) + "/project", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project_id: pid }),
+          }).then(function () { location.reload(); })
+            .catch(function (err) { console.error("move session failed:", err); });
+        });
+      });
+    })();
 
     // ── Dequeue (kill from queue) ────────────────────────────────────
     document.querySelectorAll("[data-dequeue-session]").forEach(function (btn) {
@@ -1614,19 +1714,39 @@
       });
     });
 
-    // ── Delete workspace ──────────────────────────────────────────────
-    document.querySelectorAll("[data-delete-workspace]").forEach(function (btn) {
+    // ── Delete project ────────────────────────────────────────────────
+    document.querySelectorAll("[data-delete-project]").forEach(function (btn) {
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
-        var name = btn.dataset.deleteWorkspace;
-        confirmAt(btn, 'Delete workspace "' + name + '"? This cannot be undone.', { confirmLabel: "Delete" }).then(function (ok) {
+        var id = btn.dataset.deleteProject;
+        confirmAt(btn, "Delete this project? Sessions are kept but unscoped. This cannot be undone.", { confirmLabel: "Delete" }).then(function (ok) {
           if (!ok) return;
           var b = resolveBase();
           if (!b) return;
-          fetch(b + "/workspaces/" + encodeURIComponent(name), { method: "DELETE" })
-            .then(function () { location.reload(); })
-            .catch(function (err) { console.error("delete workspace failed:", err); });
+          var redirect = btn.dataset.redirect;
+          fetch(b + "/projects/" + encodeURIComponent(id), { method: "DELETE" })
+            .then(function () {
+              if (redirect) { window.location.href = redirect; }
+              else { location.reload(); }
+            })
+            .catch(function (err) { console.error("delete project failed:", err); });
         });
+      });
+    });
+
+    // ── Modal open/close (projects create + edit) ─────────────────────
+    document.querySelectorAll("[data-open-modal]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var el = document.getElementById(btn.dataset.openModal);
+        if (el) el.classList.remove("hidden");
+      });
+    });
+    document.querySelectorAll("[data-close-modal]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var el = document.getElementById(btn.dataset.closeModal);
+        if (el) el.classList.add("hidden");
       });
     });
 
@@ -1669,95 +1789,94 @@
       });
     }
 
-    // ── Workspace custom path: toggle + folder picker ─────────────────
-    var customToggle = document.querySelector("[data-custom-path-toggle]");
-    var customFields = document.querySelector("[data-custom-path-fields]");
-    var customInput = document.querySelector("[data-custom-path-input]");
-    if (customToggle && customFields && customInput) {
-      customToggle.addEventListener("change", function () {
-        if (customToggle.checked) {
-          customFields.classList.remove("hidden");
-        } else {
-          customFields.classList.add("hidden");
-          customInput.value = "";
-        }
-      });
-    }
-
-    // Native folder picker (webkitdirectory). Browser only exposes
-    // File.webkitRelativePath (e.g. "myfolder/sub/file.txt"), so we
-    // grab the first segment as the chosen folder name and let the
-    // user complete the absolute parent path themselves. This keeps
-    // the picker honest about what the browser will give us.
-    var folderPicker = document.querySelector("[data-folder-picker]");
-    var customErr = document.querySelector("[data-custom-path-error]");
-    var createForm = document.querySelector("[data-create-workspace-form]");
-
+    // ── Project custom path: toggle + folder picker (per form) ────────
+    // There may be several project forms on the page (create + one edit
+    // modal per project), so wire each independently scoped to its form.
     function isAbsolutePath(p) {
       if (!p) return false;
-      // POSIX: starts with /
-      if (p.charAt(0) === "/") return true;
-      // Windows: C:\, D:/, \\server\share
-      if (/^[A-Za-z]:[\\/]/.test(p)) return true;
-      if (p.indexOf("\\\\") === 0) return true;
+      if (p.charAt(0) === "/") return true; // POSIX
+      if (/^[A-Za-z]:[\\/]/.test(p)) return true; // Windows C:\ D:/
+      if (p.indexOf("\\\\") === 0) return true; // UNC
       return false;
     }
 
-    function showCustomErr(msg) {
-      if (!customErr) return;
-      customErr.textContent = msg;
-      customErr.classList.remove("hidden");
-      if (customInput) {
-        customInput.classList.add("border-red-500", "dark:border-red-700");
-        customInput.classList.remove("border-white-400", "dark:border-navy-600");
-      }
-    }
+    document.querySelectorAll("[data-project-form]").forEach(function (form) {
+      var folderRadios = form.querySelectorAll("[data-folder-mode]");
+      var customFields = form.querySelector("[data-custom-path-fields]");
+      var customInput = form.querySelector("[data-custom-path-input]");
+      var folderPicker = form.querySelector("[data-folder-picker]");
+      var customErr = form.querySelector("[data-custom-path-error]");
 
-    function clearCustomErr() {
-      if (!customErr) return;
-      customErr.classList.add("hidden");
-      if (customInput) {
-        customInput.classList.remove("border-red-500", "dark:border-red-700");
-        customInput.classList.add("border-white-400", "dark:border-navy-600");
+      function customMode() {
+        var checked = form.querySelector("[data-folder-mode]:checked");
+        return checked && checked.value === "custom";
       }
-    }
-
-    if (folderPicker && customInput) {
-      folderPicker.addEventListener("change", function () {
-        var files = folderPicker.files;
-        if (!files || !files.length) return;
-        var rel = files[0].webkitRelativePath || files[0].name;
-        var folderName = rel.split("/")[0];
-        if (!folderName) return;
-        // Preserve existing parent path if user already typed one.
-        var current = customInput.value.trim();
-        if (current && (current.endsWith("/") || current.endsWith("\\"))) {
-          customInput.value = current + folderName;
-        } else {
-          customInput.value = folderName;
-          showCustomErr(
-            "Add the absolute parent path before \"" + folderName + "\" (e.g. D:/code/" + folderName + ")."
-          );
+      function showCustomErr(msg) {
+        if (!customErr) return;
+        customErr.textContent = msg;
+        customErr.classList.remove("hidden");
+        if (customInput) {
+          customInput.classList.add("border-red-500", "dark:border-red-700");
+          customInput.classList.remove("border-white-400", "dark:border-navy-600");
         }
-        customInput.focus();
-        // Reset the input so picking the same folder again still fires change.
-        folderPicker.value = "";
-        if (isAbsolutePath(customInput.value.trim())) clearCustomErr();
+      }
+      function clearCustomErr() {
+        if (!customErr) return;
+        customErr.classList.add("hidden");
+        if (customInput) {
+          customInput.classList.remove("border-red-500", "dark:border-red-700");
+          customInput.classList.add("border-white-400", "dark:border-navy-600");
+        }
+      }
+
+      // Folder mode radios: show/hide the custom path input block.
+      folderRadios.forEach(function (radio) {
+        radio.addEventListener("change", function () {
+          if (customMode()) {
+            if (customFields) customFields.classList.remove("hidden");
+          } else {
+            if (customFields) customFields.classList.add("hidden");
+            clearCustomErr();
+          }
+        });
       });
 
-      customInput.addEventListener("input", function () {
-        var v = customInput.value.trim();
-        if (!v || isAbsolutePath(v)) clearCustomErr();
-      });
-    }
+      // Native folder picker (webkitdirectory). Browser only exposes
+      // File.webkitRelativePath, so grab the first segment as the chosen
+      // folder name and let the user complete the absolute parent path.
+      if (folderPicker && customInput) {
+        folderPicker.addEventListener("change", function () {
+          var files = folderPicker.files;
+          if (!files || !files.length) return;
+          var rel = files[0].webkitRelativePath || files[0].name;
+          var folderName = rel.split("/")[0];
+          if (!folderName) return;
+          var current = customInput.value.trim();
+          if (current && (current.endsWith("/") || current.endsWith("\\"))) {
+            customInput.value = current + folderName;
+          } else {
+            customInput.value = folderName;
+            showCustomErr(
+              "Add the absolute parent path before \"" + folderName + "\" (e.g. D:/code/" + folderName + ")."
+            );
+          }
+          customInput.focus();
+          folderPicker.value = "";
+          if (isAbsolutePath(customInput.value.trim())) clearCustomErr();
+        });
+        customInput.addEventListener("input", function () {
+          var v = customInput.value.trim();
+          if (!v || isAbsolutePath(v)) clearCustomErr();
+        });
+      }
 
-    if (createForm && customToggle && customInput) {
-      createForm.addEventListener("submit", function (e) {
-        if (!customToggle.checked) return;
+      // Validate custom path on submit only when custom mode is active.
+      form.addEventListener("submit", function (e) {
+        if (!customMode() || !customInput) return;
         var v = customInput.value.trim();
         if (!v) {
           e.preventDefault();
-          showCustomErr("Custom path is required when the toggle is on.");
+          showCustomErr("Custom path is required in Custom mode.");
           customInput.focus();
           return;
         }
@@ -1769,7 +1888,22 @@
         }
         clearCustomErr();
       });
-    }
+
+      // Unpin a session from this project.
+      form.querySelectorAll("[data-unpin-session]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var pid = form.getAttribute("action").split("/").pop();
+          var sid = btn.dataset.unpinSession;
+          var b = resolveBase();
+          if (!b || !pid) return;
+          var fd = new FormData();
+          fd.append("unpin", sid);
+          fetch(b + "/projects/" + encodeURIComponent(pid), { method: "POST", body: fd })
+            .then(function () { location.reload(); })
+            .catch(function (err) { console.error("unpin failed:", err); });
+        });
+      });
+    });
 
     // ── Approval modal (gate Stage 5) ─────────────────────────────────
     // The modal is a fixed overlay rendered once per session detail

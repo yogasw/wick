@@ -5,9 +5,9 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +26,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -45,6 +45,7 @@ var (
 	globalAskUsers   *askuser.Manager
 	globalGateStatus GateStatus
 	globalConfigs    *configs.Service
+	globalAuth       *login.Service
 	globalDB         *gorm.DB
 	globalChannels   *agentchannels.Registry
 	globalSyncMgr    *providersync.Manager
@@ -99,6 +100,10 @@ func SetGateStatus(s GateStatus) { globalGateStatus = s }
 // endpoint 503s.
 func SetConfigs(c *configs.Service) { globalConfigs = c }
 
+// SetAuth wires the login service so per-user preferences (pinned
+// project) can be read/written from the agents tool.
+func SetAuth(a *login.Service) { globalAuth = a }
+
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
 //
@@ -149,7 +154,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}", sessionDetail)
 	r.POST("/sessions/{id}/send", sendMessage)
 	r.POST("/sessions/{id}/provider", switchProvider)
-	r.POST("/sessions/{id}/workspace", switchWorkspace)
+	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
@@ -174,10 +179,18 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/answer", answerAsk)
 	r.GET("/sessions/{id}/asks", asksSnapshot)
 
-	r.GET("/workspaces", workspacesPage)
-	r.GET("/workspaces/options", workspaceOptionsJSON)
-	r.POST("/workspaces", createWorkspace)
-	r.DELETE("/workspaces/{name}", deleteWorkspace)
+	// No standalone /projects list page — the sidebar Projects section is
+	// the canonical project nav. "+ New" → /projects/new (create page),
+	// project rows → /sessions?project=<id> (scoped landing), and
+	// /projects/{id} is the per-project settings page.
+	r.GET("/projects", projectsRedirect) // legacy entry → all chats
+	r.GET("/projects/options", projectOptionsJSON)
+	r.GET("/projects/new", projectSettingsPage)
+	r.GET("/projects/{id}", projectSettingsPage)
+	r.POST("/projects", createProject)
+	r.POST("/projects/{id}", updateProject)
+	r.POST("/projects/{id}/pin", toggleProjectPin)
+	r.DELETE("/projects/{id}", deleteProject)
 
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
@@ -309,8 +322,33 @@ func settingsPage(c *tool.Ctx) {
 // sidebarVM builds AgentsLayoutVM for the sidebar session list.
 // activeSessionID is set on session detail pages to highlight the current row.
 func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayoutVM {
+	return sidebarVMScoped(c, activePage, activeSessionID, "")
+}
+
+// sidebarVMScoped builds the sidebar VM, optionally scoped to a project.
+// When scopedProjectID is set, the Recent list is filtered to that
+// project's sessions and the scoped breadcrumb renders.
+func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID string) view.AgentsLayoutVM {
 	const sidebarCap = 15
+	allSessions := globalMgr.Registry().Sessions()
+	// Per-project session counts across ALL sessions (sidebar pills).
+	counts := make(map[string]int, len(allSessions))
+	for _, s := range allSessions {
+		if s.Meta.ProjectID != "" {
+			counts[s.Meta.ProjectID]++
+		}
+	}
 	allIDs := globalMgr.Registry().SessionIDs()
+	// Scoped sidebar: keep only sessions bound to the active project.
+	if scopedProjectID != "" {
+		filtered := allIDs[:0:0]
+		for _, id := range allIDs {
+			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scopedProjectID {
+				filtered = append(filtered, id)
+			}
+		}
+		allIDs = filtered
+	}
 	ids := allIDs
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
@@ -345,7 +383,34 @@ func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayou
 		SidebarLabels:    labels,
 		ActiveSessionID:  activeSessionID,
 		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
+		Projects:         globalMgr.Registry().Projects(),
+		ProjectList:      globalMgr.Registry().ProjectIDs(),
+		ProjectCounts:    counts,
+		ScopedProjectID:  scopedProjectID,
+		PinnedProjectID:  pinnedProjectID(c),
 	}
+}
+
+// projectChoices builds the picker rows for the compose form / move menu
+// from the registry projects, ordered by display name.
+func projectChoices() []view.ProjectChoiceVM {
+	ids := globalMgr.Registry().ProjectIDs()
+	projects := globalMgr.Registry().Projects()
+	out := make([]view.ProjectChoiceVM, 0, len(ids))
+	for _, id := range ids {
+		p, ok := projects[id]
+		if !ok {
+			continue
+		}
+		out = append(out, view.ProjectChoiceVM{
+			ID:              id,
+			Name:            p.Meta.Name,
+			Icon:            p.Meta.Icon,
+			DefaultPreset:   p.Meta.Defaults.Preset,
+			DefaultProvider: p.Meta.Defaults.Provider,
+		})
+	}
+	return out
 }
 
 // createSessionQuick creates a session with defaults (no form) and redirects.
@@ -426,20 +491,20 @@ func startNewSession(c *tool.Ctx) {
 			prov = ps[0].Type
 		}
 	}
-	ws := c.Form("workspace")
+	projectID := c.Form("project_id")
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
-		if ws != "" {
-			if wsData, werr := workspace.Load(globalLayout, ws); werr == nil && wsData.Meta.DefaultPreset != "" {
-				presetName = wsData.Meta.DefaultPreset
+		if projectID != "" {
+			if p, perr := project.Load(globalLayout, projectID); perr == nil && p.Meta.Defaults.Preset != "" {
+				presetName = p.Meta.Defaults.Preset
 			}
 		}
 	}
 	id := uuid.New().String()
 	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        id,
-		Workspace: ws,
+		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
 	}); err != nil {
@@ -477,17 +542,57 @@ func renderCompose(c *tool.Ctx, message, errMsg string) {
 	if len(providers) > 0 {
 		defaultProv = providers[0].Type
 	}
-	layout := sidebarVM(c, "new", "")
+	scoped := c.Query("project")
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
+	}
+	// No explicit ?project= → land on the user's pinned project (their
+	// personal default). Opening the agents tool drops straight into it.
+	// The compose picker still lets them pick "— no project —" per-session.
+	if scoped == "" {
+		scoped = pinnedProjectID(c)
+	}
+	// Scope the sidebar too so the compose page keeps the breadcrumb +
+	// filtered Recent when opened from a scoped project (mockup ②).
+	layout := sidebarVMScoped(c, "new", "", scoped)
 	layout.FullBleed = true
+	// When not explicitly scoped, fall back to the operator's configured
+	// default project (Settings → default_project_id) as a soft default.
+	configuredDefault := ""
+	if globalConfigs != nil {
+		configuredDefault = globalConfigs.GetOwned("agents", "default_project_id")
+	}
+	// effective = the project whose defaults prefill provider/preset.
+	effective := scoped
+	if effective == "" {
+		effective = configuredDefault
+	}
+	defaultPreset := ""
+	if effective != "" {
+		if p, ok := globalMgr.Registry().Project(effective); ok {
+			if p.Meta.Defaults.Provider != "" {
+				defaultProv = p.Meta.Defaults.Provider
+			}
+			defaultPreset = p.Meta.Defaults.Preset
+		} else if effective == configuredDefault {
+			// Stale configured default (project deleted) — ignore.
+			configuredDefault = ""
+		}
+	}
 	c.HTML(view.NewSessionCompose(view.NewSessionComposeVM{
-		Layout:          layout,
-		Base:            c.Base(),
-		Providers:       providers,
-		Presets:         globalMgr.Registry().PresetNames(),
-		Workspaces:      globalMgr.Registry().WorkspaceNames(),
-		DefaultProvider: defaultProv,
-		Message:         message,
-		Error:           errMsg,
+		Layout:           layout,
+		Base:             c.Base(),
+		Providers:        providers,
+		Presets:          globalMgr.Registry().PresetNames(),
+		Projects:         projectChoices(),
+		DefaultProvider:  defaultProv,
+		DefaultPreset:    defaultPreset,
+		ScopedProjectID:  scoped,
+		DefaultProjectID: configuredDefault,
+		Message:          message,
+		Error:            errMsg,
 	}))
 }
 
@@ -534,6 +639,7 @@ func overviewPage(c *tool.Ctx) {
 		PoolMax:       globalPool.MaxConcurrent(),
 		SessionIDs:    activeIDs,
 		Sessions:      globalMgr.Registry().Sessions(),
+		Projects:      globalMgr.Registry().Projects(),
 		Lifecycle:     lc,
 		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
 		Queued:        queued,
@@ -546,19 +652,30 @@ func sessionsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	page, _ := strconv.Atoi(c.Query("page"))
-	if page < 1 {
-		page = 1
+	scoped := c.Query("project")
+	// Validate the scope — an unknown project id falls back to all chats.
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
 	}
-	const perPage = 50
 	ids := globalMgr.Registry().SessionIDs()
-	start := (page - 1) * perPage
-	if start > len(ids) {
-		start = len(ids)
+	if scoped != "" {
+		sessions := globalMgr.Registry().Sessions()
+		filtered := ids[:0:0]
+		for _, id := range ids {
+			if s, ok := sessions[id]; ok && s.Meta.ProjectID == scoped {
+				filtered = append(filtered, id)
+			}
+		}
+		ids = filtered
 	}
-	end := start + perPage
-	if end > len(ids) {
-		end = len(ids)
+	// Render all rows; pagination (10/page) + search run client-side so
+	// paging never reloads the page (keeps the compose box + search text).
+	// Guard against pathological counts with a generous cap.
+	const maxRender = 1000
+	if len(ids) > maxRender {
+		ids = ids[:maxRender]
 	}
 	lc := make(map[string]view.SessionLifecycleVM)
 	for _, e := range globalPool.ActiveSnapshot() {
@@ -571,25 +688,53 @@ func sessionsPage(c *tool.Ctx) {
 		}
 		lc[e.SessionID] = entry
 	}
-	pageIDs := ids[start:end]
-	pageLabels := make(map[string]string, len(pageIDs))
-	for _, id := range pageIDs {
+	pageLabels := make(map[string]string, len(ids))
+	for _, id := range ids {
 		pageLabels[id] = loadFirstUserMessage(globalLayout, id, 60)
 	}
+	providers := providerChoicesCached(c.Context())
+	// Build the scoped project landing composer (Claude-style: compose
+	// box on top of the chats list, defaults inherited from the project).
+	var composer view.ComposerVM
+	if scoped != "" {
+		defProv := ""
+		if len(providers) > 0 {
+			defProv = providers[0].Type
+		}
+		defPreset := ""
+		if p, ok := globalMgr.Registry().Project(scoped); ok {
+			if p.Meta.Defaults.Provider != "" {
+				defProv = p.Meta.Defaults.Provider
+			}
+			defPreset = p.Meta.Defaults.Preset
+		}
+		composer = view.ComposerVM{
+			Base:            c.Base(),
+			Providers:       providers,
+			Presets:         globalMgr.Registry().PresetNames(),
+			DefaultProvider: defProv,
+			DefaultPreset:   defPreset,
+			ScopedProjectID: scoped,
+			Scoped:          true,
+			// Project picker hidden — already in the project (binding sent
+			// as a hidden field). Matches Claude's project landing.
+			ShowProjectPicker: false,
+		}
+	}
 	c.HTML(view.SessionsList(view.SessionsListVM{
-		Layout:        sidebarVM(c, "sessions", ""),
-		Base:          c.Base(),
-		IDs:           pageIDs,
-		Sessions:      globalMgr.Registry().Sessions(),
-		Labels:        pageLabels,
-		Workspaces:    globalMgr.Registry().Workspaces(),
-		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
-		PresetList:    globalMgr.Registry().PresetNames(),
-		Providers:     providerChoicesCached(c.Context()),
-		Lifecycle:     lc,
-		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
-		Page:          page,
-		HasNext:       end < len(ids),
+		Layout:          sidebarVMScoped(c, "sessions", "", scoped),
+		Base:            c.Base(),
+		IDs:             ids,
+		Sessions:        globalMgr.Registry().Sessions(),
+		Labels:          pageLabels,
+		Projects:        globalMgr.Registry().Projects(),
+		ProjectList:     globalMgr.Registry().ProjectIDs(),
+		PresetList:      globalMgr.Registry().PresetNames(),
+		Providers:       providers,
+		Lifecycle:       lc,
+		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
+		ScopedProjectID: scoped,
+		Composer:        composer,
 	}))
 }
 
@@ -597,21 +742,21 @@ func createSession(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	ws := c.Form("workspace")
+	projectID := c.Form("project_id")
 	prov := c.Form("provider")
 	if prov == "" {
 		prov = "claude"
 	}
 	id := uuid.New().String()
 	presetName := "default"
-	if ws != "" {
-		if wsData, werr := workspace.Load(globalLayout, ws); werr == nil && wsData.Meta.DefaultPreset != "" {
-			presetName = wsData.Meta.DefaultPreset
+	if projectID != "" {
+		if p, perr := project.Load(globalLayout, projectID); perr == nil && p.Meta.Defaults.Preset != "" {
+			presetName = p.Meta.Defaults.Preset
 		}
 	}
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        id,
-		Workspace: ws,
+		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
 	})
@@ -706,8 +851,9 @@ func sessionDetail(c *tool.Ctx) {
 		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
 		Providers:       providerChoicesCached(c.Context()),
 		ActiveProvider:  activeProv,
-		WorkspaceList:   globalMgr.Registry().WorkspaceNames(),
-		ActiveWorkspace: sess.Meta.Workspace,
+		Projects:        globalMgr.Registry().Projects(),
+		ProjectList:     globalMgr.Registry().ProjectIDs(),
+		ActiveProjectID: sess.Meta.ProjectID,
 		Gate: view.GateStatusVM{
 			Enabled: gs.Enabled,
 			Binary:  gs.Binary,
@@ -733,7 +879,7 @@ type switchProviderReq struct {
 	Provider string `json:"provider"`
 }
 
-// switchProvider creates a new session with the same workspace but a
+// switchProvider creates a new session with the same project but a
 // different provider. Provider sessions cannot be resumed across CLI
 // implementations (ResumeID is provider-specific), so a fresh session
 // is always the right call. Returns the new session URL for redirect.
@@ -755,7 +901,7 @@ func switchProvider(c *tool.Ctx) {
 	newID := uuid.New().String()
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        newID,
-		Workspace: sess.Meta.Workspace,
+		ProjectID: sess.Meta.ProjectID,
 		Origin:    session.OriginUI,
 	})
 	if err != nil {
@@ -773,21 +919,21 @@ func switchProvider(c *tool.Ctx) {
 	})
 }
 
-type switchWorkspaceReq struct {
-	Workspace string `json:"workspace"`
+type moveSessionReq struct {
+	ProjectID string `json:"project_id"`
 }
 
-// switchWorkspace updates the session's workspace in-place and kills
-// any running subprocess so it respawns with the new folder on the
-// next message.
-func switchWorkspace(c *tool.Ctx) {
+// moveSessionToProject moves the session to a different project in-place
+// and kills any running subprocess so it respawns in the new folder on
+// the next message. Empty project_id unscopes the session.
+func moveSessionToProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	id := c.PathValue("id")
-	var req switchWorkspaceReq
+	var req moveSessionReq
 	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "workspace required"})
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "project_id required"})
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
@@ -795,11 +941,11 @@ func switchWorkspace(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if err := globalMgr.SwitchWorkspace(c.Context(), id, req.Workspace); err != nil {
+	if err := globalMgr.MoveSession(c.Context(), id, req.ProjectID); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// Kill running subprocess so next Send respawns in the new workspace.
+	// Kill running subprocess so next Send respawns in the new folder.
 	agentName := sess.Meta.ActiveAgent
 	if agentName == "" && len(sess.Agents) > 0 {
 		agentName = sess.Agents[0].Name
@@ -807,7 +953,7 @@ func switchWorkspace(c *tool.Ctx) {
 	if agentName != "" {
 		_ = globalPool.Kill(id, agentName)
 	}
-	c.JSON(http.StatusOK, map[string]string{"status": "switched", "workspace": req.Workspace})
+	c.JSON(http.StatusOK, map[string]string{"status": "moved", "project_id": req.ProjectID})
 }
 
 type sendReq struct {
@@ -935,7 +1081,7 @@ func dequeueAgent(c *tool.Ctx) {
 	}
 	removed := globalPool.Dequeue(id, agentName)
 	_ = session.SaveMeta(globalLayout, id, session.Meta{
-		Workspace:   sess.Meta.Workspace,
+		ProjectID:   sess.Meta.ProjectID,
 		Origin:      sess.Meta.Origin,
 		ChannelID:   sess.Meta.ChannelID,
 		ActiveAgent: sess.Meta.ActiveAgent,
@@ -981,84 +1127,256 @@ func deleteSession(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ── Workspaces ────────────────────────────────────────────────────────
+// ── Projects ──────────────────────────────────────────────────────────
 
-func workspacesPage(c *tool.Ctx) {
+// projectsRedirect keeps the legacy /projects URL alive — projects are
+// managed from the sidebar now, so it just lands on All chats.
+func projectsRedirect(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	c.HTML(view.WorkspacesPage(view.WorkspacesVM{
-		Layout:        sidebarVM(c, "workspaces", ""),
-		Base:          c.Base(),
-		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
-		Workspaces:    globalMgr.Registry().Workspaces(),
-		PresetList:    globalMgr.Registry().PresetNames(),
-	}))
+	c.Redirect(c.Base()+"/sessions", http.StatusSeeOther)
 }
 
-// workspaceOptionsJSON returns [{name, path}] for every workspace —
+// pinnedProjectID returns the current user's pinned project id, or "" if
+// none / unset / the user isn't logged in. Validates the project still
+// exists so a deleted-but-still-pinned project doesn't break the landing.
+func pinnedProjectID(c *tool.Ctx) string {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return ""
+	}
+	pid := u.Metadata.PinnedAgentProjectID
+	if pid == "" {
+		return ""
+	}
+	if _, ok := globalMgr.Registry().Project(pid); !ok {
+		return ""
+	}
+	return pid
+}
+
+// toggleProjectPin sets the current user's pinned project to {id}, or
+// clears it when {id} is already pinned. One pin per user; it becomes
+// their personal default project (auto-scoped on open). Stored in
+// UserMetadata.
+func toggleProjectPin(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalAuth == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "auth service not wired"})
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not logged in"})
+		return
+	}
+	id := c.PathValue("id")
+	if _, ok := globalMgr.Registry().Project(id); !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	pinned := id
+	if u.Metadata.PinnedAgentProjectID == id {
+		pinned = "" // toggle off
+	}
+	if err := globalAuth.SetPinnedAgentProject(c.Context(), u.ID, pinned); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "pinned": pinned != "", "project_id": pinned})
+}
+
+// projectSettingsPage renders the full project settings page (mockup ④)
+// for an existing project, or the create form when id == "new".
+func projectSettingsPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	vm := view.ProjectSettingsVM{
+		Layout:     sidebarVM(c, "projects", ""),
+		Base:       c.Base(),
+		PresetList: globalMgr.Registry().PresetNames(),
+		Managed:    true,
+	}
+	if id == "new" {
+		vm.IsNew = true
+		vm.Icon = "📁"
+		vm.DefaultPreset = "default"
+		vm.DefaultProvider = "claude"
+		vm.Action = c.Base() + "/projects"
+		c.HTML(view.ProjectSettingsPage(vm))
+		return
+	}
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		c.NotFound()
+		return
+	}
+	vm.ID = id
+	vm.Name = p.Meta.Name
+	vm.Icon = p.Meta.Icon
+	vm.Description = p.Meta.Description
+	vm.CustomPath = p.Meta.CustomPath
+	vm.Managed = p.Meta.CustomPath == ""
+	vm.IsDefault = p.Meta.Name == project.DefaultName
+	vm.DefaultPreset = p.Meta.Defaults.Preset
+	vm.DefaultProvider = p.Meta.Defaults.Provider
+	vm.SystemAddon = p.Meta.Defaults.SystemAddon
+	vm.CreatedAt = p.Meta.CreatedAt.Format("2006-01-02")
+	vm.Action = c.Base() + "/projects/" + id
+	// Session count + pinned labels.
+	for sid, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.ProjectID == id {
+			vm.ChatCount++
+		}
+		_ = sid
+	}
+	for _, pinID := range p.Meta.PinnedSessions {
+		label := loadFirstUserMessage(globalLayout, pinID, 50)
+		if label == "" {
+			label = pinID
+		}
+		vm.Pinned = append(vm.Pinned, view.PinnedSessionVM{ID: pinID, Label: label})
+	}
+	if b, err := json.MarshalIndent(p.Meta, "", "  "); err == nil {
+		vm.MetaJSON = string(b)
+	}
+	c.HTML(view.ProjectSettingsPage(vm))
+}
+
+// projectOptionsJSON returns [{id, name, path}] for every project —
 // consumed by the allowed_cmds scope dropdown in the settings UI.
-func workspaceOptionsJSON(c *tool.Ctx) {
+func projectOptionsJSON(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	type option struct {
+		ID   string `json:"id"`
 		Name string `json:"name"`
 		Path string `json:"path"`
 	}
-	wss := globalMgr.Registry().Workspaces()
-	opts := make([]option, 0, len(wss))
-	for _, ws := range wss {
-		path := ws.Meta.CustomPath
+	projects := globalMgr.Registry().Projects()
+	opts := make([]option, 0, len(projects))
+	for id, p := range projects {
+		path := p.Meta.CustomPath
 		if path == "" {
-			path = globalLayout.WorkspaceManagedPath(ws.Name)
+			path = globalLayout.ProjectManagedPath(id)
 		}
-		opts = append(opts, option{Name: ws.Name, Path: path})
+		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path})
 	}
 	c.JSON(http.StatusOK, opts)
 }
 
-func createWorkspace(c *tool.Ctx) {
+// createProject materializes a new project from the settings form.
+func createProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	name := strings.TrimSpace(c.Form("name"))
 	if name == "" {
-		c.Error(http.StatusBadRequest, "workspace name required")
+		c.Error(http.StatusBadRequest, "project name required")
 		return
 	}
-	opt := workspace.CreateOptions{
-		Name:            name,
-		CustomPath:      strings.TrimSpace(c.Form("custom_path")),
-		DefaultPreset:   c.Form("preset"),
-		DefaultProvider: c.Form("provider"),
-		Description:     c.Form("description"),
+	// Folder mode radio: "managed" forces an empty custom path regardless
+	// of any stale value in the path input.
+	customPath := strings.TrimSpace(c.Form("custom_path"))
+	if c.Form("folder_mode") == "managed" {
+		customPath = ""
 	}
-	if opt.DefaultPreset == "" {
-		opt.DefaultPreset = "default"
+	opt := project.CreateOptions{
+		ID:          uuid.New().String(),
+		Name:        name,
+		Icon:        strings.TrimSpace(c.Form("icon")),
+		Description: c.Form("description"),
+		CustomPath:  customPath,
+		Defaults: project.Defaults{
+			Preset:      c.Form("preset"),
+			Provider:    c.Form("provider"),
+			SystemAddon: c.Form("system_addon"),
+		},
 	}
-	if opt.DefaultProvider == "" {
-		opt.DefaultProvider = "claude"
-	}
-	if _, err := globalMgr.CreateWorkspace(c.Context(), opt); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("create workspace %s: %s", name, err.Error())
+	if _, err := globalMgr.CreateProject(c.Context(), opt); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("create project %s: %s", name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.Redirect(c.Base()+"/workspaces", http.StatusSeeOther)
+	// Land on the new project's page (sidebar-driven nav — no list page).
+	c.Redirect(c.Base()+"/sessions?project="+opt.ID, http.StatusSeeOther)
 }
 
-func deleteWorkspace(c *tool.Ctx) {
+// updateProject patches an existing project's editable fields
+// (name / icon / description / defaults / custom_path / pinned).
+func updateProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	name := c.PathValue("name")
-	if name == workspace.DefaultName {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "workspace \"default\" is built-in and cannot be deleted"})
+	id := c.PathValue("id")
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		c.Error(http.StatusNotFound, "project not found")
 		return
 	}
-	if err := globalMgr.DeleteWorkspace(c.Context(), name); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("delete workspace %s: %s", name, err.Error())
+	meta := p.Meta
+	// Unpin path: a lightweight POST carrying only `unpin=<sid>` removes
+	// one pinned session without touching other fields.
+	if sid := c.Form("unpin"); sid != "" {
+		kept := meta.PinnedSessions[:0:0]
+		for _, pin := range meta.PinnedSessions {
+			if pin != sid {
+				kept = append(kept, pin)
+			}
+		}
+		meta.PinnedSessions = kept
+		if _, err := globalMgr.UpdateProject(c.Context(), id, meta); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]string{"status": "unpinned"})
+		return
+	}
+	if v := strings.TrimSpace(c.Form("name")); v != "" {
+		meta.Name = v
+	}
+	if v := c.Form("icon"); v != "" {
+		meta.Icon = strings.TrimSpace(v)
+	}
+	meta.Description = c.Form("description")
+	if v := c.Form("preset"); v != "" {
+		meta.Defaults.Preset = v
+	}
+	meta.Defaults.Provider = c.Form("provider")
+	meta.Defaults.SystemAddon = c.Form("system_addon")
+	// Folder mode radio: "managed" forces empty custom path; "custom"
+	// keeps the path input. Managed files/ left in place on switch (§4.2).
+	customPath := strings.TrimSpace(c.Form("custom_path"))
+	if c.Form("folder_mode") == "managed" {
+		customPath = ""
+	}
+	meta.CustomPath = customPath
+	if _, err := globalMgr.UpdateProject(c.Context(), id, meta); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("update project %s: %s", id, err.Error())
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/sessions?project="+id, http.StatusSeeOther)
+}
+
+func deleteProject(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	p, ok := globalMgr.Registry().Project(id)
+	if ok && p.Meta.Name == project.DefaultName {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "the default project cannot be deleted"})
+		return
+	}
+	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("delete project %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

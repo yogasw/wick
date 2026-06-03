@@ -28,7 +28,7 @@ features:
     details: |
       Spawn Claude / Codex / Gemini as long-lived subprocesses — same agent reachable from Slack threads, Telegram chats, and the web UI at the same time.
       <br><br>
-      Multi-session pool with idle-kill + <code>--resume</code> revive · multi-instance providers (two PATs, side-by-side) · workspaces on disk · <a href="/wick/guide/command-gate">command gate</a> with 4-mode interactive approval · AskUser MCP tool · everything persisted under <code>~/.<app>/agents/</code>.
+      Multi-session pool with idle-kill + <code>--resume</code> revive · multi-instance providers (two PATs, side-by-side) · projects on disk · <a href="/wick/guide/command-gate">command gate</a> with 4-mode interactive approval · AskUser MCP tool · everything persisted under <code>~/.<app>/agents/</code>.
   - icon: 🤖
     title: AI Is the Primary User
     details: Wick is designed for AI agents, not humans. Every convention, file name, and pattern is optimized so Claude knows exactly what to create — no exploration, no guessing.
@@ -118,13 +118,13 @@ Most "AI agent" platforms lock you into their runtime, expose chat-only, and hid
 | Your **Claude / Codex / Gemini** install (with your MCP servers, skills, memory) | A pool that spawns them as subprocesses, idle-kills, resumes by `cli_session_id` |
 | Your **Slack workspace, Telegram bot, or just a browser** | Three transports → one session per thread / chat / conversation, all live at once |
 | Your **PAT** (or two — `claude/work` + `claude/personal`) | Multi-instance provider config, per-instance env / args, status-cached `--version` probes |
-| Your **folder of repos** (or any path on disk) | Workspaces — managed or custom path, multi-session sharing, no git worktree |
+| Your **folder of repos** (or any path on disk) | Projects — managed or custom path, multi-session sharing, no git worktree |
 | Your **trust threshold** | Command Gate sidecar: whitelist + 4-mode interactive approval, fail-safe block on infra failure |
 
 Read [AI Agents](/guide/agents) for the headline tour, or jump to the deep-dives:
 
 - [Agent Host Only](/guide/agents-only) — download binary / Docker, no Go needed
-- [Workspaces](/guide/agents/workspaces) — folders on disk, managed vs custom path, the built-in `default`
+- [Projects](/guide/agents/projects) — folders on disk, managed vs custom path, the built-in `default`
 - [Providers](/guide/agents/providers) — multi-instance config, binary resolution chain, status cache
 - [Channels](/guide/agents/channels) — Slack (Socket + HTTP), Telegram (long-poll), Web (SSE), AskUser MCP
 - [Pool & Sessions](/guide/agents/pool) — slot allocation, message buffer, resume flow

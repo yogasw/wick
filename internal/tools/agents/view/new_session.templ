@@ -1,7 +1,7 @@
 package view
 
 // NewSessionCompose is the ChatGPT/Claude-style landing for starting a
-// new conversation: pick provider (and optionally preset/workspace),
+// new conversation: pick provider (and optionally preset/project),
 // type the first message, then submit. The HTTP handler creates the
 // session, attaches the agent, and forwards the first message — only
 // after the user actually sends something. No empty session is ever
@@ -24,122 +24,44 @@ templ NewSessionCompose(vm NewSessionComposeVM) {
 				[data-ns-card] { animation: none; }
 			}
 		</style>
+		{{ scopedProj, scoped := vm.ScopedProject() }}
 		<div data-ns-card class="mx-auto flex h-full w-full max-w-2xl flex-col items-center justify-center px-6">
 			<div class="mb-8 text-center">
 				<div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-green-500 text-xl text-white-100 font-semibold select-none">✦</div>
-				<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">New session</h1>
-				<p class="mt-1.5 text-sm text-black-700 dark:text-black-600">Pick a provider and start the conversation. The session is created when you send the first message.</p>
+				if scoped {
+					<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">New session in { scopedProj.Icon } { scopedProj.Name }</h1>
+					<p class="mt-1.5 text-sm text-black-700 dark:text-black-600">Provider + preset inherited from the project. Override anything per-session.</p>
+				} else {
+					<h1 class="text-2xl font-semibold text-black-900 dark:text-white-100">New session</h1>
+					<p class="mt-1.5 text-sm text-black-700 dark:text-black-600">Pick a project (or skip for unscoped). The session is created when you send the first message.</p>
+				}
 			</div>
 			if vm.Error != "" {
 				<div class="mb-4 w-full rounded-lg border border-neg-300 dark:border-neg-700 bg-neg-50 dark:bg-neg-900/20 px-4 py-2.5">
 					<p class="text-xs text-neg-600 dark:text-neg-400">{ vm.Error }</p>
 				</div>
 			}
-			if len(vm.Providers) == 0 {
-				<div class="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
-					<p class="text-sm text-amber-700 dark:text-amber-300">
-						No healthy providers found. Configure one in
-						<a class="font-medium underline" href={ templ.SafeURL(vm.Base + "/providers") }>Providers</a>
-						first.
-					</p>
-				</div>
-			} else {
-				<form method="POST" action={ templ.SafeURL(vm.Base) } class="w-full" data-ns-form enctype="multipart/form-data">
-					<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden" data-composer-drop>
-						<div data-attach-chips class="hidden flex-wrap gap-2 px-3 pt-3"></div>
-						<input type="file" name="files" multiple class="hidden" data-attach-input/>
-						<textarea
-							name="message"
-							rows="4"
-							autofocus
-							placeholder="Ask anything... (Shift+Enter for new line)"
-							class="block w-full resize-none border-0 bg-transparent px-4 pt-3.5 pb-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:outline-none focus:ring-0"
-							data-ns-textarea
-						>{ vm.Message }</textarea>
-						<div class="flex flex-wrap items-center gap-2 border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
-							<button
-								type="button"
-								data-attach-toggle
-								class="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
-								title="Attach file"
-							>
-								<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-								</svg>
-							</button>
-							<label class="sr-only" for="ns-provider">Provider</label>
-							<select
-								id="ns-provider"
-								name="provider"
-								class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-							>
-								for _, p := range vm.Providers {
-									if p.Type == vm.DefaultProvider {
-										<option value={ p.Type } selected>{ p.Type } · { p.Name }</option>
-									} else {
-										<option value={ p.Type }>{ p.Type } · { p.Name }</option>
-									}
-								}
-							</select>
-							if len(vm.Presets) > 0 {
-								<label class="sr-only" for="ns-preset">Preset</label>
-								<select
-									id="ns-preset"
-									name="preset"
-									class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-								>
-									<option value="">— preset (default) —</option>
-									for _, name := range vm.Presets {
-										if name == vm.DefaultPreset {
-											<option value={ name } selected>{ name }</option>
-										} else {
-											<option value={ name }>{ name }</option>
-										}
-									}
-								</select>
-							}
-							if len(vm.Workspaces) > 0 {
-								<label class="sr-only" for="ns-workspace">Workspace</label>
-								<select
-									id="ns-workspace"
-									name="workspace"
-									class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-								>
-									<option value="">— no workspace —</option>
-									for _, name := range vm.Workspaces {
-										<option value={ name }>{ name }</option>
-									}
-								</select>
-							}
-							<button
-								type="submit"
-								class="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
-							>
-								<span>Send</span>
-								<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5">
-									<path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" stroke-linecap="round" stroke-linejoin="round"></path>
-								</svg>
-							</button>
-						</div>
-					</div>
-				</form>
+			@composerCard(ComposerVM{
+				Base:              vm.Base,
+				Providers:         vm.Providers,
+				Presets:           vm.Presets,
+				Projects:          vm.Projects,
+				DefaultProvider:   vm.DefaultProvider,
+				DefaultPreset:     vm.DefaultPreset,
+				ScopedProjectID:   vm.ScopedProjectID,
+				DefaultProjectID:  vm.DefaultProjectID,
+				Message:           vm.Message,
+				Scoped:            scoped,
+				ShowProjectPicker: true,
+			})
+			if len(vm.Providers) > 0 {
+				if scoped {
+					<p class="mt-3 text-center text-xs text-black-600 dark:text-black-700">Green dropdowns = inherited from project. Click any to override per-session.</p>
+				} else {
+					<p class="mt-3 text-center text-xs text-black-600 dark:text-black-700">Pick a project to auto-prefill provider + preset. Folder follows the project.</p>
+				}
 			}
 		</div>
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
-		<script>
-			(function () {
-				var ta = document.querySelector('[data-ns-textarea]');
-				if (!ta) return;
-				var form = ta.closest('[data-ns-form]');
-				var input = form && form.querySelector('[data-attach-input]');
-				function hasFiles() { return input && input.files && input.files.length > 0; }
-				ta.addEventListener('keydown', function (e) {
-					if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-						e.preventDefault();
-						if (form && (ta.value.trim() || hasFiles())) form.submit();
-					}
-				});
-			})();
-		</script>
 	}
 }

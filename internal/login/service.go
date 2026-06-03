@@ -101,6 +101,18 @@ func (s *Service) SetHomeView(ctx context.Context, userID, view string) error {
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetPinnedAgentProject sets (or clears, when projectID is empty) the
+// user's pinned agents Project — their personal default. One per user.
+func (s *Service) SetPinnedAgentProject(ctx context.Context, userID, projectID string) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.PinnedAgentProjectID = projectID
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 func (s *Service) SetPassword(ctx context.Context, userID, currentPassword, newPassword string) error {
 	u, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {

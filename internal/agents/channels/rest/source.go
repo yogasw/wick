@@ -32,7 +32,7 @@ func (s *ConfigSource) load() agentconfig.RestChannelConfig {
 // Hash fingerprints fields that materially affect serving state.
 func (s *ConfigSource) Hash() string {
 	cfg := s.load()
-	return cfg.Enabled + "|" + cfg.Workspace
+	return cfg.Enabled + "|" + cfg.ProjectID
 }
 
 // Reload re-reads config and applies it to the bound channel.

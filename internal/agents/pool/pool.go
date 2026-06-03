@@ -17,7 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/agents/project"
 )
 
 // augmentWithAttachments returns text plus a trailing block listing
@@ -77,10 +77,9 @@ type Pool struct {
 
 // PoolConfig knobs.
 //
-// DefaultWorkspace is the workspace name used when a session has no
-// workspace bound. Empty = no default; the pool falls back to a
-// per-session temp dir so claude still has a stable cwd. See
-// agents-design.md §0.2 D4.
+// DefaultProjectID is the project id used when a session has no project
+// bound. Empty = no default; the pool falls back to a per-session temp
+// dir so claude still has a stable cwd. See agents-design.md §0.2 D4.
 type PoolConfig struct {
 	MaxConcurrent    int
 	IdleTimeout      time.Duration
@@ -92,7 +91,7 @@ type PoolConfig struct {
 	PreemptIdle      bool
 	Layout           config.Layout
 	Factory          AgentFactory
-	DefaultWorkspace string
+	DefaultProjectID string
 	// OnSessionCreated is called after the pool auto-creates a session for a
 	// channel message (e.g. Slack thread_ts). Wire this to
 	// manager.Register so the dashboard sees the session immediately.
@@ -279,10 +278,10 @@ func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, tex
 	return p.send(ctx, sessionID, agentName, source, role, text, "", nil)
 }
 
-// SendWithWorkspace is like Send but binds sessionID to the named workspace
+// SendWithProject is like Send but binds sessionID to the given project id
 // when auto-creating the session. Pass an empty string for the default.
-func (p *Pool) SendWithWorkspace(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
-	return p.send(ctx, sessionID, agentName, source, role, text, workspace, nil)
+func (p *Pool) SendWithProject(ctx context.Context, sessionID, agentName, source, role, text, projectID string) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, projectID, nil)
 }
 
 // SendWithAttachments is Send with a list of user-uploaded files. The
@@ -290,11 +289,11 @@ func (p *Pool) SendWithWorkspace(ctx context.Context, sessionID, agentName, sour
 // SessionDir/uploads/ — the pool only persists the metadata into
 // conversation.jsonl and appends a small `[Attached files]` block to
 // the text sent to the CLI subprocess so it can Read the paths.
-func (p *Pool) SendWithAttachments(ctx context.Context, sessionID, agentName, source, role, text, workspace string, atts []store.Attachment) error {
-	return p.send(ctx, sessionID, agentName, source, role, text, workspace, atts)
+func (p *Pool) SendWithAttachments(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, projectID, atts)
 }
 
-func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, workspace string, atts []store.Attachment) error {
+func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -335,7 +334,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// Not active. Ensure the session exists on disk (channels like Slack
 	// pass a thread_ts as the session ID; the session is never created
 	// via the UI flow).
-	if err := p.ensureSession(ctx, sessionID, source, workspace); err != nil {
+	if err := p.ensureSession(ctx, sessionID, source, projectID); err != nil {
 		return err
 	}
 	// Set label before buf.Append so concurrent disk writes don't clobber PendingInput.
@@ -741,18 +740,18 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // session_init executor calls this to materialize the registry entry +
 // sidebar row up-front, before any agent node actually dispatches a
 // message. Idempotent — a second call for the same sessionID is a
-// no-op (or backfills workspace).
-func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, workspace string) error {
-	return p.ensureSession(ctx, sessionID, source, workspace)
+// no-op (or backfills project binding).
+func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID string) error {
+	return p.ensureSession(ctx, sessionID, source, projectID)
 }
 
-func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace string) error {
+func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID string) error {
 	existing, err := session.Load(p.cfg.Layout, sessionID)
 	if err == nil {
-		// Session exists — backfill workspace if it was created before one was configured.
-		if workspace != "" && existing.Meta.Workspace == "" {
-			if swErr := session.SwitchWorkspace(ctx, p.cfg.Layout, sessionID, workspace); swErr != nil {
-				log.Warn().Str("session", sessionID).Str("workspace", workspace).Err(swErr).Msg("pool: backfill workspace failed")
+		// Session exists — backfill project if it was created before one was configured.
+		if projectID != "" && existing.Meta.ProjectID == "" {
+			if swErr := session.SetProject(ctx, p.cfg.Layout, sessionID, projectID); swErr != nil {
+				log.Warn().Str("session", sessionID).Str("project", projectID).Err(swErr).Msg("pool: backfill project failed")
 			} else if updated, ldErr := session.Load(p.cfg.Layout, sessionID); ldErr == nil {
 				if p.cfg.OnSessionCreated != nil {
 					p.cfg.OnSessionCreated(updated)
@@ -767,7 +766,7 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace s
 	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
 		ID:        sessionID,
 		Origin:    session.Origin(source),
-		Workspace: workspace,
+		ProjectID: projectID,
 	})
 	// Suppress "already exists" — a concurrent call may have won the race.
 	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
@@ -785,27 +784,26 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace s
 // resolveCwd determines the spawn cwd for a session. The fallback
 // chain (agents-design.md §0.2 D4):
 //
-//  1. session.Meta.Workspace — explicit binding
-//  2. PoolConfig.DefaultWorkspace — tools-config default
+//  1. session.Meta.ProjectID — explicit binding
+//  2. PoolConfig.DefaultProjectID — tools-config default
 //  3. <BaseDir>/sessions/<id>/cwd/ — per-session temp dir
 //
-// For named workspaces (steps 1-2) the returned path is the
-// workspace's resolved cwd (managed `files/` or custom path). The
-// pool MkdirAll's managed paths so the spawn never fails on a
-// missing directory; custom paths are assumed to exist (validated
-// at workspace create time).
+// For bound projects (steps 1-2) the returned path is the project's
+// resolved cwd (managed `files/` or custom path). The pool MkdirAll's
+// managed paths so the spawn never fails on a missing directory;
+// custom paths are assumed to exist (validated at project create time).
 func (p *Pool) resolveCwd(sess session.Session) (string, error) {
-	name := sess.Meta.Workspace
-	if name == "" {
-		name = p.cfg.DefaultWorkspace
+	id := sess.Meta.ProjectID
+	if id == "" {
+		id = p.cfg.DefaultProjectID
 	}
-	if name != "" {
-		path, err := workspace.ResolvePath(p.cfg.Layout, name)
+	if id != "" && project.Exists(p.cfg.Layout, id) {
+		path, err := project.ResolvePath(p.cfg.Layout, id)
 		if err != nil {
-			return "", fmt.Errorf("resolve workspace %q: %w", name, err)
+			return "", fmt.Errorf("resolve project %q: %w", id, err)
 		}
 		if err := os.MkdirAll(path, 0o755); err != nil {
-			return "", fmt.Errorf("ensure workspace path %q: %w", path, err)
+			return "", fmt.Errorf("ensure project path %q: %w", path, err)
 		}
 		return path, nil
 	}

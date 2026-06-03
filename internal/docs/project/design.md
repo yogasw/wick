@@ -1,7 +1,8 @@
 # Project — Bundle of Defaults + Folder (design)
 
-Status: design only — implementasi belum start.
-Update terakhir: 2026-06-01.
+Status: **implemented** (core + HTTP + UI). MCP surface deferred (no
+existing `agent.workspace.*` tools to alias — forward sketch only).
+Update terakhir: 2026-06-03.
 
 **Paradigm:** `Workspace` (concept lama) di-rename jadi `Project` (term
 familiar dari Codex/Claude). **1 Project = 1 Folder + Defaults + Pinned
@@ -439,16 +440,38 @@ Below adalah peta high-level zona berdasarkan grep awal (Jun 2026,
 
 ## 11. Acceptance checklist (implementation gate)
 
-- [ ] `internal/agents/project/` package: Meta + CRUD (Create/Load/Save/Delete/List/Exists)
-- [ ] `session.Meta.ProjectID` field; drop `session.Meta.Workspace`
-- [ ] `Layout.ProjectsDir()`, `Layout.ProjectDir(id)`, `Layout.ProjectManagedPath(id)`
-- [ ] Boot-time auto-migrate `workspaces/` → `projects/` (idempotent)
-- [ ] Registry: projects cache + accessors + Manager CRUD + MoveSession
-- [ ] HTTP routes `/tools/agents/projects/*` + session move endpoint
-- [ ] Sidebar: Projects section + scoped state (localStorage activeProjectID) + filtered Recent
-- [ ] New-session form: project picker → preset/provider prefill from project defaults
-- [ ] Header chip on scoped pages
-- [ ] Right-click context menu: Move to project ▸ project list
-- [ ] Project settings page: edit defaults + folder field + pinned list + delete
-- [ ] MCP tools `agent.project.*` + `agent.session.move`
-- [ ] Tests: migration idempotent, move-then-list, delete-project-unscopes-sessions, folder change managed↔custom
+- [x] `internal/agents/project/` package: Meta + CRUD (Create/Load/Save/Delete/List/Exists)
+- [x] `session.Meta.ProjectID` field; drop `session.Meta.Workspace`
+- [x] `Layout.ProjectsDir()`, `Layout.ProjectDir(id)`, `Layout.ProjectManagedPath(id)`
+- [x] Boot-time auto-migrate `workspaces/` → `projects/` (idempotent) — `project.MigrateWorkspacesToProjects` wired in `registry.Bootstrap`
+- [x] Registry: projects cache + accessors + Manager CRUD + MoveSession
+- [x] HTTP routes `/tools/agents/projects/*` (list/options/create/update/delete) + `/sessions/{id}/project` move endpoint
+- [x] New-session form: project picker → provider+preset prefill from project defaults; scoped heading + green "inherited" dropdowns + helper text (mockup ①②)
+- [x] Project move menu on session detail (move-to-project, in-place + respawn)
+- [x] **No standalone /projects list page** — the sidebar Projects section is the canonical nav (active row highlighted with a solid green pill + count badge). `/projects` redirects to All chats; "+ New" → `/projects/new` create page; project row → `/sessions?project=<id>` landing; ⚙ Settings → `/projects/<id>`. Settings/create page matches mockup ④: icon+editable-name header, "N chats · created DATE", folder **radio** managed/custom + badges, defaults (provider/preset/system_addon/desc), pinned-sessions list with unpin ✕, meta.json preview, folder-change semantics, delete. Create/update/delete redirect to the project landing (or All chats).
+- [x] Default project — two layers: (1) operator-wide `agents.default_project_id` config (Settings dropdown) for channels/API/quick-create via pool `DefaultProjectID`; (2) **per-user pinned project** — 1 per user, stored in `entity.UserMetadata.PinnedAgentProjectID` (jsonb), set via `POST /projects/{id}/pin` (toggle) → `login.Service.SetPinnedAgentProject`. Opening the agents tool (`/`) auto-scopes the compose landing to the user's pinned project; 📌 toggle on the project landing header + 📌 indicator on the sidebar row. Per-user pin wins for that user; picker still allows "— no project —" per-session.
+- [x] Sidebar Projects section (icon + name + session-count pill) + scoped breadcrumb `← All chats / 📁 X` + project-filtered Recent (server-side `?project=<id>`). **Opening a project = Claude-style landing**: header chip + folder + ⚙ settings, then the compose box (scoped, defaults inherited, picker hidden), then the project's chats. "New session" nav carries the active scope. Shared `composerCard` component used by both the standalone New Session page and the project landing.
+- [x] Drag-and-drop: session rows (sidebar Recent + sessions list) draggable → drop on a sidebar project row to move (`POST /sessions/{sid}/project`). (mockup ③ drag alternative)
+- [x] Project landing styled like Claude's project page: big icon+title header (N chats · folder · ⚙ Settings), compose box, chats list, and an inline **Instructions** card editing the project `system_addon` (partial update `only=instructions`). (Claude parity — Memory has no wick equivalent; per-project Files panel not built.)
+- [x] Tests: migration idempotent + lossless file-move, relink-preserves-fields, delete-project-unscopes-sessions, managed↔custom create/resolve/delete
+- [ ] MCP tools `agent.project.*` + `agent.session.move` — **deferred**: no existing `agent.workspace.*` MCP surface in this codebase to alias; §8 is a forward sketch. HTTP routes are the canonical surface today.
+- [ ] `defaults.system_addon` applied at spawn (append to preset system prompt) — **deferred**: field is stored + editable in settings; spawn-time application is a follow-up (pool/factory threads it into preset content).
+
+**Scope note vs mockup:** scoped state is driven by server-side `?project=<id>` query (breadcrumb, filtered sidebar Recent + sessions list, header chip), not a localStorage `activeProjectID`. Move-to-project ships as the session-detail dropdown menu (not a right-click context submenu on Recent rows). Pinned-sessions list + JSON meta-preview from mockup ④ not yet built (PinnedSessions field exists on Meta, unused in UI).
+
+**REST channel per-request project:** the REST channel's `project_id`
+config is the default; an OpenAI-compatible request can override it per
+call with a top-level `"project": "<id>"` field (or
+`metadata.project` / `metadata.project_id`). Threaded via a context
+value (`agentchannels.WithProjectOverride`/`ProjectOverride`) that the
+pool send closure reads — override (validated to exist) > channel config
+> single-project fallback. Applies to both `/chat/completions` and
+`/responses`.
+
+**Backward-compat note:** the `workspace` *package* is retained as the
+migration-only reader (`registry.Bootstrap` → `project.Migrate…`). All
+runtime/UI/config paths use `project`. Channel config key `workspace`
+renamed to `project_id` (old values were workspace *names*, stale after
+migration → channels fall back to the default project until re-bound).
+Config struct `WorkspaceConfig` → `StorageConfig` (`default_workspace`
+key → `default_project_id`).

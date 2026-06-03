@@ -8,19 +8,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/workspace"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
 // resolveSessionCwd returns the absolute working directory for a session
 // (the same path the agent process spawns in). Mirrors pool.resolveCwd
 // but read-only — no MkdirAll. Falls back to <SessionDir>/cwd when no
-// workspace is bound.
+// project is bound.
 func resolveSessionCwd(sess session.Session) (string, error) {
-	name := sess.Meta.Workspace
-	if name != "" {
-		return workspace.ResolvePath(globalLayout, name)
+	id := sess.Meta.ProjectID
+	if id != "" && project.Exists(globalLayout, id) {
+		return project.ResolvePath(globalLayout, id)
 	}
 	return filepath.Join(globalLayout.SessionDir(sess.ID), "cwd"), nil
 }
@@ -94,9 +94,9 @@ func safeJoin(base, rel string) (string, error) {
 }
 
 type contextFileEntry struct {
-	Path  string `json:"path"`  // relative to cwd, forward slashes
-	Name  string `json:"name"`  // basename
-	Size  int64  `json:"size"`  // bytes (0 for dirs)
+	Path  string `json:"path"` // relative to cwd, forward slashes
+	Name  string `json:"name"` // basename
+	Size  int64  `json:"size"` // bytes (0 for dirs)
 	IsDir bool   `json:"isDir"`
 	MTime int64  `json:"mtime"` // unix ms
 }

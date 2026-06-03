@@ -32,7 +32,8 @@ func SeedRestChannelConfig() []pkgentity.Config {
 	return pkgentity.StructToConfigs(DefaultRestChannelConfig())
 }
 
-// SeedWorkspaceConfig is the workspace counterpart.
-func SeedWorkspaceConfig() []pkgentity.Config {
-	return pkgentity.StructToConfigs(DefaultWorkspaceConfig())
+// SeedStorageConfig is the agents storage (base dir + default project)
+// counterpart.
+func SeedStorageConfig() []pkgentity.Config {
+	return pkgentity.StructToConfigs(DefaultStorageConfig())
 }
