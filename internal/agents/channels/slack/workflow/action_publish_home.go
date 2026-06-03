@@ -48,7 +48,7 @@ func registerActionPublishHome(reg *integration.Registry, ch *slack.Channel) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "render_home_on_open",
-					YAML: `- id: render_home
+					Body: `- id: render_home
   type: channel
   channel: slack
   action: publish_home

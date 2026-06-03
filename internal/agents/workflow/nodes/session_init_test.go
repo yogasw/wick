@@ -73,15 +73,16 @@ func TestSessionInit_PresetNew_ProducesUUID(t *testing.T) {
 	}
 }
 
+// Template rendering is handled by the engine preRenderNode before
+// Execute is called. This test verifies that the executor uses the
+// value as-is (already rendered by the engine).
 func TestSessionInit_CustomIDTemplate_RendersFromEvent(t *testing.T) {
 	rc := newTestRC()
-	rc.Event.Payload["thread_ts"] = "1715167891.234567"
-
 	exec := NewSessionInitExecutor(nil)
 	n := workflow.Node{
 		ID:        "si",
 		Type:      workflow.NodeSessionInit,
-		SessionID: "slack-{{.Event.Payload.thread_ts}}",
+		SessionID: "slack-1715167891.234567", // pre-rendered by engine
 	}
 
 	out, err := exec.Execute(context.Background(), n, rc)
@@ -123,13 +124,20 @@ func TestSessionInit_UnknownPreset_Errors(t *testing.T) {
 	}
 }
 
-func TestSessionInit_EmptyRenderedID_Errors(t *testing.T) {
+// An empty SessionID (e.g. a template that rendered to "") falls
+// through to preset resolution — tested in prerender_test.go for the
+// rendering step itself.
+func TestSessionInit_EmptySessionID_FallsToPreset(t *testing.T) {
 	rc := newTestRC()
 	exec := NewSessionInitExecutor(nil)
-	n := workflow.Node{ID: "si", Type: workflow.NodeSessionInit, SessionID: "{{.Event.Payload.missing}}"}
+	n := workflow.Node{ID: "si", Type: workflow.NodeSessionInit, SessionID: ""}
 
-	if _, err := exec.Execute(context.Background(), n, rc); err == nil {
-		t.Fatal("expected error for empty rendered sessionID")
+	out, err := exec.Execute(context.Background(), n, rc)
+	if err != nil {
+		t.Fatalf("expected preset fallback, got error: %v", err)
+	}
+	if got, _ := out.Result.(string); got == "" {
+		t.Error("expected non-empty session ID from preset fallback")
 	}
 }
 

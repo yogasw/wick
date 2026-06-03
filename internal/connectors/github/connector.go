@@ -159,7 +159,7 @@ func Operations() []connector.Operation {
 				Examples: []wickdocs.Example{
 					{
 						Name: "create_from_slack",
-						YAML: `- id: file_bug
+						Body: `- id: file_bug
   type: connector
   module: github
   op: create_issue

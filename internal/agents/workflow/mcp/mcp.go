@@ -17,9 +17,11 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/guard"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workflow/scaffold"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
@@ -39,6 +41,14 @@ type Ops struct {
 	DataTables  datatable.Service
 	StateStore  state.Store
 	Integration *integration.Registry
+	// Guard runs safety policy rules (destructive shell, secret leak,
+	// SQL injection, network allowlist). Powers workflow_guard. Nil
+	// when not wired — handler returns 503-equivalent.
+	Guard *guard.Guard
+	// Repo is the DB-backed workflow store. Nil when no DB is wired —
+	// version history + restore handlers fall back to the file-store
+	// equivalents the Service surfaces.
+	Repo *repository.Repo
 	// Pickers maps picker source names (e.g. "slack.channels") to
 	// resolver functions wired at setup. Powers workflow_picker_resolve.
 	// Always non-nil after New(); setup code registers sources via
@@ -171,6 +181,15 @@ func WorkspaceFormatContracts() map[string]any {
 				"open_modal":      "{{.Node.openmodal.view_id}}",
 			},
 		},
+		"canvas_ops": map[string]any{
+			"rule": "Always use canvas ops to read and organise node positions — never guess x/y coordinates.",
+			"ops": map[string]string{
+				"workflow_canvas_view": "Read current layout: returns table of {id, label, type, x, y, edges_to} + ASCII sketch. Call this FIRST when the user asks about canvas layout or before moving nodes.",
+				"workflow_move_nodes":  "Move one or more nodes in a single call. Pass moves=[{node_id,x,y},...]. More efficient than N workflow_move_node calls; safe to mix graph nodes and trigger IDs.",
+				"workflow_auto_layout": "Auto-arrange all nodes using DAG rank layout (Kahn's BFS). Triggers land at y=60 above their entry node; graph nodes fan left→right by rank. Pass node_ids=[] to scope; empty = all. Always publish after if the user wants the layout live.",
+			},
+			"workflow": "workflow_canvas_view → (understand layout) → workflow_move_nodes OR workflow_auto_layout → workflow_publish",
+		},
 	}
 }
 
@@ -241,12 +260,20 @@ func (m *Ops) List() ([]Summary, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Summary{
-			ID:      w.ID,
-			Name:    w.Name,
-			Enabled: w.Enabled,
-			Version: w.Version,
-		})
+		s := Summary{
+			ID:        w.ID,
+			Name:      w.Name,
+			Enabled:   w.Enabled,
+			Version:   w.Version,
+			CreatedAt: w.CreatedAt,
+		}
+		// Use draft timestamp as UpdatedAt when draft exists, else CreatedAt.
+		if draft, err := m.Service.LoadDraft(id); err == nil && !draft.CreatedAt.IsZero() {
+			s.UpdatedAt = draft.CreatedAt
+		} else {
+			s.UpdatedAt = w.CreatedAt
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }
@@ -254,11 +281,11 @@ func (m *Ops) List() ([]Summary, error) {
 // Get returns the full workflow.
 func (m *Ops) Get(id string) (workflow.Workflow, error) { return m.Service.Load(id) }
 
-// ListFiles returns relative file paths in the workflow folder.
-func (m *Ops) ListFiles(id string) ([]string, error) { return m.Service.ListFiles(id) }
+// ListTests returns every test case name registered under the workflow.
+func (m *Ops) ListTests(id string) ([]string, error) { return m.Service.ListTests(id) }
 
-// ReadFile returns the content of one file.
-func (m *Ops) ReadFile(id, path string) ([]byte, error) { return m.Service.ReadFile(id, path) }
+// GetTest returns one test case body by name.
+func (m *Ops) GetTest(id, name string) ([]byte, error) { return m.Service.GetTest(id, name) }
 
 // ── Tier 2: write ────────────────────────────────────────────────────
 
@@ -284,19 +311,19 @@ func (m *Ops) Create(in CreateInput) (workflow.Workflow, error) {
 		return workflow.Workflow{}, err
 	}
 	w := scaffold.Workflow(id, in.Name, in.Template)
-	if err := m.Service.Create(id, w, nil); err != nil {
+	if err := m.Service.Create(id, w); err != nil {
 		return workflow.Workflow{}, err
 	}
 	return m.Service.Load(id)
 }
 
-// WriteFile atomically writes a file inside the workflow folder.
-func (m *Ops) WriteFile(id, path string, data []byte) error {
-	return m.Service.WriteFile(id, path, data)
+// SaveTest upserts one test case body.
+func (m *Ops) SaveTest(id, name string, body []byte) error {
+	return m.Service.SaveTest(id, name, body)
 }
 
-// DeleteFile removes a file inside the workflow folder.
-func (m *Ops) DeleteFile(id, path string) error { return m.Service.DeleteFile(id, path) }
+// DeleteTest drops one test case by name.
+func (m *Ops) DeleteTest(id, name string) error { return m.Service.DeleteTest(id, name) }
 
 // Delete removes the workflow folder + unregisters scheduling.
 func (m *Ops) Delete(id string) error {
@@ -334,6 +361,16 @@ func (m *Ops) Disconnect(id, from, to string) (workflow.Workflow, error) {
 // MoveNode wraps Canvas.MoveNode.
 func (m *Ops) MoveNode(id, nodeID string, x, y int) (workflow.Workflow, error) {
 	return m.Canvas.MoveNode(id, nodeID, x, y)
+}
+
+// MoveNodes wraps Canvas.MoveNodes — batch position update.
+func (m *Ops) MoveNodes(id string, moves []canvas.NodeMove) (workflow.Workflow, error) {
+	return m.Canvas.MoveNodes(id, moves)
+}
+
+// AutoLayout wraps Canvas.AutoLayout — DAG-aware position compute + apply.
+func (m *Ops) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, error) {
+	return m.Canvas.AutoLayout(id, nodeIDs)
 }
 
 // SetTriggers wraps Canvas.SetTriggers.
@@ -417,10 +454,17 @@ func (m *Ops) GetRuns(id string, limit int) ([]string, error) {
 // only displays the most recent N runs (default 20) and one
 // state.json read per run is cheap.
 type RunSummary struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	// Provenance fields — mirrored from the run's index entry so the
+	// editor can show source / trigger pills without re-loading each
+	// run's state.json. Empty for legacy runs that pre-date the
+	// IndexEntry change.
+	Source      string `json:"source,omitempty"`
+	TriggerID   string `json:"trigger_id,omitempty"`
+	TriggerType string `json:"trigger_type,omitempty"`
 }
 
 // GetRunSummaries returns one page of recent runs, newest first.
@@ -436,10 +480,13 @@ func (m *Ops) GetRunSummaries(id string, page, pageSize int) ([]RunSummary, bool
 	out := make([]RunSummary, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, RunSummary{
-			ID:        e.ID,
-			Status:    e.Status,
-			StartedAt: e.StartedAt,
-			EndedAt:   e.EndedAt,
+			ID:          e.ID,
+			Status:      e.Status,
+			StartedAt:   e.StartedAt,
+			EndedAt:     e.EndedAt,
+			Source:      e.Source,
+			TriggerID:   e.TriggerID,
+			TriggerType: e.TriggerType,
 		})
 	}
 	return out, hasMore, nil
@@ -447,10 +494,12 @@ func (m *Ops) GetRunSummaries(id string, page, pageSize int) ([]RunSummary, bool
 
 // Summary is the row shape for `workflow_list`.
 type Summary struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
-	Version int    `json:"version"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
 // NodeTypeInfo is one row of the node-type catalog.
@@ -460,6 +509,12 @@ type NodeTypeInfo struct {
 	Schema      map[string]any `json:"schema"`
 	Example     string         `json:"example,omitempty"`
 	WhenToUse   string         `json:"when_to_use"`
+	// Palette metadata mirrored from engine.NodeDescriptor so the
+	// editor's Add Node picker can render category/label/badge
+	// straight from this row instead of carrying a parallel map.
+	Category string `json:"category,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Badge    string `json:"badge,omitempty"`
 }
 
 // TriggerTypeInfo is one row of the trigger-type catalog.
@@ -492,6 +547,9 @@ func NodeTypesCatalog(eng *engine.Engine) []NodeTypeInfo {
 			WhenToUse:   desc.WhenToUse,
 			Example:     desc.Example,
 			Schema:      schema,
+			Category:    string(desc.Category),
+			Label:       desc.Label,
+			Badge:       desc.Badge,
 		})
 	}
 	return out

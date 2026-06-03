@@ -19,7 +19,7 @@
 //
 //   - Per the no-auto-fix discipline: the result carries a
 //     SuggestedFix description, never applies it. AI / user runs
-//     workflow_update_node / workflow_write_file to act on it.
+//     workflow_update_node / workflow_set_triggers to act on it.
 package mcp
 
 import (

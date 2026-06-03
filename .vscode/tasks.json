@@ -62,6 +62,15 @@
       "problemMatcher": []
     },
     {
+      "label": "lab: build",
+      "type": "shell",
+      "command": "go build -o bin/wick-lab ./cmd/lab",
+      "windows": {
+        "command": "go build -o bin/wick-lab.exe ./cmd/lab"
+      },
+      "problemMatcher": ["$go"]
+    },
+    {
       "label": "gate: build",
       "type": "shell",
       "command": "go build -o bin/wick-lab-gate ./cmd/gate",
@@ -71,8 +80,56 @@
       "problemMatcher": ["$go"]
     },
     {
+      "label": "fe: install",
+      "type": "shell",
+      "command": "npm install --no-audit --no-fund",
+      "options": { "cwd": "${workspaceFolder}/fe" },
+      "problemMatcher": []
+    },
+    {
+      "label": "fe: build",
+      "type": "shell",
+      "command": "npm run build:workflow",
+      "options": { "cwd": "${workspaceFolder}/fe" },
+      "problemMatcher": []
+    },
+    {
+      "label": "fe: dev",
+      "type": "shell",
+      "command": "npm run dev:workflow",
+      "options": { "cwd": "${workspaceFolder}/fe" },
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "pattern": [{ "regexp": "." }],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "VITE",
+            "endsPattern": "ready in"
+          }
+        }
+      ],
+      "presentation": {
+        "group": "dev",
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
       "label": "debug: prep",
       "dependsOn": ["templ: generate", "css: build", "gate: build"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "debug: prep with fe",
+      "dependsOn": ["templ: generate", "css: build", "gate: build", "fe: build"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "debug: prep + fe dev",
+      "dependsOn": ["templ: generate", "css: build", "gate: build", "fe: dev"],
       "dependsOrder": "parallel",
       "problemMatcher": []
     },

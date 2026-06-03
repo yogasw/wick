@@ -63,7 +63,7 @@ type DependencyDeclarer interface {
 
 // TemplateableFieldsDeclarer is implemented by executors whose node
 // type carries templateable strings on fields beyond the common pool
-// scanned by default (Prompt, PromptFile, URL, Body, Expr, Input,
+// scanned by default (Prompt, URL, Body, Expr, Input,
 // Expression, SQL).
 //
 // Return name → value pairs for each templateable string field present

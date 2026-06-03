@@ -7,10 +7,13 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/lab",
-      "output": "${workspaceFolder}/bin/wick-lab",
+      "output": "${workspaceFolder}/bin/wick-lab2",
       "cwd": "${workspaceFolder}/cmd/lab",
       "args": ["server"],
       "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "WICK_DEV_REPO_ROOT": "${workspaceFolder}"
+      },
       "preLaunchTask": "debug: prep"
     },
     {

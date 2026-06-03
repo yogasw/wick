@@ -332,7 +332,7 @@ func Operations() []connector.Operation {
 				Examples: []wickdocs.Example{
 					{
 						Name: "simple_send",
-						YAML: `- id: notify
+						Body: `- id: notify
   type: connector
   module: slack
   op: send_message
@@ -344,7 +344,7 @@ func Operations() []connector.Operation {
 					},
 					{
 						Name: "thread_reply",
-						YAML: `- id: reply
+						Body: `- id: reply
   type: connector
   module: slack
   op: send_message
@@ -359,7 +359,7 @@ func Operations() []connector.Operation {
 					},
 					{
 						Name: "with_blocks",
-						YAML: `- id: alert
+						Body: `- id: alert
   type: connector
   module: slack
   op: send_message

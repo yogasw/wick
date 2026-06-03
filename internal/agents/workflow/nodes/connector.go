@@ -45,6 +45,13 @@ func (e *ConnectorExecutor) TemplateableFields(n workflow.Node) map[string]strin
 
 func (e *ConnectorExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		// Connector node itself is the umbrella — the palette never
+		// shows a bare "Connector" row; per-module rows are expanded
+		// from the connector registry. Category/Label/Badge here are
+		// fallback metadata for anything that introspects via the MCP
+		// catalog directly.
+		Category:    engine.CategoryAction,
+		Label:       "Connector",
 		Description: "Invoke a registered connector operation. Call workflow_connectors for available modules.",
 		WhenToUse:   "Call any registered external integration via MCP connector.",
 		Schema:      integration.StructSchema(connectorSchema{}),

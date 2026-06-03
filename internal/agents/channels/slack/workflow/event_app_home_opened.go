@@ -35,7 +35,7 @@ func registerEventAppHomeOpened(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "render_home",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: app_home_opened
   entry_node: build_home_view`,

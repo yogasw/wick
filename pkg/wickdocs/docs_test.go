@@ -20,7 +20,7 @@ func TestDocsIsZero(t *testing.T) {
 			{"OutputShape", Docs{OutputShape: map[string]string{"x": "y"}}},
 			{"TemplateableFields", Docs{TemplateableFields: []string{"prompt"}}},
 			{"Quirks", Docs{Quirks: []string{"q"}}},
-			{"Examples", Docs{Examples: []Example{{Name: "n", YAML: "y"}}}},
+			{"Examples", Docs{Examples: []Example{{Name: "n", Body: "y"}}}},
 			{"PairWith", Docs{PairWith: []string{"x"}}},
 			{"CommonPitfalls", Docs{CommonPitfalls: []string{"p"}}},
 			{"InputSample", Docs{InputSample: `{"k":"v"}`}},
@@ -50,7 +50,7 @@ func TestDocsJSONOmitEmpty(t *testing.T) {
 }
 
 func TestExampleRoundTrip(t *testing.T) {
-	e := Example{Name: "basic", YAML: "- id: x\n  type: agent\n"}
+	e := Example{Name: "basic", Body: "- id: x\n  type: agent\n"}
 	b, err := json.Marshal(e)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

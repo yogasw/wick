@@ -172,7 +172,7 @@
   }
 
   body {
-    @apply min-h-screen bg-white-200 dark:bg-navy-800 font-sans text-black-900 dark:text-white-100 antialiased;
+    @apply min-h-screen bg-white-200 dark:bg-navy-800 font-sans text-black-800 dark:text-white-100 antialiased;
     line-height: 1.5;
   }
 

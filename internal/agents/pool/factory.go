@@ -103,10 +103,22 @@ type GateConfig struct {
 func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	st := state.New(nil)
 	st.SetIdentity(opt.SessionID, opt.AgentName)
+	// Compute provider "type/name" for store stamping. Mirrors the
+	// AgentEntry.Provider format used in agents.json so the UI can
+	// render either source the same way.
+	storeProviderType := opt.ProviderType
+	if storeProviderType == "" {
+		storeProviderType = string(provider.TypeClaude)
+	}
+	storeProviderName := opt.ProviderName
+	if storeProviderName == "" {
+		storeProviderName = storeProviderType
+	}
 	sto := store.New(store.Options{
 		Layout:    f.Layout,
 		SessionID: opt.SessionID,
 		AgentName: opt.AgentName,
+		Provider:  storeProviderType + "/" + storeProviderName,
 		RecordRaw: f.RecordRaw,
 	})
 

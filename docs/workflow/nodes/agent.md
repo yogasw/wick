@@ -16,10 +16,10 @@ Spawn an agent turn through the existing pool. Templated prompt, optional skills
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `prompt_file` | path | ✅ | Path to prompt markdown file relative to workflow root (e.g. `nodes/summarize.md`). Rendered as Go template. |
+| `prompt` | string | ✅ | Inline prompt rendered as a Go template with `.Event`, `.Node`, `.Trigger` context. |
 | `provider` | string | | Provider name (`claude`, `codex`, `gemini`, …). Optional — falls back to workflow default. |
-| `skills` | YAML list | | Skill names to expose to this turn. Per-provider — see [Providers](/guide/agents/providers). |
-| `tools` | YAML list | | Tool names to allowlist. Empty = provider default. |
+| `skills` | array | | Skill names to expose to this turn. Per-provider — see [Providers](/guide/agents/providers). |
+| `tools` | array | | Tool names to allowlist. Empty = provider default. |
 | `max_turns` | int | | Cap on agent turns. Default unlimited. |
 | `session` | string | | `new` = fresh session per run, empty = inherit the run's session. |
 
@@ -29,24 +29,15 @@ Whatever the agent emits. The executor merges `text_delta` chunks into a single 
 
 ## Example
 
-```yaml
-- id: bug_report
-  type: agent
-  prompt_file: nodes/bug.md
-  provider: claude
-  skills: [shell, git]
-  max_turns: 3
-```
-
-`nodes/bug.md` is a regular Go-template Markdown file:
-
-```markdown
-You are a support engineer.
-
-New bug from {{.Event.User.Name}}:
-> {{.Event.Payload.text}}
-
-Use the `gh` CLI to file the issue. Reply with the issue URL.
+```json
+{
+  "id": "bug_report",
+  "type": "agent",
+  "prompt": "You are a support engineer.\n\nNew bug from {{.Event.User.Name}}:\n> {{.Event.Payload.text}}\n\nUse the `gh` CLI to file the issue. Reply with the issue URL.",
+  "provider": "claude",
+  "skills": ["shell", "git"],
+  "max_turns": 3
+}
 ```
 
 ## Pool integration

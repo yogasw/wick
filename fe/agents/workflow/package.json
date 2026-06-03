@@ -1,0 +1,21 @@
+{
+  "name": "@wick-fe/agents-workflow",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "lint:gotchas": "node scripts/check-svelte-gotchas.mjs",
+    "prebuild": "npm run lint:gotchas",
+    "prebuild:watch": "npm run lint:gotchas",
+    "build": "vite build",
+    "build:watch": "vite build --watch",
+    "preview": "vite preview",
+    "check": "node scripts/check-svelte-gotchas.mjs && tsc --noEmit && vite build",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "ace-builds": "^1.44.0"
+  }
+}

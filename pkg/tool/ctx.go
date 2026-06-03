@@ -63,6 +63,26 @@ func (c *Ctx) Form(key string) string { return c.R.FormValue(key) }
 // Query returns the URL query value for key.
 func (c *Ctx) Query(key string) string { return c.R.URL.Query().Get(key) }
 
+// WantsJSON returns true when the client signals it wants JSON over HTML:
+// Accept header contains "application/json" OR the `format=json` query
+// param is set. Dual-mode handlers branch on this so the same VM struct
+// powers both the templ render and the SPA fetch.
+func (c *Ctx) WantsJSON() bool {
+	if c.Query("format") == "json" {
+		return true
+	}
+	for _, a := range c.R.Header.Values("Accept") {
+		// Cheap substring — handlers don't negotiate quality scores.
+		// "application/json" wins regardless of media-type parameters.
+		for i := 0; i+len("application/json") <= len(a); i++ {
+			if a[i:i+len("application/json")] == "application/json" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // PathValue returns a Go 1.22+ mux path parameter (e.g. "/items/{id}").
 func (c *Ctx) PathValue(key string) string { return c.R.PathValue(key) }
 

@@ -43,7 +43,7 @@ func newMgr(t *testing.T) *Manager {
 // the run_id so tests can inspect state + events.
 func runWorkflow(t *testing.T, m *Manager, w workflow.Workflow, evt workflow.Event) string {
 	t.Helper()
-	require.NoError(t, m.Service.Create(w.ID, w, nil))
+	require.NoError(t, m.Service.Create(w.ID, w))
 	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, nil, w.ID))
 
 	// Run via engine direct so we get a deterministic synchronous
@@ -136,7 +136,7 @@ func TestUseCase_MultiTrigger_RouterRegistersAll(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, m.Service.Create(w.ID, w, nil))
+	require.NoError(t, m.Service.Create(w.ID, w))
 	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, nil, w.ID))
 
 	// Verify validator accepts the multi-trigger shape.
@@ -291,7 +291,7 @@ func TestUseCase_RunNow_BypassesDisabled(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, m.Service.Create(w.ID, w, nil))
+	require.NoError(t, m.Service.Create(w.ID, w))
 	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, nil, w.ID))
 
 	// Dispatch should NOT match a disabled workflow.

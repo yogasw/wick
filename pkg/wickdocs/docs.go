@@ -63,11 +63,12 @@ type Docs struct {
 
 // Example is one named snippet. Name is a short slug ("basic",
 // "with_structured_output", "skeleton_then_update") shown to the AI as
-// section header; YAML is the copy-pasteable block, matching the live
-// persistence format the engine reads.
+// section header; Body is the copy-pasteable block — JSON for workflow
+// nodes and operations, matching the live persistence format the
+// engine reads.
 type Example struct {
 	Name string `json:"name"`
-	YAML string `json:"yaml"`
+	Body string `json:"body"`
 }
 
 // IsZero reports whether the bundle carries no information. The MCP

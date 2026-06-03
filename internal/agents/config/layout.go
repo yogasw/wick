@@ -32,14 +32,14 @@ func (l Layout) WorkflowDir(id string) string {
 	return filepath.Join(l.WorkflowsDir(), id)
 }
 func (l Layout) WorkflowFile(id string) string {
-	return filepath.Join(l.WorkflowDir(id), "workflow.yaml")
+	return filepath.Join(l.WorkflowDir(id), "workflow.json")
 }
 
 // WorkflowDraftFile is the in-progress copy edited by the canvas. Save
-// from the UI always writes here, never to workflow.yaml. Publish
-// promotes this file to workflow.yaml and deletes the draft.
+// from the UI always writes here, never to workflow.json. Publish
+// promotes this file to workflow.json and deletes the draft.
 func (l Layout) WorkflowDraftFile(id string) string {
-	return filepath.Join(l.WorkflowDir(id), "workflow.draft.yaml")
+	return filepath.Join(l.WorkflowDir(id), "workflow.draft.json")
 }
 func (l Layout) WorkflowRunsDir(id string) string {
 	return filepath.Join(l.WorkflowDir(id), "runs")
@@ -61,7 +61,7 @@ func (l Layout) WorkflowIndexDir(id string) string {
 	return filepath.Join(l.WorkflowRunsDir(id), "index")
 }
 func (l Layout) WorkflowEnvFile(id string) string {
-	return filepath.Join(l.WorkflowDir(id), "env.yaml")
+	return filepath.Join(l.WorkflowDir(id), "env.json")
 }
 func (l Layout) WorkflowStateFile(id string) string {
 	return filepath.Join(l.WorkflowDir(id), "state.json")

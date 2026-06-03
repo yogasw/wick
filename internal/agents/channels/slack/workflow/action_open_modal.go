@@ -68,7 +68,7 @@ func registerActionOpenModal(reg *integration.Registry, ch *slack.Channel) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "skeleton_then_update",
-					YAML: `- id: open_modal_skeleton
+					Body: `- id: open_modal_skeleton
   type: channel
   channel: slack
   action: open_modal
@@ -87,7 +87,7 @@ func registerActionOpenModal(reg *integration.Registry, ch *slack.Channel) {
 				},
 				{
 					Name: "dynamic_view_from_agent",
-					YAML: `- id: open_modal
+					Body: `- id: open_modal
   type: channel
   channel: slack
   action: open_modal

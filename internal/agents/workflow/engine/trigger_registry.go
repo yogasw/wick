@@ -150,7 +150,7 @@ func DefaultTriggerDescriptors() []TriggerDescriptor {
 				Examples: []wickdocs.Example{
 					{
 						Name: "single_trigger_no_filter",
-						YAML: `triggers:
+						Body: `triggers:
   - type: channel
     channel: slack
     event: message
@@ -158,7 +158,7 @@ func DefaultTriggerDescriptors() []TriggerDescriptor {
 					},
 					{
 						Name: "multi_trigger_per_event_routing",
-						YAML: `triggers:
+						Body: `triggers:
   - type: channel
     channel: slack
     event: message
@@ -170,7 +170,7 @@ func DefaultTriggerDescriptors() []TriggerDescriptor {
 					},
 					{
 						Name: "with_match_filter",
-						YAML: `triggers:
+						Body: `triggers:
   - type: channel
     channel: slack
     event: message

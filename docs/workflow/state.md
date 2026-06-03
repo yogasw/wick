@@ -4,31 +4,32 @@ outline: deep
 
 # Run state
 
-Every run lives on disk under the workflow's folder. The canvas's run timeline reads this directly — no separate trace store, no DB rows for per-node IO.
+The workflow body and test fixtures live in the database. Per-run artefacts (state snapshots, event logs, env values) stay on disk — they're high-volume append-friendly data the engine writes during execution.
 
-## Layout
+## Where things live
+
+| | Storage | Notes |
+|---|---|---|
+| Workflow body (published + draft) | DB column `workflows.body_published` / `body_draft` | JSON text |
+| Version history | DB table `workflow_versions` | Append-only; powers History tab + compare + restore |
+| Test fixtures | DB table `workflow_test_cases` | Name-addressable, no file paths |
+| Run state | Disk `runs/<run-id>/state.json` | Engine writes per run |
+| Run events | Disk `runs/<run-id>/events.jsonl` | One line per `node_started` / `node_completed` / `node_failed` / `edge_traversed` |
+| Env values | Disk `env.json` | Sensitive secrets, OS-perm protected |
+
+Folder layout under `<BaseDir>/workflows/<workflow-id>/`:
 
 ```
-<BaseDir>/workflows/<workflow-id>/
-├── workflow.yaml          ← the published graph
-├── workflow.draft.yaml    ← unpublished edits (if any)
-├── nodes/                 ← prompt files referenced by agent / classify nodes
-│   └── *.md
-├── __tests__/             ← test fixtures (see MCP authoring)
-│   ├── *.json
-│   └── nodes/             ← per-node unit fixtures
-└── runs/
-    └── <run-id>/
-        ├── meta.json          ← trigger payload, start/end, status, cost
-        ├── events.jsonl       ← one line per node start/finish/error + edge_traversed
-        ├── nodes/<node-id>.json   ← output of each node
-        ├── prefill.json       ← snapshot of the inbound trigger payload
-        └── mocks.json         ← (optional) prefill data for Copy-to-editor
+runs/
+└── <run-id>/
+    ├── state.json     ← run summary + per-node outputs
+    └── events.jsonl   ← full event stream
+env.json               ← per-workflow env values (when set)
 ```
 
-`meta.json` is the run summary the timeline reads first. `events.jsonl` is the full event stream — every `node_started`, `node_completed`, `node_failed`, `edge_traversed` entry with timestamps and data payloads. Reach for it (via `workflow_get_run_events`) when `workflow_get_run` doesn't have enough detail — e.g. user gives you a failed run ID and asks why.
+`workflow_get_run` reads `state.json`. `workflow_get_run_events` reads `events.jsonl` — reach for it when `state.json` doesn't carry enough detail (e.g. you have a failed run ID and need to see what fired last).
 
-Retention is per-workflow (default: keep last 50 runs). Older runs are pruned at boot; the cleanup is best-effort and a manual delete of `runs/<id>/` is always safe.
+Retention is per-workflow (default: keep last 50 runs on disk). Older runs are pruned at boot; the cleanup is best-effort and a manual delete of `runs/<id>/` is always safe.
 
 ## Replay
 
@@ -40,13 +41,14 @@ From MCP, `workflow_replay_run` is the equivalent convenience wrapper — loads 
 
 ## Copy to editor
 
-The **Copy to editor** button (timeline + the MCP `workflow_copy_run_to_editor` op) does three things in one call:
+The **Copy to editor** button (timeline + the MCP `workflow_copy_run_to_editor` op) does two things in one call:
 
 1. Loads the run state.
 2. Saves the current published workflow as draft (so you can edit without overwriting prod).
-3. Writes `runs/<run_id>/mocks.json` so the canvas's Execute step can prefill from real data.
 
-Use this when iterating on a workflow against real-world failure data: load the failed run → edit the graph → run again against the same payload → publish when it's right.
+The response also returns the run's per-node outputs. Pass them as `node_outputs` to `workflow_exec_node` when you want Execute Step to prefill from the original run's data.
+
+Use this when iterating on a workflow against real-world failure data: load the failed run → edit the graph → exec-node with the captured outputs → publish when it's right.
 
 ## See also
 

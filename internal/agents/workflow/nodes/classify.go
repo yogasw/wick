@@ -10,15 +10,13 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 type classifyNodeSchema struct {
-	OutputCases     string `wick:"required;key=output_cases;desc=Enum labels the LLM must pick from (YAML list)"`
+	OutputCases     string `wick:"required;key=output_cases;desc=Enum labels the LLM must pick from (JSON array)"`
 	Input           string `wick:"required;key=input;desc=Text to classify — use expression e.g. {{index .Event.Payload \"text\"}}"`
 	Provider        string `wick:"key=provider;desc=Provider name (optional, uses default)"`
-	PromptFile      string `wick:"key=prompt_file;desc=Optional prompt file path to override default classify prompt"`
 	FuzzyMatch      bool   `wick:"key=fuzzy_match;desc=Allow partial/fuzzy label matching"`
 	RetryOnMismatch int    `wick:"key=retry_on_mismatch;desc=Retry count when LLM returns unrecognized label"`
 }
@@ -33,9 +31,12 @@ func (e *ClassifyExecutor) Dependencies(n workflow.Node) []engine.NodeDependency
 
 func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryAI,
+		Label:       "Classify",
+		Badge:       "AI classify",
 		Description: "Classify natural-language input into an enum via LLM. Route downstream via case: labels matching verdict.",
 		WhenToUse:   "Input is free text and needs to be bucketed into a small set of cases.",
-		Example:     "- id: triage\n  type: classify\n  output_cases: [bug, feature, question]\n  input: '{{index .Event.Payload \"text\"}}'\n  provider: claude",
+		Example:     "{\n  \"id\": \"triage\",\n  \"type\": \"classify\",\n  \"output_cases\": [\"bug\", \"feature\", \"question\"],\n  \"input\": \"{{index .Event.Payload \\\"text\\\"}}\",\n  \"provider\": \"claude\"\n}",
 		Schema:      integration.StructSchema(classifyNodeSchema{}),
 		Output: map[string]string{
 			"verdict":    "string — matched case label",
@@ -50,9 +51,9 @@ func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
 				"raw":        "Raw provider response — debugging only.",
 				"fuzzy":      "True when the verdict was resolved via fuzzy match instead of exact.",
 			},
-			TemplateableFields: []string{"input", "prompt_file"},
+			TemplateableFields: []string{"input"},
 			Quirks: []string{
-				"output_cases is a YAML list — each entry becomes a JSON Schema enum value passed to the provider's structured output.",
+				"output_cases is a JSON array — each entry becomes a JSON Schema enum value passed to the provider's structured output.",
 				"6-layer reliability stack: structured_output → normalize → exact → fuzzy → retry_on_mismatch → confidence_threshold fallback to \"default\".",
 				"verdict \"default\" fires when no enum match after all retries, OR when confidence < confidence_threshold. Add a \"default\" case in your downstream branch to catch it.",
 				"fuzzy_match enables Levenshtein + substring fallback — useful when the model occasionally returns variants like \"bugs\" instead of \"bug\".",
@@ -68,12 +69,14 @@ func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
 			Examples: []wickdocs.Example{
 				{
 					Name: "triage_support_intent",
-					YAML: `- id: triage
-  type: classify
-  provider: claude
-  output_cases: [bug, feature, question]
-  input: '{{.Node.trigger.payload.text}}'
-  fuzzy_match: true`,
+					Body: `{
+  "id": "triage",
+  "type": "classify",
+  "provider": "claude",
+  "output_cases": ["bug", "feature", "question"],
+  "input": "{{.Node.trigger.payload.text}}",
+  "fuzzy_match": true
+}`,
 				},
 			},
 		},
@@ -106,11 +109,7 @@ func (e *ClassifyExecutor) Execute(ctx context.Context, n workflow.Node, rc *wor
 	if err != nil {
 		return workflow.NodeOutput{}, err
 	}
-	rctx := rc.RenderCtx()
-	prompt, err := template.Render(n.Prompt, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, err
-	}
+	prompt := n.Prompt
 	systemPrompt := classifySystemPrompt(n.OutputCases, false)
 	maxRetry := n.RetryOnMismatch
 

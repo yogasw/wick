@@ -45,8 +45,8 @@ func pollWorkflows(ctx context.Context, workflowsDir string, svc service.Service
 			continue
 		}
 		id := e.Name()
-		yamlPath := filepath.Join(workflowsDir, id, "workflow.yaml")
-		info, err := os.Stat(yamlPath)
+		filePath := filepath.Join(workflowsDir, id, "workflow.json")
+		info, err := os.Stat(filePath)
 		if err != nil {
 			continue
 		}

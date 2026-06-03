@@ -125,7 +125,14 @@ func (r *Registry) Reload() error {
 		if recoveryAgent == "" && len(s.Agents) > 0 {
 			recoveryAgent = s.Agents[0].Name
 		}
-		if recovered, err := store.RecoverInflight(r.layout, id, recoveryAgent, nil); err != nil {
+		recoveryProvider := ""
+		for _, a := range s.Agents {
+			if a.Name == recoveryAgent {
+				recoveryProvider = a.Provider
+				break
+			}
+		}
+		if recovered, err := store.RecoverInflight(r.layout, id, recoveryAgent, recoveryProvider, nil); err != nil {
 			log.Warn().Err(err).Str("session", id).Msg("registry: recover inflight failed")
 		} else if recovered {
 			log.Info().Str("session", id).Str("agent", recoveryAgent).Msg("registry: recovered inflight turn into conversation.jsonl")

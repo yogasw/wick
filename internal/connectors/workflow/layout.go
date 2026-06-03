@@ -21,11 +21,10 @@ func normalizeTriggerEntryNodes(w *wf.Workflow) {
 	}
 }
 
-// topDownLayout is a thin alias kept for backward compatibility with
-// the workflow_write_file path. The implementation now lives in the
-// scaffold package so both UI / MCP create and write paths share one
-// source of truth. New callers should reach for
-// scaffold.ApplyTopDownLayout directly.
+// topDownLayout is a thin alias around scaffold.ApplyTopDownLayout
+// kept so handlers in this package don't need to import the scaffold
+// package directly. New callers should reach for
+// scaffold.ApplyTopDownLayout straight.
 func topDownLayout(w wf.Workflow) wf.Workflow {
 	return scaffold.ApplyTopDownLayout(w)
 }

@@ -76,7 +76,7 @@ func registerEventMessage(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "dump_all_messages",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: message
   entry_node: classify
@@ -84,7 +84,7 @@ func registerEventMessage(reg *integration.Registry) {
 				},
 				{
 					Name: "whitelist_two_channels",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: message
   entry_node: classify
@@ -97,7 +97,7 @@ func registerEventMessage(reg *integration.Registry) {
 				},
 				{
 					Name: "text_contains_filter",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: message
   entry_node: route

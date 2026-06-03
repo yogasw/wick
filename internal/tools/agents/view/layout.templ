@@ -13,6 +13,14 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	@lifecycleStyles()
 	@tooltipStyles()
 	@scrollbarStyles()
+	<!-- The Agents shell is a fixed full-height app. Lock the document so a
+	     scroll-to-bottom (scrollIntoView) only moves the chat panel, never the
+	     page itself — otherwise reloading or switching into a session with
+	     history scrolls the whole page and pushes the floating header out of
+	     view. Scrolling happens inside [data-chat-panel] only. -->
+	<style>
+		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+	</style>
 	{{ user := login.GetUser(ctx) }}
 	<div class="flex w-full h-[100dvh]" data-agents-shell>
 		<!-- Mobile hamburger (md:hidden). Hidden when drawer open. -->

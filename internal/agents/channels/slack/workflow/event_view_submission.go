@@ -66,7 +66,7 @@ func registerEventViewSubmission(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "route_by_callback",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: view_submission
   entry_node: create_ticket

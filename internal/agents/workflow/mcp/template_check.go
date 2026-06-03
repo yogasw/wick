@@ -2,7 +2,7 @@
 //
 // One-shot Go template renderer that AI clients call to verify a
 // `{{...}}` snippet against a synthetic context without round-tripping
-// through workflow_write_file + workflow_simulate. Errors are
+// through a full edit + workflow_simulate cycle. Errors are
 // introspected: when a missing-key error fires inside a map lookup, the
 // response lists the keys that ARE present at the offending path so
 // the next attempt is informed instead of guessing again.

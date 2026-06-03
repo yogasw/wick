@@ -3,11 +3,19 @@ module.exports = {
   darkMode: 'class',
 
   // Scan .templ source files and generated Go files for class names.
+  // FE/Svelte files are scanned too so classes used only by the Svelte
+  // workflow editor (`right-3`, `translate-x-3.5`, dark:bg-slate-* etc.)
+  // make it into the emitted CSS — without this the editor falls back
+  // to default browser styles and overlay buttons land at left:0.
   content: [
     './internal/**/*.templ',
     './internal/**/*_templ.go',
     './internal/**/*.js',
     './web/public/js/app.js',
+    // Narrow to FE source dirs — broader `./fe/**/*.{svelte,ts}`
+    // walks every workspace's node_modules and triples scan time.
+    './fe/agents/*/src/**/*.{svelte,ts}',
+    './fe/agents/*/index.html',
   ],
 
   theme: {
@@ -53,6 +61,25 @@ module.exports = {
         600: '#2563eb',
         700: '#1d4ed8',
       },
+
+      // ── Workflow v2 editor palette (Svelte FE) ────────────────────────────
+      // Mirrors the legacy editor.css node-head colours so the Svelte
+      // editor renders the same TRIGGER / CLASSIFY / AGENT / DATATABLE
+      // pills. Restricted to the shades actually used to keep the
+      // emitted CSS lean.
+      rose:    { 100: '#ffe4e6', 300: '#fda4af', 500: '#f43f5e', 600: '#e11d48', 700: '#be123c' },
+      emerald: { 100: '#d1fae5', 300: '#6ee7b7', 400: '#34d399', 500: '#10b981', 600: '#059669' },
+      slate:   { 100: '#f1f5f9', 200: '#e2e8f0', 300: '#cbd5e1', 400: '#94a3b8', 500: '#64748b', 600: '#475569', 700: '#334155', 800: '#1e293b', 900: '#0f172a' },
+      sky:     { 100: '#e0f2fe', 300: '#7dd3fc', 500: '#0ea5e9', 700: '#0369a1', 800: '#075985' },
+      fuchsia: { 100: '#fae8ff', 700: '#a21caf', 800: '#86198f' },
+      indigo:  { 100: '#e0e7ff', 500: '#6366f1', 700: '#4338ca' },
+      violet:  { 100: '#ede9fe', 500: '#8b5cf6', 700: '#6d28d9', 800: '#5b21b6' },
+      pink:    { 100: '#fce7f3', 500: '#ec4899', 700: '#be185d', 800: '#9d174d' },
+      lime:    { 100: '#ecfccb', 500: '#84cc16', 600: '#65a30d', 800: '#3f6212' },
+      cyan:    { 100: '#cffafe', 300: '#67e8f9', 500: '#06b6d4', 700: '#0e7490', 800: '#155e75' },
+      teal:    { 100: '#ccfbf1', 500: '#14b8a6', 600: '#0d9488', 800: '#115e59' },
+      yellow:  { 100: '#fef9c3', 200: '#fef08a', 300: '#fde047', 500: '#eab308', 700: '#a16207', 800: '#854d0e' },
+      orange:  { 300: '#fdba74', 400: '#fb923c', 500: '#f97316' },
 
       // Brand Green — buttons, sidebar, primary actions
       green: {

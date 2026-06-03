@@ -46,7 +46,7 @@ func registerEventShortcut(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "escalate_message_shortcut",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: shortcut
   entry_node: open_escalation_modal
