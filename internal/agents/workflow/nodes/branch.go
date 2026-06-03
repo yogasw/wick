@@ -19,9 +19,12 @@ type branchSchema struct {
 
 func (e *BranchExecutor) Descriptor() engine.NodeDescriptor {
 	return engine.NodeDescriptor{
+		Category:    engine.CategoryLogic,
+		Label:       "Branch",
+		Badge:       "if / else",
 		Description: "Evaluates a Go template expression; routes to the edge whose case: label matches the result.",
 		WhenToUse:   "Routing logic is structured (no natural language).",
-		Example:     "- id: route\n  type: branch\n  expr: '{{index .Event.Payload \"action_id\"}}'",
+		Example:     "{\n  \"id\": \"route\",\n  \"type\": \"branch\",\n  \"expr\": \"{{index .Event.Payload \\\"action_id\\\"}}\"\n}",
 		Schema:      integration.StructSchema(branchSchema{}),
 		Docs: wickdocs.Docs{
 			OutputShape: map[string]string{
@@ -49,15 +52,19 @@ func (e *BranchExecutor) Descriptor() engine.NodeDescriptor {
 			Examples: []wickdocs.Example{
 				{
 					Name: "route_by_classify",
-					YAML: `- id: route
-  type: branch
-  expr: '{{.Node.triage.verdict}}'`,
+					Body: `{
+  "id": "route",
+  "type": "branch",
+  "expr": "{{.Node.triage.verdict}}"
+}`,
 				},
 				{
 					Name: "boolean_check",
-					YAML: `- id: vip_check
-  type: branch
-  expr: '{{.Node.user_lookup.profile.is_admin}} == true'`,
+					Body: `{
+  "id": "vip_check",
+  "type": "branch",
+  "expr": "{{.Node.user_lookup.profile.is_admin}} == true"
+}`,
 				},
 			},
 		},

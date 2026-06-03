@@ -5,12 +5,10 @@
 package env
 
 import (
-	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
@@ -189,27 +187,27 @@ func byName(schema []workflow.EnvField, name string) (workflow.EnvField, bool) {
 	return workflow.EnvField{}, false
 }
 
-// envFileShape mirrors env.yaml file content for the {values: {...}} variant.
+// envFileShape mirrors env.json file content for the {values: {...}} variant.
 type envFileShape struct {
-	Values map[string]string `yaml:"values"`
+	Values map[string]string `json:"values"`
 }
 
-// UnmarshalYAMLFile decodes env.yaml bytes into a plain string→string map.
-// Accepts both legacy plain-map form and the {values: {...}} envelope.
-func UnmarshalYAMLFile(data []byte, out *map[string]string) error {
+// UnmarshalFile decodes env.json bytes into a plain string→string map.
+// Accepts both plain-map form and the {values: {...}} envelope.
+func UnmarshalFile(data []byte, out *map[string]string) error {
 	if *out == nil {
 		*out = map[string]string{}
 	}
 	var shape envFileShape
-	if err := yaml.Unmarshal(data, &shape); err == nil && shape.Values != nil {
+	if err := json.Unmarshal(data, &shape); err == nil && shape.Values != nil {
 		for k, v := range shape.Values {
 			(*out)[k] = v
 		}
 		return nil
 	}
 	var plain map[string]string
-	if err := yaml.Unmarshal(data, &plain); err != nil {
-		return fmt.Errorf("env.yaml decode: %w", err)
+	if err := json.Unmarshal(data, &plain); err != nil {
+		return fmt.Errorf("env.json decode: %w", err)
 	}
 	for k, v := range plain {
 		(*out)[k] = v
@@ -217,14 +215,7 @@ func UnmarshalYAMLFile(data []byte, out *map[string]string) error {
 	return nil
 }
 
-// MarshalYAMLFile serializes values map to env.yaml bytes.
-func MarshalYAMLFile(values map[string]string) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(envFileShape{Values: values}); err != nil {
-		return nil, err
-	}
-	_ = enc.Close()
-	return buf.Bytes(), nil
+// MarshalFile serializes values map to env.json bytes (pretty-indented).
+func MarshalFile(values map[string]string) ([]byte, error) {
+	return json.MarshalIndent(envFileShape{Values: values}, "", "  ")
 }

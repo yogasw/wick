@@ -69,7 +69,7 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "reply_in_thread",
-					YAML: `- id: reply
+					Body: `- id: reply
   type: channel
   channel: slack
   action: send_message
@@ -84,7 +84,7 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 				},
 				{
 					Name: "block_kit_post",
-					YAML: `- id: rich_post
+					Body: `- id: rich_post
   type: channel
   channel: slack
   action: send_message

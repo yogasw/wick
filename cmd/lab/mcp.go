@@ -17,7 +17,7 @@ func mcpCmd() *cobra.Command {
 		Use:   "mcp",
 		Short: "MCP server commands",
 	}
-	cmd.AddCommand(mcpServeCmd(), mcpSmokeCmd())
+	cmd.AddCommand(mcpServeCmd(), mcpSmokeCmd(), mcpExecCmd())
 	return cmd
 }
 
@@ -35,6 +35,30 @@ func mcpServeCmd() *cobra.Command {
 			// unstamped build even when the binary was built with VCS
 			// info available.
 			api.RunMCPStdio(app.BuildAppVersion, app.BuildCommit, app.BuildTime)
+		},
+	}
+}
+
+// mcpExecCmd calls one MCP tool in-process with the full connector
+// stack wired (same init as serve). Exits after the response is printed.
+// Usage: lab mcp exec <tool-name> [params-json]
+func mcpExecCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "exec <tool> [params-json]",
+		Short: "Call one MCP tool in-process and print result",
+		Args:  cobra.RangeArgs(1, 2),
+		Run: func(cmd *cobra.Command, args []string) {
+			toolName := args[0]
+			params := "{}"
+			if len(args) > 1 {
+				params = args[1]
+			}
+			messages := strings.Join([]string{
+				`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`,
+				`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"` + toolName + `","arguments":` + params + `}}`,
+			}, "\n")
+			h, ctx := api.BuildMCPHandler(app.BuildAppVersion, app.BuildCommit, app.BuildTime)
+			h.ServeStdio(ctx, strings.NewReader(messages), cmd.OutOrStdout())
 		},
 	}
 }

@@ -4,7 +4,7 @@ outline: deep
 
 # Workflows
 
-A **workflow** is a multi-step automation stored on disk as a YAML graph of typed nodes (`classify`, `agent`, `connector`, `http`, `shell`, `branch`, `parallel`, `datatable_*`, …) and one or more triggers (cron, channel, webhook, manual, schedule_at). One inbound message — Slack mention, cron tick, webhook — kicks off a deterministic, replayable run that wick traces node-by-node.
+A **workflow** is a multi-step automation stored in the database as a JSON graph of typed nodes (`classify`, `agent`, `connector`, `http`, `shell`, `branch`, `parallel`, `datatable_*`, …) and one or more triggers (cron, channel, webhook, manual, schedule_at). One inbound message — Slack mention, cron tick, webhook — kicks off a deterministic, replayable run that wick traces node-by-node.
 
 Workflows reuse the same wick infrastructure you already configured for agents: provider pool, channel adapters, connectors, data tables. The workflow engine is the wiring that lets an LLM (or you, in the canvas editor) compose those primitives into something more structured than a free-form chat.
 
@@ -18,7 +18,7 @@ A workflow is **not** an agent — it's the layer above. An [`agent`](./nodes/ag
 |---|---|
 | [Nodes](./nodes) | Catalog of every node type with input schema, output fields, and a one-file-per-type reference. |
 | [Triggers](./triggers) | Cron / channel / webhook / manual / `schedule_at` / error — when a workflow run starts. |
-| [Canvas editor](./canvas) | Visual editor at `/tools/agents/workflows/<id>` — Drawflow, inspector, run timeline, Publish. |
+| [Canvas editor](./canvas) | Svelte SPA editor at `/tools/agents/workflows/edit/<id>` — canvas, inspector, run timeline, version history with side-by-side compare, Publish. |
 | [MCP authoring](./mcp) | How an LLM scaffolds and edits workflows through `workflow_*` ops. |
 | [Run state](./state) | On-disk layout, retention, replay. |
 
@@ -34,45 +34,52 @@ A workflow is **not** an agent — it's the layer above. An [`agent`](./nodes/ag
 
 ## Anatomy
 
-```yaml
-id: support-triage
-version: 1
-name: Support Triage
-enabled: true
-
-triggers:
-  - type: channel
-    source: slack
-    match:
-      event: app_mention
-
-graph:
-  entry: classify_intent
-
-  nodes:
-    classify_intent:
-      type: classify
-      output_cases: [bug_report, how_to, refund]
-      input: '{{index .Event.Payload "text"}}'
-
-    bug_report:
-      type: agent
-      prompt_file: nodes/bug.md
-
-    how_to:
-      type: connector
-      module: docs-search
-      op: search
-      args:
-        q: '{{index .Event.Payload "text"}}'
-
-  edges:
-    - {from: classify_intent, to: bug_report, case: bug_report}
-    - {from: classify_intent, to: how_to,     case: how_to}
-    - {from: classify_intent, to: refund,     case: refund}
+```json
+{
+  "id": "support-triage",
+  "version": 1,
+  "name": "Support Triage",
+  "enabled": true,
+  "triggers": [
+    {
+      "id": "trigger-slack-message",
+      "type": "channel",
+      "channel": "slack",
+      "event": "app_mention",
+      "entry_node": "classify_intent"
+    }
+  ],
+  "graph": {
+    "entry": "classify_intent",
+    "nodes": [
+      {
+        "id": "classify_intent",
+        "type": "classify",
+        "output_cases": ["bug_report", "how_to", "refund"],
+        "input": "{{index .Event.Payload \"text\"}}"
+      },
+      {
+        "id": "bug_report",
+        "type": "agent",
+        "prompt": "Triage this bug report: {{.Node.classify_intent.input}}"
+      },
+      {
+        "id": "how_to",
+        "type": "connector",
+        "module": "docs-search",
+        "op": "search",
+        "args": { "q": "{{index .Event.Payload \"text\"}}" }
+      }
+    ],
+    "edges": [
+      { "from": "classify_intent", "to": "bug_report", "case": "bug_report" },
+      { "from": "classify_intent", "to": "how_to",     "case": "how_to" }
+    ]
+  }
+}
 ```
 
-Stored at `<BaseDir>/workflows/<id>/workflow.yaml`. The folder also holds per-run state under `runs/<run-id>/` — see [Run state](./state).
+The workflow body is stored in the database. Per-run artefacts (state snapshot, event log) land under `<BaseDir>/workflows/<id>/runs/<run-id>/` — see [Run state](./state).
 
 ## Gate integration
 

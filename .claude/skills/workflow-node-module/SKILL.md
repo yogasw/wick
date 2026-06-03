@@ -118,7 +118,7 @@ func (e *MyOpExecutor) Descriptor() engine.NodeDescriptor {
     return engine.NodeDescriptor{
         Description: "Action verb. Returns <output shape>.",
         WhenToUse:   "Use when <condition>; prefer X over this when <other condition>.",
-        Example:     "- id: myop\n  type: my_op\n  required: foo\n  mode: a",
+        Example:     "{\n  \"id\": \"myop\",\n  \"type\": \"my_op\",\n  \"required\": \"foo\",\n  \"mode\": \"a\"\n}",
         Schema:      integration.StructSchema(myOpSchema{}),
         Output: map[string]string{
             "result": "string — rendered output",
@@ -395,7 +395,7 @@ type TemplateableFieldsDeclarer interface {
 }
 ```
 
-`workflow_describe` calls these per node when present, falling back to a generic switch (channel / connector / agent / classify) and a fixed field pool (`prompt`, `prompt_file`, `url`, `body`, `expr`, `input`, `expression`, `sql`) otherwise. **No registration needed** — implementing the interface on your executor is the wiring.
+`workflow_describe` calls these per node when present, falling back to a generic switch (channel / connector / agent / classify) and a fixed field pool (`prompt`, `url`, `body`, `expr`, `input`, `expression`, `sql`) otherwise. **No registration needed** — implementing the interface on your executor is the wiring.
 
 Implement `Dependencies` when the node touches an external surface a future maintainer would want to find via impact search ("which workflows break if we retire sheet ABC?"). Canonical kinds:
 
@@ -552,16 +552,38 @@ specific patterns before general ones.
 go build ./internal/...
 ```
 
-Smoke from MCP:
+Smoke from MCP — two modes:
 
-1. Boot wick — `go run main.go server &`
+**A. Quick in-process (no server needed)** — use `lab mcp exec` directly:
+
+```bash
+# List all registered node types — your new type must appear
+go run ./cmd/lab mcp exec wick_execute \
+  '{"tool_id":"conn:<workflow-connector-id>/workflow_node_types","params":{}}'
+
+# Exec your node in isolation — no DB run recorded, returns {ok, latency_ms, output}
+go run ./cmd/lab mcp exec wick_execute \
+  '{"tool_id":"conn:<id>/workflow_exec_node","params":{"id":"<wf-id>","node":"{\"type\":\"my_op\",\"required\":\"foo\"}","event":"{\"Type\":\"manual\"}"}}'
+```
+
+Get the workflow connector ID once via:
+```bash
+go run ./cmd/lab mcp exec wick_list '{}' 2>&1 | grep '"id"'
+```
+
+**B. Full server** — for validate/describe/simulate that need DB context:
+
+1. Boot wick — `go run ./cmd/lab all &`
 2. Call `workflow_node_types` — verify your new entry appears with the schema you declared.
 3. Call `workflow_node_detail("<your_type>")` — confirm `quirks`, `examples`, `input_sample`, `output_sample` show what you populated (omitted when empty; that's intentional).
 4. Create a draft workflow that uses the node, call `workflow_validate` — confirms no schema errors and that any did-you-mean hints surface on typos.
 5. Call `workflow_describe(id)` — confirm your `Dependencies` declarer (if any) surfaces the right `Ref`, and `TemplateableFields` (if any) catches templates pointing at undeclared nodes.
-6. Call `workflow_simulate` with a synthetic event — confirms `Execute` runs and outputs match your `Output` doc.
-7. For templating bugs use `workflow_template_test` with `sample_event` instead of round-tripping through write_file → simulate.
-8. Kill the port.
+6. Call `workflow_exec_node` with a synthetic node JSON + event — confirms `Execute` runs and outputs match your `Output` doc. No run persisted, fast feedback loop.
+7. Call `workflow_simulate` to verify the full graph path end-to-end.
+8. For templating bugs use `workflow_template_test` with `sample_event` instead of round-tripping through simulate.
+9. Kill the port (`kill %1` or `pkill -f "cmd/lab"`).
+
+**Note on `lab mcp exec` params:** the CLI wrapper reads from the `params` field (not `input`) when calling `wick_execute`. AI clients via the live MCP server call op names directly — `params` is only a CLI artifact.
 
 ## When to ask before acting
 

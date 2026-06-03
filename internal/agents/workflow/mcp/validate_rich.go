@@ -91,7 +91,7 @@ func (m *Ops) decorateError(e parse.Error) ErrorHint {
 		h.Hint = "Use letters, digits, and underscores only. No dash, no dot. Required for Go template field access ({{.Node.<id>.…}})."
 
 	case strings.Contains(lowerMsg, "entry_node"):
-		h.Hint = "entry_node must reference an existing node id. Add the node first via workflow_add_node or workflow_write_file."
+		h.Hint = "entry_node must reference an existing node id. Add the node first via workflow_add_node."
 
 	case strings.Contains(lowerPath, ".match") && strings.Contains(lowerMsg, "string"):
 		h.Hint = "Picker fields (channel_id, user) accept [{id, name}] objects, not bare strings. Use workflow_picker_resolve to get valid IDs."
@@ -195,9 +195,9 @@ func (m *Ops) matchKeysForPath(path string) []string {
 }
 
 // isJSONPascalContext reports whether the error path likely refers to
-// the JSON trigger shape (workflow_set_triggers) rather than the YAML
-// shape (workflow_write_file). Heuristic: triggers[N].Field with a
-// PascalCase or unknown-case field name suggests JSON input.
+// the JSON trigger shape passed through workflow_set_triggers
+// (PascalCase keys). Heuristic: triggers[N].Field with a PascalCase or
+// unknown-case field name suggests the set_triggers payload.
 func isJSONPascalContext(path string) bool {
 	return strings.Contains(path, "triggers[")
 }

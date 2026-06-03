@@ -40,7 +40,7 @@ func registerEventViewClosed(reg *integration.Registry) {
 			Examples: []wickdocs.Example{
 				{
 					Name: "log_abandonment",
-					YAML: `- type: channel
+					Body: `- type: channel
   channel: slack
   event: view_closed
   entry_node: log_dropped_form

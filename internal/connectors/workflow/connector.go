@@ -82,7 +82,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Entry point. Returns {base_dir, node_types[], trigger_types[], templates[]}. Call this first to orient yourself before creating or editing workflows.",
 			emptyInput{}, h.workspace, wickdocs.Docs{}),
 		connector.Op("workflow_node_types", "List Node Types",
-			"List all node types with schema, example YAML, and when_to_use. Use to know what types are available before calling workflow_add_node.",
+			"List all node types with schema, example body, and when_to_use. Use to know what types are available before calling workflow_add_node.",
 			emptyInput{}, h.nodeTypes, wickdocs.Docs{}),
 		connector.Op("workflow_trigger_types", "List Trigger Types",
 			"List all trigger types with schema + example. Use to know valid trigger shapes before calling workflow_set_triggers.",
@@ -114,25 +114,11 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 		connector.Op("workflow_get", "Get Workflow",
 			"Get full workflow definition: triggers, graph nodes/edges, env schema. Pass the workflow ID.",
 			idInput{}, h.get, wickdocs.Docs{}),
-		connector.Op("workflow_list_files", "List Workflow Files",
-			"List all files in a workflow folder (workflow.yaml, nodes/*.md, __tests__/, etc.).",
-			idInput{}, h.listFiles, wickdocs.Docs{}),
-		connector.Op("workflow_read_file", "Read Workflow File",
-			"Read content of one file in a workflow folder. Replaces native file tool for remote AI.",
-			readFileInput{}, h.readFile, wickdocs.
-
-				// ── Tier 2: write ──────────────────────────────────────────────
-				Docs{}),
+		// ── Tier 2: write ──────────────────────────────────────────────
 
 		connector.Op("workflow_create", "Create Workflow",
 			"Scaffold a new workflow folder with a template. Templates: empty, support-triage, incident-response, daily-digest. Returns {id, name}. Newly created workflows start disabled — admin must enable.",
 			createInput{}, h.create, wickdocs.Docs{}),
-		connector.Op("workflow_write_file", "Write Workflow File",
-			"Atomically write a file inside a workflow folder. Safe path — rejects '..' and symlinks. Use for workflow.yaml, nodes/prompt.md, scripts, test fixtures. When writing workflow.yaml: every trigger must have entry_node set to the graph node it starts from (e.g. entry_node: classify). Omitting entry_node disconnects the trigger from the graph.\n\nMatch filter format in YAML: picker fields use native YAML array of {id, name} objects — NOT JSON strings. Example:\n  match:\n    mode: whitelist\n    channel_id:\n      - id: C123\n        name: '#general'\n  match_enabled: true\n\nTemplate refs (preferred): every trigger and node lives under {{.Node.<label>.…}} — payload at {{.Node.<trigger-label>.payload.<key>}}, upstream node fields at {{.Node.<node-label>.<field>}}. Label defaults to node id when no label is set. Legacy {{.Event.*}} still resolves but new workflows should use the Node.<label> form so triggers and nodes share one access pattern.",
-			writeFileInput{}, h.writeFile, wickdocs.Docs{}),
-		connector.OpDestructive("workflow_delete_file", "Delete Workflow File",
-			"Delete a file inside a workflow folder.",
-			deleteFileInput{}, h.deleteFile, wickdocs.Docs{}),
 		connector.OpDestructive("workflow_delete", "Delete Workflow",
 			"Delete the full workflow folder and unregister all scheduled triggers.",
 			idInput{}, h.deleteWorkflow, wickdocs.Docs{}),
@@ -154,6 +140,15 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 		connector.Op("workflow_move_node", "Move Node",
 			"Update canvas position for a node (x, y pixels). Does not affect execution.",
 			moveNodeInput{}, h.moveNode, wickdocs.Docs{}),
+		connector.Op("workflow_move_nodes", "Move Nodes (Batch)",
+			"Move multiple nodes in one call. Pass moves as a JSON array of {node_id, x, y}. More efficient than calling workflow_move_node N times and avoids partial-update races.",
+			moveNodesInput{}, h.moveNodes, wickdocs.Docs{}),
+		connector.Op("workflow_auto_layout", "Auto Layout Canvas",
+			"Compute DAG-aware positions for all nodes and apply them in one mutation. Uses Kahn's BFS rank assignment: roots at the left, children to the right, triggers above their entry node. Pass node_ids to restrict re-layout to a subset — positions of nodes outside the list are kept.",
+			autoLayoutInput{}, h.autoLayout, wickdocs.Docs{}),
+		connector.Op("workflow_canvas_view", "View Canvas Layout",
+			"Return a human-readable table + ASCII sketch of the current canvas. Shows each node's ID (short), label, type, X, Y, and outgoing edges. Useful from MCP to understand the current layout before moving or auto-laying nodes.",
+			idInput{}, h.canvasView, wickdocs.Docs{}),
 		connector.Op("workflow_set_triggers", "Set Triggers",
 			"Replace the entire triggers list. Use workflow_get first to read current triggers before replacing. IMPORTANT: every trigger must include entry_node pointing to the graph node it should start from — omitting it disconnects the trigger from the graph.\n\nTrigger JSON uses Go PascalCase field names. match filter format: picker fields (channel_id, user) use [{\"id\":\"C123\",\"name\":\"#ch\"}] array — NOT plain string arrays. mode field controls filtering: \"all\"=no filter, \"whitelist\"=apply picker lists. match_enabled must be true for filters to apply. Example: {\"Type\":\"channel\",\"ChannelName\":\"slack\",\"Event\":\"message\",\"EntryNode\":\"start\",\"MatchEnabled\":true,\"Match\":{\"mode\":\"whitelist\",\"channel_id\":[{\"id\":\"C123\",\"name\":\"#general\"}]}}",
 			setTriggersInput{}, h.setTriggers, wickdocs.Docs{}),
@@ -161,10 +156,10 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Enable or disable a workflow. Disabled workflows skip cron/channel/webhook but can still be run via workflow_run_now.",
 			toggleInput{}, h.toggle, wickdocs.Docs{}),
 		connector.Op("workflow_publish", "Publish Draft",
-			"Promote workflow.draft.yaml → workflow.yaml and re-register the workflow with the router. Required after any edit (workflow_write_file workflow.yaml, workflow_add_node, workflow_connect, etc.) — edits land in draft until you publish. ALWAYS ask the user before publishing edits.",
+			"Promote the draft body to published and re-register the workflow with the router. Required after any edit (workflow_add_node, workflow_update_node, workflow_connect, workflow_set_triggers, etc.) — edits land in the draft slot until you publish. ALWAYS ask the user before publishing edits.",
 			publishInput{}, h.publish, wickdocs.Docs{}),
 		connector.Op("workflow_discard_draft", "Discard Draft",
-			"Throw away workflow.draft.yaml and revert to the published version.",
+			"Throw away the in-progress draft and revert to the published version.",
 			idInput{}, h.discardDraft, wickdocs.Docs{}),
 		connector.Op("workflow_has_draft", "Has Draft",
 			"Returns {has_draft: bool} — true when there are unpublished edits.",
@@ -183,7 +178,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Resolve a picker source (e.g. slack.channels, slack.users, slack.usergroups) to [{id, name}] items. Use when populating Match filter picker fields so AI passes valid IDs instead of guessing.",
 			pickerResolveInput{}, h.pickerResolve, wickdocs.Docs{}),
 		connector.Op("workflow_describe", "Describe Workflow",
-			"Human-readable summary of a workflow: triggers, graph shape, dependencies (channels/connectors/providers), plus dangling-edge and template-reference warnings. Call before editing to orient yourself; safer than walking the full YAML.",
+			"Human-readable summary of a workflow: triggers, graph shape, dependencies (channels/connectors/providers), plus dangling-edge and template-reference warnings. Call before editing to orient yourself; safer than walking the full JSON.",
 			idInput{}, h.describe, wickdocs.Docs{}),
 		connector.Op("workflow_simulate", "Simulate Workflow",
 			"Dry-run a workflow with a synthetic event. No state persisted, no external calls. Returns per-node outputs + path_taken + final_result. Pass event as JSON string.",
@@ -195,7 +190,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Return which nodes were hit and which are untested across all __tests__/ cases.",
 			idInput{}, h.testCoverage, wickdocs.Docs{}),
 		connector.Op("workflow_record_test", "Record Test from Run",
-			"Generate a __tests__/ fixture by capturing a real run's event + per-node outputs. Returns the fixture YAML path.",
+			"Generate a __tests__/ fixture by capturing a real run's event + per-node outputs. Returns the fixture JSON path.",
 			recordTestInput{}, h.recordTest, wickdocs.Docs{}),
 		connector.Op("workflow_capture_fixture", "Capture Node Fixture",
 			"Snapshot one node's output from a run as a unit test fixture in __tests__/nodes/.",
@@ -239,6 +234,29 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 
 				// ── Input structs ──────────────────────────────────────────────────────
 			}),
+
+		// ── Lock / Guard / Versions / Execute step ───────────────────
+		connector.Op("workflow_lock", "Toggle Canvas Lock",
+			"Freeze or unfreeze the canvas. Locked workflows still run — the engine ignores the flag — but every edit endpoint (save / publish / patch nodes / set triggers) rejects writes with 423 Locked. Use to protect production workflows from accidental edits.",
+			lockInput{}, h.lock, wickdocs.Docs{}),
+		connector.Op("workflow_guard", "Guard Safety Review",
+			"Run the deterministic guard rules (destructive shell, prompt injection, plaintext secret, unparameterized SQL, network allowlist) against the workflow draft. Separate from workflow_validate, which only checks structure (cycles, schema, dangling edges). Returns {ok, violations[], content_hash}. Use before workflow_publish on anything that touches data egress.",
+			idInput{}, h.guardReport, wickdocs.Docs{}),
+		connector.Op("workflow_versions", "List Version History",
+			"List every saved snapshot for a workflow (drafts + publishes), newest first. Each row carries kind (draft|published), message, created_by, created_at. Body bytes are held back — call workflow_version_detail to fetch one. Requires DB-backed storage.",
+			idInput{}, h.versions, wickdocs.Docs{}),
+		connector.Op("workflow_version_detail", "Get Version Detail",
+			"Fetch one snapshot including its full JSON body. Use to diff against the current draft or render in a viewer.",
+			versionDetailInput{}, h.versionDetail, wickdocs.Docs{}),
+		connector.Op("workflow_restore_version", "Restore Version to Draft",
+			"Copy a historic snapshot into the draft slot. Doesn't auto-publish — the user must hit workflow_publish to make the restore live. Returns the new draft snapshot id.",
+			restoreVersionInput{}, h.restoreVersion, wickdocs.Docs{}),
+		connector.Op("workflow_diff_versions", "Compare Two Versions",
+			"Return both snapshots' full body JSON for client-side diff rendering. Use to show what changed between two save points.",
+			diffVersionsInput{}, h.diffVersions, wickdocs.Docs{}),
+		connector.Op("workflow_exec_node", "Execute Single Node",
+			"Run one node in isolation (n8n's 'Execute step' pattern). Nothing persists to runs/. Pass node JSON + optional input + event + node_outputs map so template refs ({{.Node.<upstream>}}) resolve. Returns {ok, latency_ms, output}.",
+			execNodeInput{}, h.execNode, wickdocs.Docs{}),
 
 		// ── Data Tables (n8n-style shared key/value store) ───────────
 		connector.Op("datatable_list", "List Data Tables",
@@ -306,11 +324,6 @@ type skillsInput struct {
 	Provider string `wick:"desc=Provider name (claude/codex/gemini). Omit to list all."`
 }
 
-type readFileInput struct {
-	ID   string `wick:"required;desc=Workflow ID."`
-	Path string `wick:"required;desc=Relative file path inside workflow folder. Example: workflow.yaml or nodes/prompt.md"`
-}
-
 type createInput struct {
 	Name     string `wick:"required;desc=Display name for the workflow."`
 	Template string `wick:"desc=Starter template: empty (default), support-triage, incident-response, daily-digest."`
@@ -350,17 +363,6 @@ type dtFilterInput struct {
 	Conditions string `wick:"textarea;desc=Optional condition JSON array (n8n parity ops). Wins over Where when both set."`
 }
 
-type writeFileInput struct {
-	ID      string `wick:"required;desc=Workflow ID."`
-	Path    string `wick:"required;desc=Relative path inside workflow folder. Example: workflow.yaml"`
-	Content string `wick:"textarea;required;desc=File content (full replace — not a patch)."`
-}
-
-type deleteFileInput struct {
-	ID   string `wick:"required;desc=Workflow ID."`
-	Path string `wick:"required;desc=Relative file path to delete."`
-}
-
 type addNodeInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
 	Node string `wick:"textarea;required;desc=Node definition as JSON. Must include type + label. ID is auto-minted (UUID) when omitted — pass label (lowercase a-z/digits/underscore) as the user-facing handle. See workflow_node_types for schemas."`
@@ -395,6 +397,16 @@ type moveNodeInput struct {
 	NodeID string `wick:"required;desc=Node ID."`
 	X      int    `wick:"required;desc=Canvas X position in pixels."`
 	Y      int    `wick:"required;desc=Canvas Y position in pixels."`
+}
+
+type moveNodesInput struct {
+	ID    string `wick:"required;desc=Workflow ID."`
+	Moves string `wick:"required;textarea;desc=JSON array of moves: [{\"node_id\":\"abc\",\"x\":280,\"y\":160}, ...]. All nodes moved in one draft mutation."`
+}
+
+type autoLayoutInput struct {
+	ID      string `wick:"required;desc=Workflow ID."`
+	NodeIDs string `wick:"textarea;desc=Optional JSON array of node IDs to re-layout. Empty = lay out all nodes + triggers."`
 }
 
 type setTriggersInput struct {
@@ -486,6 +498,36 @@ type saveTestCaseInput struct {
 type deleteTestCaseInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
 	Name string `wick:"required;desc=Test case name (without .json)."`
+}
+
+type lockInput struct {
+	ID     string `wick:"required;desc=Workflow ID."`
+	Locked bool   `wick:"desc=true to freeze edits, false to unlock."`
+}
+
+type versionDetailInput struct {
+	ID        string `wick:"required;desc=Workflow ID — used to assert the snapshot belongs to this workflow."`
+	VersionID int    `wick:"required;number;key=version_id;desc=Snapshot ID from workflow_versions."`
+}
+
+type restoreVersionInput struct {
+	ID        string `wick:"required;desc=Workflow ID."`
+	VersionID int    `wick:"required;number;key=version_id;desc=Snapshot ID to copy into the draft slot."`
+}
+
+type diffVersionsInput struct {
+	ID   string `wick:"required;desc=Workflow ID."`
+	From int    `wick:"required;number;desc=Older snapshot ID."`
+	To   int    `wick:"required;number;desc=Newer snapshot ID."`
+}
+
+type execNodeInput struct {
+	ID          string `wick:"required;desc=Workflow ID. Engine loads the workflow shell + env for context."`
+	Node        string `wick:"textarea;required;desc=Node JSON object (single wf.Node) — must include type. ID auto-minted when omitted."`
+	Input       string `wick:"textarea;desc=Optional input map as JSON. Exposed as .Input and as the parent_id alias in the run context."`
+	Event       string `wick:"textarea;desc=Optional event envelope as JSON (Replay → Execute pattern). When empty a synthetic manual event wrapping Input is used."`
+	ParentID    string `wick:"key=parent_id;desc=Optional parent node id to alias the input under for {{.Node.<parent>}} refs."`
+	NodeOutputs string `wick:"textarea;key=node_outputs;desc=Optional map of upstream node outputs as JSON (id → flat map). Powers template refs to upstream nodes."`
 }
 
 // ── Handler struct ────────────────────────────────────────────────────
