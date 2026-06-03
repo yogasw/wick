@@ -64,6 +64,10 @@ func providersPage(c *tool.Ctx) {
 	var spawns []provider.SpawnLogFile
 	hasNext := false
 	if globalSpawnLog != nil {
+		// Enforce the retention cap on view so the list never grows past
+		// MaxSpawnLogs even for spawns logged before pruning was added
+		// (prune otherwise only fires on a new spawn).
+		_ = globalSpawnLog.Prune(provider.MaxSpawnLogs)
 		all, err := globalSpawnLog.List("", "", "")
 		if err != nil {
 			log.Ctx(c.Context()).Warn().Msgf("providers spawns list: %s", err.Error())

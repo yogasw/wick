@@ -294,6 +294,9 @@ func NewServer() *Server {
 	}
 	agentsBcast := agentstool.NewBroadcaster()
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
+	// Trim any backlog of spawn logs from before pruning existed so the
+	// dir is bounded immediately, not only after the next spawn.
+	_ = agentsSpawnLogger.Prune(provider.MaxSpawnLogs)
 
 	// One-shot migration: the deprecated agents.bypass_permissions checkbox
 	// folded into the new GateConfig.PermissionMode dropdown. When the
