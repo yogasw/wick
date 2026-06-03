@@ -882,11 +882,20 @@ func providerSpawnDetail(c *tool.Ctx) {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Flag a stale spawn whose session has since been deleted, so the
+	// detail page can warn that the cwd path no longer exists.
+	sessionDeleted := false
+	if meta.SessionID != "" {
+		if _, ok := globalMgr.Registry().Session(meta.SessionID); !ok {
+			sessionDeleted = true
+		}
+	}
 	c.HTML(view.ProviderSpawnDetail(view.ProviderSpawnDetailVM{
-		Layout: sidebarVM(c, "providers", ""),
-		Base:   c.Base(),
-		File:   meta,
-		Events: events,
+		Layout:         sidebarVM(c, "providers", ""),
+		Base:           c.Base(),
+		File:           meta,
+		Events:         events,
+		SessionDeleted: sessionDeleted,
 	}))
 }
 

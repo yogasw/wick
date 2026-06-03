@@ -1609,6 +1609,83 @@
       });
     });
 
+    // ── Queue panel: search filter + select-all + bulk kill ───────────
+    (function () {
+      var panel = document.querySelector("[data-queue-panel]");
+      if (!panel) return;
+      var b = panel.dataset.base || resolveBase();
+      var search = panel.querySelector("[data-queue-search]");
+      var checkAll = panel.querySelector("[data-queue-check-all]");
+      var killBtn = panel.querySelector("[data-queue-kill-selected]");
+      var countEl = panel.querySelector("[data-queue-selected-count]");
+      var emptyEl = panel.querySelector("[data-queue-empty]");
+      var rows = function () {
+        return Array.prototype.slice.call(panel.querySelectorAll("[data-queue-row]"));
+      };
+      function visibleRows() {
+        return rows().filter(function (r) { return r.style.display !== "none"; });
+      }
+      function checkedRows() {
+        return rows().filter(function (r) {
+          var c = r.querySelector("[data-queue-check]");
+          return c && c.checked && r.style.display !== "none";
+        });
+      }
+      function refresh() {
+        var sel = checkedRows();
+        if (countEl) countEl.textContent = String(sel.length);
+        if (killBtn) killBtn.disabled = sel.length === 0;
+        if (checkAll) {
+          var vis = visibleRows();
+          checkAll.checked = vis.length > 0 && sel.length === vis.length;
+          checkAll.indeterminate = sel.length > 0 && sel.length < vis.length;
+        }
+      }
+      if (search) {
+        search.addEventListener("input", function () {
+          var q = search.value.trim().toLowerCase();
+          var shown = 0;
+          rows().forEach(function (r) {
+            var t = (r.dataset.queueSearchText || "").toLowerCase();
+            var ok = !q || t.indexOf(q) >= 0;
+            r.style.display = ok ? "" : "none";
+            if (!ok) {
+              var c = r.querySelector("[data-queue-check]");
+              if (c) c.checked = false; // don't kill filtered-out rows
+            } else { shown++; }
+          });
+          if (emptyEl) emptyEl.classList.toggle("hidden", shown > 0);
+          refresh();
+        });
+      }
+      if (checkAll) {
+        checkAll.addEventListener("change", function () {
+          visibleRows().forEach(function (r) {
+            var c = r.querySelector("[data-queue-check]");
+            if (c) c.checked = checkAll.checked;
+          });
+          refresh();
+        });
+      }
+      panel.querySelectorAll("[data-queue-check]").forEach(function (c) {
+        c.addEventListener("change", refresh);
+      });
+      if (killBtn) {
+        killBtn.addEventListener("click", function () {
+          var sel = checkedRows();
+          if (!sel.length || !b) return;
+          confirmAt(killBtn, "Kill " + sel.length + " queued session(s)? They won't execute.", { confirmLabel: "Kill" }).then(function (ok) {
+            if (!ok) return;
+            killBtn.disabled = true;
+            Promise.all(sel.map(function (r) {
+              return fetch(b + "/sessions/" + encodeURIComponent(r.dataset.queueId) + "/dequeue", { method: "POST" }).catch(function () {});
+            })).then(function () { location.reload(); });
+          });
+        });
+      }
+      refresh();
+    })();
+
     // ── Pin project as personal default (1 per user, UserMetadata) ────
     document.querySelectorAll("[data-pin-project]").forEach(function (btn) {
       btn.addEventListener("click", function (e) {

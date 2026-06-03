@@ -109,6 +109,10 @@ type QueuedEntryVM struct {
 	SessionID string
 	AgentName string
 	WaitingMs int64
+	// Label (first user message) + Project name make the queue list
+	// readable + searchable on the Overview page.
+	Label   string
+	Project string
 }
 
 // SessionsListVM holds data for the Sessions list page. Lifecycle is
@@ -560,4 +564,8 @@ type ProviderSpawnDetailVM struct {
 	Base   string
 	File   provider.SpawnLogFile
 	Events []provider.SpawnEvent
+	// SessionDeleted is true when the spawn's session no longer exists
+	// (deleted since the spawn ran) — the detail page shows a notice and
+	// the cwd path is stale.
+	SessionDeleted bool
 }

@@ -993,6 +993,36 @@ func (p *Pool) Dequeue(sessionID, agentName string) int {
 	return removed
 }
 
+// DequeueSession drops every queued request for the session regardless
+// of agent name, and clears its buffered/pending input so the session
+// won't execute later (even across a restart). Returns the number of
+// queue entries removed. Use this from the operator UI where the caller
+// only knows the session id — Dequeue requires an exact agent match,
+// which the UI often can't supply.
+func (p *Pool) DequeueSession(sessionID string) int {
+	p.mu.Lock()
+	out := p.queue[:0]
+	removed := 0
+	for _, q := range p.queue {
+		if q.sessionID == sessionID {
+			removed++
+			continue
+		}
+		out = append(out, q)
+	}
+	p.queue = out
+	buf := p.buffers[sessionID]
+	p.mu.Unlock()
+	// Clear pending input so a freed slot / restart doesn't replay it.
+	if buf != nil {
+		_, _ = buf.Drain()
+	} else if s, err := session.Load(p.cfg.Layout, sessionID); err == nil && len(s.Meta.PendingInput) > 0 {
+		s.Meta.PendingInput = nil
+		_ = session.SaveMeta(p.cfg.Layout, sessionID, s.Meta)
+	}
+	return removed
+}
+
 // HandleExit is the public hook the factory wires into agent.OnExit.
 // It defers to the unexported onAgentExit but accepts the reason so
 // future code can branch (e.g. don't grant queue if the previous exit

@@ -623,12 +623,21 @@ func overviewPage(c *tool.Ctx) {
 	}
 	queue := globalPool.QueueSnapshot()
 	now := time.Now()
+	projects := globalMgr.Registry().Projects()
 	queued := make([]view.QueuedEntryVM, len(queue))
 	for i, q := range queue {
+		projName := ""
+		if s, ok := globalMgr.Registry().Session(q.SessionID); ok && s.Meta.ProjectID != "" {
+			if p, ok := projects[s.Meta.ProjectID]; ok {
+				projName = p.Meta.Name
+			}
+		}
 		queued[i] = view.QueuedEntryVM{
 			SessionID: q.SessionID,
 			AgentName: q.AgentName,
 			WaitingMs: now.Sub(q.Enqueued).Milliseconds(),
+			Label:     loadFirstUserMessage(globalLayout, q.SessionID, 60),
+			Project:   projName,
 		}
 	}
 	c.HTML(view.Overview(view.OverviewVM{
@@ -1075,21 +1084,23 @@ func dequeueAgent(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	agentName := sess.Meta.ActiveAgent
-	if agentName == "" && len(sess.Agents) > 0 {
-		agentName = sess.Agents[0].Name
-	}
-	removed := globalPool.Dequeue(id, agentName)
-	_ = session.SaveMeta(globalLayout, id, session.Meta{
-		ProjectID:   sess.Meta.ProjectID,
-		Origin:      sess.Meta.Origin,
-		ChannelID:   sess.Meta.ChannelID,
-		ActiveAgent: sess.Meta.ActiveAgent,
-		Status:      session.StatusIdle,
-		CreatedAt:   sess.Meta.CreatedAt,
-		LastActive:  time.Now().UTC(),
-	})
+	// Remove every queued entry for this session (any agent) + clear its
+	// buffered input so it won't execute. Preserve the rest of meta.
+	removed := globalPool.DequeueSession(id)
+	meta := sess.Meta
+	meta.Status = session.StatusIdle
+	meta.PendingInput = nil
+	meta.LastActive = time.Now().UTC()
+	_ = session.SaveMeta(globalLayout, id, meta)
+	globalMgr.Register(sessionWithMeta(sess, meta))
 	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
+}
+
+// sessionWithMeta returns a copy of sess with replaced meta, for
+// refreshing the registry cache after a meta-only mutation.
+func sessionWithMeta(sess session.Session, meta session.Meta) session.Session {
+	sess.Meta = meta
+	return sess
 }
 
 func killAgent(c *tool.Ctx) {
