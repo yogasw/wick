@@ -21,28 +21,28 @@
   }
 
   function pillClass(event: string | undefined): string {
-    if (!event) return "bg-slate-500/15 text-slate-700 dark:text-slate-300";
+    if (!event) return "bg-slate-500/15 text-black-500 dark:text-black-600";
     if (event.includes("completed")) return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
     if (event.includes("failed")) return "bg-rose-500/15 text-rose-700 dark:text-rose-300";
     if (event.includes("started")) return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
-    return "bg-slate-500/15 text-slate-700 dark:text-slate-300";
+    return "bg-slate-500/15 text-black-500 dark:text-black-600";
   }
 </script>
 
 <section>
-  <div class="text-[11px] font-semibold tracking-wider text-slate-500 mb-2 flex items-center gap-2">
+  <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2 flex items-center gap-2">
     <span>EVENTS</span>
-    <span class="text-slate-400">{events.length}</span>
+    <span class="text-black-700 dark:text-black-500">{events.length}</span>
   </div>
   {#if events.length === 0}
-    <p class="text-xs text-slate-500 italic">No events recorded.</p>
+    <p class="text-xs text-black-700 dark:text-black-600 italic">No events recorded.</p>
   {:else}
-    <ul class="divide-y divide-slate-200 dark:divide-slate-700 text-xs font-mono">
+    <ul class="divide-y divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 text-xs font-mono">
       {#each events as ev, i (i)}
         <li class="flex items-center gap-2 py-1.5">
-          <span class="text-slate-500 tabular-nums shrink-0">{fmtTimeOnly(ev.ts)}</span>
+          <span class="text-black-700 dark:text-black-600 tabular-nums shrink-0">{fmtTimeOnly(ev.ts)}</span>
           <span class={"px-1.5 py-0.5 rounded text-[10px] " + pillClass(ev.event)}>{ev.event}</span>
-          {#if ev.node}<span class="text-slate-400 truncate flex-1">{labelFor(ev.node)}</span>{/if}
+          {#if ev.node}<span class="text-black-700 dark:text-black-500 truncate flex-1">{labelFor(ev.node)}</span>{/if}
         </li>
       {/each}
     </ul>

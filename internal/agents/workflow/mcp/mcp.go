@@ -260,12 +260,20 @@ func (m *Ops) List() ([]Summary, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Summary{
-			ID:      w.ID,
-			Name:    w.Name,
-			Enabled: w.Enabled,
-			Version: w.Version,
-		})
+		s := Summary{
+			ID:        w.ID,
+			Name:      w.Name,
+			Enabled:   w.Enabled,
+			Version:   w.Version,
+			CreatedAt: w.CreatedAt,
+		}
+		// Use draft timestamp as UpdatedAt when draft exists, else CreatedAt.
+		if draft, err := m.Service.LoadDraft(id); err == nil && !draft.CreatedAt.IsZero() {
+			s.UpdatedAt = draft.CreatedAt
+		} else {
+			s.UpdatedAt = w.CreatedAt
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }
@@ -486,10 +494,12 @@ func (m *Ops) GetRunSummaries(id string, page, pageSize int) ([]RunSummary, bool
 
 // Summary is the row shape for `workflow_list`.
 type Summary struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
-	Version int    `json:"version"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
 // NodeTypeInfo is one row of the node-type catalog.

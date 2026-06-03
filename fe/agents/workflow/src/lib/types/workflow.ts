@@ -161,7 +161,7 @@ export type Node = {
   // (workflow_run / workflow_global / new). `session_id` is a literal
   // or template string that wins over preset when set. `workspace`
   // overrides the per-run workspace.
-  preset?: string;
+  // (preset field shared with classify/agent above)
 
   // end
   result?: string;

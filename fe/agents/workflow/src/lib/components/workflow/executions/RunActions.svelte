@@ -43,7 +43,7 @@
 <div class="flex items-center gap-1.5 text-xs">
   <button
     type="button"
-    class="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"
     onclick={copyID}
     title="Copy run id to clipboard"
   >
@@ -60,7 +60,7 @@
   </button>
   <button
     type="button"
-    class="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"
     onclick={exportJSON}
     disabled={!runDetail}
     title="Download the full run state as run-<id>.json"

@@ -20,7 +20,7 @@
 >
   {#snippet body()}
     {#if rules.length === 0}
-      <div class="italic text-black-500 dark:text-white-700">no rules</div>
+      <div class="italic text-black-500 dark:text-white-100-700">no rules</div>
     {:else}
       <ul class="space-y-0.5">
         {#each rules.slice(0, 3) as r}

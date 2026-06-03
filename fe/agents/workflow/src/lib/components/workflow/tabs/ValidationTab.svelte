@@ -43,7 +43,7 @@
 </script>
 
 {#if !$validationReport}
-  <p class="text-xs text-slate-500 dark:text-slate-400 italic">
+  <p class="text-xs text-black-700 dark:text-black-600 italic">
     Save the draft to run validation. Errors here block publish.
   </p>
 {:else if $validationErrorCount === 0 && $validationWarningCount === 0}
@@ -56,7 +56,7 @@
       <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">
         ✕ {$validationErrorCount} {$validationErrorCount === 1 ? "error" : "errors"} — Publish blocked
       </div>
-      <div class="text-[11px] text-slate-500 dark:text-slate-400">
+      <div class="text-[11px] text-black-700 dark:text-black-600">
         Draft is saved — fix the errors below before publishing.
       </div>
     </div>
@@ -69,9 +69,9 @@
             <div class="font-mono text-[11px] text-rose-700 dark:text-rose-300 break-all">
               {iss.Path ?? iss.node ?? "global"}
             </div>
-            <div class="text-slate-700 dark:text-slate-200">{iss.Message}</div>
+            <div class="text-black-500 dark:text-white-100">{iss.Message}</div>
             {#if iss.hint}
-              <div class="text-[11px] italic text-slate-500 dark:text-slate-400 mt-0.5">
+              <div class="text-[11px] italic text-black-700 dark:text-black-600 mt-0.5">
                 {iss.hint}
               </div>
             {/if}
@@ -94,7 +94,7 @@
       <div class="text-xs font-semibold text-amber-600 dark:text-amber-400">
         ⚠ {$validationWarningCount} {$validationWarningCount === 1 ? "warning" : "warnings"}
       </div>
-      <div class="text-[11px] text-slate-500 dark:text-slate-400">
+      <div class="text-[11px] text-black-700 dark:text-black-600">
         Warnings do not block publish but are worth a look.
       </div>
     </div>
@@ -107,9 +107,9 @@
             <div class="font-mono text-[11px] text-amber-700 dark:text-amber-300 break-all">
               {iss.Path ?? iss.node ?? "global"}
             </div>
-            <div class="text-slate-700 dark:text-slate-200">{iss.Message}</div>
+            <div class="text-black-500 dark:text-white-100">{iss.Message}</div>
             {#if iss.hint}
-              <div class="text-[11px] italic text-slate-500 dark:text-slate-400 mt-0.5">
+              <div class="text-[11px] italic text-black-700 dark:text-black-600 mt-0.5">
                 {iss.hint}
               </div>
             {/if}

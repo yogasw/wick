@@ -71,7 +71,7 @@
   <input
     bind:this={inputEl}
     type="text"
-    class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px]"
+    class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
     {placeholder}
     {value}
     oninput={onInput}
@@ -82,14 +82,14 @@
   />
   {#if open && filtered.length > 0}
     <div
-      class="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg"
+      class="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-800 shadow-lg"
     >
       {#each filtered as name, i}
         <button
           type="button"
-          class="block w-full px-3 py-1.5 text-left font-mono text-[12px] hover:bg-emerald-50 dark:hover:bg-slate-800"
+          class="block w-full px-3 py-1.5 text-left font-mono text-[12px] hover:bg-emerald-50 dark:hover:bg-white-200 dark:bg-navy-700"
           class:bg-emerald-50={highlight === i}
-          class:dark:bg-slate-800={highlight === i}
+          class:bg-navy-700={highlight === i}
           onmousedown={(e) => { e.preventDefault(); commit(name); }}
         >{name}</button>
       {/each}

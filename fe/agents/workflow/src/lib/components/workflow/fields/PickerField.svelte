@@ -126,7 +126,7 @@
   <!-- Search input + dropdown. -->
   <div class="relative">
     <input
-      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm"
+      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 text-sm"
       type="search"
       {placeholder}
       bind:value={query}
@@ -134,29 +134,29 @@
       onblur={() => setTimeout(() => (open = false), 150)}
     />
     {#if open && (loading || results.length > 0)}
-      <div class="absolute left-0 right-0 top-full mt-1 z-30 max-h-60 overflow-y-auto rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
+      <div class="absolute left-0 right-0 top-full mt-1 z-30 max-h-60 overflow-y-auto rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 shadow-lg">
         {#if loading}
-          <div class="px-3 py-2 text-[11px] italic text-slate-500">Searching…</div>
+          <div class="px-3 py-2 text-[11px] italic text-black-700 dark:text-black-600">Searching…</div>
         {/if}
         {#each results as r (r.id)}
           <button
             type="button"
-            class="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-slate-700"
+            class="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
             onclick={() => addChip(r)}
             disabled={chips.some((c) => c.id === r.id)}
           >
             <span class="text-sm">{r.name}</span>
-            <span class="font-mono text-[10px] text-slate-500">{r.id}</span>
+            <span class="font-mono text-[10px] text-black-700 dark:text-black-600">{r.id}</span>
           </button>
         {/each}
         {#if !loading && results.length === 0 && query}
-          <div class="px-3 py-2 text-[11px] italic text-slate-500">No matches for "{query}"</div>
+          <div class="px-3 py-2 text-[11px] italic text-black-700 dark:text-black-600">No matches for "{query}"</div>
         {/if}
       </div>
     {/if}
   </div>
 
   {#if helper}
-    <span class="text-[11px] text-slate-500 dark:text-slate-400">{helper}</span>
+    <span class="text-[11px] text-black-700 dark:text-black-600">{helper}</span>
   {/if}
 </div>

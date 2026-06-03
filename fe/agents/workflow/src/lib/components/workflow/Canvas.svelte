@@ -990,14 +990,16 @@
             {@const pts = triggerEdgePoints(trig.id, trig.entry_node)}
             {#if pts}
               {@const mid = midPoint(pts)}
-              <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-slate-400 dark:text-slate-600" />
+              <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-black-700 dark:text-black-600" />
               <!-- Wide invisible hit path widens right-click target — bare
                    stroke-width=2 is too thin to land on reliably. -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
               <path
                 d={bezier(pts)}
                 fill="none"
                 stroke="transparent"
                 stroke-width="14"
+                role="presentation"
                 style="pointer-events: stroke; cursor: context-menu;"
                 oncontextmenu={(e) => openCtxMenu(e, { kind: "trigger-edge", triggerID: trig.id! })}
               />
@@ -1009,12 +1011,14 @@
           {@const pts = nodeEdgePoints(e.from, e.to)}
           {#if pts}
             {@const mid = midPoint(pts)}
-            <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-slate-400 dark:text-slate-600" />
+            <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-black-700 dark:text-black-600" />
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <path
               d={bezier(pts)}
               fill="none"
               stroke="transparent"
               stroke-width="14"
+              role="presentation"
               style="pointer-events: stroke; cursor: context-menu;"
               oncontextmenu={(ev) => openCtxMenu(ev, { kind: "edge", from: e.from, to: e.to, caseKey: e.case })}
             />
@@ -1054,7 +1058,7 @@
                  hover reveals what's wrong without leaving the canvas. -->
             <button
               type="button"
-              class="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full text-white text-[11px] font-bold flex items-center justify-center shadow-md ring-2 ring-white dark:ring-slate-900"
+              class="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full text-white-100 text-[11px] font-bold flex items-center justify-center shadow-md ring-2 ring-white dark:ring-white-400 dark:ring-navy-500"
               class:bg-rose-500={issue.kind === "error"}
               class:hover:bg-rose-600={issue.kind === "error"}
               class:bg-amber-500={issue.kind === "warning"}
@@ -1085,9 +1089,9 @@
             style="background:rgba(250,204,21,0.4)"
           ></button>
           {#if status === "success"}
-            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-emerald-500 text-white text-[10px] flex items-center justify-center shadow">✓</div>
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-emerald-500 text-white-100 text-[10px] flex items-center justify-center shadow">✓</div>
           {:else if status === "failed"}
-            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-rose-500 text-white text-[10px] flex items-center justify-center shadow">✗</div>
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-rose-500 text-white-100 text-[10px] flex items-center justify-center shadow">✗</div>
           {/if}
         </div>
       {/each}
@@ -1166,11 +1170,11 @@
                operators see when their manual fire actually kicked off
                + how it ended. Auto-clears 5s after completion. -->
           {#if trigStatus === "running"}
-            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-500 text-white text-[10px] flex items-center justify-center shadow animate-pulse" title="Running…">⟳</div>
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-500 text-white-100 text-[10px] flex items-center justify-center shadow animate-pulse" title="Running…">⟳</div>
           {:else if trigStatus === "success"}
-            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-emerald-500 text-white text-[10px] flex items-center justify-center shadow" title="Last run: success">✓</div>
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-emerald-500 text-white-100 text-[10px] flex items-center justify-center shadow" title="Last run: success">✓</div>
           {:else if trigStatus === "failed"}
-            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-rose-500 text-white text-[10px] flex items-center justify-center shadow" title="Last run: failed">✗</div>
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-rose-500 text-white-100 text-[10px] flex items-center justify-center shadow" title="Last run: failed">✗</div>
           {/if}
           <!-- Trigger output port — transparent hit target over
                BaseNode's white circle (BaseNode is shared with regular
@@ -1185,7 +1189,7 @@
         </div>
       {/each}
     {:else}
-      <div class="absolute inset-0 flex items-center justify-center text-black-500 dark:text-white-700 text-sm">
+      <div class="absolute inset-0 flex items-center justify-center text-black-500 dark:text-white-100-700 text-sm">
         Load a workflow to start editing.
       </div>
     {/if}
@@ -1195,7 +1199,7 @@
        out the state and offers a one-click unlock so the operator
        doesn't have to hunt for the lock icon on the left rail. -->
   {#if locked}
-    <div class="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/95 text-white text-xs font-medium shadow-lg">
+    <div class="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/95 text-white-100 text-xs font-medium shadow-lg">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       Canvas locked
       <button
@@ -1211,13 +1215,13 @@
        across node ids + types once the palette grows enough to need it. -->
   <div class="absolute top-3 right-3 flex flex-col gap-1.5">
     <button
-      class="h-9 w-9 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white shadow flex items-center justify-center text-lg font-semibold"
+      class="h-9 w-9 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white-100 shadow flex items-center justify-center text-lg font-semibold"
       onclick={() => paletteOpen.update(v => !v)}
       title="Add node"
       aria-label="Add node"
     >+</button>
     <button
-      class="h-9 w-9 rounded-full bg-slate-700/80 hover:bg-slate-700 text-white shadow flex items-center justify-center"
+      class="h-9 w-9 rounded-full bg-white-100 dark:bg-navy-600/80 border border-white-400 dark:border-navy-500 hover:bg-white-200 dark:hover:bg-navy-600 text-black-800 dark:text-white-100 shadow-sm flex items-center justify-center"
       onclick={() => searchOpen.set(true)}
       title="Search workflow (Ctrl+K)"
       aria-label="Search workflow"
@@ -1233,10 +1237,12 @@
     <button
       class="h-9 w-9 rounded shadow flex items-center justify-center transition-colors"
       class:bg-amber-500={locked}
-      class:text-white={locked}
-      class:bg-slate-800={!locked}
-      class:text-amber-400={!locked}
-      class:hover:bg-slate-700={!locked}
+      class:text-white-100={locked}
+      class:bg-white-100={!locked}
+      class:border={!locked}
+      class:border-white-300={!locked}
+      class:text-black-700={!locked}
+      class:hover:bg-white-200={(!locked)}
       class:hover:bg-amber-600={locked}
       onclick={toggleLock}
       title={locked ? "Unlock canvas" : "Lock canvas (blocks drag, drop, connect)"}
@@ -1251,14 +1257,14 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v3"/></svg>
       {/if}
     </button>
-    <button class="h-9 w-9 rounded bg-slate-800/80 hover:bg-slate-800 text-slate-100 shadow flex items-center justify-center" title="Auto-format (layered T→B)" aria-label="Auto-format" onclick={autoFormat}>
+    <button class="h-9 w-9 rounded bg-white-100 dark:bg-navy-700/80 border border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-700 text-black-800 dark:text-white-100 shadow-sm flex items-center justify-center" title="Auto-format (layered T→B)" aria-label="Auto-format" onclick={autoFormat}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 10l7 7 7-7"/></svg>
     </button>
-    <button class="h-9 w-9 rounded bg-slate-800/80 text-slate-100 shadow flex items-center justify-center" title="Fit to view" aria-label="Fit to view" onclick={() => { zoom = 1; pan = { x: 0, y: 0 }; }}>
+    <button class="h-9 w-9 rounded bg-white-100 dark:bg-navy-700/80 border border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-700 text-black-800 dark:text-white-100 shadow-sm flex items-center justify-center" title="Fit to view" aria-label="Fit to view" onclick={() => { zoom = 1; pan = { x: 0, y: 0 }; }}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
     </button>
-    <button class="h-9 w-9 rounded bg-slate-800/80 text-slate-100 shadow flex items-center justify-center text-base" onclick={() => (zoom = Math.max(0.25, zoom / 1.1))} title="Zoom out" aria-label="Zoom out">−</button>
-    <button class="h-9 w-9 rounded bg-slate-800/80 text-slate-100 shadow flex items-center justify-center text-base" onclick={() => (zoom = Math.min(2.5, zoom * 1.1))} title="Zoom in" aria-label="Zoom in">+</button>
+    <button class="h-9 w-9 rounded bg-white-100 dark:bg-navy-700/80 border border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-700 text-black-800 dark:text-white-100 shadow-sm flex items-center justify-center text-base" onclick={() => (zoom = Math.max(0.25, zoom / 1.1))} title="Zoom out" aria-label="Zoom out">−</button>
+    <button class="h-9 w-9 rounded bg-white-100 dark:bg-navy-700/80 border border-white-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-700 text-black-800 dark:text-white-100 shadow-sm flex items-center justify-center text-base" onclick={() => (zoom = Math.min(2.5, zoom * 1.1))} title="Zoom in" aria-label="Zoom in">+</button>
   </div>
 
   <!-- Bottom-center: Execute workflow CTA + trigger picker popup.
@@ -1268,33 +1274,46 @@
        from CI-style "Run with config X" dropdowns. -->
   <div class="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
     {#if triggerPickerOpen}
-      <div class="rounded-lg bg-slate-900/95 border border-slate-700 shadow-xl p-3 min-w-[280px] text-xs">
-        <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Pin trigger to execute</div>
+      <div class="rounded-xl bg-white-100 dark:bg-navy-800 border border-white-300 dark:border-navy-600 shadow-xl overflow-hidden min-w-[240px]">
+        <div class="px-4 py-2.5 border-b border-white-300 dark:border-navy-600">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-black-700 dark:text-black-600">Select trigger</span>
+        </div>
         {#each $draftWorkflow?.triggers ?? [] as t}
           {@const isPinned = t.id === $pinnedTriggerID}
           {@const entryNode = ($draftWorkflow?.graph?.nodes ?? []).find((n) => n.id === t.entry_node)}
-          {@const entryLabel = entryNode?.label || t.entry_node || "?"}
+          {@const entryLabel = entryNode?.label || "?"}
           <button
-            class="w-full flex items-center gap-2 px-2 py-2 rounded text-left hover:bg-slate-800 text-slate-100"
-            class:bg-slate-800={isPinned}
+            class="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors text-sm"
+            class:bg-white-200={isPinned}
+            class:dark:bg-navy-700={isPinned}
+            class:hover:bg-white-200={!isPinned}
+            class:dark:hover:bg-navy-700={!isPinned}
             onclick={() => pinTrigger(t.id)}
-            title="Pin this trigger — the Execute button will fire it"
           >
-            <span class="px-1.5 py-0.5 rounded bg-slate-700 text-[10px] uppercase tracking-wider shrink-0">{t.type}</span>
-            <span class="font-mono text-[11px] truncate flex-1">{t.label || t.id || "—"}</span>
-            <span class="text-slate-500">→</span>
-            <span class="font-mono text-[10px] text-slate-500 truncate">{entryLabel}</span>
+            <!-- Type pill -->
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-white-300 dark:bg-navy-600 text-[10px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-500 shrink-0">
+              {t.type}
+            </span>
+            <!-- Label -->
+            <span class="flex-1 truncate text-black-800 dark:text-white-100 font-medium text-xs">
+              {t.label || t.id || "—"}
+            </span>
+            <!-- Entry node chip -->
+            {#if entryNode}
+              <span class="text-[11px] text-black-600 dark:text-black-600 shrink-0">→ {entryLabel}</span>
+            {/if}
+            <!-- Pinned indicator -->
             {#if isPinned}
-              <span class="text-emerald-400 shrink-0" title="Pinned" aria-label="Pinned">✓</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-green-500 shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
             {/if}
           </button>
         {/each}
         {#if ($draftWorkflow?.triggers ?? []).length === 0}
-          <p class="text-slate-500 italic px-2 py-1">No triggers defined.</p>
+          <p class="px-4 py-3 text-xs text-black-700 dark:text-black-600 italic">No triggers defined.</p>
         {/if}
       </div>
     {/if}
-    <div class="flex items-stretch rounded-full bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold shadow-lg overflow-hidden">
+    <div class="flex items-stretch rounded-full bg-rose-500 hover:bg-rose-600 text-white-100 text-sm font-medium shadow-lg overflow-hidden">
       <button
         class="flex items-center gap-2 pl-5 pr-3 py-2 disabled:opacity-60 disabled:cursor-not-allowed"
         onclick={executePinned}
@@ -1302,18 +1321,15 @@
         title={pinnedTrigger ? `Execute: ${pinnedTrigger.label || pinnedTrigger.id}` : "Pin a trigger from the dropdown to enable Execute"}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 2v7.3M14 9.3V2M8.5 2h7M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>
-        <span>Execute</span>
-        {#if pinnedTrigger}
-          <span class="font-mono text-xs text-white/80 truncate max-w-[160px]">
-            {pinnedTrigger.label || pinnedTrigger.id}
-          </span>
+        {#if pinnedTrigger?.label}
+          <span class="truncate max-w-[200px]">Execute <span class="opacity-75">{pinnedTrigger.label}</span></span>
         {:else}
-          <span class="text-xs text-white/80">— pick trigger</span>
+          <span>Execute</span>
         {/if}
       </button>
       {#if ($draftWorkflow?.triggers?.length ?? 0) > 1}
         <button
-          class="px-3 border-l border-rose-400/40 hover:bg-rose-700"
+          class="px-3 border-l border-rose-400/40 hover:bg-rose-600"
           onclick={() => (triggerPickerOpen = !triggerPickerOpen)}
           title="Pin a different trigger"
           aria-label="Pin a different trigger"
@@ -1323,7 +1339,7 @@
   </div>
 
   <!-- Bottom-right: zoom badge. -->
-  <div class="absolute bottom-4 right-4 text-[10px] text-slate-400 tabular-nums select-none">
+  <div class="absolute bottom-4 right-4 text-[10px] text-black-700 dark:text-black-500 tabular-nums select-none">
     {Math.round(zoom * 100)}%
   </div>
 
@@ -1340,7 +1356,7 @@
   {#if lockedHint}
     {#key lockedHint.key}
       <div
-        class="wf-locked-hint fixed z-[90] px-2 py-1 rounded-full bg-amber-500 text-white text-[11px] font-medium shadow-lg flex items-center gap-1.5"
+        class="wf-locked-hint fixed z-[90] px-2 py-1 rounded-full bg-amber-500 text-white-100 text-[11px] font-medium shadow-lg flex items-center gap-1.5"
         style="left:{lockedHint.x}px;top:{lockedHint.y}px;"
       >
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -1364,10 +1380,11 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed z-[80] min-w-[140px] rounded-md border border-slate-200 dark:border-slate-700
-           bg-white dark:bg-slate-800 shadow-lg py-1 text-sm"
+    class="fixed z-[80] min-w-[140px] rounded-md border border-slate-200 dark:border-navy-600
+           bg-white dark:bg-navy-700 shadow-lg py-1 text-sm"
     style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;"
     role="menu"
+    tabindex="-1"
     onclick={(e) => e.stopPropagation()}
     oncontextmenu={(e) => e.preventDefault()}
   >

@@ -19,7 +19,7 @@
   outputs={Math.max(1, cases.length)}
 >
   {#snippet body()}
-    <div class="text-[10px] text-black-500 dark:text-white-700 mb-1">prompt</div>
+    <div class="text-[10px] text-black-500 dark:text-white-100-700 mb-1">prompt</div>
     <div class="line-clamp-2 text-xs">{node.prompt ?? "—"}</div>
     {#if cases.length}
       <div class="mt-2 flex flex-wrap gap-1">

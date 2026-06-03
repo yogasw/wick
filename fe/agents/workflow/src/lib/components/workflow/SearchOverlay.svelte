@@ -209,28 +209,30 @@
        so the box doesn't snap shorter when the result list empties
        (user noticed the size jumping between empty and matched). -->
   <div
-    class="absolute inset-0 z-[70] bg-slate-900/40 flex items-center justify-center p-4"
+    class="absolute inset-0 z-[70] bg-white-100 dark:bg-navy-800/40 flex items-center justify-center p-4"
     onclick={close}
     role="presentation"
   >
     <div
-      class="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col overflow-hidden"
+      class="rounded-xl bg-white dark:bg-navy-800 border border-slate-200 dark:border-navy-600 shadow-2xl flex flex-col overflow-hidden"
       style="width: min(560px, 92%); height: min(480px, 92%);"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
       role="dialog"
+      tabindex="-1"
       aria-label="Search workflow"
     >
-      <header class="p-3 border-b border-slate-200 dark:border-slate-700">
+      <header class="p-3 border-b border-slate-200 dark:border-navy-600">
         <div class="flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400 shrink-0"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-black-700 dark:text-black-500 shrink-0"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <input
             bind:this={inputEl}
             bind:value={query}
             onkeydown={onKey}
             placeholder={mode === "deep" ? "Search labels, ids, configs, outputs…" : "Search node labels…"}
-            class="flex-1 bg-transparent outline-none text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+            class="flex-1 bg-transparent outline-none text-sm text-slate-900 dark:text-white-100 placeholder:text-black-700 dark:text-black-500"
           />
-          <span class="text-[10px] text-slate-400">Esc to close</span>
+          <span class="text-[10px] text-black-700 dark:text-black-500">Esc to close</span>
         </div>
         <!-- Quick / Deep mode tabs. Deep mode opts into config +
              run-output searches that are heavier but find the rows
@@ -243,13 +245,13 @@
             <button
               class="px-2 py-0.5 rounded transition-colors"
               class:bg-emerald-500={mode === t.key}
-              class:text-white={mode === t.key}
-              class:text-slate-500={mode !== t.key}
+              class:text-white-100={mode === t.key}
+              class:text-black-700={mode !== t.key}
               class:hover:text-slate-900={mode !== t.key}
               onclick={() => (mode = t.key as typeof mode)}
             >{t.label}</button>
           {/each}
-          <span class="ml-auto text-slate-400">
+          <span class="ml-auto text-black-700 dark:text-black-500">
             {hits.length} {hits.length === 1 ? "match" : "matches"}
           </span>
         </div>
@@ -257,11 +259,11 @@
 
       <ul class="flex-1 overflow-y-auto min-h-0">
         {#if !query.trim()}
-          <li class="px-4 py-6 text-xs text-slate-500 italic">
+          <li class="px-4 py-6 text-xs text-black-700 dark:text-black-600 italic">
             Type to search. Quick covers labels / ids / types; Deep also scans node configs + captured run outputs.
           </li>
         {:else if hits.length === 0}
-          <li class="px-4 py-6 text-xs text-slate-500 italic">
+          <li class="px-4 py-6 text-xs text-black-700 dark:text-black-600 italic">
             No matches for "{query}".
           </li>
         {:else}
@@ -269,9 +271,9 @@
             <li>
               <button
                 type="button"
-                class="w-full text-left px-3 py-2 border-b border-slate-100 dark:border-slate-800 transition-colors"
+                class="w-full text-left px-3 py-2 border-b border-slate-100 dark:border-navy-600 transition-colors"
                 class:bg-emerald-50={activeIdx === i}
-                class:dark:bg-slate-800={activeIdx === i}
+                class:bg-navy-700={activeIdx === i}
                 onclick={() => pick(h)}
                 onmouseenter={() => (activeIdx = i)}
               >
@@ -279,19 +281,18 @@
                   <span
                     class="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shrink-0"
                     class:bg-sky-500={h.kind === "trigger"}
-                    class:text-white={h.kind === "trigger"}
-                    class:bg-slate-200={h.kind === "node"}
-                    class:dark:bg-slate-700={h.kind === "node"}
-                    class:text-slate-700={h.kind === "node"}
-                    class:dark:text-slate-200={h.kind === "node"}
+                    class:text-white-100={h.kind === "trigger" || h.kind === "node"}
+                    class:bg-white-200={h.kind === "node"}
+                    class:bg-navy-600={h.kind === "node"}
+                    class:text-black-700={h.kind === "node"}
                   >
                     {h.kind}
                   </span>
-                  <span class="font-mono text-xs truncate text-slate-900 dark:text-slate-100">{h.label}</span>
-                  <span class="text-[10px] text-slate-400">{h.typeOrSub}</span>
-                  <span class="ml-auto text-[10px] text-slate-400 uppercase tracking-wider">{h.matchedField}</span>
+                  <span class="font-mono text-xs truncate text-slate-900 dark:text-white-100">{h.label}</span>
+                  <span class="text-[10px] text-black-700 dark:text-black-500">{h.typeOrSub}</span>
+                  <span class="ml-auto text-[10px] text-black-700 dark:text-black-500 uppercase tracking-wider">{h.matchedField}</span>
                 </div>
-                <div class="mt-1 font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                <div class="mt-1 font-mono text-[11px] text-black-700 dark:text-black-600 truncate">
                   {#each snippetParts(h.snippet) as p}
                     {#if p.match}
                       <span class="bg-amber-200 text-amber-900 dark:bg-amber-500/40 dark:text-amber-100 rounded px-0.5">{p.text}</span>
@@ -306,7 +307,7 @@
         {/if}
       </ul>
 
-      <footer class="px-3 py-2 border-t border-slate-200 dark:border-slate-700 text-[10px] text-slate-400 flex items-center gap-3">
+      <footer class="px-3 py-2 border-t border-slate-200 dark:border-navy-600 text-[10px] text-black-700 dark:text-black-500 flex items-center gap-3">
         <span>↑↓ navigate</span>
         <span>↵ open</span>
         <span class="ml-auto">Ctrl+K to toggle</span>

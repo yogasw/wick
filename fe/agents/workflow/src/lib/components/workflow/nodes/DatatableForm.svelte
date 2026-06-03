@@ -238,7 +238,7 @@
     ...tables.map((t) => ({ label: t.name ? `${t.name} (${t.slug})` : t.slug, value: t.slug })),
   ]}
 />
-<div class="-mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+<div class="-mt-1 text-[11px] text-black-700 dark:text-black-600">
   Tables registered in the workspace.
   <a
     href="../data-tables"
@@ -274,11 +274,11 @@
         onclick={addCondition}
       >+ add condition</button>
     </div>
-    <span class="text-[11px] text-slate-500 dark:text-slate-400">
+    <span class="text-[11px] text-black-700 dark:text-black-600">
       Ops: equals / not_equals / gt / gte / lt / lte / contains / in / is_empty / is_not_empty
     </span>
     {#each node.conditions ?? [] as cond, i (i)}
-      <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-1">
+      <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
         <div class="grid items-center gap-2" style="grid-template-columns: 2fr 1.4fr auto;">
           <ColumnCombobox
             value={cond.column}
@@ -287,7 +287,7 @@
             onChange={(v) => updateCondition(i, { column: v })}
           />
           <select
-            class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[12px]"
+            class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 text-[12px]"
             value={cond.op}
             onchange={(e) => updateCondition(i, { op: (e.target as HTMLSelectElement).value })}
           >
@@ -338,7 +338,7 @@
           onChange={(v) => updateOrder(i, { column: v })}
         />
         <select
-          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[12px]"
+          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 text-[12px]"
           value={ord.direction ?? "asc"}
           onchange={(e) => updateOrder(i, { direction: (e.target as HTMLSelectElement).value })}
         >
@@ -358,7 +358,7 @@
       <span class="text-xs font-medium">Limit</span>
       <input
         type="number"
-        class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+        class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
         placeholder="25"
         value={node.limit ?? 0}
         oninput={(e) => patch("limit", Number((e.target as HTMLInputElement).value) || 0)}
@@ -368,7 +368,7 @@
       <span class="text-xs font-medium">Offset</span>
       <input
         type="number"
-        class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5"
+        class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
         placeholder="0"
         value={node.offset ?? 0}
         oninput={(e) => patch("offset", Number((e.target as HTMLInputElement).value) || 0)}
@@ -382,15 +382,15 @@
   <div class="space-y-2">
     <div class="flex items-center justify-between">
       <span class="text-xs font-medium">Fields</span>
-      <span class="text-[11px] text-slate-400">
+      <span class="text-[11px] text-black-700 dark:text-black-500">
         {Object.keys(node.row ?? {}).length} field{Object.keys(node.row ?? {}).length === 1 ? "" : "s"}
       </span>
     </div>
-    <span class="text-[11px] text-slate-500 dark:text-slate-400">
+    <span class="text-[11px] text-black-700 dark:text-black-600">
       Pre-filled from the table's columns. id / created_at / updated_at are auto-managed by the engine.
     </span>
     {#each Object.entries(node.row ?? {}) as [column, value] (column)}
-      <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-1">
+      <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
         <div class="grid items-center gap-2" style="grid-template-columns: 1fr auto;">
           <ColumnCombobox
             value={column}
@@ -416,14 +416,14 @@
         />
       </div>
     {/each}
-    <div class="grid items-center gap-2 pt-1 border-t border-slate-200 dark:border-slate-700" style="grid-template-columns: 1fr 1fr auto;">
+    <div class="grid items-center gap-2 pt-1 border-t border-slate-200 dark:border-navy-600" style="grid-template-columns: 1fr 1fr auto;">
       <ColumnCombobox
         value={newRowColumn}
         columns={columnNames}
         onChange={(v) => (newRowColumn = v)}
       />
       <input
-        class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px]"
+        class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
         placeholder="value"
         bind:value={newRowValue}
         onkeydown={(e) => e.key === "Enter" && addRow()}

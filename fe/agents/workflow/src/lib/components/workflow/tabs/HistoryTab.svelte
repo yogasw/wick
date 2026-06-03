@@ -70,14 +70,14 @@
 </script>
 
 {#if versions.length === 0}
-  <p class="text-xs text-black-500 dark:text-white-700">No versions persisted yet.</p>
+  <p class="text-xs text-black-500 dark:text-white-100-700">No versions persisted yet.</p>
 {:else}
   <div class="flex items-center justify-between mb-2">
-    <span class="text-[11px] text-black-500 dark:text-white-700">
+    <span class="text-[11px] text-black-500 dark:text-white-100-700">
       {selected.length} of 2 selected for compare
     </span>
     <button
-      class="text-xs px-2 py-0.5 rounded bg-emerald-500 text-white disabled:opacity-40"
+      class="text-xs px-2 py-0.5 rounded bg-emerald-500 text-white-100 disabled:opacity-40"
       disabled={selected.length !== 2}
       onclick={openCompare}
     >Compare</button>
@@ -97,9 +97,9 @@
               class:bg-amber-100={v.kind === "draft"}
               class:text-amber-700={v.kind === "draft"}
         >{v.kind}</span>
-        <span class="text-black-500 dark:text-white-700 tabular-nums">v{v.id}</span>
+        <span class="text-black-500 dark:text-white-100-700 tabular-nums">v{v.id}</span>
         <span class="flex-1 truncate">{v.message ?? "—"}</span>
-        <span class="text-black-500 dark:text-white-700">{v.created_at}</span>
+        <span class="text-black-500 dark:text-white-100-700">{v.created_at}</span>
         <button class="text-emerald-600" onclick={() => onpick?.(v.id)}>view</button>
         <button class="text-emerald-600" onclick={() => onrestore?.(v.id)}>restore</button>
       </li>

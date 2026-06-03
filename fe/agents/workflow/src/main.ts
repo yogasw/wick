@@ -1,13 +1,13 @@
 import { mount, type Component } from "svelte";
 import App from "./App.svelte";
 import EditorShell from "./lib/components/workflow/EditorShell.svelte";
+import WorkflowList from "./lib/components/workflow/WorkflowList.svelte";
 
 // Island registry — keys match the `data-island` attribute templ writes.
 // Adding an island: drop the .svelte under src/lib + add one line here.
-// Mirror of the sveltempl ComponentMap pattern (sveltempl/internal/codegen)
-// but inline because we ship a single bundle, not one per island.
 const islands: Record<string, Component<any>> = {
   WorkflowEditor: EditorShell as unknown as Component<any>,
+  WorkflowList:   WorkflowList as unknown as Component<any>,
 };
 
 type IslandAPI = {
@@ -51,7 +51,7 @@ function hydrateAll() {
   });
 }
 
-// Fallback: legacy standalone shell at /agents-v2/workflow/ still mounts
+// Fallback: legacy standalone shell at /workflow/workflow/ still mounts
 // the full App on #app (so the SPA URL keeps working for dev / direct
 // links). Hydrate islands first; if there are none, fall through to the
 // standalone App mount.

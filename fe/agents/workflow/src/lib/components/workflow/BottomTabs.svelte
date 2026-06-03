@@ -137,27 +137,27 @@
 </script>
 
 <section
-  class="flex flex-col border-t border-slate-200 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] transition-[height] duration-150"
+  class="flex flex-col border-t border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 transition-[height] duration-150"
   style:height={collapsed ? "auto" : "260px"}
 >
-  <nav class="flex items-center border-b border-slate-200 dark:border-[#2c3a5a] text-xs">
+  <nav class="flex items-center border-b border-white-300 dark:border-navy-600 text-xs">
     {#each tabs as t}
       <button
         class="px-3 py-1.5 border-b-2 transition-colors flex items-center gap-1.5"
         class:border-emerald-500={!collapsed && active === t}
         class:border-transparent={collapsed || active !== t}
         class:text-emerald-600={!collapsed && active === t}
-        class:dark:text-emerald-400={!collapsed && active === t}
+        class:text-emerald-400={!collapsed && active === t}
         onclick={() => pickTab(t)}
       >
         {labels[t]}
         {#if tabCount(t) !== null}
-          <span class="text-[10px] text-slate-400">({tabCount(t)})</span>
+          <span class="text-[10px] text-black-700 dark:text-black-500">({tabCount(t)})</span>
         {/if}
       </button>
     {/each}
     <button
-      class="ml-auto px-3 py-1.5 text-[11px] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+      class="ml-auto px-3 py-1.5 text-[11px] text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100"
       onclick={toggle}
       aria-expanded={!collapsed}
       title={collapsed ? "Expand panel" : "Collapse panel"}

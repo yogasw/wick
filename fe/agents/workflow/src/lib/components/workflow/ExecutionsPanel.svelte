@@ -104,14 +104,14 @@
 
 <div class="flex flex-1 min-h-0">
   <!-- Left: runs list. -->
-  <aside class="shrink-0 border-r border-slate-200 dark:border-slate-700 flex flex-col" style="width:380px;">
-    <header class="px-4 py-2 border-b border-slate-200 dark:border-slate-700 flex items-center gap-3 text-xs">
-      <span class="font-semibold text-slate-700 dark:text-slate-200">
+  <aside class="shrink-0 border-r border-slate-200 dark:border-navy-600 flex flex-col" style="width:380px;">
+    <header class="px-4 py-2 border-b border-slate-200 dark:border-navy-600 flex items-center gap-3 text-xs">
+      <span class="font-semibold text-black-500 dark:text-white-100">
         {runs.length} {filterActive && total >= 0 ? `of ${total}` : ""} runs
       </span>
-      {#if loading}<span class="text-slate-400 text-[10px]">…</span>{/if}
-      <button class="ml-auto text-slate-500 hover:text-slate-900 dark:hover:text-slate-100" onclick={() => void refresh()} disabled={loading} title="Refresh">↻</button>
-      <label class="flex items-center gap-1 text-slate-500 cursor-pointer">
+      {#if loading}<span class="text-black-700 dark:text-black-500 text-[10px]">…</span>{/if}
+      <button class="ml-auto text-black-700 dark:text-black-600 hover:text-slate-900 dark:hover:text-black-800 dark:text-white-100" onclick={() => void refresh()} disabled={loading} title="Refresh">↻</button>
+      <label class="flex items-center gap-1 text-black-700 dark:text-black-600 cursor-pointer">
         <input type="checkbox" bind:checked={auto} />
         auto
       </label>
@@ -120,7 +120,7 @@
     <!-- Status filter tabs + advanced toggle. Counts here reflect the
          CURRENT result set the backend returned (not global) — the
          status pill itself is sent to the API on change. -->
-    <div class="flex items-center gap-1 px-2 py-2 border-b border-slate-200 dark:border-slate-700 text-[11px]">
+    <div class="flex items-center gap-1 px-2 py-2 border-b border-slate-200 dark:border-navy-600 text-[11px]">
       {#each [
         { key: "all", label: "All" },
         { key: "success", label: "✓" },
@@ -129,18 +129,18 @@
       ] as t}
         <button
           class="px-2 py-0.5 rounded transition-colors"
-          class:bg-slate-200={filter === t.key}
-          class:dark:bg-slate-700={filter === t.key}
+          class:bg-white-200={filter === t.key}
+          class:bg-navy-600={filter === t.key}
           class:text-slate-900={filter === t.key}
-          class:dark:text-slate-100={filter === t.key}
-          class:text-slate-500={filter !== t.key}
+          class:text-white-100={filter === t.key}
+          class:text-black-700={filter !== t.key}
           onclick={() => (filter = t.key as typeof filter)}
         >
           {t.label}
         </button>
       {/each}
       <button
-        class="ml-auto text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+        class="ml-auto text-black-700 dark:text-black-600 hover:text-slate-900 dark:hover:text-black-800 dark:text-white-100"
         onclick={() => (showAdvanced = !showAdvanced)}
         title="Advanced filters"
       >
@@ -153,8 +153,8 @@
          backend as `?kind=`; rules match runKind() in
          spa_workflows.go so the FE pill in each row mirrors the
          backend's bucketing. -->
-    <div class="flex items-center gap-1 px-2 py-1.5 border-b border-slate-200 dark:border-slate-700 text-[11px]">
-      <span class="px-2 text-slate-400 uppercase tracking-wider text-[10px]">kind</span>
+    <div class="flex items-center gap-1 px-2 py-1.5 border-b border-slate-200 dark:border-navy-600 text-[11px]">
+      <span class="px-2 text-black-700 dark:text-black-500 uppercase tracking-wider text-[10px]">kind</span>
       {#each [
         { key: "all", label: "All" },
         { key: "manual", label: "Manual" },
@@ -163,11 +163,11 @@
       ] as t}
         <button
           class="px-2 py-0.5 rounded transition-colors"
-          class:bg-slate-200={kindFilter === t.key}
-          class:dark:bg-slate-700={kindFilter === t.key}
+          class:bg-white-200={kindFilter === t.key}
+          class:bg-navy-600={kindFilter === t.key}
           class:text-slate-900={kindFilter === t.key}
-          class:dark:text-slate-100={kindFilter === t.key}
-          class:text-slate-500={kindFilter !== t.key}
+          class:text-white-100={kindFilter === t.key}
+          class:text-black-700={kindFilter !== t.key}
           onclick={() => (kindFilter = t.key as typeof kindFilter)}
         >
           {t.label}
@@ -176,27 +176,27 @@
     </div>
 
     {#if showAdvanced}
-      <div class="px-3 py-2 border-b border-slate-200 dark:border-slate-700 space-y-2 text-[11px]">
+      <div class="px-3 py-2 border-b border-slate-200 dark:border-navy-600 space-y-2 text-[11px]">
         <input
           type="search"
           placeholder="Search run id…"
-          class="w-full rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono"
+          class="w-full rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono"
           bind:value={searchID}
         />
         <div class="grid grid-cols-2 gap-2">
-          <label class="flex flex-col gap-0.5 text-slate-500">
+          <label class="flex flex-col gap-0.5 text-black-700 dark:text-black-600">
             <span class="uppercase tracking-wider text-[10px]">From</span>
             <input
               type="date"
-              class="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1"
+              class="rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1"
               bind:value={fromDate}
             />
           </label>
-          <label class="flex flex-col gap-0.5 text-slate-500">
+          <label class="flex flex-col gap-0.5 text-black-700 dark:text-black-600">
             <span class="uppercase tracking-wider text-[10px]">To</span>
             <input
               type="date"
-              class="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1"
+              class="rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1"
               bind:value={toDate}
             />
           </label>
@@ -212,7 +212,7 @@
 
     <div class="flex-1 overflow-y-auto">
       {#if runs.length === 0}
-        <p class="p-4 text-xs text-slate-500">
+        <p class="p-4 text-xs text-black-700 dark:text-black-600">
           {filterActive ? "No runs match the current filters." : "No runs yet."}
         </p>
       {:else}
@@ -230,7 +230,7 @@
   <!-- Right: run detail. -->
   <section class="flex-1 overflow-y-auto p-4">
     {#if !selectedRunID}
-      <div class="h-full flex flex-col items-center justify-center text-slate-500 text-sm gap-3">
+      <div class="h-full flex flex-col items-center justify-center text-black-700 dark:text-black-600 text-sm gap-3">
         <span class="text-2xl">⊜</span>
         <div class="font-medium">Select a run</div>
         <div class="text-xs">Click any execution on the left to inspect its output.</div>

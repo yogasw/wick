@@ -162,7 +162,7 @@
   {#if $lastRunSummary}
     <div class="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium shadow-lg"
          class:bg-emerald-500={$lastRunSummary.status === "success"}
-         class:text-white={true}
+         class:text-white-100={true}
          class:bg-rose-500={$lastRunSummary.status === "failed"}>
       <span>{$lastRunSummary.status === "success" ? "✓" : "✗"}</span>
       <span>Run {$lastRunSummary.status} in {$lastRunSummary.durationMs}ms</span>

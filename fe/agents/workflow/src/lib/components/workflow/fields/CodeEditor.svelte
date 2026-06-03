@@ -128,7 +128,7 @@
   <!-- Plain textarea while Ace loads — keeps the modal usable even
        on slow networks and gives a sensible fallback if Ace fails. -->
   <textarea
-    class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm"
+    class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
     rows={rows}
     value={value ?? ""}
     oninput={(e) => onChange((e.target as HTMLTextAreaElement).value)}
@@ -136,7 +136,7 @@
 {/if}
 <div
   bind:this={host}
-  class="rounded border border-slate-200 dark:border-slate-700 overflow-hidden"
+  class="rounded border border-slate-200 dark:border-navy-600 overflow-hidden"
   class:hidden={loading}
   style="min-height: {rows * 16}px;"
 ></div>

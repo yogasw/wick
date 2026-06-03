@@ -101,18 +101,10 @@ func notReadyWorkflow(c *tool.Ctx) bool {
 // ── List + Create ───────────────────────────────────────────────────
 
 func workflowsPage(c *tool.Ctx) {
-	if notReadyWorkflow(c) {
-		return
-	}
-	summaries, err := globalWorkflowMgr.MCP.List()
-	if err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-	c.HTML(wfview.List(wfview.ListVM{
-		Layout:    sidebarVM(c, "workflows", ""),
-		Base:      c.Base(),
-		Workflows: summaries,
+	c.HTML(wfview.SvelteList(wfview.SvelteListVM{
+		Layout:   sidebarVM(c, "workflows", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("workflow"),
 	}))
 }
 
@@ -498,7 +490,15 @@ func deleteWorkflow(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	if err := globalWorkflowMgr.MCP.Delete(id); err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
+		if c.R.Header.Get("Accept") == "application/json" {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		} else {
+			c.Error(http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	if c.R.Header.Get("Accept") == "application/json" {
+		c.JSON(http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 	c.Redirect(c.Base()+"/workflows", http.StatusSeeOther)

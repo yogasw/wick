@@ -57,6 +57,9 @@ func normaliseWorkflowBody(id string, raw []byte) ([]byte, error) {
 // because /api/workflows/* paths don't overlap any existing pattern.
 func registerSPAWorkflows(r tool.Router) {
 	r.GET("/api/workflows/list", spaWorkflowList)
+	r.GET("/api/workflows/templates", spaWorkflowTemplates)
+	r.POST("/api/workflows/create", spaWorkflowCreate)
+	r.POST("/api/workflows/duplicate/{id}", spaWorkflowDuplicate)
 	r.GET("/api/workflows/get/{id}", spaWorkflowGet)
 	r.POST("/api/workflows/save/{id}", spaWorkflowSave)
 	r.POST("/api/workflows/publish/{id}", spaWorkflowPublish)
@@ -77,7 +80,80 @@ type spaWorkflowSummary struct {
 	Name      string `json:"name"`
 	Enabled   bool   `json:"enabled"`
 	HasDraft  bool   `json:"has_draft"`
+	Version   int    `json:"version"`
+	CreatedAt string `json:"created_at,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+var workflowTemplates = []map[string]string{
+	{"value": "empty",             "label": "Empty",             "desc": "Blank canvas — start from scratch"},
+	{"value": "support-triage",    "label": "Support Triage",    "desc": "Classify inbound support messages and route to the right handler"},
+	{"value": "incident-response", "label": "Incident Response", "desc": "Webhook-triggered incident response with parallel data gathering"},
+	{"value": "daily-digest",      "label": "Daily Digest",      "desc": "Cron-triggered daily summary"},
+}
+
+func spaWorkflowTemplates(c *tool.Ctx) {
+	c.JSON(http.StatusOK, map[string]any{"templates": workflowTemplates})
+}
+
+func spaWorkflowCreate(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	var body struct {
+		Name     string `json:"name"`
+		Template string `json:"template"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
+		Name:     body.Name,
+		Template: body.Template,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
+}
+
+func spaWorkflowDuplicate(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	src, err := globalWorkflowMgr.Service.Load(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{
+		Name:     src.Name + " copy",
+		Template: "empty",
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// Copy graph + triggers from source.
+	src.ID = w.ID
+	src.Name = w.Name
+	src.Enabled = false
+	if err := globalWorkflowMgr.Service.SaveDraft(w.ID, src); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := globalWorkflowMgr.Service.Publish(w.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
 func spaWorkflowList(c *tool.Ctx) {
@@ -91,12 +167,20 @@ func spaWorkflowList(c *tool.Ctx) {
 	}
 	out := make([]spaWorkflowSummary, 0, len(summaries))
 	for _, s := range summaries {
-		out = append(out, spaWorkflowSummary{
+		row := spaWorkflowSummary{
 			ID:       s.ID,
 			Name:     s.Name,
 			Enabled:  s.Enabled,
+			Version:  s.Version,
 			HasDraft: globalWorkflowMgr.Service.HasDraft(s.ID),
-		})
+		}
+		if !s.CreatedAt.IsZero() {
+			row.CreatedAt = s.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		if !s.UpdatedAt.IsZero() {
+			row.UpdatedAt = s.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
 	}
 	c.JSON(http.StatusOK, map[string]any{"workflows": out})
 }

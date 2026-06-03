@@ -90,13 +90,13 @@
     <span class="text-xs font-medium">{label}</span>
   </div>
   {#if helper}
-    <span class="text-[11px] text-slate-500 dark:text-slate-400">{helper}</span>
+    <span class="text-[11px] text-black-700 dark:text-black-600">{helper}</span>
   {/if}
   {#each Object.entries(entries ?? {}) as [k, v] (k)}
-    <div class="rounded border border-slate-200 dark:border-slate-700 p-2 space-y-1">
+    <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
       <div class="flex items-center gap-2">
         <input
-          class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
           value={k}
           onchange={(e) => renameKey(k, (e.target as HTMLInputElement).value)}
         />
@@ -119,13 +119,13 @@
   {/each}
   <div class="flex items-center gap-2 pt-1">
     <input
-      class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+      class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
       placeholder={keyPlaceholder}
       bind:value={newKey}
       onkeydown={(e) => e.key === "Enter" && add()}
     />
     <input
-      class="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 font-mono text-[12px] flex-1"
+      class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
       placeholder={valuePlaceholder}
       bind:value={newValue}
       onkeydown={(e) => e.key === "Enter" && add()}

@@ -9,7 +9,7 @@ import (
 
 // spaEmbedded carries the Vite-built Svelte SPA tree. The build pipeline
 // (`npm run build` from `fe/`) writes assets into `dist/`; this file is
-// the only Go-side glue. Served by spa_handler.go at /tools/agents-v2/.
+// the only Go-side glue. Served by spa_handler.go at /tools/workflow/.
 //
 //go:embed all:dist
 var spaEmbedded embed.FS

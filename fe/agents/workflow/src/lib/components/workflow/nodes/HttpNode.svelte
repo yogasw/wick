@@ -19,7 +19,7 @@
   {#snippet body()}
     <div class="font-mono text-[10px] flex items-center gap-1">
       <span class="px-1 rounded bg-sky-100 text-sky-800 uppercase">{node.method ?? "GET"}</span>
-      <span class="truncate text-black-700 dark:text-white-300">{node.url ?? "—"}</span>
+      <span class="truncate text-black-700 dark:text-white-100-300">{node.url ?? "—"}</span>
     </div>
   {/snippet}
 </BaseNode>

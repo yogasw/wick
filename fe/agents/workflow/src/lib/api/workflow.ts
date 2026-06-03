@@ -8,6 +8,8 @@ export type WorkflowSummary = {
   name: string;
   enabled: boolean;
   has_draft: boolean;
+  version?: number;
+  created_at?: string;
   updated_at?: string;
 };
 
@@ -219,6 +221,15 @@ export type WorkflowsRegistry = {
 // Routes mounted by internal/tools/agents/spa_workflows.go. JSON-only.
 export const workflowAPI = {
   list: (): Promise<WorkflowsRegistry> => apiGet(`${BASE}/api/workflows/list`),
+
+  templates: (): Promise<{ templates: { value: string; label: string; desc: string }[] }> =>
+    apiGet(`${BASE}/api/workflows/templates`),
+
+  create: (body: { name: string; template?: string }): Promise<{ id: string; name: string }> =>
+    apiPost(`${BASE}/api/workflows/create`, body),
+
+  duplicate: (id: string): Promise<{ id: string; name: string }> =>
+    apiPost(`${BASE}/api/workflows/duplicate/${encodeURIComponent(id)}`, {}),
 
   get: (id: string): Promise<WorkflowGetResponse> =>
     apiGet(`${BASE}/api/workflows/get/${encodeURIComponent(id)}`),

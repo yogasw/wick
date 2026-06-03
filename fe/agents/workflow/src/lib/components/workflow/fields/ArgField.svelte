@@ -262,15 +262,15 @@
   <div class="flex items-center justify-between gap-2">
     <span class="text-xs font-medium">{label}</span>
     {#if onModeChange}
-      <div class="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden text-[10px] uppercase tracking-wide">
+      <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
         {#each (["fixed","expression"] as const) as m}
           <button
             type="button"
             class="px-2 py-0.5 transition-colors"
             class:bg-emerald-500={mode === m}
-            class:text-white={mode === m}
-            class:text-slate-500={mode !== m}
-            class:dark:text-slate-400={mode !== m}
+            class:text-white-100={mode === m}
+            class:text-black-700={mode !== m}
+            class:text-black-600={mode !== m}
             onclick={() => onModeChange?.(m)}
             title={m === "fixed" ? "Literal value — {{ }} NOT rendered (verbatim output)" : "Go template — {{ ... }} evaluated at runtime"}
           >{m}</button>
@@ -283,12 +283,12 @@
   {#if multiline}
     <textarea
       bind:this={inputEl as HTMLTextAreaElement}
-      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm transition-colors"
+      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm transition-colors"
       class:text-emerald-700={mode === "expression"}
-      class:dark:text-emerald-400={mode === "expression"}
+      class:text-emerald-400={mode === "expression"}
       class:border-emerald-500={dragHover}
       class:bg-emerald-50={dragHover}
-      class:dark:bg-emerald-950={dragHover}
+      class:bg-emerald-950={dragHover}
       {placeholder}
       {rows}
       {value}
@@ -302,12 +302,12 @@
   {:else}
     <input
       bind:this={inputEl as HTMLInputElement}
-      class="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 font-mono text-sm transition-colors"
+      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm transition-colors"
       class:text-emerald-700={mode === "expression"}
-      class:dark:text-emerald-400={mode === "expression"}
+      class:text-emerald-400={mode === "expression"}
       class:border-emerald-500={dragHover}
       class:bg-emerald-50={dragHover}
-      class:dark:bg-emerald-950={dragHover}
+      class:bg-emerald-950={dragHover}
       {placeholder}
       {value}
       oninput={handleInput}
@@ -321,20 +321,20 @@
 
   <!-- Autocomplete — inline (no absolute positioning to avoid overflow clipping) -->
   {#if acSuggestions.length > 0}
-    <div class="rounded border border-slate-600 bg-slate-900 text-sm font-mono overflow-hidden">
+    <div class="rounded border border-white-400 dark:border-navy-500 bg-white-100 dark:bg-navy-800 text-sm font-mono overflow-hidden">
       {#each acSuggestions as sugg, i}
         <button
           type="button"
-          class="w-full text-left px-3 py-1.5 transition-colors border-b border-slate-800/60 last:border-0 flex items-center gap-2"
-          class:bg-slate-700={i === acSelected}
-          class:hover:bg-slate-800={i !== acSelected}
+          class="w-full text-left px-3 py-1.5 transition-colors border-b border-white-300 dark:border-navy-600/60 last:border-0 flex items-center gap-2"
+          class:bg-white-300={i === acSelected}
+          class:hover:bg-white-200={(i !== acSelected)}
           onmousedown={(e) => { e.preventDefault(); applySuggestion(sugg); }}
         >
           {#if sugg.trim().startsWith(".")}
-            <span class="text-slate-500 text-[10px]">ctx</span>
+            <span class="text-black-700 dark:text-black-600 text-[10px]">ctx</span>
             <span class="text-emerald-400">{sugg.trim()}</span>
           {:else}
-            <span class="text-slate-500 text-[10px]">fn</span>
+            <span class="text-black-700 dark:text-black-600 text-[10px]">fn</span>
             <span class="text-amber-400">{sugg.trim()}</span>
           {/if}
         </button>
@@ -344,12 +344,12 @@
 
   <!-- Inline result preview (n8n style) — visible when expression mode + has {{ -->
   {#if workflowId && mode === "expression" && value.includes("{{")}
-    <div class="rounded border border-slate-700 dark:border-slate-700 bg-slate-900/60 text-xs overflow-hidden">
-      <div class="flex items-center justify-between px-3 py-1 border-b border-slate-700/60">
-        <span class="font-semibold text-slate-300 tracking-wide uppercase text-[10px]">Result</span>
+    <div class="rounded border border-white-300 dark:border-navy-600 dark:border-navy-600 bg-white-100 dark:bg-navy-800/60 text-xs overflow-hidden">
+      <div class="flex items-center justify-between px-3 py-1 border-b border-white-300 dark:border-navy-600/60">
+        <span class="font-semibold text-black-800 dark:text-black-400 tracking-wide uppercase text-[10px]">Result</span>
         <div class="flex items-center gap-2">
           {#if previewing}
-            <svg class="animate-spin h-3 w-3 text-slate-400" fill="none" viewBox="0 0 24 24">
+            <svg class="animate-spin h-3 w-3 text-black-700 dark:text-black-500" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
             </svg>
@@ -357,7 +357,7 @@
           <select
             value={sampleEvent}
             onchange={changeSample}
-            class="text-[10px] bg-slate-800 rounded px-1.5 py-0.5 border border-slate-700 text-slate-300 cursor-pointer"
+            class="text-[10px] bg-white-200 dark:bg-navy-700 rounded px-1.5 py-0.5 border border-white-300 dark:border-navy-600 text-black-800 dark:text-black-400 cursor-pointer"
           >
             {#each SAMPLE_EVENTS as ev}
               <option value={ev}>{ev}</option>
@@ -374,7 +374,7 @@
             <span class="text-amber-400 ml-2 italic">{preview.hint}</span>
           {/if}
         {:else}
-          <span class="text-slate-500 italic">waiting…</span>
+          <span class="text-black-700 dark:text-black-600 italic">waiting…</span>
         {/if}
       </div>
     </div>
@@ -389,6 +389,6 @@
   {/if}
 
   {#if helper}
-    <span class="text-[11px] text-slate-500 dark:text-slate-400">{helper}</span>
+    <span class="text-[11px] text-black-700 dark:text-black-600">{helper}</span>
   {/if}
 </div>
