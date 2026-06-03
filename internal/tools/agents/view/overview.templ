@@ -110,9 +110,11 @@ templ statCard(label, value, color string) {
 	</div>
 }
 
+// shortID shows the first 4 + last 4 chars with "…" in the middle for
+// ids longer than 11 chars (e.g. UUIDs), else the id as-is.
 func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8] + "…"
+	if len(id) > 11 {
+		return id[:4] + "…" + id[len(id)-4:]
 	}
 	return id
 }

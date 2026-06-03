@@ -49,7 +49,7 @@ templ ProvidersPage(vm ProvidersVM) {
 			<!-- MCP Wick install status -->
 			@mcpWickCard(vm.MCP, vm.Base)
 			<!-- Recent spawns -->
-			<details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
+			<details data-remember-open="spawns" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
 				<summary class="px-5 py-3 flex items-center gap-2 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
 					<svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
 					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
@@ -66,6 +66,8 @@ templ ProvidersPage(vm ProvidersVM) {
 							<thead>
 								<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
 									<th class="px-5 py-2.5 text-left">Started</th>
+									<th class="px-5 py-2.5 text-left">Session</th>
+									<th class="px-5 py-2.5 text-left">Channel</th>
 									<th class="px-5 py-2.5 text-left">Provider</th>
 									<th class="px-5 py-2.5 text-left">PID</th>
 									<th class="px-5 py-2.5 text-left">First Message</th>
@@ -78,6 +80,20 @@ templ ProvidersPage(vm ProvidersVM) {
 										class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
 									>
 										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
+										<td class="px-5 py-3 font-mono text-xs text-black-800 dark:text-black-600">
+											if f.SessionID != "" {
+												{ shortID(f.SessionID) }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
+										<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600">
+											if f.Origin != "" {
+												{ f.Origin }
+											} else {
+												<span class="text-black-600 dark:text-black-700">—</span>
+											}
+										</td>
 										<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
 										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
 											if f.PID > 0 {

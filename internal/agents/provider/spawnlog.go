@@ -73,6 +73,11 @@ type SpawnEvent struct {
 	// event after Spawner.Spawn returns; carried on `exit` so listings
 	// can verify the same pid was reaped. 0 = test fake or unknown.
 	PID int `json:"pid,omitempty"`
+	// Origin is the session origin that triggered the spawn (e.g. "slack",
+	// "telegram", "rest", "ui"). Written once on the initial start event
+	// so the Recent Spawns list can show the channel without a session
+	// registry lookup.
+	Origin string `json:"origin,omitempty"`
 	// FirstUserMessage is a short prefix of the user input that
 	// triggered the spawn (truncated). Surfaces in the Backends UI
 	// "Recent Spawns" list so operators see what each spawn was for.
@@ -163,6 +168,7 @@ type SpawnLogFile struct {
 	SessionID        string
 	StartedAt        time.Time
 	PID              int
+	Origin           string // session origin (slack/telegram/rest/ui/…)
 	FirstUserMessage string
 	Binary           string
 	Argv             []string
@@ -266,6 +272,9 @@ func (s *SpawnLogger) enrichFromEvents(f *SpawnLogFile) {
 		case "start":
 			if ev.PID != 0 {
 				f.PID = ev.PID
+			}
+			if ev.Origin != "" && f.Origin == "" {
+				f.Origin = ev.Origin
 			}
 			if ev.FirstUserMessage != "" {
 				f.FirstUserMessage = ev.FirstUserMessage

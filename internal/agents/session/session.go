@@ -32,9 +32,10 @@ import (
 type Origin string
 
 const (
-	OriginSlack Origin = "slack"
-	OriginUI    Origin = "ui"
-	OriginAPI   Origin = "api"
+	OriginSlack    Origin = "slack"
+	OriginTelegram Origin = "telegram"
+	OriginREST     Origin = "rest"
+	OriginUI       Origin = "ui"
 )
 
 // Status is the high-level pool view: idle (no subprocess), queued

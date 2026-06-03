@@ -1609,6 +1609,22 @@
       });
     });
 
+    // ── Remember <details open> across reloads (e.g. Recent Spawns) ───
+    // Server-rendered pagination reloads the page, which resets <details>
+    // to collapsed. Persist the open state so paginating keeps it open.
+    document.querySelectorAll("details[data-remember-open]").forEach(function (d) {
+      var key = "wick:open:" + d.dataset.rememberOpen;
+      try {
+        if (localStorage.getItem(key) === "1") d.open = true;
+      } catch (e) {}
+      d.addEventListener("toggle", function () {
+        try {
+          if (d.open) localStorage.setItem(key, "1");
+          else localStorage.removeItem(key);
+        } catch (e) {}
+      });
+    });
+
     // ── Queue panel: search filter + select-all + bulk kill ───────────
     (function () {
       var panel = document.querySelector("[data-queue-panel]");

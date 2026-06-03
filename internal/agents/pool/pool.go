@@ -178,6 +178,10 @@ type FactoryOptions struct {
 	// the content from disk — pool passes the name so factory avoids a
 	// redundant session.Load.
 	PresetName string
+	// Origin is the session origin (e.g. "slack", "ui", "rest") written
+	// into the spawn log so Recent Spawns can show the channel without a
+	// registry lookup.
+	Origin string
 }
 
 // queueEntry is one request waiting for a slot.
@@ -509,15 +513,16 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 
 	br, err := p.cfg.Factory.Build(FactoryOptions{
-		SessionID:    sessionID,
-		AgentName:    agentName,
-		ProviderType: pType,
-		ProviderName: pName,
-		Workspace:    cwd,
-		ResumeID:     resumeID,
+		SessionID:     sessionID,
+		AgentName:     agentName,
+		ProviderType:  pType,
+		ProviderName:  pName,
+		Workspace:     cwd,
+		ResumeID:      resumeID,
 		IdleTimeout:   p.cfg.IdleTimeout,
 		KillAfterIdle: p.cfg.KillAfterIdle,
-		PresetName:   sess.Meta.Preset,
+		PresetName:    sess.Meta.Preset,
+		Origin:        string(sess.Meta.Origin),
 	})
 	if err != nil {
 		return err
