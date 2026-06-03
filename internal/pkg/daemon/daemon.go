@@ -82,7 +82,15 @@ func Check(p Paths) (Status, error) {
 	}
 	s.PID = pid
 	s.Started = mtime
-	s.Running = processAlive(pid)
+	// Two-step check: (1) process exists, (2) exe matches our binary.
+	// Guards against PID reuse where an unrelated OS process inherits
+	// the stale PID — processAlive alone would return true, causing
+	// Start to report ErrAlreadyRunning for a process that isn't wick.
+	if processAlive(pid) {
+		if exe := processExePath(pid); exe == "" || exe == p.ExePath {
+			s.Running = true
+		}
+	}
 	return s, nil
 }
 
