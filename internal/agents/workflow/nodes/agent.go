@@ -211,7 +211,9 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
 
-	if err := e.Pool.SendWithWorkspace(ctx, sessionID, "default", "workflow", "user", prompt, n.Workspace); err != nil {
+	// n.Workspace carries the project id binding for this agent node
+	// (legacy field name; empty = inherit session/default project).
+	if err := e.Pool.SendWithProject(ctx, sessionID, "default", "workflow", "user", prompt, n.Workspace); err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("pool send: %w", err)
 	}
 

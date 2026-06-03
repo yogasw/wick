@@ -7,10 +7,10 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/workspace"
 )
 
 // loadFirstUserMessage returns the cached label from meta (in-memory, fast).
@@ -69,21 +69,21 @@ func loadConversation(layout agentconfig.Layout, sessionID string) ([]store.Conv
 }
 
 // loadCommands reads raw lines from the SHARED commands.jsonl filtered
-// by the session's workspace cwd. Stage 9 moved the audit log out of
+// by the session's project cwd. Stage 9 moved the audit log out of
 // per-session files and into a single app-wide jsonl; we filter on
 // the read side so the UI session-detail Commands tab still shows
 // only what's relevant to that session.
 //
 // Filter: an entry matches a session when its WorkDir equals the
-// session's resolved workspace path or sits under it (prefix match
+// session's resolved project path or sits under it (prefix match
 // with separator boundary). Entries with empty WorkDir (failure
 // modes from gate-side timeouts where cwd was never recorded) are
 // dropped from per-session views.
 func loadCommands(layout agentconfig.Layout, sessionID string) ([]string, error) {
-	wsName := lookupSessionWorkspace(layout, sessionID)
+	projectID := lookupSessionProject(layout, sessionID)
 	wsPath := ""
-	if wsName != "" {
-		if p, err := workspace.ResolvePath(layout, wsName); err == nil {
+	if projectID != "" && project.Exists(layout, projectID) {
+		if p, err := project.ResolvePath(layout, projectID); err == nil {
 			if abs, err := filepath.Abs(p); err == nil {
 				wsPath = filepath.Clean(abs)
 			} else {
@@ -131,9 +131,9 @@ func loadCommands(layout agentconfig.Layout, sessionID string) ([]string, error)
 	return lines, nil
 }
 
-// lookupSessionWorkspace returns the workspace name from a session's
+// lookupSessionProject returns the project id from a session's
 // meta.json, or empty if the session has none / can't be loaded.
-func lookupSessionWorkspace(layout agentconfig.Layout, sessionID string) string {
+func lookupSessionProject(_ agentconfig.Layout, sessionID string) string {
 	if globalMgr == nil {
 		return ""
 	}
@@ -141,5 +141,5 @@ func lookupSessionWorkspace(layout agentconfig.Layout, sessionID string) string 
 	if !ok {
 		return ""
 	}
-	return s.Meta.Workspace
+	return s.Meta.ProjectID
 }

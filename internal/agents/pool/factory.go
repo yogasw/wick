@@ -244,6 +244,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			AgentName:    opt.AgentName,
 			Workspace:    opt.Workspace,
 			ResumeID:     opt.ResumeID,
+			Origin:       opt.Origin,
 		})
 	}
 

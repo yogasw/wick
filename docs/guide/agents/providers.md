@@ -218,6 +218,6 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 
 ## See also
 
-- [Workspaces](./workspaces) — `default_provider` field per workspace.
+- [Projects](./projects) — `default_provider` field per project.
 - [Pool & Sessions](./pool) — how `provider_type` / `provider_name` are forwarded to the spawner.
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.
