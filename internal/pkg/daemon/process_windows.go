@@ -5,6 +5,7 @@ package daemon
 import (
 	"os"
 	"syscall"
+	"unsafe"
 )
 
 // processAlive returns true if pid refers to a running process. On
@@ -26,6 +27,24 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return exitCode == stillActive
+}
+
+// processExePath returns the executable path of pid using
+// QueryFullProcessImageName, or "" on error.
+func processExePath(pid int) string {
+	h, err := syscall.OpenProcess(syscall.PROCESS_QUERY_INFORMATION|0x0410 /* PROCESS_VM_READ */, false, uint32(pid))
+	if err != nil {
+		return ""
+	}
+	defer syscall.CloseHandle(h)
+	buf := make([]uint16, syscall.MAX_PATH)
+	size := uint32(len(buf))
+	proc := syscall.MustLoadDLL("kernel32.dll").MustFindProc("QueryFullProcessImageNameW")
+	r, _, _ := proc.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if r == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:size])
 }
 
 // signalProcess on Windows uses Process.Kill for SIGTERM/SIGKILL —

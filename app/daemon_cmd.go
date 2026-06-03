@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/initcreds"
 	"github.com/yogasw/wick/internal/pkg/daemon"
 	"github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/userconfig"
 )
 
 // printInitCredsBanner prints the same App URL / email / default-password
@@ -288,6 +290,7 @@ func daemonStatusCmd() *cobra.Command {
 			uptime := time.Since(st.Started).Truncate(time.Second)
 			fmt.Printf("%s: running\n  pid:     %d\n  started: %s (%s ago)\n  log:     %s\n  pidfile: %s\n",
 				BuildAppName, st.PID, st.Started.Format(time.RFC3339), uptime, st.LogFile, st.PIDFile)
+			fmt.Printf("  http:    %s\n", httpStatus(BuildAppName))
 			if tail > 0 {
 				fmt.Printf("\n--- last %d bytes of log ---\n", tail)
 				_ = daemon.TailLog(p, tail, os.Stdout)
@@ -297,4 +300,23 @@ func daemonStatusCmd() *cobra.Command {
 	}
 	c.Flags().Int64Var(&tail, "log", 0, "tail last N bytes of the daemon log")
 	return c
+}
+
+// httpStatus probes the /health endpoint and returns a short status string.
+func httpStatus(appName string) string {
+	port := 9425
+	if cfg, err := userconfig.Load(appName); err == nil && cfg.Port > 0 {
+		port = cfg.Port
+	}
+	url := fmt.Sprintf("http://localhost:%d/health", port)
+	c := &http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get(url)
+	if err != nil {
+		return "unreachable"
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return fmt.Sprintf("ok (%s)", url)
+	}
+	return fmt.Sprintf("status %d (%s)", resp.StatusCode, url)
 }

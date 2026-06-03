@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -24,6 +25,16 @@ func processAlive(pid int) bool {
 		return true
 	}
 	return os.IsPermission(err)
+}
+
+// processExePath returns the executable path of pid, or "" on error.
+// Uses /proc/<pid>/exe on Linux and procfs on other POSIX systems.
+func processExePath(pid int) string {
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return ""
+	}
+	return exe
 }
 
 // signalProcess sends sig to pid. Wraps Process.Signal for symmetry
