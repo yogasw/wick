@@ -110,7 +110,6 @@ func (s *store) repairOrphans(ctx context.Context) (int, error) {
 	const sep = "\x00"
 	byKey := make(map[string]uint)
 
-	// First pass: build key→ID map in batches to avoid loading all rows at once.
 	var firstBatch []entity.ProviderStorage
 	if err := s.db.WithContext(ctx).FindInBatches(&firstBatch, 500,
 		func(tx *gorm.DB, batch int) error {
@@ -122,7 +121,6 @@ func (s *store) repairOrphans(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	// Second pass: repair parent_id in batches.
 	fixed := 0
 	var secondBatch []entity.ProviderStorage
 	err := s.db.WithContext(ctx).FindInBatches(&secondBatch, 500,

@@ -28,8 +28,6 @@ func collectExcludePatterns(sources []entity.ProviderStorageSource) []string {
 
 // matchesAnyExclude returns true if abs matches any of the glob patterns.
 // abs and patterns are normalised to forward-slash before matching.
-// Normalisation is delegated to globMatch, which already calls filepath.ToSlash
-// and strings.ReplaceAll on both sides.
 func matchesAnyExclude(abs string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
