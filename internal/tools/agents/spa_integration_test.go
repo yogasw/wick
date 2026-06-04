@@ -70,7 +70,7 @@ func (t *testRouter) handle(method, p string, h tool.HandlerFunc) {
 		_ = body.Render(c.R.Context(), c.W)
 	}
 	t.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		ctx := tool.NewCtx(w, r, render, t.meta, nil)
+		ctx := tool.NewCtx(w, r, render, t.meta, nil, nil)
 		h(ctx)
 	})
 }
