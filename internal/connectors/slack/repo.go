@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -53,6 +54,78 @@ func slackPost(c *connector.Ctx, method string, body map[string]any) (any, error
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resp, _, err := doSlack(c, req, method)
 	return resp, err
+}
+
+// slackPostMultipart implements the Slack v2 three-step file upload flow:
+// 1. POST files.getUploadURLExternal → upload_url + file_id
+// 2. POST multipart/form-data to upload_url with file bytes
+// 3. POST files.completeUploadExternal → share to channel
+// Returns the decoded completeUploadExternal response.
+func slackPostMultipart(c *connector.Ctx, filename string, content []byte, title, channelID, threadTS, initialComment string) (any, error) {
+	// Step 1: get upload URL
+	step1Resp, err := slackPost(c, "files.getUploadURLExternal", map[string]any{
+		"filename": filename,
+		"length":   len(content),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get upload URL: %w", err)
+	}
+	step1Map, _ := step1Resp.(map[string]any)
+	uploadURL, _ := step1Map["upload_url"].(string)
+	fileID, _ := step1Map["file_id"].(string)
+	if uploadURL == "" || fileID == "" {
+		return nil, fmt.Errorf("get upload URL: missing upload_url or file_id in response")
+	}
+
+	// Step 2: upload file bytes as multipart/form-data
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		return nil, fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := fw.Write(content); err != nil {
+		return nil, fmt.Errorf("write file content: %w", err)
+	}
+	mw.Close()
+
+	token, err := pickToken(c)
+	if err != nil {
+		return nil, err
+	}
+	uploadReq, err := http.NewRequestWithContext(c.Context(), http.MethodPost, uploadURL, &buf)
+	if err != nil {
+		return nil, fmt.Errorf("build upload request: %w", err)
+	}
+	uploadReq.Header.Set("Authorization", "Bearer "+token)
+	uploadReq.Header.Set("Content-Type", mw.FormDataContentType())
+	uploadResp, err := c.HTTP.Do(uploadReq)
+	if err != nil {
+		return nil, fmt.Errorf("upload file content: %w", err)
+	}
+	defer uploadResp.Body.Close()
+	if uploadResp.StatusCode < 200 || uploadResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("upload file content: HTTP %d", uploadResp.StatusCode)
+	}
+
+	// Step 3: complete upload and share to channel
+	completeBody := map[string]any{
+		"files": []map[string]any{{"id": fileID, "title": title}},
+	}
+	if channelID != "" {
+		completeBody["channel_id"] = channelID
+	}
+	if threadTS != "" {
+		completeBody["thread_ts"] = threadTS
+	}
+	if initialComment != "" {
+		completeBody["initial_comment"] = initialComment
+	}
+	result, err := slackPost(c, "files.completeUploadExternal", completeBody)
+	if err != nil {
+		return nil, fmt.Errorf("complete upload: %w", err)
+	}
+	return result, nil
 }
 
 // doSlack adds auth, dispatches, and decodes a Slack Web API response.
