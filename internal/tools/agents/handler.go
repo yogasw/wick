@@ -6,8 +6,10 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -160,6 +162,8 @@ func Register(r tool.Router) {
 	r.DELETE("/sessions/{id}", deleteSession)
 
 	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
+	r.GET("/sessions/{id}/turns/{turn_id}", sessionTurnTrace)
+	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
@@ -806,13 +810,17 @@ func sessionDetail(c *tool.Ctx) {
 		}
 		for _, t := range raw {
 			vm := view.TurnVM{
-				Role:      t.Role,
-				Agent:     t.Agent,
-				Provider:  t.Provider,
-				Text:      t.Text,
-				Truncated: t.Truncated,
-				Time:      t.Timestamp,
+				TurnID:      t.TurnID,
+				Role:        t.Role,
+				Agent:       t.Agent,
+				Provider:    t.Provider,
+				Text:        t.Text,
+				Truncated:   t.Truncated,
+				Interrupted: t.Interrupted,
+				HasTrace:    t.HasTrace,
+				Time:        t.Timestamp,
 			}
+			// Legacy: old turns that inlined events are still rendered inline.
 			for _, e := range t.Events {
 				vm.Events = append(vm.Events, view.TurnEventVM{
 					Type:      e.Type,
@@ -1136,6 +1144,51 @@ func deleteSession(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// sessionTurnEvent serves the payload for one large trace event.
+// File lives at thinking/<turn_id>/<event_id>.json.
+func sessionTurnEvent(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	turnID := c.PathValue("turn_id")
+	eventID := c.PathValue("event_id")
+	data, err := os.ReadFile(globalLayout.SessionThinkingEvent(id, turnID, eventID))
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no payload"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
+}
+
+// sessionTurnTrace serves the trace payload for one assistant turn.
+// The file lives at thinking/<turn_id>.json inside the session dir.
+// Returns 404 when the turn has no trace (user turns, old turns).
+func sessionTurnTrace(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	turnID := c.PathValue("turn_id")
+	tracePath := globalLayout.SessionThinking(id, turnID)
+	data, err := os.ReadFile(tracePath)
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no trace"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
 }
 
 // ── Projects ──────────────────────────────────────────────────────────
