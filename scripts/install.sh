@@ -116,7 +116,7 @@ echo ""
 echo "Component status (release: $TAG)"
 printf "  %-18s : %s\n" "$APP"      "$(format_status "$APP_VER" "$TAG")"
 printf "  %-18s : %s\n" "$APP-gate" "$(format_status "$GATE_VER" "$TAG")"
-printf "  %-18s : %s\n" "gotty"     "${GOTTY_VER:-not installed} (prompt below)"
+printf "  %-18s : %s\n" "gotty"     "${GOTTY_VER:-not installed} (auto-install/upgrade)"
 echo ""
 
 # Helper: stop the running agent before overwriting its binary. curl -o
@@ -147,8 +147,8 @@ install_gate() {
 }
 
 # Helper: install gotty (sorenisanerd's maintained fork). Powers the
-# Web Terminal feature. Optional — user is prompted Y/n. Pure-Go binary
-# distributed as tarball, so no `go` toolchain required.
+# Web Terminal feature. Pure-Go binary distributed as tarball, so no
+# `go` toolchain required.
 #
 # Args: $1 dest_dir, $2 goos (linux|darwin)
 # Uses outer-scope $ARCH (already normalised to amd64|arm64). Writes
@@ -176,25 +176,10 @@ install_gotty() {
     fi
   fi
   if [ -n "$installed_ver" ]; then
-    echo "gotty installed: $installed_ver (latest: ${gotty_tag:-unknown})"
-  fi
-  if [ -e /dev/tty ]; then
-    if [ -n "$installed_ver" ]; then
-      printf "Reinstall / upgrade gotty from https://github.com/sorenisanerd/gotty? [y/N]: "
-      default_ans="n"
-    else
-      printf "Install gotty (web terminal) from https://github.com/sorenisanerd/gotty? [Y/n]: "
-      default_ans="y"
-    fi
-    read ans < /dev/tty || ans=""
-    [ -z "$ans" ] && ans="$default_ans"
+    echo "→ gotty installed: $installed_ver (latest: ${gotty_tag:-unknown}) — upgrading automatically"
   else
-    echo "(no tty — skipping gotty install; rerun with a terminal to enable web terminal)"
-    return 0
+    echo "→ installing gotty automatically"
   fi
-  case "$ans" in
-    n|N|no|NO) echo "Skipped gotty install."; return 0 ;;
-  esac
   if [ -z "$gotty_tag" ]; then
     echo "! could not resolve gotty latest tag — skipping" >&2
     return 0
@@ -217,6 +202,24 @@ install_gotty() {
   chmod +x "$dest_dir/gotty"
   rm -rf "$tmp"
   echo "✓ gotty $gotty_tag installed at $dest_dir/gotty"
+}
+
+# Helper: spawn the agent after install. `start` is idempotent: it is a
+# no-op when an existing daemon is already alive, and otherwise detaches
+# into tray/all mode depending on the host.
+start_agent() {
+  bin="$1"
+  [ -n "$bin" ] && [ -x "$bin" ] || bin=$(command -v "$APP" 2>/dev/null || echo "")
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    echo "! could not find $APP on PATH — skipping auto-start" >&2
+    return 0
+  fi
+  echo "→ starting $APP..."
+  if "$bin" start </dev/null; then
+    echo "✓ $APP started"
+  else
+    echo "! $APP start failed — install completed, run '$bin start' manually to retry" >&2
+  fi
 }
 
 # Termux first — $PREFIX with com.termux marker
@@ -276,14 +279,12 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     fi
   fi
 
-  # LAN access prompt — Termux defaults to localhost, which is
+  # LAN access setup — Termux defaults to localhost, which is
   # unreachable from your laptop or another phone on the same Wi-Fi.
-  # Surface every private-range IPv4 we can see and let the user pick
-  # which to whitelist. We never silently expose — the phone might be
-  # on public Wi-Fi where the agent UI shouldn't be reachable to every
-  # device on the SSID.
+  # Surface every private-range IPv4 we can see and whitelist them so
+  # the UI is reachable from other devices immediately after install.
   # Check for existing managed ALLOWED_ORIGINS in ~/.bashrc — re-runs
-  # should be config-only, not force-reprompt every time.
+  # should be config-only, not force-edit every time.
   rc="$HOME/.bashrc"
   existing_origins=""
   if [ -f "$rc" ]; then
@@ -294,27 +295,9 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     echo ""
     echo "  LAN whitelist — existing ALLOWED_ORIGINS in $rc:"
     echo "    $existing_origins"
-    if [ -e /dev/tty ]; then
-      printf "  [k]eep / [e]dit / [c]lear [k]: "
-      read wlchoice < /dev/tty || wlchoice=""
-      [ -z "$wlchoice" ] && wlchoice="k"
-    else
-      wlchoice="k"
-    fi
-    case "$wlchoice" in
-      k|K|keep|KEEP)
-        echo "  ✓ keeping existing whitelist."
-        exit 0
-        ;;
-      c|C|clear|CLEAR)
-        tmp="$rc.tmp.$$"
-        grep -vF "added by $APP installer" "$rc" > "$tmp" && mv "$tmp" "$rc"
-        echo "  ✓ cleared whitelist from $rc."
-        exit 0
-        ;;
-      e|E|edit|EDIT) ;;
-      *) echo "  unknown choice — keeping existing."; exit 0 ;;
-    esac
+    echo "  ✓ keeping existing whitelist."
+    start_agent "$PREFIX/bin/$APP"
+    exit 0
   fi
 
   if command -v ip >/dev/null 2>&1; then
@@ -324,7 +307,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   fi
   if [ -n "$lan_ips" ]; then
     # Collect into a positional list — sh has no arrays, but `set --`
-    # gives us $1..$N with stable indices for the prompt.
+    # gives us $1..$N with stable indices for display.
     set --
     for ip in $lan_ips; do set -- "$@" "$ip"; done
     n=$#
@@ -336,34 +319,8 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
       echo "    [$i] http://$ip:9425"
     done
     echo ""
-    echo "  Whitelist for browser access from other devices?"
-    echo "    a    = all       n = none (default)       1,2,3 = pick by number"
-    # Reading from a terminal works when the script is piped (curl | sh)
-    # only if /dev/tty is available — fall back to "n" otherwise.
-    if [ -e /dev/tty ]; then
-      printf "  Choice [n]: "
-      read choice < /dev/tty || choice=""
-    else
-      choice=""
-      echo "  (no tty — skipping; set ALLOWED_ORIGINS manually or use /admin/variables later)"
-    fi
-    selected=""
-    case "$choice" in
-      ""|n|N|no|NO) selected="" ;;
-      a|A|all|ALL)  selected="$lan_ips" ;;
-      *)
-        # Parse comma-separated numbers, dedupe by index.
-        for tok in $(echo "$choice" | tr ',' ' '); do
-          case "$tok" in
-            ''|*[!0-9]*) continue ;;
-          esac
-          if [ "$tok" -ge 1 ] && [ "$tok" -le "$n" ]; then
-            eval "pick=\${$tok}"
-            selected="$selected $pick"
-          fi
-        done
-        ;;
-    esac
+    echo "  Whitelisting all detected LAN URLs automatically."
+    selected="$lan_ips"
     if [ -n "$selected" ]; then
       # Build comma-separated URL list for ALLOWED_ORIGINS.
       origins=""
@@ -389,6 +346,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
       echo "  Skipped — set ALLOWED_ORIGINS manually or add via /admin/variables later."
     fi
   fi
+  start_agent "$PREFIX/bin/$APP"
   exit 0
 fi
 
@@ -409,6 +367,7 @@ case "$OS" in
       echo "✓ $APP installed to /Applications/$APP.app"
     fi
     install_gotty "/usr/local/bin" "darwin"
+    start_agent "/Applications/$APP.app/Contents/MacOS/$APP"
     ;;
   Linux)
     if [ "$SKIP_APP" = "1" ] && [ "$SKIP_GATE" = "1" ]; then
@@ -453,6 +412,7 @@ case "$OS" in
       fi
     fi
     install_gotty "/usr/local/bin" "linux"
+    start_agent "$(command -v "$APP" 2>/dev/null || echo "/usr/local/bin/$APP")"
     ;;
   *)
     echo "unsupported OS: $OS (use install.ps1 for Windows)" >&2

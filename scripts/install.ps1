@@ -16,6 +16,27 @@ $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' 
 $Headers = @{}
 if ($Token) { $Headers['Authorization'] = "Bearer $Token" }
 
+function Start-Agent {
+  $Candidates = @()
+  $Cmd = Get-Command $App -ErrorAction SilentlyContinue
+  if ($Cmd) { $Candidates += $Cmd.Source }
+  $Candidates += (Join-Path $env:LOCALAPPDATA "Programs\$App\$App.exe")
+
+  $Exe = $Candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+  if (-not $Exe) {
+    Write-Warning "could not find $App — skipping auto-start"
+    return
+  }
+
+  Write-Host "-> starting $App..."
+  try {
+    & $Exe start
+    Write-Host "OK $App started"
+  } catch {
+    Write-Warning "$App start failed — install completed, run '$Exe start' manually to retry"
+  }
+}
+
 $Tag = if ($env:VERSION -and $env:VERSION -ne 'latest') {
   $env:VERSION
 } else {
@@ -37,6 +58,7 @@ if ($Cmd) {
 }
 if ($Installed -and ($Installed -match [regex]::Escape($Tag) -or $Installed -match [regex]::Escape($Ver))) {
   Write-Host "OK $App already at $Tag — skipping (currently: $Installed)"
+  Start-Agent
   exit 0
 }
 
@@ -48,3 +70,4 @@ Invoke-WebRequest -Headers $Headers $Url -OutFile $Tmp
 Start-Process msiexec -ArgumentList "/i `"$Tmp`" /qn" -Wait
 Remove-Item $Tmp
 Write-Host "OK $App installed"
+Start-Agent
