@@ -163,6 +163,15 @@ type SetCanvasAccessInput struct {
 	UserIDs     string `wick:"desc=Comma-separated user IDs to grant access. Cannot be combined with channel_ids."`
 }
 
+type UploadFileInput struct {
+	Filename       string `wick:"required;desc=Filename for the upload (e.g. report.txt, diagram.png). Slack infers file type from the extension."`
+	Content        string `wick:"required;textarea;desc=File content as a UTF-8 string. Binary content is not supported in this operation."`
+	ChannelID      string `wick:"desc=Channel ID (C...) to share the file to after upload. Omit to upload without sharing."`
+	Title          string `wick:"desc=Optional display title shown in Slack. Defaults to filename when omitted."`
+	ThreadTS       string `wick:"desc=Parent message ts to share the file into a thread. Requires channel_id."`
+	InitialComment string `wick:"textarea;desc=Optional message text to accompany the file when shared to a channel."`
+}
+
 // Meta returns the static metadata block for this connector.
 func Meta() connector.Meta {
 	return connector.Meta{
@@ -511,6 +520,30 @@ func Operations() []connector.Operation {
 					"Only user_ids may receive owner access.",
 					"Slack requires the canvas link to have been shared with each target channel or user before setting its access.",
 				},
+			},
+		),
+		connector.OpDestructive(
+			"upload_file",
+			"Upload File",
+			"Upload a file to Slack via the v2 two-step API, then optionally share it to a channel or thread. Requires files:write scope.",
+			UploadFileInput{},
+			uploadFile,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"file_id":   "Slack file ID (F...).",
+					"name":      "Filename as stored by Slack.",
+					"title":     "Display title shown in Slack.",
+					"permalink": "Permanent link to the file in the Slack UI.",
+					"channel":   "Channel ID the file was shared to (only present when channel_id was provided).",
+				},
+				TemplateableFields: []string{"filename", "content", "channel_id", "thread_ts", "title", "initial_comment"},
+				Quirks: []string{
+					"Uses Slack v2 upload API (files.getUploadURLExternal + files.completeUploadExternal). The legacy files.upload is deprecated.",
+					"Slack determines the file type from the filename extension — choose the extension carefully.",
+					"Omitting channel_id uploads the file without sharing it.",
+					"Requires files:write scope.",
+				},
+				PairWith: []string{"connector:slack.send_message"},
 			},
 		),
 	}
@@ -1012,4 +1045,23 @@ func parseCanvasIDs(raw string) []string {
 		}
 	}
 	return out
+}
+
+func uploadFile(c *connector.Ctx) (any, error) {
+	filename := strings.TrimSpace(c.Input("filename"))
+	content := c.Input("content")
+	channelID := strings.TrimSpace(c.Input("channel_id"))
+	title := strings.TrimSpace(c.Input("title"))
+	threadTS := strings.TrimSpace(c.Input("thread_ts"))
+	initialComment := c.Input("initial_comment")
+
+	if threadTS != "" && channelID == "" {
+		return nil, fmt.Errorf("channel_id is required when thread_ts is set")
+	}
+
+	raw, err := slackPostMultipart(c, filename, []byte(content), title, channelID, threadTS, initialComment)
+	if err != nil {
+		return nil, err
+	}
+	return shapeUploadResult(raw)
 }
