@@ -209,6 +209,29 @@ type HealthChecker interface {
 	HealthCheck() []HealthCheck
 }
 
+// StatusField is one row in the "Integration status" panel shown under
+// the test button. Used to surface identity + transport state the
+// operator wants to verify at a glance — bot user id/name, team name,
+// transport mode, subscription state, public webhook URL, etc.
+//
+// OK is optional — when true the row renders with a success icon;
+// false flags the value for attention (e.g. socket disconnected,
+// public URL missing). Leave the zero value for neutral rows.
+type StatusField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+	OK    bool   `json:"ok,omitempty"`
+	Warn  bool   `json:"warn,omitempty"`
+}
+
+// StatusReporter lets a channel expose a structured snapshot of its
+// current runtime identity + connection state. Rendered under the
+// "Test Integration" panel; polled by the admin UI on page load and
+// after each manual test run.
+type StatusReporter interface {
+	Status() []StatusField
+}
+
 // LookupProvider lets a channel back picker fields with a live search
 // against its upstream. Source is the registered key from the wick tag
 // (e.g. "slack.users"). Implementations should cap results and skip

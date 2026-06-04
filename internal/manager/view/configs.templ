@@ -409,7 +409,7 @@ templ kvDataRow(cols []string, colOpts map[string]string, entry map[string]strin
 // id|name cols, so allowedCfg parsers can read either.
 templ pickerBlock(row entity.Config, chips []map[string]string) {
 	<div
-		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm"
 		data-picker-key={ row.Key }
 		data-picker-source={ row.Options }
 		data-cfg-key={ row.Key }
