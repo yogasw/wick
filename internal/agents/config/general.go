@@ -18,6 +18,8 @@ type GeneralConfig struct {
 	WorkflowLokiURL       string `wick:"url;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
 	WorkflowLokiLabels    string `wick:"text;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
 	MCPUninstalledClients string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
+	TraceEventInlineKB    int    `wick:"number;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
+	TraceEventMaxKB       int    `wick:"number;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
@@ -31,6 +33,8 @@ func DefaultGeneralConfig() GeneralConfig {
 		AutoRescan:        true,
 		PreemptIdle:       true,
 		SystemPrompt:      DefaultSystemPrompt(),
-		WorkflowGuardMode: "off",
+		WorkflowGuardMode:  "off",
+		TraceEventInlineKB: 10,
+		TraceEventMaxKB:    512,
 	}
 }

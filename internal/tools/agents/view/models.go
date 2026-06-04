@@ -209,13 +209,16 @@ type TurnEventVM struct {
 
 // TurnVM is one conversation turn for the UI.
 type TurnVM struct {
+	TurnID      string // stable ID — used to lazy-fetch trace via GET /turns/:id
 	Role        string // "user" | "assistant" | "system"
 	Agent       string
 	Provider    string // "type/name" — snapshot from the turn that produced it
 	Text        string
 	Truncated   bool
+	Interrupted bool // true → killed before Done (distinct from text-cap truncation)
+	HasTrace    bool // true → trace file exists, UI shows "expand trace" button
 	Time        time.Time
-	Events      []TurnEventVM
+	Events      []TurnEventVM // legacy: populated only from old turns that inlined events
 	Attachments []AttachmentVM
 }
 

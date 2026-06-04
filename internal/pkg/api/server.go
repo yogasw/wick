@@ -395,6 +395,14 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	agentsFactory.TraceInlineKBLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_inline_kb"))
+		return v
+	}
+	agentsFactory.TraceEventMaxKBLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_max_kb"))
+		return v
+	}
 
 	// syncSharedSpec rewrites the shared spec.json on every spawn so
 	// allowed_cmds edits take effect without a server restart.

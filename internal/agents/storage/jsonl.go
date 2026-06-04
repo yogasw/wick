@@ -62,6 +62,10 @@ func AppendJSONL(path string, format, sessionID string, v any) error {
 // false to stop early. A missing file is treated as "no entries yet"
 // (returns nil) — callers that care about the difference should stat
 // the file themselves.
+//
+// Uses json.Decoder (not bufio.Scanner) so lines larger than any fixed
+// buffer limit (e.g. turns carrying base64-encoded attachments) are
+// handled without error.
 func ReadJSONL(path string, emit func(line []byte) bool) error {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -71,20 +75,24 @@ func ReadJSONL(path string, emit func(line []byte) bool) error {
 		return err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if isMetaLine(line) {
+	dec := json.NewDecoder(f)
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if isMetaLine(raw) {
 			continue
 		}
-		buf := make([]byte, len(line))
-		copy(buf, line)
+		buf := make([]byte, len(raw))
+		copy(buf, raw)
 		if !emit(buf) {
 			return nil
 		}
 	}
-	return scanner.Err()
 }
 
 // TailJSONL returns the last n non-meta lines via emit, in file order.
