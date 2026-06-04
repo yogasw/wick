@@ -90,6 +90,7 @@ templ ChannelConfigPage(vm ChannelConfigVM) {
 				Configure credentials and access control for the { vm.ChannelName } channel.
 			</p>
 			@integrationTestPanel(vm.Base + "/channels/test/" + vm.ChannelSlug)
+			@integrationStatusPanel(vm.Base + "/channels/" + vm.ChannelSlug + "/status")
 			@managerview.ConfigsTableFull(vm.Rows, vm.ActionBase)
 			if vm.Docs != nil {
 				<div class="mt-8">
@@ -181,6 +182,100 @@ templ integrationTestPanel(testURL string) {
 					.catch(function(e){render(null,e.message||String(e));})
 					.then(function(){btn.disabled=false;btn.textContent=orig;});
 			});
+		})();
+		</script>
+	</div>
+}
+
+// integrationStatusPanel renders the "Integration status" card under
+// the test button. JS auto-fetches statusURL on load and re-fetches
+// 2s after every successful Test Integration run so the displayed
+// state stays in sync with reconnect actions kicked off by the test.
+templ integrationStatusPanel(statusURL string) {
+	<div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden" data-integration-status data-status-url={ statusURL }>
+		<div class="flex items-center justify-between gap-3 px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			<div>
+				<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Integration status</h3>
+				<p class="text-xs text-black-700 dark:text-black-600">Live identity and transport state.</p>
+			</div>
+			<button
+				type="button"
+				data-status-refresh
+				class="rounded-lg border border-white-300 dark:border-navy-600 text-xs font-medium px-3 py-2 text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+			>Refresh</button>
+		</div>
+		<div data-status-rows class="p-5 flex flex-col gap-2">
+			<div class="text-xs text-black-700 dark:text-black-600">Loading…</div>
+		</div>
+		<script>
+		(function(){
+			var panel=document.currentScript.closest('[data-integration-status]');
+			var url=panel.getAttribute('data-status-url');
+			var rows=panel.querySelector('[data-status-rows]');
+			var btn=panel.querySelector('[data-status-refresh]');
+			function render(items,err){
+				rows.innerHTML='';
+				if(err){
+					var e=document.createElement('div');
+					e.className='text-xs text-neg-400 font-mono';
+					e.textContent='Request failed: '+err;
+					rows.appendChild(e);
+					return;
+				}
+				if(!items||items.length===0){
+					rows.innerHTML='<div class="text-xs text-black-700 dark:text-black-600">No status reported.</div>';
+					return;
+				}
+				items.forEach(function(it){
+					var row=document.createElement('div');
+					row.className='flex items-start gap-2 text-xs';
+					var icon=document.createElement('span');
+					var color='text-black-700 dark:text-black-600';
+					if(it.ok) color='text-pos-400';
+					else if(it.warn) color='text-warn-400';
+					icon.className='shrink-0 mt-0.5 font-mono '+color;
+					icon.textContent=it.ok?'✓':(it.warn?'!':'·');
+					var body=document.createElement('div');
+					body.className='flex-1 min-w-0';
+					var label=document.createElement('span');
+					label.className='font-semibold text-black-900 dark:text-white-100';
+					label.textContent=it.label+': ';
+					var val=document.createElement('span');
+					val.className='font-mono text-black-900 dark:text-white-100 break-all';
+					val.textContent=it.value;
+					body.appendChild(label);
+					body.appendChild(val);
+					row.appendChild(icon);
+					row.appendChild(body);
+					rows.appendChild(row);
+				});
+			}
+			function load(){
+				rows.innerHTML='<div class="text-xs text-black-700 dark:text-black-600">Loading…</div>';
+				fetch(url,{credentials:'same-origin'})
+					.then(function(r){
+						// 501 = channel doesn't implement StatusReporter (telegram/rest/etc).
+						// Hide the whole panel — no value in showing an error to the operator.
+						if(r.status===501){ panel.style.display='none'; return null; }
+						return r.json().then(function(b){return{ok:r.ok,body:b};});
+					})
+					.then(function(res){
+						if(!res) return;
+						if(!res.ok){render(null,(res.body&&res.body.error)||'HTTP error');return;}
+						render(res.body,null);
+					})
+					.catch(function(e){render(null,e.message||String(e));});
+			}
+			btn.addEventListener('click',load);
+			load();
+			// Re-fetch shortly after a successful test run so the reconnect
+			// kicked off by probeTransport has time to settle.
+			var testPanel=document.querySelector('[data-integration-test]');
+			if(testPanel){
+				testPanel.querySelector('[data-test-run]').addEventListener('click',function(){
+					setTimeout(load,2000);
+				});
+			}
 		})();
 		</script>
 	</div>

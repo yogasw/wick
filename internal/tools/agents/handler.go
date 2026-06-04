@@ -247,6 +247,7 @@ func Register(r tool.Router) {
 	r.POST("/channels/rest/{key}", makeChannelSaveHandler("rest"))
 	r.GET("/channels/{slug}/lookup", channelLookupHandler)
 	r.POST("/channels/test/{slug}", channelHealthHandler)
+	r.GET("/channels/{slug}/status", channelStatusHandler)
 
 	r.GET("/settings", settingsPage)
 
@@ -851,7 +852,7 @@ func sessionDetail(c *tool.Ctx) {
 		activeProv = sess.Agents[0].Provider
 	}
 	vm := view.SessionDetailVM{
-		Layout:          sidebarVM(c, "sessions", id),
+		Layout:          sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
 		Base:            c.Base(),
 		Session:         sess,
 		Tab:             tab,
