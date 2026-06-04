@@ -2,6 +2,8 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -157,131 +159,182 @@ func TestPickToken_Missing(t *testing.T) {
 	assert.Contains(t, err.Error(), "not configured")
 }
 
+func newCtxWithInput(t *testing.T, inputs map[string]string) *connector.Ctx {
+	t.Helper()
+	return connector.NewCtx(context.Background(), "test-row",
+		map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"},
+		inputs, http.DefaultClient, nil, nil)
+}
+
 // ── upload_file tests ────────────────────────────────────────────────
 
-// mockUploadFlow builds a test server that handles the three-step v2 upload
-// flow. putStatus is the HTTP status for the binary PUT; step3Body is the JSON
-// for files.completeUploadExternal. The upload_url in step 1 is set to the
-// test server's own URL so the PUT goes to the same server.
-func mockUploadFlow(t *testing.T, putStatus int, step3Body string) *httptest.Server {
-	t.Helper()
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/files.getUploadURLExternal":
-			_, _ = w.Write([]byte(`{"ok":true,"upload_url":"` + srv.URL + `/upload","file_id":"FTEST01"}`))
-		case "/upload":
-			w.WriteHeader(putStatus)
-		case "/files.completeUploadExternal":
-			_, _ = w.Write([]byte(step3Body))
-		default:
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
+func TestUploadFile_HappyPath(t *testing.T) {
+	var uploadedFilename string
+	var uploadedContent []byte
+	var completedBody map[string]any
 
-func TestUploadFile_Success_Base64(t *testing.T) {
-	step3 := `{"ok":true,"files":[{"id":"FTEST01","permalink":"https://slack.com/files/T1/FTEST01"}]}`
-	srv := mockUploadFlow(t, http.StatusOK, step3)
-	withBaseURL(t, srv.URL)
-	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
-
-	result, err := doUploadFile(c, "C123", "aGVsbG8=", "hello.txt", "base64", "", "")
-	require.NoError(t, err)
-	m := result.(map[string]any)
-	assert.Equal(t, "FTEST01", m["file_id"])
-	assert.Equal(t, "hello.txt", m["filename"])
-	assert.Equal(t, "C123", m["channel"])
-	assert.Equal(t, "https://slack.com/files/T1/FTEST01", m["permalink"])
-}
-
-func TestUploadFile_Success_Text(t *testing.T) {
-	step3 := `{"ok":true,"files":[{"id":"FTEST01"}]}`
-	srv := mockUploadFlow(t, http.StatusOK, step3)
-	withBaseURL(t, srv.URL)
-	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
-
-	result, err := doUploadFile(c, "C456", "plain text content", "notes.txt", "text", "", "")
-	require.NoError(t, err)
-	m := result.(map[string]any)
-	assert.Equal(t, "FTEST01", m["file_id"])
-	assert.Equal(t, "notes.txt", m["filename"])
-	assert.NotContains(t, m, "permalink")
-}
-
-func TestUploadFile_WithTitleAndComment(t *testing.T) {
-	var capturedBody []byte
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/files.getUploadURLExternal":
-			_, _ = w.Write([]byte(`{"ok":true,"upload_url":"` + srv.URL + `/upload","file_id":"FTEST03"}`))
-		case "/upload":
-			w.WriteHeader(http.StatusOK)
-		case "/files.completeUploadExternal":
-			capturedBody, _ = io.ReadAll(r.Body)
-			_, _ = w.Write([]byte(`{"ok":true,"files":[{"id":"FTEST03"}]}`))
-		default:
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		}
-	}))
-	t.Cleanup(srv.Close)
-	withBaseURL(t, srv.URL)
-	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
-
-	_, err := doUploadFile(c, "C789", "dGVzdA==", "data.csv", "base64", "My Title", "Check this out")
-	require.NoError(t, err)
-	body := string(capturedBody)
-	assert.Contains(t, body, "My Title")
-	assert.Contains(t, body, "Check this out")
-}
-
-func TestUploadFile_Step1Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":false,"error":"not_authed"}`))
+		switch r.URL.Path {
+		case "/files.getUploadURLExternal":
+			fmt.Fprintf(w, `{"ok":true,"upload_url":"http://%s/upload/v1","file_id":"F9999"}`, r.Host)
+		case "/upload/v1":
+			require.Empty(t, r.Header.Get("Authorization"), "upload_url must not carry Bearer token")
+			mr, err := r.MultipartReader()
+			require.NoError(t, err)
+			part, err := mr.NextPart()
+			require.NoError(t, err)
+			uploadedFilename = part.FileName()
+			uploadedContent, _ = io.ReadAll(part)
+			w.WriteHeader(http.StatusOK)
+		case "/files.completeUploadExternal":
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&completedBody))
+			fmt.Fprint(w, `{"ok":true,"files":[{"id":"F9999","name":"report.txt","title":"July Report","permalink":"https://slack.com/F9999","url_private":"https://files.slack.com/F9999"}]}`)
+		}
 	}))
 	t.Cleanup(srv.Close)
 	withBaseURL(t, srv.URL)
-	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
 
-	_, err := doUploadFile(c, "C123", "dGVzdA==", "file.txt", "base64", "", "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "get upload URL")
+	result, err := uploadFile(newCtxWithInput(t, map[string]string{
+		"filename":        "report.txt",
+		"content":         "Monthly summary",
+		"channel_id":      "C123",
+		"title":           "July Report",
+		"initial_comment": "See attached",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "report.txt", uploadedFilename)
+	assert.Equal(t, []byte("Monthly summary"), uploadedContent)
+	assert.Equal(t, "C123", completedBody["channel_id"])
+	assert.Equal(t, "See attached", completedBody["initial_comment"])
+	out := result.(map[string]any)
+	assert.Equal(t, "F9999", out["file_id"])
+	assert.Equal(t, "C123", out["channel"])
+	assert.Equal(t, "July Report", out["title"])
 }
 
-func TestUploadFile_Step2Error(t *testing.T) {
-	srv := mockUploadFlow(t, http.StatusInternalServerError, "")
+func TestUploadFile_NoChannel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/files.getUploadURLExternal":
+			fmt.Fprintf(w, `{"ok":true,"upload_url":"http://%s/upload/v1","file_id":"F001"}`, r.Host)
+		case "/upload/v1":
+			w.WriteHeader(http.StatusOK)
+		case "/files.completeUploadExternal":
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			assert.Nil(t, body["channel_id"], "channel_id must be absent when not provided")
+			fmt.Fprint(w, `{"ok":true,"files":[{"id":"F001","name":"data.txt","title":"data.txt"}]}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	result, err := uploadFile(newCtxWithInput(t, map[string]string{
+		"filename": "data.txt",
+		"content":  "hello",
+	}))
+	require.NoError(t, err)
+	out := result.(map[string]any)
+	assert.Equal(t, "F001", out["file_id"])
+	assert.Nil(t, out["channel"])
+}
+
+func TestUploadFile_ThreadTSRequiresChannelID(t *testing.T) {
+	_, err := uploadFile(newCtxWithInput(t, map[string]string{
+		"filename":  "x.txt",
+		"content":   "y",
+		"thread_ts": "1700000000.000100",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "channel_id is required")
+}
+
+func TestUploadFile_MissingFilename(t *testing.T) {
+	_, err := uploadFile(newCtxWithInput(t, map[string]string{"content": "data"}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "filename is required")
+}
+
+func TestUploadFile_MissingContent(t *testing.T) {
+	_, err := uploadFile(newCtxWithInput(t, map[string]string{"filename": "file.txt"}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "content is required")
+}
+
+func TestUploadFile_GetURLFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":false,"error":"not_authed"}`)
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := uploadFile(newCtxWithInput(t, map[string]string{
+		"filename": "x.txt",
+		"content":  "data",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not_authed")
+}
+
+func TestUploadFile_UploadFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/files.getUploadURLExternal":
+			fmt.Fprintf(w, `{"ok":true,"upload_url":"http://%s/upload/v1","file_id":"F001"}`, r.Host)
+		case "/upload/v1":
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := uploadFile(newCtxWithInput(t, map[string]string{
+		"filename": "x.txt",
+		"content":  "data",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "upload file bytes")
+}
+
+func TestUploadFile_CompleteFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/files.getUploadURLExternal":
+			fmt.Fprintf(w, `{"ok":true,"upload_url":"http://%s/upload/v1","file_id":"F001"}`, r.Host)
+		case "/upload/v1":
+			w.WriteHeader(http.StatusOK)
+		case "/files.completeUploadExternal":
+			fmt.Fprint(w, `{"ok":false,"error":"invalid_file_id"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	withBaseURL(t, srv.URL)
+
+	_, err := uploadFile(newCtxWithInput(t, map[string]string{
+		"filename":   "x.txt",
+		"content":    "data",
+		"channel_id": "C123",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid_file_id")
+}
+
+func TestUploadFile_HealthCheckScope(t *testing.T) {
+	srv := mockSlack(t, "channels:read,chat:write") // files:write absent
 	withBaseURL(t, srv.URL)
 	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
 
-	_, err := doUploadFile(c, "C123", "dGVzdA==", "file.txt", "base64", "", "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "upload file content")
-	assert.Contains(t, err.Error(), "500")
-}
-
-func TestUploadFile_Step3Error(t *testing.T) {
-	step3 := `{"ok":false,"error":"file_not_found"}`
-	srv := mockUploadFlow(t, http.StatusOK, step3)
-	withBaseURL(t, srv.URL)
-	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
-
-	_, err := doUploadFile(c, "C123", "dGVzdA==", "file.txt", "base64", "", "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "complete upload")
-}
-
-func TestUploadFile_InvalidBase64(t *testing.T) {
-	srv := mockUploadFlow(t, http.StatusOK, `{"ok":true,"files":[]}`)
-	withBaseURL(t, srv.URL)
-	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
-
-	_, err := doUploadFile(c, "C123", "not!!valid_base64%%%", "file.txt", "base64", "", "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "base64 decode")
+	report, err := runHealthCheck(c)
+	require.NoError(t, err)
+	byOp := map[string]connector.OpHealth{}
+	for _, h := range report {
+		byOp[h.Key] = h
+	}
+	assert.False(t, byOp["upload_file"].OK)
+	assert.Contains(t, byOp["upload_file"].Reason, "files:write")
 }

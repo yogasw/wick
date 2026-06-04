@@ -330,6 +330,29 @@ func shapePostResult(raw any) any {
 	return out
 }
 
+func shapeUploadResult(raw any, channelID string) any {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return raw
+	}
+	files, _ := m["files"].([]any)
+	if len(files) == 0 {
+		return map[string]any{"ok": true}
+	}
+	f, _ := files[0].(map[string]any)
+	out := map[string]any{
+		"file_id":   f["id"],
+		"name":      f["name"],
+		"title":     f["title"],
+		"permalink": f["permalink"],
+		"url":       f["url_private"],
+	}
+	if channelID != "" {
+		out["channel"] = channelID
+	}
+	return out
+}
+
 // ── Permission check ─────────────────────────────────────────────────
 
 // opScopes lists, for each operation, the set of OAuth scopes that

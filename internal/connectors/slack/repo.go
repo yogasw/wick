@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -55,30 +56,40 @@ func slackPost(c *connector.Ctx, method string, body map[string]any) (any, error
 	return resp, err
 }
 
-// slackPutBinary PUTs raw bytes to the Slack-provided upload URL returned by
-// files.getUploadURLExternal. The endpoint is not under the normal API base
-// URL and returns a plain HTTP 200, not a JSON ok-envelope.
-func slackPutBinary(c *connector.Ctx, uploadURL string, content []byte) error {
-	req, err := http.NewRequestWithContext(c.Context(), http.MethodPut, uploadURL, bytes.NewReader(content))
+// slackPostMultipart POSTs file content to a pre-signed Slack upload URL using
+// multipart/form-data. The upload URL embeds auth in its query params — no
+// Bearer token is added (unlike doSlack). Used only by uploadFile step 2.
+func slackPostMultipart(c *connector.Ctx, uploadURL string, filename string, content []byte) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	part, err := mw.CreateFormFile("file", filename)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return fmt.Errorf("create form file: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	token, err := pickToken(c)
+	if _, err := part.Write(content); err != nil {
+		return fmt.Errorf("write file content: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodPost, uploadURL, &buf)
 	if err != nil {
-		return err
+		return fmt.Errorf("build upload request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	// No Authorization header — upload_url is a pre-signed URL.
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("PUT upload: %w", err)
+		return fmt.Errorf("upload file: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("PUT upload HTTP %d", resp.StatusCode)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		return fmt.Errorf("upload file HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
 }

@@ -132,12 +132,12 @@ type RemoveReactionInput struct {
 }
 
 type UploadFileInput struct {
-	ChannelID      string `wick:"required;desc=Target channel ID (C...) or DM ID (D...) to share the file into."`
-	Content        string `wick:"required;textarea;desc=File content. Binary files must be base64-encoded (set encoding=base64). Plain text files may use encoding=text."`
-	Filename       string `wick:"required;desc=File name with extension, e.g. report.csv or screenshot.png. Slack infers MIME type from extension."`
-	Encoding       string `wick:"dropdown=base64|text;default=base64;desc=Content encoding. base64: decode before upload (use for binary). text: upload as UTF-8 bytes as-is."`
-	Title          string `wick:"desc=Optional display title shown in Slack."`
-	InitialComment string `wick:"desc=Optional message text posted alongside the file."`
+	Filename       string `wick:"required;desc=Filename for the upload (e.g. report.txt, diagram.png). Slack infers file type from the extension."`
+	Content        string `wick:"required;textarea;desc=File content as a UTF-8 string. Binary content is not supported in this operation."`
+	ChannelID      string `wick:"desc=Channel ID (C...) to share the file to after upload. Omit to upload without sharing."`
+	Title          string `wick:"desc=Optional display title shown in Slack. Defaults to filename when omitted."`
+	ThreadTS       string `wick:"desc=Parent message ts to share the file into a thread. Requires channel_id."`
+	InitialComment string `wick:"textarea;desc=Optional message text to accompany the file when shared to a channel."`
 }
 
 // Meta returns the static metadata block for this connector.
@@ -406,24 +406,30 @@ func Operations() []connector.Operation {
 		connector.OpDestructive(
 			"upload_file",
 			"Upload File",
-			"Upload a file to a channel or DM using Slack's v2 three-step upload flow. Returns file_id, filename, and channel.",
+			"Upload a file to Slack via the v2 two-step API, then optionally share it to a channel or thread.",
 			UploadFileInput{},
 			uploadFile,
 			wickdocs.Docs{
 				OutputShape: map[string]string{
-					"file_id":   "Slack file ID (F...) assigned after upload.",
-					"filename":  "Echo of the uploaded filename.",
-					"channel":   "Echo of the target channel ID.",
-					"permalink": "Direct Slack URL to the file (when returned by completeUploadExternal).",
+					"file_id":   "Slack file ID (F...).",
+					"name":      "Filename as stored by Slack.",
+					"title":     "Display title shown in Slack.",
+					"permalink": "Permanent link to the file in the Slack UI.",
+					"url":       "Private download URL (requires auth).",
+					"channel":   "Channel ID the file was shared to (only present when channel_id was provided).",
 				},
-				TemplateableFields: []string{"channel_id", "content", "filename", "title", "initial_comment"},
+				TemplateableFields: []string{"filename", "content", "channel_id", "thread_ts", "title", "initial_comment"},
 				Quirks: []string{
-					"Slack deprecated files.upload; this operation uses the v2 API (files.getUploadURLExternal).",
-					"Binary files (images, PDFs) must be base64-encoded before passing as content.",
-					"Requires files:write scope.",
-					"initial_comment is posted as a message in the channel with the file attached.",
+					"Slack v2 upload is a three-step process: get pre-signed URL, POST file bytes, complete upload.",
+					"Slack determines the file type from the filename extension — choose the extension carefully.",
+					"Omitting channel_id uploads the file without sharing it. Use send_message with a files attachment afterward if needed.",
+					"thread_ts requires channel_id. Sharing to a thread also posts a notification in the parent channel.",
+					"Requires files:write scope on the bot token.",
+					"Binary content is not supported — pass UTF-8 text only.",
 				},
-				PairWith: []string{"connector:slack.send_message"},
+				PairWith:     []string{"connector:slack.send_message"},
+				InputSample:  `{"filename":"report.txt","content":"Monthly summary:\n- 42 tickets resolved","channel_id":"C12345","title":"July Report","initial_comment":"Here is the July report."}`,
+				OutputSample: `{"file_id":"F12345","name":"report.txt","title":"July Report","permalink":"https://acme.slack.com/files/U1/F12345/report.txt","url":"https://files.slack.com/files-pri/...","channel":"C12345"}`,
 			},
 		),
 	}
@@ -764,21 +770,65 @@ func reactionAction(c *connector.Ctx, method string) (any, error) {
 }
 
 func uploadFile(c *connector.Ctx) (any, error) {
-	channelID := strings.TrimSpace(c.Input("channel_id"))
-	if channelID == "" {
-		return nil, fmt.Errorf("channel_id is required")
+	filename := strings.TrimSpace(c.Input("filename"))
+	if filename == "" {
+		return nil, fmt.Errorf("filename is required")
 	}
 	content := c.Input("content")
 	if strings.TrimSpace(content) == "" {
 		return nil, fmt.Errorf("content is required")
 	}
-	filename := strings.TrimSpace(c.Input("filename"))
-	if filename == "" {
-		return nil, fmt.Errorf("filename is required")
+	channelID := strings.TrimSpace(c.Input("channel_id"))
+	threadTS := strings.TrimSpace(c.Input("thread_ts"))
+	if threadTS != "" && channelID == "" {
+		return nil, fmt.Errorf("channel_id is required when thread_ts is set")
 	}
-	return doUploadFile(c, channelID, content, filename,
-		firstNonEmpty(strings.TrimSpace(c.Input("encoding")), "base64"),
-		strings.TrimSpace(c.Input("title")),
-		c.Input("initial_comment"),
-	)
+	title := firstNonEmpty(strings.TrimSpace(c.Input("title")), filename)
+	initialComment := strings.TrimSpace(c.Input("initial_comment"))
+
+	fileBytes := []byte(content)
+
+	// Step 1: obtain a pre-signed upload URL and a file_id.
+	step1, err := slackPost(c, "files.getUploadURLExternal", map[string]any{
+		"filename": filename,
+		"length":   len(fileBytes),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get upload URL: %w", err)
+	}
+	m1, ok := step1.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("files.getUploadURLExternal: unexpected response shape")
+	}
+	uploadURL, _ := m1["upload_url"].(string)
+	fileID, _ := m1["file_id"].(string)
+	if uploadURL == "" || fileID == "" {
+		return nil, fmt.Errorf("files.getUploadURLExternal: missing upload_url or file_id in response")
+	}
+
+	// Step 2: POST the file bytes to the pre-signed URL (no Bearer token).
+	if err := slackPostMultipart(c, uploadURL, filename, fileBytes); err != nil {
+		return nil, fmt.Errorf("upload file bytes: %w", err)
+	}
+
+	// Step 3: complete the upload and optionally share to a channel.
+	completeBody := map[string]any{
+		"files": []map[string]any{
+			{"id": fileID, "title": title},
+		},
+	}
+	if channelID != "" {
+		completeBody["channel_id"] = channelID
+	}
+	if threadTS != "" {
+		completeBody["thread_ts"] = threadTS
+	}
+	if initialComment != "" {
+		completeBody["initial_comment"] = initialComment
+	}
+	step3, err := slackPost(c, "files.completeUploadExternal", completeBody)
+	if err != nil {
+		return nil, fmt.Errorf("complete upload: %w", err)
+	}
+	return shapeUploadResult(step3, channelID), nil
 }
