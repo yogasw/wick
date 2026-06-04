@@ -96,6 +96,11 @@ type PoolConfig struct {
 	// channel message (e.g. Slack thread_ts). Wire this to
 	// manager.Register so the dashboard sees the session immediately.
 	OnSessionCreated func(s session.Session)
+	// OnAgentAdded is called after the pool auto-adds an agent entry to
+	// agents.json (channel sessions bypass the UI AddAgent flow). Wire
+	// this to manager.RefreshSession so the in-memory registry reflects
+	// the new agent before sendMessage resolves agentName.
+	OnAgentAdded func(sessionID string)
 	// OnLifecycle fires when the pool transitions a session+agent's
 	// lifecycle (Spawning, Killed). Idle/Working transitions are
 	// implicit from event flow and are NOT routed here — UIs that
@@ -486,6 +491,9 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		sess, err = session.Load(p.cfg.Layout, sessionID)
 		if err != nil {
 			return err
+		}
+		if p.cfg.OnAgentAdded != nil {
+			p.cfg.OnAgentAdded(sessionID)
 		}
 	}
 	resumeID := ""
@@ -969,13 +977,20 @@ type ActiveEntry struct {
 // draining the queue.
 func (p *Pool) Kill(sessionID, agentName string) error {
 	p.mu.Lock()
-	key := sessionKey(sessionID, agentName)
-	entry, ok := p.active[key]
-	p.mu.Unlock()
-	if !ok {
-		return nil
+	prefix := sessionID + "::"
+	var entries []*runEntry
+	for k, e := range p.active {
+		if strings.HasPrefix(k, prefix) {
+			entries = append(entries, e)
+		}
 	}
-	return entry.agent.Stop()
+	p.mu.Unlock()
+	for _, e := range entries {
+		if err := e.agent.Stop(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Dequeue drops every queued request matching sessionID+agentName.
