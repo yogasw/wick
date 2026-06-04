@@ -42,7 +42,7 @@
   }
 
   async function subscribeCurrent() {
-    if (!supportsPush()) throw new Error('Push notifications are not supported by this browser.');
+    if (!supportsPush()) throw new Error('Notifications are not supported by this browser.');
     var permission = await Notification.requestPermission();
     if (permission !== 'granted') throw new Error('Notification permission was not granted.');
     var keyRes = await fetch('/api/push/vapid-public-key');
@@ -120,7 +120,7 @@
     var list = document.getElementById('push-device-list');
     if (!list) return;
     if (!devices.length) {
-      list.innerHTML = '<div class="flex flex-col gap-2 bg-white-200 dark:bg-navy-800 px-4 py-5 text-sm text-black-800 dark:text-black-600"><span class="font-medium text-black-900 dark:text-white-100">No notification devices yet.</span><span class="text-xs text-black-700 dark:text-black-600">Enable push notifications to add this browser.</span></div>';
+      list.innerHTML = '<div class="flex flex-col gap-2 bg-white-200 dark:bg-navy-800 px-4 py-5 text-sm text-black-800 dark:text-black-600"><span class="font-medium text-black-900 dark:text-white-100">No notification devices yet.</span><span class="text-xs text-black-700 dark:text-black-600">Enable notifications to add this browser.</span></div>';
       return;
     }
     list.innerHTML = devices.map(function (d) {
@@ -179,7 +179,7 @@
   async function autoEnableForAgents() {
     if (!/^\/tools\/agents(?:\/|$)/.test(window.location.pathname)) return;
     if (!supportsPush()) {
-      setAgentStatus('Push notifications are not supported in this browser.', 'bad');
+      setAgentStatus('Notifications are not supported in this browser.', 'bad');
       return;
     }
     if (Notification.permission === 'denied') {
@@ -190,19 +190,19 @@
     try {
       var sub = await currentSubscription();
       if (sub) {
-        setAgentStatus('Push notifications are enabled for this browser.', 'ok');
+        setAgentStatus('Notifications are enabled for this browser.', 'ok');
         return;
       }
-      setAgentStatus('Wick wants to enable browser notifications for agent updates.', '');
+      setAgentStatus('Wick wants to enable notifications for agent updates.', '');
       await subscribeCurrent();
       await recordPermission(Notification.permission);
-      setAgentStatus('Push notifications are enabled for agent updates.', 'ok');
+      setAgentStatus('Notifications are enabled for agent updates.', 'ok');
     } catch (err) {
       if (Notification.permission === 'denied') {
         await recordPermission('denied');
         setAgentStatus('Browser notifications are blocked. You can unblock them from site settings; manual controls remain in Account.', 'bad');
       } else {
-        setAgentStatus(err.message || 'Push notifications were not enabled.', 'bad');
+        setAgentStatus(err.message || 'Notifications were not enabled.', 'bad');
       }
     }
   }

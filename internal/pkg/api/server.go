@@ -46,7 +46,7 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
-	"github.com/yogasw/wick/internal/connectors/pwanotify"
+	"github.com/yogasw/wick/internal/connectors/notifications"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -274,7 +274,7 @@ func NewServer() *Server {
 	// pre-existing plaintext secret rows to ciphertext on next boot.
 	configsSvc.SetEncryptor(encSvc)
 	if err := pwa.EnsurePushConfig(context.Background(), configsSvc); err != nil {
-		log.Warn().Err(err).Msg("pwa push config bootstrap failed")
+		log.Warn().Err(err).Msg("notification config bootstrap failed")
 	}
 	pushSvc := pwa.NewPushService(db, configsSvc)
 	// The encfields tool resolves its cipher through a package
@@ -785,7 +785,7 @@ func NewServer() *Server {
 		Tools:      allItems,
 		AppName:    appname.Resolve(),
 	}))
-	connectors.Register(pwanotify.Module(pwanotify.Deps{
+	connectors.Register(notifications.Module(notifications.Deps{
 		DB:   db,
 		Push: pushSvc,
 	}))
@@ -1090,7 +1090,7 @@ func NewServer() *Server {
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
 
-	// PWA push notification API (auth-gated inside)
+	// Notification API (auth-gated inside)
 	pushHandler.Register(r, authMidd)
 
 	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
@@ -1460,7 +1460,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	}
 	configsSvc.SetEncryptor(encSvc)
 	if err := pwa.EnsurePushConfig(context.Background(), configsSvc); err != nil {
-		log.Warn().Err(err).Msg("pwa push config bootstrap failed")
+		log.Warn().Err(err).Msg("notification config bootstrap failed")
 	}
 	pushSvc := pwa.NewPushService(db, configsSvc)
 
@@ -1483,7 +1483,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		Login:      authSvc,
 		AppName:    appname.Resolve(),
 	}))
-	connectors.Register(pwanotify.Module(pwanotify.Deps{
+	connectors.Register(notifications.Module(notifications.Deps{
 		DB:   db,
 		Push: pushSvc,
 	}))

@@ -1,6 +1,6 @@
-// Package pwanotify exposes Wick's in-process PWA push notification
-// service as a fixed connector.
-package pwanotify
+// Package notifications exposes Wick's in-process notification service as a
+// fixed connector.
+package notifications
 
 import (
 	"crypto/hmac"
@@ -17,7 +17,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const Key = "pwanotify"
+const Key = "notifications"
 
 type Configs struct{}
 
@@ -29,8 +29,8 @@ type Deps struct {
 func Meta() connector.Meta {
 	return connector.Meta{
 		Key:         Key,
-		Name:        "PWA Notifications",
-		Description: "Inspect PWA push subscription status and send Wick push notifications to subscribed users.",
+		Name:        "Notifications",
+		Description: "Send Wick notifications to subscribed browsers and installed web apps. Recipients are addressed by the opaque PN ID shown on the user's Account page.",
 		Icon:        "🔔",
 		Fixed:       true,
 	}
@@ -46,17 +46,17 @@ func Module(deps Deps) connector.Module {
 }
 
 type sendInput struct {
-	PushID string `wick:"required;desc=Opaque PN ID shown on the user's Account page."`
-	Title  string `wick:"desc=Notification title. Defaults to Wick notification."`
-	Body   string `wick:"textarea;desc=Notification body."`
-	URL    string `wick:"desc=Relative app URL to open on click. Default /."`
+	PushID string `wick:"required;desc=Recipient PN ID. Ask the user to open Account → Notifications and copy the PN ID shown there; the ID starts with pn_ and does not expose the user's real user ID."`
+	Title  string `wick:"desc=Notification title shown by the browser. Defaults to Wick notification."`
+	Body   string `wick:"textarea;desc=Notification body text. Keep it short; browsers may truncate long text."`
+	URL    string `wick:"desc=Relative app URL to open when the notification is clicked, for example /tools/agents. Defaults to /."`
 }
 
 func Operations(deps Deps) []connector.Operation {
 	h := handlers{deps: deps}
 	return []connector.Operation{
-		connector.OpDestructive("send_to_push_id", "Send Push To PN ID",
-			"Send a PWA push notification to every active subscribed device for one opaque PN ID copied from the user's Account page. Returns {ok, sent}. This connector does not expose self-send, user search, user listing, or device inspection.",
+		connector.OpDestructive("send_to_push_id", "Send Notification To PN ID",
+			"Send a notification to every active subscribed browser/device for one opaque PN ID. Payload: push_id is required and comes from Account → Notifications; title/body/url control the browser notification content and click target. Returns {ok, sent}. This connector does not expose self-send, user search, user listing, or device inspection.",
 			sendInput{}, h.sendToUser, wickdocs.Docs{}),
 	}
 }

@@ -101,7 +101,7 @@ func (s *PushService) Devices(ctx context.Context, userID string) ([]PushDevice,
 func (s *PushService) SendTest(ctx context.Context, userID, endpoint string) (int, error) {
 	payload, _ := json.Marshal(map[string]string{
 		"title": "Wick notification",
-		"body":  "Push notifications are enabled for this device.",
+		"body":  "Notifications are enabled for this device.",
 		"url":   "/profile",
 	})
 	return s.sendToUser(ctx, userID, strings.TrimSpace(endpoint), payload)
