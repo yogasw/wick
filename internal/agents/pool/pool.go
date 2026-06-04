@@ -971,6 +971,17 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 	p.mu.Lock()
 	key := sessionKey(sessionID, agentName)
 	entry, ok := p.active[key]
+	if !ok {
+		// agentName may be stale — find any active entry for this session.
+		prefix := sessionID + "::"
+		for k, e := range p.active {
+			if strings.HasPrefix(k, prefix) {
+				entry = e
+				ok = true
+				break
+			}
+		}
+	}
 	p.mu.Unlock()
 	if !ok {
 		return nil
