@@ -24,7 +24,7 @@ type CronScheduler struct {
 	clock  func() time.Time
 
 	mu     sync.RWMutex
-	cron   map[string][]cronEntry // slug → entries
+	cron   map[string][]cronEntry // id → entries
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -61,9 +61,9 @@ func (c *CronScheduler) Stop() {
 	}
 }
 
-// Sync replaces the cron entries for one slug. Pass an empty slice to
-// drop all cron schedules for that slug. Idempotent.
-func (c *CronScheduler) Sync(slug string, w workflow.Workflow) {
+// Sync replaces the cron entries for one id. Pass an empty slice to
+// drop all cron schedules for that id. Idempotent.
+func (c *CronScheduler) Sync(id string, w workflow.Workflow) {
 	entries := []cronEntry{}
 	for _, tr := range w.Triggers {
 		if tr.Type != workflow.TriggerCron {
@@ -76,17 +76,17 @@ func (c *CronScheduler) Sync(slug string, w workflow.Workflow) {
 	}
 	c.mu.Lock()
 	if len(entries) == 0 {
-		delete(c.cron, slug)
+		delete(c.cron, id)
 	} else {
-		c.cron[slug] = entries
+		c.cron[id] = entries
 	}
 	c.mu.Unlock()
 }
 
-// Unsync removes cron entries for slug.
-func (c *CronScheduler) Unsync(slug string) {
+// Unsync removes cron entries for id.
+func (c *CronScheduler) Unsync(id string) {
 	c.mu.Lock()
-	delete(c.cron, slug)
+	delete(c.cron, id)
 	c.mu.Unlock()
 }
 
@@ -117,7 +117,7 @@ func (c *CronScheduler) tick() {
 		snap[k] = v
 	}
 	c.mu.RUnlock()
-	for slug, entries := range snap {
+	for id, entries := range snap {
 		for _, e := range entries {
 			if !cronMatchesNow(e.Schedule, now) {
 				continue
@@ -126,11 +126,11 @@ func (c *CronScheduler) tick() {
 				Type: string(workflow.TriggerCron),
 				At:   now.UTC(),
 			}
-			if err := c.router.RunNow(context.Background(), slug, evt); err != nil {
-				log.Warn().Str("slug", slug).Err(err).Msg("workflow cron: enqueue failed")
+			if err := c.router.RunNow(context.Background(), id, evt); err != nil {
+				log.Warn().Str("wf_id", id).Err(err).Msg("workflow cron: enqueue failed")
 				continue
 			}
-			log.Info().Str("slug", slug).Str("schedule", e.Schedule).Msg("workflow cron fired")
+			log.Info().Str("wf_id", id).Str("schedule", e.Schedule).Msg("workflow cron fired")
 		}
 	}
 }

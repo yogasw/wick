@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
-func initCmd(tpl, designSystem embed.FS) *cobra.Command {
+func initCmd(tpl, designSystem, installScripts embed.FS) *cobra.Command {
 	var skipSetup bool
 	cmd := &cobra.Command{
 		Use:   "init [name]",
@@ -30,6 +31,9 @@ func initCmd(tpl, designSystem embed.FS) *cobra.Command {
 				if err := copySkillFromFS(designSystem, ".claude/skills/"+skill, name); err != nil {
 					return fmt.Errorf("copy %s skill: %w", skill, err)
 				}
+			}
+			if err := copyInstallScripts(installScripts, name); err != nil {
+				return fmt.Errorf("copy install scripts: %w", err)
 			}
 			fmt.Printf("created %s/\n", name)
 
@@ -104,6 +108,35 @@ func rewrite(p string, data []byte, name string) []byte {
 	return data
 }
 
+// copyInstallScripts drops scripts/install.sh + scripts/install.ps1 into
+// the new project root, rewriting the baked APP/REPO so the scaffolded
+// scripts target the user's app instead of wick itself. REPO owner is
+// left as `owner/<name>` for the user to edit once they create the
+// GitHub repo.
+func copyInstallScripts(fsys embed.FS, name string) error {
+	files := []string{"scripts/install.sh", "scripts/install.ps1"}
+	for _, src := range files {
+		data, err := fsys.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		s := string(data)
+		s = strings.ReplaceAll(s, `APP="wick-agent"`, `APP="`+name+`"`)
+		s = strings.ReplaceAll(s, `$App   = 'wick-agent'`, `$App   = '`+name+`'`)
+		s = strings.ReplaceAll(s, `REPO="yogasw/wick"`, `REPO="owner/`+name+`"`)
+		s = strings.ReplaceAll(s, `$Repo  = 'yogasw/wick'`, `$Repo  = 'owner/`+name+`'`)
+		dst := filepath.Join(name, filepath.Base(src))
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(src, ".sh") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(dst, []byte(s), mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func copySkillFromFS(fsys embed.FS, src, name string) error {
 	return fs.WalkDir(fsys, src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -123,7 +156,7 @@ func copySkillFromFS(fsys embed.FS, src, name string) error {
 
 func runIn(dir, bin string, args ...string) error {
 	fmt.Printf("\n> %s %s\n", bin, strings.Join(args, " "))
-	c := exec.Command(bin, args...)
+	c := safeexec.Command(bin, args...)
 	c.Dir = dir
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

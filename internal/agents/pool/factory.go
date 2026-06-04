@@ -3,12 +3,12 @@ package pool
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -19,6 +19,7 @@ import (
 	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // ClaudeFactory is the production AgentFactory: wires a ClaudeParser +
@@ -44,12 +45,12 @@ type ClaudeFactory struct {
 	// over Gate when non-nil. This lets operators toggle gate_enabled
 	// or edit AllowedCmds in the UI without restarting the server.
 	GateLoader func() *GateConfig
-	// BypassPermissionsLoader (optional) is called on every Build to
-	// check whether --permission-mode bypassPermissions should be added
-	// when no gate is active. Useful for non-interactive channels
-	// (Slack, HTTP) where the operator wants to skip prompts without
-	// enabling the full command gate.
-	BypassPermissionsLoader func() bool
+	// PermissionModeLoader (optional) is called on every Build to read
+	// the current GateConfig.PermissionMode value. Return "bypass" to
+	// force --permission-mode bypassPermissions on Claude (and the
+	// equivalent on codex/gemini) when no gate hook is installed.
+	// Any other value (including empty) means "prompt as normal".
+	PermissionModeLoader func() string
 
 	// SystemPromptLoader (optional) returns a global system prompt
 	// fragment appended to the loaded preset body on every spawn.
@@ -57,6 +58,16 @@ type ClaudeFactory struct {
 	// (prompt-injection defenses, shared conventions) without editing
 	// every preset. Preset stays the primary; this only adds to it.
 	SystemPromptLoader func() string
+
+	// ConnectorCatalogLoader (optional) returns a "## Available wick
+	// connectors" markdown block listing the connectors the spawning
+	// agent should prefer over hand-rolled HTTP. Wired in server.go
+	// so the loader can call connectorsSvc and filter to instances
+	// whose status is "ready" — connectors the operator has finished
+	// configuring. Empty string = no append (no connectors ready, or
+	// service unavailable). Inserted between the immutable rules and
+	// the preset body so the catalog can't override either layer.
+	ConnectorCatalogLoader func() string
 
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
@@ -91,39 +102,68 @@ type GateConfig struct {
 // agent.Start.
 func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	st := state.New(nil)
+	st.SetIdentity(opt.SessionID, opt.AgentName)
+	// Compute provider "type/name" for store stamping. Mirrors the
+	// AgentEntry.Provider format used in agents.json so the UI can
+	// render either source the same way.
+	storeProviderType := opt.ProviderType
+	if storeProviderType == "" {
+		storeProviderType = string(provider.TypeClaude)
+	}
+	storeProviderName := opt.ProviderName
+	if storeProviderName == "" {
+		storeProviderName = storeProviderType
+	}
 	sto := store.New(store.Options{
 		Layout:    f.Layout,
 		SessionID: opt.SessionID,
 		AgentName: opt.AgentName,
+		Provider:  storeProviderType + "/" + storeProviderName,
 		RecordRaw: f.RecordRaw,
 	})
 
-	var presetContent string
+	// Layered system prompt (top wins on conflict):
+	//   1. immutable wick rules (e.g. ban AskUserQuestion) — set in code
+	//   2. preset body (per-preset persona)
+	//   3. operator-edited `system_prompt` config row
+	// Layer 1 must lead so its guards override anything the preset /
+	// config below tries to relax.
+	// Normalize provider type early so immutable prompt selection is correct.
+	pTypeStrEarly := opt.ProviderType
+	if pTypeStrEarly == "" {
+		pTypeStrEarly = string(provider.TypeClaude)
+	}
+	var immutable string
+	if provider.Type(pTypeStrEarly) == provider.TypeCodex {
+		immutable = config.ImmutableSystemPromptCodex()
+	} else {
+		immutable = config.ImmutableSystemPrompt()
+	}
+	presetContent := immutable
+	if f.ConnectorCatalogLoader != nil {
+		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {
+			presetContent += "\n\n" + catalog
+		}
+	}
 	if opt.PresetName != "" {
-		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil {
-			presetContent = p.Body
+		if p, err := preset.Load(f.Layout, opt.PresetName); err == nil && strings.TrimSpace(p.Body) != "" {
+			presetContent += "\n\n" + p.Body
 		}
 	}
 	if f.SystemPromptLoader != nil {
 		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
-			if presetContent != "" {
-				presetContent += "\n\n"
-			}
-			presetContent += extra
+			presetContent += "\n\n" + extra
 		}
 	}
 
 	bypassPerms := false
-	if f.BypassPermissionsLoader != nil {
-		bypassPerms = f.BypassPermissionsLoader()
+	if f.PermissionModeLoader != nil {
+		bypassPerms = f.PermissionModeLoader() == "bypass"
 	}
 
 	// Normalize provider keys once — used by spawner dispatch, instance
 	// lookup, and spawn-log naming.
-	pTypeStr := opt.ProviderType
-	if pTypeStr == "" {
-		pTypeStr = string(provider.TypeClaude)
-	}
+	pTypeStr := pTypeStrEarly
 	pType := provider.Type(pTypeStr)
 	pName := opt.ProviderName
 	if pName == "" {
@@ -204,6 +244,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			AgentName:    opt.AgentName,
 			Workspace:    opt.Workspace,
 			ResumeID:     opt.ResumeID,
+			Origin:       opt.Origin,
 		})
 	}
 
@@ -249,7 +290,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		ResumeID:      opt.ResumeID,
 		IdleTimeout:   opt.IdleTimeout,
 		KillAfterIdle: opt.KillAfterIdle,
-		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
+		ParserFactory: func() event.Parser {
+			if pType == provider.TypeCodex {
+				return event.NewCodexParser()
+			}
+			return event.NewClaudeParser()
+		},
 		Spawner:       spawner,
 		Store:         sto,
 		State:         st,
@@ -258,6 +304,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		Instance:      &insCopy,
 		GateBinary:    gateBin,
 		Preset:        presetContent,
+		RespawnOnSend: pType == provider.TypeCodex,
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
 }
@@ -316,7 +363,7 @@ func resolveProviderBinary(providerType, providerName string) (bin, source strin
 	if ins, err := provider.Find(t, providerName); err == nil && ins.Binary != "" {
 		return ins.Binary, "registry"
 	}
-	if p, err := exec.LookPath(string(t)); err == nil {
+	if p, err := safeexec.LookPath(string(t)); err == nil {
 		return p, "path"
 	}
 	if st := provider.Probe(context.Background(), provider.Instance{Type: t, Name: providerName}); st.PathFound {

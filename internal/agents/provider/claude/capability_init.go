@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // init wires this provider into the capability registries. Loaded
@@ -78,7 +78,7 @@ func (hookConfigWriter) DryRun(workspace, gateBin string) (string, []byte, error
 type prober struct{}
 
 func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) error {
-	bin, err := exec.LookPath("claude")
+	bin, err := safeexec.LookPath("claude")
 	if err != nil {
 		return fmt.Errorf("claude binary: %w", err)
 	}
@@ -90,7 +90,7 @@ func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) 
 	sentinelForBash := strings.ReplaceAll(sentinelPath, "\\", "/")
 	prompt := fmt.Sprintf(`Run this exact bash command without asking: touch "%s"`, sentinelForBash)
 
-	cmd := exec.CommandContext(ctx, bin,
+	cmd := safeexec.CommandContext(ctx, bin,
 		"-p",
 		"--verbose",
 		"--output-format", "stream-json",

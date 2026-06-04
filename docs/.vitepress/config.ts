@@ -29,10 +29,8 @@ export default withMermaid(defineConfig({
     logo: '/logo.svg',
 
     nav: [
-      { text: 'Agent Host', link: '/guide/agents-only' },
-      { text: 'Framework Guide', link: '/guide/getting-started' },
-      { text: 'AI Quickstart', link: '/guide/ai-quickstart' },
-      { text: 'Reference', link: '/reference/wick-yml' },
+      { text: 'Wick Agent', link: '/guide/agents-only' },
+      { text: 'Wick Framework', link: '/guide/getting-started' },
       {
         text: `v${version}`,
         items: [
@@ -72,11 +70,33 @@ export default withMermaid(defineConfig({
         ],
       },
       {
+        text: 'Built-in Connectors',
+        items: [
+          { text: 'Overview', link: '/connectors/' },
+          { text: 'HTTP / REST', link: '/connectors/httprest' },
+          { text: 'GitHub', link: '/connectors/github' },
+          { text: 'Slack', link: '/connectors/slack' },
+          { text: 'Wick Manager', link: '/connectors/wickmanager' },
+          { text: 'Workflow', link: '/connectors/workflow' },
+          { text: 'CRUD CRUD (lab)', link: '/connectors/crudcrud' },
+        ],
+      },
+      {
         text: 'AI Agents',
         items: [
           { text: 'Agent Host Only (no Go needed)', link: '/guide/agents-only' },
+          {
+            text: 'Install',
+            collapsed: false,
+            items: [
+              { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+              { text: 'Headless Server', link: '/guide/headless' },
+              { text: 'Docker', link: '/guide/docker' },
+              { text: 'Termux / Android', link: '/guide/termux-android' },
+            ],
+          },
           { text: 'Overview', link: '/guide/agents' },
-          { text: 'Workspaces', link: '/guide/agents/workspaces' },
+          { text: 'Projects', link: '/guide/agents/projects' },
           { text: 'Providers', link: '/guide/agents/providers' },
           { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
@@ -84,15 +104,41 @@ export default withMermaid(defineConfig({
         ],
       },
       {
-        text: 'Distribution',
+        text: 'Workflows',
         items: [
-          { text: 'Desktop Tray', link: '/guide/desktop-tray' },
+          { text: 'Overview', link: '/workflow/' },
+          { text: 'Nodes', link: '/workflow/nodes' },
+          { text: 'Triggers', link: '/workflow/triggers' },
+          { text: 'Canvas editor', link: '/workflow/canvas' },
+          { text: 'MCP authoring', link: '/workflow/mcp' },
+          { text: 'Run state', link: '/workflow/state' },
+        ],
+      },
+      {
+        text: 'Workflow nodes',
+        collapsed: true,
+        items: [
+          { text: 'agent', link: '/workflow/nodes/agent' },
+          { text: 'branch', link: '/workflow/nodes/branch' },
+          { text: 'channel', link: '/workflow/nodes/channel' },
+          { text: 'classify', link: '/workflow/nodes/classify' },
+          { text: 'connector', link: '/workflow/nodes/connector' },
+          { text: 'datatable_*', link: '/workflow/nodes/datatable' },
+          { text: 'db_query', link: '/workflow/nodes/db-query' },
+          { text: 'end', link: '/workflow/nodes/end' },
+          { text: 'go_script', link: '/workflow/nodes/go-script' },
+          { text: 'http', link: '/workflow/nodes/http' },
+          { text: 'session_init', link: '/workflow/nodes/session_init' },
+          { text: 'shell', link: '/workflow/nodes/shell' },
+          { text: 'switch', link: '/workflow/nodes/switch' },
+          { text: 'transform', link: '/workflow/nodes/transform' },
         ],
       },
       {
         text: 'Reference',
         items: [
           { text: 'CLI', link: '/reference/cli' },
+          { text: 'App CLI', link: '/reference/app-cli' },
           { text: 'wick.yml', link: '/reference/wick-yml' },
           { text: 'wick build', link: '/reference/build' },
           { text: 'Environment Variables', link: '/reference/env-vars' },

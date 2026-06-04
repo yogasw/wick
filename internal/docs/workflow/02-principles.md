@@ -8,7 +8,7 @@
    AI-first dgn checklist berikut sebelum impl ship:
 
    - **Schema fully introspectable via MCP.** Setiap node type, trigger
-     type, channel, connector op, skill, dataset, dan provider tersedia
+     type, channel, connector op, skill, data table, dan provider tersedia
      via MCP introspection op (`workflow_node_types`, `workflow_trigger_types`,
      `workflow_channels`, `workflow_connectors`, `workflow_skills`,
      `workflow_providers`). Tiap return JSON schema + description +
@@ -26,14 +26,14 @@
      `workflow_validate` (parse + cycle + schema), `workflow_simulate`
      (event sintetis, no side effect), `workflow_test` (fixtures). Error
      messages structured + actionable (path field, expected vs got).
-   - **Scaffold templates.** `workflow_create(slug, template)` punya 4+
+   - **Scaffold templates.** `workflow_create(id, template)` punya 4+
      starter (empty, support-triage, incident-response, daily-digest)
      yang AI extend, bukan generate from-scratch.
    - **Canvas ops as alternative to file edit.** AI di remote env (Claude
      Desktop, ChatGPT) ga punya file tool — pakai `workflow_add_node`,
      `workflow_connect`, etc. Same outcome (file di folder), beda channel.
    - **Composition over invention.** AI compose dari building blocks yang
-     sudah ada (connector ops, channel actions, skills, dataset). Ga
+     sudah ada (connector ops, channel actions, skills, data tables). Ga
      perlu mikir "gimana cara call GitHub API" — connector existing handle.
      Adding new integration = bikin connector module (existing pattern,
      well-documented).
@@ -44,7 +44,7 @@
    prompt?". Kalau jawaban "perlu human read docs first" → redesign.
 
 1. **File-based, UI = primary editor.** Workflow = folder
-   `<BaseDir>/workflows/<slug>/` dengan `workflow.yaml` (graph + triggers)
+   `<BaseDir>/workflows/<id>/` dengan `workflow.yaml` (graph + triggers)
    + folder `nodes/` (per-node script/prompt). File adalah storage,
    canvas adalah surface utama. Hand-edit YAML tetep didukung (gitops,
    power-user). Atomic write via `tmp+rename`.

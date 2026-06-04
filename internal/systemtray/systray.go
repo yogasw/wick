@@ -29,6 +29,7 @@ import (
 	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/logfiles"
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/updater"
@@ -106,7 +107,7 @@ func Run(projectDir, name, appVer, wickVer, commit, builtAt, repo, pat string) {
 	// Log files first — hideConsole has detached the console for tray
 	// launches, so any crash before this point is invisible without a
 	// file sink.
-	if ls, cleanup, err := setupLogFiles(appName, 0); err == nil {
+	if ls, cleanup, err := logfiles.Setup(appName, 0); err == nil {
 		logDir = ls.Dir
 		serverLogger = ls.Server
 		workerLogger = ls.Worker

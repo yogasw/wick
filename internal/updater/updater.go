@@ -18,11 +18,11 @@
 //
 // Repo resolution:
 //
-//	1. repoFull arg ("owner/repo"), typically baked from --release-github-repo
-//	2. fallback to debug.ReadBuildInfo() Main.Path when arg is empty
-//	   (lets a "same source repo as releases" setup work without a flag)
-//	3. else updater is disabled — Configured() returns false and
-//	   CheckNow returns an error.
+//  1. repoFull arg ("owner/repo"), typically baked from --release-github-repo
+//  2. fallback to debug.ReadBuildInfo() Main.Path when arg is empty
+//     (lets a "same source repo as releases" setup work without a flag)
+//  3. else updater is disabled — Configured() returns false and
+//     CheckNow returns an error.
 package updater
 
 import (
@@ -36,7 +36,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -47,6 +46,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
@@ -374,7 +374,7 @@ func clearQuarantine(path string) error {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	cmd := exec.Command("xattr", "-d", "com.apple.quarantine", path)
+	cmd := safeexec.Command("xattr", "-d", "com.apple.quarantine", path)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -423,7 +423,7 @@ func swapWindows(current, staged, cacheDir string, sentinel Sentinel) error {
 	pid := os.Getpid()
 	log.Printf("updater: scheduling helper=%s pid=%d staged=%s", helperPath, pid, staged)
 
-	cmd := exec.Command("cmd.exe", "/c", "start", "", "/b", helperPath, fmt.Sprintf("%d", pid))
+	cmd := safeexec.Command("cmd.exe", "/c", "start", "", "/b", helperPath, fmt.Sprintf("%d", pid))
 	cmd.SysProcAttr = detachedSysProcAttr()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start update helper: %w", err)

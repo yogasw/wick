@@ -11,10 +11,10 @@ scripted events + mock external).
 |---|---|---|
 | `wftest.Runner` — RunAll/RunOne | wired | [`internal/agents/workflow/wftest/runner.go`](../../agents/workflow/wftest/runner.go) |
 | Coverage tracking (TotalNodes / HitNodes / Untested) | wired | `RunAllWithCoverage` in `wftest/runner.go` |
-| CLI `wick workflow test <slug> [--filter X]` | wired | [`cmd/cli/workflow.go`](../../../cmd/cli/workflow.go) |
+| CLI `wick workflow test <id> [--filter X]` | wired | [`cmd/cli/workflow.go`](../../../cmd/cli/workflow.go) |
 | Editor "Tests" tab + TestResults panel | wired | [`view/workflow/test_results.templ`](../../tools/agents/view/workflow/test_results.templ) |
 | Test case manager UI (CRUD + modal) | wired | [`view/workflow/test_manager.templ`](../../tools/agents/view/workflow/test_manager.templ) |
-| Mock interception (provider/connector/channel/HTTP/dataset/shell) | designed, partial | spec below |
+| Mock interception (provider/connector/channel/HTTP/datatable/shell) | designed, partial | spec below |
 | `workflow_test` / `workflow_simulate` MCP ops | designed | §9 |
 | `--watch` / `--record` flags | not yet | CLI subcommand only does run-all + --filter |
 | 6-layer reliability mocks (run layer 2–5 over mocked provider response) | designed | spec below |
@@ -116,8 +116,8 @@ mocks:                            # mock setiap external call
     - url_pattern: "*.example.com/*"
       method: GET
       response: { status: 200, body: { ok: true } }
-  datasets:
-    - dataset: handled
+  data_tables:
+    - table: handled
       ops: [exists]
       response: { found: false }   # first time → process
 
@@ -143,7 +143,7 @@ assertions:
 | Channel (`type: channel`) | `Channel.Send(action, args)` | Capture call (record args), return scripted response |
 | HTTP node (`type: http`) | `http.Do(req)` | Match URL pattern + method, return scripted response |
 | DB query (`type: db_query`) | `db.Query(...)` | Return scripted rows |
-| Dataset (`type: dataset_*`) | Postgres `wick_datasets_rows` | In-memory test DB (default) atau scripted rows kalau explicit mock |
+| Data table (`type: datatable_*`) | Postgres `wick_data_table_rows` | In-memory test DB (default) atau scripted rows kalau explicit mock |
 | Shell (`type: shell`) | `exec.Cmd` | Skip exec, return scripted stdout/exit_code |
 | Implicit reply-to-source | `Channel.Send` synthetic | Captured like channel mock |
 
@@ -165,7 +165,7 @@ type MockRegistry struct {
     Connector  map[string]ConnectorMock    // "module.op" → mock + args match
     Channel    map[string]ChannelMock      // "channel.op" → capture + response
     HTTP       []HTTPMock                  // url pattern + method match
-    Dataset    DatasetMockMode             // inmemory | scripted
+    DataTable  DataTableMockMode           // inmemory | scripted
     Shell      map[string]ShellMock        // node ID → stdout/exit
 }
 
@@ -189,7 +189,7 @@ func (e *Engine) resolveProvider(ctx EngineContext, nodeID string) Provider {
     return e.providerRegistry.Get(...)             // real provider
 }
 
-// Sama pattern untuk Connector, Channel, HTTP, Dataset, Shell.
+// Sama pattern untuk Connector, Channel, HTTP, DataTable, Shell.
 ```
 
 **Mock fallback policy** (no mock declared untuk a node):
@@ -248,12 +248,12 @@ cost_usd: <comparison>
 ### Running tests
 
 ```bash
-wick workflow test <slug>                          # all tests in __tests__/
-wick workflow test <slug> --filter node:classify   # unit tests filtered
-wick workflow test <slug> --integration            # only integration/
-wick workflow test <slug> --watch                  # rerun on file change
-wick workflow test <slug> --coverage               # which nodes hit
-wick workflow test <slug> --record <run-id>        # capture real run sebagai fixture
+wick workflow test <id>                          # all tests in __tests__/
+wick workflow test <id> --filter node:classify   # unit tests filtered
+wick workflow test <id> --integration            # only integration/
+wick workflow test <id> --watch                  # rerun on file change
+wick workflow test <id> --coverage               # which nodes hit
+wick workflow test <id> --record <run-id>        # capture real run sebagai fixture
 ```
 
 UI:
@@ -264,13 +264,13 @@ UI:
 
 ### Mock generation from run history
 
-`wick workflow test <slug> --record <run-id>`:
+`wick workflow test <id> --record <run-id>`:
 - Take existing JobRun (real or simulated)
 - Extract trigger event + per-node outputs + connector responses
 - Generate `__tests__/integration/auto-<timestamp>.test.yaml` dgn captured data
 - User review + edit + commit
 
-MCP equivalent: `workflow_record_test(slug, run_id)`.
+MCP equivalent: `workflow_record_test(id, run_id)`.
 
 ### AI-first test workflow
 
@@ -286,7 +286,7 @@ AI compose __tests__/nodes/*.test.yaml (1 per node)
   ↓
 AI compose __tests__/integration/main-flow.test.yaml
   ↓
-AI panggil workflow_test(slug)
+AI panggil workflow_test(id)
   ↓
 Engine return: 5 pass, 1 fail "expected case bug got case other"
   ↓
@@ -307,10 +307,10 @@ bisa juga pake `workflow_capture_fixture(run_id)` MCP op.
 ### MCP ops untuk testing
 
 ```
-workflow_test(slug, filter?)           → run tests, return [{case, pass, error?, diff?}]
-workflow_record_test(slug, run_id)     → generate test YAML dari JobRun
-workflow_test_coverage(slug)           → {nodes_hit: [...], nodes_uncovered: [...]}
-workflow_simulate(slug, event, mocks)  → run with synthetic event + inline mocks, no persist
+workflow_test(id, filter?)           → run tests, return [{case, pass, error?, diff?}]
+workflow_record_test(id, run_id)     → generate test YAML dari JobRun
+workflow_test_coverage(id)           → {nodes_hit: [...], nodes_uncovered: [...]}
+workflow_simulate(id, event, mocks)  → run with synthetic event + inline mocks, no persist
 ```
 
 ---

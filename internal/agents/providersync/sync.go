@@ -8,15 +8,19 @@ package providersync
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
@@ -29,6 +33,12 @@ import (
 type Manager struct {
 	db    *gorm.DB
 	store *store
+
+	// watcherMu guards the realtime fsnotify watcher lifecycle. The
+	// watcher itself is lazily created by EnsureWatcher and torn down
+	// by StopWatcher; nil means "not running" (cron-only mode).
+	watcherMu sync.Mutex
+	w         *watcher
 }
 
 // New returns a Manager backed by db.
@@ -37,6 +47,83 @@ func New(db *gorm.DB) *Manager {
 		db:    db,
 		store: newStore(db),
 	}
+}
+
+// EnsureWatcher starts the realtime fsnotify watcher if it isn't already
+// running, or hot-reloads its source set if it is. Idempotent — safe to
+// call every job tick. debounceMs <= 0 falls back to 1000.
+//
+// Boot order matters: the caller (server.go) MUST run RestoreAllForce
+// to completion before calling EnsureWatcher, otherwise the watcher
+// races the restore writes and reports them as "disk changes" back to
+// itself.
+func (m *Manager) EnsureWatcher(ctx context.Context, debounceMs int) error {
+	m.watcherMu.Lock()
+	defer m.watcherMu.Unlock()
+
+	if debounceMs <= 0 {
+		debounceMs = 1000
+	}
+	debounce := time.Duration(debounceMs) * time.Millisecond
+
+	sources, err := m.store.listSources(ctx)
+	if err != nil {
+		return err
+	}
+
+	if m.w != nil {
+		// Update debounce in place (next flush tick picks it up via
+		// recompute) and reconcile sources.
+		m.w.mu.Lock()
+		m.w.debounce = debounce
+		m.w.mu.Unlock()
+		return m.w.sync(ctx, sources)
+	}
+
+	w, err := newWatcher(m, debounce)
+	if err != nil {
+		return err
+	}
+	// Use a detached context for the watcher's lifetime — the job
+	// context that triggered EnsureWatcher cancels after a single tick,
+	// but the watcher must outlive it. The watcher exits via stop().
+	if err := w.start(context.Background(), sources); err != nil {
+		_ = w.fsw.Close()
+		return err
+	}
+	m.w = w
+	return nil
+}
+
+// StopWatcher tears down the realtime watcher. No-op when not running.
+// Pending debounced events are dropped — the next cron tick will pick
+// them up via the normal walk path.
+func (m *Manager) StopWatcher() {
+	m.watcherMu.Lock()
+	defer m.watcherMu.Unlock()
+	if m.w == nil {
+		return
+	}
+	m.w.stop()
+	m.w = nil
+}
+
+// Reload tells the realtime watcher to re-read sources from DB and
+// adjust its kernel watch set accordingly. No-op when the watcher is
+// not running. Called after SaveSource / DeleteSource so toggling a
+// row in the Settings UI propagates without a job tick.
+func (m *Manager) Reload(ctx context.Context) error {
+	m.watcherMu.Lock()
+	w := m.w
+	m.watcherMu.Unlock()
+	if w == nil {
+		return nil
+	}
+	sources, err := m.store.listSources(ctx)
+	if err != nil {
+		return err
+	}
+	return w.sync(ctx, sources)
 }
 
 // SourceToInstance converts a ProviderStorageSource to a provider.Instance
@@ -54,11 +141,15 @@ func SourceToInstance(src entity.ProviderStorageSource) provider.Instance {
 }
 
 // SyncOne runs a single backup pass for one instance.
-func (m *Manager) SyncOne(ctx context.Context, ins provider.Instance) error {
+// SyncOne backs up one provider instance from disk to DB.
+// Returns (changed, skipped, error) — changed is the number of files
+// written/updated; skipped is files whose content hash was unchanged.
+func (m *Manager) SyncOne(ctx context.Context, ins provider.Instance, verbose ...bool) (int, int, error) {
 	if ins.Storage == nil {
-		return nil
+		return 0, 0, nil
 	}
-	return m.backup(ctx, ins)
+	v := len(verbose) > 0 && verbose[0]
+	return m.backup(ctx, ins, v)
 }
 
 // PurgeExcluded walks every row for (providerType, instanceName) and deletes
@@ -122,7 +213,7 @@ func (m *Manager) SyncAll(ctx context.Context) (int, error) {
 		if !src.Enabled || src.Mode == "exclude" {
 			continue
 		}
-		if err := m.SyncOne(ctx, SourceToInstance(src)); err != nil {
+		if _, _, err := m.SyncOne(ctx, SourceToInstance(src)); err != nil {
 			log.Warn().Err(err).
 				Str("provider", src.ProviderType).
 				Str("path", src.SyncPath).
@@ -182,11 +273,23 @@ func (m *Manager) RestoreSelected(ctx context.Context, ids []uint, srcsByInstanc
 // SrcInfo holds mode and path for one configured sync source.
 type SrcInfo struct{ Mode, SyncPath string }
 
-// RestoreAll writes all DB file rows back to filesystem.
-// rel_path is now an absolute path; we only restore files whose absolute path
-// falls under at least one enabled source (file mode "single") or under an
-// enabled folder source's prefix. Call once at startup.
-func (m *Manager) RestoreAll(ctx context.Context) error {
+// RestoreAll writes all DB file rows back to filesystem with the disk-wins
+// guard: missing → write, same hash → skip, diverged → keep disk + log.
+// Used by the cron tick and the /restore-now UI button.
+func (m *Manager) RestoreAll(ctx context.Context, verbose ...bool) error {
+	return m.restoreAll(ctx, false, len(verbose) > 0 && verbose[0])
+}
+
+// RestoreAllForce overwrites every covered file on disk with the DB copy,
+// no hash check. Used at server boot so DB is the source of truth on the
+// first restore after a container restart (no-volume env).
+func (m *Manager) RestoreAllForce(ctx context.Context, verbose ...bool) error {
+	return m.restoreAll(ctx, true, len(verbose) > 0 && verbose[0])
+}
+
+func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) error {
+
+	l := log.With().Str("component", "provider-storage").Str("op", "restore").Str("run_id", runID()).Logger()
 	// Legacy-row wipe is now a one-shot DB migration in postgres.Migrate;
 	// nothing to clean up here.
 	sources, err := m.store.listSources(ctx)
@@ -226,35 +329,57 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		if dst == "" {
 			continue
 		}
-		// Disk is source of truth at startup: only fill gaps.
-		// - missing on disk → write from DB
-		// - exists, same hash → no-op
-		// - exists, diverged → keep disk, log
-		if existing, err := os.ReadFile(dst); err == nil {
-			if hashBytes(existing) == row.ContentHash {
-				skippedExist++
+		// force = boot path: DB is source of truth, overwrite always.
+		// guard path: missing → write, same hash → skip, diverged → keep disk.
+		if !force {
+			if existing, err := os.ReadFile(dst); err == nil {
+				if hashBytes(existing) == row.ContentHash {
+					skippedExist++
+					if verbose {
+						l.Info().
+							Str("file", dst).
+							Str("hash", row.ContentHash[:8]).
+							Int("size_bytes", len(row.Content)).
+							Msg("providersync: restore skip (hash match)")
+					}
+					continue
+				}
+				skippedDiverged++
+				l.Warn().Str("file", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
 				continue
 			}
-			skippedDiverged++
-			log.Warn().Str("dst", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
-			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			log.Warn().Err(err).Str("dst", dst).Msg("providersync: restore mkdir failed")
+			l.Warn().Err(err).Str("file", dst).Msg("providersync: restore mkdir failed")
 			continue
 		}
 		if err := os.WriteFile(dst, row.Content, 0o600); err != nil {
-			log.Warn().Err(err).Str("dst", dst).Msg("providersync: restore write failed")
+			l.Warn().Err(err).Str("file", dst).Msg("providersync: restore write failed")
 			continue
+		}
+		if verbose {
+			l.Info().
+				Str("file", dst).
+				Str("hash", row.ContentHash[:8]).
+				Int("size_bytes", len(row.Content)).
+				Msg("providersync: restore written")
 		}
 		count++
 	}
-	log.Info().
+	l.Info().
 		Int("restored", count).
 		Int("skipped_match", skippedExist).
 		Int("skipped_diverged", skippedDiverged).
 		Msg("providersync: RestoreAll done")
 	return nil
+}
+
+// runID returns a short random hex string for correlating log lines within
+// a single sync or restore run.
+func runID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // absToOS converts an absolute path stored in DB (slash-normalised) to the
@@ -323,7 +448,39 @@ func pickRetention(abs string, sources []entity.ProviderStorageSource) int {
 }
 
 // Upload stores file content directly into DB (manual upload).
+//
+// If relPath is already covered by an enabled include source whose
+// provider/instance differs from the caller's values, the upload is
+// re-tagged to that source. This stops a single physical path from
+// living under two (provider, instance) pairs — which would leave one
+// copy uncovered by RestoreAll and effectively unrestorable.
 func (m *Manager) Upload(ctx context.Context, providerType, instanceName, relPath string, content []byte) error {
+	if sources, err := m.store.listSources(ctx); err == nil {
+		// Pick the deepest covering enabled include source so nested
+		// sources (e.g. /a/b inside /a) win over the shallower one.
+		bestLen := -1
+		a := normAbs(relPath)
+		for _, s := range sources {
+			if !s.Enabled || s.Mode == "exclude" {
+				continue
+			}
+			sp := normAbs(s.SyncPath)
+			match := false
+			if s.Mode == "single" {
+				match = sp == a
+			} else {
+				match = a == sp || strings.HasPrefix(a, sp+"/")
+			}
+			if !match {
+				continue
+			}
+			if len(sp) > bestLen {
+				bestLen = len(sp)
+				providerType = s.ProviderType
+				instanceName = s.InstanceName
+			}
+		}
+	}
 	hash := hashBytes(content)
 	row := entity.ProviderStorage{
 		ProviderType: providerType,
@@ -367,6 +524,14 @@ func (m *Manager) DeleteByID(ctx context.Context, id uint) error {
 	return m.store.deleteByID(ctx, id)
 }
 
+// DeleteByAbsPath hard-deletes the file row at the given absolute path.
+// Used by the realtime watcher in response to fsnotify Remove/Rename
+// events — when a file disappears from disk it must disappear from DB
+// immediately, bypassing the retention job. Returns rows affected.
+func (m *Manager) DeleteByAbsPath(ctx context.Context, abs string) (int64, error) {
+	return m.store.deleteByAbsPath(ctx, abs)
+}
+
 // DeleteByInstance removes all rows for a provider instance.
 func (m *Manager) DeleteByInstance(ctx context.Context, providerType, instanceName string) (int64, error) {
 	return m.store.deleteByInstance(ctx, providerType, instanceName)
@@ -396,7 +561,7 @@ func (m *Manager) SaveSource(ctx context.Context, src entity.ProviderStorageSour
 			Name:    saved.InstanceName,
 			Storage: &provider.StorageConfig{Mode: saved.Mode, SyncPath: saved.SyncPath},
 		}
-		if syncErr := m.SyncOne(ctx, ins); syncErr != nil {
+		if _, _, syncErr := m.SyncOne(ctx, ins); syncErr != nil {
 			log.Warn().Err(syncErr).
 				Str("provider", saved.ProviderType).
 				Str("path", saved.SyncPath).
@@ -423,6 +588,11 @@ func (m *Manager) SaveSource(ctx context.Context, src entity.ProviderStorageSour
 			Str("instance", saved.InstanceName).
 			Msg("providersync: purged excluded rows after SaveSource")
 	}
+	// Hot-reload the realtime watcher (if running) so it picks up the
+	// new/edited source without waiting for the next job tick.
+	if err := m.Reload(ctx); err != nil {
+		log.Warn().Err(err).Msg("providersync: watcher reload after SaveSource failed")
+	}
 	return saved, nil
 }
 
@@ -442,6 +612,11 @@ func (m *Manager) DeleteSource(ctx context.Context, id uint) error {
 			Str("provider", src.ProviderType).
 			Str("instance", src.InstanceName).
 			Msg("providersync: recompute retention failed after delete")
+	}
+	// Hot-reload the realtime watcher (if running) so removed paths
+	// drop out of the kernel watch set without waiting for the next job tick.
+	if err := m.Reload(ctx); err != nil {
+		log.Warn().Err(err).Msg("providersync: watcher reload after DeleteSource failed")
 	}
 	return nil
 }
@@ -507,78 +682,47 @@ func (m *Manager) RunRetention(ctx context.Context) {
 
 // ── internals ─────────────────────────────────────────────────────────
 
-func (m *Manager) backup(ctx context.Context, ins provider.Instance) error {
+func (m *Manager) backup(ctx context.Context, ins provider.Instance, verbose bool) (int, int, error) {
 	// Skip exclude-mode pseudo-sources here — only include-mode sources
 	// drive disk walks. Retention picking ignores them too.
 	if ins.Storage != nil && (ins.Storage.Mode == "exclude") {
-		return nil
+		return 0, 0, nil
 	}
 
+	l := log.With().Str("component", "provider-storage").Str("op", "sync").Str("run_id", runID()).Logger()
+
 	allSources, _ := m.store.listSourcesForInstance(ctx, string(ins.Type), ins.Name)
-	// stable order so retention pick is deterministic when two sources have
-	// the same SyncPath length (shouldn't happen, but cheap insurance).
 	sort.SliceStable(allSources, func(i, j int) bool { return allSources[i].ID < allSources[j].ID })
 
 	excludes := collectExcludePatterns(allSources)
+	base := filepath.Clean(ins.Storage.SyncPath)
+	changed, skipped := 0, 0
 
-	files, err := collectFiles(ins.Storage, excludes)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-	for abs, content := range files {
-		row := entity.ProviderStorage{
-			ProviderType:  string(ins.Type),
-			InstanceName:  ins.Name,
-			RelPath:       abs,
-			Content:       content,
-			ContentHash:   hashBytes(content),
-			SyncedAt:      now,
-			RetentionDays: pickRetention(abs, allSources),
-		}
-		written, err := m.store.upsertFile(ctx, row)
-		if err != nil {
-			return err
-		}
-		if written {
-			log.Debug().
-				Str("provider", string(ins.Type)).
-				Str("instance", ins.Name).
-				Str("file", abs).
-				Msg("providersync: stored")
-		}
-	}
-	return nil
-}
-
-// collectFiles returns a map keyed by absolute (slash-normalised) path so the
-// row identity matches the real filesystem location, regardless of which
-// configured source produced it. Overlapping sources therefore dedupe instead
-// of stacking. Paths matching any of the excludes glob list are skipped.
-func collectFiles(sc *provider.StorageConfig, excludes []string) (map[string][]byte, error) {
-	out := make(map[string][]byte)
-	base := filepath.Clean(sc.SyncPath)
-	if sc.Mode == "single" {
+	if ins.Storage.Mode == "single" {
 		abs := filepath.ToSlash(base)
 		if matchesAnyExclude(abs, excludes) {
-			return out, nil
+			return 0, 0, nil
 		}
-		data, err := os.ReadFile(base)
+		// Surface stat errors so SyncAll can skip-count an unreadable
+		// single-mode source (matches the pre-streaming behaviour of
+		// collectFiles returning err on os.ReadFile failure).
+		info, err := os.Stat(base)
 		if err != nil {
-			return nil, err
+			return 0, 0, err
 		}
-		out[abs] = data
-		return out, nil
+		if info.IsDir() || info.Mode()&os.ModeType != 0 {
+			return 0, 0, nil
+		}
+		return m.syncFilePath(ctx, ins, abs, base, allSources, verbose, l)
 	}
-	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+
+	walkErr := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("providersync: skipping unreadable entry")
 			return nil
 		}
 		abs := filepath.ToSlash(path)
 		if d.IsDir() {
-			// Prune the whole subtree if the directory itself matches.
 			if matchesAnyExclude(abs, excludes) {
 				return filepath.SkipDir
 			}
@@ -591,17 +735,118 @@ func collectFiles(sc *provider.StorageConfig, excludes []string) (map[string][]b
 		if err != nil || info.Mode()&os.ModeType != 0 {
 			return nil
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			log.Debug().Err(err).Str("path", path).Msg("providersync: skipping unreadable file")
-			return nil
-		}
-		out[abs] = data
+		c, s, _ := m.syncFilePath(ctx, ins, abs, path, allSources, verbose, l)
+		changed += c
+		skipped += s
 		return nil
 	})
-	return out, err
+
+	l.Debug().
+		Str("provider", string(ins.Type)).
+		Str("instance", ins.Name).
+		Int("changed", changed).
+		Int("skipped", skipped).
+		Msg("providersync: sync done")
+	return changed, skipped, walkErr
 }
 
+// syncFilePath syncs a single file row by:
+//  1. Streaming-hashing the file on disk (constant memory, no full read).
+//  2. Comparing to the stored hash + retention — short-circuit when unchanged.
+//  3. Loading content into memory ONLY when a write is necessary.
+//
+// This is the per-file streaming path shared by backup() walks and the
+// realtime watcher. Previously backup() materialised every file into a
+// single map[string][]byte before iterating; on a tree with thousands of
+// files that produced hundreds of MB of RAM spike per cron tick and OOM-
+// killed small containers. Streaming keeps idle scans nearly free since
+// >99% of files are unchanged and never load their content.
+func (m *Manager) syncFilePath(ctx context.Context, ins provider.Instance, abs, osPath string, allSources []entity.ProviderStorageSource, verbose bool, l zerolog.Logger) (int, int, error) {
+	newHash, _, err := hashFileStream(osPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", osPath).Msg("providersync: hash failed")
+		return 0, 0, nil
+	}
+	retention := pickRetention(abs, allSources)
+	prevHash, prevRetention, exists := m.store.fileHash(ctx, string(ins.Type), ins.Name, abs)
+	if exists && prevHash == newHash && prevRetention == retention {
+		return 0, 1, nil
+	}
+	content, err := os.ReadFile(osPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", osPath).Msg("providersync: read failed")
+		return 0, 0, nil
+	}
+	row := entity.ProviderStorage{
+		ProviderType:  string(ins.Type),
+		InstanceName:  ins.Name,
+		RelPath:       abs,
+		Content:       content,
+		ContentHash:   newHash,
+		SyncedAt:      time.Now().UTC(),
+		RetentionDays: retention,
+	}
+	if err := m.store.upsertFile(ctx, row); err != nil {
+		return 0, 0, err
+	}
+	if verbose {
+		e := l.Info().
+			Str("file", abs).
+			Int("size_bytes", len(content)).
+			Str("hash", newHash[:8])
+		if prevHash != "" {
+			e = e.Str("prev_hash", prevHash[:8])
+		}
+		e.Msg("providersync: sync stored")
+	}
+	return 1, 0, nil
+}
+
+// SyncFile syncs one absolute path on disk into DB. Used by the realtime
+// watcher to react to a single Write/Create event without re-walking the
+// whole source. Returns (changed, skipped, err) where skipped=1 means the
+// content hash matched and no DB write happened.
+func (m *Manager) SyncFile(ctx context.Context, ins provider.Instance, abs string) (int, int, error) {
+	if ins.Storage == nil {
+		return 0, 0, nil
+	}
+	allSources, _ := m.store.listSourcesForInstance(ctx, string(ins.Type), ins.Name)
+	excludes := collectExcludePatterns(allSources)
+	if matchesAnyExclude(abs, excludes) {
+		return 0, 0, nil
+	}
+	osPath := filepath.FromSlash(abs)
+	info, err := os.Stat(osPath)
+	if err != nil {
+		return 0, 0, err
+	}
+	if info.IsDir() || info.Mode()&os.ModeType != 0 {
+		return 0, 0, nil
+	}
+	l := log.With().Str("component", "provider-storage").Str("op", "watch-sync").Logger()
+	return m.syncFilePath(ctx, ins, abs, osPath, allSources, false, l)
+}
+
+// hashFileStream computes SHA-256 of a file without loading its full
+// content into memory. Used by the streaming sync path so unchanged files
+// (the common case) never allocate beyond the 32 KB io.Copy buffer.
+func hashFileStream(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// hashBytes computes SHA-256 of an in-memory buffer. Retained for the
+// restore path (RestoreAll diff check) and the manual Upload path, where
+// the caller already holds the content in memory.
 func hashBytes(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

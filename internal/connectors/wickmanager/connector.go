@@ -31,6 +31,7 @@ import (
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Key is the connector definition slug. Single instance is auto-seeded
@@ -81,89 +82,99 @@ func Operations(deps Deps) []connector.Operation {
 		// app_*
 		connector.Op("app_list", "List App Variables",
 			"List app-level configuration variables (session secret, app URL, encryption key, etc). Returns array of {key, type, description, is_secret, is_set, is_locked, can_regenerate, value}. Secret values are masked. Access: ADMIN ONLY. UI: <app_url>/admin/variables.",
-			emptyInput{}, h.appList),
+			emptyInput{}, h.appList, wickdocs.Docs{}),
 		connector.Op("app_get_config", "Get App Variable",
 			"Get one app-level config row by key. Returns {key, type, description, is_secret, is_set, value} (value masked if secret). Access: ADMIN ONLY. UI: <app_url>/admin/variables.",
-			appGetInput{}, h.appGetConfig),
+			appGetInput{}, h.appGetConfig, wickdocs.Docs{}),
 		connector.Op("app_set_config", "Set App Variable",
 			"Update one app-level config value. Rejects rows where is_locked=true. Validates Required field is non-empty. Returns {ok: true, key, before, after} (both masked if secret). Access: ADMIN ONLY. UI: <app_url>/admin/variables.",
-			appSetInput{}, h.appSetConfig),
+			appSetInput{}, h.appSetConfig, wickdocs.Docs{}),
 		connector.OpDestructive("app_regenerate_config", "Regenerate App Variable",
 			"Regenerate the value of a regenerate-able app config (e.g. session_secret). High-impact — regenerating session_secret logs out other admins. Returns {ok: true, key, regenerated_at}. Access: ADMIN ONLY. UI: <app_url>/admin/variables.",
-			appRegenerateInput{}, h.appRegenerateConfig),
+			appRegenerateInput{}, h.appRegenerateConfig, wickdocs.
 
-		// job_*
+				// job_*
+				Docs{}),
+
 		connector.Op("job_list", "List Jobs",
 			"List background jobs visible to the caller. Tag-filtered: admin sees all, non-admin sees only jobs their tags grant access to. Returns array of {key, name, description, icon, schedule, enabled, last_status, last_run_at, total_runs, max_runs, has_config}. UI: <app_url>/admin/jobs (admin) or <app_url>/manager/jobs/{key} (per-job).",
-			emptyInput{}, h.jobList),
+			emptyInput{}, h.jobList, wickdocs.Docs{}),
 		connector.Op("job_get", "Get Job",
 			"Get one job's full detail — meta + configs. Returns {meta, configs: [...]}. Secret config values masked. Access: per-job-access. UI: <app_url>/manager/jobs/{key}.",
-			jobKeyInput{}, h.jobGet),
+			jobKeyInput{}, h.jobGet, wickdocs.Docs{}),
 		connector.Op("job_set_config", "Set Job Config",
 			"Update one of a job's config values. Rejects rows where is_locked=true. Returns {ok: true, key, config_key, before, after} (masked if secret). Access: per-job-access. NOTE: UI dashboard restricts edit to admin; MCP is more permissive — caller with tag access can edit here. UI: <app_url>/manager/jobs/{key}.",
-			jobSetConfigInput{}, h.jobSetConfig),
+			jobSetConfigInput{}, h.jobSetConfig, wickdocs.Docs{}),
 		connector.Op("job_set_schedule", "Set Job Schedule",
 			"Update a job's cron schedule and toggle enabled/max_runs cap. schedule is standard 5-field cron expression. Returns {ok: true, key, schedule, enabled, max_runs}. Access: per-job-access. UI: <app_url>/manager/jobs/{key}.",
-			jobSetScheduleInput{}, h.jobSetSchedule),
+			jobSetScheduleInput{}, h.jobSetSchedule, wickdocs.Docs{}),
 		connector.Op("job_run_now", "Run Job Now",
 			"Trigger an out-of-cycle run of the named job. Returns immediately with the run id; run executes in background. Errors if job is already running or max_runs reached. Returns {run_id, status: started, started_at}. Access: per-job-access. UI: <app_url>/manager/jobs/{key}.",
-			jobKeyInput{}, h.jobRunNow),
+			jobKeyInput{}, h.jobRunNow, wickdocs.Docs{}),
 		connector.Op("job_get_run", "Get Job Run",
 			"Get one job run's status + result. Caller must have tag access to the parent job. Returns {id, job_key, status, result, triggered_by, started_at, ended_at}. Access: per-job-access. UI: <app_url>/manager/jobs/{key}.",
-			jobGetRunInput{}, h.jobGetRun),
+			jobGetRunInput{}, h.jobGetRun, wickdocs.Docs{}),
 		connector.Op("job_list_runs", "List Job Runs",
 			"List recent runs of a job, newest first. Returns array of {id, status, triggered_by, started_at, ended_at, duration_ms}. Access: per-job-access. UI: <app_url>/manager/jobs/{key}.",
-			jobListRunsInput{}, h.jobListRuns),
+			jobListRunsInput{}, h.jobListRuns, wickdocs.
 
-		// tool_*
+				// tool_*
+				Docs{}),
+
 		connector.Op("tool_list", "List Tools",
 			"List tools (UI modules) visible to the caller. Tag-filtered. Returns array of {key, name, description, icon, category, has_config}. UI: <app_url>/admin/tools (admin) or <app_url>/manager/tools/{key}.",
-			emptyInput{}, h.toolList),
+			emptyInput{}, h.toolList, wickdocs.Docs{}),
 		connector.Op("tool_get", "Get Tool",
 			"Get one tool's full detail — meta + configs. Returns {meta, configs: [...]} (secret masked). Access: per-tool-access. UI: <app_url>/manager/tools/{key}.",
-			toolKeyInput{}, h.toolGet),
+			toolKeyInput{}, h.toolGet, wickdocs.Docs{}),
 		connector.Op("tool_set_config", "Set Tool Config",
 			"Update one of a tool's config values. Rejects locked rows. Returns {ok: true, key, config_key, before, after} (masked if secret). Access: per-tool-access. MCP-permissive vs UI (UI: admin-only). UI: <app_url>/manager/tools/{key}.",
-			toolSetConfigInput{}, h.toolSetConfig),
+			toolSetConfigInput{}, h.toolSetConfig, wickdocs.
 
-		// connector_*
+				// connector_*
+				Docs{}),
+
 		connector.Op("connector_list", "List Connectors",
 			"List connector instances visible to the caller. Tag-filtered. Returns array of {id, key, label, description, icon, status, total_tools, disabled, has_config}. status is ready (all required configs filled) or needs_setup. UI: <app_url>/admin/connectors (admin) or <app_url>/manager/connectors/{id}.",
-			emptyInput{}, h.connectorList),
+			emptyInput{}, h.connectorList, wickdocs.Docs{}),
 		connector.Op("connector_get", "Get Connector",
 			"Get one connector's full detail — meta + configs + operations. Returns {meta, configs: [...], operations: [{key, name, description, destructive}]}. Secret config masked. Access: per-connector-access. UI: <app_url>/manager/connectors/{id}.",
-			connectorIDInput{}, h.connectorGet),
+			connectorIDInput{}, h.connectorGet, wickdocs.Docs{}),
 		connector.Op("connector_set_config", "Set Connector Config",
 			"Update one of a connector's config values. Rejects locked rows. Returns {ok: true, id, config_key, before, after} (masked if secret). Access: per-connector-access. MCP-permissive vs UI (UI: admin-only). UI: <app_url>/manager/connectors/{id}.",
-			connectorSetConfigInput{}, h.connectorSetConfig),
+			connectorSetConfigInput{}, h.connectorSetConfig, wickdocs.
 
-		// system_* (tray-only + admin)
+				// system_* (tray-only + admin)
+				Docs{}),
+
 		connector.Op("system_status", "System Status",
 			"Get HTTP server + background worker process status. Only available when wick is launched via the system tray. Returns {server_running, server_port, worker_running, run_mode}. Access: ADMIN + tray-only.",
-			emptyInput{}, h.systemStatus),
+			emptyInput{}, h.systemStatus, wickdocs.Docs{}),
 		connector.Op("system_server_start", "Start Server",
 			"Start the HTTP server in this tray process. Errors if already running or port in use. Returns {ok: true, port}. Access: ADMIN + tray-only.",
-			emptyInput{}, h.systemServerStart),
+			emptyInput{}, h.systemServerStart, wickdocs.Docs{}),
 		connector.OpDestructive("system_server_stop", "Stop Server",
 			"Stop the HTTP server. Returns {ok: true}. Access: ADMIN + tray-only.",
-			emptyInput{}, h.systemServerStop),
+			emptyInput{}, h.systemServerStop, wickdocs.Docs{}),
 		connector.Op("system_worker_start", "Start Worker",
 			"Start the background worker. Errors if already running. Returns {ok: true}. Access: ADMIN + tray-only.",
-			emptyInput{}, h.systemWorkerStart),
+			emptyInput{}, h.systemWorkerStart, wickdocs.Docs{}),
 		connector.OpDestructive("system_worker_stop", "Stop Worker",
 			"Stop the background worker. Returns {ok: true}. Access: ADMIN + tray-only.",
-			emptyInput{}, h.systemWorkerStop),
+			emptyInput{}, h.systemWorkerStop, wickdocs.Docs{}),
 		connector.Op("system_prefs_get", "Get Tray Preferences",
 			"Read per-machine tray preferences from ~/.<appName>/config.json. Returns {auto_start_app, auto_start_server, auto_start_worker, auto_update, port, log_retention_days, database_path}. Access: ADMIN + tray-only.",
-			emptyInput{}, h.systemPrefsGet),
+			emptyInput{}, h.systemPrefsGet, wickdocs.Docs{}),
 		connector.Op("system_prefs_set", "Set Tray Preferences",
 			"Update per-machine tray preferences. PATCH-style merge — only fields present in input are updated; omitted fields keep current value. Returns the new full config. Access: ADMIN + tray-only.",
-			systemPrefsSetInput{}, h.systemPrefsSet),
+			systemPrefsSetInput{}, h.systemPrefsSet, wickdocs.Docs{
+
+				// emptyInput marks an op that takes no arguments. Reflected into an
+				// empty Configs slice; the LLM sees `{}` as the input schema.
+			}),
 	}
 }
 
-// emptyInput marks an op that takes no arguments. Reflected into an
-// empty Configs slice; the LLM sees `{}` as the input schema.
 type emptyInput struct{}
 
 type appGetInput struct {

@@ -24,7 +24,6 @@ package builder
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -32,6 +31,7 @@ import (
 	"github.com/yogasw/wick/internal/builder/darwin"
 	"github.com/yogasw/wick/internal/builder/linux"
 	"github.com/yogasw/wick/internal/builder/windows"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Build compiles the Go source in CWD per cfg, then wraps the
@@ -104,6 +104,16 @@ func Build(cfg Config) (Result, error) {
 		res.Bundles = append(res.Bundles, appPath)
 		fmt.Printf("> bundled %s\n", appPath)
 
+		fmt.Println("> ad-hoc signing app...")
+		switch err := darwin.SignAdHoc(appPath); {
+		case err == darwin.ErrSkippedSign:
+			fmt.Println("> codesign skipped (codesign only available on macOS host) — distributed .app may show 'damaged' on Apple Silicon")
+		case err != nil:
+			return res, fmt.Errorf("ad-hoc sign mac app: %w", err)
+		default:
+			fmt.Println("> ad-hoc signed app")
+		}
+
 		verSlug := strings.TrimPrefix(strings.TrimSpace(cfg.AppVersion), "v")
 		dmgPath := filepath.Join(filepath.Dir(cfg.Output), fmt.Sprintf("%s-%s-darwin-%s.dmg", cfg.AppName, verSlug, cfg.GOARCH))
 		fmt.Println("> packaging dmg...")
@@ -160,7 +170,7 @@ func runGoBuild(cfg Config, ldflags []string) error {
 	args = append(args, ".")
 
 	fmt.Printf("> go %s\n", strings.Join(args, " "))
-	cmd := exec.Command("go", args...)
+	cmd := safeexec.Command("go", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),

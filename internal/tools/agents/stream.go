@@ -1,8 +1,10 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -27,8 +29,18 @@ type Event struct {
 	AgentName string `json:"agent_name"`
 	Type      string `json:"type"`
 	Data      string `json:"data"`
+	// ToolName, ToolInput, ToolUseID are populated for tool_use events;
+	// ToolUseID and IsError are also set for tool_result events.
+	ToolName  string `json:"tool_name,omitempty"`
+	ToolInput string `json:"tool_input,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 	PID       int    `json:"pid,omitempty"`
 	Lifecycle string `json:"lifecycle,omitempty"`
+	// At / EndAt carry Unix ms timestamps for tool_use/tool_result events
+	// so the UI can show "started HH:MM:SS, took Ns".
+	At    int64 `json:"at,omitempty"`
+	EndAt int64 `json:"end_at,omitempty"`
 }
 
 func (e Event) JSON() string {
@@ -84,9 +96,32 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		Type:      ev.Type.String(),
 		Data:      ev.Text,
 	}
-	if ev.ErrorMsg != "" {
+	now := time.Now().UnixMilli()
+	switch ev.Type {
+	case event.ToolUse:
+		payload.Data = ev.ToolName
+		payload.ToolName = ev.ToolName
+		payload.ToolInput = ev.ToolInput
+		payload.ToolUseID = ev.ToolUseID
+		payload.At = now
+	case event.ToolResult:
+		payload.Data = ev.Text
+		payload.ToolUseID = ev.ToolUseID
+		payload.IsError = ev.IsError
+		payload.At = now
+	case event.Thinking:
+		payload.At = now
+	case event.Error:
 		payload.Data = ev.ErrorMsg
 	}
+	log.Debug().
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("event_type", payload.Type).
+		Str("data", payload.Data).
+		Str("tool_name", payload.ToolName).
+		Str("tool_use_id", payload.ToolUseID).
+		Msg("sse.publish: broadcasting event")
 	b.fanout(sessionID, payload)
 }
 
@@ -94,7 +129,18 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 // to subscribers. Idle/Working transitions are inferred from
 // AgentEvent flow on the client side; only the bookend transitions —
 // which never carry an AgentEvent — go through this channel.
-func (b *Broadcaster) PublishLifecycle(sessionID, agentName, lifecycle string, pid int) {
+// PublishLifecycle takes the spawn-time ctx so the broadcast log line
+// carries the originating request_id (set by the HTTP middleware) when
+// the spawn came from an HTTP path. Pass context.Background() when
+// no spawn ctx is in scope.
+func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName, lifecycle string, pid int) {
+	log.Ctx(ctx).Debug().
+		Str("component", "sse").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("lifecycle", lifecycle).
+		Int("pid", pid).
+		Msg("sse.publish: broadcasting lifecycle")
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		AgentName: agentName,
@@ -162,6 +208,33 @@ func (b *Broadcaster) PublishAskUserResolved(sessionID, requestID string) {
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		Type:      "ask_user_resolved",
+		Data:      string(body),
+	})
+}
+
+// PublishRaw fires an arbitrary typed SSE event. Used to inject synthetic
+// agent events (e.g. text_delta + done for a switch confirmation reply).
+func (b *Broadcaster) PublishRaw(sessionID, agentName, evType, data string) {
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      evType,
+		Data:      data,
+	})
+}
+
+// PublishSystemTurn fires a system_turn event so the UI can append it
+// to the conversation without a page reload. Data is JSON with text +
+// steps so the front-end can render the pill + checklist inline.
+func (b *Broadcaster) PublishSystemTurn(sessionID, agentName, text string, steps []string) {
+	body, _ := json.Marshal(map[string]any{
+		"text":  text,
+		"steps": steps,
+	})
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      "system_turn",
 		Data:      string(body),
 	})
 }

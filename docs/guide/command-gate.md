@@ -44,13 +44,26 @@ When you enable it, wick runs a **capability probe**: it spawns the provider wit
 
 The master gate switch on the Providers page fans out — toggle ON sets every instance's per-instance flag and kicks off background probes; toggle OFF clears all flags. Single source of truth is always the per-instance `Hooks["PreToolUse"].Enabled` field on disk.
 
-**Bypass lock**: if `bypass_permissions` is set in agents config (non-interactive channels), the master switch shows a `locked (bypass)` badge and refuses toggles. Turn bypass off first.
+**Bypass lock**: if the gate's `PermissionMode` is set to `bypass` (non-interactive channels), the master switch shows a `locked (bypass)` badge and refuses toggles. Switch `PermissionMode` back to `on` first.
+
+### Umbrella policy
+
+The gate config is the umbrella for **every user-facing prompt** an agent might issue, not just shell approval. It carries two sub-modes:
+
+| Field | What it gates | Values |
+|---|---|---|
+| `PermissionMode` | Per-tool permission prompts (the `PreToolUse` hook on each provider) | `on` (install hook) / `bypass` (skip — for Slack / HTTP / cron channels where no human can answer) |
+| `AskUserMode` | The `ask_user` MCP tool the agent calls mid-turn | `on` (route question to the web UI) / `off` (return a clean error to the LLM so it picks a default instead of hanging) |
+
+The master `GateEnabled` flag is the global kill-switch — off snaps every sub-mode to its unguarded default (`PermissionMode: bypass`, `AskUserMode: off`). On honors each sub-mode independently.
+
+Defaults on fresh install: gate on, permission prompts on, ask_user routed to the UI. The legacy `bypass_permissions` checkbox was retired in v0.13.0 — its value is one-shot migrated to `PermissionMode` at boot.
 
 ### Capability badges per provider card
 
 | State | Badge |
 |---|---|
-| `bypass_permissions` on | `locked (bypass)` |
+| `PermissionMode: bypass` | `locked (bypass)` |
 | Master off | `locked` |
 | Master on + probe in flight | `testing…` |
 | Master on + intent on + verified | `enabled ✓` |
@@ -75,11 +88,11 @@ The gate uses a catch-all `.*` matcher, so **every tool call** routes through th
 | Tool type | Gate behavior |
 |---|---|
 | **Bash** | Whitelist check → auto-approved check → ask user |
-| **Read / Write / Edit / Glob** | Scope check — if path is within the workspace `default_scope`, auto-allow; otherwise ask user |
+| **Read / Write / Edit / Glob** | Scope check — if path is within the project `default_scope`, auto-allow; otherwise ask user |
 | **MCP tools** (e.g. `mcp__support-tools__wick_execute`) | Always ask user (no scope to check) |
 | **Unknown / future tools** | Always ask user |
 
-File tools within the workspace scope are auto-allowed without a popup, so normal agent file operations stay fast. Only out-of-scope file access and all MCP/shell calls prompt you.
+File tools within the project scope are auto-allowed without a popup, so normal agent file operations stay fast. Only out-of-scope file access and all MCP/shell calls prompt you.
 
 ## Approval modes
 
@@ -179,7 +192,7 @@ Plus a per-day human-readable tail log alongside the other wick logs:
 ```
 
 ::: info Why one shared spec/socket/log
-Earlier iterations gave each session its own socket directory. Approvals are an app-wide concern (`approve_always` should mean the same thing across every session) and the daemon routes to the right session by matching the hook's `cwd` against known workspace paths. One listener, one spec, one audit log.
+Earlier iterations gave each session its own socket directory. Approvals are an app-wide concern (`approve_always` should mean the same thing across every session) and the daemon routes to the right session by matching the hook's `cwd` against known project paths. One listener, one spec, one audit log.
 :::
 
 ### `commands.jsonl` format
@@ -194,7 +207,7 @@ Multi-stage trail per invocation, tied together by `RequestID`:
 {"ts":"...","stage":"terminal","request_id":"r-abc","decision":"approve_once","match_key":"..."}
 ```
 
-Filter by `request_id` to follow one command end-to-end. The session detail Commands tab filters by workspace cwd prefix.
+Filter by `request_id` to follow one command end-to-end. The session detail Commands tab filters by project cwd prefix.
 
 ### Daily tail log
 
@@ -277,7 +290,7 @@ A failing round-trip is the most useful signal: binary resolves but daemon isn't
 
 ### Test gate button
 
-The Providers page has a per-card **Test gate** button. It spawns the provider with a force-deny hook in a temp workspace, asks it to touch a sentinel file, and reports whether the file was created. Green = deny envelope honored; red = gate effectively bypassed.
+The Providers page has a per-card **Test gate** button. It spawns the provider with a force-deny hook in a temp project folder, asks it to touch a sentinel file, and reports whether the file was created. Green = deny envelope honored; red = gate effectively bypassed.
 
 Use this as a smoke test after upgrading a provider CLI — the contract has changed before without warning.
 
@@ -316,6 +329,6 @@ See [command-gate-multi-provider.md](https://github.com/yogasw/wick/blob/master/
 
 ## See also
 
-- [AI Agents](./agents) — sessions, workspaces, providers.
+- [AI Agents](./agents) — sessions, projects, providers.
 - [`wick build`](../reference/build) — `--installer` flag bundles the gate sidecar.
 - [Environment Variables](../reference/env-vars) — `APP_NAME` namespacing for `~/.<app>/`.

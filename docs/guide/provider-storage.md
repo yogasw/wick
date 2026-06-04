@@ -9,12 +9,21 @@ Provider Storage backs up local credential and config files from disk to the dat
 
 ```
 Boot
-  DB → filesystem   (RestoreAll, disk-wins guard)
-  filesystem → DB   (SyncAll, populates rows immediately)
+  DB → filesystem      (RestoreAllForce — DB is source of truth)
+  ── restore complete ──
+  fsnotify watcher on  (if watcher_status = true)
 
-Every minute (background job)
-  filesystem → DB   (SyncOne per enabled source, skip unchanged via SHA-256)
+Realtime (kernel event)
+  Write/Create file    → debounce window → SyncFile → DB
+  Remove/Rename file   → hard delete row from DB
+  Create dir           → recursively register subtree with kernel
+
+Every minute (cron job, safety net)
+  filesystem → DB      (SyncOne per enabled source, skip unchanged via SHA-256)
+  reconcile watcher    (toggle on/off to match watcher_status config)
 ```
+
+**Streaming sync.** The cron pass and the realtime watcher both go through the same per-file path: stream-hash the file on disk (constant-memory `io.Copy` into SHA-256), compare against the stored hash, and only load the full content into memory when a DB write is actually necessary. Idle scans across thousands of files therefore allocate just the hash buffer, not the full content.
 
 File rows are keyed by their **absolute filesystem path** (e.g. `/home/app/.claude/credentials.json` or `C:/Users/x/.wick-lab/agents/foo.yml`). The same physical file always maps to a single row, regardless of how many sources cover it.
 
@@ -93,10 +102,33 @@ Edit retention on a source via the **Retention** column in Configured Sources (p
 
 | Job | Schedule | What it does |
 |-----|----------|--------------|
-| Provider Storage Sync | `*/1 * * * *` | Backs up enabled sources from disk to DB |
+| Provider Storage Sync | `*/1 * * * *` | Reconciles watcher lifecycle + backs up enabled sources as a safety net |
 | Provider Storage Retention | `0 3 * * *` | Deletes file rows past their retention |
 
 Both jobs can be triggered manually from **Tools → Jobs**.
+
+### Realtime watcher
+
+The Provider Storage Sync job carries two configs that drive the realtime watcher:
+
+| Config | Default | Purpose |
+|--------|---------|---------|
+| `watcher_status` | `true` | Master switch. When off, only the cron tick syncs. |
+| `watcher_debounce_ms` | `1000` | Per-path debounce window. Editor save bursts (atomic rename + multi-write) collapse into one sync. |
+
+**Lifecycle:**
+
+- Watcher starts **after** boot restore completes (so it doesn't race the restore writes).
+- Hot reloads automatically on **Save Source** / **Delete Source** — no restart needed.
+- Toggling `watcher_status` in the Settings page takes effect on the next job tick (≤ 1 min).
+- **Remove / Rename** events hard-delete the file row from DB immediately. This is the "disk truth wins" semantic — retention is a TTL for files you *keep*, not a backup of files you've actively removed.
+
+**When to leave it on:** virtually always — idle CPU and disk I/O drop to ~zero compared with the polling scan.
+
+**When to turn it off:**
+
+- Linux container hitting `fs.inotify.max_user_watches` (rare for credential trees; check `sysctl fs.inotify.max_user_watches`).
+- Source path on a network mount that doesn't emit inotify/ReadDirectoryChangesW events. The cron tick still covers these.
 
 ## Migration notes
 

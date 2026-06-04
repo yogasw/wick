@@ -37,7 +37,7 @@ import (
 const DefaultShardMax = 100
 
 // Store is a sharded append-only JSONL log. Callers create one
-// instance per logical stream (e.g. per workflow slug, per session
+// instance per logical stream (e.g. per workflow id, per session
 // id). Concurrent appends to the same Store are serialised via the
 // internal mutex.
 //

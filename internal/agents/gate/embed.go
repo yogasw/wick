@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 //go:embed all:assets
@@ -21,13 +21,17 @@ var embeddedGateFS embed.FS
 // from their own executable name (wick-lab-gate.exe → "wick-lab") so
 // socket/spec paths land under the correct ~/.<app>/ tree even when no
 // ldflag, APP_NAME env, or wick.yml is present. appname.Resolve() is
-// used only when the exe-derived name is empty or equals the bare
-// default.
+// used for all other callers (server binary, embedded gate named "gate")
+// so the BuildAppName ldflag is respected in every context.
 func AppName() string {
 	if exe, err := os.Executable(); err == nil {
-		stem := strings.TrimSuffix(filepath.Base(exe), ".exe")
-		stem = strings.TrimSuffix(stem, "-gate")
-		if stem != "" && stem != "gate" {
+		base := strings.TrimSuffix(filepath.Base(exe), ".exe")
+		// Only derive from exe name for explicit gate sidecars (must carry
+		// the -gate suffix). Non-gate binaries (server "lab", "wick-lab",
+		// embedded "gate") must fall through to appname.Resolve() so the
+		// BuildAppName ldflag — baked into both server and gate builds — is
+		// the single source of truth regardless of how the binary is named.
+		if stem, ok := strings.CutSuffix(base, "-gate"); ok && stem != "" {
 			return stem
 		}
 	}
@@ -122,7 +126,7 @@ func ResolveGateBinaryWithSource(sessionDir string) (path, source string, err er
 	}
 	lookupName := brandedGateName()
 	lookupName = strings.TrimSuffix(lookupName, ".exe")
-	if p, err := exec.LookPath(lookupName); err == nil {
+	if p, err := safeexec.LookPath(lookupName); err == nil {
 		return p, SourcePath, nil
 	}
 	return "", "", fmt.Errorf("gate binary %q not found: build the app with `wick build` (sibling+embed both produced) or place %s on PATH", lookupName, lookupName)

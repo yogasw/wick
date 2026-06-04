@@ -7,12 +7,35 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 
 	// register drivers used by workflow db_query nodes
 	_ "github.com/glebarez/go-sqlite"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+type dbQuerySchema struct {
+	Database string `wick:"required;key=database;desc=DSN reference key configured in workspace"`
+	SQL      string `wick:"required;key=sql;textarea;desc=Parameterized SQL query"`
+	SQLArgs  string `wick:"key=sql_args;desc=YAML list of positional args for ? placeholders"`
+}
+
+func (e *DBQueryExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Category:    engine.CategoryAction,
+		Label:       "DB Query",
+		Badge:       "SQL query",
+		Description: "Run a parameterized SQL query against a configured DSN.",
+		WhenToUse:   "Reading from an external user database.",
+		Schema:      integration.StructSchema(dbQuerySchema{}),
+		Output: map[string]string{
+			"rows":      "[]map[string]any — result rows",
+			"row_count": "int — row count",
+			"columns":   "[]string — column names",
+		},
+	}
+}
 
 // DBQueryExecutor runs a parameterized SQL query against a named
 // database. The Database field resolves to an env key whose value is
@@ -29,7 +52,6 @@ func NewDBQueryExecutor() *DBQueryExecutor { return &DBQueryExecutor{} }
 
 // Execute connects, runs the SQL, and returns rows.
 func (e *DBQueryExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflow.RunContext) (workflow.NodeOutput, error) {
-	rctx := rc.RenderCtx()
 
 	// Resolve DSN: Database field is an env key name.
 	dsn := ""
@@ -46,23 +68,13 @@ func (e *DBQueryExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 		return workflow.NodeOutput{}, fmt.Errorf("db_query: database %q not found in workflow env", n.Database)
 	}
 
-	// Render SQL template.
-	query, err := template.Render(n.SQL, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("db_query: sql render: %w", err)
-	}
-	if query == "" {
+	if n.SQL == "" {
 		return workflow.NodeOutput{}, fmt.Errorf("db_query: sql is empty")
 	}
-
-	// Render positional args.
-	args := make([]any, 0, len(n.SQLArgs))
-	for i, raw := range n.SQLArgs {
-		rendered, err := template.Render(raw, rctx)
-		if err != nil {
-			return workflow.NodeOutput{}, fmt.Errorf("db_query: sql_args[%d] render: %w", i, err)
-		}
-		args = append(args, rendered)
+	query := n.SQL
+	args := make([]any, len(n.SQLArgs))
+	for i, v := range n.SQLArgs {
+		args[i] = v
 	}
 
 	// Open connection. Use pgx for postgres, go-sqlite for sqlite/file.
@@ -125,3 +137,6 @@ func (e *DBQueryExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 		},
 	}, nil
 }
+
+// DBQuerySchema is the exported form of dbQuerySchema for the editor UI.
+type DBQuerySchema = dbQuerySchema

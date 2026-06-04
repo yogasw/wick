@@ -49,14 +49,11 @@ func matchesAnyExclude(abs string, patterns []string) bool {
 //     the dir AND every descendant. Folder ignores work without making the
 //     user type "/**" manually.
 func globMatch(pattern, path string) bool {
-	// filepath.ToSlash is a no-op on Linux/macOS — '\' is a legal
-	// filename char there — so a pattern saved by a Windows host
-	// (e.g. "C:\Users\x\logs") still arrives backslash-laced on a Linux
-	// runner. Force-normalise both ends so cross-OS DB shares and CI
-	// running Windows-style string tests still match the way users see
-	// the same path on their own machine.
-	pattern = strings.ReplaceAll(filepath.ToSlash(pattern), `\`, "/")
-	path = strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
+	// Normalise to forward slashes on all platforms — filepath.ToSlash only
+	// converts the OS separator, so Windows backslashes pass through unchanged
+	// on Linux/macOS. Use strings.ReplaceAll for cross-platform correctness.
+	pattern = strings.ReplaceAll(pattern, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/")
 	// Drop a trailing slash on the pattern — both Clean and human input
 	// can produce it, and "/foo/" should match the same set as "/foo".
 	if len(pattern) > 1 {

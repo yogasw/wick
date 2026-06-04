@@ -5,11 +5,12 @@ package systemtray
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
 	"syscall"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // notify shows an OS-level toast on Win10+.
@@ -37,7 +38,7 @@ func notify(title, message string) error {
 		`Start-Sleep -Seconds 6;`+
 		`$n.Dispose()`,
 		esc(title), esc(message))
-	c := exec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script)
+	c := safeexec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script)
 	c.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x08000000,

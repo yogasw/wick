@@ -9,13 +9,18 @@ import (
 // KVList renders an editable multi-row table widget. Options holds
 // pipe-separated column names (e.g. "id|name"); Value is a JSON array
 // of string-keyed objects: [{"id":"1","name":"Sales Report"},...].
-// The hidden input named "value" is serialized to JSON on submit.
+//
+// The hidden input named "value" carries the serialized JSON. It is
+// also stamped with `data-field-key=<row.Key>` so contexts that look
+// up editables by field-key (workflow inspector's argEditable) can
+// find this widget. Serialization happens live on every row edit so
+// the JSON stays current without depending on a form submit.
 templ KVList(row entity.Config) {
-	@kvlistEditor(kvlistColumns(row), kvlistRows(row))
+	@kvlistEditor(row.Key, kvlistColumns(row), kvlistRows(row))
 }
 
-templ kvlistEditor(cols []string, rows []map[string]string) {
-	<div class="kvlist-editor w-full" data-cols={ strings.Join(cols, "|") }>
+templ kvlistEditor(fieldKey string, cols []string, rows []map[string]string) {
+	<div class="kvlist-editor w-full" data-cols={ strings.Join(cols, "|") } data-field-key={ fieldKey }>
 		<div class="overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 mb-2">
 			<table class="w-full text-xs">
 				<thead>
@@ -57,7 +62,7 @@ templ kvlistEditor(cols []string, rows []map[string]string) {
 			data-kvlist-add
 			class="rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
 		>+ Add Row</button>
-		<input type="hidden" name="value"/>
+		<input type="hidden" name="value" data-field-key={ fieldKey }/>
 		<script>
 		(function(){
 			var w=document.currentScript.closest('.kvlist-editor');
@@ -93,14 +98,11 @@ templ kvlistEditor(cols []string, rows []map[string]string) {
 				tr.appendChild(td2);
 				return tr;
 			}
-			tbody.addEventListener('click',function(e){
-				var btn=e.target.closest('[data-kvlist-remove]');
-				if(btn)btn.closest('tr').remove();
-			});
-			addBtn.addEventListener('click',function(){
-				tbody.appendChild(mkRow());
-			});
-			form.addEventListener('submit',function(){
+			// serialize collects every row's cell values and writes JSON
+			// into the hidden input. Dispatches input+change so listeners
+			// scoped to the hidden (workflow canvas, channel args) wake up
+			// without having to listen on each row input themselves.
+			function serialize(){
 				var out=[];
 				tbody.querySelectorAll('tr').forEach(function(tr){
 					var obj={};
@@ -112,7 +114,28 @@ templ kvlistEditor(cols []string, rows []map[string]string) {
 					}
 				});
 				hidden.value=JSON.stringify(out);
+				hidden.dispatchEvent(new Event('input',{bubbles:true}));
+				hidden.dispatchEvent(new Event('change',{bubbles:true}));
+			}
+			tbody.addEventListener('click',function(e){
+				var btn=e.target.closest('[data-kvlist-remove]');
+				if(btn){btn.closest('tr').remove();serialize();}
 			});
+			tbody.addEventListener('input',serialize);
+			tbody.addEventListener('change',serialize);
+			addBtn.addEventListener('click',function(){
+				tbody.appendChild(mkRow());
+				serialize();
+			});
+			// Seed the hidden value at boot so server-rendered rows are
+			// reflected before the user touches anything.
+			serialize();
+			// Backward compat: legacy admin pages relied on form.submit
+			// to fill the hidden. Keep that handler so non-canvas
+			// callers still work.
+			if(form){
+				form.addEventListener('submit',serialize);
+			}
 		})();
 		</script>
 	</div>

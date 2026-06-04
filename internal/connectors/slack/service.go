@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -342,21 +344,26 @@ func shapePostResult(raw any) any {
 // ANY-OF so a bot with only public scopes still passes ops that don't
 // require private access.
 var opScopes = map[string][][]string{
-	"list_channels":      {{"channels:read", "groups:read", "im:read", "mpim:read"}},
-	"search_channels":    {{"channels:read", "groups:read", "im:read", "mpim:read"}},
-	"get_channel_info":   {{"channels:read", "groups:read", "im:read", "mpim:read"}},
-	"get_channel_history": {{"channels:history", "groups:history", "im:history", "mpim:history"}},
-	"get_thread_replies":  {{"channels:history", "groups:history", "im:history", "mpim:history"}},
-	"list_users":         {{"users:read"}},
-	"get_user_info":      {{"users:read"}},
-	"get_user_by_email":  {{"users:read", "users:read.email"}},
-	"get_permalink":      {{"chat:write"}},
-	"send_message":       {{"chat:write"}},
-	"send_ephemeral":     {{"chat:write"}},
-	"update_message":     {{"chat:write"}},
-	"delete_message":     {{"chat:write"}},
-	"add_reaction":       {{"reactions:write"}},
-	"remove_reaction":    {{"reactions:write"}},
+	"list_channels":          {{"channels:read", "groups:read", "im:read", "mpim:read"}},
+	"search_channels":        {{"channels:read", "groups:read", "im:read", "mpim:read"}},
+	"get_channel_info":       {{"channels:read", "groups:read", "im:read", "mpim:read"}},
+	"get_channel_history":    {{"channels:history", "groups:history", "im:history", "mpim:history"}},
+	"get_thread_replies":     {{"channels:history", "groups:history", "im:history", "mpim:history"}},
+	"list_users":             {{"users:read"}},
+	"get_user_info":          {{"users:read"}},
+	"get_user_by_email":      {{"users:read", "users:read.email"}},
+	"get_permalink":          {{"chat:write"}},
+	"send_message":           {{"chat:write"}},
+	"send_ephemeral":         {{"chat:write"}},
+	"update_message":         {{"chat:write"}},
+	"delete_message":         {{"chat:write"}},
+	"add_reaction":           {{"reactions:write"}},
+	"remove_reaction":        {{"reactions:write"}},
+	"create_canvas":          {{"canvases:write"}},
+	"create_channel_canvas":  {{"canvases:write"}},
+	"edit_canvas":            {{"canvases:write"}},
+	"lookup_canvas_sections": {{"canvases:read"}},
+	"set_canvas_access":      {{"canvases:write"}},
 }
 
 // runHealthCheck makes one auth.test call, reads the granted scopes
@@ -439,6 +446,56 @@ func evalScopeRule(rule [][]string, granted map[string]struct{}) (bool, [][]stri
 		}
 	}
 	return len(missing) == 0, missing
+}
+
+// botUserID holds the Slack user_id of the active bot. Seeded by the
+// agent slack channel on connect/reload (one bot per process), and
+// read by signedFooterBlock to render "Sent using <@BotID>".
+//
+// Stored as atomic.Value so reads are lock-free on the hot send path.
+// Empty until the channel performs auth.test successfully.
+var botUserID atomic.Value // string
+
+// SetBotUserID is called by the agent slack channel after auth.test
+// confirms the bot identity. No-op on empty input. Safe from any
+// goroutine.
+func SetBotUserID(id string) {
+	if id == "" {
+		return
+	}
+	botUserID.Store(id)
+}
+
+// BotUserID returns the cached bot user_id, or "" when the channel has
+// not yet connected.
+func BotUserID() string {
+	if v, ok := botUserID.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// signedFooterBlock builds the Block Kit context block that gets
+// appended to every send_message — "Sent using <@BotID>" when the
+// bot user is known (seeded by the agent slack channel on connect),
+// falling back to the app name.
+func signedFooterBlock() map[string]any {
+	botID := BotUserID()
+	var footerText string
+	if botID != "" {
+		footerText = "Sent using <@" + botID + ">"
+	} else {
+		footerText = "Sent using *" + appname.Resolve() + "*"
+	}
+	return map[string]any{
+		"type": "context",
+		"elements": []any{
+			map[string]any{
+				"type": "mrkdwn",
+				"text": footerText,
+			},
+		},
+	}
 }
 
 func cursorFrom(m map[string]any) string {

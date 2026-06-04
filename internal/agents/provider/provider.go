@@ -20,12 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
@@ -51,7 +52,7 @@ func SupportedTypes() []Type {
 type Instance struct {
 	Type      Type
 	Name      string
-	Binary    string   // override path; empty = use Type as PATH name
+	Binary    string // override path; empty = use Type as PATH name
 	ExtraArgs []string
 	Env       []string
 	Disabled  bool
@@ -65,6 +66,25 @@ type Instance struct {
 	// Storage configures credential-file syncing for this instance.
 	// nil = sync disabled.
 	Storage *StorageConfig
+
+	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
+	CodexConfig *CodexConfig
+}
+
+// CodexSandboxMode maps to codex's --sandbox flag values.
+type CodexSandboxMode string
+
+const (
+	CodexSandboxReadOnly       CodexSandboxMode = "read-only"
+	CodexSandboxWorkspaceWrite CodexSandboxMode = "workspace-write"
+	CodexSandboxFullAccess     CodexSandboxMode = "danger-full-access"
+)
+
+// CodexConfig holds codex-specific spawn configuration.
+// Populated only when Instance.Type == TypeCodex.
+type CodexConfig struct {
+	// SandboxMode sets --sandbox. Empty = CodexSandboxFullAccess.
+	SandboxMode CodexSandboxMode
 }
 
 // StorageConfig mirrors userconfig.StorageConfig in-memory.
@@ -336,7 +356,7 @@ func Delete(t Type, name string) error {
 				return err
 			}
 			invalidateInstanceCache()
-		InvalidateProbeCache(t, name)
+			InvalidateProbeCache(t, name)
 			return nil
 		}
 	}
@@ -356,11 +376,11 @@ func Probe(ctx context.Context, ins Instance) Status {
 	if ins.Binary != "" {
 		st.Path = ins.Binary
 		source = "registry"
-		if _, err := exec.LookPath(ins.Binary); err == nil {
+		if _, err := safeexec.LookPath(ins.Binary); err == nil {
 			st.PathFound = true
 		}
 	} else {
-		path, err := exec.LookPath(string(ins.Type))
+		path, err := safeexec.LookPath(string(ins.Type))
 		if err == nil {
 			st.Path = path
 			st.PathFound = true
@@ -390,7 +410,7 @@ func Probe(ctx context.Context, ins Instance) Status {
 	if ins.Disabled {
 		return st
 	}
-	cmd := exec.CommandContext(ctx, st.Path, "--version")
+	cmd := safeexec.CommandContext(ctx, st.Path, "--version")
 	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -518,7 +538,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 			continue
 		}
 		for _, raw := range list {
-			out = append(out, Instance{
+			ins := Instance{
 				Type:      t,
 				Name:      raw.Name,
 				Binary:    raw.BinaryPath,
@@ -527,7 +547,13 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				Disabled:  raw.Disabled,
 				Hooks:     hooksFromUser(raw.Hooks),
 				Storage:   storageFromUser(raw.Storage),
-			})
+			}
+			if t == TypeCodex {
+				ins.CodexConfig = &CodexConfig{
+					SandboxMode: CodexSandboxMode(raw.SandboxMode),
+				}
+			}
+			out = append(out, ins)
 		}
 	}
 	return out
@@ -558,7 +584,7 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 }
 
 func toUserInstance(ins Instance) userconfig.ProviderInstance {
-	return userconfig.ProviderInstance{
+	raw := userconfig.ProviderInstance{
 		Name:       ins.Name,
 		BinaryPath: ins.Binary,
 		Disabled:   ins.Disabled,
@@ -567,6 +593,10 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		Hooks:      hooksToUser(ins.Hooks),
 		Storage:    storageToUser(ins.Storage),
 	}
+	if ins.CodexConfig != nil {
+		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)
+	}
+	return raw
 }
 
 // hooksFromUser converts the persisted shape into the in-memory map.

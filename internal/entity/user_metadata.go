@@ -27,6 +27,12 @@ type UserMetadata struct {
 	// "light"/"dark" defaults. Values are Theme.ID.
 	LightTheme string `json:"light_theme,omitempty"`
 	DarkTheme  string `json:"dark_theme,omitempty"`
+
+	// PinnedAgentProjectID is the agents Project this user pinned as
+	// their personal default. One per user. When set, opening the agents
+	// tool lands scoped to this project. Empty = unpinned. See
+	// internal/docs/project/design.md.
+	PinnedAgentProjectID string `json:"pinned_agent_project_id,omitempty"`
 }
 
 const (

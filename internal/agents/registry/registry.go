@@ -16,10 +16,13 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/preset"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // Registry is the in-memory view of the on-disk agents state.
@@ -29,20 +32,20 @@ import (
 type Registry struct {
 	layout config.Layout
 
-	mu         sync.RWMutex
-	workspaces map[string]workspace.Workspace
-	sessions   map[string]session.Session
-	presets    map[string]struct{}
+	mu       sync.RWMutex
+	projects map[string]project.Project
+	sessions map[string]session.Session
+	presets  map[string]struct{}
 }
 
 // New returns an empty registry bound to the given layout. Call
 // Reload() before serving traffic.
 func New(layout config.Layout) *Registry {
 	return &Registry{
-		layout:     layout,
-		workspaces: map[string]workspace.Workspace{},
-		sessions:   map[string]session.Session{},
-		presets:    map[string]struct{}{},
+		layout:   layout,
+		projects: map[string]project.Project{},
+		sessions: map[string]session.Session{},
+		presets:  map[string]struct{}{},
 	}
 }
 
@@ -70,20 +73,20 @@ func (r *Registry) Reload() error {
 		presets[n] = struct{}{}
 	}
 
-	wsNames, err := workspace.List(r.layout)
+	projectIDs, err := project.List(r.layout)
 	if err != nil {
 		return err
 	}
-	workspaces := make(map[string]workspace.Workspace, len(wsNames))
-	for _, n := range wsNames {
-		w, err := workspace.Load(r.layout, n)
+	projects := make(map[string]project.Project, len(projectIDs))
+	for _, id := range projectIDs {
+		p, err := project.Load(r.layout, id)
 		if err != nil {
 			// Skip unreadable folders rather than fail the whole boot.
-			// A broken workspace shouldn't prevent the rest of wick
+			// A broken project shouldn't prevent the rest of wick
 			// from running — operator can fix it manually.
 			continue
 		}
-		workspaces[n] = w
+		projects[id] = p
 	}
 
 	sessionIDs, err := session.List(r.layout)
@@ -114,46 +117,72 @@ func (r *Registry) Reload() error {
 			_ = session.SaveMeta(r.layout, id, s.Meta)
 			_ = session.SaveAgents(r.layout, id, s.Agents)
 		}
+		// Merge any inflight.jsonl left over from the previous process
+		// into conversation.jsonl as a truncated assistant turn. Without
+		// this, a subsequent --resume would branch off a history the
+		// agent CLI never saw the answer for.
+		recoveryAgent := s.Meta.ActiveAgent
+		if recoveryAgent == "" && len(s.Agents) > 0 {
+			recoveryAgent = s.Agents[0].Name
+		}
+		recoveryProvider := ""
+		for _, a := range s.Agents {
+			if a.Name == recoveryAgent {
+				recoveryProvider = a.Provider
+				break
+			}
+		}
+		if recovered, err := store.RecoverInflight(r.layout, id, recoveryAgent, recoveryProvider, nil); err != nil {
+			log.Warn().Err(err).Str("session", id).Msg("registry: recover inflight failed")
+		} else if recovered {
+			log.Info().Str("session", id).Str("agent", recoveryAgent).Msg("registry: recovered inflight turn into conversation.jsonl")
+		}
 		sessions[id] = s
 	}
 
-	r.workspaces = workspaces
+	r.projects = projects
 	r.sessions = sessions
 	r.presets = presets
 	return nil
 }
 
-// Workspaces returns a snapshot copy of the workspaces map. Callers
-// that just need names should prefer WorkspaceNames to avoid copying
-// meta.
-func (r *Registry) Workspaces() map[string]workspace.Workspace {
+// Projects returns a snapshot copy of the projects map keyed by id.
+func (r *Registry) Projects() map[string]project.Project {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make(map[string]workspace.Workspace, len(r.workspaces))
-	for k, v := range r.workspaces {
+	out := make(map[string]project.Project, len(r.projects))
+	for k, v := range r.projects {
 		out[k] = v
 	}
 	return out
 }
 
-// WorkspaceNames returns sorted workspace names.
-func (r *Registry) WorkspaceNames() []string {
+// ProjectIDs returns project ids sorted by display name.
+func (r *Registry) ProjectIDs() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.workspaces))
-	for k := range r.workspaces {
-		out = append(out, k)
+	type kv struct {
+		id   string
+		name string
 	}
-	sort.Strings(out)
+	all := make([]kv, 0, len(r.projects))
+	for id, p := range r.projects {
+		all = append(all, kv{id, p.Meta.Name})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
+	out := make([]string, len(all))
+	for i, e := range all {
+		out[i] = e.id
+	}
 	return out
 }
 
-// Workspace returns one workspace by name, ok=false if missing.
-func (r *Registry) Workspace(name string) (workspace.Workspace, bool) {
+// Project returns one project by id, ok=false if missing.
+func (r *Registry) Project(id string) (project.Project, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	w, ok := r.workspaces[name]
-	return w, ok
+	p, ok := r.projects[id]
+	return p, ok
 }
 
 // Sessions returns a snapshot copy.
@@ -221,10 +250,10 @@ func (r *Registry) HasPreset(name string) bool {
 // upsert / delete helpers used by Manager (same package). Callers must
 // not hold the read lock when invoking these.
 
-func (r *Registry) upsertWorkspace(w workspace.Workspace) {
+func (r *Registry) upsertProject(p project.Project) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.workspaces[w.Name] = w
+	r.projects[p.Meta.ID] = p
 }
 
 func (r *Registry) upsertSession(s session.Session) {
@@ -239,10 +268,10 @@ func (r *Registry) upsertPreset(name string) {
 	r.presets[name] = struct{}{}
 }
 
-func (r *Registry) deleteWorkspace(name string) {
+func (r *Registry) deleteProject(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.workspaces, name)
+	delete(r.projects, id)
 }
 
 func (r *Registry) deleteSession(id string) {

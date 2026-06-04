@@ -12,7 +12,7 @@ import (
 // Dev), each carrying its own credentials and tag set. Rows are listed
 // here with quick actions; clicking a row opens the detail page where
 // configs are edited and operations are tested.
-templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow map[string][]string, user *entity.User) {
+templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow map[string][]string, user *entity.User, oauthAppCfg ConnectorOAuthAppConfig) {
 	@Layout("Manager · "+mod.Meta.Name, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -44,6 +44,10 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 				}
 			</div>
 
+			if oauthAppCfg.Enabled {
+				@connectorOAuthAppSection(mod, oauthAppCfg)
+			}
+
 			<section class="mt-8">
 				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Instances</h2>
 				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
@@ -63,6 +67,68 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 			</section>
 		</main>
 	}
+}
+
+// connectorOAuthAppSection renders the OAuth App configuration card for admins.
+// Shown on the list page before the rows list so connector-level credentials
+// (client_id / client_secret) are managed in one place, not per-row.
+templ connectorOAuthAppSection(mod connector.Module, cfg ConnectorOAuthAppConfig) {
+	<section class="mt-6 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
+		<div class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+			<div>
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">OAuth App</h2>
+				<p class="mt-0.5 text-sm text-black-800 dark:text-black-600">
+					Connector-level credentials for the { cfg.DisplayName } OAuth flow. Set these once here
+					— they are shared across all rows and take effect immediately.
+				</p>
+			</div>
+			if cfg.OAuthURL != "" {
+				<a
+					href={ templ.SafeURL(cfg.OAuthURL) }
+					class="mt-3 sm:mt-0 inline-flex items-center gap-2 rounded-lg border border-green-500 px-4 py-2 text-sm font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20"
+				>
+					Connect with { cfg.DisplayName }
+				</a>
+			}
+		</div>
+		<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/oauth-app") } class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+			<div class="flex flex-col gap-1.5">
+				<label class="text-xs font-medium text-black-800 dark:text-black-600" for="oauth_client_id">Client ID</label>
+				<input
+					id="oauth_client_id"
+					type="text"
+					name="client_id"
+					value={ cfg.ClientID }
+					placeholder=""
+					autocomplete="off"
+					class={ cfgInputClass }
+				/>
+				<p class="text-[11px] text-black-700 dark:text-black-600">OAuth App Client ID from your { cfg.DisplayName } developer settings.</p>
+			</div>
+			<div class="flex flex-col gap-1.5">
+				<label class="text-xs font-medium text-black-800 dark:text-black-600" for="oauth_client_secret">Client Secret</label>
+				<input
+					id="oauth_client_secret"
+					type="password"
+					name="client_secret"
+					value=""
+					if cfg.ClientSecret != "" {
+						placeholder={ cfg.ClientSecret }
+					} else {
+						placeholder="Leave blank to keep unchanged"
+					}
+					autocomplete="new-password"
+					class={ cfgInputClass }
+				/>
+				<p class="text-[11px] text-black-700 dark:text-black-600">Required for the OAuth token exchange.</p>
+			</div>
+			<div class="sm:col-span-2 flex justify-end">
+				<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
+					Save OAuth App
+				</button>
+			</div>
+		</form>
+	</section>
 }
 
 // connectorListCard renders one row in the n8n-style stacked list:

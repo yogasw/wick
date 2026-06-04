@@ -245,6 +245,13 @@
     }
 
     window.wickInitPickers = initAll;
+    // wickRefreshPicker re-renders chips from the hidden input's current
+    // value. Call after programmatically setting the hidden input value
+    // (e.g. during form hydration) so chips reflect the restored state.
+    window.wickRefreshPicker = function (root) {
+        const scope = root || document;
+        scope.querySelectorAll('.wf-picker').forEach(renderChips);
+    };
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => initAll(document));

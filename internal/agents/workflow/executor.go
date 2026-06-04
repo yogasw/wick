@@ -34,10 +34,17 @@ type RunContext struct {
 	RunID       string
 	NodeOutputs map[string]NodeOutput
 
+	// TriggerNodeID is the canvas/yaml node id under which the run's
+	// firing trigger surfaces in {{.Node.<id>.…}}. Set by the engine
+	// when pickEntry resolves a trigger row (uses Trigger.ID when set,
+	// else falls back to the entry node id). Empty for legacy runs
+	// (graph.entry fallback) — those still expose data via .Event.
+	TriggerNodeID string
+
 	// DefaultAgentSessionID is set by an upstream `session_init` node
 	// and consumed by downstream `agent` nodes that don't override
 	// session: themselves. Empty = engine falls back to the per-run
-	// pattern "wf:<slug>:run:<runID>". See pool.md for the resolver
+	// pattern "wf:<id>:run:<runID>". See pool.md for the resolver
 	// order.
 	DefaultAgentSessionID string
 
@@ -51,6 +58,22 @@ type RunContext struct {
 // RenderCtx materializes a RenderCtx from the RunContext for template
 // rendering inside an executor.
 func (r *RunContext) RenderCtx() RenderCtx {
+	// labelByID lets template refs use either the stable id or the
+	// user-facing label. Both keys point at the same payload map so
+	// `{{.Node.<id>.x}}` and `{{.Node.<label>.x}}` resolve interchangeably
+	// — UI defaults to label (what the operator typed), legacy refs and
+	// internal session_from lookups still find data by id.
+	labelByID := map[string]string{}
+	for _, n := range r.Workflow.Graph.Nodes {
+		if n.Label != "" && n.Label != n.ID {
+			labelByID[n.ID] = n.Label
+		}
+	}
+	for _, tr := range r.Workflow.Triggers {
+		if tr.Label != "" && tr.ID != "" && tr.Label != tr.ID {
+			labelByID[tr.ID] = tr.Label
+		}
+	}
 	nodeMap := map[string]any{}
 	for id, out := range r.NodeOutputs {
 		m := map[string]any{}
@@ -70,6 +93,22 @@ func (r *RunContext) RenderCtx() RenderCtx {
 			m[k] = v
 		}
 		nodeMap[id] = m
+		if lbl, ok := labelByID[id]; ok {
+			nodeMap[lbl] = m
+		}
+	}
+	if r.TriggerNodeID != "" {
+		trMap := map[string]any{
+			"type":    r.Event.Type,
+			"subtype": r.Event.Subtype,
+			"channel": r.Event.Channel,
+			"at":      r.Event.At,
+			"payload": r.Event.Payload,
+		}
+		nodeMap[r.TriggerNodeID] = trMap
+		if lbl, ok := labelByID[r.TriggerNodeID]; ok {
+			nodeMap[lbl] = trMap
+		}
 	}
 	return RenderCtx{
 		Event:  r.Event,
@@ -108,15 +147,15 @@ func (e *ExecError) Unwrap() error { return e.Wrapped }
 //	{{.Secret.X}}       — encrypted secret, decrypted on lookup
 //	{{.Workflow.X}}     — workflow metadata
 //	{{.Run.X}}          — runtime metadata
-//	{{.Dataset.<alias>}} — dataset binding from datasets: list
+//	{{.DataTable.<alias>}} — data table binding from data_tables: list
 type RenderCtx struct {
-	Event    Event
-	Node     map[string]any
-	Env      map[string]string
-	Secret   map[string]string
-	Workflow WorkflowRef
-	Run      RunRef
-	Dataset  map[string]any
+	Event     Event
+	Node      map[string]any
+	Env       map[string]string
+	Secret    map[string]string
+	Workflow  WorkflowRef
+	Run       RunRef
+	DataTable map[string]any
 }
 
 // WorkflowRef is the small subset of Workflow accessible to templates.

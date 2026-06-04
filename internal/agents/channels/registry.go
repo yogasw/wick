@@ -146,7 +146,11 @@ func (r *Registry) Channels() []Channel {
 func (r *Registry) HTTPHandlers() map[string]http.Handler {
 	out := map[string]http.Handler{}
 	for _, c := range r.Channels() {
-		if h, ok := c.(HTTPHandlerProvider); ok {
+		if h, ok := c.(MultiHTTPHandlerProvider); ok {
+			for path, handler := range h.HTTPHandlers() {
+				out[path] = handler
+			}
+		} else if h, ok := c.(HTTPHandlerProvider); ok {
 			out[h.HTTPPath()] = h.HTTPHandler()
 		}
 	}

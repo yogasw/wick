@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // HTTPExecutor performs an HTTP request. Retry policy from n.Retry;
@@ -25,17 +27,125 @@ func NewHTTPExecutor() *HTTPExecutor {
 	return &HTTPExecutor{client: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// Execute runs the request described by node n.
+// HTTPSchema is the per-field schema reflected via integration.StructSchema
+// for workflow_node_types. Single source of truth for AI consumers and
+// the editor UI (the editor-side module reflects the same struct via
+// entity.StructToConfigs to render ArgForm).
+type HTTPSchema struct {
+	Method        string `wick:"required;key=method;dropdown=GET|POST|PUT|PATCH|DELETE;desc=HTTP method"`
+	URL           string `wick:"required;key=url;desc=Full URL. Rendered as Go template — use {{.Node.x.y}} or {{.Event.Payload.z}} to pull values from upstream nodes."`
+	Headers       string `wick:"key=headers;kvlist=name|value;desc=Request headers. Each value is rendered as a Go template, so you can pull tokens from upstream nodes (e.g. Authorization: Bearer {{.Node.login.token}})."`
+	Query         string `wick:"key=query;kvlist=name|value;desc=Query string params. Each value is rendered as a Go template."`
+	Body          string `wick:"key=body;textarea;visible_when=method:POST|PUT|PATCH|DELETE;desc=Request body as string. Use YAML block scalar | for multiline JSON."`
+	ParseResponse string `wick:"key=parse_response;dropdown=raw|json|bytes;visible_when=method:POST|PUT|PATCH|DELETE;desc=How to parse response body (default: raw)"`
+	TimeoutSec    string `wick:"key=timeout_sec;number;desc=Request timeout in seconds (default 30)"`
+}
+
+// Dependencies surfaces the URL (or its host when easy to extract)
+// as a generic http dependency so workflow_describe groups HTTP
+// outbound under deps.other.http.
+func (e *HTTPExecutor) Dependencies(n workflow.Node) []engine.NodeDependency {
+	if n.URL == "" {
+		return nil
+	}
+	return []engine.NodeDependency{{Kind: engine.DepKindHTTP, Ref: n.URL}}
+}
+
+// TemplateableFields exposes per-header / per-query values to
+// workflow_describe's cross-ref scan in addition to the generic
+// pool (url + body live in the default set).
+func (e *HTTPExecutor) TemplateableFields(n workflow.Node) map[string]string {
+	out := map[string]string{}
+	for k, v := range n.Headers {
+		out["headers."+k] = v
+	}
+	for k, v := range n.Query {
+		out["query."+k] = v
+	}
+	return out
+}
+
+// Descriptor exposes the schema + docs for the MCP catalog.
+func (e *HTTPExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Category:    engine.CategoryAction,
+		Label:       "HTTP / REST",
+		Badge:       "GET / POST",
+		Description: "Make an HTTP request. URL/headers/query/body rendered as Go templates.",
+		WhenToUse:   "Direct external API calls without a connector module.",
+		Example:     "{\n  \"id\": \"call_api\",\n  \"type\": \"http\",\n  \"method\": \"POST\",\n  \"url\": \"https://api.example.com/tickets\",\n  \"headers\": { \"Content-Type\": \"application/json\" },\n  \"body\": \"{\\\"title\\\": \\\"{{jsonEscape (index .Event.Payload \\\"text\\\")}}\\\"}\"\n}",
+		Schema:      integration.StructSchema(HTTPSchema{}),
+		Output: map[string]string{
+			"status":  "int — HTTP status code",
+			"body":    "string — response body",
+			"headers": "map[string]string — response headers",
+		},
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"status":  "Numeric HTTP status. Branch on it via a downstream branch node ({{.Node.x.status}} >= 400).",
+				"body":    "Response body as string. Always populated regardless of parse_response.",
+				"headers": "Flat map of response headers — first value per key.",
+				"json":    "Parsed JSON body. Populated when parse_response is \"json\" or unset and the body is valid JSON. Use {{.Node.x.json.<field>}}.",
+				"bytes":   "Raw bytes — populated only when parse_response is \"bytes\".",
+			},
+			TemplateableFields: []string{"url", "body", "headers", "query"},
+			Quirks: []string{
+				"Default timeout is 30s. Override with timeout_sec when the upstream is known to be slow.",
+				"Retry policy comes from the common retry block (max, backoff_sec). Retries fire on transport errors and 5xx — NOT on 4xx (those are user errors).",
+				"headers / query are kv-list widgets in the inspector — each VALUE is template-rendered. Set arg_modes.headers: fixed (or query: fixed) to render the whole map literally.",
+				"parse_response defaults to \"json\" — when the body is valid JSON, .Node.<this>.json is populated. Set to \"raw\" or \"bytes\" to skip parsing.",
+				"jsonEscape your template values when embedding into a JSON body — unescaped quotes break the payload.",
+			},
+			PairWith: []string{"branch", "transform", "shell"},
+			CommonPitfalls: []string{
+				"Don't put secrets directly in headers — use wick_enc_ tokens, or reference them via {{.Env.MY_SECRET}}.",
+				"Don't depend on .Node.<this>.json when parse_response is \"raw\" — only .body is populated.",
+				"Don't forget Content-Type: application/json when posting JSON — wick doesn't auto-set it.",
+			},
+			InputSample:  `{"method":"POST","url":"https://api.example.com/tickets","headers":{"Authorization":"Bearer {{.Env.API_TOKEN}}","Content-Type":"application/json"},"body":"{\"title\":\"{{jsonEscape .Node.classify.reasoning}}\"}","parse_response":"json","timeout_sec":"15"}`,
+			OutputSample: `{"status":201,"body":"{\"id\":42,\"title\":\"Payment refund bug\"}","headers":{"Content-Type":"application/json"},"json":{"id":42,"title":"Payment refund bug"}}`,
+			Examples: []wickdocs.Example{
+				{
+					Name: "post_json_body",
+					Body: `{
+  "id": "file_ticket",
+  "type": "http",
+  "method": "POST",
+  "url": "https://api.example.com/tickets",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer {{.Env.API_TOKEN}}"
+  },
+  "body": "{\"title\": \"{{jsonEscape .Node.classify.reasoning}}\"}",
+  "parse_response": "json",
+  "timeout_sec": "15"
+}`,
+				},
+				{
+					Name: "get_with_query",
+					Body: `{
+  "id": "lookup",
+  "type": "http",
+  "method": "GET",
+  "url": "https://api.example.com/users",
+  "query": {
+    "email": "{{.Node.trigger.payload.email}}"
+  }
+}`,
+				},
+			},
+		},
+	}
+}
+
+// Execute runs the request described by node n. Fields are pre-rendered
+// by the engine before this call.
 func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflow.RunContext) (workflow.NodeOutput, error) {
-	rctx := rc.RenderCtx()
 	method := strings.ToUpper(n.Method)
 	if method == "" {
 		method = http.MethodGet
 	}
-	urlStr, err := template.Render(n.URL, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("url: %w", err)
-	}
+	urlStr := n.URL
 	if len(n.Query) > 0 {
 		u, err := url.Parse(urlStr)
 		if err != nil {
@@ -43,11 +153,7 @@ func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflo
 		}
 		q := u.Query()
 		for k, v := range n.Query {
-			rv, err := template.Render(v, rctx)
-			if err != nil {
-				return workflow.NodeOutput{}, fmt.Errorf("query %q: %w", k, err)
-			}
-			q.Set(k, rv)
+			q.Set(k, v)
 		}
 		u.RawQuery = q.Encode()
 		urlStr = u.String()
@@ -55,11 +161,7 @@ func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflo
 
 	body := io.Reader(nil)
 	if n.Body != "" {
-		rb, err := template.Render(n.Body, rctx)
-		if err != nil {
-			return workflow.NodeOutput{}, fmt.Errorf("body: %w", err)
-		}
-		body = strings.NewReader(rb)
+		body = strings.NewReader(n.Body)
 	}
 
 	timeout := time.Duration(n.TimeoutSec) * time.Second
@@ -88,11 +190,7 @@ func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflo
 			return workflow.NodeOutput{}, fmt.Errorf("http build: %w", err)
 		}
 		for k, v := range n.Headers {
-			rv, err := template.Render(v, rctx)
-			if err != nil {
-				return workflow.NodeOutput{}, fmt.Errorf("header %q: %w", k, err)
-			}
-			req.Header.Set(k, rv)
+			req.Header.Set(k, v)
 		}
 		resp, lastErr = e.client.Do(req)
 		if lastErr == nil && resp.StatusCode < 500 {

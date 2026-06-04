@@ -1,5 +1,5 @@
 // Package config holds the runtime-editable Agents config (General /
-// Slack / Workspace structs reflected into the configs DB table) plus
+// Slack / Storage structs reflected into the configs DB table) plus
 // the on-disk Layout — the single source of truth for path math under
 // the platform default data directory (~/.<app>/agents). Every other
 // agents subpackage receives a Layout, never hand-rolls paths.
@@ -15,7 +15,7 @@ import (
 // Layout describes the on-disk folder layout rooted at BaseDir.
 //
 // Tests construct a Layout pointing at `t.TempDir()`; production code
-// builds one from WorkspaceConfig.BaseDir (or the platform default).
+// builds one from StorageConfig.BaseDir (or the platform default).
 type Layout struct {
 	BaseDir string
 }
@@ -24,60 +24,54 @@ func NewLayout(baseDir string) Layout { return Layout{BaseDir: baseDir} }
 
 func (l Layout) PresetsDir() string    { return filepath.Join(l.BaseDir, "presets") }
 func (l Layout) WorkspacesDir() string { return filepath.Join(l.BaseDir, "workspaces") }
+func (l Layout) ProjectsDir() string   { return filepath.Join(l.BaseDir, "projects") }
 func (l Layout) SessionsDir() string   { return filepath.Join(l.BaseDir, "sessions") }
 func (l Layout) WorkflowsDir() string  { return filepath.Join(l.BaseDir, "workflows") }
-func (l Layout) DatasetsDir() string   { return filepath.Join(l.BaseDir, "datasets") }
 
-// WorkflowDir is the folder for one workflow (`workflows/<slug>/`).
-func (l Layout) WorkflowDir(slug string) string {
-	return filepath.Join(l.WorkflowsDir(), slug)
+// WorkflowDir is the folder for one workflow (`workflows/<id>/`).
+func (l Layout) WorkflowDir(id string) string {
+	return filepath.Join(l.WorkflowsDir(), id)
 }
-func (l Layout) WorkflowFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "workflow.yaml")
+func (l Layout) WorkflowFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "workflow.json")
 }
 
 // WorkflowDraftFile is the in-progress copy edited by the canvas. Save
-// from the UI always writes here, never to workflow.yaml. Publish
-// promotes this file to workflow.yaml and deletes the draft.
-func (l Layout) WorkflowDraftFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "workflow.draft.yaml")
+// from the UI always writes here, never to workflow.json. Publish
+// promotes this file to workflow.json and deletes the draft.
+func (l Layout) WorkflowDraftFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "workflow.draft.json")
 }
-func (l Layout) WorkflowRunsDir(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "runs")
+func (l Layout) WorkflowRunsDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "runs")
 }
-func (l Layout) WorkflowRunDir(slug, runID string) string {
-	return filepath.Join(l.WorkflowRunsDir(slug), runID)
+func (l Layout) WorkflowRunDir(id, runID string) string {
+	return filepath.Join(l.WorkflowRunsDir(id), runID)
 }
-func (l Layout) WorkflowRunState(slug, runID string) string {
-	return filepath.Join(l.WorkflowRunDir(slug, runID), "state.json")
+func (l Layout) WorkflowRunState(id, runID string) string {
+	return filepath.Join(l.WorkflowRunDir(id, runID), "state.json")
 }
-func (l Layout) WorkflowRunEvents(slug, runID string) string {
-	return filepath.Join(l.WorkflowRunDir(slug, runID), "events.jsonl")
+func (l Layout) WorkflowRunEvents(id, runID string) string {
+	return filepath.Join(l.WorkflowRunDir(id, runID), "events.jsonl")
 }
 // WorkflowIndexDir holds the sharded run-summary index files
 // (YYYY-MM-DD-NN.jsonl, max 100 lines each) — sibling to runs/.
 // Lets the Runs panel paginate cheaply without scanning every
 // per-run subdir.
-func (l Layout) WorkflowIndexDir(slug string) string {
-	return filepath.Join(l.WorkflowRunsDir(slug), "index")
+func (l Layout) WorkflowIndexDir(id string) string {
+	return filepath.Join(l.WorkflowRunsDir(id), "index")
 }
-func (l Layout) WorkflowEnvFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "env.yaml")
+func (l Layout) WorkflowEnvFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "env.json")
 }
-func (l Layout) WorkflowStateFile(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "state.json")
+func (l Layout) WorkflowStateFile(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "state.json")
 }
-func (l Layout) WorkflowNodesDir(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "nodes")
+func (l Layout) WorkflowNodesDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "nodes")
 }
-func (l Layout) WorkflowTestsDir(slug string) string {
-	return filepath.Join(l.WorkflowDir(slug), "__tests__")
-}
-func (l Layout) DatasetDir(slug string) string {
-	return filepath.Join(l.DatasetsDir(), slug)
-}
-func (l Layout) DatasetFile(slug string) string {
-	return filepath.Join(l.DatasetDir(slug), "dataset.yaml")
+func (l Layout) WorkflowTestsDir(id string) string {
+	return filepath.Join(l.WorkflowDir(id), "__tests__")
 }
 
 func (l Layout) PresetDir(name string) string  { return filepath.Join(l.PresetsDir(), name) }
@@ -102,6 +96,25 @@ func (l Layout) WorkspaceManagedPath(name string) string {
 	return filepath.Join(l.WorkspaceDir(name), "files")
 }
 
+// ProjectDir is the metadata folder for one project
+// (`projects/<id>/`). For managed projects this also contains the
+// `files/` subfolder used as the agent cwd; custom projects store no
+// files here, only meta.json.
+func (l Layout) ProjectDir(id string) string {
+	return filepath.Join(l.ProjectsDir(), id)
+}
+func (l Layout) ProjectMeta(id string) string {
+	return filepath.Join(l.ProjectDir(id), "meta.json")
+}
+
+// ProjectManagedPath is the cwd folder for a managed project
+// (`projects/<id>/files/`). Use project.ResolvePath() instead of
+// calling this directly — it transparently handles the custom path
+// case.
+func (l Layout) ProjectManagedPath(id string) string {
+	return filepath.Join(l.ProjectDir(id), "files")
+}
+
 func (l Layout) SessionDir(id string) string  { return filepath.Join(l.SessionsDir(), id) }
 func (l Layout) SessionMeta(id string) string { return filepath.Join(l.SessionDir(id), "meta.json") }
 func (l Layout) SessionAgents(id string) string {
@@ -120,10 +133,22 @@ func (l Layout) SessionRaw(id string) string {
 	return filepath.Join(l.SessionDir(id), "raw.jsonl")
 }
 
+// SessionInflight is an append-only JSONL of every event in the
+// currently in-progress assistant turn: text_delta chunks, tool_use,
+// tool_result, thinking. The store appends as events arrive and
+// deletes the file the moment the turn flushes to conversation.jsonl,
+// so the presence of inflight.jsonl on boot means "a turn was killed
+// or the server crashed mid-stream; replay these for the operator".
+// Provider-agnostic — claude, codex, gemini, future CLIs all write
+// the same shape via store.Apply.
+func (l Layout) SessionInflight(id string) string {
+	return filepath.Join(l.SessionDir(id), "inflight.jsonl")
+}
+
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {
-	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.SessionsDir(), l.WorkflowsDir(), l.DatasetsDir()} {
+	for _, d := range []string{l.PresetsDir(), l.WorkspacesDir(), l.ProjectsDir(), l.SessionsDir(), l.WorkflowsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -133,7 +158,7 @@ func (l Layout) EnsureLayout() error {
 
 // ResolveBaseDir returns the platform default base directory (~/.wick/agents).
 // The cfg parameter is kept for call-site compatibility.
-func ResolveBaseDir(_ WorkspaceConfig) string {
+func ResolveBaseDir(_ StorageConfig) string {
 	return defaultBaseDir()
 }
 

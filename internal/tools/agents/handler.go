@@ -5,9 +5,9 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,11 +25,11 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/agents/workspace"
+	agentstore "github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
-	wfnodes "github.com/yogasw/wick/internal/tools/agents/workflow/nodes"
-	_ "github.com/yogasw/wick/internal/tools/agents/workflow/nodes/all"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -45,6 +45,7 @@ var (
 	globalAskUsers   *askuser.Manager
 	globalGateStatus GateStatus
 	globalConfigs    *configs.Service
+	globalAuth       *login.Service
 	globalDB         *gorm.DB
 	globalChannels   *agentchannels.Registry
 	globalSyncMgr    *providersync.Manager
@@ -99,9 +100,20 @@ func SetGateStatus(s GateStatus) { globalGateStatus = s }
 // endpoint 503s.
 func SetConfigs(c *configs.Service) { globalConfigs = c }
 
+// SetAuth wires the login service so per-user preferences (pinned
+// project) can be read/written from the agents tool.
+func SetAuth(a *login.Service) { globalAuth = a }
+
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
-func SetDB(db *gorm.DB) { globalDB = db }
+//
+// Workflow data is DB-primary as of the JSON migration — legacy
+// folders on disk (workflow.yaml era) are not imported automatically.
+// Users who have legacy workflows must hand-port them once into the
+// new SPA / MCP flow, then delete the old folder.
+func SetDB(db *gorm.DB) {
+	globalDB = db
+}
 
 // SetChannelRegistry wires the live channel registry so picker fields
 // can issue lookup queries against each channel's upstream (Slack API,
@@ -124,7 +136,13 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
 	r.Static("/static/", StaticFS)
-	r.Static("/static/nodes/", wfnodes.StaticFS)
+
+	// Svelte SPA shell + assets for the workflow editor.
+	registerSPA(r)
+	registerSPAWorkflows(r)
+	registerSPAWorkflowHistory(r)
+	registerSPAPanels(r)
+	registerSPAPalette(r)
 
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
@@ -136,10 +154,19 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}", sessionDetail)
 	r.POST("/sessions/{id}/send", sendMessage)
 	r.POST("/sessions/{id}/provider", switchProvider)
-	r.POST("/sessions/{id}/workspace", switchWorkspace)
+	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.DELETE("/sessions/{id}", deleteSession)
+
+	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
+
+	r.GET("/sessions/{id}/files", sessionContextList)
+	r.GET("/sessions/{id}/files/read", sessionContextRead)
+	r.GET("/sessions/{id}/files/download", sessionContextDownload)
+	r.POST("/sessions/{id}/files/save", sessionContextSave)
+	r.POST("/sessions/{id}/files/create", sessionContextCreate)
+	r.DELETE("/sessions/{id}/files", sessionContextDelete)
 
 	// Gate approval (Stage 5). Modal in the UI POSTs the user's
 	// decision here; revoke removes a previously-approved match key.
@@ -152,10 +179,17 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/answer", answerAsk)
 	r.GET("/sessions/{id}/asks", asksSnapshot)
 
-	r.GET("/workspaces", workspacesPage)
-	r.GET("/workspaces/options", workspaceOptionsJSON)
-	r.POST("/workspaces", createWorkspace)
-	r.DELETE("/workspaces/{name}", deleteWorkspace)
+	// No standalone /projects list page — the sidebar Projects section is
+	// the canonical project nav. "+ New" → /projects/new (create page),
+	// project rows → /sessions?project=<id> (scoped landing), and
+	// /projects/{id} is the per-project settings page.
+	r.GET("/projects", projectsRedirect) // legacy entry → all chats
+	r.GET("/projects/options", projectOptionsJSON)
+	r.GET("/projects/{id}", projectSettingsPage)
+	r.POST("/projects", createProject)
+	r.POST("/projects/{id}", updateProject)
+	r.POST("/projects/{id}/pin", toggleProjectPin)
+	r.DELETE("/projects/{id}", deleteProject)
 
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
@@ -168,6 +202,7 @@ func Register(r tool.Router) {
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
 	r.POST("/providers/gate/toggle", toggleGate)
+	r.POST("/providers/gate/modes", saveGateModes)
 	r.POST("/providers/rescan", rescanAllProviders)
 	r.POST("/providers/rescan/{type}/{name}", rescanOneProvider)
 	r.POST("/providers/probe-gate/{type}/{name}", probeProviderGate)
@@ -175,6 +210,24 @@ func Register(r tool.Router) {
 	r.POST("/providers/{type}/{name}/hooks/{event}/enable", enableProviderHook)
 	r.POST("/providers/{type}/{name}/hooks/{event}/disable", disableProviderHook)
 	r.POST("/providers/auto-rescan/toggle", toggleAutoRescan)
+
+	r.POST("/providers/mcp/{clientID}/install", mcpInstallClient)
+	r.POST("/providers/mcp/{clientID}/uninstall", mcpUninstallClient)
+
+	r.GET("/skills", skillsPage)
+	r.POST("/skills/sync", skillsSync)
+	r.POST("/skills/upload", skillsUpload)
+	r.GET("/skills/{name}", skillDetail)
+	r.GET("/skills/{name}/download", skillDownload)
+	r.POST("/skills/{name}/delete", skillDelete)
+	r.POST("/skills/{name}/delete-from/{dirLabel}", skillDeleteFromDir)
+	r.GET("/skills/{folder}/files/{file}", skillFolderFileDetail)
+	r.GET("/skills/{folder}/files/{file}/download", skillFolderFileDownload)
+	r.POST("/skills/{folder}/files/{file}/delete", skillFolderFileDelete)
+	// provider-scoped views — {path...} matches arbitrary depth
+	r.GET("/skills/{provider}/{path...}", skillProviderPath)
+	r.POST("/skills-sync/{provider}/{path...}", skillProviderSync)
+	r.POST("/skills/{name}/sync", skillEntrySync)
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
@@ -193,52 +246,64 @@ func Register(r tool.Router) {
 	r.POST("/channels/rest/{key}", makeChannelSaveHandler("rest"))
 	r.GET("/channels/{slug}/lookup", channelLookupHandler)
 	r.POST("/channels/test/{slug}", channelHealthHandler)
+	r.GET("/channels/{slug}/status", channelStatusHandler)
 
 	r.GET("/settings", settingsPage)
 
-	// Workflows tab — visual DAG editor (mockup §3).
+	// Workflows tab — Svelte v2 editor. `/workflows` lists; the editor
+	// page mounts the Svelte SPA via the templ shell.
 	r.GET("/workflows", workflowsPage)
 	r.POST("/workflows", createWorkflow)
 	r.POST("/workflows/import", importWorkflow)
 	r.GET("/workflows/edit/{id}/download", downloadWorkflowYAML)
-	// ID-bound routes live under /edit/ so Go 1.22's mux doesn't
-	// flag a conflict with /static/{path}. The ID is the folder name
-	// (UUID for canvas-created workflows) — stable across name renames.
 	r.GET("/workflows/edit/{id}", workflowEditor)
-	r.POST("/workflows/edit/{id}/save", saveWorkflow)
 	r.POST("/workflows/edit/{id}/rename", renameWorkflow)
-	r.POST("/workflows/edit/{id}/publish", publishWorkflow)
-	r.POST("/workflows/edit/{id}/discard", discardWorkflowDraft)
-	r.POST("/workflows/edit/{id}/toggle", toggleWorkflow)
-	r.POST("/workflows/edit/{id}/run", runWorkflowNow)
-	r.POST("/workflows/edit/{id}/exec-node", execNodeStep)
 	r.GET("/workflows/edit/{id}/runs/{runID}/state", workflowRunStateAPI)
-	r.POST("/workflows/edit/{id}/runs/{runID}/copy-to-editor", copyRunToEditor)
 	r.POST("/workflows/edit/{id}/delete", deleteWorkflow)
-	r.GET("/workflows/edit/{id}/runs/{runID}", workflowRunDetail)
-	r.GET("/workflows/edit/{id}/executions", executionsPanel)
-	r.GET("/workflows/edit/{id}/executions/{runID}", executionDetail)
 	r.GET("/workflows/api/registry", workflowRegistryAPI)
 	r.GET("/workflows/api/lookup", workflowLookupAPI)
-	r.POST("/workflows/edit/{id}/test", runWorkflowTests)
-	r.GET("/workflows/edit/{id}/test-cases", listTestCases)
-	r.POST("/workflows/edit/{id}/test-cases", saveTestCase)
-	r.POST("/workflows/edit/{id}/test-cases/{name}/run", runOneTestCase)
-	r.DELETE("/workflows/edit/{id}/test-cases/{name}", deleteTestCase)
 
 	r.GET("/stream", streamSSE)
+	r.GET("/stream/snapshot", streamSnapshot)
+
+	// Data Tables tab — n8n-style standalone shared key/value store.
+	// Schema + rows live in-memory (Postgres backend deferred); shared
+	// with the workflow engine so datatable_* nodes see the same data.
+	r.GET("/data-tables", dataTablesPage)
+	r.GET("/api/data-tables", listDataTablesJSON)
+	r.GET("/api/data-tables/{slug}/columns", listDataTableColumnsJSON)
+	r.POST("/data-tables", createDataTable)
+	r.POST("/data-tables/import-csv", importDataTableCSV)
+	r.GET("/data-tables/{slug}", dataTableDetail)
+	r.POST("/data-tables/{slug}/delete", dropDataTable)
+	r.POST("/data-tables/{slug}/rows", insertDataTableRow)
+	r.POST("/data-tables/{slug}/rows/bulk-delete", bulkDeleteDataTableRows)
+	r.POST("/data-tables/{slug}/rows/{pk}/delete", deleteDataTableRow)
+	r.POST("/data-tables/{slug}/columns", addDataTableColumn)
+	r.POST("/data-tables/{slug}/columns/{col}/rename", renameDataTableColumn)
+	r.POST("/data-tables/{slug}/columns/{col}/delete", dropDataTableColumn)
+	r.GET("/data-tables/{slug}/export.csv", exportDataTableCSV)
 }
 
 func settingsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	if u := login.GetUser(c.Context()); u == nil || !u.IsAdmin() {
+		c.Error(http.StatusForbidden, "admins only")
+		return
+	}
 	rows := globalConfigs.ListOwned("agents")
 	// Split system_prompt_append out — rendered in its own panel with a
 	// Reset button. The rest fall through to the generic ConfigsTable.
+	// Skip Hidden rows — those belong to dedicated pages (Channels,
+	// Providers, Workspaces) and must not leak onto generic Settings.
 	current := ""
 	rest := rows[:0:len(rows)]
 	for _, r := range rows {
+		if r.Hidden {
+			continue
+		}
 		if r.Key == "system_prompt" {
 			current = r.Value
 			continue
@@ -257,8 +322,33 @@ func settingsPage(c *tool.Ctx) {
 // sidebarVM builds AgentsLayoutVM for the sidebar session list.
 // activeSessionID is set on session detail pages to highlight the current row.
 func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayoutVM {
+	return sidebarVMScoped(c, activePage, activeSessionID, "")
+}
+
+// sidebarVMScoped builds the sidebar VM, optionally scoped to a project.
+// When scopedProjectID is set, the Recent list is filtered to that
+// project's sessions and the scoped breadcrumb renders.
+func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID string) view.AgentsLayoutVM {
 	const sidebarCap = 15
+	allSessions := globalMgr.Registry().Sessions()
+	// Per-project session counts across ALL sessions (sidebar pills).
+	counts := make(map[string]int, len(allSessions))
+	for _, s := range allSessions {
+		if s.Meta.ProjectID != "" {
+			counts[s.Meta.ProjectID]++
+		}
+	}
 	allIDs := globalMgr.Registry().SessionIDs()
+	// Scoped sidebar: keep only sessions bound to the active project.
+	if scopedProjectID != "" {
+		filtered := allIDs[:0:0]
+		for _, id := range allIDs {
+			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scopedProjectID {
+				filtered = append(filtered, id)
+			}
+		}
+		allIDs = filtered
+	}
 	ids := allIDs
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
@@ -293,7 +383,34 @@ func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayou
 		SidebarLabels:    labels,
 		ActiveSessionID:  activeSessionID,
 		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
+		Projects:         globalMgr.Registry().Projects(),
+		ProjectList:      globalMgr.Registry().ProjectIDs(),
+		ProjectCounts:    counts,
+		ScopedProjectID:  scopedProjectID,
+		PinnedProjectID:  pinnedProjectID(c),
 	}
+}
+
+// projectChoices builds the picker rows for the compose form / move menu
+// from the registry projects, ordered by display name.
+func projectChoices() []view.ProjectChoiceVM {
+	ids := globalMgr.Registry().ProjectIDs()
+	projects := globalMgr.Registry().Projects()
+	out := make([]view.ProjectChoiceVM, 0, len(ids))
+	for _, id := range ids {
+		p, ok := projects[id]
+		if !ok {
+			continue
+		}
+		out = append(out, view.ProjectChoiceVM{
+			ID:              id,
+			Name:            p.Meta.Name,
+			Icon:            p.Meta.Icon,
+			DefaultPreset:   p.Meta.Defaults.Preset,
+			DefaultProvider: p.Meta.Defaults.Provider,
+		})
+	}
+	return out
 }
 
 // createSessionQuick creates a session with defaults (no form) and redirects.
@@ -352,9 +469,19 @@ func startNewSession(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	// Compose form may be multipart (when files are attached) or
+	// urlencoded. ParseMultipartForm short-circuits to ParseForm for
+	// urlencoded bodies so calling it once is safe either way.
+	if strings.HasPrefix(c.R.Header.Get("Content-Type"), "multipart/") {
+		if err := c.R.ParseMultipartForm(maxMultipartTotal); err != nil {
+			renderCompose(c, "", "parse form: "+err.Error())
+			return
+		}
+	}
 	text := strings.TrimSpace(c.Form("message"))
-	if text == "" {
-		renderCompose(c, "", "Type a message to start the session.")
+	hasFiles := c.R.MultipartForm != nil && len(c.R.MultipartForm.File["files"]) > 0
+	if text == "" && !hasFiles {
+		renderCompose(c, "", "Type a message or attach a file to start the session.")
 		return
 	}
 	prov := c.Form("provider")
@@ -364,20 +491,20 @@ func startNewSession(c *tool.Ctx) {
 			prov = ps[0].Type
 		}
 	}
-	ws := c.Form("workspace")
+	projectID := c.Form("project_id")
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
-		if ws != "" {
-			if wsData, werr := workspace.Load(globalLayout, ws); werr == nil && wsData.Meta.DefaultPreset != "" {
-				presetName = wsData.Meta.DefaultPreset
+		if projectID != "" {
+			if p, perr := project.Load(globalLayout, projectID); perr == nil && p.Meta.Defaults.Preset != "" {
+				presetName = p.Meta.Defaults.Preset
 			}
 		}
 	}
 	id := uuid.New().String()
 	if _, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        id,
-		Workspace: ws,
+		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
 	}); err != nil {
@@ -390,7 +517,15 @@ func startNewSession(c *tool.Ctx) {
 		renderCompose(c, text, err.Error())
 		return
 	}
-	if err := globalPool.Send(context.Background(), id, "main", "ui", "user", text); err != nil {
+	atts, err := saveUploadsFromMultipart(c, id, c.Base())
+	if err != nil {
+		log.Ctx(c.Context()).Error().Msgf("compose save uploads: %s", err.Error())
+		renderCompose(c, text, err.Error())
+		return
+	}
+	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
+	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
 		return
@@ -407,17 +542,57 @@ func renderCompose(c *tool.Ctx, message, errMsg string) {
 	if len(providers) > 0 {
 		defaultProv = providers[0].Type
 	}
-	layout := sidebarVM(c, "new", "")
+	scoped := c.Query("project")
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
+	}
+	// No explicit ?project= → land on the user's pinned project (their
+	// personal default). Opening the agents tool drops straight into it.
+	// The compose picker still lets them pick "— no project —" per-session.
+	if scoped == "" {
+		scoped = pinnedProjectID(c)
+	}
+	// Scope the sidebar too so the compose page keeps the breadcrumb +
+	// filtered Recent when opened from a scoped project (mockup ②).
+	layout := sidebarVMScoped(c, "new", "", scoped)
 	layout.FullBleed = true
+	// When not explicitly scoped, fall back to the operator's configured
+	// default project (Settings → default_project_id) as a soft default.
+	configuredDefault := ""
+	if globalConfigs != nil {
+		configuredDefault = globalConfigs.GetOwned("agents", "default_project_id")
+	}
+	// effective = the project whose defaults prefill provider/preset.
+	effective := scoped
+	if effective == "" {
+		effective = configuredDefault
+	}
+	defaultPreset := ""
+	if effective != "" {
+		if p, ok := globalMgr.Registry().Project(effective); ok {
+			if p.Meta.Defaults.Provider != "" {
+				defaultProv = p.Meta.Defaults.Provider
+			}
+			defaultPreset = p.Meta.Defaults.Preset
+		} else if effective == configuredDefault {
+			// Stale configured default (project deleted) — ignore.
+			configuredDefault = ""
+		}
+	}
 	c.HTML(view.NewSessionCompose(view.NewSessionComposeVM{
-		Layout:          layout,
-		Base:            c.Base(),
-		Providers:       providers,
-		Presets:         globalMgr.Registry().PresetNames(),
-		Workspaces:      globalMgr.Registry().WorkspaceNames(),
-		DefaultProvider: defaultProv,
-		Message:         message,
-		Error:           errMsg,
+		Layout:           layout,
+		Base:             c.Base(),
+		Providers:        providers,
+		Presets:          globalMgr.Registry().PresetNames(),
+		Projects:         projectChoices(),
+		DefaultProvider:  defaultProv,
+		DefaultPreset:    defaultPreset,
+		ScopedProjectID:  scoped,
+		DefaultProjectID: configuredDefault,
+		Message:          message,
+		Error:            errMsg,
 	}))
 }
 
@@ -448,12 +623,21 @@ func overviewPage(c *tool.Ctx) {
 	}
 	queue := globalPool.QueueSnapshot()
 	now := time.Now()
+	projects := globalMgr.Registry().Projects()
 	queued := make([]view.QueuedEntryVM, len(queue))
 	for i, q := range queue {
+		projName := ""
+		if s, ok := globalMgr.Registry().Session(q.SessionID); ok && s.Meta.ProjectID != "" {
+			if p, ok := projects[s.Meta.ProjectID]; ok {
+				projName = p.Meta.Name
+			}
+		}
 		queued[i] = view.QueuedEntryVM{
 			SessionID: q.SessionID,
 			AgentName: q.AgentName,
 			WaitingMs: now.Sub(q.Enqueued).Milliseconds(),
+			Label:     loadFirstUserMessage(globalLayout, q.SessionID, 60),
+			Project:   projName,
 		}
 	}
 	c.HTML(view.Overview(view.OverviewVM{
@@ -464,6 +648,7 @@ func overviewPage(c *tool.Ctx) {
 		PoolMax:       globalPool.MaxConcurrent(),
 		SessionIDs:    activeIDs,
 		Sessions:      globalMgr.Registry().Sessions(),
+		Projects:      globalMgr.Registry().Projects(),
 		Lifecycle:     lc,
 		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
 		Queued:        queued,
@@ -476,19 +661,30 @@ func sessionsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	page, _ := strconv.Atoi(c.Query("page"))
-	if page < 1 {
-		page = 1
+	scoped := c.Query("project")
+	// Validate the scope — an unknown project id falls back to all chats.
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
 	}
-	const perPage = 50
 	ids := globalMgr.Registry().SessionIDs()
-	start := (page - 1) * perPage
-	if start > len(ids) {
-		start = len(ids)
+	if scoped != "" {
+		sessions := globalMgr.Registry().Sessions()
+		filtered := ids[:0:0]
+		for _, id := range ids {
+			if s, ok := sessions[id]; ok && s.Meta.ProjectID == scoped {
+				filtered = append(filtered, id)
+			}
+		}
+		ids = filtered
 	}
-	end := start + perPage
-	if end > len(ids) {
-		end = len(ids)
+	// Render all rows; pagination (10/page) + search run client-side so
+	// paging never reloads the page (keeps the compose box + search text).
+	// Guard against pathological counts with a generous cap.
+	const maxRender = 1000
+	if len(ids) > maxRender {
+		ids = ids[:maxRender]
 	}
 	lc := make(map[string]view.SessionLifecycleVM)
 	for _, e := range globalPool.ActiveSnapshot() {
@@ -501,25 +697,53 @@ func sessionsPage(c *tool.Ctx) {
 		}
 		lc[e.SessionID] = entry
 	}
-	pageIDs := ids[start:end]
-	pageLabels := make(map[string]string, len(pageIDs))
-	for _, id := range pageIDs {
+	pageLabels := make(map[string]string, len(ids))
+	for _, id := range ids {
 		pageLabels[id] = loadFirstUserMessage(globalLayout, id, 60)
 	}
+	providers := providerChoicesCached(c.Context())
+	// Build the scoped project landing composer (Claude-style: compose
+	// box on top of the chats list, defaults inherited from the project).
+	var composer view.ComposerVM
+	if scoped != "" {
+		defProv := ""
+		if len(providers) > 0 {
+			defProv = providers[0].Type
+		}
+		defPreset := ""
+		if p, ok := globalMgr.Registry().Project(scoped); ok {
+			if p.Meta.Defaults.Provider != "" {
+				defProv = p.Meta.Defaults.Provider
+			}
+			defPreset = p.Meta.Defaults.Preset
+		}
+		composer = view.ComposerVM{
+			Base:            c.Base(),
+			Providers:       providers,
+			Presets:         globalMgr.Registry().PresetNames(),
+			DefaultProvider: defProv,
+			DefaultPreset:   defPreset,
+			ScopedProjectID: scoped,
+			Scoped:          true,
+			// Project picker hidden — already in the project (binding sent
+			// as a hidden field). Matches Claude's project landing.
+			ShowProjectPicker: false,
+		}
+	}
 	c.HTML(view.SessionsList(view.SessionsListVM{
-		Layout:        sidebarVM(c, "sessions", ""),
-		Base:          c.Base(),
-		IDs:           pageIDs,
-		Sessions:      globalMgr.Registry().Sessions(),
-		Labels:        pageLabels,
-		Workspaces:    globalMgr.Registry().Workspaces(),
-		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
-		PresetList:    globalMgr.Registry().PresetNames(),
-		Providers:     providerChoicesCached(c.Context()),
-		Lifecycle:     lc,
-		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
-		Page:          page,
-		HasNext:       end < len(ids),
+		Layout:          sidebarVMScoped(c, "sessions", "", scoped),
+		Base:            c.Base(),
+		IDs:             ids,
+		Sessions:        globalMgr.Registry().Sessions(),
+		Labels:          pageLabels,
+		Projects:        globalMgr.Registry().Projects(),
+		ProjectList:     globalMgr.Registry().ProjectIDs(),
+		PresetList:      globalMgr.Registry().PresetNames(),
+		Providers:       providers,
+		Lifecycle:       lc,
+		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
+		ScopedProjectID: scoped,
+		Composer:        composer,
 	}))
 }
 
@@ -527,21 +751,21 @@ func createSession(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	ws := c.Form("workspace")
+	projectID := c.Form("project_id")
 	prov := c.Form("provider")
 	if prov == "" {
 		prov = "claude"
 	}
 	id := uuid.New().String()
 	presetName := "default"
-	if ws != "" {
-		if wsData, werr := workspace.Load(globalLayout, ws); werr == nil && wsData.Meta.DefaultPreset != "" {
-			presetName = wsData.Meta.DefaultPreset
+	if projectID != "" {
+		if p, perr := project.Load(globalLayout, projectID); perr == nil && p.Meta.Defaults.Preset != "" {
+			presetName = p.Meta.Defaults.Preset
 		}
 	}
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        id,
-		Workspace: ws,
+		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
 	})
@@ -581,13 +805,38 @@ func sessionDetail(c *tool.Ctx) {
 			log.Ctx(c.Context()).Error().Msgf("load conversation %s: %s", id, err.Error())
 		}
 		for _, t := range raw {
-			turns = append(turns, view.TurnVM{
+			vm := view.TurnVM{
 				Role:      t.Role,
 				Agent:     t.Agent,
+				Provider:  t.Provider,
 				Text:      t.Text,
 				Truncated: t.Truncated,
 				Time:      t.Timestamp,
-			})
+			}
+			for _, e := range t.Events {
+				vm.Events = append(vm.Events, view.TurnEventVM{
+					Type:      e.Type,
+					ToolName:  e.ToolName,
+					ToolInput: e.ToolInput,
+					ToolUseID: e.ToolUseID,
+					IsError:   e.IsError,
+					Text:      e.Text,
+				})
+			}
+			for _, a := range t.Attachments {
+				// IsImage must match the server's inline-serve whitelist
+				// (imageMIMEAllowed) — SVG / generic image/* types are
+				// served as attachments, so rendering them via <img> would
+				// just produce a broken icon.
+				vm.Attachments = append(vm.Attachments, view.AttachmentVM{
+					Name:    a.Name,
+					URL:     a.URL,
+					MIME:    a.MIME,
+					Size:    a.Size,
+					IsImage: imageMIMEAllowed[a.MIME],
+				})
+			}
+			turns = append(turns, vm)
 		}
 	case "commands":
 		lines, err := loadCommands(globalLayout, id)
@@ -602,7 +851,7 @@ func sessionDetail(c *tool.Ctx) {
 		activeProv = sess.Agents[0].Provider
 	}
 	vm := view.SessionDetailVM{
-		Layout:          sidebarVM(c, "sessions", id),
+		Layout:          sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
 		Base:            c.Base(),
 		Session:         sess,
 		Tab:             tab,
@@ -611,8 +860,9 @@ func sessionDetail(c *tool.Ctx) {
 		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
 		Providers:       providerChoicesCached(c.Context()),
 		ActiveProvider:  activeProv,
-		WorkspaceList:   globalMgr.Registry().WorkspaceNames(),
-		ActiveWorkspace: sess.Meta.Workspace,
+		Projects:        globalMgr.Registry().Projects(),
+		ProjectList:     globalMgr.Registry().ProjectIDs(),
+		ActiveProjectID: sess.Meta.ProjectID,
 		Gate: view.GateStatusVM{
 			Enabled: gs.Enabled,
 			Binary:  gs.Binary,
@@ -638,7 +888,7 @@ type switchProviderReq struct {
 	Provider string `json:"provider"`
 }
 
-// switchProvider creates a new session with the same workspace but a
+// switchProvider creates a new session with the same project but a
 // different provider. Provider sessions cannot be resumed across CLI
 // implementations (ResumeID is provider-specific), so a fresh session
 // is always the right call. Returns the new session URL for redirect.
@@ -660,7 +910,7 @@ func switchProvider(c *tool.Ctx) {
 	newID := uuid.New().String()
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        newID,
-		Workspace: sess.Meta.Workspace,
+		ProjectID: sess.Meta.ProjectID,
 		Origin:    session.OriginUI,
 	})
 	if err != nil {
@@ -678,21 +928,21 @@ func switchProvider(c *tool.Ctx) {
 	})
 }
 
-type switchWorkspaceReq struct {
-	Workspace string `json:"workspace"`
+type moveSessionReq struct {
+	ProjectID string `json:"project_id"`
 }
 
-// switchWorkspace updates the session's workspace in-place and kills
-// any running subprocess so it respawns with the new folder on the
-// next message.
-func switchWorkspace(c *tool.Ctx) {
+// moveSessionToProject moves the session to a different project in-place
+// and kills any running subprocess so it respawns in the new folder on
+// the next message. Empty project_id unscopes the session.
+func moveSessionToProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	id := c.PathValue("id")
-	var req switchWorkspaceReq
+	var req moveSessionReq
 	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "workspace required"})
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "project_id required"})
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
@@ -700,11 +950,11 @@ func switchWorkspace(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if err := globalMgr.SwitchWorkspace(c.Context(), id, req.Workspace); err != nil {
+	if err := globalMgr.MoveSession(c.Context(), id, req.ProjectID); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// Kill running subprocess so next Send respawns in the new workspace.
+	// Kill running subprocess so next Send respawns in the new folder.
 	agentName := sess.Meta.ActiveAgent
 	if agentName == "" && len(sess.Agents) > 0 {
 		agentName = sess.Agents[0].Name
@@ -712,7 +962,7 @@ func switchWorkspace(c *tool.Ctx) {
 	if agentName != "" {
 		_ = globalPool.Kill(id, agentName)
 	}
-	c.JSON(http.StatusOK, map[string]string{"status": "switched", "workspace": req.Workspace})
+	c.JSON(http.StatusOK, map[string]string{"status": "moved", "project_id": req.ProjectID})
 }
 
 type sendReq struct {
@@ -725,15 +975,80 @@ func sendMessage(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	var req sendReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+	var atts []agentstore.Attachment
+
+	// Accept multipart/form-data when files are attached; fall back to
+	// the JSON shape so text-only sends from older clients still work.
+	if strings.HasPrefix(c.R.Header.Get("Content-Type"), "multipart/") {
+		if err := c.R.ParseMultipartForm(maxMultipartTotal); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "parse form: " + err.Error()})
+			return
+		}
+		req.Text = strings.TrimSpace(c.Form("text"))
+		saved, err := saveUploadsFromMultipart(c, id, c.Base())
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		atts = saved
+	} else {
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		req.Text = strings.TrimSpace(req.Text)
+	}
+	if req.Text == "" && len(atts) == 0 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "text or file required"})
 		return
 	}
-	req.Text = strings.TrimSpace(req.Text)
-	if req.Text == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "text required"})
-		return
+
+	// #<provider> prefix → switch provider before sending.
+	if r := agentchannels.ParseProviderTag(req.Text); r.HasTag {
+		sess, ok := globalMgr.Registry().Session(id)
+		if !ok {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		agentName := sess.Meta.ActiveAgent
+		if agentName == "" && len(sess.Agents) > 0 {
+			agentName = sess.Agents[0].Name
+		}
+		if agentName == "" {
+			c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
+			return
+		}
+		bcast := globalBcast
+		if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
+			Source:   "ui",
+			UserText: req.Text,
+			Notify: func(tag string, steps []string) {
+				if bcast != nil {
+					bcast.PublishRaw(id, agentName, "user_message", req.Text)
+					bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+				}
+			},
+			Reply: func(text string) {
+				if bcast != nil {
+					bcast.PublishRaw(id, agentName, "text_delta", text)
+					bcast.PublishRaw(id, agentName, "done", "")
+				}
+			},
+		}); err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := globalMgr.RefreshSession(id); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
+			return
+		}
+		if r.Rest == "" {
+			c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": r.Tag})
+			return
+		}
+		req.Text = r.Rest
 	}
+
 	sess, ok := globalMgr.Registry().Session(id)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
@@ -747,7 +1062,11 @@ func sendMessage(c *tool.Ctx) {
 		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
 		return
 	}
-	if err := globalPool.Send(context.Background(), id, agentName, "ui", "user", req.Text); err != nil {
+	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
+	// inheriting c.Context() would SIGKILL claude.exe the moment the
+	// response returns. Copy request_id over so logs still correlate.
+	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", req.Text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -765,21 +1084,23 @@ func dequeueAgent(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	agentName := sess.Meta.ActiveAgent
-	if agentName == "" && len(sess.Agents) > 0 {
-		agentName = sess.Agents[0].Name
-	}
-	removed := globalPool.Dequeue(id, agentName)
-	_ = session.SaveMeta(globalLayout, id, session.Meta{
-		Workspace:   sess.Meta.Workspace,
-		Origin:      sess.Meta.Origin,
-		ChannelID:   sess.Meta.ChannelID,
-		ActiveAgent: sess.Meta.ActiveAgent,
-		Status:      session.StatusIdle,
-		CreatedAt:   sess.Meta.CreatedAt,
-		LastActive:  time.Now().UTC(),
-	})
+	// Remove every queued entry for this session (any agent) + clear its
+	// buffered input so it won't execute. Preserve the rest of meta.
+	removed := globalPool.DequeueSession(id)
+	meta := sess.Meta
+	meta.Status = session.StatusIdle
+	meta.PendingInput = nil
+	meta.LastActive = time.Now().UTC()
+	_ = session.SaveMeta(globalLayout, id, meta)
+	globalMgr.Register(sessionWithMeta(sess, meta))
 	c.JSON(http.StatusOK, map[string]any{"status": "dequeued", "removed": removed})
+}
+
+// sessionWithMeta returns a copy of sess with replaced meta, for
+// refreshing the registry cache after a meta-only mutation.
+func sessionWithMeta(sess session.Session, meta session.Meta) session.Session {
+	sess.Meta = meta
+	return sess
 }
 
 func killAgent(c *tool.Ctx) {
@@ -817,84 +1138,256 @@ func deleteSession(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ── Workspaces ────────────────────────────────────────────────────────
+// ── Projects ──────────────────────────────────────────────────────────
 
-func workspacesPage(c *tool.Ctx) {
+// projectsRedirect keeps the legacy /projects URL alive — projects are
+// managed from the sidebar now, so it just lands on All chats.
+func projectsRedirect(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	c.HTML(view.WorkspacesPage(view.WorkspacesVM{
-		Layout:        sidebarVM(c, "workspaces", ""),
-		Base:          c.Base(),
-		WorkspaceList: globalMgr.Registry().WorkspaceNames(),
-		Workspaces:    globalMgr.Registry().Workspaces(),
-		PresetList:    globalMgr.Registry().PresetNames(),
-	}))
+	c.Redirect(c.Base()+"/sessions", http.StatusSeeOther)
 }
 
-// workspaceOptionsJSON returns [{name, path}] for every workspace —
+// pinnedProjectID returns the current user's pinned project id, or "" if
+// none / unset / the user isn't logged in. Validates the project still
+// exists so a deleted-but-still-pinned project doesn't break the landing.
+func pinnedProjectID(c *tool.Ctx) string {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return ""
+	}
+	pid := u.Metadata.PinnedAgentProjectID
+	if pid == "" {
+		return ""
+	}
+	if _, ok := globalMgr.Registry().Project(pid); !ok {
+		return ""
+	}
+	return pid
+}
+
+// toggleProjectPin sets the current user's pinned project to {id}, or
+// clears it when {id} is already pinned. One pin per user; it becomes
+// their personal default project (auto-scoped on open). Stored in
+// UserMetadata.
+func toggleProjectPin(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalAuth == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "auth service not wired"})
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not logged in"})
+		return
+	}
+	id := c.PathValue("id")
+	if _, ok := globalMgr.Registry().Project(id); !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	pinned := id
+	if u.Metadata.PinnedAgentProjectID == id {
+		pinned = "" // toggle off
+	}
+	if err := globalAuth.SetPinnedAgentProject(c.Context(), u.ID, pinned); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"status": "ok", "pinned": pinned != "", "project_id": pinned})
+}
+
+// projectSettingsPage renders the full project settings page (mockup ④)
+// for an existing project, or the create form when id == "new".
+func projectSettingsPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	vm := view.ProjectSettingsVM{
+		Layout:     sidebarVM(c, "projects", ""),
+		Base:       c.Base(),
+		PresetList: globalMgr.Registry().PresetNames(),
+		Managed:    true,
+	}
+	if id == "new" {
+		vm.IsNew = true
+		vm.Icon = "📁"
+		vm.DefaultPreset = "default"
+		vm.DefaultProvider = "claude"
+		vm.Action = c.Base() + "/projects"
+		c.HTML(view.ProjectSettingsPage(vm))
+		return
+	}
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		c.NotFound()
+		return
+	}
+	vm.ID = id
+	vm.Name = p.Meta.Name
+	vm.Icon = p.Meta.Icon
+	vm.Description = p.Meta.Description
+	vm.CustomPath = p.Meta.CustomPath
+	vm.Managed = p.Meta.CustomPath == ""
+	vm.IsDefault = p.Meta.Name == project.DefaultName
+	vm.DefaultPreset = p.Meta.Defaults.Preset
+	vm.DefaultProvider = p.Meta.Defaults.Provider
+	vm.SystemAddon = p.Meta.Defaults.SystemAddon
+	vm.CreatedAt = p.Meta.CreatedAt.Format("2006-01-02")
+	vm.Action = c.Base() + "/projects/" + id
+	// Session count + pinned labels.
+	for sid, s := range globalMgr.Registry().Sessions() {
+		if s.Meta.ProjectID == id {
+			vm.ChatCount++
+		}
+		_ = sid
+	}
+	for _, pinID := range p.Meta.PinnedSessions {
+		label := loadFirstUserMessage(globalLayout, pinID, 50)
+		if label == "" {
+			label = pinID
+		}
+		vm.Pinned = append(vm.Pinned, view.PinnedSessionVM{ID: pinID, Label: label})
+	}
+	if b, err := json.MarshalIndent(p.Meta, "", "  "); err == nil {
+		vm.MetaJSON = string(b)
+	}
+	c.HTML(view.ProjectSettingsPage(vm))
+}
+
+// projectOptionsJSON returns [{id, name, path}] for every project —
 // consumed by the allowed_cmds scope dropdown in the settings UI.
-func workspaceOptionsJSON(c *tool.Ctx) {
+func projectOptionsJSON(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	type option struct {
+		ID   string `json:"id"`
 		Name string `json:"name"`
 		Path string `json:"path"`
 	}
-	wss := globalMgr.Registry().Workspaces()
-	opts := make([]option, 0, len(wss))
-	for _, ws := range wss {
-		path := ws.Meta.CustomPath
+	projects := globalMgr.Registry().Projects()
+	opts := make([]option, 0, len(projects))
+	for id, p := range projects {
+		path := p.Meta.CustomPath
 		if path == "" {
-			path = globalLayout.WorkspaceManagedPath(ws.Name)
+			path = globalLayout.ProjectManagedPath(id)
 		}
-		opts = append(opts, option{Name: ws.Name, Path: path})
+		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path})
 	}
 	c.JSON(http.StatusOK, opts)
 }
 
-func createWorkspace(c *tool.Ctx) {
+// createProject materializes a new project from the settings form.
+func createProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	name := strings.TrimSpace(c.Form("name"))
 	if name == "" {
-		c.Error(http.StatusBadRequest, "workspace name required")
+		c.Error(http.StatusBadRequest, "project name required")
 		return
 	}
-	opt := workspace.CreateOptions{
-		Name:            name,
-		CustomPath:      strings.TrimSpace(c.Form("custom_path")),
-		DefaultPreset:   c.Form("preset"),
-		DefaultProvider: c.Form("provider"),
-		Description:     c.Form("description"),
+	// Folder mode radio: "managed" forces an empty custom path regardless
+	// of any stale value in the path input.
+	customPath := strings.TrimSpace(c.Form("custom_path"))
+	if c.Form("folder_mode") == "managed" {
+		customPath = ""
 	}
-	if opt.DefaultPreset == "" {
-		opt.DefaultPreset = "default"
+	opt := project.CreateOptions{
+		ID:          uuid.New().String(),
+		Name:        name,
+		Icon:        strings.TrimSpace(c.Form("icon")),
+		Description: c.Form("description"),
+		CustomPath:  customPath,
+		Defaults: project.Defaults{
+			Preset:      c.Form("preset"),
+			Provider:    c.Form("provider"),
+			SystemAddon: c.Form("system_addon"),
+		},
 	}
-	if opt.DefaultProvider == "" {
-		opt.DefaultProvider = "claude"
-	}
-	if _, err := globalMgr.CreateWorkspace(c.Context(), opt); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("create workspace %s: %s", name, err.Error())
+	if _, err := globalMgr.CreateProject(c.Context(), opt); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("create project %s: %s", name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.Redirect(c.Base()+"/workspaces", http.StatusSeeOther)
+	// Land on the new project's page (sidebar-driven nav — no list page).
+	c.Redirect(c.Base()+"/sessions?project="+opt.ID, http.StatusSeeOther)
 }
 
-func deleteWorkspace(c *tool.Ctx) {
+// updateProject patches an existing project's editable fields
+// (name / icon / description / defaults / custom_path / pinned).
+func updateProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	name := c.PathValue("name")
-	if name == workspace.DefaultName {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "workspace \"default\" is built-in and cannot be deleted"})
+	id := c.PathValue("id")
+	p, ok := globalMgr.Registry().Project(id)
+	if !ok {
+		c.Error(http.StatusNotFound, "project not found")
 		return
 	}
-	if err := globalMgr.DeleteWorkspace(c.Context(), name); err != nil {
-		log.Ctx(c.Context()).Error().Msgf("delete workspace %s: %s", name, err.Error())
+	meta := p.Meta
+	// Unpin path: a lightweight POST carrying only `unpin=<sid>` removes
+	// one pinned session without touching other fields.
+	if sid := c.Form("unpin"); sid != "" {
+		kept := meta.PinnedSessions[:0:0]
+		for _, pin := range meta.PinnedSessions {
+			if pin != sid {
+				kept = append(kept, pin)
+			}
+		}
+		meta.PinnedSessions = kept
+		if _, err := globalMgr.UpdateProject(c.Context(), id, meta); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]string{"status": "unpinned"})
+		return
+	}
+	if v := strings.TrimSpace(c.Form("name")); v != "" {
+		meta.Name = v
+	}
+	if v := c.Form("icon"); v != "" {
+		meta.Icon = strings.TrimSpace(v)
+	}
+	meta.Description = c.Form("description")
+	if v := c.Form("preset"); v != "" {
+		meta.Defaults.Preset = v
+	}
+	meta.Defaults.Provider = c.Form("provider")
+	meta.Defaults.SystemAddon = c.Form("system_addon")
+	// Folder mode radio: "managed" forces empty custom path; "custom"
+	// keeps the path input. Managed files/ left in place on switch (§4.2).
+	customPath := strings.TrimSpace(c.Form("custom_path"))
+	if c.Form("folder_mode") == "managed" {
+		customPath = ""
+	}
+	meta.CustomPath = customPath
+	if _, err := globalMgr.UpdateProject(c.Context(), id, meta); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("update project %s: %s", id, err.Error())
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Redirect(c.Base()+"/sessions?project="+id, http.StatusSeeOther)
+}
+
+func deleteProject(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	p, ok := globalMgr.Registry().Project(id)
+	if ok && p.Meta.Name == project.DefaultName {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "the default project cannot be deleted"})
+		return
+	}
+	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {
+		log.Ctx(c.Context()).Error().Msgf("delete project %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1016,6 +1509,16 @@ func streamSSE(c *tool.Ctx) {
 	fmt.Fprintf(w, ": connected\n\n")
 	flush()
 
+	// Snapshot: emit the current lifecycle + substate for every active
+	// agent in this session so the UI recovers state immediately on
+	// refresh without waiting for the next real event.
+	if sessionID != "" && globalPool != nil {
+		for _, ev := range snapshotEvents(sessionID) {
+			fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ev.JSON())
+		}
+		flush()
+	}
+
 	for {
 		select {
 		case ev, open := <-ch:
@@ -1031,4 +1534,153 @@ func streamSSE(c *tool.Ctx) {
 			return
 		}
 	}
+}
+
+// snapshotEvents builds the lifecycle + in-flight event list for sessionID
+// from the current pool state. Used by both streamSSE (SSE replay on fresh
+// connect) and streamSnapshot (JSON endpoint for SharedWorker reuse path).
+//
+// Two sources, in order of preference:
+//  1. Live pool entry — turn is currently in flight, replay from RAM.
+//  2. On-disk inflight.jsonl — turn was mid-stream when the process died
+//     (server crash, agent killed before Done). Read the file and emit
+//     the same event sequence so the FE shows what was already streamed
+//     plus a stale "killed" lifecycle pill the operator can act on.
+func snapshotEvents(sessionID string) []Event {
+	var out []Event
+	matched := false
+	for _, e := range globalPool.ActiveSnapshot() {
+		if e.SessionID != sessionID {
+			continue
+		}
+		matched = true
+		// At = actual LastActive (when lifecycle last transitioned) so
+		// the FE can paint the right amount of idle-countdown burn on
+		// refresh instead of restarting from zero.
+		var lastActiveMs int64
+		if !e.LastActive.IsZero() {
+			lastActiveMs = e.LastActive.UnixMilli()
+		}
+		out = append(out, Event{
+			SessionID: e.SessionID,
+			AgentName: e.AgentName,
+			Type:      "lifecycle",
+			Lifecycle: e.Lifecycle,
+			Data:      e.Substate,
+			PID:       e.PID,
+			At:        lastActiveMs,
+		})
+		// Replay the partial assistant text accumulated since the last
+		// flushed turn — needed for mid-stream refresh so the bubble
+		// repaints instead of going blank until Done arrives. The FE
+		// treats text_delta as append; sending the full partial here
+		// works because the FE clears any pending turn before replay.
+		if e.PartialText != "" {
+			out = append(out, Event{
+				SessionID: e.SessionID,
+				AgentName: e.AgentName,
+				Type:      "text_delta",
+				Data:      e.PartialText,
+			})
+		}
+		for _, te := range e.InFlightEvents {
+			ev := Event{
+				SessionID: e.SessionID,
+				AgentName: e.AgentName,
+			}
+			switch te.Type {
+			case "thinking":
+				ev.Type = "thinking"
+				ev.Data = te.Text
+				ev.At = te.At.UnixMilli()
+			case "tool_use":
+				ev.Type = "tool_use"
+				ev.ToolName = te.ToolName
+				ev.ToolInput = te.ToolInput
+				ev.ToolUseID = te.ToolUseID
+				ev.At = te.At.UnixMilli()
+				ev.EndAt = te.EndAt.UnixMilli()
+			case "tool_result":
+				ev.Type = "tool_result"
+				ev.ToolUseID = te.ToolUseID
+				ev.IsError = te.IsError
+				ev.Data = te.Text
+				ev.At = te.At.UnixMilli()
+			default:
+				continue
+			}
+			out = append(out, ev)
+		}
+	}
+	if matched {
+		return out
+	}
+	// Pool has no live entry — fall back to inflight.jsonl on disk for
+	// the case where a turn was mid-stream when the process died. Emit
+	// the cached deltas + trace cards so the operator at least sees how
+	// far the agent got before the kill.
+	if globalLayout == (agentconfig.Layout{}) {
+		return out
+	}
+	entries, err := agentstore.LoadInflight(globalLayout, sessionID)
+	if err != nil || len(entries) == 0 {
+		return out
+	}
+	for _, e := range entries {
+		ev := Event{
+			SessionID: sessionID,
+		}
+		switch e.Type {
+		case "text_delta":
+			ev.Type = "text_delta"
+			ev.Data = e.Text
+		case "thinking":
+			ev.Type = "thinking"
+			ev.Data = e.Text
+			if !e.At.IsZero() {
+				ev.At = e.At.UnixMilli()
+			}
+		case "tool_use":
+			ev.Type = "tool_use"
+			ev.ToolName = e.ToolName
+			ev.ToolInput = e.ToolInput
+			ev.ToolUseID = e.ToolUseID
+			if !e.At.IsZero() {
+				ev.At = e.At.UnixMilli()
+			}
+		case "tool_result":
+			ev.Type = "tool_result"
+			ev.ToolUseID = e.ToolUseID
+			ev.IsError = e.IsError
+			ev.Data = e.Text
+			if !e.At.IsZero() {
+				ev.At = e.At.UnixMilli()
+			}
+		default:
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+// streamSnapshot returns the current lifecycle + in-flight events for a
+// session as JSON. Called by the SharedWorker whenever a new page subscribes
+// (even when the EventSource is already open) so the UI can replay trace
+// cards without waiting for the next real event.
+func streamSnapshot(c *tool.Ctx) {
+	if globalPool == nil {
+		c.JSON(http.StatusOK, []Event{})
+		return
+	}
+	sessionID := c.Query("session")
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "session required"})
+		return
+	}
+	out := snapshotEvents(sessionID)
+	if out == nil {
+		out = []Event{}
+	}
+	c.JSON(http.StatusOK, out)
 }

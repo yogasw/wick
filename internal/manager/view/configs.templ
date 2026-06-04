@@ -93,16 +93,33 @@ templ simpleFieldInner(row entity.Config) {
 			if row.IsSecret && row.Value != "" {
 				<span class="rounded-full bg-pos-100 px-1.5 py-0.5 text-[10px] font-semibold text-pos-400">stored</span>
 			}
+			if row.EnvOverride != "" {
+				<span class="rounded-full bg-prog-100 px-1.5 py-0.5 text-[10px] font-semibold text-prog-400" title="Overridden by environment variable — unset it and restart to edit from here">env: { row.EnvOverride }</span>
+			}
 			<span data-save-status class="ml-auto text-[10px] transition-all"></span>
 		</div>
 		@simpleFieldWidget(row)
-		if row.Description != "" {
+		if row.EnvOverride != "" {
+			<p class="mt-1.5 text-[11px] text-prog-400 leading-relaxed">
+				Overridden by <span class="font-mono">{ row.EnvOverride }</span> environment variable. Unset it and restart to edit from here.
+			</p>
+		} else if row.Description != "" {
 			<p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed">{ row.Description }</p>
 		}
 	</div>
 }
 
 templ simpleFieldWidget(row entity.Config) {
+	if row.EnvOverride != "" {
+		<fieldset disabled class="opacity-60 cursor-not-allowed">
+			@simpleFieldWidgetInner(row)
+		</fieldset>
+	} else {
+		@simpleFieldWidgetInner(row)
+	}
+}
+
+templ simpleFieldWidgetInner(row entity.Config) {
 	if row.IsSecret {
 		if row.Value != "" {
 			<input
@@ -133,8 +150,8 @@ templ simpleFieldWidget(row entity.Config) {
 				<select data-field-key={ row.Key } data-server-value={ row.Value } class={ cfgInputClass + " cursor-pointer appearance-none" }>
 					<option value="">— select —</option>
 					if row.Options != "" {
-						for _, opt := range strings.Split(row.Options, "|") {
-							<option value={ opt }>{ opt }</option>
+						for _, pair := range parseColOpts(row.Options) {
+							<option value={ pair[1] }>{ pair[0] }</option>
 						}
 					}
 				</select>
@@ -153,6 +170,33 @@ templ simpleFieldWidget(row entity.Config) {
 							Enabled
 						} else {
 							Disabled
+						}
+					</span>
+				</label>
+			case "bool", "boolean":
+				<label class="inline-flex items-center gap-3 cursor-pointer mt-1 select-none">
+					<input
+						data-field-key={ row.Key }
+						type="checkbox"
+						if row.Value == "true" {
+							checked
+						}
+						class="sr-only cfg-toggle-input"
+					/>
+					if row.Value == "true" {
+						<span data-toggle-track class="toggle-track is-on">
+							<span class="toggle-knob"></span>
+						</span>
+					} else {
+						<span data-toggle-track class="toggle-track">
+							<span class="toggle-knob"></span>
+						</span>
+					}
+					<span data-toggle-label class="text-xs font-medium text-black-800 dark:text-black-600 min-w-[1.75rem]">
+						if row.Value == "true" {
+							On
+						} else {
+							Off
 						}
 					</span>
 				</label>
@@ -365,7 +409,7 @@ templ kvDataRow(cols []string, colOpts map[string]string, entry map[string]strin
 // id|name cols, so allowedCfg parsers can read either.
 templ pickerBlock(row entity.Config, chips []map[string]string) {
 	<div
-		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm"
 		data-picker-key={ row.Key }
 		data-picker-source={ row.Options }
 		data-cfg-key={ row.Key }
@@ -737,9 +781,13 @@ templ configsSaveScript() {
 				var idx=rule.indexOf(':');
 				if(idx<0){el.style.display='';return;}
 				var key=rule.slice(0,idx).trim();
-				var want=rule.slice(idx+1).trim();
+				// Value half supports a|b|c (pipe-separated OR) so a
+				// field can be gated on a set of allowed dependency
+				// values. Single value still works because split returns
+				// a one-element array.
+				var allowed=rule.slice(idx+1).split('|').map(function(s){return s.trim();});
 				var have=currentFieldValue(form,key);
-				el.style.display=(have===want)?'':'none';
+				el.style.display=(allowed.indexOf(have)>=0)?'':'none';
 			});
 		}
 
@@ -760,6 +808,16 @@ templ configsSaveScript() {
 				var immediate=el.tagName==='SELECT'||el.type==='checkbox'||el.type==='color'||el.type==='date'||el.type==='datetime-local';
 				var handler=function(){saveField(el,base);applyVisibility(form);};
 				el.addEventListener(immediate?'change':'input',immediate?handler:debounce(handler,800));
+			});
+			// bool toggle: sync visual track + label with sr-only checkbox state
+			form.querySelectorAll('.cfg-toggle-input').forEach(function(el){
+				el.addEventListener('change',function(){
+					var lbl=el.closest('label');if(!lbl)return;
+					var track=lbl.querySelector('[data-toggle-track]');
+					if(track)track.classList.toggle('is-on',el.checked);
+					var txt=lbl.querySelector('[data-toggle-label]');
+					if(txt)txt.textContent=el.checked?'On':'Off';
+				});
 			});
 			applyVisibility(form);
 			// kvlist blocks — delegate on the rows container for both input

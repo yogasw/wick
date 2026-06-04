@@ -7,7 +7,7 @@
 // Dependencies:
 //   - internal/agents/channels (store helpers)
 //   - internal/agents/config   (seed / typed config)
-//   - internal/agents/workspace (workspace list for dropdown)
+//   - internal/agents/project   (project list for dropdown)
 //   - internal/entity           (entity.Config for ConfigsTable UI)
 //
 // Main Functions:
@@ -27,7 +27,7 @@ import (
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	agentworkspace "github.com/yogasw/wick/internal/agents/workspace"
+	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
@@ -81,7 +81,7 @@ func slackChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "workspace")
+	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "project_id")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -98,13 +98,13 @@ func restChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "workspace")
+	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "project_id")
 
 	appURL := ""
 	if globalConfigs != nil {
 		appURL = strings.TrimRight(globalConfigs.AppURL(), "/")
 	}
-	endpoint := appURL + "/integrations/rest/v1/chat/completions"
+	apiBase := appURL + "/integrations/rest/api/v1/openai"
 
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
@@ -114,9 +114,11 @@ func restChannelPage(c *tool.Ctx) {
 		Rows:        rows,
 		ActionBase:  c.Base() + "/channels/rest",
 		Docs: view.RestDocs(view.RestDocsVM{
-			Base:       appURL,
-			Endpoint:   endpoint,
-			SampleUser: "demo-user",
+			Base:              appURL,
+			APIBase:           apiBase,
+			ChatEndpoint:      apiBase + "/chat/completions",
+			ResponsesEndpoint: apiBase + "/responses",
+			ModelsEndpoint:    apiBase + "/models",
 		}),
 	}))
 }
@@ -126,7 +128,7 @@ func telegramChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "workspace")
+	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "project_id")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -205,9 +207,59 @@ func channelHealthHandler(c *tool.Ctx) {
 	c.JSON(http.StatusOK, checks)
 }
 
+// channelStatusHandler returns the channel's identity + transport state
+// (bot user id/name, workspace, mode, subscription). Powers the
+// "Integration status" panel rendered under the test button.
+func channelStatusHandler(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalChannels == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel registry not ready"})
+		return
+	}
+	slug := c.PathValue("slug")
+	ch := globalChannels.ChannelByName(slug)
+	if ch == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
+		return
+	}
+	sr, ok := ch.(agentchannels.StatusReporter)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, map[string]string{"error": "channel does not report status"})
+		return
+	}
+	fields := sr.Status()
+	if fields == nil {
+		fields = []agentchannels.StatusField{}
+	}
+	c.JSON(http.StatusOK, fields)
+}
+
+// channelSecretKeys returns the set of secret key names for a channel type,
+// derived from the wick:"secret" tag on each channel's config struct.
+func channelSecretKeys(channelType string) map[string]bool {
+	var seed []entity.Config
+	switch channelType {
+	case "slack":
+		seed = agentconfig.SeedSlackChannelConfig()
+	case "telegram":
+		seed = agentconfig.SeedTelegramChannelConfig()
+	}
+	m := make(map[string]bool, len(seed))
+	for _, r := range seed {
+		if r.IsSecret {
+			m[r.Key] = true
+		}
+	}
+	return m
+}
+
 // makeChannelSaveHandler returns a POST handler for /channels/{channelType}/{key}
 // that saves one config value for channelType in the agent_channels table.
+// Fields declared secret in the channel's config struct are encrypted at rest.
 func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
+	secretKeys := channelSecretKeys(channelType)
 	return func(c *tool.Ctx) {
 		if notReady(c) {
 			return
@@ -218,6 +270,14 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 		}
 		key := c.PathValue("key")
 		value := c.Form("value")
+		if value != "" && secretKeys[key] && globalConfigs != nil {
+			encrypted, err := globalConfigs.EncryptSecret(value)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, map[string]string{"error": "encrypt: " + err.Error()})
+				return
+			}
+			value = encrypted
+		}
 		if err := agentchannels.SetChannelConfigKey(globalDB, channelType, key, value); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -228,8 +288,11 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 
 // loadChannelRows returns entity.Config rows (for the ConfigsTable UI component)
 // with values populated from the agent_channels JSON config.
-// workspaceKey is the key whose Options should be set to the live workspace list.
-func loadChannelRows(channelType string, seed []entity.Config, workspaceKey string) []entity.Config {
+// projectKey is the key whose Options should be set to the live project list
+// (formatted "name::id" so the dropdown shows names but stores the id).
+// Secret values stored as wick_cenc_ tokens are decrypted before render so the
+// UI can show the "stored" badge correctly (non-empty value = stored).
+func loadChannelRows(channelType string, seed []entity.Config, projectKey string) []entity.Config {
 	rows := make([]entity.Config, len(seed))
 	copy(rows, seed)
 
@@ -237,19 +300,42 @@ func loadChannelRows(channelType string, seed []entity.Config, workspaceKey stri
 	if globalDB != nil {
 		m, _ := agentchannels.GetChannelConfigMap(globalDB, channelType)
 		for i := range rows {
-			if v, ok := m[rows[i].Key]; ok {
-				rows[i].Value = v
+			v, ok := m[rows[i].Key]
+			if !ok {
+				continue
 			}
+			if rows[i].IsSecret && globalConfigs != nil {
+				plain, err := globalConfigs.DecryptSecret(v)
+				if err == nil {
+					v = plain
+				}
+			}
+			rows[i].Value = v
 		}
 	}
 
-	// Populate workspace dropdown options.
-	if globalLayout.BaseDir != "" && workspaceKey != "" {
-		wsNames, err := agentworkspace.List(globalLayout)
-		if err == nil && len(wsNames) > 0 {
-			for i := range rows {
-				if rows[i].Key == workspaceKey {
-					rows[i].Options = strings.Join(wsNames, "|")
+	// Populate project dropdown options as "name::id" pairs so the
+	// dropdown shows display names but stores the project id.
+	if globalLayout.BaseDir != "" && projectKey != "" {
+		ids, err := agentproject.List(globalLayout)
+		if err == nil && len(ids) > 0 {
+			var opts []string
+			for _, id := range ids {
+				p, lerr := agentproject.Load(globalLayout, id)
+				if lerr != nil {
+					continue
+				}
+				label := p.Meta.Name
+				if label == "" {
+					label = id
+				}
+				opts = append(opts, label+"::"+id)
+			}
+			if len(opts) > 0 {
+				for i := range rows {
+					if rows[i].Key == projectKey {
+						rows[i].Options = strings.Join(opts, "|")
+					}
 				}
 			}
 		}

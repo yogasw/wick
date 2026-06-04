@@ -2,97 +2,90 @@ package mcp
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/connectors"
-	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/mcp/handlers"
+	"gorm.io/gorm"
 )
 
-// supportedProtocolVersions lists every MCP revision this server can
-// speak, newest first. The JSON-RPC method shapes (initialize,
-// tools/list, tools/call) are identical across these revisions — the
-// difference is transport (Streamable HTTP in 2025-03-26+ vs the
-// 2024-11-05 single-shot POST). Wick is POST-only either way, which
-// the spec allows for both: a Streamable-HTTP client that doesn't
-// receive `text/event-stream` simply treats the response as a single
-// JSON-RPC reply.
-//
-// latestProtocolVersion is the version returned when the client asks
-// for one we don't support, per spec §lifecycle.
+// supportedProtocolVersions lists every MCP revision this server can speak,
+// newest first. latestProtocolVersion is returned when the client requests
+// one we don't support, per spec §lifecycle.
 var supportedProtocolVersions = []string{"2025-03-26", "2024-11-05"}
 
 const latestProtocolVersion = "2025-03-26"
 
-// Handler wires the MCP JSON-RPC surface — tools/list, tools/call,
-// initialize. Bearer auth is applied by AuthMiddleware before this
-// handler runs, so every request reaches us with login.GetUser
-// already populated.
+// Handler wires the MCP JSON-RPC surface — tools/list, tools/call, initialize.
+// Bearer auth is applied by AuthMiddleware before this handler runs.
 //
-// Tool surface uses a meta-tool pattern: rather than expose every
-// (connector × operation) pair as its own static MCP tool, the server
-// exposes three stable tools — wick_list, wick_search, wick_execute —
-// and lets the LLM discover the underlying connectors and operations
-// at runtime. Adding/removing connectors in the admin UI never changes
-// what the client cached, so Claude.ai users don't have to click
-// "Refresh tool list" after every admin change.
+// Tool surface uses a meta-tool pattern: three stable tools (wick_list,
+// wick_search, wick_execute) let the LLM discover connectors at runtime.
+// Adding/removing connectors never changes the cached tool list.
 type Handler struct {
 	connectors *connectors.Service
 	version    string
 	commit     string
 	buildTime  string
 	wickRoot   string // project root; set for CLI (stdio), empty for HTTP
-	// appURL returns the live base URL (configs.Service.AppURL) at
-	// request time. Used to build the absolute redirect link for the
-	// wick_encrypt / wick_decrypt meta-tools — those never run the
-	// crypto themselves, only point the user at the UI form. nil
-	// fallback returns "" so we still serve a relative path.
+	// appURL returns the live base URL at request time. Used to build
+	// absolute redirect links for wick_encrypt / wick_decrypt.
 	appURL func() string
-	// askUsers handles the ask_user MCP tool: blocks the calling
-	// agent until the user answers via the web UI. nil = tool
-	// returns an error pointing the agent at the dashboard.
+	// askUsers handles the ask_user MCP tool. nil = tool returns an error.
 	askUsers *askuser.Manager
+	// askUserAllowed is the gate-policy check for ask_user calls.
+	// nil = always allowed (stdio / tests).
+	askUserAllowed func() (bool, string)
+	// pool is wired for wick_switch_provider and wick_kill_session.
+	// nil in stdio mode and tests.
+	pool   *agentpool.Pool
+	layout agentconfig.Layout
+	// db is passed to wick_info so it can surface DB status/type.
+	// May be nil (tests, smoke mode); handlers.WickInfo reports
+	// "disabled" in that case. DSN is never exposed.
+	db *gorm.DB
 }
 
 func NewHandler(c *connectors.Service) *Handler {
 	return &Handler{connectors: c, version: "dev", commit: "", buildTime: "unknown"}
 }
 
-// WithAppURL records a getter for the configurable base URL so the
-// wick_encrypt / wick_decrypt redirect tools can mint absolute links.
-// Pass configsSvc.AppURL — wick reads it on every call so admin URL
-// edits take effect without a restart.
 func (h *Handler) WithAppURL(get func() string) *Handler {
 	h.appURL = get
 	return h
 }
 
-// WithWickRoot records the project root directory for the wick_info tool.
-// Called by RunMCPStdio after chdir — pass os.Getwd(). Empty string means
-// the server is running in HTTP mode (no local filesystem access).
 func (h *Handler) WithWickRoot(root string) *Handler {
 	h.wickRoot = root
 	return h
 }
 
-// WithAskUser wires the ask_user MCP tool to a daemon-side
-// Manager that broadcasts SSE + blocks until the user answers in
-// the web UI. nil keeps the tool listed but always returns an
-// error (used in tests / read-only deployments).
 func (h *Handler) WithAskUser(m *askuser.Manager) *Handler {
 	h.askUsers = m
 	return h
 }
 
-// WithBuildInfo sets the version, short commit hash, and build timestamp
-// shown in the MCP initialize response and wick_info tool.
-// Called by RunMCPStdio with app.Build* vars.
+func (h *Handler) WithAskUserPolicy(fn func() (bool, string)) *Handler {
+	h.askUserAllowed = fn
+	return h
+}
+
+func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handler {
+	h.pool = p
+	h.layout = layout
+	return h
+}
+
+func (h *Handler) WithDB(db *gorm.DB) *Handler {
+	h.db = db
+	return h
+}
+
 func (h *Handler) WithBuildInfo(version, commit, buildTime string) *Handler {
 	h.version = version
 	if len(commit) > 8 {
@@ -108,6 +101,15 @@ func (h *Handler) serverVersion() string {
 		return h.version + " (" + h.commit + ")"
 	}
 	return h.version
+}
+
+// responder builds the Responder the handlers subpackage uses to write
+// JSON-RPC responses without importing the unexported write helpers.
+func (h *Handler) responder() handlers.Responder {
+	return handlers.Responder{
+		WriteResult: writeRPCResult,
+		WriteError:  writeRPCError,
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,18 +133,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, req.ID, errInvalidRequest, "jsonrpc must be 2.0", nil)
 		return
 	}
-
 	if req.isNotification() {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	// Streamable HTTP (spec 2025-03-26): when the client lists
-	// text/event-stream in Accept and the method actually benefits from
-	// streaming (currently just tools/call — that's the path that calls
-	// Execute and may emit progress notifications), respond with an SSE
-	// body instead of a single JSON document. Other methods always
-	// reply JSON regardless of Accept; the spec lets us choose.
+	// Streamable HTTP (spec 2025-03-26): SSE for tools/call when client accepts it.
 	if req.Method == "tools/call" && wantsSSE(r) {
 		h.handleToolsCallSSE(w, r, req)
 		return
@@ -181,24 +177,16 @@ type serverCapabilities struct {
 }
 
 type toolsCapability struct {
-	// ListChanged would let us push tools/list_changed notifications.
-	// We don't — and we don't need to. The meta-tool pattern keeps the
-	// static tool list invariant (always exactly wick_list / wick_search
-	// / wick_execute), so the client's cached list never goes stale.
 	ListChanged bool `json:"listChanged"`
 }
 
-// initializeParams is the subset of the client's "initialize" payload
-// we read. The full payload also carries clientInfo and capabilities,
-// but wick doesn't react to those — capability negotiation here is
-// one-way (server advertises its own).
 type initializeParams struct {
 	ProtocolVersion string `json:"protocolVersion"`
 }
 
 func (h *Handler) handleInitialize(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
 	var p initializeParams
-	_ = json.Unmarshal(req.Params, &p) // tolerate older clients that omit params
+	_ = json.Unmarshal(req.Params, &p)
 	writeRPCResult(w, req.ID, initializeResult{
 		ProtocolVersion: negotiateProtocolVersion(p.ProtocolVersion),
 		ServerInfo:      serverInfo{Name: "wick", Version: h.serverVersion()},
@@ -207,12 +195,6 @@ func (h *Handler) handleInitialize(w http.ResponseWriter, _ *http.Request, req r
 	})
 }
 
-// negotiateProtocolVersion implements the spec rule: if the client's
-// requested version is one we support, echo it back; otherwise return
-// our latest. Echoing the client's version keeps both sides on the
-// same shape — important for clients that key transport behavior off
-// the negotiated version (e.g. only opening a GET SSE stream after
-// confirming 2025-03-26+).
 func negotiateProtocolVersion(requested string) string {
 	for _, v := range supportedProtocolVersions {
 		if v == requested {
@@ -224,253 +206,8 @@ func negotiateProtocolVersion(requested string) string {
 
 // ── tools/list ───────────────────────────────────────────────────────
 
-type toolListResult struct {
-	Tools []toolDescriptor `json:"tools"`
-}
-
-// toolDescriptor is one entry in the static MCP tool list. Under the
-// meta-tool pattern the list is always exactly the three entries in
-// metaToolDescriptors — connector instances and per-op definitions are
-// surfaced inside wick_list / wick_search payloads, not here.
-type toolDescriptor struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema any             `json:"inputSchema"`
-	Annotations *toolAnnotation `json:"annotations,omitempty"`
-}
-
-// toolAnnotation conveys MCP tool hints to the client. Claude.ai groups
-// tools by readOnlyHint / destructiveHint and applies different default
-// permission policies per group ("read-only" → ask, "write/delete" →
-// prompt-and-allow). Without these every tool defaults to destructive.
-type toolAnnotation struct {
-	Title           string `json:"title,omitempty"`
-	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
-	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
-	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
-	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
-}
-
-func ptrBool(b bool) *bool { return &b }
-
-func (h *Handler) metaToolDescriptors() []toolDescriptor {
-	return []toolDescriptor{
-		{
-			Name: "wick_list",
-			Description: "List available connectors grouped by instance. " +
-				"Returns each connector's id, label, description, total_tools count, and status. " +
-				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
-				"WORKFLOW: (1) wick_list to see what connectors exist, " +
-				"(2) wick_get with the connector id to see its tools + input_schemas, " +
-				"(3) wick_execute with tool_id + params. Takes no arguments.",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "List wick connectors",
-				ReadOnlyHint: ptrBool(true),
-			},
-		},
-		{
-			Name: "wick_search",
-			Description: "Search tools by keyword across all connectors. " +
-				"Case-insensitive match on connector label, tool name, and description. " +
-				"Returns matching tools nested under their connector (id, description, status), with tool_id per hit. " +
-				"status is 'ready' or 'needs_setup' — do NOT call wick_execute on a needs_setup connector; tell the user to open the admin dashboard to complete setup. " +
-				"WORKFLOW: after finding a match, call wick_get with the connector id to get full schemas, " +
-				"then wick_execute.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "Keyword to match.",
-					},
-				},
-				"required": []string{"query"},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "Search wick tools",
-				ReadOnlyHint: ptrBool(true),
-			},
-		},
-		{
-			Name: "wick_get",
-			Description: "Get a connector's full tool list with input_schemas. " +
-				"Pass the connector id from wick_list or wick_search. " +
-				"ALWAYS call this before wick_execute to know the required params. " +
-				"Never guess params — read input_schema from this response first.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Connector id from wick_list or wick_search.",
-					},
-				},
-				"required": []string{"id"},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "Get wick connector tools",
-				ReadOnlyHint: ptrBool(true),
-			},
-		},
-		{
-			Name: "wick_execute",
-			Description: "Execute a tool by tool_id. " +
-				"PREREQUISITE: call wick_get first to get the tool's input_schema — " +
-				"never guess params. params must match the input_schema exactly. " +
-				"On success returns the response as JSON; " +
-				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.\n\n" +
-				"ENCRYPTED FIELDS: values prefixed with \"wick_enc_\" are valid credentials " +
-				"managed by the server. Use them as-is wherever a value is needed — pass them " +
-				"through into params, return them unchanged in your response, and never alter, " +
-				"decode, or omit them. The server resolves them automatically before the tool " +
-				"runs and re-encrypts any sensitive values in the response. If a user asks for " +
-				"the plaintext, redirect them to the wick_decrypt tool — do not attempt to " +
-				"decode the value yourself.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"tool_id": map[string]any{
-						"type":        "string",
-						"description": "Opaque tool identifier from wick_list or wick_search.",
-					},
-					"params": map[string]any{
-						"type":                 "object",
-						"description":          "Arguments matching the tool's input_schema. Use {} when the tool has no input fields.",
-						"additionalProperties": true,
-					},
-				},
-				"required": []string{"tool_id", "params"},
-			},
-			Annotations: &toolAnnotation{
-				Title:           "Execute wick tool",
-				ReadOnlyHint:    ptrBool(false),
-				DestructiveHint: ptrBool(true),
-				OpenWorldHint:   ptrBool(true),
-			},
-		},
-		{
-			Name: "wick_info",
-			Description: "Return wick server info. Fields: wick_version, server_build_time, server_commit, " +
-				"access_type ('cli' when running as a local stdio process with filesystem access, 'http' when running as a remote HTTP server), " +
-				"wick_root (absolute path to the project directory — only set for 'cli', empty for 'http'). " +
-				"Use access_type and wick_root to decide whether you can edit connector config files directly or must redirect the user to the Wick UI.",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "Wick server info",
-				ReadOnlyHint: ptrBool(true),
-			},
-		},
-		{
-			Name: "wick_encrypt",
-			Description: "Mint a wick_enc_ token from a plaintext value. " +
-				"This tool never runs the crypto over MCP — calling it returns a URL pointing " +
-				"to the Wick UI form. The user must open the URL, log in, and paste their " +
-				"value there; the server replies with a wick_enc_<...> token they can then " +
-				"paste back into the conversation. Use this when a user asks how to protect a " +
-				"credential before sharing it with a tool, or when a connector config form " +
-				"asks for a wick_enc_ token.",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "Encrypt a value (UI redirect)",
-				ReadOnlyHint: ptrBool(true),
-			},
-		},
-		{
-			Name: "ask_user",
-			Description: "Ask the human operator a question and block until they answer in the Wick web UI. " +
-				"Use sparingly — only when you genuinely need a decision the user must make (e.g. picking between " +
-				"two libraries, confirming a destructive change). The user sees an inline card with optional " +
-				"choices and an optional freeform field; their answer is returned as JSON {\"value\":\"...\",\"text\":\"...\"}. " +
-				"Default timeout is 5 minutes; on timeout the tool returns an error and you should choose a sensible " +
-				"default rather than retrying immediately. session_id is required and must match the active wick agent " +
-				"session — pass the value the user mentioned or that you saw in the conversation context.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "ID of the active wick agent session this question belongs to.",
-					},
-					"agent_name": map[string]any{
-						"type":        "string",
-						"description": "Optional agent name; defaults to 'main'.",
-					},
-					"question": map[string]any{
-						"type":        "string",
-						"description": "The question text shown to the user.",
-					},
-					"options": map[string]any{
-						"type":        "array",
-						"description": "Optional list of preset choices. Each item is {label, value}; the user clicks one and you receive its value.",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"label": map[string]any{"type": "string"},
-								"value": map[string]any{"type": "string"},
-							},
-							"required": []string{"label", "value"},
-						},
-					},
-					"allow_freeform": map[string]any{
-						"type":        "boolean",
-						"description": "When true the UI also offers a text input so the user can type a custom answer (returned as text).",
-					},
-				},
-				"required": []string{"session_id", "question"},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "Ask the human operator",
-				ReadOnlyHint: ptrBool(false),
-			},
-		},
-		{
-			Name: "wick_decrypt",
-			Description: "Reveal the plaintext behind a wick_enc_ token. " +
-				"This tool never runs the crypto over MCP — calling it returns a URL pointing " +
-				"to the Wick UI form. The user must open the URL, log in, and paste the token " +
-				"there; the server replies with the plaintext, visible only in the user's " +
-				"browser. Per-user keys mean only the user who issued a token can reveal it. " +
-				"Use this only when the user explicitly asks to see a wick_enc_ value's " +
-				"plaintext — never call it speculatively.",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-			Annotations: &toolAnnotation{
-				Title:        "Decrypt a wick_enc_ token (UI redirect)",
-				ReadOnlyHint: ptrBool(true),
-			},
-		},
-	}
-}
-
-// encfieldsURL builds the absolute URL for the encrypt/decrypt UI page
-// — now mounted as a regular tool at /tools/encfields. Falls back to
-// a relative path when no app_url is configured (typically the stdio
-// path where there is no live HTTP server).
-func (h *Handler) encfieldsURL(suffix string) string {
-	base := ""
-	if h.appURL != nil {
-		base = strings.TrimRight(h.appURL(), "/")
-	}
-	if suffix == "encrypt" {
-		return base + "/tools/encfields"
-	}
-	return base + "/tools/encfields/" + suffix
-}
-
 func (h *Handler) handleToolsList(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
-	writeRPCResult(w, req.ID, toolListResult{Tools: h.metaToolDescriptors()})
+	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: handlers.MetaToolDescriptors()})
 }
 
 // ── tools/call ───────────────────────────────────────────────────────
@@ -478,30 +215,16 @@ func (h *Handler) handleToolsList(w http.ResponseWriter, _ *http.Request, req rp
 type toolCallParams struct {
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
-	// Meta carries the optional _meta object the spec defines for tools/
-	// call. Wick reads only progressToken from it — everything else is
-	// transparent. Token type is RawMessage because the spec allows
-	// either string or number; we echo it verbatim in progress notifs
-	// so the client matches them to its outstanding request.
-	Meta *callMeta `json:"_meta,omitempty"`
+	Meta      *callMeta      `json:"_meta,omitempty"`
 }
 
 type callMeta struct {
 	ProgressToken json.RawMessage `json:"progressToken,omitempty"`
 }
 
-// toolCallResult is the MCP-spec content envelope. We always return a
-// single text part with a JSON-encoded payload — the spec allows
-// multipart but JSON-in-text is what LLMs handle best.
-type toolCallResult struct {
-	Content []toolContent `json:"content"`
-	IsError bool          `json:"isError"`
-}
-
-type toolContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
+// type aliases for test files in this package.
+type listResult = handlers.ListResult
+type toolListResult = handlers.ToolListResult
 
 func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	user := login.GetUser(r.Context())
@@ -517,524 +240,34 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		return
 	}
 
+	rsp := h.responder()
+	hreq := handlers.RPCRequest{ID: req.ID, Params: req.Params}
+
 	switch p.Name {
 	case "wick_list":
-		h.handleWickList(w, r, req, tagIDs, user.IsAdmin())
+		handlers.WickList(w, r, hreq, rsp, h.connectors, tagIDs, user.IsAdmin())
 	case "wick_search":
-		h.handleWickSearch(w, r, req, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickSearch(w, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_get":
-		h.handleWickGet(w, r, req, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickGet(w, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_execute":
-		h.handleWickExecute(w, r, req, p.Arguments, user, tagIDs)
+		handlers.WickExecute(w, r, hreq, rsp, h.connectors, p.Arguments, user, tagIDs)
 	case "wick_info":
-		h.handleWickInfo(w, req)
+		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot, h.db)
 	case "wick_encrypt":
-		h.handleWickEncrypt(w, req)
+		handlers.WickEncrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "wick_decrypt":
-		h.handleWickDecrypt(w, req)
+		handlers.WickDecrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "ask_user":
-		h.handleAskUser(w, r, req, p.Arguments)
+		handlers.AskUser(w, r, hreq, rsp, h.askUsers, h.askUserAllowed, p.Arguments)
+	case "wick_list_providers":
+		handlers.WickListProviders(w, hreq, rsp, h.layout, p.Arguments)
+	case "wick_skill_list":
+		handlers.WickSkillList(w, hreq, rsp)
+	case "wick_skill_sync":
+		handlers.WickSkillSync(w, hreq, rsp)
 	default:
 		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
 	}
 }
 
-// handleWickEncrypt and handleWickDecrypt are deliberately
-// non-functional: they return only the UI URL. Running the cipher over
-// MCP would put plaintext (and key-resolved ciphertext) into the LLM's
-// context window — exactly the leakage the encrypted-fields layer
-// exists to prevent. The redirect forces the user to log in to the UI
-// and complete the operation in their own browser session.
-
-// handleAskUser blocks the calling agent until the human operator
-// answers in the web UI (or the ask times out). Sequence:
-//
-//  1. Validate input + ensure the askuser.Manager is wired.
-//  2. Manager.Ask: register pending → broadcast SSE → block.
-//  3. On answer / timeout, write the JSON answer back as a tool
-//     result. Timeouts surface as `{"error":"timeout: ..."}` with
-//     isError=true so the agent sees it and can pick a default.
-//
-// Cancellation: r.Context() is wired into Manager.Ask's done
-// channel so a transport disconnect (e.g. claude killed) frees
-// the goroutine immediately rather than waiting out the timeout.
-func (h *Handler) handleAskUser(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any) {
-	if h.askUsers == nil {
-		writeRPCError(w, req.ID, errInternal,
-			"ask_user disabled — wick is not running with the agents UI", nil)
-		return
-	}
-
-	type optionIn struct {
-		Label string `json:"label"`
-		Value string `json:"value"`
-	}
-	type input struct {
-		SessionID     string     `json:"session_id"`
-		AgentName     string     `json:"agent_name"`
-		Question      string     `json:"question"`
-		Options       []optionIn `json:"options"`
-		AllowFreeform bool       `json:"allow_freeform"`
-	}
-	raw, _ := json.Marshal(args)
-	var in input
-	if err := json.Unmarshal(raw, &in); err != nil {
-		writeToolError(w, req.ID, "invalid arguments: "+err.Error(), "ask_user")
-		return
-	}
-	if strings.TrimSpace(in.SessionID) == "" {
-		writeToolError(w, req.ID, "session_id is required", "ask_user")
-		return
-	}
-	if strings.TrimSpace(in.Question) == "" {
-		writeToolError(w, req.ID, "question is required", "ask_user")
-		return
-	}
-	opts := make([]askuser.Option, 0, len(in.Options))
-	for _, o := range in.Options {
-		opts = append(opts, askuser.Option{Label: o.Label, Value: o.Value})
-	}
-
-	q := askuser.Question{
-		SessionID:     in.SessionID,
-		AgentName:     in.AgentName,
-		Question:      in.Question,
-		Options:       opts,
-		AllowFreeform: in.AllowFreeform,
-		Timeout:       4 * time.Minute,
-	}
-
-	done := make(chan struct{})
-	if r != nil {
-		ctx := r.Context()
-		go func() {
-			<-ctx.Done()
-			close(done)
-		}()
-	}
-
-	ans, err := h.askUsers.Ask(q, done)
-	if err != nil {
-		writeToolError(w, req.ID, err.Error(), "ask_user")
-		return
-	}
-	out := map[string]string{"value": ans.Value, "text": ans.Text}
-	b, _ := json.Marshal(out)
-	writeRPCResult(w, req.ID, toolCallResult{
-		Content: []toolContent{{Type: "text", Text: string(b)}},
-	})
-}
-
-func (h *Handler) handleWickEncrypt(w http.ResponseWriter, req rpcRequest) {
-	writeToolJSON(w, req.ID, map[string]string{
-		"message": "Encryption must be done via the Wick UI. Open the URL, log in, paste the plaintext, and copy the wick_enc_ token back into the conversation.",
-		"url":     h.encfieldsURL("encrypt"),
-	})
-}
-
-func (h *Handler) handleWickDecrypt(w http.ResponseWriter, req rpcRequest) {
-	writeToolJSON(w, req.ID, map[string]string{
-		"message": "Decryption must be done via the Wick UI. Per-user keys mean only the user who issued a wick_enc_ token can reveal its plaintext.",
-		"url":     h.encfieldsURL("decrypt"),
-	})
-}
-
-// ── wick_info ──────────────────────────────────────────────────────
-
-func (h *Handler) handleWickInfo(w http.ResponseWriter, req rpcRequest) {
-	accessType := "http"
-	if h.wickRoot != "" {
-		accessType = "cli"
-	}
-	info := map[string]string{
-		"wick_version":      h.version,
-		"server_build_time": h.buildTime,
-		"server_commit":     h.commit,
-		"access_type":       accessType,
-		"wick_root":         h.wickRoot,
-	}
-	b, _ := json.Marshal(info)
-	writeRPCResult(w, req.ID, toolCallResult{
-		Content: []toolContent{{Type: "text", Text: string(b)}},
-	})
-}
-
-// ── wick_list ───────────────────────────────────────────────────────
-
-// connectorSummary is one entry in the wick_list response.
-// Grouped per connector instance — no tool schemas, just counts.
-type connectorSummary struct {
-	ID          string `json:"id"`
-	Connector   string `json:"connector"`
-	Description string `json:"description"`
-	TotalTools  int    `json:"total_tools"`
-	// Status is "ready" when all required configs are filled, "needs_setup"
-	// when one or more required fields are empty. Do not call wick_execute
-	// on a needs_setup connector — it will fail. Direct the user to the
-	// admin dashboard to complete setup.
-	Status string `json:"status"`
-}
-
-type listResult struct {
-	Connectors      []connectorSummary `json:"connectors"`
-	TotalConnectors int                `json:"total_connectors"`
-	TotalTools      int                `json:"total_tools"`
-}
-
-
-func (h *Handler) handleWickList(w http.ResponseWriter, r *http.Request, req rpcRequest, tagIDs []string, isAdmin bool) {
-	rows, err := h.connectors.ListVisibleTo(r.Context(), tagIDs, isAdmin)
-	if err != nil {
-		writeToolError(w, req.ID, "list connectors: "+err.Error(), "")
-		return
-	}
-	summaries := make([]connectorSummary, 0, len(rows))
-	totalTools := 0
-	for _, row := range rows {
-		mod, ok := h.connectors.Module(row.Key)
-		if !ok {
-			continue
-		}
-		states, err := h.connectors.OperationStates(r.Context(), row.ID, row.Key)
-		if err != nil {
-			continue
-		}
-		count := 0
-		for _, op := range mod.Operations {
-			if states[op.Key] {
-				count++
-			}
-		}
-		if count == 0 {
-			continue
-		}
-		totalTools += count
-		summaries = append(summaries, connectorSummary{
-			ID:          row.ID,
-			Connector:   row.Label,
-			Description: mod.Meta.Description,
-			TotalTools:  count,
-			Status:      h.connectors.Status(row),
-		})
-	}
-	writeToolJSON(w, req.ID, listResult{
-		Connectors:      summaries,
-		TotalConnectors: len(summaries),
-		TotalTools:      totalTools,
-	})
-}
-
-// ── wick_search ─────────────────────────────────────────────────────
-
-// searchTool is one matching tool inside a searchGroup. Connector-level
-// info (id, label, description) lives on the parent group so it isn't
-// repeated for each hit on the same connector.
-type searchTool struct {
-	ToolID      string `json:"tool_id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Destructive bool   `json:"destructive"`
-}
-
-// searchGroup nests matching tools under their owning connector.
-type searchGroup struct {
-	ID          string       `json:"id"`
-	Connector   string       `json:"connector"`
-	Description string       `json:"description"`
-	// Status mirrors connectorSummary.Status — "ready" or "needs_setup".
-	Status string       `json:"status"`
-	Tools  []searchTool `json:"tools"`
-}
-
-type searchResult struct {
-	Connectors []searchGroup `json:"connectors"`
-	Total      int           `json:"total"`
-	Query      string        `json:"query"`
-}
-
-func (h *Handler) handleWickSearch(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any, tagIDs []string, isAdmin bool) {
-	query, _ := args["query"].(string)
-	query = strings.TrimSpace(query)
-	if query == "" {
-		writeToolError(w, req.ID, "query is required", "")
-		return
-	}
-	rows, err := h.connectors.ListVisibleTo(r.Context(), tagIDs, isAdmin)
-	if err != nil {
-		writeToolError(w, req.ID, "search: "+err.Error(), "")
-		return
-	}
-	needle := strings.ToLower(query)
-	groups := make([]searchGroup, 0)
-	total := 0
-	for _, row := range rows {
-		mod, ok := h.connectors.Module(row.Key)
-		if !ok {
-			continue
-		}
-		states, err := h.connectors.OperationStates(r.Context(), row.ID, row.Key)
-		if err != nil {
-			continue
-		}
-		matched := make([]searchTool, 0)
-		for _, op := range mod.Operations {
-			if !states[op.Key] {
-				continue
-			}
-			hay := strings.ToLower(row.Label + " " + op.Name + " " + op.Description)
-			if !strings.Contains(hay, needle) {
-				continue
-			}
-			matched = append(matched, searchTool{
-				ToolID:      formatToolID(row.ID, op.Key),
-				Name:        op.Name,
-				Description: op.Description,
-				Destructive: op.Destructive,
-			})
-		}
-		if len(matched) == 0 {
-			continue
-		}
-		total += len(matched)
-		groups = append(groups, searchGroup{
-			ID:          row.ID,
-			Connector:   row.Label,
-			Description: mod.Meta.Description,
-			Status:      h.connectors.Status(row),
-			Tools:       matched,
-		})
-	}
-	writeToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
-}
-
-// ── wick_get ────────────────────────────────────────────────────────
-
-// toolDetail is one tool entry inside a connectorDetail response.
-type toolDetail struct {
-	ToolID      string     `json:"tool_id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Destructive bool       `json:"destructive"`
-	InputSchema jsonSchema `json:"input_schema"`
-}
-
-// connectorDetail is the full response for wick_get — one connector
-// instance with all its enabled tools and their input_schemas.
-type connectorDetail struct {
-	ID          string       `json:"id"`
-	Connector   string       `json:"connector"`
-	Description string       `json:"description"`
-	Tools       []toolDetail `json:"tools"`
-}
-
-func (h *Handler) handleWickGet(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any, tagIDs []string, isAdmin bool) {
-	connectorID, _ := args["id"].(string)
-	connectorID = strings.TrimSpace(connectorID)
-	if connectorID == "" {
-		writeToolError(w, req.ID, "id is required", "")
-		return
-	}
-	allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
-	if err != nil || !allowed {
-		writeToolError(w, req.ID, "connector not found or not accessible", connectorID)
-		return
-	}
-	row, err := h.connectors.Get(r.Context(), connectorID)
-	if err != nil {
-		writeToolError(w, req.ID, "get connector: "+err.Error(), connectorID)
-		return
-	}
-	mod, ok := h.connectors.Module(row.Key)
-	if !ok {
-		writeToolError(w, req.ID, "connector module not registered", connectorID)
-		return
-	}
-	states, err := h.connectors.OperationStates(r.Context(), row.ID, row.Key)
-	if err != nil {
-		writeToolError(w, req.ID, "load operation states: "+err.Error(), connectorID)
-		return
-	}
-	tools := make([]toolDetail, 0, len(mod.Operations))
-	for _, op := range mod.Operations {
-		if !states[op.Key] {
-			continue
-		}
-		tools = append(tools, toolDetail{
-			ToolID:      formatToolID(row.ID, op.Key),
-			Name:        op.Name,
-			Description: op.Description,
-			Destructive: op.Destructive,
-			InputSchema: configsToJSONSchema(op.Input),
-		})
-	}
-	writeToolJSON(w, req.ID, connectorDetail{
-		ID:          row.ID,
-		Connector:   row.Label,
-		Description: mod.Meta.Description,
-		Tools:       tools,
-	})
-}
-
-// ── wick_execute ────────────────────────────────────────────────────
-
-func (h *Handler) handleWickExecute(w http.ResponseWriter, r *http.Request, req rpcRequest, args map[string]any, user *entity.User, tagIDs []string) {
-	toolID, _ := args["tool_id"].(string)
-	toolID = strings.TrimSpace(toolID)
-	if toolID == "" {
-		writeToolError(w, req.ID, "tool_id is required", toolID)
-		return
-	}
-
-	connectorID, opKey, err := parseToolID(toolID)
-	if err != nil {
-		writeToolError(w, req.ID, err.Error(), toolID)
-		return
-	}
-
-	// Re-check authorization at call time — the cached list the client
-	// holds may be stale, and tags can change between list and call.
-	allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-	if err != nil || !allowed {
-		writeToolError(w, req.ID, "tool_id not found or not accessible", toolID)
-		return
-	}
-
-	rawParams, _ := args["params"].(map[string]any)
-	input := stringifyArgs(rawParams)
-
-	res, execErr := h.connectors.Execute(r.Context(), connectors.ExecuteParams{
-		ConnectorID:  connectorID,
-		OperationKey: opKey,
-		Input:        input,
-		Source:       entity.ConnectorRunSourceMCP,
-		UserID:       user.ID,
-		IsAdmin:      user.IsAdmin(),
-		IPAddress:    clientIP(r),
-		UserAgent:    r.Header.Get("User-Agent"),
-	})
-	if execErr != nil {
-		// Per MCP spec, tool errors return as a result envelope with
-		// IsError=true so the LLM sees the message and can recover.
-		body := execErr.Error()
-		if res != nil && res.ResponseJSON != "" {
-			body = res.ResponseJSON
-		}
-		writeToolError(w, req.ID, body, toolID)
-		return
-	}
-	writeRPCResult(w, req.ID, toolCallResult{
-		Content: []toolContent{{Type: "text", Text: res.ResponseJSON}},
-		IsError: false,
-	})
-}
-
-// ── tool_id helpers ─────────────────────────────────────────────────
-
-// formatToolID produces the opaque identifier wick_list and wick_search
-// hand to the LLM. Format: "conn:{connector_id}/{op_key}". The conn:
-// prefix leaves room for future tool sources (e.g. "mcp:" for proxied
-// remote MCP tools, "prompt:" for prompt-shaped tools) without
-// reshuffling the parser.
-func formatToolID(connectorID, opKey string) string {
-	return "conn:" + connectorID + "/" + opKey
-}
-
-// parseToolID inverts formatToolID. Returns a friendly error when the
-// shape is wrong so the LLM can correct itself on the next call.
-func parseToolID(id string) (connectorID, opKey string, err error) {
-	const prefix = "conn:"
-	if !strings.HasPrefix(id, prefix) {
-		return "", "", errors.New("tool_id must start with 'conn:'")
-	}
-	connectorID, opKey, ok := strings.Cut(id[len(prefix):], "/")
-	if !ok || connectorID == "" || opKey == "" {
-		return "", "", errors.New("tool_id must be of the form 'conn:{connector_id}/{op_key}'")
-	}
-	return connectorID, opKey, nil
-}
-
-// ── response helpers ────────────────────────────────────────────────
-
-// writeToolJSON wraps a typed payload as the text content of a
-// successful tools/call result. The MCP spec requires content[].text
-// to be a string, so we JSON-encode the payload here.
-func writeToolJSON(w http.ResponseWriter, id json.RawMessage, payload any) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		writeRPCError(w, id, errInternal, "marshal: "+err.Error(), nil)
-		return
-	}
-	writeRPCResult(w, id, toolCallResult{
-		Content: []toolContent{{Type: "text", Text: string(body)}},
-		IsError: false,
-	})
-}
-
-// writeToolError emits a tools/call result with isError=true and a
-// JSON-shaped error body. Returning errors as result envelopes (rather
-// than JSON-RPC errors) is what the spec asks for — the LLM should
-// see the message and try to recover, not see a transport failure.
-func writeToolError(w http.ResponseWriter, id json.RawMessage, message, toolID string) {
-	body := map[string]string{"error": message}
-	if toolID != "" {
-		body["tool_id"] = toolID
-	}
-	bytes, _ := json.Marshal(body)
-	writeRPCResult(w, id, toolCallResult{
-		Content: []toolContent{{Type: "text", Text: string(bytes)}},
-		IsError: true,
-	})
-}
-
-// ── input shaping ───────────────────────────────────────────────────
-
-// stringifyArgs flattens the LLM's JSON params (string|number|bool|null
-// |object|array) into the string-keyed map connectors.Service.Execute
-// expects — every Cfg/Input field is read via Ctx.Input(key) which
-// returns string.
-func stringifyArgs(args map[string]any) map[string]string {
-	out := make(map[string]string, len(args))
-	for k, v := range args {
-		out[k] = stringifyOne(v)
-	}
-	return out
-}
-
-func stringifyOne(v any) string {
-	switch x := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return x
-	case bool:
-		if x {
-			return "true"
-		}
-		return "false"
-	case float64:
-		// JSON numbers decode to float64. Render integers without ".0"
-		// so existing connectors that strconv.Atoi don't choke.
-		if x == float64(int64(x)) {
-			return fmt.Sprintf("%d", int64(x))
-		}
-		return fmt.Sprintf("%g", x)
-	default:
-		// Fall back to JSON for objects/arrays — connectors that take
-		// structured input declare it as a JSON-string field anyway.
-		b, _ := json.Marshal(v)
-		return string(b)
-	}
-}
-
-// clientIP returns the request's resolved client IP. Trusts the
-// X-Forwarded-For first hop when present (the realIP middleware
-// upstream already normalized it onto RemoteAddr, but defensive).
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first, _, ok := strings.Cut(xff, ","); ok {
-			return strings.TrimSpace(first)
-		}
-		return strings.TrimSpace(xff)
-	}
-	return r.RemoteAddr
-}

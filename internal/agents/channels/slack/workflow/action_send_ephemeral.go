@@ -8,15 +8,16 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // SendEphemeralInput is the schema for slack.send_ephemeral. The
 // message is visible only to the target user inside the channel.
 type SendEphemeralInput struct {
-	Channel string `json:"channel"`          // required
-	User    string `json:"user"`             // required — target user ID
-	Text    string `json:"text"`             // fallback text
-	Blocks  string `json:"blocks,omitempty"` // optional Block Kit JSON
+	Channel string `json:"channel"          wick:"required;desc=Channel ID"`
+	User    string `json:"user"             wick:"required;desc=Target user ID (message visible only to them)"`
+	Text    string `json:"text"             wick:"desc=Message text (fallback / accessibility)"`
+	Blocks  string `json:"blocks,omitempty" wick:"textarea;desc=Block Kit JSON array (overrides text)"`
 }
 
 // SendEphemeralOutput is the response — Slack returns only the
@@ -34,6 +35,20 @@ func registerActionSendEphemeral(reg *integration.Registry, ch *slack.Channel) {
 		InputType:   SendEphemeralInput{},
 		OutputType:  SendEphemeralOutput{},
 		Destructive: true,
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"ts": "Ephemeral message ts. Note: ephemerals can NOT be edited or deleted later — Slack does not honour chat.update / chat.delete on ephemerals.",
+			},
+			TemplateableFields: []string{"channel", "user", "text", "blocks"},
+			Quirks: []string{
+				"Ephemerals are invisible to everyone except {user} and vanish when they leave the channel / refresh after expiry.",
+				"Once posted, can't be edited via update_message — use respond_url with replace_original instead.",
+				"Either text or blocks must be non-empty.",
+			},
+			PairWith: []string{"channel:slack.respond_url", "channel:slack.send_message"},
+			InputSample:  `{"channel":"C12345","user":"U02ABCDEF","text":"Working on it — I'll DM you when ready."}`,
+			OutputSample: `{"ts":"1700001234.005600"}`,
+		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
 			api := ch.API()
 			if api == nil {

@@ -32,7 +32,7 @@ n8n's weakness we're fixing:
 Run Now jalanin **draft** persist di disk (workflow.draft.yaml). Auto-save sudah debounce 800ms, jadi sebelum Run Now fire, pending save di-flush dulu supaya consistent dengan yang di kanvas. Ngga perlu in-memory transient run buat full graph — itu hanya nambah duplicate path.
 
 - [ ] **Client flush-then-run**: tombol Run Now di JS: kalau ada pending autosave timer, cancel + fire save segera → tunggu response sukses → baru POST /run. Garansi disk == kanvas saat run kick off.
-- [ ] **Server**: tetap pakai `LoadDraft(slug)` (existing), tetap gate validate. Tidak butuh endpoint baru.
+- [ ] **Server**: tetap pakai `LoadDraft(id)` (existing), tetap gate validate. Tidak butuh endpoint baru.
 - [ ] **UX**: status indicator `⟳ Saving + running…` saat flush+run combo jalan.
 
 ### P0 — Execute step (run single node dari kanvas)
@@ -43,9 +43,9 @@ Beda dari Run Now. User klik node → tombol "Execute step" → server jalanin *
 
 Ini in-memory transient run karena scope-nya per-node + sering banget user iterate node body tanpa save full workflow.
 
-- [ ] **Endpoint `POST /workflows/edit/<slug>/exec-node`**: body `{node: <drawflow node JSON>, input: <map>}`. Server resolve executor by node type → eksekusi sekali → return `{output, latency_ms, error}`. Ngga write ke disk.
+- [ ] **Endpoint `POST /workflows/edit/<id>/exec-node`**: body `{node: <drawflow node JSON>, input: <map>}`. Server resolve executor by node type → eksekusi sekali → return `{output, latency_ms, error}`. Ngga write ke disk.
 - [ ] **Input source pilihan**:
-  - **From parent**: ambil output node parent dari run history terakhir (StateStore.Load slug, last run, `Outputs[parentID]`)
+  - **From parent**: ambil output node parent dari run history terakhir (StateStore.Load id, last run, `Outputs[parentID]`)
   - **Mock data**: user paste JSON di input panel
   - **Empty**: jalanin dengan input `{}`
 - [ ] **UI**: di inspector saat node selected, tombol "Execute step" + dropdown source. Output muncul di right pane (Schema/Table/JSON tabs mirip n8n screenshot).
@@ -54,16 +54,16 @@ Ini in-memory transient run karena scope-nya per-node + sering banget user itera
   - **Table**: tabular kalau output array of objects
   - **JSON**: raw dengan syntax highlight
 - [ ] **"No output data" empty state**: tombol `Execute step` + `or set mock data` link → modal buat paste JSON manual.
-- [ ] **Set mock data**: tab "Settings" di parameters area buat saved mock per node (persist di `<slug>/mocks.yaml`).
+- [ ] **Set mock data**: tab "Settings" di parameters area buat saved mock per node (persist di `<id>/mocks.yaml`).
 
 ### P0 — Run progress indicator (no page reload)
 
 Saat Run Now / Execute Step jalan, user harus lihat progress live di kanvas — pulsing border di node yang lagi running, edge labels "1 item" muncul saat data flowing, status badge update tiap node selesai. Ngga ada page reload — semuanya di-handle JS lewat SSE stream.
 
-Saat ini Run Now → redirect ke `/edit/<slug>` (server-side reload). Wajib ganti jadi fire-and-stream:
+Saat ini Run Now → redirect ke `/edit/<id>` (server-side reload). Wajib ganti jadi fire-and-stream:
 
 - [ ] **Endpoint return run ID**: `POST /run` (atau `/run-once`) return `{run_id}` segera setelah enqueue, status 202. Ngga redirect.
-- [ ] **SSE stream**: pakai `/stream` endpoint existing → JS subscribe ke `wf:<slug>:<runID>` channel, terima events: `node_started`, `node_completed`, `node_failed`, `node_skipped`, `edge_traversed`, `workflow_completed`.
+- [ ] **SSE stream**: pakai `/stream` endpoint existing → JS subscribe ke `wf:<id>:<runID>` channel, terima events: `node_started`, `node_completed`, `node_failed`, `node_skipped`, `edge_traversed`, `workflow_completed`.
 - [ ] **Per-node visual state** (event-driven):
   - `node_started` → pulsing red border (1.5s loop) + ⟳ icon di pojok
   - `node_completed` → green border + ✓ icon, latency badge "Xms" di bawah node
@@ -98,8 +98,8 @@ Selain file-based state, push run events ke Loki supaya:
 
 - [ ] **Loki client config**: tambah `agents.workflow_loki_url` + `agents.workflow_loki_labels` di general config. Empty = disabled (default).
 - [ ] **Event pusher**: hook ke engine's `events.jsonl` writer — paralel write ke Loki via push endpoint. Async batched (e.g., 5s flush atau 100 entries).
-- [ ] **Label scheme**: `{wick_workflow=<slug>, wick_run=<runID>, wick_node=<nodeID>, wick_status=<success|failed|...>}`.
-- [ ] **Payload schema**: 1 line per event, JSON: `{ts, slug, run_id, node_id, type, latency_ms, input_size, output_size, error}`. Input/output JSON body tidak dipush penuh (terlalu besar) — push hash + first N bytes; full payload tetap di disk.
+- [ ] **Label scheme**: `{wick_workflow=<id>, wick_run=<runID>, wick_node=<nodeID>, wick_status=<success|failed|...>}`.
+- [ ] **Payload schema**: 1 line per event, JSON: `{ts, id, run_id, node_id, type, latency_ms, input_size, output_size, error}`. Input/output JSON body tidak dipush penuh (terlalu besar) — push hash + first N bytes; full payload tetap di disk.
 - [ ] **Restore**: docs note "kalau file `runs/<id>/` hilang, queries Loki `{wick_workflow=...,wick_run=...}` untuk audit trail (tidak bisa replay run, hanya recap)".
 
 ### P1 — Inspector → modal / drawer
@@ -210,7 +210,7 @@ Use case:
 5. Diff visible vs current published; user tau apa yang berubah → fix
 
 - [ ] **Snapshot store**: tiap run, simpan `workflow.snapshot.yaml` di dalam `runs/<id>/` — copy persis graph yang jalan. Tidak share file dengan `workflow.yaml` karena published version bisa berubah after the run.
-- [ ] **Endpoint baru `POST /workflows/edit/<slug>/runs/<runID>/copy-to-editor`**: load snapshot → write ke `workflow.draft.yaml` (overwrite draft, dengan confirm dialog kalau draft punya unsaved changes)
+- [ ] **Endpoint baru `POST /workflows/edit/<id>/runs/<runID>/copy-to-editor`**: load snapshot → write ke `workflow.draft.yaml` (overwrite draft, dengan confirm dialog kalau draft punya unsaved changes)
 - [ ] **Diff highlight**: setelah copy, badge node yang BEDA dari published muncul (e.g., `modified` badge). User tau persis node mana yang berubah antara run snapshot vs current published.
 - [ ] **Node-level state include**: copy snapshot juga restore `state.json.Outputs[nodeID]` — kalau user re-run, output node yang ngga di-rerun bisa di-mock dari snapshot (lihat P2 Replay-from-node).
 - [ ] **Confirmation flow**: kalau draft existing → modal "Replace draft with snapshot from <timestamp>? Current draft will be lost." → confirm/cancel.
@@ -245,7 +245,7 @@ seperti sekarang, atau wrap module-style):
 Tidak buru-buru — keep monolithic dulu sampai run progress feature landed (1 more growth spurt OK), baru split. Kalau dipecah pre-emptive, churn-nya ngga sebanding karena structure belum settle.
 
 **Kontrak split**:
-- Tiap module export 1 init function yang accept `{editor, baseURL, slug, ...}`
+- Tiap module export 1 init function yang accept `{editor, baseURL, id, ...}`
 - Cross-module communication lewat events di `editor` (sudah pakai Drawflow events) atau via shared mutable state object `state = {selectedID, mouseIsDown, ...}` di-pass eksplisit
 - Tidak ada global var; window.__wfDebug stays for live debugging
 
@@ -260,7 +260,7 @@ view dari log entries = task tersendiri, BUKAN bagian dari first
 observability cut.
 
 Scope import flow (jadwal nanti):
-- [ ] Loki client buat query: `{wick_workflow=<slug>}` + time range
+- [ ] Loki client buat query: `{wick_workflow=<id>}` + time range
 - [ ] Reconstruct `runs/<runID>/state.json` + `events.jsonl` dari log entries
 - [ ] UI: tombol "Import from logs" di Executions panel header → modal dengan time range picker
 - [ ] Conflict handling: kalau `runs/<runID>/` sudah ada lokal, skip vs overwrite

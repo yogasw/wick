@@ -111,20 +111,42 @@ func hasShellMetachar(cmd string) bool {
 	return false
 }
 
-// splitCommand splits a shell-ish command into argv WITHOUT honoring
-// quotes (we already rejected dangerous metachars; quotes are
-// allowed but stripped here for matching). Whitespace separates
-// tokens.
+// splitCommand splits a shell-ish command into argv, respecting double
+// and single quotes so paths with spaces are treated as one token.
+// Dangerous metachars are already rejected upstream; we only handle
+// quoting here. Unclosed quotes return an error.
 func splitCommand(cmd string) ([]string, error) {
-	fields := strings.Fields(cmd)
-	if len(fields) == 0 {
+	var tokens []string
+	var cur strings.Builder
+	inDouble := false
+	inSingle := false
+
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case (c == ' ' || c == '\t') && !inDouble && !inSingle:
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if inDouble || inSingle {
+		return nil, errors.New("unclosed quote")
+	}
+	if cur.Len() > 0 {
+		tokens = append(tokens, cur.String())
+	}
+	if len(tokens) == 0 {
 		return nil, errors.New("no tokens")
 	}
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		out = append(out, strings.Trim(f, `"'`))
-	}
-	return out, nil
+	return tokens, nil
 }
 
 // matchPattern matches `args` (already split) against a rule pattern.

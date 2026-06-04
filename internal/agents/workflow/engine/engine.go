@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // Engine walks a workflow graph and dispatches each node to its
@@ -31,14 +32,77 @@ import (
 // the StateStore. The UI subscribes via SSE to paint per-node
 // progress without polling state.json. Set via SetEventHook so
 // existing callers stay source-compatible.
+// NodeDescriptor bundles the schema + docs for a node type.
+// Populated via RegisterWithDesc — single source of truth lives in the
+// executor file itself (nodes/<type>.go Descriptor method).
+//
+// Docs carries the opt-in self-documentation contract (quirks,
+// examples, templateable fields, pair-with, common pitfalls) projected
+// by the MCP `workflow_node_detail` op. Zero-value Docs = current
+// behaviour; populate per executor when worth it. See
+// internal/agents/workflow/docs and internal/docs/workflow/24-describe-contract.md.
+// PaletteCategory is the typed bucket label each descriptor declares.
+// Defined as a named string type (not a bare string field) so callers
+// can't typo "LOIGIC" — the compiler catches it at the descriptor site.
+// Adding a new category means adding a constant below; the palette
+// builder treats anything outside the known set as an extension bucket
+// rendered after the canonical ones.
+type PaletteCategory string
+
+const (
+	CategoryAI     PaletteCategory = "AI"
+	CategoryAction PaletteCategory = "ACTION"
+	CategoryLogic  PaletteCategory = "LOGIC"
+	CategoryData   PaletteCategory = "DATA"
+)
+
+type NodeDescriptor struct {
+	Type        workflow.NodeType
+	Description string
+	WhenToUse   string
+	Example     string
+	Schema      map[string]any    // reflected from per-node schema struct
+	Output      map[string]string // field → description
+	// Palette metadata — drives the editor "Add node" picker. Zero
+	// values fall back to sane defaults so executors that don't care
+	// still show up: Category defaults to CategoryAction, Label to a
+	// prettified version of Type, Badge to "" (no chip).
+	Category PaletteCategory // typed — see CategoryAI/Action/Logic/Data
+	Label    string          // display label ("HTTP / REST")
+	Badge    string          // short right-aligned hint ("GET / POST")
+	wickdocs.Docs
+}
+
+// Describer is implemented by executors that want to expose schema +
+// docs to the MCP catalog. Optional — executor that does not implement
+// gets a bare descriptor with no schema.
+type Describer interface {
+	Descriptor() NodeDescriptor
+}
+
 type Engine struct {
-	Layout     config.Layout
-	Service    service.Service
-	StateStore state.Store
-	Executors  map[workflow.NodeType]workflow.Executor
-	Now        func() time.Time
-	IDGen      func() string
-	OnEvent    func(slug, runID string, ev workflow.RunEvent)
+	Layout      config.Layout
+	Service     service.Service
+	StateStore  state.Store
+	Executors   map[workflow.NodeType]workflow.Executor
+	Descriptors map[workflow.NodeType]NodeDescriptor
+	// Triggers carries the per-trigger-type descriptors (schema + docs).
+	// MCP `workflow_node_detail` resolves `trigger:<type>` against this
+	// registry. Seeded by setup; zero value = no triggers discoverable.
+	Triggers *TriggerRegistry
+	Now      func() time.Time
+	IDGen    func() string
+	// OnEvent is the legacy single-slot broadcast hook (SSE owns it).
+	// Newer subscribers should use Engine.Subscribe — that registers
+	// against a fan-out broker. Both fire per event; legacy first,
+	// broker second.
+	OnEvent func(id, runID string, ev workflow.RunEvent)
+
+	// bus + busInitOnce back the multi-subscriber broker. Lazy: nil
+	// until the first Subscribe call, then non-nil for life. See
+	// broker.go.
+	bus         *broker
+	busInitOnce sync.Once
 }
 
 // NewRunID returns a fresh run id. Plain UUID — chronological
@@ -51,26 +115,55 @@ func NewRunID() string {
 
 // New builds a bare engine — no executors registered. Caller must
 // Register at least the node types the workflow uses.
+//
+// The Triggers registry is pre-seeded with DefaultTriggerDescriptors
+// so MCP discovery surfaces the canonical trigger types out of the
+// box. Channel setup code overrides the entry for `trigger:channel`
+// to attach channel-specific Docs (multi-trigger routing quirk etc.).
 func New(layout config.Layout, svc service.Service, ss state.Store) *Engine {
+	tr := NewTriggerRegistry()
+	tr.RegisterMany(DefaultTriggerDescriptors()...)
 	return &Engine{
-		Layout:     layout,
-		Service:    svc,
-		StateStore: ss,
-		Executors:  map[workflow.NodeType]workflow.Executor{},
-		Now:        func() time.Time { return time.Now().UTC() },
-		IDGen:      NewRunID,
+		Layout:      layout,
+		Service:     svc,
+		StateStore:  ss,
+		Executors:   map[workflow.NodeType]workflow.Executor{},
+		Descriptors: map[workflow.NodeType]NodeDescriptor{},
+		Triggers:    tr,
+		Now:         func() time.Time { return time.Now().UTC() },
+		IDGen:       NewRunID,
 	}
 }
 
-// Register attaches an executor for a node type.
+// Register attaches an executor for a node type. If the executor
+// implements Describer, its Descriptor is captured so MCP catalog
+// auto-reflects schema.
 func (e *Engine) Register(t workflow.NodeType, ex workflow.Executor) {
 	e.Executors[t] = ex
+	if d, ok := ex.(Describer); ok {
+		desc := d.Descriptor()
+		if desc.Type == "" {
+			desc.Type = t
+		}
+		e.Descriptors[t] = desc
+	}
+}
+
+// RegisterWithDesc attaches an executor + explicit descriptor. Used
+// when the same executor instance serves multiple node types (e.g.
+// datatable executor handles 7 types).
+func (e *Engine) RegisterWithDesc(t workflow.NodeType, ex workflow.Executor, desc NodeDescriptor) {
+	e.Executors[t] = ex
+	if desc.Type == "" {
+		desc.Type = t
+	}
+	e.Descriptors[t] = desc
 }
 
 // SetEventHook installs the broadcast callback. Fires after each
 // StateStore.AppendEvent so callers see persistent + ephemeral
 // payloads in lockstep.
-func (e *Engine) SetEventHook(fn func(slug, runID string, ev workflow.RunEvent)) {
+func (e *Engine) SetEventHook(fn func(id, runID string, ev workflow.RunEvent)) {
 	e.OnEvent = fn
 }
 
@@ -89,13 +182,13 @@ func (e *Engine) SetEventHook(fn func(slug, runID string, ev workflow.RunEvent))
 // The whole RunEvent.Data (input on _started, output on _completed,
 // error on _failed) is included after truncation so the grep target
 // has the payload, not just an opaque event name.
-func (e *Engine) emit(ctx context.Context, slug, runID string, ev workflow.RunEvent) {
+func (e *Engine) emit(ctx context.Context, id, runID string, ev workflow.RunEvent) {
 	// Stamp ts once so AppendEvent (state) and OnEvent (SSE) agree.
 	// Without this, FE backfill can't dedup state ↔ stream events.
 	if ev.TS.IsZero() {
 		ev.TS = e.Now()
 	}
-	_ = e.StateStore.AppendEvent(slug, runID, ev)
+	_ = e.StateStore.AppendEvent(id, runID, ev)
 	lg := log.Ctx(ctx)
 	logEvent := lg.Info()
 	if ev.Event == workflow.EventNodeFailed || ev.Event == workflow.EventWorkflowFailed {
@@ -103,15 +196,16 @@ func (e *Engine) emit(ctx context.Context, slug, runID string, ev workflow.RunEv
 	}
 	logEvent.
 		Str("component", "wf").
-		Str("wf_slug", slug).
+		Str("wf_id", id).
 		Str("wf_run_id", runID).
 		Str("wf_node", ev.Node).
 		Str("wf_event", ev.Event).
 		Interface("data", truncateForEvent(ev.Data)).
 		Msg("workflow event")
 	if e.OnEvent != nil {
-		e.OnEvent(slug, runID, ev)
+		e.OnEvent(id, runID, ev)
 	}
+	e.publishToBus(id, runID, ev)
 }
 
 // Run starts a fresh run. Blocking; returns the final state.
@@ -166,14 +260,23 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		return st, errors.New("no entry node (graph.entry + no trigger entry_node)")
 	}
 	envVals, _ := e.Service.LoadEnvValues(w.ID)
+	triggerNodeID := ""
+	if firedTrigger != nil {
+		if firedTrigger.ID != "" {
+			triggerNodeID = firedTrigger.ID
+		} else if firedTrigger.EntryNode != "" {
+			triggerNodeID = firedTrigger.EntryNode
+		}
+	}
 	rc := &workflow.RunContext{
-		Workflow:    w,
-		Event:       evt,
-		Outputs:     st.Outputs,
-		EnvValues:   envVals,
-		Secrets:     extractSecrets(w.Env, envVals),
-		RunID:       runID,
-		NodeOutputs: map[string]workflow.NodeOutput{},
+		Workflow:      w,
+		Event:         evt,
+		Outputs:       st.Outputs,
+		EnvValues:     envVals,
+		Secrets:       extractSecrets(w.Env, envVals),
+		RunID:         runID,
+		NodeOutputs:   map[string]workflow.NodeOutput{},
+		TriggerNodeID: triggerNodeID,
 	}
 	// Log which runID source we used so any future mismatch between
 	// the UI-issued ID and the engine's effective ID is grep-able.
@@ -185,6 +288,9 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	if firedTrigger != nil {
 		if firedTrigger.ID != "" {
 			startData["trigger_id"] = firedTrigger.ID
+		}
+		if firedTrigger.EntryNode != "" {
+			startData["entry_node"] = firedTrigger.EntryNode
 		}
 		startData["trigger_type"] = string(firedTrigger.Type)
 	} else if tid, _ := evt.Payload["trigger_id"].(string); tid != "" {
@@ -211,6 +317,7 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	if e.OnEvent != nil {
 		e.OnEvent(w.ID, runID, startEv)
 	}
+	e.publishToBus(w.ID, runID, startEv)
 	if err := e.StateStore.Save(w.ID, runID, st); err != nil {
 		return st, err
 	}
@@ -223,35 +330,36 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	defer cancel()
 
 	err := e.walk(cctx, w, st.Entry, rc, &st)
+	end := e.Now()
 	if err != nil {
 		st.Status = workflow.StatusFailed
 		if st.Error == nil {
 			st.Error = &workflow.NodeError{Message: err.Error()}
 		}
-		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
 	} else {
 		st.Status = workflow.StatusSuccess
-		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
 	}
-	end := e.Now()
 	st.EndedAt = &end
 	st.UpdatedAt = end
 	st.Current = nil
-	if err := e.StateStore.Save(w.ID, runID, st); err != nil {
-		return st, err
+	if serr := e.StateStore.Save(w.ID, runID, st); serr != nil {
+		return st, serr
 	}
-	// Persist a one-line summary to the sharded index file. The Runs
-	// panel reads from this index instead of scanning every run dir
-	// on disk, so listings stay constant-time as history grows. Log
-	// the failure (warn) so a broken index doesn't hide silently;
-	// don't return the error — the run itself already finished, and
-	// missing index rows are a UX degradation, not a data loss.
+	// Persist the one-line summary BEFORE we fire the terminal event.
+	// Watch / SSE subscribers wake up on that event and re-scan the
+	// index; flipping the order guarantees the new row is visible the
+	// instant the subscriber gets the wake-up, so a "wait then peek"
+	// pattern never misses the run that triggered it. Index failure is
+	// still soft — log + continue; the run itself already finished.
 	if ierr := e.StateStore.IndexAppend(w.ID, state.IndexEntry{
 		ID:         runID,
 		Status:     st.Status,
 		StartedAt:  st.StartedAt,
 		EndedAt:    st.EndedAt,
-		DurationMs: end.Sub(st.StartedAt).Milliseconds(),
+		DurationMs:  end.Sub(st.StartedAt).Milliseconds(),
+		Source:      indexEntrySource(st),
+		TriggerID:   indexEntryTrigger(st),
+		TriggerType: indexEntryTriggerType(st, w),
 	}); ierr != nil {
 		log.Ctx(ctx).Warn().Err(ierr).
 			Str("component", "wf").
@@ -259,7 +367,52 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 			Str("wf_run_id", runID).
 			Msg("index append failed; Runs panel may drop this run")
 	}
+	if err != nil {
+		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowFailed, Data: map[string]any{"error": err.Error()}})
+	} else {
+		e.emit(ctx, w.ID, runID, workflow.RunEvent{Event: workflow.EventWorkflowCompleted})
+	}
 	return st, err
+}
+
+// indexEntrySource pulls the source slug stamped on the event when
+// the run was kicked off. spaWorkflowRunNow sets "spa", wftest sets
+// "test", router-fired events leave it empty (those are automation).
+// Falls back to "" so the FE can treat it as "automation / unknown".
+func indexEntrySource(st workflow.RunState) string {
+	if s, _ := st.Event.Payload["source"].(string); s != "" {
+		return s
+	}
+	return ""
+}
+
+// indexEntryTrigger returns whichever trigger id is present on the
+// event. Router events stamp evt.TriggerID directly; spaWorkflowRunNow
+// stuffs it into the payload because that's where pickEntry reads it.
+func indexEntryTrigger(st workflow.RunState) string {
+	if st.Event.TriggerID != "" {
+		return st.Event.TriggerID
+	}
+	if tid, _ := st.Event.Payload["trigger_id"].(string); tid != "" {
+		return tid
+	}
+	return ""
+}
+
+// indexEntryTriggerType picks the canonical TriggerType for a run.
+// Prefer the workflow's own trigger row (rename-safe) and fall back
+// to the event type so trigger-less / legacy runs still record
+// something useful in the index.
+func indexEntryTriggerType(st workflow.RunState, w workflow.Workflow) string {
+	tid := indexEntryTrigger(st)
+	if tid != "" {
+		for i := range w.Triggers {
+			if w.Triggers[i].ID == tid {
+				return string(w.Triggers[i].Type)
+			}
+		}
+	}
+	return st.Event.Type
 }
 
 func (e *Engine) walk(ctx context.Context, w workflow.Workflow, start string, rc *workflow.RunContext, st *workflow.RunState) error {
@@ -350,6 +503,10 @@ func (e *Engine) runOne(ctx context.Context, n workflow.Node, rc *workflow.RunCo
 				"config": truncateForEvent(nodeConfigForEvent(n)),
 			},
 		})
+		n, prerr := preRenderNode(n, rc.RenderCtx())
+		if prerr != nil {
+			return workflow.NodeOutput{}, prerr
+		}
 		out, err := exec.Execute(ctx, n, rc)
 		if err == nil {
 			return out, nil
@@ -373,13 +530,13 @@ func retryJitter(backoff time.Duration) time.Duration {
 	return backoff + time.Duration(rand.Int63n(int64(backoff/2+1)))
 }
 
-func (e *Engine) recordSuccess(ctx context.Context, slug string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput, latencyMs int64) {
+func (e *Engine) recordSuccess(ctx context.Context, id string, st *workflow.RunState, rc *workflow.RunContext, n workflow.Node, out workflow.NodeOutput, latencyMs int64) {
 	rc.NodeOutputs[n.ID] = out
 	rc.Outputs[n.ID] = nodeOutputAsMap(out)
 	st.Completed = append(st.Completed, n.ID)
 	st.Outputs = rc.Outputs
 	st.UpdatedAt = e.Now()
-	e.emit(ctx, slug, st.RunID, workflow.RunEvent{
+	e.emit(ctx, id, st.RunID, workflow.RunEvent{
 		Event: workflow.EventNodeCompleted,
 		Node:  n.ID,
 		Data: map[string]any{
@@ -388,15 +545,15 @@ func (e *Engine) recordSuccess(ctx context.Context, slug string, st *workflow.Ru
 			"output":     truncateForEvent(nodeOutputAsMap(out)),
 		},
 	})
-	e.saveState(ctx, slug, st)
+	e.saveState(ctx, id, st)
 }
 
-func (e *Engine) failNode(ctx context.Context, slug string, st *workflow.RunState, n workflow.Node, err error) error {
+func (e *Engine) failNode(ctx context.Context, id string, st *workflow.RunState, n workflow.Node, err error) error {
 	st.Failed = append(st.Failed, n.ID)
 	st.Error = &workflow.NodeError{Node: n.ID, Type: string(n.Type), Message: err.Error()}
 	st.UpdatedAt = e.Now()
-	e.emit(ctx, slug, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
-	e.saveState(ctx, slug, st)
+	e.emit(ctx, id, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
+	e.saveState(ctx, id, st)
 	return &workflow.ExecError{Node: n.ID, Type: n.Type, Wrapped: err}
 }
 
@@ -429,10 +586,10 @@ func (e *Engine) applyOnFailure(ctx context.Context, w workflow.Workflow, st *wo
 // Callers previously discarded the error with _ = — this surfaces it so
 // operators can diagnose disk-full or permission issues without the engine
 // silently continuing with stale state on disk.
-func (e *Engine) saveState(ctx context.Context, slug string, st *workflow.RunState) {
-	if err := e.StateStore.Save(slug, st.RunID, *st); err != nil {
+func (e *Engine) saveState(ctx context.Context, id string, st *workflow.RunState) {
+	if err := e.StateStore.Save(id, st.RunID, *st); err != nil {
 		zerolog.Ctx(ctx).Warn().
-			Str("slug", slug).
+			Str("wf_id", id).
 			Str("run_id", st.RunID).
 			Err(err).
 			Msg("engine: failed to persist run state — state on disk may be stale")
@@ -720,9 +877,13 @@ func pickEntry(w workflow.Workflow, evt workflow.Event) (string, *workflow.Trigg
 	}
 	for i := range w.Triggers {
 		tr := &w.Triggers[i]
-		if tr.EntryNode != "" && string(tr.Type) == evt.Type {
-			return tr.EntryNode, tr
+		if tr.EntryNode == "" || string(tr.Type) != evt.Type {
+			continue
 		}
+		if tr.Event != "" && evt.Subtype != "" && tr.Event != evt.Subtype {
+			continue
+		}
+		return tr.EntryNode, tr
 	}
 	return w.Graph.Entry, nil
 }

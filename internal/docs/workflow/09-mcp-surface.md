@@ -49,7 +49,7 @@ atau canvas ops (deklaratif).
 
 | Op | Param | Hasil |
 |---|---|---|
-| `workflow_create` | name, slug?, template? | scaffold folder; `slug` optional — auto UUID kalau kosong. Return `{id, path, files}` |
+| `workflow_create` | name, id?, template? | scaffold folder; `id` optional — auto UUID kalau kosong. Return `{id, path, files}` |
 | `workflow_write_file` | id, path, content | atomic write ke `<base>/<id>/<path>` — sanitize (no `..`, no symlink, no escape folder) |
 | `workflow_delete_file` | id, path | hapus file dalam folder workflow |
 | `workflow_delete` | id | hapus full workflow folder + unregister scheduler |

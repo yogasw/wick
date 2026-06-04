@@ -11,6 +11,9 @@
       "cwd": "${workspaceFolder}/cmd/lab",
       "args": ["server"],
       "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "WICK_DEV_REPO_ROOT": "${workspaceFolder}"
+      },
       "preLaunchTask": "debug: prep"
     },
     {

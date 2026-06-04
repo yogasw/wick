@@ -66,7 +66,7 @@ The `~/.<app>/` tree currently includes:
 | `~/.<app>/config.json` | Userconfig — provider instances, status cache, misc kv |
 | `~/.<app>/INITIAL_CREDENTIALS.txt` | Auto-generated admin passphrase (deleted on first password rotation) |
 | `~/.<app>/logs/{app,server,worker,gate}-YYYY-MM-DD.log` | Daily tail logs |
-| `~/.<app>/agents/` | [Agents](../guide/agents) subsystem state — workspaces, sessions, presets, gate spec/socket |
+| `~/.<app>/agents/` | [Agents](../guide/agents) subsystem state — projects, sessions, presets, gate spec/socket |
 
 ```env
 APP_NAME=My Internal Tools
@@ -75,11 +75,28 @@ APP_NAME=My Internal Tools
 ### `APP_URL`
 **Default:** `http://localhost:9425`
 
-Base URL used for SSO callbacks and absolute links. **Only used on first boot.** Change it from `/admin/configs` after the first run.
+Base URL used for SSO callbacks and absolute links. Also drives the **host allowlist** — requests whose `Host` header (or `X-Forwarded-Host`) doesn't match this URL's host get a 403. `/health` is exempt.
+
+The env var overrides the DB value at read time (and read-only-locks the row in `/admin/variables`). Useful for bootstrapping on a remote host where the seeded `localhost` value would block your first login.
 
 ```env
 APP_URL=https://tools.example.com
 ```
+
+### `ALLOWED_ORIGINS`
+**Default:** _(empty — only `APP_URL` is allowed)_
+
+Comma-separated list of extra URLs (or bare `host:port`) added to the host allowlist alongside `APP_URL`. Overrides the `allowed_origins` kvlist in `/admin/variables` at read time.
+
+```env
+ALLOWED_ORIGINS=http://192.168.1.42:9425,http://10.0.0.5:9425
+```
+
+::: tip LAN / Termux access
+On Termux (and any host where `localhost` isn't enough) open `/admin/variables`, click **Detect LAN URLs** to see your reachable IPv4 addresses, and paste them into the `allowed_origins` row. The `install.sh` script also prints your private-range IPs at the end of a Termux install — copy from there if the admin UI isn't reachable yet, and bootstrap with `ALLOWED_ORIGINS=http://<ip>:9425 ./<app> server`.
+
+Suggestions are read-only by design: the install script never writes the allowlist for you because a phone may be on public Wi-Fi where exposing the manager to every device on the SSID would be unsafe.
+:::
 
 ---
 

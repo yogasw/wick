@@ -58,6 +58,45 @@ func (c *eventCollector) sessionStartCount() int {
 	return n
 }
 
+func (c *eventCollector) errorCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, e := range c.events {
+		if e.Type == event.Error {
+			n++
+		}
+	}
+	return n
+}
+
+func (c *eventCollector) firstError() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.events {
+		if e.Type == event.Error {
+			return e.Text
+		}
+	}
+	return ""
+}
+
+// textDeltaCount returns how many TextDelta events fired across the
+// whole session. Used by the partial-streaming test to assert claude
+// emitted MULTIPLE chunks (not one batched blob) when
+// --include-partial-messages is on.
+func (c *eventCollector) textDeltaCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, e := range c.events {
+		if e.Type == event.TextDelta {
+			n++
+		}
+	}
+	return n
+}
+
 func (c *eventCollector) textPerTurn() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -7,9 +7,81 @@ import (
 	"unicode"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
-	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
+
+type classifyNodeSchema struct {
+	OutputCases     string `wick:"required;key=output_cases;desc=Enum labels the LLM must pick from (JSON array)"`
+	Input           string `wick:"required;key=input;desc=Text to classify — use expression e.g. {{index .Event.Payload \"text\"}}"`
+	Provider        string `wick:"key=provider;desc=Provider name (optional, uses default)"`
+	FuzzyMatch      bool   `wick:"key=fuzzy_match;desc=Allow partial/fuzzy label matching"`
+	RetryOnMismatch int    `wick:"key=retry_on_mismatch;desc=Retry count when LLM returns unrecognized label"`
+}
+
+// Dependencies surfaces the provider name to workflow_describe.
+func (e *ClassifyExecutor) Dependencies(n workflow.Node) []engine.NodeDependency {
+	if n.Provider == "" {
+		return nil
+	}
+	return []engine.NodeDependency{{Kind: engine.DepKindProvider, Ref: n.Provider}}
+}
+
+func (e *ClassifyExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Category:    engine.CategoryAI,
+		Label:       "Classify",
+		Badge:       "AI classify",
+		Description: "Classify natural-language input into an enum via LLM. Route downstream via case: labels matching verdict.",
+		WhenToUse:   "Input is free text and needs to be bucketed into a small set of cases.",
+		Example:     "{\n  \"id\": \"triage\",\n  \"type\": \"classify\",\n  \"output_cases\": [\"bug\", \"feature\", \"question\"],\n  \"input\": \"{{index .Event.Payload \\\"text\\\"}}\",\n  \"provider\": \"claude\"\n}",
+		Schema:      integration.StructSchema(classifyNodeSchema{}),
+		Output: map[string]string{
+			"verdict":    "string — matched case label",
+			"confidence": "float — 0.0–1.0",
+			"reasoning":  "string — LLM explanation",
+		},
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"verdict":    "Matched output_cases label. Edge `case:` filters route on this value. Falls back to \"default\" after retries fail.",
+				"confidence": "0.0–1.0 score from the provider's structured output. 0 when the provider didn't return one.",
+				"reasoning":  "Short explanation. Useful as Slack reply or audit log; not a routing input.",
+				"raw":        "Raw provider response — debugging only.",
+				"fuzzy":      "True when the verdict was resolved via fuzzy match instead of exact.",
+			},
+			TemplateableFields: []string{"input"},
+			Quirks: []string{
+				"output_cases is a JSON array — each entry becomes a JSON Schema enum value passed to the provider's structured output.",
+				"6-layer reliability stack: structured_output → normalize → exact → fuzzy → retry_on_mismatch → confidence_threshold fallback to \"default\".",
+				"verdict \"default\" fires when no enum match after all retries, OR when confidence < confidence_threshold. Add a \"default\" case in your downstream branch to catch it.",
+				"fuzzy_match enables Levenshtein + substring fallback — useful when the model occasionally returns variants like \"bugs\" instead of \"bug\".",
+				"retry_on_mismatch tightens the system prompt on each retry. Costs more tokens; keep ≤2 unless the model is unreliable.",
+			},
+			PairWith:     []string{"branch", "switch", "agent"},
+			CommonPitfalls: []string{
+				"Don't add \"default\" to output_cases — the engine reserves \"default\" as the fallback verdict. Add it as a downstream edge case, not an input enum.",
+				"Don't use classify for boolean/structured routing — use branch with an expression instead. Classify is for free-text input.",
+			},
+			InputSample:  `{"output_cases":["bug","feature","question"],"input":"{{index .Event.Payload \"text\"}}","provider":"claude","fuzzy_match":true,"retry_on_mismatch":1}`,
+			OutputSample: `{"verdict":"bug","confidence":0.92,"reasoning":"User reports authentication failure after deploy — concrete defect, reproducible."}`,
+			Examples: []wickdocs.Example{
+				{
+					Name: "triage_support_intent",
+					Body: `{
+  "id": "triage",
+  "type": "classify",
+  "provider": "claude",
+  "output_cases": ["bug", "feature", "question"],
+  "input": "{{.Node.trigger.payload.text}}",
+  "fuzzy_match": true
+}`,
+				},
+			},
+		},
+	}
+}
 
 // ClassifyExecutor implements the 6-layer reliability stack:
 //
@@ -37,11 +109,7 @@ func (e *ClassifyExecutor) Execute(ctx context.Context, n workflow.Node, rc *wor
 	if err != nil {
 		return workflow.NodeOutput{}, err
 	}
-	rctx := rc.RenderCtx()
-	prompt, err := template.Render(n.Prompt, rctx)
-	if err != nil {
-		return workflow.NodeOutput{}, err
-	}
+	prompt := n.Prompt
 	systemPrompt := classifySystemPrompt(n.OutputCases, false)
 	maxRetry := n.RetryOnMismatch
 
@@ -221,3 +289,6 @@ func levenshtein(a, b string) int {
 	}
 	return prev[lb]
 }
+
+// ClassifySchema is the exported form of classifyNodeSchema for the editor UI.
+type ClassifySchema = classifyNodeSchema

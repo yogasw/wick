@@ -7,8 +7,56 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
+
+type connectorSchema struct {
+	Module   string `wick:"required;key=module;desc=Connector module key"`
+	Op       string `wick:"required;key=op;desc=Operation name — call workflow_integration for per-op schema"`
+	Args     string `wick:"key=args;desc=Op inputs as YAML map"`
+	ArgModes string `wick:"key=arg_modes;desc=Per-field mode: fixed=literal, expression=Go template render"`
+}
+
+// Dependencies surfaces "<module>.<op>" pairs to workflow_describe.
+func (e *ConnectorExecutor) Dependencies(n workflow.Node) []engine.NodeDependency {
+	if n.Module == "" {
+		return nil
+	}
+	ref := n.Module
+	if n.Op != "" {
+		ref += "." + n.Op
+	}
+	return []engine.NodeDependency{{Kind: engine.DepKindConnector, Ref: ref}}
+}
+
+// TemplateableFields exposes each Args value as args.<key> for the
+// describe scan.
+func (e *ConnectorExecutor) TemplateableFields(n workflow.Node) map[string]string {
+	out := map[string]string{}
+	for k, v := range n.Args {
+		if s, ok := v.(string); ok {
+			out["args."+k] = s
+		}
+	}
+	return out
+}
+
+func (e *ConnectorExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		// Connector node itself is the umbrella — the palette never
+		// shows a bare "Connector" row; per-module rows are expanded
+		// from the connector registry. Category/Label/Badge here are
+		// fallback metadata for anything that introspects via the MCP
+		// catalog directly.
+		Category:    engine.CategoryAction,
+		Label:       "Connector",
+		Description: "Invoke a registered connector operation. Call workflow_connectors for available modules.",
+		WhenToUse:   "Call any registered external integration via MCP connector.",
+		Schema:      integration.StructSchema(connectorSchema{}),
+	}
+}
 
 // ConnectorExecutor dispatches workflow connector nodes through the
 // existing connector module ExecuteFunc.

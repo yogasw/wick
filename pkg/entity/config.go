@@ -39,17 +39,27 @@ type Config struct {
 	// Hidden is set from the `wick:"hidden"` tag at seed time. Not persisted
 	// (gorm:"-") — tells the manager Settings page to skip this row. Hidden
 	// configs are still seeded to DB so runtime reads work normally.
-	Hidden bool `gorm:"-" json:"-"`
+	//
+	// JSON-exposed (omitempty) so the SPA inspector / workflow editor
+	// receives the same presentation hint the templ admin page already
+	// uses. Pure UI flag — no secret material here.
+	Hidden bool `gorm:"-" json:"hidden,omitempty"`
 	// ColOptions holds per-column select options for kvlist rows. Not persisted.
 	// Key = column name; Value = pipe-separated "label::value" pairs (or just
 	// "value" when label == value). The kvlist component renders a <select>
 	// instead of <input> for columns that have options set.
-	ColOptions map[string]string `gorm:"-" json:"-"`
+	ColOptions map[string]string `gorm:"-" json:"col_options,omitempty"`
 	// VisibleWhen is a "<otherField>:<value>" predicate sourced from the
 	// `wick:"visible_when=..."` tag. When set, the admin UI shows this row
 	// only while the named field's current value equals <value>. Not
 	// persisted — pure presentation hint.
-	VisibleWhen string `gorm:"-" json:"-"`
+	VisibleWhen string `gorm:"-" json:"visible_when,omitempty"`
+	// EnvOverride names the environment variable currently overriding
+	// this row's value. Set by Service.ListOwned when the operator has
+	// exported an env var declared in configs.envOverrides — the UI
+	// renders a badge + disables the input, and Set() rejects writes
+	// while the override is live. Empty when no override is active.
+	EnvOverride string `gorm:"-" json:"env_override,omitempty"`
 }
 
 func (Config) TableName() string { return "configs" }

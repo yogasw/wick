@@ -28,7 +28,7 @@
 ### Identity — folder name = workflow ID
 
 Folder name is the workflow `id` — UUID for canvas-created workflows,
-arbitrary `[a-z0-9-]+` slug for legacy hand-edited ones (the regex
+arbitrary `[a-z0-9-]+` id for legacy hand-edited ones (the regex
 still accepts hex+dashes so UUIDs pass). Display title lives in
 `name:` and is freely renameable through the editor toolbar; the
 folder, URL (`/workflows/edit/<id>`), and run index all stay anchored
@@ -62,7 +62,7 @@ triggers:                           # WAJIB minimal 1. Multi-trigger supported.
     match:
       mention_bot: true
     entry_node: classify-intent     # the node this trigger fires
-  - id: trigger-manual              # second trigger in the same workflow
+  - id: trigger_manual              # second trigger in the same workflow
     type: manual                    # fires a different chain
     entry_node: handle-question
 
@@ -81,11 +81,10 @@ env:                                # config schema (values di env.yaml; lihat �
     desc: "Token issue tracker"
     required: true
 
-datasets:                           # optional, link ke datasets (§12)
+data_tables:                        # optional, link ke data tables (§12)
   - name: handled
-    ref: inquiry-events             # dataset slug di <BaseDir>/datasets/
+    ref: inquiry-events             # data table slug di wick_data_tables
     mode: read_write
-    expected_version: 1             # break loud kalau dataset schema drift
 
 graph:
   entry: classify-intent            # default entry kalau trigger ga override
@@ -319,7 +318,7 @@ etc. register their own.
 **`manual`** — UI button + MCP op. Fired via the Execute workflow
 picker on the canvas (or via the MCP `workflow_run` op).
 ```yaml
-- id: trigger-manual
+- id: trigger_manual
   type: manual
   entry_node: classify-intent
   label: "Run digest now"
@@ -340,7 +339,7 @@ picker on the canvas (or via the MCP `workflow_run` op).
 - id: trigger-error
   type: error
   entry_node: notify-oncall
-  source_workflow: "*"              # workflow slug atau pattern; "*" = semua
+  source_workflow: "*"              # workflow id atau pattern; "*" = semua
   severity: [high, critical]        # optional filter: error severity levels
   node_types: [shell, http, connector]  # optional filter: cuma error dari node types ini
   dedup_ttl_sec: 300                # default 5min, hindari error storm
@@ -350,13 +349,13 @@ Use case:
 - Centralized error handler workflow yang catch failures dari workflow lain
 - Notify on-call team kalau workflow critical fail
 - Auto-retry pattern (error → wait → re-trigger original workflow)
-- Audit trail di dataset events untuk root-cause analysis
+- Audit trail di data-table events untuk root-cause analysis
 
 Source workflow `on_error` opt-in:
 ```yaml
 # Source workflow declares error handler binding
 on_error:
-  trigger_workflow: "error-handler"   # workflow slug yg pasang trigger type: error
+  trigger_workflow: "error-handler"   # workflow id yg pasang trigger type: error
   severity: critical                  # filter mana error yg fire handler
   include_state: true                 # ship full state.json ke handler
   include_node_output: true           # include outputs hingga node yg fail

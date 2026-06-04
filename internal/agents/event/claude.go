@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ClaudeParser parses the Claude CLI `--output-format stream-json`
@@ -35,6 +37,13 @@ type ClaudeParser struct {
 
 	// sessionEmitted is true after the first SessionStart we returned.
 	sessionEmitted bool
+
+	// partialTextEmitted tracks whether any content_block_delta of type
+	// text_delta has been emitted in the current turn. When true, the
+	// trailing `assistant` frame's text content is suppressed (the FE
+	// would otherwise see the same text twice — once as live deltas,
+	// once as the final block). Cleared on Done/Error.
+	partialTextEmitted bool
 }
 
 // NewClaudeParser returns a fresh parser ready to consume Claude
@@ -52,6 +61,31 @@ type claudeRaw struct {
 
 	// `assistant` and `user` wrap content blocks under .message.content
 	Message *claudeMessage `json:"message,omitempty"`
+
+	// `stream_event` (only when --include-partial-messages is set)
+	// wraps an Anthropic Messages-API streaming event in .event.
+	Event *claudeStreamEvent `json:"event,omitempty"`
+}
+
+// claudeStreamEvent mirrors the Anthropic Messages API streaming event
+// shape. We only model content_block_delta payloads — the start/stop/
+// message_delta bookends are not actionable here (turn lifecycle is
+// already covered by `system init` + `result`).
+type claudeStreamEvent struct {
+	Type  string             `json:"type"`            // message_start | content_block_start | content_block_delta | content_block_stop | message_delta | message_stop
+	Index int                `json:"index,omitempty"` // content block index
+	Delta *claudeStreamDelta `json:"delta,omitempty"`
+}
+
+// claudeStreamDelta carries the incremental payload. For text we get
+// text_delta with .text; for thinking we get thinking_delta with
+// .thinking; for tool_use input we get input_json_delta — we don't
+// stream tool args, so input_json_delta is ignored (the final
+// `assistant` frame surfaces tool_use as one ToolUse event).
+type claudeStreamDelta struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 type claudeMessage struct {
@@ -66,8 +100,11 @@ type claudeContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// thinking fields
+	Thinking string `json:"thinking,omitempty"`
 	// tool_result fields
 	ToolUseID string `json:"tool_use_id,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 	// tool_result.content can be a string OR an array of blocks; keep
 	// the raw bytes so we don't fight Anthropic's polymorphism here.
 	ResultContent json.RawMessage `json:"content,omitempty"`
@@ -118,6 +155,46 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		}
 		return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 
+	case "stream_event":
+		// Partial-message stream from --include-partial-messages. Only
+		// content_block_delta with a text_delta or thinking_delta is
+		// actionable; the rest (message_start, content_block_start,
+		// message_delta usage, etc.) are bookends with no user-visible
+		// payload.
+		if raw.Event == nil {
+			log.Debug().Msg("claude.parse: stream_event without inner event")
+			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+		}
+		if raw.Event.Type != "content_block_delta" || raw.Event.Delta == nil {
+			log.Debug().Str("inner_type", raw.Event.Type).Msg("claude.parse: stream_event bookend, skipping")
+			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+		}
+		switch raw.Event.Delta.Type {
+		case "text_delta":
+			if raw.Event.Delta.Text == "" {
+				return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+			}
+			p.partialTextEmitted = true
+			log.Debug().Int("len", len(raw.Event.Delta.Text)).Msg("claude.parse: stream text_delta")
+			return AgentEvent{
+				Type: TextDelta,
+				Text: raw.Event.Delta.Text,
+				Raw:  trimmed,
+			}, nil
+		case "thinking_delta":
+			if raw.Event.Delta.Thinking == "" {
+				return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+			}
+			log.Debug().Int("len", len(raw.Event.Delta.Thinking)).Msg("claude.parse: stream thinking_delta")
+			return AgentEvent{
+				Type: Thinking,
+				Text: raw.Event.Delta.Thinking,
+				Raw:  trimmed,
+			}, nil
+		}
+		log.Debug().Str("delta_type", raw.Event.Delta.Type).Msg("claude.parse: stream_event unknown delta type")
+		return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+
 	case "assistant":
 		// claude packs text + tool_use blocks into one frame. Iterate
 		// to find the first interesting block. If both text and
@@ -128,16 +205,39 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 		}
 		for _, b := range raw.Message.Content {
-			if b.Type == "tool_use" {
+			switch b.Type {
+			case "tool_use":
 				return AgentEvent{
 					Type:      ToolUse,
 					ToolName:  b.Name,
 					ToolInput: string(b.Input),
+					ToolUseID: b.ID,
 					Raw:       trimmed,
 				}, nil
+			case "thinking":
+				if b.Thinking != "" {
+					// Suppress when stream_event thinking_delta already
+					// streamed this text; otherwise emit as one block.
+					if p.partialTextEmitted {
+						return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+					}
+					return AgentEvent{
+						Type: Thinking,
+						Text: b.Thinking,
+						Raw:  trimmed,
+					}, nil
+				}
 			}
 		}
-		// No tool_use — return concatenated text as TextDelta.
+		// If --include-partial-messages already streamed the text via
+		// stream_event content_block_delta, suppress the trailing
+		// `assistant` frame's text — it's the same content concatenated,
+		// emitting it again would double-render in the UI bubble and
+		// double the assistant turn body in conversation.jsonl.
+		if p.partialTextEmitted {
+			return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+		}
+		// No tool_use/thinking — return concatenated text as TextDelta.
 		var buf strings.Builder
 		for _, b := range raw.Message.Content {
 			if b.Type == "text" {
@@ -163,9 +263,11 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		for _, b := range raw.Message.Content {
 			if b.Type == "tool_result" {
 				return AgentEvent{
-					Type: ToolResult,
-					Text: string(b.ResultContent),
-					Raw:  trimmed,
+					Type:      ToolResult,
+					Text:      string(b.ResultContent),
+					ToolUseID: b.ToolUseID,
+					IsError:   b.IsError,
+					Raw:       trimmed,
 				}, nil
 			}
 		}
@@ -177,6 +279,11 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// Error so the agent can react. .result holds the final
 		// assistant text on success; we already streamed it via
 		// TextDelta above so we don't re-emit here.
+		//
+		// Reset the partial-text guard so the next turn's `assistant`
+		// frame is treated fresh (we may not get stream_event deltas
+		// for short replies — claude can batch them).
+		p.partialTextEmitted = false
 		if raw.IsError {
 			return AgentEvent{
 				Type:     Error,

@@ -14,13 +14,16 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/channel"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/cost"
-	"github.com/yogasw/wick/internal/agents/workflow/dataset"
+	"gorm.io/gorm"
+
+	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/guard"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/nodes"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
 	"github.com/yogasw/wick/internal/agents/workflow/trigger"
@@ -30,17 +33,22 @@ import (
 // to consumers (UI handlers, MCP transport, jobs).
 type Manager struct {
 	Layout     config.Layout
-	Service    *service.FileService
+	Service    service.Service
+	// Repo is the DB-backed workflow repository. Nil when no DB is
+	// wired (test paths) — every consumer that touches it must
+	// nil-check first. Populated by WithDB.
+	Repo       *repository.Repo
 	StateStore *state.FileStore
 	Engine     *engine.Engine
 	Router     *trigger.Router
 	Cron       *trigger.CronScheduler
+	ScheduleAt *trigger.ScheduleAtScheduler
 	Canvas     *canvas.Canvas
 	Channels    *channel.Registry
 	Integration *integration.Registry
 	Connectors  *connector.Registry
 	Providers  *provider.Registry
-	Datasets   dataset.Service
+	DataTables datatable.Service
 	Guard      *guard.Guard
 	Cost       *cost.Tracker
 	MCP        *mcp.Ops
@@ -62,12 +70,13 @@ func New(layout config.Layout) *Manager {
 	eng := engine.New(layout, svc, ss)
 	router := trigger.NewRouter(eng, svc)
 	cron := trigger.NewCronScheduler(router)
+	schedAt := trigger.NewScheduleAtScheduler(router)
 	can := canvas.New(svc)
 	chReg := channel.NewRegistry()
 	intReg := integration.New()
 	conReg := connector.NewRegistry(nil, nil)
 	provReg := provider.NewRegistry()
-	dsSvc := dataset.NewMem()
+	dtSvc := datatable.NewMock()
 	// Guard default = off. Admin enables per-install via the agents
 	// settings page (mode = warn|block). Keep the package alive so the
 	// rule surface stays available — only the Apply gate is skipped
@@ -77,9 +86,12 @@ func New(layout config.Layout) *Manager {
 
 	// Wire executors so the engine can dispatch every node type once
 	// registries have content.
+	// Executors with Descriptor() method auto-register schema via Engine.Register.
 	eng.Register(workflow.NodeShell, nodes.NewShellExecutor())
+	eng.Register(workflow.NodeGoScript, nodes.NewGoScriptExecutor())
 	eng.Register(workflow.NodeHTTP, nodes.NewHTTPExecutor())
 	eng.Register(workflow.NodeBranch, nodes.NewBranchExecutor())
+	eng.Register(workflow.NodeSwitch, nodes.NewSwitchExecutor())
 	eng.Register(workflow.NodeTransform, nodes.NewTransformExecutor())
 	eng.Register(workflow.NodeEnd, nodes.NewEndExecutor())
 	eng.Register(workflow.NodeClassify, nodes.NewClassifyExecutor(provReg))
@@ -88,16 +100,18 @@ func New(layout config.Layout) *Manager {
 	eng.Register(workflow.NodeChannel, nodes.NewChannelExecutor(intReg))
 	eng.Register(workflow.NodeConnector, nodes.NewConnectorExecutor(conReg))
 	eng.Register(workflow.NodeDBQuery, nodes.NewDBQueryExecutor())
-	dsExec := nodes.NewDatasetExecutor(dsSvc)
+	// DataTable: one executor serves 7 node types — register each with its own descriptor.
+	dtExec := nodes.NewDataTableExecutor(dtSvc)
 	for _, t := range []workflow.NodeType{
-		workflow.NodeDatasetGet, workflow.NodeDatasetExists, workflow.NodeDatasetQuery,
-		workflow.NodeDatasetInsert, workflow.NodeDatasetUpsert, workflow.NodeDatasetDelete,
-		workflow.NodeDatasetCount,
+		workflow.NodeDataTableGet, workflow.NodeDataTableExists, workflow.NodeDataTableQuery,
+		workflow.NodeDataTableInsert, workflow.NodeDataTableUpsert, workflow.NodeDataTableDelete,
+		workflow.NodeDataTableCount,
 	} {
-		eng.Register(t, dsExec)
+		eng.RegisterWithDesc(t, dtExec, nodes.DataTableDescriptor(t))
 	}
 
-	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dsSvc, ss)
+	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dtSvc, ss).WithIntegration(intReg)
+	ops.Guard = g
 
 	return &Manager{
 		Layout:      layout,
@@ -106,16 +120,76 @@ func New(layout config.Layout) *Manager {
 		Engine:      eng,
 		Router:      router,
 		Cron:        cron,
+		ScheduleAt:  schedAt,
 		Canvas:      can,
 		Channels:    chReg,
 		Integration: intReg,
 		Connectors:  conReg,
 		Providers:   provReg,
-		Datasets:    dsSvc,
+		DataTables:  dtSvc,
 		Guard:       g,
 		Cost:        c,
 		MCP:         ops,
 	}
+}
+
+// WithDB switches the workflow Service from the file-based store to
+// the DB-primary one. Workflow body + draft + version history + test
+// cases now live in SQL; runtime concerns (state.json, env.json,
+// runs/) keep their on-disk paths via the embedded FileService.
+//
+// Idempotent — call once at boot with the shared *gorm.DB. Passing nil
+// leaves the file-based Service in place (test path).
+func (m *Manager) WithDB(db *gorm.DB) *Manager {
+	if db == nil {
+		return m
+	}
+	repo := repository.New(db)
+	m.Repo = repo
+	dbsvc := service.NewDB(m.Layout, repo)
+	m.Service = dbsvc
+	// Re-wire downstream consumers that captured the previous Service
+	// pointer. Engine, router, canvas, and MCP all close over the
+	// reference at New() time — without rewiring they'd keep reading
+	// from the file store and the SPA would see drift.
+	if m.Engine != nil {
+		m.Engine.Service = dbsvc
+	}
+	if m.Router != nil {
+		m.Router.SetService(dbsvc)
+	}
+	if m.Canvas != nil {
+		m.Canvas.Service = dbsvc
+	}
+	if m.MCP != nil {
+		m.MCP.Service = dbsvc
+		m.MCP.Repo = repo
+	}
+	return m
+}
+
+// WithDataTablesDB swaps the in-memory data table store for the
+// Postgres-backed PgService. Re-registers the datatable_* executors so
+// downstream Engine.Run calls hit the new backend. Idempotent; pass nil
+// to revert to the in-memory store (test path).
+func (m *Manager) WithDataTablesDB(db *gorm.DB) *Manager {
+	if db == nil {
+		return m
+	}
+	pg := datatable.NewPg(db)
+	m.DataTables = pg
+	dtExec := nodes.NewDataTableExecutor(pg)
+	for _, t := range []workflow.NodeType{
+		workflow.NodeDataTableGet, workflow.NodeDataTableExists, workflow.NodeDataTableQuery,
+		workflow.NodeDataTableInsert, workflow.NodeDataTableUpsert, workflow.NodeDataTableDelete,
+		workflow.NodeDataTableCount,
+	} {
+		m.Engine.RegisterWithDesc(t, dtExec, nodes.DataTableDescriptor(t))
+	}
+	if m.MCP != nil {
+		m.MCP.DataTables = pg
+	}
+	return m
 }
 
 // WithChannels registers one or more channels.
@@ -135,6 +209,9 @@ func (m *Manager) WithProvider(p provider.Provider) *Manager {
 // WithGuardConfig replaces the guard configuration.
 func (m *Manager) WithGuardConfig(cfg guard.Config) *Manager {
 	m.Guard = guard.New(cfg)
+	if m.MCP != nil {
+		m.MCP.Guard = m.Guard
+	}
 	return m
 }
 
@@ -162,7 +239,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.Layout.EnsureLayout(); err != nil {
 		return err
 	}
-	if err := Bootstrap(ctx, m.Service, m.Router, m.Cron); err != nil {
+	if err := Bootstrap(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt); err != nil {
 		return err
 	}
 	if m.Cron != nil {
@@ -184,38 +261,47 @@ func (m *Manager) Stop() {
 // Bootstrap wires every workflow folder found at startup into the
 // router + cron scheduler. Called once from server startup after
 // Service + Router are constructed.
-func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler) error {
-	slugs, err := svc.List()
+func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler) error {
+	ids, err := svc.List()
 	if err != nil {
 		return err
 	}
-	for _, slug := range slugs {
-		w, err := svc.Load(slug)
+	for _, id := range ids {
+		w, err := svc.Load(id)
 		if err != nil {
 			continue
 		}
 		router.Register(ctx, w)
 		if cron != nil {
-			cron.Sync(slug, w)
+			cron.Sync(id, w)
+		}
+		if schedAt != nil {
+			schedAt.Sync(id, w)
 		}
 	}
 	return nil
 }
 
-// HotReload reloads + re-registers (or unregisters) one slug. Used by
+// HotReload reloads + re-registers (or unregisters) one id. Used by
 // fsnotify watcher in production.
-func HotReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, slug string) error {
-	w, err := svc.Load(slug)
+func HotReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string) error {
+	w, err := svc.Load(id)
 	if err != nil {
-		router.Unregister(slug)
+		router.Unregister(id)
 		if cron != nil {
-			cron.Unsync(slug)
+			cron.Unsync(id)
+		}
+		if schedAt != nil {
+			schedAt.Unsync(id)
 		}
 		return nil
 	}
 	router.Register(ctx, w)
 	if cron != nil {
-		cron.Sync(slug, w)
+		cron.Sync(id, w)
+	}
+	if schedAt != nil {
+		schedAt.Sync(id, w)
 	}
 	return nil
 }
@@ -241,12 +327,12 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 	}
 	svc := service.New(layout)
 	store := state.New(layout)
-	slugs, err := svc.List()
+	ids, err := svc.List()
 	if err != nil {
 		return 0, err
 	}
-	for _, slug := range slugs {
-		runs, err := store.ListRuns(slug)
+	for _, id := range ids {
+		runs, err := store.ListRuns(id)
 		if err != nil {
 			continue
 		}
@@ -254,7 +340,7 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 			if opts.KeepMax > 0 && i < opts.KeepMax {
 				continue
 			}
-			st, err := store.Load(slug, rid)
+			st, err := store.Load(id, rid)
 			if err != nil {
 				continue
 			}
@@ -263,7 +349,7 @@ func CleanupRuns(layout config.Layout, opts CleanupOptions) (removed int, err er
 				ttl = opts.FailedTTL
 			}
 			if st.EndedAt != nil && opts.Now().Sub(*st.EndedAt) > ttl {
-				dir := layout.WorkflowRunDir(slug, rid)
+				dir := layout.WorkflowRunDir(id, rid)
 				if err := removeAll(dir); err == nil {
 					removed++
 				}

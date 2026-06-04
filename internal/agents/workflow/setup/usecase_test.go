@@ -43,8 +43,8 @@ func newMgr(t *testing.T) *Manager {
 // the run_id so tests can inspect state + events.
 func runWorkflow(t *testing.T, m *Manager, w workflow.Workflow, evt workflow.Event) string {
 	t.Helper()
-	require.NoError(t, m.Service.Create(w.ID, w, nil))
-	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, w.ID))
+	require.NoError(t, m.Service.Create(w.ID, w))
+	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, nil, w.ID))
 
 	// Run via engine direct so we get a deterministic synchronous
 	// result — Router.RunNow + worker goroutine is async.
@@ -56,9 +56,9 @@ func runWorkflow(t *testing.T, m *Manager, w workflow.Workflow, evt workflow.Eve
 }
 
 // readEvents loads events.jsonl as []map for assertions.
-func readEvents(t *testing.T, m *Manager, slug, runID string) []map[string]any {
+func readEvents(t *testing.T, m *Manager, id, runID string) []map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(m.Layout.WorkflowRunEvents(slug, runID))
+	data, err := os.ReadFile(m.Layout.WorkflowRunEvents(id, runID))
 	require.NoError(t, err)
 	out := []map[string]any{}
 	dec := json.NewDecoder(newBytesReader(data))
@@ -126,7 +126,7 @@ func TestUseCase_MultiTrigger_RouterRegistersAll(t *testing.T) {
 		Enabled: true,
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerCron, Schedule: "0 8 * * *"},
-			{Type: workflow.TriggerManual, Label: "Run now"},
+			{Type: workflow.TriggerManual, Label: "run_now"},
 			{Type: workflow.TriggerWebhook, Path: "/hooks/uc-multi"},
 		},
 		Graph: workflow.Graph{
@@ -136,8 +136,8 @@ func TestUseCase_MultiTrigger_RouterRegistersAll(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, m.Service.Create(w.ID, w, nil))
-	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, w.ID))
+	require.NoError(t, m.Service.Create(w.ID, w))
+	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, nil, w.ID))
 
 	// Verify validator accepts the multi-trigger shape.
 	loaded, err := m.Service.Load(w.ID)
@@ -291,8 +291,8 @@ func TestUseCase_RunNow_BypassesDisabled(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, m.Service.Create(w.ID, w, nil))
-	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, w.ID))
+	require.NoError(t, m.Service.Create(w.ID, w))
+	require.NoError(t, HotReload(context.Background(), m.Service, m.Router, m.Cron, nil, w.ID))
 
 	// Dispatch should NOT match a disabled workflow.
 	matched := m.Router.Dispatch(context.Background(), workflow.Event{Type: string(workflow.TriggerManual)})

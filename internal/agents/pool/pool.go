@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +17,37 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/workspace"
+	"github.com/yogasw/wick/internal/agents/project"
 )
+
+// augmentWithAttachments returns text plus a trailing block listing
+// the absolute on-disk paths of any uploaded files. The CLI subprocess
+// reads the file content via its own Read/View tool — wick just hands
+// it the paths. Returns text unchanged when atts is empty.
+func augmentWithAttachments(text string, atts []store.Attachment) string {
+	if len(atts) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString(text)
+	if text != "" {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("[Attached files]")
+	for _, a := range atts {
+		path := a.AbsPath
+		if path == "" {
+			path = a.StoredName
+		}
+		b.WriteString("\n- ")
+		if a.Name != "" && a.Name != filepath.Base(path) {
+			b.WriteString(a.Name)
+			b.WriteString(": ")
+		}
+		b.WriteString(path)
+	}
+	return b.String()
+}
 
 // Pool is the global slot manager. It tracks how many agent
 // subprocesses are alive across all sessions, FIFO-queues sessions
@@ -47,10 +77,9 @@ type Pool struct {
 
 // PoolConfig knobs.
 //
-// DefaultWorkspace is the workspace name used when a session has no
-// workspace bound. Empty = no default; the pool falls back to a
-// per-session temp dir so claude still has a stable cwd. See
-// agents-design.md §0.2 D4.
+// DefaultProjectID is the project id used when a session has no project
+// bound. Empty = no default; the pool falls back to a per-session temp
+// dir so claude still has a stable cwd. See agents-design.md §0.2 D4.
 type PoolConfig struct {
 	MaxConcurrent    int
 	IdleTimeout      time.Duration
@@ -62,7 +91,7 @@ type PoolConfig struct {
 	PreemptIdle      bool
 	Layout           config.Layout
 	Factory          AgentFactory
-	DefaultWorkspace string
+	DefaultProjectID string
 	// OnSessionCreated is called after the pool auto-creates a session for a
 	// channel message (e.g. Slack thread_ts). Wire this to
 	// manager.Register so the dashboard sees the session immediately.
@@ -85,6 +114,12 @@ type LifecycleEvent struct {
 	Lifecycle string // "spawning" | "killed"
 	PID       int
 	At        time.Time
+	// Ctx is the spawn-time context from the originating Send. Carries
+	// the zerolog logger the HTTP middleware attached, so callbacks
+	// can `log.Ctx(ev.Ctx)` and recover the request_id. Never nil —
+	// pool sets it to context.Background() when no spawn ctx applies
+	// (e.g. exit fired from an already-released runEntry).
+	Ctx context.Context
 }
 
 // AgentFactory builds an agent ready to Start. The pool wires the
@@ -143,6 +178,10 @@ type FactoryOptions struct {
 	// the content from disk — pool passes the name so factory avoids a
 	// redundant session.Load.
 	PresetName string
+	// Origin is the session origin (e.g. "slack", "ui", "rest") written
+	// into the spawn log so Recent Spawns can show the channel without a
+	// registry lookup.
+	Origin string
 }
 
 // queueEntry is one request waiting for a slot.
@@ -154,13 +193,20 @@ type queueEntry struct {
 
 // runEntry tracks an active agent in the pool.
 type runEntry struct {
-	agent    *provider.Agent
-	state    *state.Machine
-	store    *store.Store
-	buffer   *Buffer
-	sessID   string
-	agentNm  string
-	cwd      string // resolved workspace path (used by RouteByCWD)
+	agent   *provider.Agent
+	state   *state.Machine
+	store   *store.Store
+	buffer  *Buffer
+	sessID  string
+	agentNm string
+	cwd     string // resolved workspace path (used by RouteByCWD)
+	// ctx is the spawn-time context (HTTP Send → pool.spawn). It
+	// carries the zerolog logger the middleware attached, so async
+	// post-spawn callbacks (onAgentExit, OnLifecycle) recover the
+	// originating request_id via log.Ctx(ctx). The cancel signal
+	// is intentionally NOT used to abort post-spawn work — only the
+	// logger value is read.
+	ctx context.Context
 }
 
 // New returns an empty pool.
@@ -233,16 +279,25 @@ func (p *Pool) SessionExists(sessionID string) bool {
 }
 
 func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, text string) error {
-	return p.send(ctx, sessionID, agentName, source, role, text, "")
+	return p.send(ctx, sessionID, agentName, source, role, text, "", nil)
 }
 
-// SendWithWorkspace is like Send but binds sessionID to the named workspace
+// SendWithProject is like Send but binds sessionID to the given project id
 // when auto-creating the session. Pass an empty string for the default.
-func (p *Pool) SendWithWorkspace(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
-	return p.send(ctx, sessionID, agentName, source, role, text, workspace)
+func (p *Pool) SendWithProject(ctx context.Context, sessionID, agentName, source, role, text, projectID string) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, projectID, nil)
 }
 
-func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, workspace string) error {
+// SendWithAttachments is Send with a list of user-uploaded files. The
+// caller is responsible for materializing the files on disk under
+// SessionDir/uploads/ — the pool only persists the metadata into
+// conversation.jsonl and appends a small `[Attached files]` block to
+// the text sent to the CLI subprocess so it can Read the paths.
+func (p *Pool) SendWithAttachments(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
+	return p.send(ctx, sessionID, agentName, source, role, text, projectID, atts)
+}
+
+func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -253,20 +308,37 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	p.mu.Unlock()
 
 	if alive {
+		log.Ctx(ctx).Debug().
+			Str("component", "pool").
+			Str("session", sessionID).
+			Str("agent", agentName).
+			Str("role", role).
+			Str("source", source).
+			Int("text_len", len(text)).
+			Int("attachments", len(atts)).
+			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurn(role, source, text)
+			_ = entry.store.AppendUserTurnWithAttachments(role, source, text, atts)
 		}
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
 		}
-		return entry.agent.Send(text)
+		return entry.agent.Send(augmentWithAttachments(text, atts))
 	}
+	log.Ctx(ctx).Debug().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Str("role", role).
+		Str("source", source).
+		Int("text_len", len(text)).
+		Msg("pool.send: no live subprocess — buffer + spawn-or-queue")
 
 	// Not active. Ensure the session exists on disk (channels like Slack
 	// pass a thread_ts as the session ID; the session is never created
 	// via the UI flow).
-	if err := p.ensureSession(ctx, sessionID, source, workspace); err != nil {
+	if err := p.ensureSession(ctx, sessionID, source, projectID); err != nil {
 		return err
 	}
 	// Set label before buf.Append so concurrent disk writes don't clobber PendingInput.
@@ -279,14 +351,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if err != nil {
 		return err
 	}
-	if err := buf.Append(text); err != nil {
+	// Buffer the agent-facing text (with attachment block appended) so
+	// the first drain after spawn includes file references in the user
+	// message. Storage gets the un-augmented text + structured atts.
+	if err := buf.Append(augmentWithAttachments(text, atts)); err != nil {
 		return err
 	}
 	// Persist the user turn to conversation.jsonl immediately so a page
 	// refresh while the session is buffered (queued or mid-spawn) still
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
-	p.persistBufferedTurn(sessionID, agentName, role, source, text)
+	p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
 
 	p.mu.Lock()
 	// If this session is already mid-spawn, the in-flight spawn's Drain
@@ -330,13 +405,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurn(role, source, text)
+	_ = sto.AppendUserTurnWithAttachments(role, source, text, atts)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
@@ -415,10 +490,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 	resumeID := ""
 	pType := ""
+	pName := ""
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
 			resumeID = a.CLISessionID
-			pType = a.Provider
+			// Provider field is stored as "type/name" (e.g. "claude/work").
+			// Fall back to bare type when no slash present.
+			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
+				pType = a.Provider[:idx]
+				pName = a.Provider[idx+1:]
+			} else {
+				pType = a.Provider
+				pName = a.Provider
+			}
 			break
 		}
 	}
@@ -429,15 +513,16 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 
 	br, err := p.cfg.Factory.Build(FactoryOptions{
-		SessionID:    sessionID,
-		AgentName:    agentName,
-		ProviderType: pType,
-		ProviderName: pType, // default-name = type until per-instance pickers ship
-		Workspace:    cwd,
-		ResumeID:     resumeID,
+		SessionID:     sessionID,
+		AgentName:     agentName,
+		ProviderType:  pType,
+		ProviderName:  pName,
+		Workspace:     cwd,
+		ResumeID:      resumeID,
 		IdleTimeout:   p.cfg.IdleTimeout,
 		KillAfterIdle: p.cfg.KillAfterIdle,
-		PresetName:   sess.Meta.Preset,
+		PresetName:    sess.Meta.Preset,
+		Origin:        string(sess.Meta.Origin),
 	})
 	if err != nil {
 		return err
@@ -452,6 +537,30 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		sessID:  sessionID,
 		agentNm: agentName,
 		cwd:     cwd,
+		ctx:     ctx,
+	}
+	// Spawn-local logger derived from the same ctx — consumers in the
+	// rest of this function reuse it without redoing the With() chain.
+	l := log.Ctx(ctx).With().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Logger()
+	// Wire the state machine's lifecycle hook into the pool's
+	// OnLifecycle callback so working↔idle transitions reach SSE the
+	// same path as spawning/killed. BE becomes the source of truth;
+	// the FE just listens to "lifecycle" events.
+	if p.cfg.OnLifecycle != nil {
+		st.SetLifecycleHook(func(from, to state.Lifecycle) {
+			p.cfg.OnLifecycle(LifecycleEvent{
+				SessionID: sessionID,
+				AgentName: agentName,
+				Lifecycle: to.String(),
+				Ctx:       ctx,
+				PID:       a.PID(),
+				At:        time.Now().UTC(),
+			})
+		})
 	}
 	p.mu.Lock()
 	if p.closed {
@@ -477,10 +586,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		return err
 	}
 	st.MarkSpawning()
+	l.Debug().
+		Int("first_input_len", len(combined)).
+		Msg("pool.spawn: starting subprocess")
 	if err := a.Start(ctx); err != nil {
+		l.Error().
+			Err(err).
+			Msg("pool.spawn: Start failed")
 		p.releaseSlot(key)
 		return err
 	}
+	l.Debug().
+		Int("pid", a.PID()).
+		Msg("pool.spawn: subprocess started")
 	// Spawn metadata (pid + first user message) is only knowable here:
 	// pid arrives from a.Start, first message from the buffer drain.
 	if br.OnStarted != nil {
@@ -496,6 +614,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			SessionID: sessionID,
 			AgentName: agentName,
 			Lifecycle: "spawning",
+			Ctx:       ctx,
 			PID:       a.PID(),
 			At:        time.Now().UTC(),
 		})
@@ -527,20 +646,31 @@ func (p *Pool) onAgentExit(sessionID, agentName string) {
 	defer p.wg.Done()
 	key := sessionKey(sessionID, agentName)
 	p.mu.Lock()
-	if entry, ok := p.active[key]; ok && entry.state != nil {
+	entry, ok := p.active[key]
+	if ok && entry.state != nil {
+		// MarkKilled flips the state machine → its lifecycle hook
+		// broadcasts the killed transition to SSE. Pool no longer
+		// emits a duplicate OnLifecycle("killed") below to avoid the
+		// FE receiving two killed events per exit.
 		entry.state.MarkKilled()
 	}
 	p.mu.Unlock()
+	// Recover the spawn-time ctx (carries request_id from the
+	// originating HTTP middleware). Fall back to Background when the
+	// entry was already released by a racing caller — rare and harmless,
+	// the log line just won't have request_id.
+	ctx := context.Background()
+	if ok {
+		ctx = entry.ctx
+	}
+	l := log.Ctx(ctx).With().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Logger()
+	l.Debug().Msg("pool.exit: subprocess exited — releasing slot")
 	_ = p.markStatus(sessionID, session.StatusIdle)
 	p.releaseSlot(key)
-	if p.cfg.OnLifecycle != nil {
-		p.cfg.OnLifecycle(LifecycleEvent{
-			SessionID: sessionID,
-			AgentName: agentName,
-			Lifecycle: "killed",
-			At:        time.Now().UTC(),
-		})
-	}
 	p.tryGrantQueue()
 }
 
@@ -615,18 +745,18 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // session_init executor calls this to materialize the registry entry +
 // sidebar row up-front, before any agent node actually dispatches a
 // message. Idempotent — a second call for the same sessionID is a
-// no-op (or backfills workspace).
-func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, workspace string) error {
-	return p.ensureSession(ctx, sessionID, source, workspace)
+// no-op (or backfills project binding).
+func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID string) error {
+	return p.ensureSession(ctx, sessionID, source, projectID)
 }
 
-func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace string) error {
+func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID string) error {
 	existing, err := session.Load(p.cfg.Layout, sessionID)
 	if err == nil {
-		// Session exists — backfill workspace if it was created before one was configured.
-		if workspace != "" && existing.Meta.Workspace == "" {
-			if swErr := session.SwitchWorkspace(ctx, p.cfg.Layout, sessionID, workspace); swErr != nil {
-				log.Warn().Str("session", sessionID).Str("workspace", workspace).Err(swErr).Msg("pool: backfill workspace failed")
+		// Session exists — backfill project if it was created before one was configured.
+		if projectID != "" && existing.Meta.ProjectID == "" {
+			if swErr := session.SetProject(ctx, p.cfg.Layout, sessionID, projectID); swErr != nil {
+				log.Warn().Str("session", sessionID).Str("project", projectID).Err(swErr).Msg("pool: backfill project failed")
 			} else if updated, ldErr := session.Load(p.cfg.Layout, sessionID); ldErr == nil {
 				if p.cfg.OnSessionCreated != nil {
 					p.cfg.OnSessionCreated(updated)
@@ -641,7 +771,7 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace s
 	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
 		ID:        sessionID,
 		Origin:    session.Origin(source),
-		Workspace: workspace,
+		ProjectID: projectID,
 	})
 	// Suppress "already exists" — a concurrent call may have won the race.
 	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
@@ -659,27 +789,26 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, workspace s
 // resolveCwd determines the spawn cwd for a session. The fallback
 // chain (agents-design.md §0.2 D4):
 //
-//  1. session.Meta.Workspace — explicit binding
-//  2. PoolConfig.DefaultWorkspace — tools-config default
+//  1. session.Meta.ProjectID — explicit binding
+//  2. PoolConfig.DefaultProjectID — tools-config default
 //  3. <BaseDir>/sessions/<id>/cwd/ — per-session temp dir
 //
-// For named workspaces (steps 1-2) the returned path is the
-// workspace's resolved cwd (managed `files/` or custom path). The
-// pool MkdirAll's managed paths so the spawn never fails on a
-// missing directory; custom paths are assumed to exist (validated
-// at workspace create time).
+// For bound projects (steps 1-2) the returned path is the project's
+// resolved cwd (managed `files/` or custom path). The pool MkdirAll's
+// managed paths so the spawn never fails on a missing directory;
+// custom paths are assumed to exist (validated at project create time).
 func (p *Pool) resolveCwd(sess session.Session) (string, error) {
-	name := sess.Meta.Workspace
-	if name == "" {
-		name = p.cfg.DefaultWorkspace
+	id := sess.Meta.ProjectID
+	if id == "" {
+		id = p.cfg.DefaultProjectID
 	}
-	if name != "" {
-		path, err := workspace.ResolvePath(p.cfg.Layout, name)
+	if id != "" && project.Exists(p.cfg.Layout, id) {
+		path, err := project.ResolvePath(p.cfg.Layout, id)
 		if err != nil {
-			return "", fmt.Errorf("resolve workspace %q: %w", name, err)
+			return "", fmt.Errorf("resolve project %q: %w", id, err)
 		}
 		if err := os.MkdirAll(path, 0o755); err != nil {
-			return "", fmt.Errorf("ensure workspace path %q: %w", path, err)
+			return "", fmt.Errorf("ensure project path %q: %w", path, err)
 		}
 		return path, nil
 	}
@@ -802,6 +931,8 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 		}
 		if e.agent != nil {
 			entry.PID = e.agent.PID()
+			entry.InFlightEvents = e.agent.InFlightEvents()
+			entry.PartialText = e.agent.PartialText()
 		}
 		out = append(out, entry)
 	}
@@ -817,13 +948,19 @@ func (p *Pool) IdleTimeout() time.Duration { return p.cfg.IdleTimeout }
 // pool can read them; older callers that only check SessionID + AgentName
 // keep working.
 type ActiveEntry struct {
-	SessionID  string
-	AgentName  string
-	CWD        string // resolved workspace path, used by RouteByCWD
-	PID        int
-	Lifecycle  string
-	Substate   string
-	LastActive time.Time
+	SessionID      string
+	AgentName      string
+	CWD            string // resolved workspace path, used by RouteByCWD
+	PID            int
+	Lifecycle      string
+	Substate       string
+	LastActive     time.Time
+	InFlightEvents []store.TurnEvent
+	// PartialText is the assistant text accumulated so far for the
+	// in-flight turn (everything received via TextDelta but not yet
+	// flushed by Done). Empty when no turn is mid-stream. Used by the
+	// SSE snapshot so a refresh keeps the partial bubble visible.
+	PartialText string
 }
 
 // Kill stops the running agent for sessionID+agentName. Idempotent if
@@ -858,6 +995,36 @@ func (p *Pool) Dequeue(sessionID, agentName string) int {
 		out = append(out, q)
 	}
 	p.queue = out
+	return removed
+}
+
+// DequeueSession drops every queued request for the session regardless
+// of agent name, and clears its buffered/pending input so the session
+// won't execute later (even across a restart). Returns the number of
+// queue entries removed. Use this from the operator UI where the caller
+// only knows the session id — Dequeue requires an exact agent match,
+// which the UI often can't supply.
+func (p *Pool) DequeueSession(sessionID string) int {
+	p.mu.Lock()
+	out := p.queue[:0]
+	removed := 0
+	for _, q := range p.queue {
+		if q.sessionID == sessionID {
+			removed++
+			continue
+		}
+		out = append(out, q)
+	}
+	p.queue = out
+	buf := p.buffers[sessionID]
+	p.mu.Unlock()
+	// Clear pending input so a freed slot / restart doesn't replay it.
+	if buf != nil {
+		_, _ = buf.Drain()
+	} else if s, err := session.Load(p.cfg.Layout, sessionID); err == nil && len(s.Meta.PendingInput) > 0 {
+		s.Meta.PendingInput = nil
+		_ = session.SaveMeta(p.cfg.Layout, sessionID, s.Meta)
+	}
 	return removed
 }
 

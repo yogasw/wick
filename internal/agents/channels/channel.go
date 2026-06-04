@@ -25,6 +25,30 @@ import (
 // meta-command checks.
 type SendFunc func(ctx context.Context, sessionID, agentName, source, role, text string) error
 
+// projectOverrideKey carries a per-request project id through the send
+// context, letting a channel override its configured default project on
+// a single dispatch (e.g. a REST request that names a project in its
+// body). The pool's SendFunc closure reads it via ProjectOverride.
+type projectOverrideKey struct{}
+
+// WithProjectOverride returns ctx carrying a per-request project id. The
+// pool send closure prefers this over the channel's configured project.
+func WithProjectOverride(ctx context.Context, projectID string) context.Context {
+	if projectID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, projectOverrideKey{}, projectID)
+}
+
+// ProjectOverride returns the per-request project id set via
+// WithProjectOverride, or "" when none.
+func ProjectOverride(ctx context.Context) string {
+	if v, ok := ctx.Value(projectOverrideKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ApproveFn resolves a gate approval request originating from a channel.
 // sessionID is the wick session, requestID is the gate request UUID,
 // decision is one of the gate.Decision* constants. channelName is the
@@ -37,6 +61,12 @@ type ApproveFn func(sessionID, requestID, decision, matchKey string) error
 // is wrapped per-channel into ApproveFn during Add so each channel keeps
 // a 4-arg signature.
 type RegistryApproveFn func(channelName, sessionID, requestID, decision, matchKey string) error
+
+// SwitchPool is the subset of pool.Pool needed for provider switching.
+type SwitchPool interface {
+	Kill(sessionID, agentName string) error
+	Send(ctx context.Context, sessionID, agentName, source, role, text string) error
+}
 
 // SessionChecker reports whether a sessionID already exists. Implemented
 // by *pool.Pool. Channels use it to decide whether the next inbound
@@ -179,6 +209,29 @@ type HealthChecker interface {
 	HealthCheck() []HealthCheck
 }
 
+// StatusField is one row in the "Integration status" panel shown under
+// the test button. Used to surface identity + transport state the
+// operator wants to verify at a glance — bot user id/name, team name,
+// transport mode, subscription state, public webhook URL, etc.
+//
+// OK is optional — when true the row renders with a success icon;
+// false flags the value for attention (e.g. socket disconnected,
+// public URL missing). Leave the zero value for neutral rows.
+type StatusField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+	OK    bool   `json:"ok,omitempty"`
+	Warn  bool   `json:"warn,omitempty"`
+}
+
+// StatusReporter lets a channel expose a structured snapshot of its
+// current runtime identity + connection state. Rendered under the
+// "Test Integration" panel; polled by the admin UI on page load and
+// after each manual test run.
+type StatusReporter interface {
+	Status() []StatusField
+}
+
 // LookupProvider lets a channel back picker fields with a live search
 // against its upstream. Source is the registered key from the wick tag
 // (e.g. "slack.users"). Implementations should cap results and skip
@@ -195,6 +248,13 @@ type LookupProvider interface {
 type HTTPHandlerProvider interface {
 	HTTPPath() string
 	HTTPHandler() http.Handler
+}
+
+// MultiHTTPHandlerProvider extends HTTPHandlerProvider for channels
+// that need to register more than one HTTP route (e.g. Slack registers
+// both the inbound event webhook and a local send-message proxy).
+type MultiHTTPHandlerProvider interface {
+	HTTPHandlers() map[string]http.Handler
 }
 
 // ConfigSource is per-channel hot-reload glue. Hash returns a stable

@@ -95,6 +95,87 @@ func (s *Channel) WorkflowActionSpecs() []agentchannels.WorkflowActionSpec {
 				"required": []any{"channel", "ts", "text"},
 			},
 		},
+		{
+			ID:          "open_modal",
+			Description: "Open a modal in response to a block_action / shortcut / command. trigger_id expires in 3 seconds.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"trigger_id": map[string]any{"type": "string"},
+					"view":       map[string]any{"type": "string"},
+				},
+				"required": []any{"trigger_id", "view"},
+			},
+		},
+		{
+			ID:          "update_modal",
+			Description: "Replace the contents of an open modal. Pass view_id from open_modal output.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"view_id":   map[string]any{"type": "string"},
+					"view_hash": map[string]any{"type": "string"},
+					"view":      map[string]any{"type": "string"},
+				},
+				"required": []any{"view_id", "view"},
+			},
+		},
+		{
+			ID:          "push_modal",
+			Description: "Push a new view onto the modal stack. trigger_id expires in 3 seconds.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"trigger_id": map[string]any{"type": "string"},
+					"view":       map[string]any{"type": "string"},
+				},
+				"required": []any{"trigger_id", "view"},
+			},
+		},
+		{
+			ID:          "open_dm",
+			Description: "Open a DM channel with a user and return the channel ID.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"user": map[string]any{"type": "string"},
+				},
+				"required": []any{"user"},
+			},
+		},
+		{
+			ID:          "send_ephemeral",
+			Description: "Send an ephemeral message visible only to one user.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"channel": map[string]any{"type": "string"},
+					"user":    map[string]any{"type": "string"},
+					"text":    map[string]any{"type": "string"},
+				},
+				"required": []any{"channel", "user", "text"},
+			},
+		},
+		{
+			ID:          "publish_home",
+			Description: "Publish a Home tab view for a user.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"user_id": map[string]any{"type": "string"},
+					"view":    map[string]any{"type": "string"},
+				},
+				"required": []any{"user_id", "view"},
+			},
+		},
+		{
+			ID:          "respond_url",
+			Description: "Post a response to a slash command or interactive payload via response_url.",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"response_url":      map[string]any{"type": "string"},
+					"text":              map[string]any{"type": "string"},
+					"replace_original":  map[string]any{"type": "boolean"},
+					"delete_original":   map[string]any{"type": "boolean"},
+					"response_type":     map[string]any{"type": "string"},
+				},
+				"required": []any{"response_url"},
+			},
+		},
 	}
 }
 

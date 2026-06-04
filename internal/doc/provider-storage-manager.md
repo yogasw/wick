@@ -53,7 +53,7 @@ Exclude lives as a first-class row, not a property on an include source. Matcher
 - Wildcard-free pattern with slashes (`/home/app/logs`) — matches the dir AND every descendant.
 - `**` matches across segments, `*` within a segment, `?` single non-slash char.
 
-`backup()` calls `collectExcludePatterns(sources)` to assemble the patterns, then `collectFiles(sc, excludes)` prunes the walk (`filepath.SkipDir` when a dir matches).
+`backup()` calls `collectExcludePatterns(sources)` to assemble the patterns, then streams each file via `syncFilePath` inside a `filepath.WalkDir` (returns `filepath.SkipDir` when a directory matches an exclude). The old `collectFiles` helper that materialised every file into a `map[string][]byte` was removed in favour of streaming — it produced hundreds of MB of RAM spike per cron tick on trees with thousands of files and OOM-killed small containers.
 
 `pickRetention` and `sourceCovers` ignore exclude-mode rows.
 
@@ -68,13 +68,21 @@ postgres.Migrate(db)
   CREATE UNIQUE INDEX idx_storage_tree (soft-fail on duplicates)
 
 providersync.New(db)
-syncMgr.SyncAll(ctx)
-  for each enabled include source: SyncOne → backup → upsert files
-  for each (provider, instance) once: PurgeExcluded (self-heal pre-fix rows)
-
-syncMgr.RestoreAll(ctx)
+syncMgr.RestoreAllForce(ctx)       ← boot: DB is source of truth, overwrite all
   for each file row covered by enabled include sources:
-    read disk; skip if same hash; warn-skip if diverged; write if missing
+    write content from DB unconditionally
+
+syncMgr.EnsureWatcher(ctx, debounceMs)   ← only when watcher_status = true
+  walks each enabled folder/single source, fsnotify.Add per non-excluded dir
+  event loop:
+    Write/Create  → debounce → SyncFile (stream-hash, upsert only if changed)
+    Create (dir)  → recursive Add of new subtree
+    Remove/Rename → DeleteByAbsPath (hard delete, bypasses retention)
+
+provider-storage-sync cron (*/1 * * * *):
+  reconcile watcher state vs watcher_status config (EnsureWatcher / StopWatcher)
+  RestoreAll (guarded: missing→write, same→skip, diverged→keep disk)
+  → SyncOne per enabled source (safety net for events the watcher missed)
 ```
 
 `ensureFolderChain` is SELECT-then-INSERT (orphan-recovery fallback: if SELECT by `(parent_id, name)` misses but a row exists at the same `rel_path`, re-parent it). No `ON CONFLICT` is used because SQLite errors when the named conflict target is one of multiple unique indexes hit by the insert.
@@ -84,13 +92,19 @@ syncMgr.RestoreAll(ctx)
 | Method | Purpose |
 |--------|---------|
 | `New(db)` | Construct, owns the per-table store |
-| `SaveSource(ctx, src)` | Upsert source; cascades SyncOne (include) → RecomputeRetention → PurgeExcluded |
-| `DeleteSource(ctx, id)` | Delete source + RecomputeRetention so retentions fall back |
+| `SaveSource(ctx, src)` | Upsert source; cascades SyncOne (include) → RecomputeRetention → PurgeExcluded → Reload watcher |
+| `DeleteSource(ctx, id)` | Delete source + RecomputeRetention + Reload watcher |
 | `GetSource(ctx, id)` | Single source row |
 | `ListSources(ctx)` | All source rows |
-| `SyncOne(ctx, ins)` | Backup pass for one include source |
+| `SyncOne(ctx, ins)` | Backup pass for one include source (streaming) |
+| `SyncFile(ctx, ins, abs)` | Per-file streaming sync — used by the realtime watcher |
 | `SyncAll(ctx)` | Iterate all enabled include sources + self-heal purge |
-| `RestoreAll(ctx)` | DB → disk with disk-wins guard |
+| `EnsureWatcher(ctx, debounceMs)` | Start or hot-reload the fsnotify watcher |
+| `StopWatcher()` | Tear down the watcher; drops pending debounced events |
+| `Reload(ctx)` | Re-read sources from DB and adjust kernel watch set (no-op when watcher off) |
+| `DeleteByAbsPath(ctx, abs)` | Hard-delete one file row by absolute path (watcher Remove/Rename path) |
+| `RestoreAll(ctx)` | DB → disk with disk-wins guard (cron + UI) |
+| `RestoreAllForce(ctx)` | DB → disk overwrite-all (boot only) |
 | `RestoreSelected(ctx, ids, _)` | Force-overwrite specified file rows |
 | `RecomputeRetention(ctx, p, i)` | Re-derive `retention_days` for every file row from the deepest covering source |
 | `PurgeExcluded(ctx, p, i)` | Delete file rows matching any enabled `Mode=exclude` row; prune empty folders |
@@ -105,6 +119,7 @@ GET    /tools/provider-storage/files                — flat file list (excludes
 GET    /tools/provider-storage/roots                — top-level rows across all instances
 GET    /tools/provider-storage/tree                 — ?provider=&instance=&parent_id=
 GET    /tools/provider-storage/{id}/preview
+GET    /tools/provider-storage/{id}/download         — file = raw bytes, folder = zip of subtree
 POST   /tools/provider-storage/restore              — body: ids[]
 POST   /tools/provider-storage/upload
 POST   /tools/provider-storage/sync-now
@@ -129,8 +144,15 @@ GET/POST /tools/provider-storage/settings
 
 | Key | Schedule | Function |
 |-----|----------|----------|
-| `provider-storage-sync` | `*/1 * * * *` | Backup filesystem → DB (skips exclude-mode rows) |
+| `provider-storage-sync` | `*/1 * * * *` | Reconciles watcher lifecycle from `watcher_status` cfg + backup filesystem → DB as safety net |
 | `provider-storage-retention` | `0 3 * * *` | Purge expired file rows |
+
+### `provider-storage-sync` configs
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `watcher_status` | bool | `true` | Master switch for the realtime fsnotify watcher |
+| `watcher_debounce_ms` | number | `1000` | Per-path debounce window for coalescing write bursts |
 
 ## Testing
 
@@ -138,5 +160,6 @@ Two test files cover the package end-to-end:
 
 - `sync_test.go` — backup / restore / retention / repair / cascade delete / migration regressions.
 - `cross_platform_test.go` — Windows/POSIX path handling, unicode + spaces, concurrent SyncOne, symlink (POSIX-only), case-sensitive FS (Linux-only), permission-denied (POSIX-only), volume-style mounts, idempotency, exclude edge cases.
+- `watcher_test.go` — fsnotify Detects new file / hard-delete on Remove / honors excludes / idempotent Stop.
 
 Migration tests live in `internal/pkg/postgres/migrate_test.go` (fresh DB, exclude_patterns split, duplicate-row non-fatal).

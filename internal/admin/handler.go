@@ -102,6 +102,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/variables", admin(h.variablesPage))
 	mux.Handle("POST /admin/variables/{key}", admin(h.setVariable))
 	mux.Handle("POST /admin/variables/{key}/regenerate", admin(h.regenerateVariable))
+	mux.Handle("GET /admin/variables/lan-ips", admin(h.lanIPs))
 
 	// User actions
 	mux.Handle("POST /admin/users/{id}/approve", admin(h.approveUser))
@@ -260,7 +261,14 @@ func requiredMissingKeys(rows []entity.Config) []string {
 func (h *Handler) variablesPage(w http.ResponseWriter, r *http.Request) {
 	user := login.GetUser(r.Context())
 	editKey := r.URL.Query().Get("edit")
-	view.VariablesPage(h.configs.List(), editKey, user).Render(r.Context(), w)
+	all := h.configs.List()
+	rows := all[:0:len(all)]
+	for _, r := range all {
+		if !r.Hidden {
+			rows = append(rows, r)
+		}
+	}
+	view.VariablesPage(rows, editKey, user).Render(r.Context(), w)
 }
 
 func (h *Handler) setVariable(w http.ResponseWriter, r *http.Request) {

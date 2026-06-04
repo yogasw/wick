@@ -61,14 +61,95 @@ func (r *repo) ForceEnable(ctx context.Context, key string) error {
 		}).Error
 }
 
-func (r *repo) UpdateSchedule(ctx context.Context, id string, schedule string, enabled bool, maxRuns int) error {
+func (r *repo) UpdateSchedule(ctx context.Context, id string, schedule string, enabled bool, maxRuns int, maxTimeoutMin int) error {
 	return r.db.WithContext(ctx).Model(&entity.Job{}).Where("id = ?", id).
 		Updates(map[string]any{
-			"schedule":   schedule,
-			"enabled":    enabled,
-			"max_runs":   maxRuns,
-			"updated_at": time.Now(),
+			"schedule":         schedule,
+			"enabled":          enabled,
+			"max_runs":         maxRuns,
+			"max_timeout_min":  maxTimeoutMin,
+			"updated_at":       time.Now(),
 		}).Error
+}
+
+// ResetStuckForJob marks any open run of job j whose started_at is
+// older than max_timeout_min as error, then flips j's last_status to
+// idle when no open run remains. Returns true when the row was reset.
+//
+// Per-job (not a bulk sweep) for two reasons:
+//
+//   - The worker tick already iterates the enabled-jobs list to
+//     evaluate cron triggers. Sweeping per-job inside that same loop
+//     piggybacks on data we already have, no extra "list enabled"
+//     query.
+//   - Disabled / archived jobs are skipped automatically: the caller
+//     simply doesn't pass them in. As job_runs history grows, scan
+//     size stays bounded by the (small) active set.
+//
+// The previous bulk version had a Postgres-only `interval '1 minute'`
+// math in SQL that errored silently on SQLite and let stuck rows pile
+// up across restarts. Doing the cutoff math in Go keeps this portable
+// across both drivers with no dialect branching.
+func (r *repo) ResetStuckForJob(ctx context.Context, j *entity.Job) (bool, error) {
+	if j == nil {
+		return false, nil
+	}
+	timeout := j.MaxTimeoutMin
+	if timeout <= 0 {
+		timeout = 30
+	}
+	cutoff := time.Now().Add(-time.Duration(timeout) * time.Minute)
+
+	var stuckIDs []string
+	if err := r.db.WithContext(ctx).Model(&entity.JobRun{}).
+		Where("job_id = ? AND ended_at IS NULL AND started_at < ?", j.ID, cutoff).
+		Pluck("id", &stuckIDs).Error; err != nil {
+		return false, err
+	}
+	if len(stuckIDs) == 0 {
+		return false, nil
+	}
+
+	now := time.Now()
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return false, tx.Error
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Model(&entity.JobRun{}).
+		Where("id IN ?", stuckIDs).
+		Updates(map[string]any{
+			"status":   entity.RunStatusError,
+			"result":   "timed out (max_timeout exceeded)",
+			"ended_at": &now,
+		}).Error; err != nil {
+		tx.Rollback()
+		return false, err
+	}
+
+	// Flip job.last_status to idle only when no other open run remains.
+	// A manual trigger fired right after a stuck cron tick should keep
+	// running — that fresh run's row still has ended_at IS NULL.
+	res := tx.Model(&entity.Job{}).
+		Where("id = ? AND last_status = ?", j.ID, entity.JobStatusRunning).
+		Where("NOT EXISTS (?)",
+			tx.Model(&entity.JobRun{}).Select("1").
+				Where("job_runs.job_id = ? AND job_runs.ended_at IS NULL", j.ID)).
+		Updates(map[string]any{
+			"last_status": entity.JobStatusIdle,
+			"updated_at":  now,
+		})
+	if res.Error != nil {
+		tx.Rollback()
+		return false, res.Error
+	}
+
+	return res.RowsAffected > 0, tx.Commit().Error
 }
 
 func (r *repo) SetStatus(ctx context.Context, id string, status entity.JobStatus) error {

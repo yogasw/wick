@@ -26,8 +26,11 @@ type Config struct {
     // secret/password field
     APIKey string `wick:"desc=External API key.;secret;required"`
 
-    // checkbox toggle (also auto-applied for bool fields)
+    // native checkbox (auto-applied for bool fields)
     EnableCache bool `wick:"desc=Cache results across requests."`
+
+    // toggle switch — clearer on/off visual; opt-in via `bool` flag
+    DebugMode bool `wick:"bool;desc=Verbose logging."`
 
     // editable table — see kvlist section below
     Groups string `wick:"kvlist=id|name;desc=Visible group definitions."`
@@ -44,7 +47,8 @@ type Config struct {
 | _(none / default string)_ | Text input | |
 | `textarea` | Textarea | Multi-line |
 | `dropdown=a\|b\|c` | Select | Pipe-separated options |
-| `checkbox` | Checkbox toggle | Auto-applied for `bool` fields |
+| `checkbox` | Native checkbox | Auto-applied for Go `bool` fields. Compact, classic style. |
+| `bool` / `boolean` | Toggle switch | Boolean with clear on/off track + knob. Use when state should read at a glance. |
 | `number` | Number input | Auto-applied for `int` / `float` fields |
 | `secret` | Password input | Masked; value never sent to browser. Shows `••••••••` when set |
 | `email` | Email input | HTML `type="email"` |
@@ -65,7 +69,7 @@ type Config struct {
 | `locked` | Read-only in admin UI — set once at boot, not editable post-deploy |
 | `regen` | Shows a regenerate button in admin UI — key must have a registered generator |
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
-| `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Pure presentation hint — value is still seeded / saved normally. |
+| `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Use `field:a\|b\|c` (pipe-separated) to allow a set. Pure presentation hint — value is still seeded / saved normally. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
 
 ## Key derivation
@@ -164,6 +168,15 @@ Hide a field from the admin form until another field equals a target value:
 type Config struct {
     Mode    string `wick:"dropdown=all|whitelist;default=all"`
     Allowed string `wick:"picker=slack.users;visible_when=mode:whitelist;desc=Allowed users."`
+}
+```
+
+For a set of allowed values use a pipe-separated list (OR semantics):
+
+```go
+type Config struct {
+    Method string `wick:"dropdown=GET|POST|PUT|PATCH|DELETE"`
+    Body   string `wick:"textarea;visible_when=method:POST|PUT|PATCH|DELETE;desc=Request body."`
 }
 ```
 

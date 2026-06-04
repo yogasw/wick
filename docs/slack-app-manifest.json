@@ -35,7 +35,7 @@
     },
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://windmill.qiscus.io/api/slack"
+      "request_url": "https://domain.com/api/slack"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": true,

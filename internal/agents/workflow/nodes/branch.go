@@ -7,8 +7,69 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
+	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/template"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
+
+type branchSchema struct {
+	Expr string `wick:"required;key=expr;desc=Go template expression that returns a case label string matching downstream edge case: values"`
+}
+
+func (e *BranchExecutor) Descriptor() engine.NodeDescriptor {
+	return engine.NodeDescriptor{
+		Category:    engine.CategoryLogic,
+		Label:       "Branch",
+		Badge:       "if / else",
+		Description: "Evaluates a Go template expression; routes to the edge whose case: label matches the result.",
+		WhenToUse:   "Routing logic is structured (no natural language).",
+		Example:     "{\n  \"id\": \"route\",\n  \"type\": \"branch\",\n  \"expr\": \"{{index .Event.Payload \\\"action_id\\\"}}\"\n}",
+		Schema:      integration.StructSchema(branchSchema{}),
+		Docs: wickdocs.Docs{
+			OutputShape: map[string]string{
+				"verdict": "Resolved case label. Engine filters outgoing edges by edge.case == verdict.",
+				"result":  "Same value as verdict — kept for downstream nodes that prefer `.result` reference.",
+			},
+			TemplateableFields: []string{"expr"},
+			Quirks: []string{
+				"Binary operators (==, !=, <, <=, >, >=) are auto-detected — the verdict becomes \"true\" / \"false\". Use them for boolean routing.",
+				"Without an operator, the rendered string IS the verdict. Match it against edge case: labels exactly (case-sensitive).",
+				"Numeric compare auto-detects when BOTH sides parse as numbers; falls back to string compare otherwise.",
+				"Engine routes to ONE matching edge. If no edge matches, the run dead-ends — add a default edge if you want a catch-all.",
+			},
+			PairWith: []string{
+				"classify",
+				"switch",
+				"end",
+			},
+			CommonPitfalls: []string{
+				"Don't forget the case: label on each outgoing edge — without it the edge never fires.",
+				"Don't put a multi-line template in expr — branch expects a single short expression.",
+			},
+			InputSample:  `{"expr":"{{.Node.classify.verdict}}"}`,
+			OutputSample: `{"verdict":"bug","result":"bug"}`,
+			Examples: []wickdocs.Example{
+				{
+					Name: "route_by_classify",
+					Body: `{
+  "id": "route",
+  "type": "branch",
+  "expr": "{{.Node.triage.verdict}}"
+}`,
+				},
+				{
+					Name: "boolean_check",
+					Body: `{
+  "id": "vip_check",
+  "type": "branch",
+  "expr": "{{.Node.user_lookup.profile.is_admin}} == true"
+}`,
+				},
+			},
+		},
+	}
+}
 
 // BranchExecutor evaluates a Go-template expression and exposes the
 // result as Verdict so the engine filters outgoing edges by `case:`.
@@ -117,3 +178,6 @@ func boolStr(b bool) string {
 	}
 	return "false"
 }
+
+// BranchSchema is the exported form of branchSchema for the editor UI.
+type BranchSchema = branchSchema

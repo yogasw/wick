@@ -73,15 +73,16 @@ func TestSessionInit_PresetNew_ProducesUUID(t *testing.T) {
 	}
 }
 
+// Template rendering is handled by the engine preRenderNode before
+// Execute is called. This test verifies that the executor uses the
+// value as-is (already rendered by the engine).
 func TestSessionInit_CustomIDTemplate_RendersFromEvent(t *testing.T) {
 	rc := newTestRC()
-	rc.Event.Payload["thread_ts"] = "1715167891.234567"
-
 	exec := NewSessionInitExecutor(nil)
 	n := workflow.Node{
 		ID:        "si",
 		Type:      workflow.NodeSessionInit,
-		SessionID: "slack-{{.Event.Payload.thread_ts}}",
+		SessionID: "slack-1715167891.234567", // pre-rendered by engine
 	}
 
 	out, err := exec.Execute(context.Background(), n, rc)
@@ -123,23 +124,30 @@ func TestSessionInit_UnknownPreset_Errors(t *testing.T) {
 	}
 }
 
-func TestSessionInit_EmptyRenderedID_Errors(t *testing.T) {
+// An empty SessionID (e.g. a template that rendered to "") falls
+// through to preset resolution — tested in prerender_test.go for the
+// rendering step itself.
+func TestSessionInit_EmptySessionID_FallsToPreset(t *testing.T) {
 	rc := newTestRC()
 	exec := NewSessionInitExecutor(nil)
-	n := workflow.Node{ID: "si", Type: workflow.NodeSessionInit, SessionID: "{{.Event.Payload.missing}}"}
+	n := workflow.Node{ID: "si", Type: workflow.NodeSessionInit, SessionID: ""}
 
-	if _, err := exec.Execute(context.Background(), n, rc); err == nil {
-		t.Fatal("expected error for empty rendered sessionID")
+	out, err := exec.Execute(context.Background(), n, rc)
+	if err != nil {
+		t.Fatalf("expected preset fallback, got error: %v", err)
+	}
+	if got, _ := out.Result.(string); got == "" {
+		t.Error("expected non-empty session ID from preset fallback")
 	}
 }
 
 // Storage validator gates sessionIDs at the pool boundary — make sure
 // every default-resolved ID survives that check. The original bug:
-// "wf:slug:run:uuid" was rejected because `:` is not in the allowed
+// "wf:id:run:uuid" was rejected because `:` is not in the allowed
 // charset. Underscores are.
 func TestDefaultRunSessionID_PassesStorageValidator(t *testing.T) {
 	cases := []struct {
-		slug  string
+		id    string
 		runID string
 	}{
 		{"it-ops", "0d147eca-82ca-48e9-8d11-8d3eaa926865"},
@@ -147,9 +155,9 @@ func TestDefaultRunSessionID_PassesStorageValidator(t *testing.T) {
 		{"abc123", "x"},
 	}
 	for _, c := range cases {
-		id := DefaultRunSessionID(c.slug, c.runID)
-		if err := storage.ValidateSessionID(id); err != nil {
-			t.Errorf("slug=%q runID=%q → %q: %v", c.slug, c.runID, id, err)
+		sid := DefaultRunSessionID(c.id, c.runID)
+		if err := storage.ValidateSessionID(sid); err != nil {
+			t.Errorf("id=%q runID=%q → %q: %v", c.id, c.runID, sid, err)
 		}
 	}
 }

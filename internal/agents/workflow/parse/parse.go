@@ -1,4 +1,4 @@
-// Package parse decodes and validates workflow.yaml bodies. Pure
+// Package parse decodes and validates workflow JSON bodies. Pure
 // in-memory transforms over the types defined in `workflow` root pkg
 // — no filesystem, no engine, no executors.
 //
@@ -9,24 +9,38 @@
 package parse
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
+	gotemplate "text/template"
 
 	"github.com/google/uuid"
-	"gopkg.in/yaml.v3"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
 
-// SlugRe is the canonical slug pattern. Folder names and trigger
-// path templates must match.
-var SlugRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+// IdentRe is the Go-template identifier pattern. Used for node ids,
+// trigger ids, and labels — anything that will appear as a key in
+// `{{.Node.<key>.…}}`. Letters/digits/underscore, must start with
+// letter or underscore. Dashes are banned so the template parser
+// doesn't choke with "bad character U+002D".
+var IdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// NodeIDRe accepts slug charset plus underscore. Underscore is allowed
-// because palette node-type names (e.g. `session_init`, `dataset_query`)
+// LabelRe is stricter than IdentRe — lowercase only. Keeps node labels
+// predictable across the team (no `User` vs `user` aliases) and matches
+// the canvas-side isValidIdent rule.
+var LabelRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
+// IDRe is the canonical id pattern. Folder names and trigger
+// path templates must match.
+var IDRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// NodeIDRe accepts id charset plus underscore. Underscore is allowed
+// because palette node-type names (e.g. `session_init`, `datatable_query`)
 // are reused as the seeded ID on drop — rejecting `_` here would force
 // every Go const to dual-spell as `session-init` solely for the
-// validator. Folder names still use SlugRe (hyphen-only).
+// validator. Folder names still use IDRe (hyphen-only).
 var NodeIDRe = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // Error is returned by Parse with a path-style locator for the
@@ -43,36 +57,61 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Path, e.Message)
 }
 
-// ValidateSlug rejects names that would break path math.
-func ValidateSlug(slug string) error {
-	if slug == "" {
-		return Error{Path: "slug", Message: "is empty"}
+// ValidateID rejects names that would break path math.
+func ValidateID(id string) error {
+	if id == "" {
+		return Error{Path: "id", Message: "is empty"}
 	}
-	if !SlugRe.MatchString(slug) {
-		return Error{Path: "slug", Message: fmt.Sprintf("%q is not [a-z0-9-]+", slug)}
+	if !IDRe.MatchString(id) {
+		return Error{Path: "id", Message: fmt.Sprintf("%q is not [a-z0-9-]+", id)}
 	}
 	return nil
 }
 
-// ValidateNodeID rejects bad node IDs.
+// NodeIDLooseRe matches the two ID shapes wick currently accepts:
+//
+//   - Go identifier (legacy, hand-edited YAML)
+//   - UUID v4 (auto-minted by the canvas + MCP add_node)
+//
+// Templates can't reference a UUID ID via the dotted form (UUID dashes
+// break the parser) so when ID is a UUID the canvas falls back to the
+// label for `{{.Node.<label>.…}}` refs. The struct-level fields
+// (edges, entry_node, session_from) always use ID directly.
+var NodeIDLooseRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
+
+// ValidateNodeID rejects bad node IDs. Accepts both Go identifiers
+// (legacy human-typed) and UUID-shaped values (current default — UI
+// + MCP mint one on add) so existing workflows keep loading.
 func ValidateNodeID(id string) error {
 	if id == "" {
 		return Error{Path: "node.id", Message: "is empty"}
 	}
-	if !NodeIDRe.MatchString(id) {
-		return Error{Path: "node.id", Message: fmt.Sprintf("%q is not [a-z0-9_-]+", id)}
+	if !NodeIDLooseRe.MatchString(id) {
+		return Error{Path: "node.id", Message: fmt.Sprintf("%q must be letters/digits/underscore/dash, starting with letter/digit/underscore", id)}
 	}
 	return nil
 }
 
-// Parse decodes a workflow.yaml body. The folder name is the
-// authoritative ID — it overwrites whatever `id:` happens to be in the
-// YAML so renaming a folder always wins over a stale value. The
+// ValidateLabel rejects bad labels. Same rule as ValidateNodeID since
+// labels are how operators reference nodes in templates.
+func ValidateLabel(label string) error {
+	if label == "" {
+		return nil // optional field
+	}
+	if !LabelRe.MatchString(label) {
+		return Error{Path: "node.label", Message: fmt.Sprintf("%q must be lowercase a-z, digits, or underscore (e.g. fetch_user) — no caps, dash, dot, or space", label)}
+	}
+	return nil
+}
+
+// Parse decodes a workflow JSON body. The folder name (or DB id) is the
+// authoritative ID — it overwrites whatever `id` happens to be in the
+// body so renaming the workflow always wins over a stale value. The
 // returned workflow has not yet been validated; call Validate after.
 func Parse(id string, data []byte) (workflow.Workflow, error) {
 	var w workflow.Workflow
-	if err := yaml.Unmarshal(data, &w); err != nil {
-		return workflow.Workflow{}, Error{Path: "yaml", Message: err.Error()}
+	if err := json.Unmarshal(data, &w); err != nil {
+		return workflow.Workflow{}, Error{Path: "json", Message: err.Error()}
 	}
 	w.ID = id
 	if w.ID == "" {
@@ -81,9 +120,9 @@ func Parse(id string, data []byte) (workflow.Workflow, error) {
 	return w, nil
 }
 
-// Marshal serializes a Workflow back to YAML.
+// Marshal serializes a Workflow back to indented JSON.
 func Marshal(w workflow.Workflow) ([]byte, error) {
-	return yaml.Marshal(w)
+	return json.MarshalIndent(w, "", "  ")
 }
 
 // Result is the aggregate of static checks performed by Validate.
@@ -116,7 +155,7 @@ func (r *Result) Ok() bool { return r == nil || len(r.Errors) == 0 }
 func Validate(w workflow.Workflow) *Result {
 	r := &Result{}
 
-	if err := ValidateSlug(w.ID); err != nil {
+	if err := ValidateID(w.ID); err != nil {
 		r.Errors = append(r.Errors, err.(Error))
 	}
 	if w.Name == "" {
@@ -147,6 +186,9 @@ func Validate(w workflow.Workflow) *Result {
 
 	seen := map[string]int{}
 	nodesByID := map[string]workflow.Node{}
+	// labelOwner tracks which path first claimed each label (own id
+	// counts when label is empty so id↔label collisions also surface).
+	labelOwner := map[string]string{}
 	for i, n := range w.Graph.Nodes {
 		// Use the node ID in the path so the UI can index errors per
 		// node element. Fall back to numeric index when the ID itself
@@ -160,9 +202,21 @@ func Validate(w workflow.Workflow) *Result {
 			r.Errors = append(r.Errors, Error{Path: path + ".id", Message: err.(Error).Message})
 			continue
 		}
+		if err := ValidateLabel(n.Label); err != nil {
+			r.Errors = append(r.Errors, Error{Path: path + ".label", Message: err.(Error).Message})
+		}
 		if prev, dup := seen[n.ID]; dup {
 			r.Errors = append(r.Errors, Error{Path: path + ".id", Message: fmt.Sprintf("duplicate node ID %q (first at graph.nodes[%d])", n.ID, prev)})
 			continue
+		}
+		key := n.Label
+		if key == "" {
+			key = n.ID
+		}
+		if owner, dup := labelOwner[key]; dup {
+			r.Errors = append(r.Errors, Error{Path: path + ".label", Message: fmt.Sprintf("label/id %q collides with %s — labels must be unique within a workflow", key, owner)})
+		} else {
+			labelOwner[key] = path
 		}
 		seen[n.ID] = i
 		nodesByID[n.ID] = n
@@ -219,11 +273,16 @@ func Validate(w workflow.Workflow) *Result {
 		}
 		cases := caseEdgesPerSource[n.ID]
 		if len(cases) == 0 {
-			r.Errors = append(r.Errors, Error{Path: "graph.nodes[" + n.ID + "]", Message: "classify/branch has no outgoing edges"})
+			r.Errors = append(r.Errors, Error{Path: "graph.nodes[" + n.ID + "]", Message: fmt.Sprintf("%s node %q has no outgoing edges", n.Type, n.ID)})
 			continue
 		}
-		if _, hasDefault := cases["default"]; !hasDefault {
-			r.Errors = append(r.Errors, Error{Path: "graph.edges", Message: fmt.Sprintf("classify/branch node %q missing default case edge", n.ID)})
+		// datatable_exists/get use explicit verdicts (true/false, found/not_found)
+		// instead of a default catch-all, so skip the default-edge requirement.
+		needsDefault := n.Type != workflow.NodeDataTableExists && n.Type != workflow.NodeDataTableGet
+		if needsDefault {
+			if _, hasDefault := cases["default"]; !hasDefault {
+				r.Errors = append(r.Errors, Error{Path: "graph.edges", Message: fmt.Sprintf("%s node %q missing default case edge", n.Type, n.ID)})
+			}
 		}
 		if n.Type == workflow.NodeClassify {
 			for _, oc := range n.OutputCases {
@@ -280,6 +339,15 @@ func Validate(w workflow.Workflow) *Result {
 }
 
 func validateTrigger(r *Result, path string, tr workflow.Trigger) {
+	// Trigger IDs follow the same loose rule as node IDs: UUIDs +
+	// dash-style legacy ids both pass. The user-facing handle lives
+	// in tr.Label (validated separately below).
+	if tr.ID != "" && !NodeIDLooseRe.MatchString(tr.ID) {
+		r.Errors = append(r.Errors, Error{Path: path + ".id", Message: fmt.Sprintf("%q must be letters/digits/underscore/dash, starting with letter/digit/underscore", tr.ID)})
+	}
+	if err := ValidateLabel(tr.Label); err != nil {
+		r.Errors = append(r.Errors, Error{Path: path + ".label", Message: err.(Error).Message})
+	}
 	switch tr.Type {
 	case workflow.TriggerCron:
 		if tr.Schedule == "" {
@@ -289,6 +357,7 @@ func validateTrigger(r *Result, path string, tr workflow.Trigger) {
 		if tr.ChannelName == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".channel", Message: "is required for channel trigger"})
 		}
+		validateMatchSpec(r, path+".match", tr.Match)
 	case workflow.TriggerWebhook:
 		if tr.Path == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".path", Message: "is required for webhook trigger"})
@@ -310,21 +379,130 @@ func validateTrigger(r *Result, path string, tr workflow.Trigger) {
 	}
 }
 
+// validateMatchSpec warns when a match value looks like a plain string
+// array (["C0ABC"]) — the router's idMembership checks .id inside each
+// element, so plain strings never match. The correct picker format is
+// a JSON array of {id,name} objects, e.g. [{"id":"C0ABC","name":"#ch"}].
+// Plain string equality ("C0ABC") is also valid and is left as-is.
+func validateMatchSpec(r *Result, path string, spec map[string]any) {
+	for k, v := range spec {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if !strings.HasPrefix(s, "[") {
+			continue
+		}
+		// Looks like a JSON array — check whether elements are plain
+		// strings instead of {id,name} objects.
+		var arr []json.RawMessage
+		if err := json.Unmarshal([]byte(s), &arr); err != nil {
+			r.Warnings = append(r.Warnings, Error{
+				Path:    path + "." + k,
+				Message: "value looks like JSON but failed to parse — use plain string equality or picker format [{\"id\":\"...\",\"name\":\"...\"}]",
+			})
+			continue
+		}
+		for i, elem := range arr {
+			var obj map[string]any
+			if json.Unmarshal(elem, &obj) != nil {
+				// Element is not an object (likely a plain string like "C0ABC")
+				r.Warnings = append(r.Warnings, Error{
+					Path: fmt.Sprintf("%s.%s[%d]", path, k, i),
+					Message: "picker array element must be an object {\"id\":\"...\",\"name\":\"...\"}, not a plain string — " +
+						"plain string arrays never match; use [{\"id\":\"C0ABC\",\"name\":\"#channel\"}] or a bare string for single-value equality",
+				})
+				break
+			}
+			if _, hasID := obj["id"]; !hasID {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.%s[%d]", path, k, i),
+					Message: "picker array element missing \"id\" field — router matches on id, not name",
+				})
+				break
+			}
+		}
+	}
+}
+
+// validateArgModes warns when arg_modes[key] is "fixed" but the
+// corresponding field value contains a Go template `{{...}}` — the
+// engine will pass that string through literally, which is almost
+// always a mistake (user expected the template to render). The
+// inverse (mode=expression on a string without `{{`) is silent because
+// it's harmless.
+func validateArgModes(r *Result, path string, n workflow.Node) {
+	if len(n.ArgModes) == 0 {
+		return
+	}
+	hasTemplate := func(v any) bool {
+		s, ok := v.(string)
+		return ok && strings.Contains(s, "{{")
+	}
+	for key, mode := range n.ArgModes {
+		if mode != "fixed" {
+			continue
+		}
+		switch key {
+		case "prompt":
+			if strings.Contains(n.Prompt, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: fmt.Sprintf("mode=fixed but %q contains {{...}} — template will NOT render, set mode=expression if you want it evaluated", key),
+				})
+			}
+		case "url":
+			if strings.Contains(n.URL, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but url contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		case "body":
+			if strings.Contains(n.Body, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but body contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		case "expression":
+			if strings.Contains(n.Expression, "{{") {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: "mode=fixed but expression contains {{...}} — template will NOT render, set mode=expression",
+				})
+			}
+		default:
+			// Inside the args map (channel + connector nodes).
+			if v, ok := n.Args[key]; ok && hasTemplate(v) {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+					Message: fmt.Sprintf("mode=fixed but args.%s contains {{...}} — template will NOT render, set mode=expression", key),
+				})
+			}
+		}
+	}
+}
+
 func validateNodeBody(r *Result, path string, n workflow.Node) {
+	validateArgModes(r, path, n)
 	switch n.Type {
 	case "":
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: "is required"})
 	case workflow.NodeClassify:
-		if n.Prompt == "" && n.PromptFile == "" {
-			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt or prompt_file"})
+		if n.Prompt == "" {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "classify node needs prompt"})
 		}
+		checkTemplate(r, path, "prompt", n.Prompt)
 		if len(n.OutputCases) == 0 {
 			r.Warnings = append(r.Warnings, Error{Path: path + ".output_cases", Message: "classify without output_cases will accept any verdict (defeats normalize/fuzzy)"})
 		}
 	case workflow.NodeAgent:
-		if n.Prompt == "" && n.PromptFile == "" {
-			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt or prompt_file"})
+		if n.Prompt == "" {
+			r.Errors = append(r.Errors, Error{Path: path, Message: "agent node needs prompt"})
 		}
+		checkTemplate(r, path, "prompt", n.Prompt)
 	case workflow.NodeChannel:
 		if n.ChannelName == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".channel", Message: "is required"})
@@ -332,6 +510,7 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Op == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".op", Message: "is required"})
 		}
+		checkTemplateMap(r, path, "args", n.Args)
 	case workflow.NodeConnector:
 		if n.Module == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".module", Message: "is required"})
@@ -339,18 +518,27 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Op == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".op", Message: "is required"})
 		}
+		checkTemplateMap(r, path, "args", n.Args)
 	case workflow.NodeShell:
 		if len(n.Command) == 0 {
 			r.Errors = append(r.Errors, Error{Path: path + ".command", Message: "is required"})
+		}
+		for i, c := range n.Command {
+			checkTemplate(r, path, fmt.Sprintf("command[%d]", i), c)
 		}
 	case workflow.NodeHTTP:
 		if n.URL == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".url", Message: "is required"})
 		}
+		checkTemplate(r, path, "url", n.URL)
+		checkTemplate(r, path, "body", n.Body)
+		checkTemplateStringMap(r, path, "headers", n.Headers)
+		checkTemplateStringMap(r, path, "query", n.Query)
 	case workflow.NodeDBQuery:
 		if n.SQL == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".query", Message: "is required"})
 		}
+		checkTemplate(r, path, "query", n.SQL)
 	case workflow.NodeTransform:
 		if n.Engine == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".engine", Message: "is required"})
@@ -358,9 +546,19 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		if n.Expression == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".expression", Message: "is required"})
 		}
+		checkTemplate(r, path, "expression", n.Expression)
 	case workflow.NodeBranch:
 		if n.Expr == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".expr", Message: "is required"})
+		}
+		checkTemplate(r, path, "expr", n.Expr)
+	case workflow.NodeSwitch:
+		if len(n.Cases) == 0 {
+			r.Errors = append(r.Errors, Error{Path: path + ".cases", Message: "is required"})
+		}
+	case workflow.NodeGoScript:
+		if n.Code == "" {
+			r.Errors = append(r.Errors, Error{Path: path + ".code", Message: "is required"})
 		}
 	case workflow.NodeParallel:
 		if len(n.Branches) == 0 {
@@ -378,13 +576,72 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		// workflow_run; empty session_id falls back to preset. Engine
 		// resolves at runtime.
 	default:
-		if n.Type.IsDatasetNode() {
-			if n.Dataset == "" {
-				r.Errors = append(r.Errors, Error{Path: path + ".dataset", Message: "is required"})
+		if n.Type.IsDataTableNode() {
+			if n.Table == "" {
+				r.Errors = append(r.Errors, Error{Path: path + ".table", Message: "is required"})
 			}
 			return
 		}
 		r.Errors = append(r.Errors, Error{Path: path + ".type", Message: fmt.Sprintf("unknown node type %q", n.Type)})
+	}
+}
+
+// checkTemplate parses s as a Go template (parse-only, no execute) and
+// appends an Error to r when the body is malformed. Empty actions
+// (`{{}}`), unbalanced delimiters, and bad function call syntax all
+// fail here without engaging the renderer's missing-key checks.
+// Funcs map declares the same callables the engine registers so the
+// parser knows their arity — keeps the check honest without pulling
+// the runtime template package and risking a cycle.
+//
+// Empty string skipped — callers gate on the field being optional.
+func checkTemplate(r *Result, path, field, s string) {
+	if s == "" {
+		return
+	}
+	if !strings.Contains(s, "{{") {
+		return // plain literal — nothing to parse
+	}
+	// Stub funcs match BuiltinFuncs by name so the parser accepts
+	// `{{ now "..." }}`, `{{ env "X" }}`, etc. Bodies don't matter —
+	// parse stage only validates syntax + arity.
+	funcs := gotemplate.FuncMap{
+		"now":     func(any) string { return "" },
+		"env":     func(any) string { return "" },
+		"secret":  func(any) string { return "" },
+		"toJson":  func(any) string { return "" },
+		"trim":    func(any) string { return "" },
+		"upper":   func(any) string { return "" },
+		"lower":   func(any) string { return "" },
+		"default": func(any, any) any { return nil },
+		"len":     func(any) int { return 0 },
+		"index":   func(any, ...any) any { return nil },
+		"printf":  func(string, ...any) string { return "" },
+	}
+	if _, err := gotemplate.New("check").Funcs(funcs).Option("missingkey=zero").Parse(s); err != nil {
+		r.Errors = append(r.Errors, Error{Path: path + "." + field, Message: fmt.Sprintf("template syntax error: %s", err.Error())})
+	}
+}
+
+// checkTemplateMap walks every string value in m and parse-checks it.
+// Used for channel/connector Args where each value carries an
+// independent template body. Non-string values skipped (numbers and
+// nested maps land in Args too).
+func checkTemplateMap(r *Result, path, field string, m map[string]any) {
+	for k, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		checkTemplate(r, path, field+"."+k, s)
+	}
+}
+
+// checkTemplateStringMap is the typed-map sibling for HTTP Headers /
+// Query — those land as map[string]string after YAML decode.
+func checkTemplateStringMap(r *Result, path, field string, m map[string]string) {
+	for k, v := range m {
+		checkTemplate(r, path, field+"."+k, v)
 	}
 }
 

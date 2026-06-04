@@ -1,15 +1,13 @@
 // Package wftest runs workflow test cases loaded from `__tests__/`
 // fixtures. Each case = synthetic event + expected outputs +
 // assertions. Used by `workflow_test` MCP op and CLI
-// `wick workflow test <slug>`.
+// `wick workflow test <id>`.
 package wftest
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -83,31 +81,26 @@ func New(e *engine.Engine, svc service.Service, layout config.Layout) *Runner {
 	return &Runner{Engine: e, Service: svc, Layout: layout}
 }
 
-// LoadCases reads every `__tests__/*.json` in a workflow folder.
-func (r *Runner) LoadCases(slug string) ([]Case, error) {
-	dir := r.Layout.WorkflowTestsDir(slug)
-	entries, err := os.ReadDir(dir)
+// LoadCases reads every test case for the workflow via the Service
+// interface — DBService backs to the workflow_test_cases table,
+// FileService falls back to the legacy `__tests__/*.json` folder.
+func (r *Runner) LoadCases(id string) ([]Case, error) {
+	names, err := r.Service.ListTests(id)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	cases := []Case{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+	for _, name := range names {
+		data, err := r.Service.GetTest(id, name)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("read %s: %w", name, err)
 		}
 		var tc Case
 		if err := json.Unmarshal(data, &tc); err != nil {
-			return nil, fmt.Errorf("decode %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("decode %s: %w", name, err)
 		}
 		if tc.Name == "" {
-			tc.Name = strings.TrimSuffix(e.Name(), ".json")
+			tc.Name = name
 		}
 		cases = append(cases, tc)
 	}
@@ -115,18 +108,18 @@ func (r *Runner) LoadCases(slug string) ([]Case, error) {
 }
 
 // RunAll executes every test case and returns per-case results.
-func (r *Runner) RunAll(ctx context.Context, slug string) ([]Result, error) {
-	results, _, err := r.RunAllWithCoverage(ctx, slug)
+func (r *Runner) RunAll(ctx context.Context, id string) ([]Result, error) {
+	results, _, err := r.RunAllWithCoverage(ctx, id)
 	return results, err
 }
 
 // RunAllWithCoverage runs all cases and computes node coverage.
-func (r *Runner) RunAllWithCoverage(ctx context.Context, slug string) ([]Result, Coverage, error) {
-	cases, err := r.LoadCases(slug)
+func (r *Runner) RunAllWithCoverage(ctx context.Context, id string) ([]Result, Coverage, error) {
+	cases, err := r.LoadCases(id)
 	if err != nil {
 		return nil, Coverage{}, err
 	}
-	w, err := r.Service.Load(slug)
+	w, err := r.Service.Load(id)
 	if err != nil {
 		return nil, Coverage{}, err
 	}
@@ -174,7 +167,17 @@ func (r *Runner) RunOne(ctx context.Context, w workflow.Workflow, tc Case) Resul
 func (r *Runner) runOne(ctx context.Context, w workflow.Workflow, tc Case) Result {
 	start := time.Now()
 	res := Result{Name: tc.Name}
-	st, err := r.Engine.Run(ctx, w, tc.Input.Event)
+	// Stamp the event with source=test so the runs list can bucket
+	// these into the Test pill instead of mixing them with manual /
+	// automation fires. Preserves any existing payload values.
+	evt := tc.Input.Event
+	if evt.Payload == nil {
+		evt.Payload = map[string]any{}
+	}
+	if _, ok := evt.Payload["source"]; !ok {
+		evt.Payload["source"] = "test"
+	}
+	st, err := r.Engine.Run(ctx, w, evt)
 	res.State = st
 	res.NodeOutput = st.Outputs
 	res.Duration = time.Since(start)

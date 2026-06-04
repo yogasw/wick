@@ -108,7 +108,7 @@ func parseWickTag(raw string) map[string]string {
 // widgetFor picks the admin UI widget from the Go type + tag flags.
 // Explicit widget flags in the tag win over the type-derived default.
 func widgetFor(k reflect.Kind, tag map[string]string) (widget, options string) {
-	for _, flag := range []string{"textarea", "dropdown", "kvlist", "picker", "email", "url", "color", "date", "datetime", "number", "checkbox", "secret"} {
+	for _, flag := range []string{"textarea", "dropdown", "kvlist", "picker", "email", "url", "color", "date", "datetime", "number", "checkbox", "bool", "boolean", "secret"} {
 		if v, ok := tag[flag]; ok {
 			if flag == "dropdown" {
 				return "dropdown", v
@@ -169,6 +169,42 @@ func goValueToString(v reflect.Value) string {
 		return fmt.Sprintf("%g", v.Float())
 	default:
 		return fmt.Sprintf("%v", v.Interface())
+	}
+}
+
+// MapToStruct fills dst (pointer to struct) from m using each field's
+// wick tag. key= picks the map key; default= is used when the map value
+// is empty or absent. Fields without a wick tag or key are ignored.
+func MapToStruct(m map[string]string, dst any) {
+	v := reflect.ValueOf(dst)
+	for v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		raw := f.Tag.Get("wick")
+		if raw == "" {
+			continue
+		}
+		tag := parseWickTag(raw)
+		key := tag["key"]
+		if key == "" {
+			key = toSnakeCase(f.Name)
+		}
+		val := m[key]
+		if val == "" {
+			val = tag["default"]
+		}
+		if val != "" {
+			v.Field(i).SetString(val)
+		}
 	}
 }
 

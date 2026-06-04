@@ -15,31 +15,49 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/canvas"
 	"github.com/yogasw/wick/internal/agents/workflow/channel"
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
-	"github.com/yogasw/wick/internal/agents/workflow/dataset"
+	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/agents/workflow/guard"
+	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
+	"github.com/yogasw/wick/internal/agents/workflow/repository"
 	"github.com/yogasw/wick/internal/agents/workflow/scaffold"
 	"github.com/yogasw/wick/internal/agents/workflow/service"
 	"github.com/yogasw/wick/internal/agents/workflow/state"
+	wftemplate "github.com/yogasw/wick/internal/agents/workflow/template"
 	"github.com/yogasw/wick/internal/agents/workflow/trigger"
 )
 
 // Ops bundles every MCP operation surface.
 type Ops struct {
-	Service    service.Service
-	Engine     *engine.Engine
-	Router     *trigger.Router
-	Canvas     *canvas.Canvas
-	Channels   *channel.Registry
-	Connectors *connector.Registry
-	Providers  *provider.Registry
-	Datasets   dataset.Service
-	StateStore state.Store
+	Service     service.Service
+	Engine      *engine.Engine
+	Router      *trigger.Router
+	Canvas      *canvas.Canvas
+	Channels    *channel.Registry
+	Connectors  *connector.Registry
+	Providers   *provider.Registry
+	DataTables  datatable.Service
+	StateStore  state.Store
+	Integration *integration.Registry
+	// Guard runs safety policy rules (destructive shell, secret leak,
+	// SQL injection, network allowlist). Powers workflow_guard. Nil
+	// when not wired — handler returns 503-equivalent.
+	Guard *guard.Guard
+	// Repo is the DB-backed workflow store. Nil when no DB is wired —
+	// version history + restore handlers fall back to the file-store
+	// equivalents the Service surfaces.
+	Repo *repository.Repo
+	// Pickers maps picker source names (e.g. "slack.channels") to
+	// resolver functions wired at setup. Powers workflow_picker_resolve.
+	// Always non-nil after New(); setup code registers sources via
+	// Pickers.Register(...). See picker.go.
+	Pickers *PickerRegistry
 }
 
 // New wires the dispatcher.
-func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canvas.Canvas, channels *channel.Registry, connectors *connector.Registry, providers *provider.Registry, datasets dataset.Service, ss state.Store) *Ops {
+func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canvas.Canvas, channels *channel.Registry, connectors *connector.Registry, providers *provider.Registry, dataTables datatable.Service, ss state.Store) *Ops {
 	return &Ops{
 		Service:    svc,
 		Engine:     e,
@@ -48,9 +66,36 @@ func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canva
 		Channels:   channels,
 		Connectors: connectors,
 		Providers:  providers,
-		Datasets:   datasets,
+		DataTables: dataTables,
 		StateStore: ss,
+		Pickers:    NewPickerRegistry(),
 	}
+}
+
+// WithIntegration wires the integration registry so workflow_integration
+// can expose per-channel event + action descriptors (incl. MatchSchema)
+// independent of the live Channel registry. Useful for stdio MCP where
+// no Slack channel runs but AI still needs full filter schemas.
+func (m *Ops) WithIntegration(reg *integration.Registry) *Ops {
+	m.Integration = reg
+	return m
+}
+
+// IntegrationEvents returns every registered event descriptor across all
+// channels. Includes MatchSchema + PayloadType for full filter discovery.
+func (m *Ops) IntegrationEvents() []integration.EventDescriptor {
+	if m.Integration == nil {
+		return nil
+	}
+	return m.Integration.Events()
+}
+
+// IntegrationActions returns every registered action descriptor.
+func (m *Ops) IntegrationActions() []integration.ActionDescriptor {
+	if m.Integration == nil {
+		return nil
+	}
+	return m.Integration.Actions()
 }
 
 // ── Tier 1: introspection ───────────────────────────────────────────
@@ -58,15 +103,99 @@ func New(svc service.Service, e *engine.Engine, router *trigger.Router, c *canva
 // Workspace returns the entry-point response for `workflow_workspace`.
 func (m *Ops) Workspace() map[string]any {
 	return map[string]any{
-		"base_dir":      m.Service.BaseDir(),
-		"node_types":    NodeTypesCatalog(),
-		"trigger_types": TriggerTypesCatalog(),
-		"templates":     []string{"empty", "support-triage", "incident-response", "daily-digest"},
+		"base_dir":         m.Service.BaseDir(),
+		"node_types":       NodeTypesCatalog(m.Engine),
+		"trigger_types":    TriggerTypesCatalog(),
+		"templates":        []string{"empty", "support-triage", "incident-response", "daily-digest"},
+		"format_contracts": WorkspaceFormatContracts(),
+	}
+}
+
+// WorkspaceFormatContracts returns structured format rules AI must follow
+// when writing workflow YAML or trigger JSON. Exposed via workflow_workspace
+// so AI reads them once at session start instead of relying on prose descriptions.
+func WorkspaceFormatContracts() map[string]any {
+	return map[string]any{
+		"event_payload": map[string]any{
+			"rule":      "Every trigger and node lives under .Node.<label>. Trigger payload at .Node.<trigger-label>.payload.<key>. Use {{index .Node.<label>.payload \"key\"}} when the key has special chars; dotted form works for plain identifiers. Legacy .Event.Payload still resolves but new workflows should use .Node.<label>.",
+			"correct":   `{{.Node.<trigger-label>.payload.text}}  OR  {{index .Node.<trigger-label>.payload "channel_id"}}`,
+			"wrong":     []string{"{{.Event.User}}", "{{.Event.Text}}", "{{.Event.Ts}}", "{{.Event.TriggerId}}"},
+			"deprecated": []string{`{{index .Event.Payload "key"}}`},
+			"common_keys": map[string]any{
+				"message":      []string{"text", "ts", "user", "channel_id", "thread", "is_dm"},
+				"block_action": []string{"trigger_id", "action_id", "value", "user", "channel_id", "ts"},
+				"submission":   []string{"values", "user", "callback_id", "private_metadata"},
+			},
+		},
+		"match_filter": map[string]any{
+			"rule": "Picker fields (channel_id, user) use YAML native array of {id,name} objects. Never plain string arrays.",
+			"correct": map[string]any{
+				"mode":       "whitelist",
+				"channel_id": []map[string]any{{"id": "C123", "name": "#general"}},
+			},
+			"wrong": []string{
+				`channel_id: '[{"id":"C123"}]'`,
+				`channel_id: ["C123"]`,
+			},
+			"match_enabled": "MUST be true for filter to apply. Default false = no filter.",
+		},
+		"arg_modes": map[string]any{
+			"rule":   "Every channel/connector node arg should declare its mode.",
+			"values": []string{"fixed", "expression"},
+			"fixed":  "literal value, not rendered as template",
+			"expression": "Go template rendered with RenderCtx — use for {{...}} values",
+			"default": "absent key = expression mode (template render)",
+		},
+		"trigger_json": map[string]any{
+			"rule":    "workflow_set_triggers JSON uses Go PascalCase field names, not snake_case.",
+			"example": map[string]any{
+				"Type":         "channel",
+				"ChannelName":  "slack",
+				"Event":        "message",
+				"EntryNode":    "start",
+				"MatchEnabled": true,
+				"Match": map[string]any{
+					"mode":       "whitelist",
+					"channel_id": []map[string]any{{"id": "C123", "name": "#general"}},
+				},
+			},
+		},
+		"template_functions": map[string]any{
+			"available":     wftemplate.BuiltinFuncDocs,
+			"NOT available": []string{"js", "trunc", "date", "sprig functions"},
+			"usage": map[string]string{
+				"embed in JSON body":       `"title": "{{jsonEscape (index .Node.trigger.payload \"text\")}}"`,
+				"current timestamp":        `{{now "2006-01-02T15:04:05Z07:00"}}`,
+				"marshal map":              `{{toJSON .Node.somenode.row}}`,
+				"parse JSON string":        `{{(.Node.summarize.text | fromJson).title}}`,
+			},
+		},
+		"node_output": map[string]any{
+			"rule":    "Reference any node (triggers + downstream) via {{.Node.<label>.<field>}}. Label is the user-facing name in the inspector and MUST be a Go identifier (letters/digits/underscore, no spaces, no dash). When label is empty the engine falls back to the node id. Triggers expose {payload, type, subtype, channel, at}; regular nodes expose their declared output fields.",
+			"examples": map[string]string{
+				"trigger payload": "{{.Node.slack_msg.payload.text}}",
+				"trigger field":   `{{index .Node.slack_msg.payload "channel_id"}}`,
+				"transform":       "{{.Node.build.result}}",
+				"agent":           "{{.Node.summarize.text}}",
+				"send_message":    "{{.Node.sendmsg.ts}}",
+				"open_modal":      "{{.Node.openmodal.view_id}}",
+			},
+		},
+		"canvas_ops": map[string]any{
+			"rule": "Always use canvas ops to read and organise node positions — never guess x/y coordinates.",
+			"ops": map[string]string{
+				"workflow_canvas_view": "Read current layout: returns table of {id, label, type, x, y, edges_to} + ASCII sketch. Call this FIRST when the user asks about canvas layout or before moving nodes.",
+				"workflow_move_nodes":  "Move one or more nodes in a single call. Pass moves=[{node_id,x,y},...]. More efficient than N workflow_move_node calls; safe to mix graph nodes and trigger IDs.",
+				"workflow_auto_layout": "Auto-arrange all nodes using DAG rank layout (Kahn's BFS). Triggers land at y=60 above their entry node; graph nodes fan left→right by rank. Pass node_ids=[] to scope; empty = all. Always publish after if the user wants the layout live.",
+			},
+			"workflow": "workflow_canvas_view → (understand layout) → workflow_move_nodes OR workflow_auto_layout → workflow_publish",
+		},
 	}
 }
 
 // NodeTypes returns the catalog used by `workflow_node_types`.
-func (m *Ops) NodeTypes() []NodeTypeInfo { return NodeTypesCatalog() }
+// Built from Engine.Descriptors — populated by each executor's Descriptor().
+func (m *Ops) NodeTypes() []NodeTypeInfo { return NodeTypesCatalog(m.Engine) }
 
 // TriggerTypes returns the catalog used by `workflow_trigger_types`.
 func (m *Ops) TriggerTypes() []TriggerTypeInfo { return TriggerTypesCatalog() }
@@ -131,109 +260,127 @@ func (m *Ops) List() ([]Summary, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Summary{
-			ID:      w.ID,
-			Name:    w.Name,
-			Enabled: w.Enabled,
-			Version: w.Version,
-		})
+		s := Summary{
+			ID:        w.ID,
+			Name:      w.Name,
+			Enabled:   w.Enabled,
+			Version:   w.Version,
+			CreatedAt: w.CreatedAt,
+		}
+		// Use draft timestamp as UpdatedAt when draft exists, else CreatedAt.
+		if draft, err := m.Service.LoadDraft(id); err == nil && !draft.CreatedAt.IsZero() {
+			s.UpdatedAt = draft.CreatedAt
+		} else {
+			s.UpdatedAt = w.CreatedAt
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }
 
 // Get returns the full workflow.
-func (m *Ops) Get(slug string) (workflow.Workflow, error) { return m.Service.Load(slug) }
+func (m *Ops) Get(id string) (workflow.Workflow, error) { return m.Service.Load(id) }
 
-// ListFiles returns relative file paths in the workflow folder.
-func (m *Ops) ListFiles(slug string) ([]string, error) { return m.Service.ListFiles(slug) }
+// ListTests returns every test case name registered under the workflow.
+func (m *Ops) ListTests(id string) ([]string, error) { return m.Service.ListTests(id) }
 
-// ReadFile returns the content of one file.
-func (m *Ops) ReadFile(slug, path string) ([]byte, error) { return m.Service.ReadFile(slug, path) }
+// GetTest returns one test case body by name.
+func (m *Ops) GetTest(id, name string) ([]byte, error) { return m.Service.GetTest(id, name) }
 
 // ── Tier 2: write ────────────────────────────────────────────────────
 
 // CreateInput is the payload for `workflow_create`.
 //
-// Slug is the on-disk folder name. Optional — when empty, Create
+// ID is the on-disk folder name. Optional — when empty, Create
 // generates a UUID so renaming the display name later doesn't break
 // run history, indexed logs, or shared edit URLs. Power users (MCP,
-// CLI, tests) may pin an explicit slug for human-readable folders.
+// CLI, tests) may pin an explicit id for human-readable folders.
 type CreateInput struct {
-	Slug     string `json:"slug,omitempty"`
+	ID       string `json:"id,omitempty"`
 	Template string `json:"template,omitempty"`
 	Name     string `json:"name,omitempty"`
 }
 
 // Create scaffolds a new workflow from a template.
 func (m *Ops) Create(in CreateInput) (workflow.Workflow, error) {
-	slug := in.Slug
-	if slug == "" {
-		slug = uuid.NewString()
+	id := in.ID
+	if id == "" {
+		id = uuid.NewString()
 	}
-	if err := parse.ValidateSlug(slug); err != nil {
+	if err := parse.ValidateID(id); err != nil {
 		return workflow.Workflow{}, err
 	}
-	w := scaffold.Workflow(slug, in.Name, in.Template)
-	if err := m.Service.Create(slug, w, nil); err != nil {
+	w := scaffold.Workflow(id, in.Name, in.Template)
+	if err := m.Service.Create(id, w); err != nil {
 		return workflow.Workflow{}, err
 	}
-	return m.Service.Load(slug)
+	return m.Service.Load(id)
 }
 
-// WriteFile atomically writes a file inside the workflow folder.
-func (m *Ops) WriteFile(slug, path string, data []byte) error {
-	return m.Service.WriteFile(slug, path, data)
+// SaveTest upserts one test case body.
+func (m *Ops) SaveTest(id, name string, body []byte) error {
+	return m.Service.SaveTest(id, name, body)
 }
 
-// DeleteFile removes a file inside the workflow folder.
-func (m *Ops) DeleteFile(slug, path string) error { return m.Service.DeleteFile(slug, path) }
+// DeleteTest drops one test case by name.
+func (m *Ops) DeleteTest(id, name string) error { return m.Service.DeleteTest(id, name) }
 
 // Delete removes the workflow folder + unregisters scheduling.
-func (m *Ops) Delete(slug string) error {
+func (m *Ops) Delete(id string) error {
 	if m.Router != nil {
-		m.Router.Unregister(slug)
+		m.Router.Unregister(id)
 	}
-	return m.Service.Delete(slug)
+	return m.Service.Delete(id)
 }
 
 // AddNode wraps Canvas.AddNode.
-func (m *Ops) AddNode(slug string, n workflow.Node) (workflow.Workflow, error) {
-	return m.Canvas.AddNode(slug, n)
+func (m *Ops) AddNode(id string, n workflow.Node) (workflow.Workflow, error) {
+	return m.Canvas.AddNode(id, n)
 }
 
 // UpdateNode wraps Canvas.UpdateNode.
-func (m *Ops) UpdateNode(slug, id string, patch map[string]any) (workflow.Workflow, error) {
-	return m.Canvas.UpdateNode(slug, id, patch)
+func (m *Ops) UpdateNode(id, nodeID string, patch map[string]any) (workflow.Workflow, error) {
+	return m.Canvas.UpdateNode(id, nodeID, patch)
 }
 
 // DeleteNode wraps Canvas.DeleteNode.
-func (m *Ops) DeleteNode(slug, id string) (workflow.Workflow, error) {
-	return m.Canvas.DeleteNode(slug, id)
+func (m *Ops) DeleteNode(id, nodeID string) (workflow.Workflow, error) {
+	return m.Canvas.DeleteNode(id, nodeID)
 }
 
 // Connect wraps Canvas.Connect.
-func (m *Ops) Connect(slug, from, to, caseLabel string) (workflow.Workflow, error) {
-	return m.Canvas.Connect(slug, from, to, caseLabel)
+func (m *Ops) Connect(id, from, to, caseLabel string) (workflow.Workflow, error) {
+	return m.Canvas.Connect(id, from, to, caseLabel)
 }
 
 // Disconnect wraps Canvas.Disconnect.
-func (m *Ops) Disconnect(slug, from, to string) (workflow.Workflow, error) {
-	return m.Canvas.Disconnect(slug, from, to)
+func (m *Ops) Disconnect(id, from, to string) (workflow.Workflow, error) {
+	return m.Canvas.Disconnect(id, from, to)
 }
 
 // MoveNode wraps Canvas.MoveNode.
-func (m *Ops) MoveNode(slug, id string, x, y int) (workflow.Workflow, error) {
-	return m.Canvas.MoveNode(slug, id, x, y)
+func (m *Ops) MoveNode(id, nodeID string, x, y int) (workflow.Workflow, error) {
+	return m.Canvas.MoveNode(id, nodeID, x, y)
+}
+
+// MoveNodes wraps Canvas.MoveNodes — batch position update.
+func (m *Ops) MoveNodes(id string, moves []canvas.NodeMove) (workflow.Workflow, error) {
+	return m.Canvas.MoveNodes(id, moves)
+}
+
+// AutoLayout wraps Canvas.AutoLayout — DAG-aware position compute + apply.
+func (m *Ops) AutoLayout(id string, nodeIDs []string) (workflow.Workflow, error) {
+	return m.Canvas.AutoLayout(id, nodeIDs)
 }
 
 // SetTriggers wraps Canvas.SetTriggers.
-func (m *Ops) SetTriggers(slug string, triggers []workflow.Trigger) (workflow.Workflow, error) {
-	return m.Canvas.SetTriggers(slug, triggers)
+func (m *Ops) SetTriggers(id string, triggers []workflow.Trigger) (workflow.Workflow, error) {
+	return m.Canvas.SetTriggers(id, triggers)
 }
 
 // Toggle wraps Canvas.Toggle.
-func (m *Ops) Toggle(slug string, enabled bool) (workflow.Workflow, error) {
-	return m.Canvas.Toggle(slug, enabled)
+func (m *Ops) Toggle(id string, enabled bool) (workflow.Workflow, error) {
+	return m.Canvas.Toggle(id, enabled)
 }
 
 // ── Tier 3: action ───────────────────────────────────────────────────
@@ -246,8 +393,8 @@ type ValidateResult struct {
 }
 
 // Validate runs parse + validate (no guard).
-func (m *Ops) Validate(slug string) ValidateResult {
-	w, err := m.Service.Load(slug)
+func (m *Ops) Validate(id string) ValidateResult {
+	w, err := m.Service.Load(id)
 	if err != nil {
 		return ValidateResult{OK: false, Errors: []parse.Error{{Path: "load", Message: err.Error()}}}
 	}
@@ -256,20 +403,20 @@ func (m *Ops) Validate(slug string) ValidateResult {
 }
 
 // Simulate dry-runs a workflow with a synthetic event.
-func (m *Ops) Simulate(ctx context.Context, slug string, evt workflow.Event) (workflow.RunState, error) {
-	w, err := m.Service.Load(slug)
+func (m *Ops) Simulate(ctx context.Context, id string, evt workflow.Event) (workflow.RunState, error) {
+	w, err := m.Service.Load(id)
 	if err != nil {
 		return workflow.RunState{}, err
 	}
 	return m.Engine.Run(ctx, w, evt)
 }
 
-// RunNow enqueues a manual run for one explicit slug. Bypasses
+// RunNow enqueues a manual run for one explicit id. Bypasses
 // Enabled + trigger-match checks so admins can fire a disabled
 // workflow from the UI Run-Now button. Compare with Router.Dispatch
 // which is the trigger-source path.
-func (m *Ops) RunNow(ctx context.Context, slug string, evt workflow.Event) error {
-	return m.RunNowWith(ctx, slug, nil, evt)
+func (m *Ops) RunNow(ctx context.Context, id string, evt workflow.Event) error {
+	return m.RunNowWith(ctx, id, nil, evt)
 }
 
 // RunNowWith fires a single run with an explicit Workflow override.
@@ -277,22 +424,22 @@ func (m *Ops) RunNow(ctx context.Context, slug string, evt workflow.Event) error
 // (workflow.draft.yaml) without waiting for Publish — router's
 // registered copy stays on the published version so cron / channel
 // / webhook triggers keep firing live.
-func (m *Ops) RunNowWith(ctx context.Context, slug string, w *workflow.Workflow, evt workflow.Event) error {
+func (m *Ops) RunNowWith(ctx context.Context, id string, w *workflow.Workflow, evt workflow.Event) error {
 	if m.Router == nil {
 		return fmt.Errorf("router not configured")
 	}
 	if evt.Type == "" {
 		evt.Type = string(workflow.TriggerManual)
 	}
-	return m.Router.RunNowWith(ctx, slug, w, evt)
+	return m.Router.RunNowWith(ctx, id, w, evt)
 }
 
-// GetRuns returns recent run IDs for a slug.
-func (m *Ops) GetRuns(slug string, limit int) ([]string, error) {
+// GetRuns returns recent run IDs for an id.
+func (m *Ops) GetRuns(id string, limit int) ([]string, error) {
 	if m.StateStore == nil {
 		return nil, nil
 	}
-	runs, err := m.StateStore.ListRuns(slug)
+	runs, err := m.StateStore.ListRuns(id)
 	if err != nil {
 		return nil, err
 	}
@@ -307,10 +454,17 @@ func (m *Ops) GetRuns(slug string, limit int) ([]string, error) {
 // only displays the most recent N runs (default 20) and one
 // state.json read per run is cheap.
 type RunSummary struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	// Provenance fields — mirrored from the run's index entry so the
+	// editor can show source / trigger pills without re-loading each
+	// run's state.json. Empty for legacy runs that pre-date the
+	// IndexEntry change.
+	Source      string `json:"source,omitempty"`
+	TriggerID   string `json:"trigger_id,omitempty"`
+	TriggerType string `json:"trigger_type,omitempty"`
 }
 
 // GetRunSummaries returns one page of recent runs, newest first.
@@ -318,18 +472,21 @@ type RunSummary struct {
 // instead of scanning the per-run subdirs, so the cost stays
 // constant whether the workflow has 10 or 100,000 historical runs.
 // hasMore=true when older pages exist.
-func (m *Ops) GetRunSummaries(slug string, page, pageSize int) ([]RunSummary, bool, error) {
-	entries, hasMore, err := m.StateStore.IndexList(slug, page, pageSize)
+func (m *Ops) GetRunSummaries(id string, page, pageSize int) ([]RunSummary, bool, error) {
+	entries, hasMore, err := m.StateStore.IndexList(id, page, pageSize)
 	if err != nil {
 		return nil, false, err
 	}
 	out := make([]RunSummary, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, RunSummary{
-			ID:        e.ID,
-			Status:    e.Status,
-			StartedAt: e.StartedAt,
-			EndedAt:   e.EndedAt,
+			ID:          e.ID,
+			Status:      e.Status,
+			StartedAt:   e.StartedAt,
+			EndedAt:     e.EndedAt,
+			Source:      e.Source,
+			TriggerID:   e.TriggerID,
+			TriggerType: e.TriggerType,
 		})
 	}
 	return out, hasMore, nil
@@ -337,10 +494,12 @@ func (m *Ops) GetRunSummaries(slug string, page, pageSize int) ([]RunSummary, bo
 
 // Summary is the row shape for `workflow_list`.
 type Summary struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
-	Version int    `json:"version"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
 // NodeTypeInfo is one row of the node-type catalog.
@@ -350,6 +509,12 @@ type NodeTypeInfo struct {
 	Schema      map[string]any `json:"schema"`
 	Example     string         `json:"example,omitempty"`
 	WhenToUse   string         `json:"when_to_use"`
+	// Palette metadata mirrored from engine.NodeDescriptor so the
+	// editor's Add Node picker can render category/label/badge
+	// straight from this row instead of carrying a parallel map.
+	Category string `json:"category,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Badge    string `json:"badge,omitempty"`
 }
 
 // TriggerTypeInfo is one row of the trigger-type catalog.
@@ -360,29 +525,34 @@ type TriggerTypeInfo struct {
 	Example     string         `json:"example,omitempty"`
 }
 
-// NodeTypesCatalog returns the AI-introspectable node type metadata.
-func NodeTypesCatalog() []NodeTypeInfo {
-	return []NodeTypeInfo{
-		{Type: "classify", Description: "Classify natural-language input into an enum via LLM. Returns verdict + confidence + reasoning. Route via case: labels.", WhenToUse: "Input is free text and needs to be bucketed into a small set of cases."},
-		{Type: "agent", Description: "Spawn an AI agent with prompt, optional skills, and tool allowlist. Returns last assistant text.", WhenToUse: "Multi-turn reasoning or skill-driven action."},
-		{Type: "channel", Description: "Invoke a channel module action (send_message, reply_thread, open_modal, ...).", WhenToUse: "Send messages out via Slack/Telegram/REST."},
-		{Type: "connector", Description: "Invoke a connector module operation. Reuses MCP audit, encrypted fields, destructive flag.", WhenToUse: "Call any registered external integration."},
-		{Type: "shell", Description: "Execute a local shell command. Captures stdout/stderr/exit_code.", WhenToUse: "Operating on local files or running a tool only available as a CLI."},
-		{Type: "http", Description: "Make an HTTP request. Supports retry policy, template-rendered URL/headers/query/body.", WhenToUse: "Direct external API calls outside a connector module."},
-		{Type: "db_query", Description: "Run a parameterized SQL query against a configured DSN.", WhenToUse: "Reading from an external user database."},
-		{Type: "transform", Description: "Pure-function transform via gotemplate / jsonpath / jq.", WhenToUse: "Reshape an upstream output for downstream consumption."},
-		{Type: "branch", Description: "Deterministic if/switch routing via Go template expression. Filters edges by case: label.", WhenToUse: "Routing logic is structured (no natural language)."},
-		{Type: "parallel", Description: "Fan out to N named branches; wait per on_failure policy.", WhenToUse: "Independent sub-flows that can run concurrently."},
-		{Type: "merge", Description: "Fan-in wait-for-all; composes outputs per strategy (object|array|first|last).", WhenToUse: "Diamond topology requiring all parents complete."},
-		{Type: "end", Description: "Terminator. Captures a final result template for {{.Run.final_result}}.", WhenToUse: "Explicit end-of-flow with a result payload."},
-		{Type: "dataset_get", Description: "Load one row by primary key. Branches on found/not_found.", WhenToUse: "Lookup a state row before deciding next action."},
-		{Type: "dataset_exists", Description: "Check whether any row matches. Branches on true/false.", WhenToUse: "Dedup webhook events or guard against duplicate work."},
-		{Type: "dataset_query", Description: "Multi-row search with where/order_by/limit.", WhenToUse: "List or paginate stored rows."},
-		{Type: "dataset_count", Description: "Count rows matching where without loading them.", WhenToUse: "Cheap statistic for decisions."},
-		{Type: "dataset_insert", Description: "Insert a new row; fails on PK conflict.", WhenToUse: "Idempotency-by-PK guard plus persistence."},
-		{Type: "dataset_upsert", Description: "Insert or update by primary key. Returns action: insert|update.", WhenToUse: "Idempotent record sync."},
-		{Type: "dataset_delete", Description: "Delete rows matching where.", WhenToUse: "Cleanup expired state."},
+// NodeTypesCatalog returns the AI-introspectable node type metadata,
+// built entirely from Engine.Descriptors — single source of truth lives
+// in each node executor's Descriptor() method.
+func NodeTypesCatalog(eng *engine.Engine) []NodeTypeInfo {
+	if eng == nil {
+		return nil
 	}
+	out := make([]NodeTypeInfo, 0, len(eng.Descriptors))
+	for t, desc := range eng.Descriptors {
+		schema := desc.Schema
+		if desc.Output != nil {
+			if schema == nil {
+				schema = map[string]any{}
+			}
+			schema["output"] = desc.Output
+		}
+		out = append(out, NodeTypeInfo{
+			Type:        string(t),
+			Description: desc.Description,
+			WhenToUse:   desc.WhenToUse,
+			Example:     desc.Example,
+			Schema:      schema,
+			Category:    string(desc.Category),
+			Label:       desc.Label,
+			Badge:       desc.Badge,
+		})
+	}
+	return out
 }
 
 // TriggerTypesCatalog returns the trigger-type metadata.

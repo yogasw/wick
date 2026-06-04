@@ -104,7 +104,7 @@
 <!-- ANATOMY -->
 <section class="max-w-6xl mx-auto px-6 py-16">
   <h2 class="text-3xl font-bold mb-2">1. Anatomi sebuah workflow</h2>
-  <p class="text-slate-600 mb-8">Empat sisi: trigger (kapan), action (apa), env (config + secret), datasets (state lookup). Notifikasi success/failure = explicit action node di graph (tidak ada field <code>notify:</code> terpisah). Plus governance (approve, guard). Engine impl pakai istilah "graph" / "node" / "DAG" — accurate di technical level (lihat §6).</p>
+  <p class="text-slate-600 mb-8">Empat sisi: trigger (kapan), action (apa), env (config + secret), data tables (state lookup). Notifikasi success/failure = explicit action node di graph (tidak ada field <code>notify:</code> terpisah). Plus governance (approve, guard). Engine impl pakai istilah "graph" / "node" / "DAG" — accurate di technical level (lihat §6).</p>
 
   <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-indigo-500">
@@ -129,7 +129,7 @@
         <li><span class="dot bg-teal-500"></span> <code class="text-teal-700">connector</code> — external API</li>
         <li><span class="dot bg-slate-500"></span> <code class="text-slate-700">shell</code> / <code class="text-slate-700">python</code></li>
         <li><span class="dot bg-amber-500"></span> <code class="text-amber-700">http</code> / <code class="text-amber-700">db_query</code></li>
-        <li><span class="dot bg-emerald-500"></span> <code class="text-emerald-700">dataset_*</code> — wick internal</li>
+        <li><span class="dot bg-emerald-500"></span> <code class="text-emerald-700">datatable_*</code> — wick internal</li>
         <li><span class="dot bg-rose-500"></span> <code class="text-rose-700">branch</code> / <code class="text-rose-700">parallel</code></li>
       </ul>
     </div>
@@ -145,14 +145,14 @@
       </ul>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-emerald-500">
-      <div class="text-emerald-600 text-xs font-bold uppercase tracking-wide mb-2">4 — Datasets</div>
+      <div class="text-emerald-600 text-xs font-bold uppercase tracking-wide mb-2">4 — Data Tables</div>
       <h3 class="text-base font-bold mb-2">Data store binding (§9)</h3>
       <ul class="text-xs text-slate-600 space-y-1">
-        <li><code class="text-emerald-700">datasets:</code> field declare alias</li>
-        <li>shared <code>wick_datasets_rows</code> table</li>
-        <li>schema di <code>dataset.yaml</code></li>
-        <li>UI tab terpisah (table view)</li>
-        <li class="text-slate-500 italic">akses via <code>dataset_*</code> node di Action</li>
+        <li><code class="text-emerald-700">data_tables:</code> field declare alias</li>
+        <li>shared <code>wick_data_table_rows</code> table</li>
+        <li>schema di <code>wick_data_tables.schema</code> (JSONB)</li>
+        <li>UI tab terpisah (table view, n8n-style)</li>
+        <li class="text-slate-500 italic">akses via <code>datatable_*</code> node di Action</li>
       </ul>
     </div>
   </div>
@@ -186,19 +186,19 @@
       └─ <span class="text-emerald-300">nodes/</span>          <span class="yaml-cmt"># output cache per node</span></pre>
     </div>
     <div class="bg-slate-900 text-slate-100 p-6 rounded-xl mono text-sm leading-relaxed">
-      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Dataset (schema in file, data in DB)</div>
-<pre>&lt;BaseDir&gt;/datasets/<span class="text-emerald-300">processed-events/</span>
-├─ <span class="text-amber-300">dataset.yaml</span>            <span class="yaml-cmt"># current schema (active)</span>
-└─ <span class="text-emerald-300">history/</span>              <span class="yaml-cmt"># version snapshots (gitops)</span>
-   ├─ <span class="text-amber-300">v1.yaml</span>
-   ├─ <span class="text-amber-300">v2.yaml</span>
-   └─ <span class="text-amber-300">v3.yaml</span>
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Data Table (DB only, n8n-style)</div>
+<pre><span class="yaml-cmt"># Schema + data live in Postgres, managed via UI tab:</span>
+<span class="text-cyan-300">TABLE</span> wick_data_tables
+  WHERE slug = 'processed-events'
+  <span class="yaml-cmt"># columns: slug, name, schema JSONB,</span>
+  <span class="yaml-cmt">#          access JSONB, retention JSONB, ...</span>
 
-<span class="yaml-cmt"># Data di 1 shared Postgres table:</span>
-<span class="text-cyan-300">TABLE</span> wick_datasets_rows
-  WHERE dataset_slug = 'processed-events'
+<span class="text-cyan-300">TABLE</span> wick_data_table_rows
+  WHERE table_slug = 'processed-events'
+  <span class="yaml-cmt"># composite PK (table_slug, pk)</span>
+  <span class="yaml-cmt"># data JSONB validated app-layer</span>
 </pre>
-      <p class="text-xs text-slate-400 mt-3">Versioning via file (gitops, <code>git log</code> = audit gratis). Data di wick Postgres. Workflow link via alias di <code>datasets:</code> field. Lihat §9.</p>
+      <p class="text-xs text-slate-400 mt-3">Schema + data hidup di wick Postgres. UI Data Tables tab = source of truth. Workflow link via alias di <code>data_tables:</code> field. Lihat §9.</p>
     </div>
   </div>
 </section>
@@ -712,16 +712,16 @@ strategy: object
 # edge: { from: <this>, to: process }</pre>
       </div>
 
-      <!-- dataset_exists -->
+      <!-- datatable_exists -->
       <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
         <div class="flex items-center gap-2 mb-2">
-          <div class="w-8 h-8 rounded bg-emerald-400 flex items-center justify-center text-white font-bold text-xs">DSX</div>
-          <h3 class="font-bold">dataset_exists</h3>
+          <div class="w-8 h-8 rounded bg-emerald-400 flex items-center justify-center text-white font-bold text-xs">DTX</div>
+          <h3 class="font-bold">datatable_exists</h3>
           <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
         </div>
         <p class="text-xs text-slate-600 mb-3">"Ada row yang match?" 1 node check + branch. Dedup pattern terpendek.</p>
-<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_exists
-dataset: events
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: datatable_exists
+table: events
 where:
   id: "{{.Event.Payload.event_id}}"
   is_processed: true
@@ -731,16 +731,16 @@ where:
 # - { from: <this>, case: "false", to: process }</pre>
       </div>
 
-      <!-- dataset_get -->
+      <!-- datatable_get -->
       <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
         <div class="flex items-center gap-2 mb-2">
-          <div class="w-8 h-8 rounded bg-emerald-500 flex items-center justify-center text-white font-bold text-xs">DSG</div>
-          <h3 class="font-bold">dataset_get</h3>
+          <div class="w-8 h-8 rounded bg-emerald-500 flex items-center justify-center text-white font-bold text-xs">DTG</div>
+          <h3 class="font-bold">datatable_get</h3>
           <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
         </div>
         <p class="text-xs text-slate-600 mb-3">Load 1 row by primary key. Branch via found / not_found.</p>
-<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_get
-dataset: users
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: datatable_get
+table: users
 key:
   id: "{{.Event.Payload.user}}"
 
@@ -749,32 +749,32 @@ key:
 # - { from: <this>, case: not_found, to: create }</pre>
       </div>
 
-      <!-- dataset_query -->
+      <!-- datatable_query -->
       <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
         <div class="flex items-center gap-2 mb-2">
-          <div class="w-8 h-8 rounded bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">DSQ</div>
-          <h3 class="font-bold">dataset_query</h3>
+          <div class="w-8 h-8 rounded bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">DTQ</div>
+          <h3 class="font-bold">datatable_query</h3>
           <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
         </div>
         <p class="text-xs text-slate-600 mb-3">Multi-row search. Filter, sort, paginate.</p>
-<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_query
-dataset: tickets
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: datatable_query
+table: tickets
 where: { status: pending }
 order_by:
   - { column: created_at, direction: desc }
 limit: 50</pre>
       </div>
 
-      <!-- dataset_insert / upsert -->
+      <!-- datatable_insert / upsert -->
       <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
         <div class="flex items-center gap-2 mb-2">
-          <div class="w-8 h-8 rounded bg-emerald-700 flex items-center justify-center text-white font-bold text-xs">DSU</div>
-          <h3 class="font-bold">dataset_insert / upsert</h3>
+          <div class="w-8 h-8 rounded bg-emerald-700 flex items-center justify-center text-white font-bold text-xs">DTU</div>
+          <h3 class="font-bold">datatable_insert / upsert</h3>
           <span class="badge bg-emerald-100 text-emerald-700 ml-auto">data</span>
         </div>
         <p class="text-xs text-slate-600 mb-3">Insert fresh atau insert-or-update (idempotent).</p>
-<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: dataset_upsert
-dataset: events
+<pre class="mono text-xs bg-white p-2 rounded border border-slate-200">type: datatable_upsert
+table: events
 key: [id]
 row:
   id: "{{.Event.Payload.event_id}}"
@@ -1540,10 +1540,10 @@ result: "{{.Node.summary.text}}"</pre>
   </div>
 </section>
 
-<!-- DATASETS -->
+<!-- DATA TABLES -->
 <section class="max-w-6xl mx-auto px-6 py-16">
-  <h2 class="text-3xl font-bold mb-2">9. Datasets — cross-workflow data store</h2>
-  <p class="text-slate-600 mb-8">Workflow butuh state lookup beyond single run: "udah handle event ini?", "user opt-out?", "cache enrichment yang masih fresh?". Datasets = <strong>wick-native data tables</strong>, user-defined schema, schema-aware, MCP-discoverable, UI table view built-in.</p>
+  <h2 class="text-3xl font-bold mb-2">9. Data Tables — cross-workflow data store</h2>
+  <p class="text-slate-600 mb-8">Workflow butuh state lookup beyond single run: "udah handle event ini?", "user opt-out?", "cache enrichment yang masih fresh?". Data Tables = <strong>standalone tool</strong> (<code>internal/tools/data-tables/</code>), schema-aware, MCP-discoverable, UI table view built-in (n8n-style). Sejajar Workflows / Workspaces / Presets / Providers / Channels.</p>
 
   <div class="grid md:grid-cols-4 gap-4 mb-8">
     <div class="bg-rose-50 border-l-4 border-rose-400 rounded p-4">
@@ -1566,63 +1566,69 @@ result: "{{.Node.summary.text}}"</pre>
 
   <div class="grid md:grid-cols-2 gap-4 mb-6">
     <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mono text-sm leading-relaxed">
-      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Schema — file (gitops)</div>
-<pre>&lt;BaseDir&gt;/datasets/<span class="text-emerald-300">processed-events/</span>
-├─ <span class="text-amber-300">dataset.yaml</span>          <span class="yaml-cmt"># current schema, active</span>
-└─ <span class="text-emerald-300">history/</span>            <span class="yaml-cmt"># version snapshots</span>
-   ├─ <span class="text-amber-300">v1.yaml</span>
-   ├─ <span class="text-amber-300">v2.yaml</span>
-   └─ <span class="text-amber-300">v3.yaml</span>
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Schema — DB only (n8n-style)</div>
+<pre><span class="text-cyan-300">TABLE</span> wick_data_tables (
+  slug          <span class="text-amber-300">TEXT</span> PRIMARY KEY,
+  name          <span class="text-amber-300">TEXT</span> NOT NULL,
+  description   <span class="text-amber-300">TEXT</span>,
+  schema        <span class="text-amber-300">JSONB</span> NOT NULL,   <span class="yaml-cmt"># columns + indexes</span>
+  access        <span class="text-amber-300">JSONB</span> NOT NULL,   <span class="yaml-cmt"># allowlist + flags</span>
+  retention     <span class="text-amber-300">JSONB</span>,            <span class="yaml-cmt"># ttl_days, by_column</span>
+  created_by    <span class="text-amber-300">TEXT</span>,
+  created_at    <span class="text-amber-300">TIMESTAMPTZ</span>,
+  updated_at    <span class="text-amber-300">TIMESTAMPTZ</span>
+);
 
-<span class="yaml-cmt"># Audit:</span>
-<span class="text-cyan-300">git log</span> datasets/processed-events/
-  → who changed what when, free.</pre>
+<span class="yaml-cmt"># Optional audit (opt-in via access.audit_changes):</span>
+<span class="text-cyan-300">TABLE</span> wick_data_table_audit (
+  id, table_slug, op, actor, diff, at
+);</pre>
     </div>
     <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mono text-sm leading-relaxed">
       <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Data — 1 shared Postgres table</div>
 <pre><span class="text-emerald-300">wick database</span> (existing, same as
 configs / jobs / sessions / connectors)
 
-<span class="text-cyan-300">TABLE</span> wick_datasets_rows (
-  dataset_slug  <span class="text-amber-300">TEXT</span> NOT NULL,
+<span class="text-cyan-300">TABLE</span> wick_data_table_rows (
+  table_slug    <span class="text-amber-300">TEXT</span> NOT NULL,
   pk            <span class="text-amber-300">TEXT</span> NOT NULL,
   data          <span class="text-amber-300">JSONB</span> NOT NULL,
   created_at    <span class="text-amber-300">TIMESTAMPTZ</span> DEFAULT now(),
   updated_at    <span class="text-amber-300">TIMESTAMPTZ</span> DEFAULT now(),
-  <span class="text-cyan-300">PRIMARY KEY</span> (dataset_slug, pk)
+  <span class="text-cyan-300">PRIMARY KEY</span> (table_slug, pk)
 );
 
-<span class="yaml-cmt">-- Partial functional index per dataset:</span>
+<span class="yaml-cmt">-- Partial functional index per table:</span>
 <span class="text-cyan-300">CREATE INDEX</span> idx_events_status
-  ON wick_datasets_rows ((data->>'status'))
-  <span class="text-cyan-300">WHERE</span> dataset_slug = 'events';</pre>
+  ON wick_data_table_rows ((data->>'status'))
+  <span class="text-cyan-300">WHERE</span> table_slug = 'events';</pre>
     </div>
   </div>
 
   <div class="bg-indigo-50 border-l-4 border-indigo-400 rounded p-4 text-sm text-indigo-900 mb-6">
-    <strong>Schema in file, data in DB.</strong> Schema versioning via file snapshots (gitops, <code>git log</code> = audit). Data via shared Postgres table (<code>wick_datasets_rows</code>) dgn composite PK <code>(dataset_slug, pk)</code>. JSONB validated app-layer. Indexes = partial functional, scoped per dataset.
+    <strong>Schema + data in DB.</strong> No file, no <code>dataset.yaml</code>, no git history. UI = source of truth (sama kayak n8n). Schema lives di <code>wick_data_tables.schema</code> JSONB. Data via shared Postgres table (<code>wick_data_table_rows</code>) dgn composite PK <code>(table_slug, pk)</code>. JSONB validated app-layer. Indexes = partial functional, scoped per table. Audit changes opt-in.
   </div>
 
-  <h3 class="font-bold mb-3">Schema versioning &amp; migration</h3>
+  <h3 class="font-bold mb-3">Schema migration</h3>
   <div class="grid md:grid-cols-2 gap-6 mb-6">
     <div>
-      <p class="text-sm text-slate-600 mb-3">Setiap schema edit → bump <code>version</code>, snapshot lama ke <code>history/v&lt;N&gt;.yaml</code>, new schema active di <code>dataset.yaml</code>. Atomic write.</p>
-<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># history/v3.yaml</span>
-<span class="yaml-key">id</span>: <span class="yaml-str">0193e2b4-...</span>
-<span class="yaml-key">slug</span>: <span class="yaml-str">processed-events</span>
-<span class="yaml-key">version</span>: <span class="yaml-num">3</span>
-<span class="yaml-key">columns</span>:
-  - { <span class="yaml-key">name</span>: <span class="yaml-str">event_id</span>, <span class="yaml-key">type</span>: <span class="yaml-str">string</span>, <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span> }
-  - { <span class="yaml-key">name</span>: <span class="yaml-str">status</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }
-  - { <span class="yaml-key">name</span>: <span class="yaml-str">priority</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }  <span class="yaml-cmt"># NEW</span>
+      <p class="text-sm text-slate-600 mb-3">Schema = JSONB di <code>wick_data_tables.schema</code>. Migration = single <code>UPDATE</code> + optional data migration job kalau rows perlu disentuh.</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># wick_data_tables.schema (JSONB)</span>
+{
+  <span class="yaml-key">"columns"</span>: [
+    { <span class="yaml-key">"name"</span>: <span class="yaml-str">"event_id"</span>, <span class="yaml-key">"type"</span>: <span class="yaml-str">"string"</span>,
+      <span class="yaml-key">"primary_key"</span>: <span class="yaml-bool">true</span> },
+    { <span class="yaml-key">"name"</span>: <span class="yaml-str">"status"</span>, <span class="yaml-key">"type"</span>: <span class="yaml-str">"enum"</span>,
+      <span class="yaml-key">"options"</span>: [<span class="yaml-str">"received"</span>, <span class="yaml-str">"done"</span>] },
+    { <span class="yaml-key">"name"</span>: <span class="yaml-str">"priority"</span>, <span class="yaml-key">"type"</span>: <span class="yaml-str">"enum"</span>,
+      <span class="yaml-key">"options"</span>: [<span class="yaml-str">"low"</span>, <span class="yaml-str">"med"</span>, <span class="yaml-str">"high"</span>] }
+  ],
+  <span class="yaml-key">"strictness"</span>: <span class="yaml-str">"strict"</span>
+}
 
-<span class="yaml-key">_version_meta</span>:
-  <span class="yaml-key">changed_from</span>: <span class="yaml-num">2</span>
-  <span class="yaml-key">changed_by</span>: <span class="yaml-str">yoga@abc.com</span>
-  <span class="yaml-key">changed_at</span>: <span class="yaml-str">2026-05-14T08:00:00Z</span>
-  <span class="yaml-key">reason</span>: <span class="yaml-str">"Added priority for routing"</span>
-  <span class="yaml-key">data_migration</span>:
-    <span class="yaml-key">required</span>: <span class="yaml-bool">false</span>  <span class="yaml-cmt"># add column = no row touch</span></pre>
+<span class="yaml-cmt"># Audit row (opt-in):</span>
+<span class="text-cyan-300">INSERT</span> INTO wick_data_table_audit
+  (op, actor, diff, ...) VALUES ('schema_change', ...);</pre>
     </div>
 
     <div>
@@ -1644,57 +1650,48 @@ configs / jobs / sessions / connectors)
         </table>
       </div>
       <div class="mt-3 p-3 bg-amber-50 border-l-4 border-amber-400 rounded text-xs text-amber-900">
-        <strong>Data migration = JobRun.</strong> Kalau schema change butuh sentuh JSONB rows (rename key, strip key, transform), engine create one-shot Job (reuse existing runner). Progress visible di JobRun history. Engine reject mutate ops di dataset selama job running. Rollback via swap <code>dataset.yaml</code> dgn old version + reverse migration.
+        <strong>Data migration = JobRun.</strong> Kalau schema change butuh sentuh JSONB rows (rename key, strip key, transform), engine create one-shot Job (reuse existing runner). Progress visible di JobRun history. Engine reject mutate ops di table selama job running.
       </div>
     </div>
   </div>
 
-  <h3 class="font-bold mb-3">UI History tab</h3>
+  <h3 class="font-bold mb-3">UI Audit log (opt-in)</h3>
   <div class="bg-white border border-slate-200 rounded-xl p-4 mb-6">
-    <div class="font-bold text-slate-700 mb-2">Dataset: events</div>
+    <div class="font-bold text-slate-700 mb-2">Data Table: events <span class="text-xs font-normal text-slate-500">(audit_changes: true)</span></div>
     <div class="space-y-2 text-xs font-mono">
       <div class="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded">
-        <span class="badge bg-emerald-100 text-emerald-700">v4 active</span>
+        <span class="badge bg-emerald-100 text-emerald-700">schema_change</span>
         <span class="text-slate-500">2026-05-15 10:30</span>
         <span>yoga@abc.com</span>
-        <span class="italic text-slate-600">"rollback to v2"</span>
-      </div>
-      <div class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded">
-        <span class="badge bg-slate-200 text-slate-700">v3</span>
-        <span class="text-slate-500">2026-05-14 16:20</span>
-        <span>yoga@abc.com</span>
-        <span class="italic text-slate-600">"added priority"</span>
         <span class="ml-auto text-emerald-700">+ priority (enum)</span>
       </div>
       <div class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded">
-        <span class="badge bg-slate-200 text-slate-700">v2</span>
+        <span class="badge bg-amber-100 text-amber-700">schema_change</span>
         <span class="text-slate-500">2026-05-14 14:00</span>
         <span>ai-token-X</span>
-        <span class="italic text-slate-600">"renamed event_name → name"</span>
         <span class="ml-auto text-amber-700">~ rename (migrated 12,847 rows)</span>
       </div>
       <div class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded">
-        <span class="badge bg-slate-200 text-slate-700">v1</span>
+        <span class="badge bg-slate-200 text-slate-700">schema_change</span>
         <span class="text-slate-500">2026-05-13 09:00</span>
         <span>yoga@abc.com</span>
         <span class="italic text-slate-600">"created"</span>
       </div>
     </div>
     <div class="mt-3 flex gap-2 text-xs">
-      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Rollback to v2</button>
-      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Compare v2 ↔ v4</button>
-      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Export schema</button>
+      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Export schema (JSON)</button>
+      <button class="px-3 py-1 bg-slate-100 border border-slate-300 rounded">Export bundle (.tar.gz)</button>
     </div>
   </div>
 
   <div class="grid md:grid-cols-3 gap-4 mb-6">
     <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm">
-      <strong class="text-emerald-700">No DDL per dataset</strong>
-      <p class="text-xs text-slate-700 mt-1">Schema change = update YAML, validator update. Ga ada CREATE TABLE atau ALTER TABLE per dataset. 100 dataset = 1 table.</p>
+      <strong class="text-emerald-700">No DDL per table</strong>
+      <p class="text-xs text-slate-700 mt-1">Schema change = atomic <code>UPDATE wick_data_tables.schema</code>, validator update. Ga ada CREATE TABLE atau ALTER TABLE per data table. 100 tables = 1 rows table.</p>
     </div>
     <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm">
       <strong class="text-emerald-700">Hot path fast</strong>
-      <p class="text-xs text-slate-700 mt-1">Composite PK natural index buat <code>dataset_get</code>/<code>dataset_exists</code> by primary key. Sub-ms lookup.</p>
+      <p class="text-xs text-slate-700 mt-1">Composite PK natural index buat <code>datatable_get</code>/<code>datatable_exists</code> by primary key. Sub-ms lookup.</p>
     </div>
     <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
       <strong class="text-amber-700">Tradeoff</strong>
@@ -1704,26 +1701,23 @@ configs / jobs / sessions / connectors)
 
   <div class="grid md:grid-cols-2 gap-6 mb-6">
     <div>
-      <h3 class="font-bold mb-3 text-slate-800">dataset.yaml</h3>
-<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">id</span>: <span class="yaml-str">0193e2b4-...</span>
+      <h3 class="font-bold mb-3 text-slate-800">Schema body (JSONB)</h3>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># wick_data_tables row</span>
 <span class="yaml-key">slug</span>: <span class="yaml-str">processed-events</span>
 <span class="yaml-key">name</span>: <span class="yaml-str">"Processed channel events"</span>
 
-<span class="yaml-key">columns</span>:
-  - <span class="yaml-key">name</span>: <span class="yaml-str">event_id</span>
-    <span class="yaml-key">type</span>: <span class="yaml-str">string</span>
-    <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span>
-  - <span class="yaml-key">name</span>: <span class="yaml-str">workflow_slug</span>
-    <span class="yaml-key">type</span>: <span class="yaml-str">string</span>
-    <span class="yaml-key">indexed</span>: <span class="yaml-bool">true</span>
-  - <span class="yaml-key">name</span>: <span class="yaml-str">handled_at</span>
-    <span class="yaml-key">type</span>: <span class="yaml-str">timestamp</span>
-    <span class="yaml-key">indexed</span>: <span class="yaml-bool">true</span>
-  - <span class="yaml-key">name</span>: <span class="yaml-str">result</span>
-    <span class="yaml-key">type</span>: <span class="yaml-str">json</span>
-
-<span class="yaml-key">indexes</span>:
-  - [<span class="yaml-str">workflow_slug</span>, <span class="yaml-str">handled_at</span>]
+<span class="yaml-key">schema</span>:
+  <span class="yaml-key">columns</span>:
+    - { <span class="yaml-key">name</span>: <span class="yaml-str">event_id</span>, <span class="yaml-key">type</span>: <span class="yaml-str">string</span>,
+        <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span> }
+    - { <span class="yaml-key">name</span>: <span class="yaml-str">workflow_slug</span>, <span class="yaml-key">type</span>: <span class="yaml-str">string</span>,
+        <span class="yaml-key">indexed</span>: <span class="yaml-bool">true</span> }
+    - { <span class="yaml-key">name</span>: <span class="yaml-str">handled_at</span>, <span class="yaml-key">type</span>: <span class="yaml-str">timestamp</span>,
+        <span class="yaml-key">indexed</span>: <span class="yaml-bool">true</span> }
+    - { <span class="yaml-key">name</span>: <span class="yaml-str">result</span>, <span class="yaml-key">type</span>: <span class="yaml-str">json</span> }
+  <span class="yaml-key">indexes</span>:
+    - [<span class="yaml-str">workflow_slug</span>, <span class="yaml-str">handled_at</span>]
+  <span class="yaml-key">strictness</span>: <span class="yaml-str">strict</span>
 
 <span class="yaml-key">retention</span>:
   <span class="yaml-key">ttl_days</span>: <span class="yaml-num">90</span>
@@ -1732,13 +1726,14 @@ configs / jobs / sessions / connectors)
 <span class="yaml-key">access</span>:
   <span class="yaml-key">workflows</span>: [<span class="yaml-str">support-triage</span>]
   <span class="yaml-key">ui_editable</span>: <span class="yaml-bool">true</span>
-  <span class="yaml-key">mcp_writable</span>: <span class="yaml-bool">true</span></pre>
+  <span class="yaml-key">mcp_writable</span>: <span class="yaml-bool">true</span>
+  <span class="yaml-key">audit_changes</span>: <span class="yaml-bool">false</span></pre>
     </div>
 
     <div>
       <h3 class="font-bold mb-3 text-slate-800">Dedup pattern — 1 node check</h3>
-      <p class="text-xs text-slate-500 mb-2">Pakai <code>dataset_exists</code> — sebelumnya butuh query + branch (2 nodes), sekarang cukup 1.</p>
-<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">datasets</span>:
+      <p class="text-xs text-slate-500 mb-2">Pakai <code>datatable_exists</code> — sebelumnya butuh query + branch (2 nodes), sekarang cukup 1.</p>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">data_tables</span>:
   - <span class="yaml-key">name</span>: <span class="yaml-str">events</span>            <span class="yaml-cmt"># alias</span>
     <span class="yaml-key">ref</span>: <span class="yaml-str">events</span>
     <span class="yaml-key">mode</span>: <span class="yaml-str">read_write</span>
@@ -1747,8 +1742,8 @@ configs / jobs / sessions / connectors)
   <span class="yaml-key">entry</span>: <span class="yaml-str">check-handled</span>
   <span class="yaml-key">nodes</span>:
     - <span class="yaml-key">id</span>: <span class="yaml-str">check-handled</span>
-      <span class="yaml-key">type</span>: <span class="yaml-str">dataset_exists</span>
-      <span class="yaml-key">dataset</span>: <span class="yaml-str">events</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">datatable_exists</span>
+      <span class="yaml-key">table</span>: <span class="yaml-str">events</span>
       <span class="yaml-key">where</span>:
         <span class="yaml-key">id</span>: <span class="yaml-str">"{{.Event.Payload.event_id}}"</span>
         <span class="yaml-key">is_processed</span>: <span class="yaml-bool">true</span>
@@ -1761,8 +1756,8 @@ configs / jobs / sessions / connectors)
       <span class="yaml-key">next</span>: <span class="yaml-str">mark-done</span>
 
     - <span class="yaml-key">id</span>: <span class="yaml-str">mark-done</span>
-      <span class="yaml-key">type</span>: <span class="yaml-str">dataset_upsert</span>
-      <span class="yaml-key">dataset</span>: <span class="yaml-str">events</span>
+      <span class="yaml-key">type</span>: <span class="yaml-str">datatable_upsert</span>
+      <span class="yaml-key">table</span>: <span class="yaml-str">events</span>
       <span class="yaml-key">key</span>: [<span class="yaml-str">id</span>]
       <span class="yaml-key">row</span>:
         <span class="yaml-key">id</span>: <span class="yaml-str">"{{.Event.Payload.event_id}}"</span>
@@ -1772,11 +1767,11 @@ configs / jobs / sessions / connectors)
     </div>
   </div>
 
-  <h3 class="font-bold mb-3 mt-8">UI Datasets tab — 3-panel</h3>
+  <h3 class="font-bold mb-3 mt-8">UI Data Tables tab — 3-panel</h3>
   <div class="grid md:grid-cols-3 gap-4 mb-6">
     <div class="bg-white border border-slate-200 rounded-xl p-4">
       <div class="text-xs uppercase tracking-wide text-sky-600 font-bold mb-2">1. Schema editor</div>
-      <p class="text-xs text-slate-600 mb-2">Column list, add/remove/rename. Schema change → migration confirmation modal. Old version saved di <code>history/</code>.</p>
+      <p class="text-xs text-slate-600 mb-2">Column list, add/remove/rename. Schema change → atomic DB TX + audit entry (kalau enabled). Destructive change = typed confirmation + dry-run.</p>
       <div class="text-xs space-y-1 mt-2 font-mono">
         <div class="flex items-center gap-2"><span class="badge bg-amber-100 text-amber-700">PK</span> <span>event_id (string)</span></div>
         <div class="flex items-center gap-2"><span class="badge bg-blue-100 text-blue-700">IDX</span> <span>workflow_slug</span></div>
@@ -1811,34 +1806,38 @@ limit 100</pre>
   </div>
 
   <h3 class="font-bold mb-3">Akses lewat expose function only — no raw SQL</h3>
-  <p class="text-slate-600 text-sm mb-3">Dataset di wick's DB tapi ga di-query bebas via <code>db_query</code>. Akses cuma lewat <code>dataset_*</code> node types, MCP ops, UI Datasets tab, atau Service interface internal Go.</p>
+  <p class="text-slate-600 text-sm mb-3">Data table di wick's DB tapi ga di-query bebas via <code>db_query</code>. Akses cuma lewat <code>datatable_*</code> node types, MCP ops, UI Data Tables tab, atau Service interface internal Go.</p>
 
   <div class="grid md:grid-cols-2 gap-4 mb-6">
     <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
       <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">MCP ops — schema</div>
-<pre><span class="text-cyan-300">dataset_list</span>()
-<span class="text-cyan-300">dataset_get</span>(slug)
-<span class="text-cyan-300">dataset_create</span>(slug, schema)
-<span class="text-cyan-300">dataset_update_schema</span>(slug, patch)
-<span class="text-cyan-300">dataset_drop</span>(slug)</pre>
+<pre><span class="text-cyan-300">datatable_list</span>()
+<span class="text-cyan-300">datatable_get</span>(slug)
+<span class="text-cyan-300">datatable_create</span>(slug, schema)
+<span class="text-cyan-300">datatable_update_schema</span>(slug, patch)
+<span class="text-cyan-300">datatable_drop</span>(slug)
+<span class="text-cyan-300">datatable_infer_schema</span>(slug)
+<span class="text-cyan-300">datatable_export</span>(slug, format)
+<span class="text-cyan-300">datatable_import</span>(bundle, on_conflict)</pre>
     </div>
     <div class="bg-slate-900 text-slate-100 rounded-xl p-4 mono text-xs leading-relaxed">
       <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">MCP ops — rows</div>
-<pre><span class="text-cyan-300">dataset_query</span>(slug, where, ...)
-<span class="text-cyan-300">dataset_insert</span>(slug, row)
-<span class="text-cyan-300">dataset_upsert</span>(slug, row)
-<span class="text-cyan-300">dataset_delete</span>(slug, where)
-<span class="text-cyan-300">dataset_count</span>(slug, where)</pre>
+<pre><span class="text-cyan-300">datatable_query</span>(slug, where, ...)
+<span class="text-cyan-300">datatable_insert</span>(slug, row)
+<span class="text-cyan-300">datatable_upsert</span>(slug, row)
+<span class="text-cyan-300">datatable_delete</span>(slug, where)
+<span class="text-cyan-300">datatable_count</span>(slug, where)</pre>
     </div>
   </div>
 
   <div class="bg-slate-900 text-slate-100 rounded-xl p-6 mb-6">
-    <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Service interface (Go, engine internal)</div>
+    <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-2">Service interface (Go, internal/tools/data-tables/)</div>
 <pre class="mono text-xs leading-relaxed"><span class="text-cyan-300">type</span> Service <span class="text-cyan-300">interface</span> {
-  <span class="text-amber-200">List</span>() ([]Dataset, error)
-  <span class="text-amber-200">Get</span>(slug <span class="text-cyan-300">string</span>) (Dataset, error)
-  <span class="text-amber-200">Create</span>(d Dataset) error              <span class="yaml-cmt">// create table via DDL</span>
-  <span class="text-amber-200">UpdateSchema</span>(slug, patch SchemaPatch) error <span class="yaml-cmt">// migrate</span>
+  <span class="text-amber-200">List</span>() ([]Table, error)
+  <span class="text-amber-200">Get</span>(slug <span class="text-cyan-300">string</span>) (Table, error)
+  <span class="text-amber-200">Create</span>(t Table) error
+  <span class="text-amber-200">UpdateSchema</span>(slug, patch SchemaPatch) error
+  <span class="text-amber-200">Drop</span>(slug <span class="text-cyan-300">string</span>) error
 
   <span class="text-amber-200">Query</span>(slug, q Query) (QueryResult, error)
   <span class="text-amber-200">Insert</span>(slug, row map[<span class="text-cyan-300">string</span>]<span class="text-cyan-300">any</span>) (<span class="text-cyan-300">any</span>, error)
@@ -1854,8 +1853,8 @@ limit 100</pre>
       <strong>Why no raw SQL?</strong>
       <ul class="mt-2 space-y-1 list-disc list-inside text-xs">
         <li><strong>Safety</strong> — workflow author bisa AI, ga trust raw SQL ke prod DB</li>
-        <li><strong>Schema enforcement</strong> — query divalidasi terhadap <code>dataset.yaml</code></li>
-        <li><strong>Access control</strong> — per-dataset allowlist enforceable di Service layer</li>
+        <li><strong>Schema enforcement</strong> — query divalidasi terhadap declared columns</li>
+        <li><strong>Access control</strong> — per-table allowlist enforceable di Service layer</li>
         <li><strong>Index hint</strong> — Service tau index relevan, bisa optimize</li>
         <li><strong>Audit</strong> — tiap call log-able dgn structured args</li>
         <li><strong>Future-proof</strong> — kalau pindah ke Mongo/Redis, Service hide impl</li>
@@ -1864,7 +1863,7 @@ limit 100</pre>
     <div class="bg-amber-50 border-l-4 border-amber-400 rounded p-4 text-sm text-amber-900">
       <strong>Power user butuh raw SQL?</strong>
       <ul class="mt-2 space-y-1 list-disc list-inside text-xs">
-        <li>UI Query Console — audit-able, schema-aware, scoped ke 1 dataset</li>
+        <li>UI Query Console — audit-able, schema-aware, scoped ke 1 table</li>
         <li><code>db_query</code> node ke external read-replica DB</li>
         <li>Direct DB access lewat connector — outside workflow scope</li>
       </ul>
@@ -1872,38 +1871,42 @@ limit 100</pre>
   </div>
 
   <!-- Sharing + safety -->
-  <h3 class="font-bold mb-3 mt-12 text-xl">Sharing antar workflow — norm, bukan exception</h3>
-  <p class="text-slate-600 text-sm mb-6">Share dataset = use case utama (dedup events, cross-workflow state, shared lookup). Safety bukan dari no-share, tapi dari <strong>explicit contract</strong>.</p>
+  <h3 class="font-bold mb-3 mt-12 text-xl">Sharing antar workflow — first-class</h3>
+  <p class="text-slate-600 text-sm mb-6">Share data table = use case utama (dedup events, cross-workflow state, shared lookup). Safety dari <strong>explicit contract</strong>.</p>
 
   <div class="grid md:grid-cols-2 gap-6 mb-6">
     <div>
-      <h4 class="font-bold mb-2 text-slate-800">dataset.yaml — shared, safe pattern</h4>
-<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">slug</span>: <span class="yaml-str">events</span>
-<span class="yaml-key">strictness</span>: <span class="yaml-str">strict</span>             <span class="yaml-cmt"># layer 1: contract</span>
+      <h4 class="font-bold mb-2 text-slate-800">schema JSONB — shared, safe pattern</h4>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-cmt"># wick_data_tables.schema</span>
+{
+  <span class="yaml-key">"strictness"</span>: <span class="yaml-str">"strict"</span>,         <span class="yaml-cmt"># layer 1</span>
+  <span class="yaml-key">"columns"</span>: [
+    { <span class="yaml-key">"name"</span>: <span class="yaml-str">"id"</span>, <span class="yaml-key">"type"</span>: <span class="yaml-str">"string"</span>,
+      <span class="yaml-key">"primary_key"</span>: <span class="yaml-bool">true</span> },
+    { <span class="yaml-key">"name"</span>: <span class="yaml-str">"source"</span>, <span class="yaml-key">"type"</span>: <span class="yaml-str">"enum"</span>, ... },
+    { <span class="yaml-key">"name"</span>: <span class="yaml-str">"status"</span>, <span class="yaml-key">"type"</span>: <span class="yaml-str">"enum"</span>, ... }
+  ]
+}
 
-<span class="yaml-key">columns</span>:
-  - { <span class="yaml-key">name</span>: <span class="yaml-str">id</span>, <span class="yaml-key">type</span>: <span class="yaml-str">string</span>, <span class="yaml-key">primary_key</span>: <span class="yaml-bool">true</span> }
-  - { <span class="yaml-key">name</span>: <span class="yaml-str">source</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }
-  - { <span class="yaml-key">name</span>: <span class="yaml-str">status</span>, <span class="yaml-key">type</span>: <span class="yaml-str">enum</span>, <span class="yaml-key">options</span>: [...] }
-
-<span class="yaml-key">access</span>:
-  <span class="yaml-key">workflows</span>:                  <span class="yaml-cmt"># layer 2: explicit allowlist</span>
-    - <span class="yaml-str">webhook-handler</span>
-    - <span class="yaml-str">calendar-poller</span>
-    - <span class="yaml-str">slack-monitor</span>
-  <span class="yaml-key">read_only_workflows</span>:
-    - <span class="yaml-str">audit-monthly</span>
-  <span class="yaml-key">row_filter</span>: <span class="yaml-str">none</span>             <span class="yaml-cmt"># layer 3: 'by_creator' kalau perlu</span></pre>
+<span class="yaml-cmt"># wick_data_tables.access</span>
+{
+  <span class="yaml-key">"workflows"</span>: [             <span class="yaml-cmt"># layer 2: allowlist</span>
+    <span class="yaml-str">"webhook-handler"</span>,
+    <span class="yaml-str">"calendar-poller"</span>,
+    <span class="yaml-str">"slack-monitor"</span>
+  ],
+  <span class="yaml-key">"read_only_workflows"</span>: [<span class="yaml-str">"audit-monthly"</span>],
+  <span class="yaml-key">"row_filter"</span>: <span class="yaml-str">"none"</span>          <span class="yaml-cmt"># layer 3: by_creator opt-in</span>
+}</pre>
     </div>
 
     <div>
-      <h4 class="font-bold mb-2 text-slate-800">workflow.yaml — binding dgn version pin</h4>
-<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">datasets</span>:
-  - <span class="yaml-key">name</span>: <span class="yaml-str">events</span>
+      <h4 class="font-bold mb-2 text-slate-800">workflow.yaml — binding</h4>
+<pre class="mono text-xs bg-slate-900 text-slate-100 p-4 rounded leading-relaxed"><span class="yaml-key">data_tables</span>:
+  - <span class="yaml-key">name</span>: <span class="yaml-str">events</span>            <span class="yaml-cmt"># alias</span>
     <span class="yaml-key">ref</span>: <span class="yaml-str">events</span>
-    <span class="yaml-key">mode</span>: <span class="yaml-str">read_write</span>
-    <span class="yaml-key">expected_version</span>: <span class="yaml-num">1</span>      <span class="yaml-cmt"># layer 4: break loud kalau drift</span></pre>
-      <p class="text-xs text-slate-500 mt-3"><strong>4 safety layers buat shared dataset.</strong> Strictness, allowlist, row_filter, version pin. Default safe (strict + explicit). Power user opt-out kalau benar2 butuh JSONB flexibility.</p>
+    <span class="yaml-key">mode</span>: <span class="yaml-str">read_write</span></pre>
+      <p class="text-xs text-slate-500 mt-3"><strong>3 safety layers buat shared table.</strong> Strictness, allowlist, row_filter. Default safe (strict + explicit empty allowlist). Power user opt-out ke <code>lax</code> kalau butuh JSONB flexibility.</p>
     </div>
   </div>
 
@@ -1924,15 +1927,10 @@ limit 100</pre>
           <td class="p-3">Reject insert kalau ada extra key di luar <code>columns</code>. Workflow harus declare semua fields</td>
           <td class="p-3">Production, critical data, multi-workflow share</td>
         </tr>
-        <tr class="border-b border-slate-100">
+        <tr>
           <td class="p-3"><code class="text-amber-700">lax</code></td>
           <td class="p-3">Accept extra keys, simpan ke JSONB. Warn di UI saat read kalau ada key tak dikenal. Query by extra key = full scan</td>
           <td class="p-3">Dev iteration, exploration, ad-hoc data</td>
-        </tr>
-        <tr>
-          <td class="p-3"><code class="text-blue-700">extensible</code></td>
-          <td class="p-3">Per-workflow boleh tambah column. Schema = union. Engine track <code>_meta.added_by_workflow</code></td>
-          <td class="p-3">Federation pattern, plug-in workflows</td>
         </tr>
       </tbody>
     </table>
@@ -1946,15 +1944,14 @@ limit 100</pre>
     <div class="bg-white border border-slate-200 rounded-xl p-6">
       <h4 class="font-bold mb-3 text-slate-800">Flow</h4>
       <ol class="text-sm text-slate-700 space-y-2 list-decimal list-inside">
-        <li>User edit <code>dataset.yaml</code> (UI form atau hand-edit)</li>
-        <li>Engine compute diff vs current active version</li>
+        <li>User edit schema (UI form atau MCP <code>datatable_update_schema</code>)</li>
+        <li>Engine compute diff vs current schema</li>
         <li>UI <strong>Preview panel</strong> — schema diff color-coded + data impact estimate ("1,247 rows touched")</li>
         <li><strong>[Dry-run]</strong> — validate di shadow, report rows yg ga fit. No data touched</li>
         <li><strong>[Apply]</strong> — typed confirmation kalau destructive ("type DROP to confirm")</li>
-        <li>Migration job spawn (reuse JobRun runner), snapshot ke <code>history/v&lt;N+1&gt;.yaml</code> first</li>
-        <li>Atomic per-batch (1000 rows default) dlm transaction, throttle 100ms</li>
-        <li>Progress visible di JobRun + dataset detail. Pause/resume support</li>
-        <li>Done → schema active, history snapshot final, audit log entry</li>
+        <li>Migration JobRun spawn, atomic per-batch (1000 rows default) dlm transaction, throttle 100ms</li>
+        <li>Progress visible di JobRun + table detail. Pause/resume support</li>
+        <li>Done → new schema active di <code>wick_data_tables.schema</code>, audit entry kalau enabled</li>
       </ol>
     </div>
 
@@ -1963,15 +1960,15 @@ limit 100</pre>
       <div class="space-y-2 text-xs">
         <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
           <strong class="text-emerald-700">Idempotent</strong>
-          <p class="text-slate-700 mt-1">Engine stamp <code>_meta.migrated_to: v&lt;N&gt;</code> per row. Re-run skip rows already migrated. Crash mid-job → restart aman.</p>
+          <p class="text-slate-700 mt-1">Engine stamp <code>_meta.migrated_at</code> per row. Re-run skip rows already stamped after migration start. Crash mid-job → restart aman.</p>
         </div>
         <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
           <strong class="text-emerald-700">Atomic per-batch</strong>
           <p class="text-slate-700 mt-1">Partial fail rollback batch transaction. Mark migration <code>failed</code> di JobRun, user retry atau revert.</p>
         </div>
         <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
-          <strong class="text-emerald-700">Rollback via snapshot</strong>
-          <p class="text-slate-700 mt-1">Sebelum apply, snapshot ke <code>history/v&lt;N+1&gt;.yaml</code>. Revert = swap <code>dataset.yaml</code> dgn old version + reverse migration job.</p>
+          <strong class="text-emerald-700">Rollback via re-PATCH</strong>
+          <p class="text-slate-700 mt-1">Revert = PATCH schema kembali ke previous shape + reverse migration job. Audit table simpan diff buat replay.</p>
         </div>
         <div class="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3">
           <strong class="text-emerald-700">Throttle + observable</strong>
@@ -1981,34 +1978,50 @@ limit 100</pre>
     </div>
   </div>
 
+  <!-- CSV upload (n8n parity) -->
+  <h3 class="font-bold mb-3 mt-12 text-xl">CSV upload (n8n parity)</h3>
+  <div class="bg-white border border-slate-200 rounded-xl p-6 mb-6">
+    <p class="text-sm text-slate-700 mb-3">UI <strong>New data table</strong> → tab <strong>Upload CSV</strong>:</p>
+    <ol class="text-sm text-slate-700 space-y-1 list-decimal list-inside">
+      <li>User upload <code>.csv</code>. Engine sniff header + first 100 rows.</li>
+      <li>Infer column types (<code>string</code> default; <code>int</code>/<code>float</code> kalau semua sample numeric; <code>timestamp</code> kalau ISO parseable). User override per column.</li>
+      <li>User pick primary key column.</li>
+      <li>Preview generated schema + first 10 rows.</li>
+      <li>Click <strong>Create &amp; import</strong> → atomic: insert schema row, batch INSERT rows, build indexes.</li>
+    </ol>
+    <p class="text-xs text-slate-500 mt-3">Limit awal: 10MB CSV, 100k rows per import. Larger via MCP <code>datatable_import</code> bundle.</p>
+  </div>
+
   <!-- Adoption + import -->
-  <h3 class="font-bold mb-3 mt-12 text-xl">Adoption + import flows</h3>
+  <h3 class="font-bold mb-3 mt-12 text-xl">Adoption + export/import flows</h3>
 
   <div class="grid md:grid-cols-2 gap-6 mb-6">
     <div class="bg-white border border-slate-200 rounded-xl p-6">
-      <h4 class="font-bold mb-2 text-slate-800">Adoption — data exists, no dataset.yaml yet</h4>
-      <p class="text-xs text-slate-600 mb-3">Rows orphan di <code>wick_datasets_rows</code> tapi folder dataset ga ada.</p>
+      <h4 class="font-bold mb-2 text-slate-800">Adoption — rows tanpa schema</h4>
+      <p class="text-xs text-slate-600 mb-3">Rows orphan di <code>wick_data_table_rows</code> tapi <code>wick_data_tables</code> ga ada.</p>
 <pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed">Engine detect orphan rows
   ↓
-UI list page: "Orphan dataset" badge + row count
+UI list page: "Orphan table" badge + row count
   ↓
 Klik → adoption modal:
   ├─ [Adopt] → sample N rows, infer schema dari
-  │            JSONB keys, generate dataset.yaml v1
-  │            draft. User review + edit + save.
+  │            JSONB keys. User review + edit + save.
   └─ [Drop] → DELETE rows (typed confirmation)</pre>
     </div>
 
     <div class="bg-white border border-slate-200 rounded-xl p-6">
-      <h4 class="font-bold mb-2 text-slate-800">Import — bundle dari instance lain</h4>
-<pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed mb-3">wick dataset import events.tar.gz \
+      <h4 class="font-bold mb-2 text-slate-800">Export/Import bundle — gitops opt-in</h4>
+<pre class="mono text-xs bg-slate-50 border border-slate-200 p-3 rounded leading-relaxed mb-3">events.tar.gz
+├─ schema.json          # schema + access + retention
+└─ rows.jsonl           # ordered by pk
+
+wick datatable import events.tar.gz \
   --on-conflict abort
   # abort | overwrite | skip | merge</pre>
       <ul class="text-xs text-slate-700 space-y-1 list-disc list-inside">
         <li><strong>Ga ada existing</strong> → straight import</li>
         <li><strong>Schema hash sama</strong> → append (skip dup pk)</li>
-        <li><strong>Schema diff</strong> → prompt: abort (default) / overwrite / skip / merge (dry-run dulu)</li>
-        <li>History merged timestamp-ordered, conflict pk per <code>--on-conflict</code></li>
+        <li><strong>Schema diff</strong> → prompt: abort / overwrite / skip / merge (dry-run)</li>
       </ul>
     </div>
   </div>
@@ -2020,37 +2033,28 @@ Klik → adoption modal:
       <li><strong>Read</strong> — engine return rows as-is, surface validation warning di run logs</li>
       <li><strong>Write strict mode</strong> — reject insert</li>
       <li><strong>Write lax mode</strong> — accept + warn</li>
-      <li>Handle dgn <code>transform</code> node, migration job, atau <code>expected_version</code> pin (workflow refuse jalan sampai diadaptasi)</li>
+      <li>Handle dgn <code>transform</code> node antara query + use, atau migration job batch UPDATE ke shape baru</li>
     </ul>
   </div>
 
-  <!-- Critical safety opt-in -->
-  <div class="mb-8 p-4 bg-rose-50 border-l-4 border-rose-400 rounded text-sm text-rose-900">
-    <strong>Critical dataset extra safety (opt-in).</strong> Untuk compliance/financial/audit:
-<pre class="mono text-xs bg-white border border-rose-200 p-3 rounded mt-2 leading-relaxed"><span class="yaml-key">critical_safety</span>:
-  <span class="yaml-key">append_only</span>: <span class="yaml-bool">true</span>              <span class="yaml-cmt"># block UPDATE/DELETE</span>
-  <span class="yaml-key">require_review</span>: <span class="yaml-bool">true</span>           <span class="yaml-cmt"># schema change butuh 2-person approval</span>
-  <span class="yaml-key">backup_before_migration</span>: <span class="yaml-bool">true</span>  <span class="yaml-cmt"># dump rows ke external storage</span></pre>
-  </div>
-
   <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
-    <div class="bg-slate-50 px-4 py-2 border-b border-slate-200 text-sm font-bold text-slate-700">Differentiator: <code>db_query</code> vs <code>dataset_*</code></div>
+    <div class="bg-slate-50 px-4 py-2 border-b border-slate-200 text-sm font-bold text-slate-700">Differentiator: <code>db_query</code> vs <code>datatable_*</code></div>
     <table class="w-full text-sm">
       <thead class="bg-slate-50 border-b border-slate-200">
         <tr>
           <th class="text-left p-3 font-semibold"></th>
           <th class="text-left p-3 font-semibold text-sky-700"><code>db_query</code></th>
-          <th class="text-left p-3 font-semibold text-emerald-700"><code>dataset_*</code></th>
+          <th class="text-left p-3 font-semibold text-emerald-700"><code>datatable_*</code></th>
         </tr>
       </thead>
       <tbody class="text-slate-700">
-        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Schema source</td><td class="p-3">external system</td><td class="p-3">wick <code>dataset.yaml</code></td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Schema source</td><td class="p-3">external system</td><td class="p-3">wick <code>wick_data_tables.schema</code> JSONB</td></tr>
         <tr class="border-b border-slate-100"><td class="p-3 font-medium">Storage</td><td class="p-3">user-configured DSN</td><td class="p-3">wick's Postgres (same DB)</td></tr>
-        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Discovery</td><td class="p-3">manual</td><td class="p-3 text-emerald-700">MCP <code>dataset_list</code> + UI</td></tr>
-        <tr class="border-b border-slate-100"><td class="p-3 font-medium">UI</td><td class="p-3">none</td><td class="p-3 text-emerald-700">3-panel table view</td></tr>
-        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Migration</td><td class="p-3">user's responsibility</td><td class="p-3 text-emerald-700">wick-managed + history log</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Discovery</td><td class="p-3">manual</td><td class="p-3 text-emerald-700">MCP <code>datatable_list</code> + UI</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">UI</td><td class="p-3">none</td><td class="p-3 text-emerald-700">3-panel table view + CSV upload</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3 font-medium">Migration</td><td class="p-3">user's responsibility</td><td class="p-3 text-emerald-700">wick-managed (audit-able)</td></tr>
         <tr class="border-b border-slate-100"><td class="p-3 font-medium">TTL cleanup</td><td class="p-3">external</td><td class="p-3 text-emerald-700">built-in</td></tr>
-        <tr><td class="p-3 font-medium">When</td><td class="p-3 text-sky-700">data hidup di sistem lain</td><td class="p-3 text-emerald-700">data lahir dari workflow operation</td></tr>
+        <tr><td class="p-3 font-medium">When</td><td class="p-3 text-sky-700">data hidup di sistem lain</td><td class="p-3 text-emerald-700">data lahir dari workflow / AI / UI</td></tr>
       </tbody>
     </table>
   </div>
@@ -2161,7 +2165,7 @@ Klik → adoption modal:
         <tr class="border-b border-slate-100"><td class="p-3"><strong>Connector</strong> (type: connector)</td><td class="p-3">Operation.Execute()</td><td class="p-3 text-emerald-700">Engine bypass, scripted response per args_match</td></tr>
         <tr class="border-b border-slate-100"><td class="p-3"><strong>Channel</strong> (type: channel)</td><td class="p-3">Channel.Send()</td><td class="p-3 text-emerald-700">Capture call (record args), scripted response</td></tr>
         <tr class="border-b border-slate-100"><td class="p-3"><strong>HTTP</strong> (type: http)</td><td class="p-3">http.Do()</td><td class="p-3 text-emerald-700">Match URL pattern + method</td></tr>
-        <tr class="border-b border-slate-100"><td class="p-3"><strong>Dataset</strong> (dataset_*)</td><td class="p-3">Postgres query</td><td class="p-3 text-emerald-700">In-memory test DB atau scripted rows</td></tr>
+        <tr class="border-b border-slate-100"><td class="p-3"><strong>Data Table</strong> (datatable_*)</td><td class="p-3">Postgres query</td><td class="p-3 text-emerald-700">In-memory test DB atau scripted rows</td></tr>
         <tr><td class="p-3"><strong>Shell</strong> (type: shell)</td><td class="p-3">exec.Cmd</td><td class="p-3 text-emerald-700">Skip exec, scripted stdout/exit</td></tr>
       </tbody>
     </table>
@@ -2307,10 +2311,10 @@ workflow_simulate(slug, event, mocks)</pre>
       </div>
 
       <div>
-        <h4 class="font-bold mb-3 text-slate-200">Hot path: pakai dataset, bukan JobRun</h4>
-        <p class="text-sm text-slate-300 mb-3">Workflow yg cuma butuh "did this event get handled?" → simpan ke <strong>dataset</strong> (small, queryable, dedup-friendly). JobRun = audit/debug, bukan source of truth.</p>
+        <h4 class="font-bold mb-3 text-slate-200">Hot path: pakai data table, bukan JobRun</h4>
+        <p class="text-sm text-slate-300 mb-3">Workflow yg cuma butuh "did this event get handled?" → simpan ke <strong>data table</strong> (small, queryable, dedup-friendly). JobRun = audit/debug, bukan source of truth.</p>
         <div class="bg-slate-800 border border-slate-700 rounded p-3 text-xs text-slate-300">
-          <strong class="text-amber-400">Warning auto-emit</strong> kalau workflow accumulate &gt; 50% dari <code>keep_max</code> → engine suggest dataset approach + tighter retention.
+          <strong class="text-amber-400">Warning auto-emit</strong> kalau workflow accumulate &gt; 50% dari <code>keep_max</code> → engine suggest data-table approach + tighter retention.
         </div>
       </div>
     </div>

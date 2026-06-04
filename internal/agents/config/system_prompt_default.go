@@ -10,6 +10,15 @@ import (
 //go:embed system_prompt_default.md
 var defaultSystemPromptTemplate string
 
+//go:embed system_prompt_immutable.md
+var immutableSystemPromptTemplate string
+
+//go:embed system_prompt_immutable_claude.md
+var immutableSystemPromptClaudeTemplate string
+
+//go:embed system_prompt_immutable_codex.md
+var immutableSystemPromptCodexTemplate string
+
 // DefaultSystemPrompt is the baseline interaction policy embedded at
 // build time. Seeded into the `system_prompt` config row on fresh
 // installs and surfaced as the target of the Reset button on the
@@ -21,5 +30,27 @@ var defaultSystemPromptTemplate string
 // every reference to `~/.wick/` would otherwise be wrong). Resolved
 // once at call time via appname.Resolve.
 func DefaultSystemPrompt() string {
-	return strings.ReplaceAll(defaultSystemPromptTemplate, "{{app}}", appname.Resolve())
+	return resolve(defaultSystemPromptTemplate)
+}
+
+// ImmutableSystemPrompt returns the global rules combined with
+// claude-specific rules. Passed via --append-system-prompt on every
+// claude spawn; operator-uneditable, always wins on conflict.
+//
+// Connector catalog is NOT appended here — the catalog needs the live
+// connectors service to filter for ready instances, which only the
+// factory can wire. See ClaudeFactory.ConnectorCatalogLoader.
+func ImmutableSystemPrompt() string {
+	return resolve(immutableSystemPromptTemplate + "\n\n" + immutableSystemPromptClaudeTemplate)
+}
+
+// ImmutableSystemPromptCodex returns the global rules combined with
+// codex-specific rules. Written as AGENTS.md into the workspace so
+// codex picks it up automatically on every spawn.
+func ImmutableSystemPromptCodex() string {
+	return resolve(immutableSystemPromptTemplate + "\n\n" + immutableSystemPromptCodexTemplate)
+}
+
+func resolve(s string) string {
+	return strings.ReplaceAll(s, "{{app}}", appname.Resolve())
 }

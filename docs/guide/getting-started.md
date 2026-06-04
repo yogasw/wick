@@ -17,8 +17,10 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 
 ## 2. Install Wick CLI
 
+The Wick CLI scaffolds and builds projects (`wick init`, `wick build`, `wick dev`). Install via Go:
+
 ```bash
-go install github.com/yogasw/wick@v0.12.0
+go install github.com/yogasw/wick@v0.14.24
 ```
 
 Verify:
@@ -26,6 +28,10 @@ Verify:
 ```bash
 wick version
 ```
+
+::: tip Just want to run AI agents without building tools?
+Skip the CLI and grab the pre-built **`wick-agent`** runtime binary directly — see [Run AI Agents (no Go)](https://github.com/yogasw/wick#1-run-ai-agents--no-go-no-framework) in the README. That binary ships pre-built for Linux / macOS / Windows / Termux via a curl installer; the Wick CLI here is for **scaffolding new projects**.
+:::
 
 ## 3. Init a project
 

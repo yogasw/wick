@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ func stubModule() connector.Module {
 				EchoInput{},
 				func(c *connector.Ctx) (any, error) {
 					return map[string]string{"echo": c.Input("msg")}, nil
-				},
+				}, wickdocs.Docs{},
 			),
 		},
 	}

@@ -48,6 +48,10 @@ declare description.
     backoff_sec: 5
   on_failure: halt                 # halt | skip | fallback (gotonode)
   fallback: end                    # if on_failure=fallback
+  arg_modes:                       # optional — per-field render mode for nodes
+    url: fixed                     # whose inspector uses the Fixed|Expression
+    body: expression               # toggle (channel, connector, http). Keys
+                                   # match the schema field. Missing = expression.
   output_schema:                   # optional, validator
     type: object
     properties:
@@ -337,7 +341,7 @@ control behavior:
 |---|---|---|
 | `new` (default) | Fresh subprocess per node, ga share context | Isolation, deterministic, paralel-safe |
 | `root` | Share single subprocess di-spawn di awal workflow, all `root`-session nodes interact via same agent process. Sequential within workflow run | Multi-turn reasoning across nodes, faster (1× spawn) |
-| `persistent` | Subprocess persist across **workflow runs** (session ID = workflow slug). Context inherit dari run sebelumnya | Long-running assistant pattern, learn-from-history |
+| `persistent` | Subprocess persist across **workflow runs** (session ID = workflow id). Context inherit dari run sebelumnya | Long-running assistant pattern, learn-from-history |
 
 ```yaml
 - id: classify-intent
@@ -392,7 +396,7 @@ Per-node execution dgn root/persistent session:
 **Persistent session lifecycle:**
 - Subprocess detached, written ke wick global session registry
 - Cleanup: idle > 24h (configurable) → terminate
-- Manual cleanup: `wick workflow session kill <slug>` CLI / MCP op
+- Manual cleanup: `wick workflow session kill <id>` CLI / MCP op
 - Restart wick: persistent sessions lost (TBD: future = serialize transcript to disk for resume)
 
 **Concurrent runs same workflow + session:**
@@ -411,8 +415,8 @@ concurrent prompts cleanly). Workflow yg butuh parallel + share context
 
 **Session ID format:**
 - `new`: ephemeral, no ID stored
-- `root`: `workflow:<slug>:run:<run_id>:root`
-- `persistent`: `workflow:<slug>:persistent`
+- `root`: `workflow:<id>:run:<run_id>:root`
+- `persistent`: `workflow:<id>:persistent`
 
 **Default decision:**
 - `classify` default `session: new` (independent classification, no
@@ -528,20 +532,28 @@ Output: `{{.Node.check-disk.stdout}}`, `.stderr`, `.exit_code`,
   type: http
   method: GET
   url: https://api.github.com/repos/{{.Env.REPO}}/issues
-  headers:
+  headers:                          # map[string]string — each value template-rendered
     Authorization: "Bearer {{.Secret.GITHUB_PAT}}"
-  query:
+  query:                            # map[string]string — each value template-rendered
     since: "{{.Event.At | addHours -24}}"
-  body: ""                          # raw atau {{.Node.x.json}}
-  parse_response: json              # raw | json | bytes
+  body: ""                          # only used for POST/PUT/PATCH/DELETE
+  parse_response: json              # raw | json | bytes (default raw); ignored for GET
   timeout_sec: 30
   retry:
     max: 3
     backoff_sec: 2
+  arg_modes:                        # optional — per-field render mode
+    url: fixed                      # "fixed" = pass value verbatim, skip template render
+    body: expression                # "expression" = template.Render (default behaviour)
   # edge: { from: <this-id>, to: summarize }
 ```
 
 Output: `.status`, `.headers`, `.body`, `.json` (kalau parse).
+
+**Inspector UI:**
+- Headers / Query render sebagai `kvlist` row editor (one row per key/value pair, click `+ Add Row` to append). Each value is rendered as a Go template, so you can pull tokens from upstream nodes (e.g. `Authorization: Bearer {{.Node.login.token}}`).
+- `url`, `body`, `method`, `timeout_sec` each carry a `Fixed | Expression` toggle pill. Fixed = passed verbatim, Expression = `template.Render` against the run context (default for backward compat). State persists as `arg_modes` in YAML.
+- `body` + `parse_response` rows are hidden when `method = GET` (`visible_when=method:POST|PUT|PATCH|DELETE`).
 
 ### `db_query` — SQL query
 
@@ -560,30 +572,30 @@ Output: `.status`, `.headers`, `.body`, `.json` (kalau parse).
 
 Output: `.rows` (array of objects), `.row_count`.
 
-### `dataset_*` — wick-native data store
+### `datatable_*` — wick-native data store
 
-Wick-native data tables (lihat §12 Datasets). Single shared Postgres
-table `wick_datasets_rows`, schema YAML-defined, akses cuma lewat node
-types ini (no raw SQL).
+Wick-native data tables (lihat §12 Data Tables). Single shared Postgres
+table `wick_data_table_rows`, schema DB-defined (JSONB di
+`wick_data_tables.schema`), akses cuma lewat node types ini (no raw SQL).
 
-**6 variant:**
+**7 variant:**
 
 | Node | Use case | Output | Branching |
 |---|---|---|---|
-| `dataset_exists` | "ada row yang match `where`?" | `.found: bool` | `cases: {"true", "false"}` |
-| `dataset_get` | ambil 1 row by primary key | `.found: bool`, `.row: object/null` | `cases: {found, not_found}` |
-| `dataset_query` | multi-row search | `.rows: []`, `.row_count`, `.has_more` | `next:` atau branch eksternal |
-| `dataset_count` | count tanpa load row | `.count: int` | `next:` |
-| `dataset_insert` | INSERT row, fail kalau pk conflict | `.inserted_pk`, `.success` | `next:` |
-| `dataset_upsert` | INSERT atau UPDATE based on pk | `.action: "insert"\|"update"`, `.row` | `next:` |
-| `dataset_delete` | DELETE rows matching where | `.deleted_count` | `next:` |
+| `datatable_exists` | "ada row yang match `where`?" | `.found: bool` | `cases: {"true", "false"}` |
+| `datatable_get` | ambil 1 row by primary key | `.found: bool`, `.row: object/null` | `cases: {found, not_found}` |
+| `datatable_query` | multi-row search | `.rows: []`, `.row_count`, `.has_more` | `next:` atau branch eksternal |
+| `datatable_count` | count tanpa load row | `.count: int` | `next:` |
+| `datatable_insert` | INSERT row, fail kalau pk conflict | `.inserted_pk`, `.success` | `next:` |
+| `datatable_upsert` | INSERT atau UPDATE based on pk | `.action: "insert"\|"update"`, `.row` | `next:` |
+| `datatable_delete` | DELETE rows matching where | `.deleted_count` | `next:` |
 
 **Pattern: webhook dedup (1 node check, lebih ringkas dari query+branch):**
 
 ```yaml
 - id: check-handled
-  type: dataset_exists
-  dataset: events
+  type: datatable_exists
+  table: events
   where:
     id: "{{.Event.Payload.event_id}}"
     is_processed: true
@@ -597,8 +609,8 @@ types ini (no raw SQL).
 
 ```yaml
 - id: load-user-state
-  type: dataset_get
-  dataset: users
+  type: datatable_get
+  table: users
   key:
     id: "{{.Event.Payload.user}}"
 
@@ -617,8 +629,8 @@ types ini (no raw SQL).
 
 ```yaml
 - id: list-pending
-  type: dataset_query
-  dataset: tickets
+  type: datatable_query
+  table: tickets
   where:
     status: pending
     assignee: "{{.Event.Payload.user}}"
@@ -630,8 +642,8 @@ types ini (no raw SQL).
 **Pattern: idempotent upsert (cron poll):**
 
 ```yaml
-- type: dataset_upsert
-  dataset: events
+- type: datatable_upsert
+  table: events
   key: [id]                              # primary key columns
   row:
     id: "{{.Event.Payload.event_id}}"
@@ -645,20 +657,20 @@ types ini (no raw SQL).
 
 | Kasus | Node |
 |---|---|
-| Dedup webhook ("udah handle?") | `dataset_exists` |
-| Load row by PK terus pake fieldnya | `dataset_get` |
-| Cari multiple rows (filter, paginate, sort) | `dataset_query` |
-| Count tanpa load row | `dataset_count` |
-| Insert fresh, fail kalau ada conflict | `dataset_insert` |
-| Insert-or-update (idempotent) | `dataset_upsert` |
-| Hapus satu/banyak row | `dataset_delete` |
+| Dedup webhook ("udah handle?") | `datatable_exists` |
+| Load row by PK terus pake fieldnya | `datatable_get` |
+| Cari multiple rows (filter, paginate, sort) | `datatable_query` |
+| Count tanpa load row | `datatable_count` |
+| Insert fresh, fail kalau ada conflict | `datatable_insert` |
+| Insert-or-update (idempotent) | `datatable_upsert` |
+| Hapus satu/banyak row | `datatable_delete` |
 
 **Beda dari `db_query`:**
 - `db_query` = external SQL DB user-configured (`internal/connectors/`).
-- `dataset_*` = wick-internal table di wick's Postgres, schema-aware,
+- `datatable_*` = wick-internal table di wick's Postgres, schema-aware,
   MCP-discoverable, UI table view built-in, no raw SQL.
 
-Use `db_query` kalau data hidup di system lain. Use `dataset_*` kalau
+Use `db_query` kalau data hidup di system lain. Use `datatable_*` kalau
 data baru lahir dari workflow (state, dedup, cache, internal records).
 
 ### `transform` — jq / template / Go template
@@ -736,15 +748,18 @@ errors awal.
 ### Output reference syntax
 
 Template var:
-- `{{.Node.<id>}}` — full output object
-- `{{.Node.<id>.<field>}}` — sub-field
-- `{{.Node.<id>.<field> | <filter>}}` — Go template pipe filter
-- `{{.Event.*}}` — trigger event
+- `{{.Node.<label>}}` — full output object (label is the user-facing name shown in the inspector; falls back to id when label empty)
+- `{{.Node.<label>.<field>}}` — sub-field
+- `{{.Node.<label>.<field> | <filter>}}` — Go template pipe filter
+- **Trigger nodes** also live under `.Node.<label>` — payload at `{{.Node.<trigger-label>.payload.<key>}}`, envelope keys `type/subtype/channel/at` directly under the trigger label
+- `{{.Event.*}}` — **legacy**, still resolved by the engine for older workflows; new workflows should use `{{.Node.<trigger-label>.payload.…}}` so triggers and regular nodes share the same access pattern
 - `{{.Env.<NAME>}}` — workflow env value, from `env.yaml` (UI-managed, hand-edit OK) — lihat §11
 - `{{.Secret.<NAME>}}` — encrypted secret, decrypt runtime. Schema declare `widget: secret` di workflow.yaml, value stored encrypted di `env.yaml` — lihat §11
-- `{{.Workflow.<field>}}` — workflow metadata (Slug, ID, Version, Name)
+- `{{.Workflow.<field>}}` — workflow metadata (ID, Version, Name)
 - `{{.Run.<field>}}` — runtime metadata (ID, StartedAt)
 - `{{.Dataset.<alias>}}` — dataset binding from `datasets:` field — lihat §12
+
+**Label vs id:** Inspector exposes `label` (free-form, must be a Go identifier — letters/digits/underscore, no spaces, unique within workflow). Renaming a label cascades through every `{{.Node.<old>...}}` reference, `index .Node "<old>"` form, graph edges, trigger `entry_node`, and `session_from`. The internal numeric Drawflow id stays stable so saved YAML and runtime state survive renames. When label is empty or not a valid identifier the canvas falls back to id for the template path.
 
 ---
 

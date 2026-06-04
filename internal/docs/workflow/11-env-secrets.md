@@ -3,7 +3,7 @@
 Workflow butuh config: Slack channel target, GitHub PAT, max retry,
 toggle feature, dst. **Schema** declared di `workflow.yaml` (developer
 contract, version-controlled). **Values** di file terpisah
-`<slug>/env.yaml` (UI-managed, secrets encrypted).
+`<id>/env.yaml` (UI-managed, secrets encrypted).
 
 **Reuse vocabulary `wick:"..."` config-tag yang sudah ada** di
 [docs/reference/config-tags.md](../../docs/reference/config-tags.md).
@@ -110,7 +110,7 @@ Field `name:` auto snake-case ke env key (sama config-tags rule):
 
 Atau eksplisit: `key: legacy_api_key` override default.
 
-### Values di `<slug>/env.yaml`
+### Values di `<id>/env.yaml`
 
 ```yaml
 # env.yaml — UI-managed, hand-edit OK
@@ -186,14 +186,14 @@ value ga berubah.
 ### MCP ops
 
 ```
-workflow_get_env_schema(slug)
+workflow_get_env_schema(id)
   → [{name, type, default, description, required}]
 
-workflow_get_env_values(slug, reveal_secrets=false)
+workflow_get_env_values(id, reveal_secrets=false)
   → {SLACK_CHANNEL: "#support", GITHUB_PAT: "wick_enc_..."}
     reveal_secrets=true → require admin token
 
-workflow_set_env_values(slug, values)
+workflow_set_env_values(id, values)
   → atomic write env.yaml, secret auto-encrypt
 ```
 

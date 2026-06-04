@@ -17,10 +17,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // Spawner spawns the real `codex` CLI binary in non-interactive
@@ -70,6 +73,27 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if bin == "" {
 		bin = "codex"
 	}
+	resolved, err := safeexec.ResolveBin(bin)
+	if err != nil {
+		return nil, fmt.Errorf("codex binary not found: %w", err)
+	}
+	bin = resolved
+
+	// Write preset to .codex/soul.md and point codex at it via
+	// -c instructions_files so the instructions apply on both fresh and
+	// resumed sessions (AGENTS.md is ignored on resume).
+	soulPath := ""
+	if opt.Workspace != "" && opt.Preset != "" {
+		codexDir := filepath.Join(opt.Workspace, ".codex")
+		if err := os.MkdirAll(codexDir, 0o755); err == nil {
+			p := filepath.Join(codexDir, "soul.md")
+			if err := os.WriteFile(p, []byte(opt.Preset), 0o644); err == nil {
+				soulPath = p
+			} else {
+				log.Warn().Err(err).Str("path", p).Msg("agents.spawn: write soul.md failed")
+			}
+		}
+	}
 
 	// Install / remove per-workspace hook config based on the user's
 	// per-instance intent. See claude/spawn.go applyHookConfig for the
@@ -78,8 +102,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	args := []string{
 		"exec",
-		"--sandbox", "workspace-write",
+		"--json",
+		"--skip-git-repo-check",
 	}
+	sandboxMode := provider.CodexSandboxFullAccess
+	if opt.Instance != nil && opt.Instance.CodexConfig != nil && opt.Instance.CodexConfig.SandboxMode != "" {
+		sandboxMode = opt.Instance.CodexConfig.SandboxMode
+	}
+	args = append(args, "--sandbox", string(sandboxMode))
 	// When gate is active for this instance, do NOT set
 	// --ask-for-approval to a bypass value — codex's approval flag
 	// generally skips PreToolUse under bypass modes, which would
@@ -88,11 +118,20 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--ask-for-approval", s.AskForApproval)
 	}
 	args = append(args, s.ExtraArgs...)
+	if soulPath != "" {
+		// Use JSON array syntax for TOML list value.
+		args = append(args, "-c", `instructions_files=["`+soulPath+`"]`)
+	}
 	if opt.ResumeID != "" {
-		args = append(args, "--resume", opt.ResumeID)
+		args = append(args, "resume", opt.ResumeID)
+	}
+	if opt.InitialMessage != "" {
+		args = append(args, opt.InitialMessage)
 	}
 
-	cmd := exec.CommandContext(ctx, bin, args...)
+	bin, args = termuxProotWrap(bin, args)
+
+	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)
@@ -119,6 +158,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		log.Error().Err(err).Str("bin", bin).Msg("agents.spawn: codex start failed")
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
+	// Close stdin immediately — codex reads the prompt from argv, not stdin.
+	// Leaving stdin open causes codex to block on "Reading additional input from stdin".
+	_ = stdin.Close()
 	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (codex)")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
 }
@@ -188,4 +230,33 @@ func (p *process) Kill() error {
 		return nil
 	}
 	return p.cmd.Process.Kill()
+}
+
+// termuxProotWrap wraps the codex argv with `proot` bind-mounts when
+// running under Termux. Codex's musl binary hard-codes
+// /etc/resolv.conf and /etc/ssl/certs/ca-certificates.crt; Android's
+// /etc is read-only, so the websocket handshake to wss://chatgpt.com
+// fails with "failed to lookup address information: Try again" (DNS)
+// without bind-mounting Termux's copies into place.
+//
+// install.sh provisions proot and writes the same bind-mount as a
+// bash alias for interactive use. Wick spawns codex via direct exec
+// (alias bypassed), so the wrap has to happen here.
+func termuxProotWrap(bin string, args []string) (string, []string) {
+	if os.Getenv("TERMUX_VERSION") == "" {
+		if _, err := os.Stat("/data/data/com.termux/files/usr"); err != nil {
+			return bin, args
+		}
+	}
+	prefix := os.Getenv("PREFIX")
+	if prefix == "" {
+		return bin, args
+	}
+	wrapped := append([]string{
+		"-b", prefix + "/etc/resolv.conf:/etc/resolv.conf",
+		"-b", prefix + "/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt",
+		bin,
+	}, args...)
+	log.Info().Str("bin", bin).Msg("agents.spawn: codex wrapped with proot (termux)")
+	return "proot", wrapped
 }

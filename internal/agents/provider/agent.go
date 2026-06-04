@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -38,6 +39,9 @@ type Agent struct {
 	proc    Process
 	cancel  context.CancelFunc
 	running bool
+	// rootCtx is the context passed to Start; used by RespawnOnSend to
+	// re-spawn with a fresh subcontext without needing an external ctx arg.
+	rootCtx context.Context
 
 	// done is closed when the reader goroutine exits — Stop() waits on it.
 	done chan struct{}
@@ -112,6 +116,13 @@ type Options struct {
 	// per-channel transports (Slack, HTTP) that need to inject auth
 	// tokens or routing keys.
 	ExtraEnv []string
+	// MessageEncoder formats a user message before writing to stdin.
+	// nil = default Claude stream-json envelope. Ignored when RespawnOnSend=true.
+	MessageEncoder func(text string) string
+	// RespawnOnSend, when true, means Send() kills the current process and
+	// spawns a new one with the message as InitialMessage (positional arg).
+	// Used by codex which is one-shot per invocation, not long-lived.
+	RespawnOnSend bool
 }
 
 // New builds an Agent from Options. Doesn't spawn — call Start.
@@ -145,6 +156,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		a.mu.Unlock()
 		return errors.New("agent already running")
 	}
+	a.rootCtx = ctx
 	a.parser = a.cfg.ParserFactory()
 
 	subCtx, cancel := context.WithCancel(ctx)
@@ -180,17 +192,87 @@ func (a *Agent) Start(ctx context.Context) error {
 // conversation.jsonl reflects the message; we don't double-write here
 // because some transports (replay tests) skip storage.
 func (a *Agent) Send(text string) error {
+	if a.cfg.RespawnOnSend {
+		return a.respawnWithMessage(text)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.running || a.proc == nil {
 		return errors.New("agent not running")
 	}
-	payload := fmt.Sprintf(
-		`{"type":"user","message":{"role":"user","content":%s}}`,
-		jsonString(text),
-	)
+	var payload string
+	if a.cfg.MessageEncoder != nil {
+		payload = a.cfg.MessageEncoder(text)
+	} else {
+		payload = fmt.Sprintf(
+			`{"type":"user","message":{"role":"user","content":%s}}`,
+			jsonString(text),
+		)
+	}
+	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
 	_, err := a.proc.Stdin().Write([]byte(payload + "\n"))
 	return err
+}
+
+// respawnWithMessage stops the current process (if any) and spawns a new one
+// with text as the InitialMessage positional arg. Used by codex which is
+// one-shot per invocation.
+func (a *Agent) respawnWithMessage(text string) error {
+	a.mu.Lock()
+	ctx := a.rootCtx
+	resumeID := a.resumeID
+	// Kill current process if alive.
+	if a.running && a.proc != nil {
+		if a.cancel != nil {
+			a.cancel()
+		}
+		_ = a.proc.Stdin().Close()
+		_ = a.proc.Kill()
+		done := a.done
+		a.mu.Unlock()
+		<-done
+		a.mu.Lock()
+	}
+	if ctx == nil {
+		a.mu.Unlock()
+		return errors.New("agent not started")
+	}
+	a.parser = a.cfg.ParserFactory()
+	a.exitReasonSet = false
+
+	log.Debug().Str("message", text).Str("resume_id", resumeID).Msg("agent.respawn: spawning with initial message")
+
+	subCtx, cancel := context.WithCancel(ctx)
+	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
+		Workspace:      a.cfg.Workspace,
+		ResumeID:       resumeID,
+		ExtraEnv:       a.cfg.ExtraEnv,
+		Instance:       a.cfg.Instance,
+		GateBinary:     a.cfg.GateBinary,
+		Preset:         a.cfg.Preset,
+		InitialMessage: text,
+	})
+	if err != nil {
+		cancel()
+		a.mu.Unlock()
+		return err
+	}
+	a.proc = proc
+	a.cancel = cancel
+	a.running = true
+	a.done = make(chan struct{})
+	a.mu.Unlock()
+
+	// Respawn = a brand-new subprocess from the FE's perspective; flip
+	// the state machine to Spawning so the lifecycle hook broadcasts
+	// the transition (otherwise codex/respawn-on-send providers leave
+	// the badge stuck at idle until the first event arrives).
+	if a.state != nil {
+		a.state.MarkSpawning()
+	}
+
+	go a.run(subCtx)
+	return nil
 }
 
 // Stop kills the subprocess and waits for the reader to exit.
@@ -265,6 +347,27 @@ func (a *Agent) Argv() []string {
 	return a.proc.Argv()
 }
 
+// InFlightEvents returns events buffered in the current in-progress turn
+// (tool_use, tool_result, thinking) that have not yet been flushed to
+// disk. Returns nil when no turn is active or store is not wired.
+func (a *Agent) InFlightEvents() []store.TurnEvent {
+	if a.store == nil {
+		return nil
+	}
+	return a.store.InFlightEvents()
+}
+
+// PartialText returns the assistant text accumulated so far for the
+// in-flight turn. Empty when no turn is active or store is not wired.
+// The SSE snapshot endpoint uses this so a refresh mid-stream repaints
+// the partial bubble instead of waiting for the next delta.
+func (a *Agent) PartialText() string {
+	if a.store == nil {
+		return ""
+	}
+	return a.store.PartialText()
+}
+
 // run is the reader goroutine. Reads lines from stdout, parses each,
 // applies to state + store, fires the OnEvent hook, resets the idle
 // timer, and detects subprocess exit. Stops when stdout returns EOF or
@@ -332,22 +435,16 @@ func (a *Agent) run(ctx context.Context) {
 		}
 	}()
 
+	// toolInFlight is true from ToolUse until the matching ToolResult.
+	// While a tool is running the subprocess stdout goes silent (the
+	// tool itself is executing), so we must not let the idle timer fire
+	// and kill the process. The timer is stopped on ToolUse and
+	// restarted on ToolResult so the normal idle-kill still applies once
+	// the tool finishes.
+	toolInFlight := false
+
 	for scanner.Scan() {
 		line := scanner.Text()
-
-		if !idle.Stop() {
-			// Drain the channel if the timer already fired.
-			select {
-			case <-idle.C:
-			default:
-			}
-		}
-		idle.Reset(a.cfg.IdleTimeout)
-		// Signal activity so any active grace period is cancelled.
-		select {
-		case a.activityCh <- struct{}{}:
-		default:
-		}
 
 		ev, err := a.parser.Parse(line)
 		if err != nil {
@@ -356,6 +453,69 @@ func (a *Agent) run(ctx context.Context) {
 			// event so the store + UI still see it.
 			ev = event.AgentEvent{Type: event.Error, ErrorMsg: err.Error(), Raw: line}
 		}
+
+		switch ev.Type {
+		case event.ToolUse:
+			// Tool about to execute — stdout will be silent. Stop the
+			// idle timer until the result comes back.
+			if !toolInFlight {
+				if !idle.Stop() {
+					select {
+					case <-idle.C:
+					default:
+					}
+				}
+				toolInFlight = true
+			}
+		case event.ToolResult:
+			// Tool finished — restart idle timer from now.
+			toolInFlight = false
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(a.cfg.IdleTimeout)
+			select {
+			case a.activityCh <- struct{}{}:
+			default:
+			}
+		case event.Done, event.Error:
+			// Turn ended (normally or via error) — always reset
+			// toolInFlight so a crash mid-tool doesn't leave the idle
+			// timer stopped forever.
+			toolInFlight = false
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(a.cfg.IdleTimeout)
+			select {
+			case a.activityCh <- struct{}{}:
+			default:
+			}
+		default:
+			// For every other line reset the idle timer only when no
+			// tool is in flight — tool execution keeps stdout silent
+			// and we must not accidentally restart the timer mid-tool.
+			if !toolInFlight {
+				if !idle.Stop() {
+					select {
+					case <-idle.C:
+					default:
+					}
+				}
+				idle.Reset(a.cfg.IdleTimeout)
+				select {
+				case a.activityCh <- struct{}{}:
+				default:
+				}
+			}
+		}
+
 		if ev.Type == event.SessionStart && ev.SessionID != "" {
 			a.mu.Lock()
 			a.resumeID = ev.SessionID
@@ -385,7 +545,41 @@ func (a *Agent) run(ctx context.Context) {
 	if waitErr != nil && !isCleanExitErr(waitErr) {
 		reason = ExitError
 	}
+	// Log the raw wait error + reason so an unexpected crash (subprocess
+	// dies right after spawn before emitting session_start) is visible.
+	// Clean exits log at debug; abnormal exits log at warn so they pop
+	// out of the firehose.
+	lvl := log.Debug
+	if reason == ExitError {
+		lvl = log.Warn
+	}
+	ev := lvl().
+		Str("component", "agent").
+		Int("pid", a.PID()).
+		Int("reason", int(reason)).
+		Str("reason_name", exitReasonName(reason))
+	if waitErr != nil {
+		ev = ev.Str("wait_err", waitErr.Error())
+	}
+	ev.Msg("agent.reader: subprocess exited")
 	a.exitReason(reason)
+}
+
+// exitReasonName mirrors the ExitReason iota for log lines. Kept local
+// to agent.go so the reader path doesn't need to import the pool's
+// stringifier.
+func exitReasonName(r ExitReason) string {
+	switch r {
+	case ExitClean:
+		return "clean"
+	case ExitIdle:
+		return "idle_ttl"
+	case ExitStopped:
+		return "stopped"
+	case ExitError:
+		return "error"
+	}
+	return "unknown"
 }
 
 // exitReason fires the OnExit hook at most once per spawn. Idempotent

@@ -34,19 +34,25 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Resolve templ version from go.mod
+        id: templ
+        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> $GITHUB_OUTPUT
+
       - name: Cache templ binary
         id: cache-templ
         uses: actions/cache@v4
         with:
           path: ~/go/bin/templ
-          key: templ-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          # Key on the pinned templ version, not hashFiles('go.sum') — the
+          # old key invalidated on every PR that touched any dep, even
+          # though templ itself was stable for hundreds of commits.
+          key: templ-${{ steps.go.outputs.go-version }}-${{ steps.templ.outputs.version }}
 
       - name: Install templ (version pinned to go.mod)
         if: steps.cache-templ.outputs.cache-hit != 'true'
         run: |
-          TEMPL_VERSION=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
-          echo "Using templ $TEMPL_VERSION"
-          go install github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}
+          echo "Using templ ${{ steps.templ.outputs.version }}"
+          go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
 
       - name: Generate templ files
         run: templ generate ./...

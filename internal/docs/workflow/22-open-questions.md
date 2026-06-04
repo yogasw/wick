@@ -21,7 +21,7 @@
      Same engine, same audit, blocking call:
      ```yaml
      - type: workflow
-       slug: other-workflow
+       id: other-workflow
        args: {event: {Type: "manual", Payload: {...}}}
        timeout_sec: 60
      ```
@@ -54,13 +54,13 @@
     - Daily cleanup job (reuse `connector-runs-purge` pattern) prune
       `runs/<run-id>/` folder + JobRun row.
     - **Hot path optimization**: workflow yg cuma butuh "did this event
-      get handled?" → simpan ke dataset (small, queryable) bukan rely on
+      get handled?" → simpan ke data table (small, queryable) bukan rely on
       JobRun history. JobRun cuma audit/debug.
     - Engine emit warning kalau workflow accumulate > 50% of `keep_max`
-      → suggest tighter retention atau dataset approach.
+      → suggest tighter retention atau data-table approach.
 
 6. [**decided**] **Workflow versioning** — rely on git, no wick layer.
-   - Workflow folder = git-tracked. `git log workflows/<slug>/` =
+   - Workflow folder = git-tracked. `git log workflows/<id>/` =
      audit history. `git diff` between commits = compare versions.
    - `version:` field di workflow.yaml = signal user-driven (manual
      bump untuk material change). Drives re-approval trigger.
@@ -68,9 +68,10 @@
      re-approve.
    - Rollback = `git revert` + re-run wick reload. Wick ga tracking
      history beyond `approved_version`/`approved_hash`.
-   - **Dataset versioning beda** (lihat §12) — file `history/v<N>.yaml`
-     karena dataset schema diff lebih sering + butuh in-process diff
-     untuk migration check. Workflow change ga butuh granularity itu.
+   - **Data table versioning beda** (lihat §12) — schema hidup di DB
+     (`wick_data_tables.schema` JSONB), bukan file. Audit changes opt-in
+     via `wick_data_table_audit` table. Workflow change ga butuh
+     granularity itu.
 7. **Multi-tenant** — workflow yang sama jalan dgn config beda per
    tenant? Mungkin via `Env` per-trigger atau parameter passing. Tunda
    sampai use case muncul.
@@ -131,8 +132,8 @@
     - AI tokens default = write-without-enable, wajib panggil
       `workflow_request_review` buat ngumumin perubahan ke admin.
     - Admin approve via UI (lihat AI guard §17).
-    - Token allowlist per workflow slug (`workflow_allowlist: ["*"]` atau
-      specific slugs).
+    - Token allowlist per workflow id (`workflow_allowlist: ["*"]` atau
+      specific ids).
     - Audit log catat tiap MCP call (token ID, op, args hash, timestamp,
       result), reuse infra audit yang sudah ada.
 14. [**deferred**] **`workflow_grep` MCP op** — tunda. AI di remote env
@@ -144,35 +145,36 @@
     widget vocab (text/textarea/secret/number/checkbox/dropdown/email/
     url/color/date/datetime/kvlist/picker). Cukup buat workflow,
     atau butuh widget khusus workflow (`workflow_ref` cross-flow,
-    `dataset_ref` dropdown ke datasets, `node_ref` reference ke node
+    `datatable_ref` dropdown ke data tables, `node_ref` reference ke node
     di graph)? Saran: pakai `picker` dgn LookupProvider khusus
-    (`workflow.workflows`, `workflow.datasets`) — reuse infrastructure,
+    (`workflow.workflows`, `workflow.data_tables`) — reuse infrastructure,
     no new widget.
-16. **Dataset storage shape** — single shared table
-    `wick_datasets_rows (dataset_slug, pk, data JSONB, ...)` vs
-    per-dataset native table `wick_dataset_<slug>` dgn real columns.
-    Single shared = simpler (no DDL per dataset, JSONB flexible),
+16. **Data table storage shape** — single shared table
+    `wick_data_table_rows (table_slug, pk, data JSONB, ...)` vs
+    per-table native `wick_data_table_<slug>` dgn real columns.
+    Single shared = simpler (no DDL per table, JSONB flexible),
     per-table = native B-tree indexes (faster filter, type CHECK
     constraints, JSONB GIN-only). Saran: single shared dgn partial
-    GIN index per dataset (`CREATE INDEX ... ON wick_datasets_rows
-    ((data->>'status')) WHERE dataset_slug='events'`) — best of
-    both. Need benchmark di prod scale (>1M rows per dataset).
-17. [**decided**] **Dataset row-level access** —
-    - V1 = `access.workflows` allowlist di `dataset.yaml` (read /
-      read_write per workflow slug).
+    GIN index per table (`CREATE INDEX ... ON wick_data_table_rows
+    ((data->>'status')) WHERE table_slug='events'`) — best of
+    both. Need benchmark di prod scale (>1M rows per table).
+17. [**decided**] **Data table row-level access** —
+    - V1 = `access.workflows` allowlist di `wick_data_tables.access` (read /
+      read_write per workflow id).
     - **Stamping**: tiap row di-insert otomatis ada `_meta.created_by_workflow`
       di JSONB. Used buat audit + future RBAC.
-    - **Filter by workflow** (opt-in di dataset.yaml):
-      ```yaml
-      access:
-        workflows: [support-triage, incident-resp]
-        row_filter: by_creator    # by_creator | none
+    - **Filter by workflow** (opt-in di access JSONB):
+      ```json
+      {
+        "workflows": ["support-triage", "incident-resp"],
+        "row_filter": "by_creator"
+      }
       ```
-      `by_creator` = workflow cuma boleh `dataset_*` ke row yang
-      `_meta.created_by_workflow == own_slug`. Cross-workflow read
+      `by_creator` = workflow cuma boleh `datatable_*` ke row yang
+      `_meta.created_by_workflow == own_id`. Cross-workflow read
       di-allow, write/delete reject.
     - Multi-tenant deeper (per-user, per-team) tunda sampai use case.
-18. **Dataset query DSL** — pakai WHERE clause string (SQL-flavored)
+18. **Data table query DSL** — pakai WHERE clause string (SQL-flavored)
     atau structured object? Saran: structured object di YAML (lebih
     safe, lebih readable), tapi engine translate ke SQL underneath.
     Ad-hoc query console di UI pakai raw SQL.
@@ -193,10 +195,10 @@
       di schema tapi ga di env.yaml → use `default:` atau prompt user.
     - No history file untuk env (use git: `git log env.yaml` =
       sufficient audit).
-20. **Datasets vs configs (existing wick concept)** — wick udah punya
+20. **Data tables vs configs (existing wick concept)** — wick udah punya
     `internal/configs/` tabel `configs`. Boleh merge atau pisah?
     Saran: pisah — `configs` = singleton per-job per-module config
-    (current), `datasets` = arbitrary multi-row data tables (new).
+    (current), `data tables` = arbitrary multi-row tables (new).
     Beda use case.
 
 Jawab sebelum implementasi biar scope ga melar.

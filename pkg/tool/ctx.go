@@ -39,6 +39,9 @@ type Ctx struct {
 	// Never nil inside a handler; HTML panics otherwise, which is the
 	// right signal during development.
 	render RenderFunc
+	// notFound renders the app-wide 404 page. Injected at mount time so
+	// c.NotFound() produces the same styled page as the auth middleware.
+	notFound func(w http.ResponseWriter, r *http.Request)
 	// meta is the tool.Tool this route belongs to, captured at mount
 	// time. Read via Meta() / Base() so handlers can build URLs without
 	// hardcoding /tools/{Key}.
@@ -50,8 +53,8 @@ type Ctx struct {
 
 // NewCtx is used by wick when mounting handlers. Modules never call it
 // directly — they receive a *Ctx ready to use.
-func NewCtx(w http.ResponseWriter, r *http.Request, render RenderFunc, meta Tool, cfg ConfigReader) *Ctx {
-	return &Ctx{W: w, R: r, render: render, meta: meta, cfg: cfg}
+func NewCtx(w http.ResponseWriter, r *http.Request, render RenderFunc, meta Tool, cfg ConfigReader, notFound func(http.ResponseWriter, *http.Request)) *Ctx {
+	return &Ctx{W: w, R: r, render: render, meta: meta, cfg: cfg, notFound: notFound}
 }
 
 // ── Request helpers ──────────────────────────────────────────────────
@@ -62,6 +65,26 @@ func (c *Ctx) Form(key string) string { return c.R.FormValue(key) }
 
 // Query returns the URL query value for key.
 func (c *Ctx) Query(key string) string { return c.R.URL.Query().Get(key) }
+
+// WantsJSON returns true when the client signals it wants JSON over HTML:
+// Accept header contains "application/json" OR the `format=json` query
+// param is set. Dual-mode handlers branch on this so the same VM struct
+// powers both the templ render and the SPA fetch.
+func (c *Ctx) WantsJSON() bool {
+	if c.Query("format") == "json" {
+		return true
+	}
+	for _, a := range c.R.Header.Values("Accept") {
+		// Cheap substring — handlers don't negotiate quality scores.
+		// "application/json" wins regardless of media-type parameters.
+		for i := 0; i+len("application/json") <= len(a); i++ {
+			if a[i:i+len("application/json")] == "application/json" {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // PathValue returns a Go 1.22+ mux path parameter (e.g. "/items/{id}").
 func (c *Ctx) PathValue(key string) string { return c.R.PathValue(key) }
@@ -123,6 +146,11 @@ func (c *Ctx) CfgBool(key string) bool {
 	return err == nil && b
 }
 
+// ConfigReader returns the underlying ConfigReader so callers that need
+// to capture it for use outside the request lifecycle (e.g. background
+// workers) can store it. Returns nil when no config service is wired.
+func (c *Ctx) ConfigReader() ConfigReader { return c.cfg }
+
 // Missing returns the names of Required Specs this tool declared that
 // have no stored value yet. Handlers call it at the top of a request
 // to decide whether to render the real view or a "setup required"
@@ -154,8 +182,14 @@ func (c *Ctx) Redirect(url string, code int) {
 	http.Redirect(c.W, c.R, url, code)
 }
 
-// NotFound writes a 404 with no body.
-func (c *Ctx) NotFound() { http.NotFound(c.W, c.R) }
+// NotFound renders the app-wide styled 404 page.
+func (c *Ctx) NotFound() {
+	if c.notFound != nil {
+		c.notFound(c.W, c.R)
+		return
+	}
+	http.NotFound(c.W, c.R)
+}
 
 // Error writes an error response with the given status code and
 // message. Messages are plain text; use JSON for structured errors.

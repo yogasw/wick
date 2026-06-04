@@ -70,7 +70,7 @@ func Create(layout config.Layout, opt CreateOptions) (Workspace, error) {
 		return Workspace{}, err
 	}
 	dir := layout.WorkspaceDir(opt.Name)
-	if storage.PathExists(dir) {
+	if storage.PathExists(layout.WorkspaceMeta(opt.Name)) {
 		return Workspace{}, fmt.Errorf("workspace %q already exists", opt.Name)
 	}
 	if opt.DefaultPreset == "" {

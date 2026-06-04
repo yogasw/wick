@@ -4,13 +4,14 @@ outline: deep
 
 # Channels
 
-A **channel** is where a message comes from. Wick agents are reachable from three channels at once:
+A **channel** is where a message comes from. Wick agents are reachable from four channels at once:
 
 | Channel | Connection | Session key | Source |
 |---|---|---|---|
 | **Slack** | Socket Mode (default) or HTTP Event API | `thread_ts` | [`channels/slack/slack.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go) |
 | **Telegram** | Long polling | `tg-<chatID>` | [`channels/telegram/telegram.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go) |
 | **Web UI** | Direct HTTP + SSE | UUID minted by wick | [`internal/tools/agents/`](https://github.com/yogasw/wick/blob/master/internal/tools/agents) |
+| **REST (OpenAI-compatible)** | HTTP request/response, OpenAI SDK | `rest-<conversation>` (or fresh UUID) | [`channels/rest/rest.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go) |
 
 All three implement the same `Channel` interface ([channel.go:59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/channel.go#L59)) — the pool sees them uniformly via a `SendFunc`. Wiring is handled by `*Registry` (not `server.go` directly); `channels/setup/` composers do the one-call boot assembly.
 
@@ -76,7 +77,7 @@ Channels declare exactly the interfaces they need; unused ones are simply not im
 
 ## Slack
 
-> **📸 Screenshot needed:** `agents-slack-config.png` — capture `/tools/agents/channels/slack` showing the form (Mode, Bot Token, App Token, Access Mode, Workspace dropdown). Save to `docs/public/screenshots/agents-slack-config.png`.
+> **📸 Screenshot needed:** `agents-slack-config.png` — capture `/tools/agents/channels/slack` showing the form (Mode, Bot Token, App Token, Access Mode, Project dropdown). Save to `docs/public/screenshots/agents-slack-config.png`.
 
 > **📸 Screenshot needed:** `agents-slack-thread.png` — capture a Slack thread mid-conversation: user message with ⏳/⚙️/✅ reaction lifecycle visible, bot reply chunked. Save to `docs/public/screenshots/agents-slack-thread.png`.
 
@@ -182,9 +183,9 @@ When all probes pass the panel shows a single "✓ All checks passed" line.
 
 Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is `Add`ed to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); the fingerprint covers the credentials (`Mode`, `BotToken`, `AppToken`, `SigningSecret`, `pubURL`) plus every access-control field (`UsersMode`, `AllowedUsers`, `GroupsMode`, `AllowedGroups`, `ChannelsMode`, `AllowedChannels`) and the approver block (`GateApprovers`, `GateApproverUsers`, `GateApproverGroups`). When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
 
-### Workspace selection
+### Project selection
 
-When **only one workspace exists**, Slack uses it without asking — the operator doesn't need to set `Workspace`. With multiple workspaces, the `Workspace` config field picks one.
+When **only one project exists**, Slack uses it without asking — the operator doesn't need to set `ProjectID`. With multiple projects, the `ProjectID` config field picks one.
 
 ### App manifest
 
@@ -192,7 +193,7 @@ A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](h
 
 ## Telegram
 
-> **📸 Screenshot needed:** `agents-telegram-config.png` — capture `/tools/agents/channels/telegram` showing the form (Bot Token, Allowed IDs, Workspace). Save to `docs/public/screenshots/agents-telegram-config.png`.
+> **📸 Screenshot needed:** `agents-telegram-config.png` — capture `/tools/agents/channels/telegram` showing the form (Bot Token, Allowed IDs, Project). Save to `docs/public/screenshots/agents-telegram-config.png`.
 
 > **📸 Screenshot needed:** `agents-telegram-chat.png` — capture a Telegram chat with the bot: user message → bot reply, plus an inline-keyboard approval message (Approve / Block buttons). Save to `docs/public/screenshots/agents-telegram-chat.png`.
 
@@ -208,13 +209,13 @@ The token is validated at config-save time. Invalid token → channel stays in *
 
 One Telegram chat = one wick session, keyed `tg-<chatID>` ([telegram.go:242](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L242)). The session lives across messages in that chat.
 
-::: warning Default workspace fallback
-When the Telegram config has no `Workspace` set, it falls back to the literal `"main"` ([telegram.go:262-265](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L262)), not the built-in `default` workspace. So if you set up Telegram on a fresh install with the default workspace only, the agent will fail to spawn until you either (a) create a workspace named `main`, or (b) set `Workspace` to `default` in the channel config.
+::: warning Default project fallback
+When the Telegram config has no `ProjectID` set, it falls back to the literal `"main"` ([telegram.go:262-265](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L262)), not the built-in `default` project. So if you set up Telegram on a fresh install with the default project only, the agent will fail to spawn until you either (a) create a project named `main`, or (b) set `ProjectID` to `default` in the channel config.
 :::
 
 ### Connection: long polling
 
-Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 60-second timeout ([telegram.go:158-175](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L158)). No public URL needed. Hot-reload works the same way as Slack — [`telegram/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/source.go) fingerprints `BotToken + AllowedIDs + Workspace`; `Registry.WatchConfigs` calls `Reload` on change.
+Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 60-second timeout ([telegram.go:158-175](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L158)). No public URL needed. Hot-reload works the same way as Slack — [`telegram/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/source.go) fingerprints `BotToken + AllowedIDs + ProjectID`; `Registry.WatchConfigs` calls `Reload` on change.
 
 ### Approvals via inline keyboard
 
@@ -244,6 +245,29 @@ The web UI is the always-on third channel. No config — it's just `/tools/agent
 | **AskUser card** | When `ask_user` fires, JS renders an inline card in the composer area with the question, option buttons, and (if `allow_freeform=true`) a text input. Submit → `POST /sessions/{id}/answer`. |
 | **Approved-commands panel** | Lists every `approve_always` rule for the current session, with a Revoke button. |
 
+### SSE event vocabulary
+
+The web UI listens to one stream (`GET /tools/agents/stream?session=<id>`) and dispatches every event by `type`. Other channels reuse the same broadcaster ([stream.go](https://github.com/yogasw/wick/blob/master/internal/tools/agents/stream.go)) so adding a transport doesn't change the event shape — only how the transport delivers it.
+
+| `type` | Producer | Payload | FE handler |
+|---|---|---|---|
+| `lifecycle` | State machine via pool `OnLifecycle` | `lifecycle: spawning\|working\|idle\|killed`, `pid`, `at` (LastActive ms) | Update header badge, idle countdown, typing indicator |
+| `session_start` | Parser `SessionStart` event | — | Show typing indicator, append assistant bubble shell |
+| `text_delta` | Parser per chunk | `data: <chunk>` | Append to current assistant bubble |
+| `thinking` | Parser `Thinking` event | `data: <text>` | Append thinking card to turn trace |
+| `tool_use` | Parser `ToolUse` event | `tool_name`, `tool_input`, `tool_use_id`, `at` | Render tool card with running spinner |
+| `tool_result` | Parser `ToolResult` event | `tool_use_id`, `data`, `is_error`, `at` | Attach result to matching tool card |
+| `done` | Parser `Done` event | — | Finalize turn bubble |
+| `error` | Parser `Error` event | `data: <error msg>` | Render error bubble, finalize turn |
+| `unknown` | Parser fallback | — | Ignored (debug-only) |
+| `approval_request` | Gate sidecar via daemon socket | `data: JSON ApprovalRequest` | Open approval modal |
+| `approval_resolved` | Approval write-back | `data: JSON {id, decision}` | Close modal, refresh approved panel |
+| `ask_user` | AskUser MCP tool | `data: JSON {question, options, allow_freeform}` | Render inline askUser card |
+| `ask_user_resolved` | Answer submit | `data: JSON {id, value}` | Hide askUser card |
+| `system_turn` | Provider switcher | `data: JSON {text, steps}` | Render system bubble |
+
+The snapshot endpoint (`GET /stream/snapshot?session=<id>`) replays the **current** in-flight state as the same events so a page refresh mid-turn paints the partial bubble + trace cards without waiting for the next live event. The snapshot reads from pool first (live `entry.PartialText` + `entry.InFlightEvents`), then falls back to `inflight.jsonl` on disk for crashed-but-not-flushed turns.
+
 ### AskUser MCP tool
 
 This is the agent-initiated counterpart to the gate. The agent calls the `ask_user` MCP tool ([askuser.go:38-45](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L38)):
@@ -263,6 +287,101 @@ This is the agent-initiated counterpart to the gate. The agent calls the `ask_us
 The handler registers a pending question, broadcasts SSE, blocks the MCP call until the user answers (default 5min timeout per [askuser.go:27](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L27)), then returns the answer to the agent. Unlike the gate, this is **voluntary** — the agent decides when to ask, and a forgetful agent can skip it.
 
 The reason wick ships its own AskUser MCP tool instead of relying on Claude Code's `AskUserQuestion` harness tool: the harness tool isn't available when Claude runs in pipe mode (`-p`), only inside the Claude Code TUI. An MCP tool works in every mode.
+
+## REST (OpenAI-compatible)
+
+> **📸 Screenshot needed:** `agents-rest-config.png` — capture `/tools/agents/channels/rest` showing the form (Enabled toggle, Project) and the docs panel with three tabs (Chat Completions / Responses / Models). Save to `docs/public/screenshots/agents-rest-config.png`.
+
+OpenAI Chat Completions, Responses, and Models APIs exposed at `/integrations/rest/api/v1/openai/*`. Any OpenAI SDK (`openai-python`, `openai-node`, LangChain, LiteLLM, …) works by pointing `base_url` at that path and using a wick Personal Access Token as the API key. Source: [`channels/rest/`](https://github.com/yogasw/wick/tree/master/internal/agents/channels/rest).
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/integrations/rest/api/v1/openai/chat/completions` | Chat Completions — most clients. |
+| `POST` | `/integrations/rest/api/v1/openai/responses` | OpenAI Responses API. Supports `previous_response_id` chaining. |
+| `GET`  | `/integrations/rest/api/v1/openai/models` | Lists every enabled wick provider as an OpenAI model object. |
+
+### Auth
+
+Every request must carry a wick Personal Access Token as `Authorization: Bearer wick_pat_…`. Mint tokens at `/profile/tokens`. There is no shared bot token — auth is per-request, so a request with no Bearer returns `401`, an unknown token returns `401`. Channel-level enable is just an on/off in the config form; the token does the real auth.
+
+### Session binding via `conversation`
+
+Sessions are keyed by the OpenAI Responses API standard `conversation` field (an extension on Chat Completions; native on Responses). Three modes:
+
+| Mode | Trigger | Behaviour |
+|---|---|---|
+| **Stateless** | Omit `conversation` and `previous_response_id` | Each request spawns a fresh wick session UUID. Client owns history — re-send the full `messages` / `input` each turn (OpenAI parity). |
+| **Conversation** | `"conversation": "<id>"` | All requests with the same id reuse one wick session (`rest-<id>`). Only the new turn is sent; wick keeps history. Works on both endpoints. Also accepted via `metadata.conversation` for clients that expose only standard OpenAI fields. |
+| **Responses chaining** | `"previous_response_id": "resp_<id>"` (Responses only) | The id returned by a prior `/responses` call. Wick reuses the underlying session — equivalent to passing the same `conversation`. |
+
+::: tip One vocabulary
+Wick deliberately uses `conversation` everywhere instead of a custom `session_id` field. That keeps clients aligned with the OpenAI Responses API spec and means a single Python snippet (just `extra_body={"conversation": "..."}`) drives both endpoints.
+:::
+
+### Model validation
+
+The `model` field on chat / responses must match one of the ids returned by `GET /models`. The catalogue is built live from `provider.Load()` ([`models.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/models.go)): each enabled provider instance shows up once — default-seeded entries surface as the bare type (`claude`, `codex`, `gemini`), named instances as `type/name` (`claude/work`). Disabled instances are skipped. Unknown ids return `404 model_not_found` with the OpenAI-shaped error body so SDK typed-exception handling works. Empty `model` is allowed and lets wick pick.
+
+### Streaming
+
+Not supported. `"stream": true` returns `400` immediately — clients should leave it at the default `false`. The handler waits for the agent's `Done` event before responding, so a turn takes as long as the underlying provider does.
+
+### Approvals
+
+Gate prompts are **auto-blocked** ([`rest.go OnApprovalRequest`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go)). REST clients cannot deliver an interactive decision, so any approval request resolves to `block` and the resulting error surfaces as a `403`. Use the web UI to approve sensitive commands.
+
+### Concurrency
+
+Two safeguards:
+
+1. **Per-session REST lock**: a second request on the same `conversation` while the first is still in flight gets `409 session busy`. Prevents two REST clients racing the same wick session.
+2. **Pool queue**: dispatch always goes through `sendFn → pool.Send`, which FIFO-queues when slots are full and preempts idle slots when configured. REST has no direct spawn path. See [Pool & Sessions](./pool).
+
+### Configured response shape (chat completions)
+
+```json
+{
+  "id": "wick-rest-…",
+  "object": "chat.completion",
+  "created": 1715000000,
+  "model": "claude",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "…" },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+### Configured response shape (responses)
+
+```json
+{
+  "id": "resp_…",
+  "object": "response",
+  "status": "completed",
+  "model": "claude",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [{ "type": "output_text", "text": "…", "annotations": [] }]
+    }
+  ],
+  "output_text": "…",
+  "previous_response_id": null
+}
+```
+
+`id` is `resp_<conversation>` so a client can reuse it either as `previous_response_id` or pass the same `conversation` back — both land in the same wick session.
+
+### Hot-reload
+
+Same pattern as the other channels: [`rest/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/source.go) fingerprints `Enabled + ProjectID`. `Registry.WatchConfigs` calls `Reload` on change. Toggle the channel from `/tools/agents/channels/rest` and it activates within 30 seconds without a server restart.
 
 ## Meta-commands
 
@@ -288,7 +407,7 @@ Channel configs live in `agent_channels` ([store.go](https://github.com/yogasw/w
 
 | Column | Holds |
 |---|---|
-| `type` | `slack` / `telegram` |
+| `type` | `slack` / `telegram` / `rest` |
 | `name` | Display name (currently always `default`) |
 | `enabled` | Mirrors whether `bot_token` is non-empty |
 | `config` | JSON map: per-field settings (one per `wick:"key=..."` field) |
@@ -307,8 +426,18 @@ The recipe for a hypothetical Discord channel. `server.go` never changes after t
 
 The `Channel` interface itself doesn't change. The hard parts are the platform-specific bits: how messages stream back, how access control works, how approvals are rendered. The `Registry` wires everything else automatically.
 
+## Workflow integration
+
+Channels participate in workflows two ways:
+
+- **Inbound events** — a `channel` trigger fires a workflow when an event matches `source` + `match.event` (Slack `app_mention`, `message`, `block_action`, `view_submission`, …). The full payload lands in `.Event.Payload`.
+- **Outbound actions** — a `channel` node calls registered actions (Slack `send_message`, `add_reaction`, `open_dm`, `open_modal`, `push_modal`, `update_modal`, `send_ephemeral`, `publish_home`, `respond_url`, `update_message`, …) without spawning an agent turn.
+
+See [Workflows ▶ channel node](/workflow/nodes/channel) for the full surface.
+
 ## See also
 
 - [Pool & Sessions](./pool) — how `SendFunc` actually does the dispatch.
-- [Workspaces](./workspaces) — per-channel `Workspace` config field.
+- [Projects](./projects) — per-channel `ProjectID` config field.
+- [Workflows](/workflow/) — typed channel events + outbound actions inside a workflow DAG.
 - [Command Gate](../command-gate) — the approval modal in the web UI is the same approval Slack/Telegram render.

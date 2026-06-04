@@ -38,6 +38,8 @@ import (
 	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/pkg/logfiles"
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
@@ -98,6 +100,7 @@ func init() {
 	// reading `app.BuildAppName` see the same value as agents/gate/
 	// Layout etc. that read appname.Resolve() directly.
 	BuildAppName = appname.Resolve()
+	appname.BuildAppVersion = BuildAppVersion
 
 	// Cobra ships an anti-double-click guard: when a binary is launched
 	// from Explorer on Windows, it prints `MousetrapHelpText` and exits
@@ -269,8 +272,9 @@ Clients (--client):
 				return err
 			}
 			if name == "" {
-				name = filepath.Base(cwd)
+				name = BuildAppName
 			}
+			fmt.Fprintf(os.Stdout, "%s %s (wick %s)\n", BuildAppName, BuildAppVersion, BuildWickVersion)
 			entry, err := mcpconfig.SelfEntry()
 			if err != nil {
 				return err
@@ -355,10 +359,25 @@ func Run() {
 	defaultPort := config.Load().App.Port
 	var port int
 	root := &cobra.Command{
-		Use:   "app",
-		Short: "wick-powered service",
-		Long:  "Run with no args to launch the system tray. Use subcommands for headless server / worker / MCP / install.",
+		Use:   BuildAppName,
+		Short: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")",
+		// Setting Version enables `<app> --version` and `<app> -v` for free
+		// via cobra. The matching `version` subcommand is registered below
+		// so `wick-agent version` works too — the installer's version probe
+		// relies on at least one of these returning the embedded version.
+		Version: BuildAppVersion,
+		Long: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")" +
+			"\n\nRun with no args to launch the system tray on desktops with a GUI." +
+			"\nOn headless environments (Termux / SSH / no DISPLAY) use `" + BuildAppName + " start`" +
+			"\nfor a background daemon, or one of the foreground subcommands.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !env.HasGUI() {
+				fmt.Fprintf(os.Stderr,
+					"Headless environment detected — tray needs a desktop session.\n"+
+						"Use `%s start` for background daemon mode, or `%s all` to run in foreground.\n",
+					BuildAppName, BuildAppName)
+				return nil
+			}
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
@@ -367,11 +386,34 @@ func Run() {
 			return nil
 		},
 	}
+	root.AddGroup(
+		&cobra.Group{ID: "daemon", Title: "Daemon (background):"},
+		&cobra.Group{ID: "run", Title: "Run (foreground):"},
+		&cobra.Group{ID: "tools", Title: "Tools:"},
+	)
+	// Override the default cobra version template (just "{{.Version}}\n")
+	// so `<app> --version` produces "<app> version vX.Y.Z (wick vA.B.C)"
+	// — a single line the installer's probe_version can grep against the
+	// resolved release tag.
+	root.SetVersionTemplate("{{.Name}} version " + BuildAppVersion + " (wick " + BuildWickVersion + ")\n")
 
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print " + BuildAppName + " version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(BuildAppName + " version " + BuildAppVersion + " (wick " + BuildWickVersion + ")")
+		},
+	}
+
+	var serverHost string
+	var serverLocalhost bool
 	serverCmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run web server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := applyHostFlags(serverHost, serverLocalhost); err != nil {
+				return err
+			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -381,6 +423,8 @@ func Run() {
 		},
 	}
 	serverCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
+	serverCmd.Flags().StringVar(&serverHost, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	serverCmd.Flags().BoolVar(&serverLocalhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 
 	workerCmd := &cobra.Command{
 		Use:   "worker",
@@ -394,19 +438,35 @@ func Run() {
 		},
 	}
 
+	var allHost string
+	var allLocalhost bool
 	allCmd := &cobra.Command{
 		Use:   "all",
 		Short: "Run web server and cron scheduler in one process (single-node)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := applyHostFlags(allHost, allLocalhost); err != nil {
+				return err
+			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
+			// Split component logs into app/server/worker/mcp dated files
+			// under ~/.<appName>/logs/, matching tray mode. Daemon parent
+			// still redirects child stdout/stderr to daemon.log as a
+			// safety net for panics that fire before this point.
+			serverLogger := log.With().Str("component", "server").Logger()
+			workerLogger := log.With().Str("component", "worker").Logger()
+			if ls, cleanup, err := logfiles.Setup(BuildAppName, 0); err == nil {
+				defer cleanup()
+				serverLogger = ls.Server
+				workerLogger = ls.Worker
+			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
+			ctx = serverLogger.WithContext(ctx)
 
 			srv := api.NewServer()
 
-			schedCtx := log.With().Str("component", "worker").Logger().WithContext(ctx)
+			schedCtx := workerLogger.WithContext(ctx)
 			// Auto-respawn loop. RunScheduler should only return when
 			// schedCtx is cancelled; any other return is treated as a
 			// crash and restarted with backoff so a transient DB blip
@@ -441,6 +501,8 @@ func Run() {
 		},
 	}
 	allCmd.Flags().IntVar(&port, "port", defaultPort, "Listen on given port (env: PORT)")
+	allCmd.Flags().StringVar(&allHost, "host", "", "Bind interface (e.g. 127.0.0.1, 192.168.1.42) — default empty binds all (env: WICK_HOST)")
+	allCmd.Flags().BoolVar(&allLocalhost, "localhost", false, "Shortcut for --host 127.0.0.1 — not reachable from LAN")
 
 	mcpCmd := &cobra.Command{
 		Use:   "mcp",
@@ -468,9 +530,54 @@ func Run() {
 		},
 	}
 
-	root.AddCommand(serverCmd, workerCmd, allCmd, mcpCmd, trayCmd, uninstallCmd())
+	// Group foreground run commands.
+	serverCmd.GroupID = "run"
+	workerCmd.GroupID = "run"
+	allCmd.GroupID = "run"
+
+	// Group tools.
+	mcpCmd.GroupID = "tools"
+	trayCmd.GroupID = "tools"
+
+	// Daemon (background) commands — start/stop/restart/status using a
+	// PID file under userconfig.Dir. Lets headless boxes (Termux, SSH
+	// servers, Linux without DISPLAY) run wick without a system tray
+	// or manual `nohup &` shell tricks.
+	startCmd := daemonStartCmd()
+	stopCmd := daemonStopCmd()
+	restartCmd := daemonRestartCmd()
+	statusCmd := daemonStatusCmd()
+	svcCmd := serviceCmd()
+	startCmd.GroupID = "daemon"
+	stopCmd.GroupID = "daemon"
+	restartCmd.GroupID = "daemon"
+	statusCmd.GroupID = "daemon"
+	svcCmd.GroupID = "daemon"
+
+	root.AddCommand(
+		serverCmd, workerCmd, allCmd,
+		startCmd, stopCmd, restartCmd, statusCmd, svcCmd,
+		mcpCmd, trayCmd,
+		configCmd(), uninstallCmd(),
+		versionCmd,
+	)
 
 	if err := root.Execute(); err != nil {
 		log.Fatal().Msgf("failed run app: %s", err.Error())
 	}
+}
+
+// applyHostFlags resolves the --host / --localhost pair to a single
+// WICK_HOST env value the server reads at bind time. --host wins when
+// both are set (explicit IP beats the shortcut); --localhost alone is
+// 127.0.0.1; nothing set leaves WICK_HOST untouched so the default
+// bind-all behavior survives.
+func applyHostFlags(host string, localhost bool) error {
+	switch {
+	case host != "":
+		_ = os.Setenv("WICK_HOST", host)
+	case localhost:
+		_ = os.Setenv("WICK_HOST", "127.0.0.1")
+	}
+	return nil
 }

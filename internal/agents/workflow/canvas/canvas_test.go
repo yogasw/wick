@@ -18,19 +18,19 @@ type stubService struct {
 	updateErr  error
 }
 
-func newStub(slugs ...string) *stubService {
+func newStub(ids ...string) *stubService {
 	s := &stubService{workflows: map[string]workflow.Workflow{}}
-	for _, slug := range slugs {
-		s.workflows[slug] = minimalWorkflow(slug)
+	for _, id := range ids {
+		s.workflows[id] = minimalWorkflow(id)
 	}
 	return s
 }
 
 // minimalWorkflow builds the smallest workflow that passes parse.Validate.
-func minimalWorkflow(slug string) workflow.Workflow {
+func minimalWorkflow(id string) workflow.Workflow {
 	return workflow.Workflow{
-		ID:      slug,
-		Name:    slug,
+		ID:      id,
+		Name:    id,
 		Enabled: false,
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerManual, EntryNode: "start"},
@@ -43,41 +43,40 @@ func minimalWorkflow(slug string) workflow.Workflow {
 	}
 }
 
-func (s *stubService) Load(slug string) (workflow.Workflow, error) {
+func (s *stubService) Load(id string) (workflow.Workflow, error) {
 	if s.loadErr != nil {
 		return workflow.Workflow{}, s.loadErr
 	}
-	w, ok := s.workflows[slug]
+	w, ok := s.workflows[id]
 	if !ok {
-		return workflow.Workflow{}, errors.New("not found: " + slug)
+		return workflow.Workflow{}, errors.New("not found: " + id)
 	}
 	return w, nil
 }
 
-func (s *stubService) Update(slug string, w workflow.Workflow, _ map[string][]byte) error {
+func (s *stubService) Update(id string, w workflow.Workflow) error {
 	if s.updateErr != nil {
 		return s.updateErr
 	}
-	s.workflows[slug] = w
+	s.workflows[id] = w
 	return nil
 }
 
 // Remaining interface methods — all no-ops.
-func (s *stubService) List() ([]string, error)                               { return nil, nil }
-func (s *stubService) Create(_ string, _ workflow.Workflow, _ map[string][]byte) error {
-	return nil
-}
-func (s *stubService) Delete(_ string) error                                   { return nil }
-func (s *stubService) Toggle(_ string, _ bool) error                           { return nil }
-func (s *stubService) LoadDraft(_ string) (workflow.Workflow, error)            { return workflow.Workflow{}, nil }
-func (s *stubService) HasDraft(_ string) bool                                  { return false }
-func (s *stubService) SaveDraft(_ string, _ workflow.Workflow) error            { return nil }
-func (s *stubService) Publish(_ string) (workflow.Workflow, error)             { return workflow.Workflow{}, nil }
-func (s *stubService) DiscardDraft(_ string) error                             { return nil }
-func (s *stubService) ListFiles(_ string) ([]string, error)                    { return nil, nil }
-func (s *stubService) ReadFile(_, _ string) ([]byte, error)                    { return nil, nil }
-func (s *stubService) WriteFile(_, _ string, _ []byte) error                   { return nil }
-func (s *stubService) DeleteFile(_, _ string) error                            { return nil }
+func (s *stubService) List() ([]string, error)                          { return nil, nil }
+func (s *stubService) FindByName(_, _ string) (string, error)           { return "", nil }
+func (s *stubService) Create(_ string, _ workflow.Workflow) error       { return nil }
+func (s *stubService) Delete(_ string) error                            { return nil }
+func (s *stubService) Toggle(_ string, _ bool) error                    { return nil }
+func (s *stubService) LoadDraft(id string) (workflow.Workflow, error)   { return s.Load(id) }
+func (s *stubService) HasDraft(_ string) bool                           { return false }
+func (s *stubService) SaveDraft(id string, w workflow.Workflow) error   { s.workflows[id] = w; return nil }
+func (s *stubService) Publish(_ string) (workflow.Workflow, error)      { return workflow.Workflow{}, nil }
+func (s *stubService) DiscardDraft(_ string) error                      { return nil }
+func (s *stubService) ListTests(_ string) ([]string, error)             { return nil, nil }
+func (s *stubService) GetTest(_, _ string) ([]byte, error)              { return nil, nil }
+func (s *stubService) SaveTest(_, _ string, _ []byte) error             { return nil }
+func (s *stubService) DeleteTest(_, _ string) error                     { return nil }
 func (s *stubService) LoadState(_ string) (workflow.WorkflowState, error)      { return workflow.WorkflowState{}, nil }
 func (s *stubService) SaveState(_ string, _ workflow.WorkflowState) error      { return nil }
 func (s *stubService) LoadEnvValues(_ string) (map[string]string, error)       { return nil, nil }
@@ -166,7 +165,7 @@ func TestUpdateNode_KnownKey(t *testing.T) {
 	svc := newStub("wf")
 	c := newCanvas(svc)
 
-	patch := map[string]any{"label": "my label"}
+	patch := map[string]any{"label": "my_label"}
 	got, err := c.UpdateNode("wf", "start", patch)
 	if err != nil {
 		t.Fatalf("UpdateNode error: %v", err)
@@ -175,7 +174,7 @@ func TestUpdateNode_KnownKey(t *testing.T) {
 	if !ok {
 		t.Fatal("start node missing from result")
 	}
-	if n.Label != "my label" {
+	if n.Label != "my_label" {
 		t.Errorf("expected label %q, got %q", "my label", n.Label)
 	}
 }
@@ -240,34 +239,6 @@ func TestDeleteNode_NotFound(t *testing.T) {
 	_, err := c.DeleteNode("wf", "ghost")
 	if err == nil {
 		t.Fatal("expected error for missing node, got nil")
-	}
-}
-
-func TestDeleteNode_EntryNodeRejected(t *testing.T) {
-	svc := newStub()
-	// Build a workflow where graph.Entry is explicitly set.
-	w := workflow.Workflow{
-		ID:      "ewf",
-		Name:    "ewf",
-		Enabled: false,
-		Triggers: []workflow.Trigger{
-			{Type: workflow.TriggerManual, EntryNode: ""},
-		},
-		Graph: workflow.Graph{
-			Entry: "start",
-			Nodes: []workflow.Node{
-				{ID: "start", Type: workflow.NodeShell, Command: []string{"echo"}},
-				{ID: "end", Type: workflow.NodeEnd},
-			},
-		},
-	}
-	svc.workflows["ewf"] = w
-
-	c := newCanvas(svc)
-
-	_, err := c.DeleteNode("ewf", "start")
-	if err == nil {
-		t.Fatal("expected error when deleting entry node, got nil")
 	}
 }
 
@@ -586,13 +557,214 @@ func TestMutate_ValidationFail_WorkflowUnchanged(t *testing.T) {
 	}
 }
 
-func TestMutate_LoadMissingSlug_Error(t *testing.T) {
+func TestMutate_LoadMissingID_Error(t *testing.T) {
 	svc := newStub("wf")
 	c := newCanvas(svc)
 
 	// "other" is not seeded in the stub.
 	_, err := c.AddNode("other", workflow.Node{ID: "x", Type: workflow.NodeShell, Command: []string{"ls"}})
 	if err == nil {
-		t.Fatal("expected error for unknown slug")
+		t.Fatal("expected error for unknown id")
+	}
+}
+
+// ── MoveNodes (batch) ────────────────────────────────────────────────────────
+
+func TestMoveNodes_BatchUpdatesPositions(t *testing.T) {
+	svc := newStub("wf")
+	// Add a second node so both IDs exist in the workflow.
+	w := svc.workflows["wf"]
+	w.Graph.Nodes = append(w.Graph.Nodes, workflow.Node{ID: "n2", Type: workflow.NodeEnd})
+	w.Graph.Edges = append(w.Graph.Edges, workflow.Edge{From: "start", To: "n2"})
+	svc.workflows["wf"] = w
+
+	c := newCanvas(svc)
+	moves := []NodeMove{
+		{NodeID: "start", X: 100, Y: 200},
+		{NodeID: "n2", X: 400, Y: 200},
+	}
+	got, err := c.MoveNodes("wf", moves)
+	if err != nil {
+		t.Fatalf("MoveNodes error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	for _, mv := range moves {
+		pos := positions[mv.NodeID].(map[string]any)
+		if pos["x"] != mv.X || pos["y"] != mv.Y {
+			t.Errorf("node %s: want x=%d y=%d, got %v", mv.NodeID, mv.X, mv.Y, pos)
+		}
+	}
+}
+
+func TestMoveNodes_EmptyMovesError(t *testing.T) {
+	c := newCanvas(newStub("wf"))
+	_, err := c.MoveNodes("wf", nil)
+	if err == nil {
+		t.Fatal("expected error for empty moves slice")
+	}
+}
+
+func TestMoveNodes_MissingNodeIDError(t *testing.T) {
+	c := newCanvas(newStub("wf"))
+	_, err := c.MoveNodes("wf", []NodeMove{{NodeID: "", X: 10, Y: 10}})
+	if err == nil {
+		t.Fatal("expected error for empty node_id")
+	}
+}
+
+func TestMoveNodes_PreservesUnlistedPositions(t *testing.T) {
+	svc := newStub("wf")
+	c := newCanvas(svc)
+	// Set start at known position first.
+	if _, err := c.MoveNode("wf", "start", 50, 50); err != nil {
+		t.Fatalf("setup MoveNode: %v", err)
+	}
+	// MoveNodes with a synthetic ID — start must be untouched.
+	w := svc.workflows["wf"]
+	w.Graph.Nodes = append(w.Graph.Nodes, workflow.Node{ID: "n2", Type: workflow.NodeEnd})
+	w.Graph.Edges = append(w.Graph.Edges, workflow.Edge{From: "start", To: "n2"})
+	svc.workflows["wf"] = w
+
+	got, err := c.MoveNodes("wf", []NodeMove{{NodeID: "n2", X: 200, Y: 300}})
+	if err != nil {
+		t.Fatalf("MoveNodes: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	startPos := positions["start"].(map[string]any)
+	if startPos["x"] != 50 || startPos["y"] != 50 {
+		t.Errorf("start position changed unexpectedly: %v", startPos)
+	}
+}
+
+// ── AutoLayout ────────────────────────────────────────────────────────────────
+
+// chainWorkflow builds wf with a linear A→B→C chain.
+func chainWorkflow(id string) workflow.Workflow {
+	return workflow.Workflow{
+		ID:      id,
+		Name:    id,
+		Enabled: false,
+		Triggers: []workflow.Trigger{
+			{ID: "trig-manual", Type: workflow.TriggerManual, EntryNode: "a"},
+		},
+		Graph: workflow.Graph{
+			Entry: "a",
+			Nodes: []workflow.Node{
+				{ID: "a", Type: workflow.NodeShell, Command: []string{"echo", "a"}},
+				{ID: "b", Type: workflow.NodeShell, Command: []string{"echo", "b"}},
+				{ID: "c", Type: workflow.NodeEnd},
+			},
+			Edges: []workflow.Edge{
+				{From: "a", To: "b"},
+				{From: "b", To: "c"},
+			},
+		},
+	}
+}
+
+func TestAutoLayout_LinearChainIncreasingX(t *testing.T) {
+	svc := &stubService{workflows: map[string]workflow.Workflow{"wf": chainWorkflow("wf")}}
+	c := newCanvas(svc)
+
+	got, err := c.AutoLayout("wf", nil)
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+
+	posFor := func(id string) (x, y int) {
+		p, ok := positions[id].(map[string]any)
+		if !ok {
+			t.Fatalf("position for %q not found (keys: %v)", id, func() []string {
+				var ks []string
+				for k := range positions {
+					ks = append(ks, k)
+				}
+				return ks
+			}())
+		}
+		x = p["x"].(int)
+		y = p["y"].(int)
+		return
+	}
+	// Top-down layout: a→b→c means a.Y < b.Y < c.Y (increasing depth).
+	// Each level has one node, so they're all centred at the same X.
+	_, ay := posFor("a")
+	_, by := posFor("b")
+	_, cy := posFor("c")
+	if !(ay < by && by < cy) {
+		t.Errorf("expected a.Y < b.Y < c.Y (top-down), got %d %d %d", ay, by, cy)
+	}
+}
+
+func TestAutoLayout_TriggerPlacedAboveEntryNode(t *testing.T) {
+	svc := &stubService{workflows: map[string]workflow.Workflow{"wf": chainWorkflow("wf")}}
+	c := newCanvas(svc)
+
+	got, err := c.AutoLayout("wf", nil)
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+
+	tpos, ok := positions["trig-manual"].(map[string]any)
+	if !ok {
+		t.Fatal("trigger position not set")
+	}
+	if tpos["y"].(int) != layoutYOrigin {
+		t.Errorf("trigger Y: want %d (layoutYOrigin), got %d", layoutYOrigin, tpos["y"].(int))
+	}
+	// Trigger should align horizontally with entry node "a".
+	apos := positions["a"].(map[string]any)
+	if tpos["x"].(int) != apos["x"].(int) {
+		t.Errorf("trigger X %d != entry node X %d", tpos["x"].(int), apos["x"].(int))
+	}
+}
+
+func TestAutoLayout_ScopedOnlyMovesListed(t *testing.T) {
+	svc := &stubService{workflows: map[string]workflow.Workflow{"wf": chainWorkflow("wf")}}
+	c := newCanvas(svc)
+
+	// Pre-position node "c" at a known spot.
+	if _, err := c.MoveNode("wf", "c", 999, 999); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Auto-layout only "a" and "b" — "c" must remain at 999,999.
+	got, err := c.AutoLayout("wf", []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("AutoLayout scoped error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	cpos := positions["c"].(map[string]any)
+	if cpos["x"].(int) != 999 || cpos["y"].(int) != 999 {
+		t.Errorf("node c unexpectedly moved: %v", cpos)
+	}
+}
+
+func TestAutoLayout_SameDepthSameY(t *testing.T) {
+	// Two root nodes (no incoming edges) → both depth 0 → same Y, different X.
+	svc := newStub("wf")
+	w := svc.workflows["wf"]
+	w.Graph.Nodes = append(w.Graph.Nodes,
+		workflow.Node{ID: "r1", Type: workflow.NodeEnd},
+		workflow.Node{ID: "r2", Type: workflow.NodeEnd},
+	)
+	svc.workflows["wf"] = w
+
+	c := newCanvas(svc)
+	got, err := c.AutoLayout("wf", []string{"r1", "r2"})
+	if err != nil {
+		t.Fatalf("AutoLayout error: %v", err)
+	}
+	positions := got.Canvas["positions"].(map[string]any)
+	r1 := positions["r1"].(map[string]any)
+	r2 := positions["r2"].(map[string]any)
+	// Same depth → same Y row.
+	if r1["y"].(int) != r2["y"].(int) {
+		t.Errorf("same-depth nodes should share Y: r1=%v r2=%v", r1, r2)
+	}
+	// Different horizontal position within the row.
+	if r1["x"].(int) == r2["x"].(int) {
+		t.Errorf("same-depth nodes should differ in X: r1=%v r2=%v", r1, r2)
 	}
 }

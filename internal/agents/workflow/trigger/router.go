@@ -54,7 +54,7 @@ type Router struct {
 	queues  map[string]*Queue
 	dedups  map[string]*Dedup
 	workers map[string]context.CancelFunc
-	// index maps a route key → list of (slug, triggerIdx) pairs so
+	// index maps a route key → list of (id, triggerIdx) pairs so
 	// Dispatch can skip workflows that don't subscribe to this event.
 	// Built/torn-down by Register/Unregister; never read without
 	// holding mu.
@@ -72,9 +72,15 @@ type Router struct {
 // have N triggers and the router-level check (path/method/severity)
 // must run against the right one.
 type triggerRef struct {
-	Slug       string
+	ID         string
 	TriggerIdx int
 }
+
+// SetService swaps the workflow service this router reads from. Used
+// at boot when the DB-backed service replaces the file-based one — the
+// router caches a Service pointer at New() time, so re-wiring after
+// the swap keeps the queues + dedup tables pointing at the same data.
+func (r *Router) SetService(svc service.Service) { r.service = svc }
 
 // NewRouter wires a Router to an Engine + Service.
 func NewRouter(e *engine.Engine, svc service.Service) *Router {
@@ -119,54 +125,54 @@ func (r *Router) Register(ctx context.Context, w workflow.Workflow) {
 	r.reindexLocked(w)
 }
 
-// Unregister stops the worker for slug and frees its queue.
-func (r *Router) Unregister(slug string) {
+// Unregister stops the worker for id and frees its queue.
+func (r *Router) Unregister(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cancel, ok := r.workers[slug]; ok {
+	if cancel, ok := r.workers[id]; ok {
 		cancel()
-		delete(r.workers, slug)
+		delete(r.workers, id)
 	}
-	if q, ok := r.queues[slug]; ok {
+	if q, ok := r.queues[id]; ok {
 		q.Close()
-		delete(r.queues, slug)
+		delete(r.queues, id)
 	}
-	delete(r.dedups, slug)
-	delete(r.defs, slug)
-	r.removeFromIndexLocked(slug)
+	delete(r.dedups, id)
+	delete(r.defs, id)
+	r.removeFromIndexLocked(id)
 }
 
-// RunNow enqueues a manual run for one explicit slug, bypassing
+// RunNow enqueues a manual run for one explicit id, bypassing
 // Enabled + trigger-match checks. Used by the UI Run-Now button so
 // admins can fire a disabled workflow (e.g. dry-run before enable)
 // without going through the Dispatch matcher.
 //
 // Returns an error if the workflow isn't registered with the router
 // (caller should HotReload first).
-func (r *Router) RunNow(ctx context.Context, slug string, evt workflow.Event) error {
-	return r.RunNowWith(ctx, slug, nil, evt)
+func (r *Router) RunNow(ctx context.Context, id string, evt workflow.Event) error {
+	return r.RunNowWith(ctx, id, nil, evt)
 }
 
 // RunNowWith is RunNow with an explicit workflow override. Pass a
 // non-nil `w` to execute that exact definition (typically the
 // draft loaded from disk) instead of the published copy registered
-// in Router.defs. The router still owns the per-slug queue + worker
+// in Router.defs. The router still owns the per-id queue + worker
 // machinery — the override only affects which Workflow value the
 // engine receives.
 //
 // When `w` is nil, behaviour is identical to RunNow.
-func (r *Router) RunNowWith(ctx context.Context, slug string, w *workflow.Workflow, evt workflow.Event) error {
+func (r *Router) RunNowWith(ctx context.Context, id string, w *workflow.Workflow, evt workflow.Event) error {
 	r.mu.RLock()
-	_, registered := r.defs[slug]
-	q := r.queues[slug]
+	_, registered := r.defs[id]
+	q := r.queues[id]
 	r.mu.RUnlock()
 	if q == nil {
-		return fmt.Errorf("workflow %q has no router queue — register it first", slug)
+		return fmt.Errorf("workflow %q has no router queue — register it first", id)
 	}
 	if w == nil && !registered {
-		return fmt.Errorf("workflow %q not registered with router", slug)
+		return fmt.Errorf("workflow %q not registered with router", id)
 	}
-	return q.Enqueue(WorkItem{Slug: slug, Event: evt, Workflow: w})
+	return q.Enqueue(WorkItem{ID: id, Event: evt, Workflow: w})
 }
 
 // Dispatch routes an event to every subscribed workflow.
@@ -174,7 +180,7 @@ func (r *Router) RunNowWith(ctx context.Context, slug string, w *workflow.Workfl
 // Pipeline:
 //  1. Build the event's route keys (specific + wildcards).
 //  2. Look each up in the trigger index, union the resulting
-//     triggerRefs, dedup by workflow slug so a workflow with
+//     triggerRefs, dedup by workflow id so a workflow with
 //     multiple matching triggers still enqueues once.
 //  3. For each candidate, run the cheap router-side checks that need
 //     the raw trigger (webhook path/method, error source, target),
@@ -186,36 +192,43 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 	candidates := map[string]workflow.Trigger{}
 	for _, key := range eventRouteKeys(evt) {
 		for _, ref := range r.index[key] {
-			if _, seen := candidates[ref.Slug]; seen {
+			if _, seen := candidates[ref.ID]; seen {
 				continue
 			}
-			w, ok := r.defs[ref.Slug]
+			w, ok := r.defs[ref.ID]
 			if !ok || !w.Enabled {
 				continue
 			}
 			if ref.TriggerIdx >= len(w.Triggers) {
 				continue
 			}
-			candidates[ref.Slug] = w.Triggers[ref.TriggerIdx]
+			candidates[ref.ID] = w.Triggers[ref.TriggerIdx]
 		}
 	}
 	r.mu.RUnlock()
 
 	matched := 0
-	for slug, tr := range candidates {
+	for id, tr := range candidates {
 		if !triggerPassesRouterChecks(tr, evt) {
 			continue
 		}
-		if !r.passesDedup(slug, evt) {
+		if !r.passesDedup(id, evt) {
 			continue
 		}
 		r.mu.RLock()
-		q := r.queues[slug]
+		q := r.queues[id]
 		r.mu.RUnlock()
 		if q == nil {
 			continue
 		}
-		_ = q.Enqueue(WorkItem{Slug: slug, Event: evt})
+		// Per-trigger event copy with the originating Trigger.ID
+		// stamped so workflow_watch(trigger_id=...) can filter back
+		// to the entry that fired. Original evt stays untouched —
+		// matters because a single inbound payload may fan out to
+		// multiple triggers across workflows.
+		perTrig := evt
+		perTrig.TriggerID = tr.ID
+		_ = q.Enqueue(WorkItem{ID: id, Event: perTrig})
 		matched++
 	}
 	return matched
@@ -258,7 +271,7 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 				return false
 			}
 		}
-		if tr.MatchEnabled && !matchEventPayload(tr.Match, evt.Payload) {
+		if tr.MatchEnabled && !matchEventPayload(filterMatchSpec(tr.Match), evt.Payload) {
 			return false
 		}
 		return true
@@ -290,6 +303,34 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 		return true
 	}
 	return true
+}
+
+// filterMatchSpec strips UI-control keys from a match spec before the
+// router evaluates it against event payload. The "mode" key is a
+// MatchSchema UI convention (dropdown: all|whitelist) — its value
+// ("all", "whitelist") is never present in event payloads, so passing
+// it through matchEventPayload causes a false-negative: mode=whitelist
+// vs payload["mode"]=nil → always rejects.
+//
+// Rule: if mode=all → return empty spec (no filter). If mode=whitelist
+// (or absent) → return spec minus the "mode" key so only real payload
+// keys (channel_id, user, text_contains, …) are evaluated.
+func filterMatchSpec(spec map[string]any) map[string]any {
+	if len(spec) == 0 {
+		return spec
+	}
+	mode, _ := spec["mode"].(string)
+	if mode == "all" {
+		return nil
+	}
+	out := make(map[string]any, len(spec))
+	for k, v := range spec {
+		if k == "mode" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // matchEventPayload evaluates the trigger's Match map against the
@@ -445,7 +486,7 @@ func (r *Router) reindexLocked(w workflow.Workflow) {
 	r.removeFromIndexLocked(w.ID)
 	for i, tr := range w.Triggers {
 		for _, key := range triggerRouteKeys(tr) {
-			r.index[key] = append(r.index[key], triggerRef{Slug: w.ID, TriggerIdx: i})
+			r.index[key] = append(r.index[key], triggerRef{ID: w.ID, TriggerIdx: i})
 		}
 		if tr.Type == workflow.TriggerWebhook && tr.SecretRef != "" {
 			path := tr.Path
@@ -457,13 +498,13 @@ func (r *Router) reindexLocked(w workflow.Workflow) {
 	}
 }
 
-// removeFromIndexLocked drops every index entry for slug. Caller must
+// removeFromIndexLocked drops every index entry for id. Caller must
 // hold r.mu.
-func (r *Router) removeFromIndexLocked(slug string) {
+func (r *Router) removeFromIndexLocked(id string) {
 	for key, refs := range r.index {
 		filtered := refs[:0]
 		for _, ref := range refs {
-			if ref.Slug != slug {
+			if ref.ID != id {
 				filtered = append(filtered, ref)
 			}
 		}
@@ -474,7 +515,7 @@ func (r *Router) removeFromIndexLocked(slug string) {
 		}
 	}
 	for path, entry := range r.webhookIndex {
-		if entry.workflowID == slug {
+		if entry.workflowID == id {
 			delete(r.webhookIndex, path)
 		}
 	}
@@ -509,9 +550,9 @@ func PathMatches(tmpl, got string) bool {
 	return true
 }
 
-func (r *Router) passesDedup(slug string, evt workflow.Event) bool {
+func (r *Router) passesDedup(id string, evt workflow.Event) bool {
 	r.mu.RLock()
-	d := r.dedups[slug]
+	d := r.dedups[id]
 	r.mu.RUnlock()
 	if d == nil {
 		return true
@@ -520,7 +561,7 @@ func (r *Router) passesDedup(slug string, evt workflow.Event) bool {
 	if key == "" {
 		return true
 	}
-	return !d.Seen(slug + ":" + key)
+	return !d.Seen(id + ":" + key)
 }
 
 func dedupKey(evt workflow.Event) string {
@@ -533,10 +574,10 @@ func dedupKey(evt workflow.Event) string {
 	return ""
 }
 
-func (r *Router) runWorker(ctx context.Context, slug string) {
+func (r *Router) runWorker(ctx context.Context, id string) {
 	defer r.wg.Done()
 	r.mu.RLock()
-	q := r.queues[slug]
+	q := r.queues[id]
 	r.mu.RUnlock()
 	if q == nil {
 		return
@@ -551,7 +592,7 @@ func (r *Router) runWorker(ctx context.Context, slug string) {
 			w = *item.Workflow
 		} else {
 			r.mu.RLock()
-			reg, defOK := r.defs[slug]
+			reg, defOK := r.defs[id]
 			r.mu.RUnlock()
 			if !defOK {
 				continue
@@ -608,12 +649,12 @@ var StopTimeout = 30 * time.Second
 
 func (r *Router) Stop() {
 	r.mu.Lock()
-	slugs := make([]string, 0, len(r.workers))
+	ids := make([]string, 0, len(r.workers))
 	for s := range r.workers {
-		slugs = append(slugs, s)
+		ids = append(ids, s)
 	}
 	r.mu.Unlock()
-	for _, s := range slugs {
+	for _, s := range ids {
 		r.Unregister(s)
 	}
 	done := make(chan struct{})

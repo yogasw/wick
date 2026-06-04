@@ -288,15 +288,15 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	t.mu.Unlock()
 
-	workspace := t.cfg.Workspace
-	if workspace == "" {
-		workspace = "main"
-	}
+	// agentName is the pool agent to route to; default "main". The
+	// project binding (cwd) is resolved by the pool send closure from
+	// the channel's configured project_id, not here.
+	agentName := "main"
 
 	if !t.sessionOnDisk(sessionID) {
 		ctxText := t.buildSessionContext(msg, sessionID)
 		if ctxText != "" {
-			if err := sendFn(ctx, sessionID, workspace, "telegram", "system", ctxText); err != nil {
+			if err := sendFn(ctx, sessionID, agentName, "telegram", "system", ctxText); err != nil {
 				log.Warn().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("inject session context failed")
 			}
 		}
@@ -305,7 +305,7 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		}
 	}
 
-	if err := sendFn(ctx, sessionID, workspace, "telegram", "user", msg.Text); err != nil {
+	if err := sendFn(ctx, sessionID, agentName, "telegram", "user", msg.Text); err != nil {
 		log.Error().Str("channel", "telegram").Str("session", sessionID).Err(err).Msg("pool send failed")
 		t.postMessage(chatID, "Agent error: could not queue message. Check the dashboard for details.")
 	}
