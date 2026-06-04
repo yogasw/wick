@@ -207,6 +207,35 @@ func channelHealthHandler(c *tool.Ctx) {
 	c.JSON(http.StatusOK, checks)
 }
 
+// channelStatusHandler returns the channel's identity + transport state
+// (bot user id/name, workspace, mode, subscription). Powers the
+// "Integration status" panel rendered under the test button.
+func channelStatusHandler(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalChannels == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel registry not ready"})
+		return
+	}
+	slug := c.PathValue("slug")
+	ch := globalChannels.ChannelByName(slug)
+	if ch == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
+		return
+	}
+	sr, ok := ch.(agentchannels.StatusReporter)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, map[string]string{"error": "channel does not report status"})
+		return
+	}
+	fields := sr.Status()
+	if fields == nil {
+		fields = []agentchannels.StatusField{}
+	}
+	c.JSON(http.StatusOK, fields)
+}
+
 // channelSecretKeys returns the set of secret key names for a channel type,
 // derived from the wick:"secret" tag on each channel's config struct.
 func channelSecretKeys(channelType string) map[string]bool {
