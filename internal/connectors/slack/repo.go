@@ -55,6 +55,34 @@ func slackPost(c *connector.Ctx, method string, body map[string]any) (any, error
 	return resp, err
 }
 
+// slackPutBinary PUTs raw bytes to the Slack-provided upload URL returned by
+// files.getUploadURLExternal. The endpoint is not under the normal API base
+// URL and returns a plain HTTP 200, not a JSON ok-envelope.
+func slackPutBinary(c *connector.Ctx, uploadURL string, content []byte) error {
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodPut, uploadURL, bytes.NewReader(content))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	token, err := pickToken(c)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("PUT upload: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("PUT upload HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // doSlack adds auth, dispatches, and decodes a Slack Web API response.
 // Slack always returns HTTP 200 — success is signalled by `ok: true` in
 // the body. Non-2xx is therefore always a transport/infra failure.

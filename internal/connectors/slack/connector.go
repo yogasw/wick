@@ -131,6 +131,15 @@ type RemoveReactionInput struct {
 	Name    string `wick:"required;desc=Emoji name without colons."`
 }
 
+type UploadFileInput struct {
+	ChannelID      string `wick:"required;desc=Target channel ID (C...) or DM ID (D...) to share the file into."`
+	Content        string `wick:"required;textarea;desc=File content. Binary files must be base64-encoded (set encoding=base64). Plain text files may use encoding=text."`
+	Filename       string `wick:"required;desc=File name with extension, e.g. report.csv or screenshot.png. Slack infers MIME type from extension."`
+	Encoding       string `wick:"dropdown=base64|text;default=base64;desc=Content encoding. base64: decode before upload (use for binary). text: upload as UTF-8 bytes as-is."`
+	Title          string `wick:"desc=Optional display title shown in Slack."`
+	InitialComment string `wick:"desc=Optional message text posted alongside the file."`
+}
+
 // Meta returns the static metadata block for this connector.
 func Meta() connector.Meta {
 	return connector.Meta{
@@ -393,6 +402,29 @@ func Operations() []connector.Operation {
 			"Remove an emoji reaction previously added by the bot.",
 			RemoveReactionInput{},
 			removeReaction, wickdocs.Docs{},
+		),
+		connector.OpDestructive(
+			"upload_file",
+			"Upload File",
+			"Upload a file to a channel or DM using Slack's v2 three-step upload flow. Returns file_id, filename, and channel.",
+			UploadFileInput{},
+			uploadFile,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"file_id":   "Slack file ID (F...) assigned after upload.",
+					"filename":  "Echo of the uploaded filename.",
+					"channel":   "Echo of the target channel ID.",
+					"permalink": "Direct Slack URL to the file (when returned by completeUploadExternal).",
+				},
+				TemplateableFields: []string{"channel_id", "content", "filename", "title", "initial_comment"},
+				Quirks: []string{
+					"Slack deprecated files.upload; this operation uses the v2 API (files.getUploadURLExternal).",
+					"Binary files (images, PDFs) must be base64-encoded before passing as content.",
+					"Requires files:write scope.",
+					"initial_comment is posted as a message in the channel with the file attached.",
+				},
+				PairWith: []string{"connector:slack.send_message"},
+			},
 		),
 	}
 }
@@ -729,4 +761,24 @@ func reactionAction(c *connector.Ctx, method string) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "channel": ch, "ts": ts, "name": name}, nil
+}
+
+func uploadFile(c *connector.Ctx) (any, error) {
+	channelID := strings.TrimSpace(c.Input("channel_id"))
+	if channelID == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	content := c.Input("content")
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("content is required")
+	}
+	filename := strings.TrimSpace(c.Input("filename"))
+	if filename == "" {
+		return nil, fmt.Errorf("filename is required")
+	}
+	return doUploadFile(c, channelID, content, filename,
+		firstNonEmpty(strings.TrimSpace(c.Input("encoding")), "base64"),
+		strings.TrimSpace(c.Input("title")),
+		c.Input("initial_comment"),
+	)
 }

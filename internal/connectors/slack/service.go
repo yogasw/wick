@@ -357,6 +357,7 @@ var opScopes = map[string][][]string{
 	"delete_message":     {{"chat:write"}},
 	"add_reaction":       {{"reactions:write"}},
 	"remove_reaction":    {{"reactions:write"}},
+	"upload_file":        {{"files:write"}},
 }
 
 // runHealthCheck makes one auth.test call, reads the granted scopes
