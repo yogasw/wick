@@ -851,7 +851,7 @@ func sessionDetail(c *tool.Ctx) {
 		activeProv = sess.Agents[0].Provider
 	}
 	vm := view.SessionDetailVM{
-		Layout:          sidebarVM(c, "sessions", id),
+		Layout:          sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
 		Base:            c.Base(),
 		Session:         sess,
 		Tab:             tab,
