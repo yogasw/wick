@@ -39,6 +39,9 @@ type Ctx struct {
 	// Never nil inside a handler; HTML panics otherwise, which is the
 	// right signal during development.
 	render RenderFunc
+	// notFound renders the app-wide 404 page. Injected at mount time so
+	// c.NotFound() produces the same styled page as the auth middleware.
+	notFound func(w http.ResponseWriter, r *http.Request)
 	// meta is the tool.Tool this route belongs to, captured at mount
 	// time. Read via Meta() / Base() so handlers can build URLs without
 	// hardcoding /tools/{Key}.
@@ -50,8 +53,8 @@ type Ctx struct {
 
 // NewCtx is used by wick when mounting handlers. Modules never call it
 // directly — they receive a *Ctx ready to use.
-func NewCtx(w http.ResponseWriter, r *http.Request, render RenderFunc, meta Tool, cfg ConfigReader) *Ctx {
-	return &Ctx{W: w, R: r, render: render, meta: meta, cfg: cfg}
+func NewCtx(w http.ResponseWriter, r *http.Request, render RenderFunc, meta Tool, cfg ConfigReader, notFound func(http.ResponseWriter, *http.Request)) *Ctx {
+	return &Ctx{W: w, R: r, render: render, meta: meta, cfg: cfg, notFound: notFound}
 }
 
 // ── Request helpers ──────────────────────────────────────────────────
@@ -179,8 +182,14 @@ func (c *Ctx) Redirect(url string, code int) {
 	http.Redirect(c.W, c.R, url, code)
 }
 
-// NotFound writes a 404 with no body.
-func (c *Ctx) NotFound() { http.NotFound(c.W, c.R) }
+// NotFound renders the app-wide styled 404 page.
+func (c *Ctx) NotFound() {
+	if c.notFound != nil {
+		c.notFound(c.W, c.R)
+		return
+	}
+	http.NotFound(c.W, c.R)
+}
 
 // Error writes an error response with the given status code and
 // message. Messages are plain text; use JSON for structured errors.

@@ -7,7 +7,7 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/lab",
-      "output": "${workspaceFolder}/bin/wick-lab2",
+      "output": "${workspaceFolder}/bin/wick-lab",
       "cwd": "${workspaceFolder}/cmd/lab",
       "args": ["server"],
       "envFile": "${workspaceFolder}/.env",

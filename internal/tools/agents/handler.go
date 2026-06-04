@@ -185,7 +185,6 @@ func Register(r tool.Router) {
 	// /projects/{id} is the per-project settings page.
 	r.GET("/projects", projectsRedirect) // legacy entry → all chats
 	r.GET("/projects/options", projectOptionsJSON)
-	r.GET("/projects/new", projectSettingsPage)
 	r.GET("/projects/{id}", projectSettingsPage)
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
