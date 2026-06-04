@@ -332,6 +332,28 @@ func shapePostResult(raw any) any {
 	return out
 }
 
+func shapeUploadResult(raw any) (any, error) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return raw, nil
+	}
+	files, _ := m["files"].([]any)
+	if len(files) == 0 {
+		return raw, nil
+	}
+	f, _ := files[0].(map[string]any)
+	out := map[string]any{
+		"file_id":   f["id"],
+		"name":      f["name"],
+		"title":     f["title"],
+		"permalink": f["permalink"],
+	}
+	if ch, ok := f["channels"].([]any); ok && len(ch) > 0 {
+		out["channel"] = ch[0]
+	}
+	return out, nil
+}
+
 // ── Permission check ─────────────────────────────────────────────────
 
 // opScopes lists, for each operation, the set of OAuth scopes that
@@ -364,6 +386,7 @@ var opScopes = map[string][][]string{
 	"edit_canvas":            {{"canvases:write"}},
 	"lookup_canvas_sections": {{"canvases:read"}},
 	"set_canvas_access":      {{"canvases:write"}},
+	"upload_file":            {{"files:write"}},
 }
 
 // runHealthCheck makes one auth.test call, reads the granted scopes

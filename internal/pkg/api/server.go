@@ -439,6 +439,9 @@ func NewServer() *Server {
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
+		OnAgentAdded: func(sessionID string) {
+			_ = agentsMgr.RefreshSession(sessionID)
+		},
 		OnLifecycle: func(ev agentpool.LifecycleEvent) {
 			log.Ctx(ev.Ctx).Debug().
 				Str("component", "lifecycle").
