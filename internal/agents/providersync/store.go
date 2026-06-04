@@ -107,45 +107,55 @@ func (s *store) ensureFolderChain(ctx context.Context, providerType, instanceNam
 // are physically in the table. Cheap in-place repair; safe to run on every
 // boot.
 func (s *store) repairOrphans(ctx context.Context) (int, error) {
-	var rows []entity.ProviderStorage
-	if err := s.db.WithContext(ctx).Find(&rows).Error; err != nil {
+	const sep = "\x00"
+	byKey := make(map[string]uint)
+
+	var firstBatch []entity.ProviderStorage
+	if err := s.db.WithContext(ctx).FindInBatches(&firstBatch, 500,
+		func(tx *gorm.DB, batch int) error {
+			for _, r := range firstBatch {
+				byKey[r.ProviderType+sep+r.InstanceName+sep+r.RelPath] = r.ID
+			}
+			return nil
+		}).Error; err != nil {
 		return 0, err
 	}
-	const sep = "\x00"
-	byKey := make(map[string]uint, len(rows))
-	for _, r := range rows {
-		byKey[r.ProviderType+sep+r.InstanceName+sep+r.RelPath] = r.ID
-	}
+
 	fixed := 0
-	for _, r := range rows {
-		norm := filepath.ToSlash(r.RelPath)
-		leadingSlash := strings.HasPrefix(norm, "/")
-		trimmed := strings.TrimPrefix(norm, "/")
-		parts := strings.Split(trimmed, "/")
-		var wantParent uint
-		if len(parts) <= 1 {
-			wantParent = entity.RootParentID
-		} else {
-			parentRel := strings.Join(parts[:len(parts)-1], "/")
-			if leadingSlash {
-				parentRel = "/" + parentRel
+	var secondBatch []entity.ProviderStorage
+	err := s.db.WithContext(ctx).FindInBatches(&secondBatch, 500,
+		func(tx *gorm.DB, batch int) error {
+			for _, r := range secondBatch {
+				norm := filepath.ToSlash(r.RelPath)
+				leadingSlash := strings.HasPrefix(norm, "/")
+				trimmed := strings.TrimPrefix(norm, "/")
+				parts := strings.Split(trimmed, "/")
+				var wantParent uint
+				if len(parts) <= 1 {
+					wantParent = entity.RootParentID
+				} else {
+					parentRel := strings.Join(parts[:len(parts)-1], "/")
+					if leadingSlash {
+						parentRel = "/" + parentRel
+					}
+					wantParent = byKey[r.ProviderType+sep+r.InstanceName+sep+parentRel]
+					// parent missing → treat as root so the row remains reachable
+					// via listRoots (better than an unreachable orphan).
+				}
+				if r.ParentID == wantParent {
+					continue
+				}
+				if err := s.db.WithContext(ctx).
+					Model(&entity.ProviderStorage{}).
+					Where("id = ?", r.ID).
+					Update("parent_id", wantParent).Error; err != nil {
+					return err
+				}
+				fixed++
 			}
-			wantParent = byKey[r.ProviderType+sep+r.InstanceName+sep+parentRel]
-			// parent missing → treat as root so the row remains reachable
-			// via listRoots (better than an unreachable orphan).
-		}
-		if r.ParentID == wantParent {
-			continue
-		}
-		if err := s.db.WithContext(ctx).
-			Model(&entity.ProviderStorage{}).
-			Where("id = ?", r.ID).
-			Update("parent_id", wantParent).Error; err != nil {
-			return fixed, err
-		}
-		fixed++
-	}
-	return fixed, nil
+			return nil
+		}).Error
+	return fixed, err
 }
 
 // pruneEmptyFolders removes folder rows under (providerType, instanceName)
@@ -154,24 +164,19 @@ func (s *store) repairOrphans(ctx context.Context) (int, error) {
 // children either. Safe to call repeatedly.
 func (s *store) pruneEmptyFolders(ctx context.Context, providerType, instanceName string) error {
 	for {
-		var folders []entity.ProviderStorage
-		if err := s.db.WithContext(ctx).
-			Where("provider_type = ? AND instance_name = ? AND is_dir = ?", providerType, instanceName, true).
-			Find(&folders).Error; err != nil {
+		var victims []uint
+		err := s.db.WithContext(ctx).
+			Model(&entity.ProviderStorage{}).
+			Select("id").
+			Where(`provider_type = ? AND instance_name = ? AND is_dir = ?
+                   AND id NOT IN (
+                     SELECT DISTINCT parent_id FROM provider_storage
+                     WHERE provider_type = ? AND instance_name = ? AND parent_id != 0
+                   )`, providerType, instanceName, true,
+				providerType, instanceName).
+			Pluck("id", &victims).Error
+		if err != nil {
 			return err
-		}
-		victims := make([]uint, 0, len(folders))
-		for _, f := range folders {
-			var n int64
-			if err := s.db.WithContext(ctx).
-				Model(&entity.ProviderStorage{}).
-				Where("provider_type = ? AND instance_name = ? AND parent_id = ?", providerType, instanceName, f.ID).
-				Count(&n).Error; err != nil {
-				return err
-			}
-			if n == 0 {
-				victims = append(victims, f.ID)
-			}
 		}
 		if len(victims) == 0 {
 			return nil
@@ -274,26 +279,22 @@ func (s *store) deleteByID(ctx context.Context, id uint) error {
 // itself in one batch. Scoped to (providerType, instanceName) so a stray
 // matching parent_id in another instance can't drag unrelated rows down.
 func (s *store) deleteSubtree(ctx context.Context, id uint, providerType, instanceName string) error {
-	ids := []uint{id}
+	toDelete := []uint{id}
 	queue := []uint{id}
 	for len(queue) > 0 {
-		next := queue[0]
-		queue = queue[1:]
 		var children []uint
 		if err := s.db.WithContext(ctx).
 			Model(&entity.ProviderStorage{}).
-			Where("provider_type = ? AND instance_name = ? AND parent_id = ?", providerType, instanceName, next).
+			Where("provider_type = ? AND instance_name = ? AND parent_id IN ?",
+				providerType, instanceName, queue).
 			Pluck("id", &children).Error; err != nil {
 			return err
 		}
-		if len(children) == 0 {
-			continue
-		}
-		ids = append(ids, children...)
-		queue = append(queue, children...)
+		queue = children
+		toDelete = append(toDelete, children...)
 	}
 	return s.db.WithContext(ctx).
-		Where("id IN ?", ids).
+		Where("id IN ?", toDelete).
 		Delete(&entity.ProviderStorage{}).Error
 }
 
