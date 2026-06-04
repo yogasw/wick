@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/pkg/render"
+	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -183,7 +184,10 @@ func (t *toolRouter) mount(mux *http.ServeMux) {
 		r := r
 		cfg := t.cfg
 		handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			r.h(tool.NewCtx(w, req, r.render, r.meta, cfg))
+			notFound := func(w http.ResponseWriter, r *http.Request) {
+				ui.RenderNotFound(w, r, nil, http.StatusNotFound)
+			}
+			r.h(tool.NewCtx(w, req, r.render, r.meta, cfg, notFound))
 		})
 		mux.Handle(r.method+" "+r.path, handler)
 		if r.method == "GET" && r.path == "/tools/"+r.meta.Key {
