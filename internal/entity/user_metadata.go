@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 // UserMetadata is the free-form preferences bag stored as JSON on the
@@ -33,6 +34,11 @@ type UserMetadata struct {
 	// tool lands scoped to this project. Empty = unpinned. See
 	// internal/docs/project/design.md.
 	PinnedAgentProjectID string `json:"pinned_agent_project_id,omitempty"`
+
+	// PushPermission stores the last browser notification permission
+	// state reported by the PWA prompt ("granted" or "denied").
+	PushPermission   string     `json:"push_permission,omitempty"`
+	PushPermissionAt *time.Time `json:"push_permission_at,omitempty"`
 }
 
 const (
