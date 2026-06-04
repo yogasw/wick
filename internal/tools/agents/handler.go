@@ -247,6 +247,7 @@ func Register(r tool.Router) {
 	r.POST("/channels/rest/{key}", makeChannelSaveHandler("rest"))
 	r.GET("/channels/{slug}/lookup", channelLookupHandler)
 	r.POST("/channels/test/{slug}", channelHealthHandler)
+	r.GET("/channels/{slug}/status", channelStatusHandler)
 
 	r.GET("/settings", settingsPage)
 
