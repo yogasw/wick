@@ -32,3 +32,42 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   event.respondWith(fetch(req).catch(() => caches.match(req)));
 });
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (_) {
+    data = { body: event.data ? event.data.text() : '' };
+  }
+
+  const title = data.title || 'Wick notification';
+  const options = {
+    body: data.body || '',
+    icon: '/public/img/icon-192.png',
+    badge: '/public/img/icon-192.png',
+    data: { url: data.url || '/' },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetURL = event.notification.data && event.notification.data.url
+    ? event.notification.data.url
+    : '/';
+
+  event.waitUntil((async () => {
+    const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of allClients) {
+      const url = new URL(client.url);
+      if (url.origin === self.location.origin) {
+        await client.focus();
+        if ('navigate' in client) return client.navigate(targetURL);
+        return;
+      }
+    }
+    return clients.openWindow(targetURL);
+  })());
+});

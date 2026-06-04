@@ -46,6 +46,7 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/connectors/pwanotify"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -272,6 +273,10 @@ func NewServer() *Server {
 	// encrypted at rest from this point on. Also migrates any
 	// pre-existing plaintext secret rows to ciphertext on next boot.
 	configsSvc.SetEncryptor(encSvc)
+	if err := pwa.EnsurePushConfig(context.Background(), configsSvc); err != nil {
+		log.Warn().Err(err).Msg("pwa push config bootstrap failed")
+	}
+	pushSvc := pwa.NewPushService(db, configsSvc)
 	// The encfields tool resolves its cipher through a package
 	// singleton — built-in tools register from cmd/lab before the DB
 	// or enc service exist, so a static Register signature is the
@@ -780,6 +785,10 @@ func NewServer() *Server {
 		Tools:      allItems,
 		AppName:    appname.Resolve(),
 	}))
+	connectors.Register(pwanotify.Module(pwanotify.Deps{
+		DB:   db,
+		Push: pushSvc,
+	}))
 
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
@@ -998,6 +1007,7 @@ func NewServer() *Server {
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
 	bookmarkHandler := bookmark.NewHandler(bookmarkSvc)
+	pushHandler := pwa.NewPushHandler(pushSvc, authSvc)
 
 	// Seed default tags for items that have them.
 	for _, t := range allItems {
@@ -1079,6 +1089,9 @@ func NewServer() *Server {
 
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
+
+	// PWA push notification API (auth-gated inside)
+	pushHandler.Register(r, authMidd)
 
 	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
 	tokensHandler.Register(r, authMidd)
@@ -1446,6 +1459,10 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		log.Fatal().Msgf("enc init: %s", err.Error())
 	}
 	configsSvc.SetEncryptor(encSvc)
+	if err := pwa.EnsurePushConfig(context.Background(), configsSvc); err != nil {
+		log.Warn().Err(err).Msg("pwa push config bootstrap failed")
+	}
+	pushSvc := pwa.NewPushService(db, configsSvc)
 
 	connSvc := connectors.NewServiceFromDB(db)
 	connSvc.SetEnc(encSvc)
@@ -1465,6 +1482,10 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		Jobs:       jobsSvc,
 		Login:      authSvc,
 		AppName:    appname.Resolve(),
+	}))
+	connectors.Register(pwanotify.Module(pwanotify.Deps{
+		DB:   db,
+		Push: pushSvc,
 	}))
 
 	// Workflow connector — bootstrap minimal workflow manager so MCP
