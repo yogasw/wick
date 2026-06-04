@@ -28,6 +28,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	slackconnector "github.com/yogasw/wick/internal/connectors/slack"
 )
 
 const (
@@ -124,6 +125,13 @@ type Channel struct {
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
 
+	// socketState tracks the current Socket Mode connection lifecycle so
+	// the integration test panel can report "subscribed / not subscribed"
+	// without re-initiating a connection. Empty when not started or when
+	// running in HTTP mode. Updated by handleSocketEvent.
+	socketMu    sync.RWMutex
+	socketState string // "", "connecting", "connected", "error", "disconnected"
+	socketAt    time.Time
 }
 
 // New builds a Slack Channel from the operator-supplied config alone.
@@ -228,6 +236,7 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	if cfg.BotToken != "" {
 		if resp, err := api.AuthTest(); err == nil {
 			botUserID = resp.UserID
+			slackconnector.SetBotUserID(botUserID)
 		}
 	}
 
@@ -326,6 +335,71 @@ func (s *Channel) Stop() {
 	if cancel != nil {
 		cancel()
 	}
+	s.setSocketState("disconnected")
+}
+
+// SocketState returns the current Socket Mode lifecycle state and when
+// it was last updated. Empty state means the channel is in HTTP mode
+// or has not started yet. Used by the integration test panel to report
+// "subscribed / not subscribed" without re-initiating a connection.
+func (s *Channel) SocketState() (string, time.Time) {
+	s.socketMu.RLock()
+	defer s.socketMu.RUnlock()
+	return s.socketState, s.socketAt
+}
+
+func (s *Channel) setSocketState(state string) {
+	s.socketMu.Lock()
+	s.socketState = state
+	s.socketAt = time.Now()
+	s.socketMu.Unlock()
+}
+
+// refreshBotUserID re-resolves the bot's Slack user ID via auth.test and
+// persists it onto the channel. Called on every successful Socket Mode
+// connect so a transient AuthTest failure at applyConfig time gets
+// repaired the moment we have a healthy session. No-op on http mode
+// (where applyConfig's one-shot resolution is the only attempt).
+func (s *Channel) refreshBotUserID(ctx context.Context) {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+	resp, err := api.AuthTestContext(ctx)
+	if err != nil {
+		log.Warn().Err(err).Str("channel", "slack").Msg("authtest after connect failed")
+		return
+	}
+	s.cfgMu.Lock()
+	prev := s.botUserID
+	s.botUserID = resp.UserID
+	s.cfgMu.Unlock()
+	slackconnector.SetBotUserID(resp.UserID)
+	if prev != resp.UserID {
+		log.Info().Str("channel", "slack").Str("bot_user_id", resp.UserID).Str("prev", prev).Msg("bot user id refreshed on connect")
+	}
+}
+
+// Reconnect re-establishes the Socket Mode connection when the current
+// state is not connecting/connected. No-op when already connecting or
+// connected (anti-duplicate-subscribe guard). HTTP mode is a no-op.
+// Runs Reload in a goroutine so callers (health probe, test panel) do
+// not block on the reconnect handshake.
+func (s *Channel) Reconnect(ctx context.Context) {
+	s.cfgMu.Lock()
+	cfg := s.cfg
+	pubURL := s.pubURL
+	s.cfgMu.Unlock()
+	if cfg.Mode == "http" {
+		return
+	}
+	state, _ := s.SocketState()
+	if state == "connecting" || state == "connected" {
+		return
+	}
+	go s.Reload(ctx, cfg, pubURL)
 }
 
 // Reload stops the current connection, applies new credentials, and
@@ -378,10 +452,14 @@ func (s *Channel) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 		s.socket.Ack(*evt.Request)
 		go s.handleSlashCommand(ctx, cmd)
 	case socketmode.EventTypeConnecting:
+		s.setSocketState("connecting")
 		log.Debug().Str("channel", "slack").Msg("connecting")
 	case socketmode.EventTypeConnected:
+		s.setSocketState("connected")
 		log.Info().Str("channel", "slack").Msg("connected")
+		go s.refreshBotUserID(ctx)
 	case socketmode.EventTypeConnectionError:
+		s.setSocketState("error")
 		log.Warn().Str("channel", "slack").Msg("connection error, will retry")
 	}
 }
