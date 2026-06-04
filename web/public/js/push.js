@@ -93,13 +93,16 @@
     return res.json();
   }
 
-  function setStatus(text, tone) {
+  function setStatus(text, tone, help) {
     var el = document.getElementById('push-current-status');
-    if (!el) return;
-    el.textContent = text;
-    el.classList.remove('border-pos-200', 'bg-pos-100', 'text-pos-400', 'border-neg-200', 'bg-neg-100', 'text-neg-400');
-    if (tone === 'ok') el.classList.add('border-pos-200', 'bg-pos-100', 'text-pos-400');
-    if (tone === 'bad') el.classList.add('border-neg-200', 'bg-neg-100', 'text-neg-400');
+    if (el) {
+      el.textContent = text;
+      el.classList.remove('border-pos-200', 'bg-pos-100', 'text-pos-400', 'border-neg-200', 'bg-neg-100', 'text-neg-400');
+      if (tone === 'ok') el.classList.add('border-pos-200', 'bg-pos-100', 'text-pos-400');
+      if (tone === 'bad') el.classList.add('border-neg-200', 'bg-neg-100', 'text-neg-400');
+    }
+    var helper = document.getElementById('push-current-help');
+    if (helper && help) helper.textContent = help;
   }
 
   function setAgentStatus(text, tone) {
@@ -156,15 +159,19 @@
     var root = document.getElementById('push-device-list');
     if (!root) return;
     if (!supportsPush()) {
-      setStatus('Unsupported', 'bad');
+      setStatus('Unsupported', 'bad', 'This browser cannot receive notifications from Wick.');
       renderDeviceList([], '');
       return;
     }
     var sub = await currentSubscription();
     var currentEndpoint = sub ? sub.endpoint : '';
-    if (Notification.permission === 'denied') setStatus('Blocked', 'bad');
-    else if (sub) setStatus('Enabled', 'ok');
-    else setStatus('Not connected', '');
+    if (Notification.permission === 'denied') {
+      setStatus('Blocked', 'bad', 'Browser notifications are blocked in site settings. Unblock them before enabling this browser.');
+    } else if (sub) {
+      setStatus('Enabled', 'ok', 'This browser is subscribed and can receive notifications.');
+    } else {
+      setStatus('Disabled', '', 'This browser is not subscribed. Enable notifications to add it as a delivery device.');
+    }
     var data = await loadDevices();
     renderPushID(data.push_id || '');
     renderDeviceList(data.devices || [], currentEndpoint);
@@ -224,6 +231,7 @@
       if (enable) {
         enable.disabled = true;
         await subscribeCurrent();
+        await recordPermission(Notification.permission);
         await refreshProfile();
       }
       if (test) {
