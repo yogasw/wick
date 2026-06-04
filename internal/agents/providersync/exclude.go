@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -29,13 +28,14 @@ func collectExcludePatterns(sources []entity.ProviderStorageSource) []string {
 
 // matchesAnyExclude returns true if abs matches any of the glob patterns.
 // abs and patterns are normalised to forward-slash before matching.
+// Normalisation is delegated to globMatch, which already calls filepath.ToSlash
+// and strings.ReplaceAll on both sides.
 func matchesAnyExclude(abs string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
 	}
-	a := filepath.ToSlash(abs)
 	for _, p := range patterns {
-		if globMatch(p, a) {
+		if globMatch(p, abs) {
 			return true
 		}
 	}
@@ -79,8 +79,10 @@ func globMatch(pattern, path string) bool {
 	return globRegex(pattern).MatchString(path)
 }
 
+const globCacheMaxSize = 512
+
 var (
-	globCache   = make(map[string]*regexp.Regexp)
+	globCache   = make(map[string]*regexp.Regexp, globCacheMaxSize)
 	globCacheMu sync.RWMutex
 )
 
@@ -124,6 +126,10 @@ func globRegex(pattern string) *regexp.Regexp {
 	b.WriteString("$")
 	r := regexp.MustCompile(b.String())
 	globCacheMu.Lock()
+	if len(globCache) >= globCacheMaxSize {
+		// simple full eviction — patterns are cheap to recompile
+		globCache = make(map[string]*regexp.Regexp, globCacheMaxSize)
+	}
 	globCache[pattern] = r
 	globCacheMu.Unlock()
 	return r
