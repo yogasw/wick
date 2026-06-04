@@ -16,6 +16,7 @@ import (
 	slackgo "github.com/slack-go/slack"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
 
 // HealthCheck satisfies channels.HealthChecker. Each entry corresponds
@@ -23,6 +24,11 @@ import (
 // Calls run sequentially — Slack rate limits per-method, not per-app —
 // and each is given a short timeout so a single hung call doesn't block
 // the whole probe.
+//
+// Transport mode is probed separately at the end: for socket mode the
+// current subscription state is reported and an async Reconnect is
+// kicked off when disconnected/errored (anti-duplicate guard inside
+// Reconnect). For http mode the public webhook URL is verified.
 func (s *Channel) HealthCheck() []agentchannels.HealthCheck {
 	s.cfgMu.Lock()
 	api := s.api
@@ -65,21 +71,82 @@ func (s *Channel) HealthCheck() []agentchannels.HealthCheck {
 		}
 	}
 
-	if cfg.Mode == "socket" && cfg.AppToken == "" {
-		out = append(out, agentchannels.HealthCheck{
-			Name:   "app_token",
-			OK:     false,
-			Detail: "required for socket mode",
-		})
-	}
-	if cfg.Mode == "http" && cfg.SigningSecret == "" {
-		out = append(out, agentchannels.HealthCheck{
-			Name:   "signing_secret",
-			OK:     false,
-			Detail: "required for http mode",
-		})
-	}
+	// Transport mode probe: always emitted so the operator sees
+	// subscribe status / webhook URL even when other probes pass.
+	out = append(out, s.probeTransport(cfg))
 	return out
+}
+
+// probeTransport reports the runtime status of whichever transport the
+// channel is configured for. Socket mode: current subscription state
+// plus an async reconnect when disconnected. HTTP mode: public URL +
+// signing secret presence.
+func (s *Channel) probeTransport(cfg agentconfig.SlackChannelConfig) agentchannels.HealthCheck {
+	if cfg.Mode == "http" {
+		if cfg.SigningSecret == "" {
+			return agentchannels.HealthCheck{
+				Name:   "http.webhook",
+				OK:     false,
+				Detail: "signing_secret required for http mode",
+			}
+		}
+		s.cfgMu.Lock()
+		pubURL := s.pubURL
+		s.cfgMu.Unlock()
+		if pubURL == "" {
+			return agentchannels.HealthCheck{
+				Name:   "http.webhook",
+				OK:     false,
+				Detail: "public URL not configured — Slack can't reach POST /integrations/slack/events",
+			}
+		}
+		return agentchannels.HealthCheck{
+			Name:   "http.webhook",
+			OK:     true,
+			Detail: pubURL + "/integrations/slack/events",
+		}
+	}
+
+	// Socket mode (default).
+	if cfg.AppToken == "" {
+		return agentchannels.HealthCheck{
+			Name:   "socket.subscribe",
+			OK:     false,
+			Detail: "app_token (xapp-...) required for socket mode",
+		}
+	}
+	state, at := s.SocketState()
+	switch state {
+	case "connected":
+		age := time.Since(at).Round(time.Second)
+		return agentchannels.HealthCheck{
+			Name:   "socket.subscribe",
+			OK:     true,
+			Detail: fmt.Sprintf("subscribed (connected %s ago)", age),
+		}
+	case "connecting":
+		return agentchannels.HealthCheck{
+			Name:   "socket.subscribe",
+			OK:     false,
+			Detail: "still connecting — try again in a few seconds",
+		}
+	case "error", "disconnected":
+		s.Reconnect(context.Background())
+		return agentchannels.HealthCheck{
+			Name:   "socket.subscribe",
+			OK:     false,
+			Error:  "not subscribed (state=" + state + ")",
+			Detail: "kicked off async reconnect — re-run the test to verify",
+		}
+	default:
+		// Empty state: never started, or applyConfig wiped it.
+		s.Reconnect(context.Background())
+		return agentchannels.HealthCheck{
+			Name:   "socket.subscribe",
+			OK:     false,
+			Detail: "no connection yet — kicked off async connect, re-run the test to verify",
+		}
+	}
 }
 
 func withTimeout(d time.Duration) (context.Context, context.CancelFunc) {
