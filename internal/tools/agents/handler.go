@@ -6,8 +6,10 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -157,9 +159,14 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
+	r.GET("/sessions/{id}/subscription", sessionSubscriptionStatus)
+	r.POST("/sessions/{id}/subscribe", sessionSubscribe)
+	r.POST("/sessions/{id}/unsubscribe", sessionUnsubscribe)
 	r.DELETE("/sessions/{id}", deleteSession)
 
 	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
+	r.GET("/sessions/{id}/turns/{turn_id}", sessionTurnTrace)
+	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
@@ -517,6 +524,19 @@ func startNewSession(c *tool.Ctx) {
 		renderCompose(c, text, err.Error())
 		return
 	}
+	// Pre-subscribe: the new-session composer carries a bell with a
+	// hidden "subscribe" input that flips to "1" when toggled on. If
+	// set, opt the calling user in to lifecycle pushes for this brand-
+	// new session right after creation. Best-effort — registry failures
+	// here would be confusing to surface inline because the session is
+	// already live; log and continue.
+	if c.Form("subscribe") == "1" {
+		if u := login.GetUser(c.Context()); u != nil {
+			if _, err := globalMgr.SubscribeUser(id, u.ID); err != nil {
+				log.Ctx(c.Context()).Warn().Err(err).Str("session", id).Msg("compose pre-subscribe failed")
+			}
+		}
+	}
 	atts, err := saveUploadsFromMultipart(c, id, c.Base())
 	if err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose save uploads: %s", err.Error())
@@ -806,13 +826,17 @@ func sessionDetail(c *tool.Ctx) {
 		}
 		for _, t := range raw {
 			vm := view.TurnVM{
-				Role:      t.Role,
-				Agent:     t.Agent,
-				Provider:  t.Provider,
-				Text:      t.Text,
-				Truncated: t.Truncated,
-				Time:      t.Timestamp,
+				TurnID:      t.TurnID,
+				Role:        t.Role,
+				Agent:       t.Agent,
+				Provider:    t.Provider,
+				Text:        t.Text,
+				Truncated:   t.Truncated,
+				Interrupted: t.Interrupted,
+				HasTrace:    t.HasTrace,
+				Time:        t.Timestamp,
 			}
+			// Legacy: old turns that inlined events are still rendered inline.
 			for _, e := range t.Events {
 				vm.Events = append(vm.Events, view.TurnEventVM{
 					Type:      e.Type,
@@ -1103,6 +1127,71 @@ func sessionWithMeta(sess session.Session, meta session.Meta) session.Session {
 	return sess
 }
 
+// sessionSubscriptionStatus reports whether the calling user is on the
+// session's lifecycle-push subscriber list. Used by the bell UI to
+// decide its on/off rendering — anyone can open any session, so the
+// bell state has to come from the server, not the browser.
+func sessionSubscriptionStatus(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"subscribed": sess.Meta.IsSubscribed(u.ID),
+	})
+}
+
+// sessionSubscribe adds the calling user to the session's lifecycle-
+// push subscriber list. Idempotent: subscribing twice is a no-op.
+// Sessions are shared (anyone can open them) but pushes target only
+// the IDs in meta.Subscribers, so a user "watching" a session
+// explicitly opts in via this endpoint.
+func sessionSubscribe(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id := c.PathValue("id")
+	if _, err := globalMgr.SubscribeUser(id, u.ID); err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"subscribed": true})
+}
+
+// sessionUnsubscribe drops the calling user from the subscriber list.
+// Idempotent: unsubscribing when not subscribed is a no-op.
+func sessionUnsubscribe(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id := c.PathValue("id")
+	if _, err := globalMgr.UnsubscribeUser(id, u.ID); err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"subscribed": false})
+}
+
 func killAgent(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1136,6 +1225,51 @@ func deleteSession(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// sessionTurnEvent serves the payload for one large trace event.
+// File lives at thinking/<turn_id>/<event_id>.json.
+func sessionTurnEvent(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	turnID := c.PathValue("turn_id")
+	eventID := c.PathValue("event_id")
+	data, err := os.ReadFile(globalLayout.SessionThinkingEvent(id, turnID, eventID))
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no payload"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
+}
+
+// sessionTurnTrace serves the trace payload for one assistant turn.
+// The file lives at thinking/<turn_id>.json inside the session dir.
+// Returns 404 when the turn has no trace (user turns, old turns).
+func sessionTurnTrace(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	turnID := c.PathValue("turn_id")
+	tracePath := globalLayout.SessionThinking(id, turnID)
+	data, err := os.ReadFile(tracePath)
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no trace"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.W.Header().Set("Content-Type", "application/json")
+	_, _ = c.W.Write(data)
 }
 
 // ── Projects ──────────────────────────────────────────────────────────

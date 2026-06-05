@@ -14,17 +14,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joho/godotenv"
-
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
-	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
-	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -35,6 +31,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/agents/store"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
@@ -46,6 +44,7 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/connectors/notifications"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -67,7 +66,6 @@ import (
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/ui"
-	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
@@ -75,7 +73,6 @@ import (
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
-	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -272,6 +269,10 @@ func NewServer() *Server {
 	// encrypted at rest from this point on. Also migrates any
 	// pre-existing plaintext secret rows to ciphertext on next boot.
 	configsSvc.SetEncryptor(encSvc)
+	if err := pwa.EnsurePushConfig(context.Background(), configsSvc); err != nil {
+		log.Warn().Err(err).Msg("notification config bootstrap failed")
+	}
+	pushSvc := pwa.NewPushService(db, configsSvc)
 	// The encfields tool resolves its cipher through a package
 	// singleton — built-in tools register from cmd/lab before the DB
 	// or enc service exist, so a static Register signature is the
@@ -395,6 +396,14 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	agentsFactory.TraceInlineKBLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_inline_kb"))
+		return v
+	}
+	agentsFactory.TraceEventMaxKBLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_max_kb"))
+		return v
+	}
 
 	// syncSharedSpec rewrites the shared spec.json on every spawn so
 	// allowed_cmds edits take effect without a server restart.
@@ -451,6 +460,10 @@ func NewServer() *Server {
 				Int("pid", ev.PID).
 				Msg("lifecycle: broadcasting to SSE")
 			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+			// Fan out a push to opt-in subscribers when the agent
+			// goes idle (the "your turn is back" moment). Other
+			// transitions are skipped — see dispatchLifecyclePush.
+			dispatchLifecyclePush(ev.Ctx, pushSvc, agentsMgr, agentsLayout, ev)
 		},
 	})
 	// Wire the hook writer so Manager injects .claude/settings.local.json
@@ -780,6 +793,10 @@ func NewServer() *Server {
 		Tools:      allItems,
 		AppName:    appname.Resolve(),
 	}))
+	connectors.Register(notifications.Module(notifications.Deps{
+		DB:   db,
+		Push: pushSvc,
+	}))
 
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
@@ -998,6 +1015,7 @@ func NewServer() *Server {
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
 	bookmarkHandler := bookmark.NewHandler(bookmarkSvc)
+	pushHandler := pwa.NewPushHandler(pushSvc, authSvc)
 
 	// Seed default tags for items that have them.
 	for _, t := range allItems {
@@ -1079,6 +1097,9 @@ func NewServer() *Server {
 
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
+
+	// Notification API (auth-gated inside)
+	pushHandler.Register(r, authMidd)
 
 	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
 	tokensHandler.Register(r, authMidd)
@@ -1410,155 +1431,111 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	return nil
 }
 
-// BuildMCPHandler initialises the connector layer (DB + connectors
-// bootstrap) and returns a ready-to-serve MCP handler + admin context.
-// Callers must either call ServeStdioOS (for the production stdio path)
-// or ServeStdio with a custom reader/writer (for exec/test paths).
-func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.Context) {
-	// When spawned by an MCP client (Claude Desktop, Cursor, etc.) the
-	// working directory is the client's, not the project root. Chdir to
-	// the project root (parent of the bin/ dir) so .env and wick.db
-	// resolve correctly, then reload .env before config.Load().
-	if exe, err := os.Executable(); err == nil {
-		projectRoot := filepath.Dir(filepath.Dir(filepath.Clean(exe)))
-		if err := os.Chdir(projectRoot); err == nil {
-			_ = godotenv.Load()
-			name := appname.ResolveAfterChdir()
-			userconfig.ResolveDBPath(name, "")
+// Stdio MCP entry points (BuildMCPHandler, RunMCPStdio, resolveWickGateBin)
+// live in server_mcp.go. fileExists below is shared by both files.
+
+// dispatchLifecyclePush fans an agent lifecycle transition out to the
+// session's opt-in push subscribers (meta.Subscribers, populated via
+// POST /tools/agents/sessions/{id}/subscribe).
+//
+// Only the "idle" transition surfaces a push — that's the "your turn
+// is back" moment users actually care about. "working" was dropped
+// because it fires at the START of a turn (noise — you just sent the
+// message), "spawning" / "killed" are operational events that don't
+// need a page.
+//
+// Body uses the last assistant message snippet so the notification
+// previews the result, not just a generic "agent finished". Falls
+// back to the session label when the snippet is unavailable.
+//
+// Sessions are shared (anyone with a wick login can open them) so
+// targeting via Subscribers means a user only gets paged about the
+// sessions they explicitly watched. SendToUser handles the fan-out
+// across each user's devices on the receiving side.
+//
+// Best-effort: errors are logged but never block the SSE broadcast.
+// Service worker on each receiver decides whether to surface as OS
+// notification or postMessage an in-app toast — see web/public/js/sw.js.
+func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *agentregistry.Manager, layout agentconfig.Layout, ev agentpool.LifecycleEvent) {
+	if pushSvc == nil || mgr == nil {
+		return
+	}
+	if ev.Lifecycle != "idle" {
+		return
+	}
+	sess, ok := mgr.Registry().Session(ev.SessionID)
+	if !ok {
+		return
+	}
+	if len(sess.Meta.Subscribers) == 0 {
+		return
+	}
+	title := "Agent is idle — your turn"
+	body := lastAssistantPreview(layout, ev.SessionID, 140)
+	if body == "" {
+		// No assistant text available (early failure, killed mid-turn,
+		// etc.) — fall back to the session label so the user at least
+		// recognises which session pinged.
+		if label := strings.TrimSpace(sess.Meta.Label); label != "" {
+			body = label
+		} else {
+			body = ev.AgentName
 		}
 	}
-
-	cfg := config.Load()
-
-	db := postgres.NewGORM(cfg.Database)
-	postgres.Migrate(db)
-
-	// Bootstrap the configs service even in stdio mode — we don't
-	// expose it over HTTP here, but the encrypted-fields layer pulls
-	// the master key from it and the rest of the connector dispatch
-	// path expects encrypt/decrypt to behave the same as in HTTP.
-	configsSvc := configs.NewService(db)
-	if err := configsSvc.Bootstrap(context.Background()); err != nil {
-		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
-	}
-	encSvc, err := enc.New(configsSvc.EncryptionKey())
-	if err != nil {
-		log.Fatal().Msgf("enc init: %s", err.Error())
-	}
-	configsSvc.SetEncryptor(encSvc)
-
-	connSvc := connectors.NewServiceFromDB(db)
-	connSvc.SetEnc(encSvc)
-	connSvc.SetConfigs(configsSvc)
-
-	// Stdio mode also needs wickmanager so the LLM can introspect
-	// wick configs over the same stdio link. Jobs / tools surface
-	// degrade to "no rows" because we don't run the manager service
-	// in stdio — that's intentional, the LLM can still read app vars
-	// and connector configs which is the common ask.
-	authSvc := login.NewService(db, cfg.App.AdminEmails)
-	jobsSvc := manager.NewServiceFromDB(db)
-	jobsSvc.SetConfigReader(configsSvc)
-	connectors.Register(wickmanager.Module(wickmanager.Deps{
-		Configs:    configsSvc,
-		Connectors: connSvc,
-		Jobs:       jobsSvc,
-		Login:      authSvc,
-		AppName:    appname.Resolve(),
-	}))
-
-	// Workflow connector — bootstrap minimal workflow manager so MCP
-	// clients (Claude Desktop, Cursor) can introspect / create / edit /
-	// test workflows. Engine has no live channel / provider wiring here
-	// so type:channel + type:agent nodes will fail at run time; everything
-	// else (validate/simulate/test/file ops/canvas mutations) works.
-	stdioAgentsCfg := agentconfig.StorageConfig{
-		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
-		DefaultProjectID: configsSvc.GetOwned("agents", "default_project_id"),
-	}
-	stdioWfLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(stdioAgentsCfg))
-	stdioWfMgr := wfsetup.New(stdioWfLayout)
-	wfsetup.RegisterLiveConnectors(stdioWfMgr.Connectors)
-	stdioWfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connSvc))
-	// Register Slack workflow descriptors into the integration registry
-	// so workflow_integration / workflow_channels can surface full
-	// MatchSchema + InputSchema metadata. Execute closures bind to a
-	// stub Slack channel (no live API) — they error at runtime if a node
-	// actually fires, but AI discovery + workflow_validate work fully.
-	stdioStubSlack := agentslack.New(agentconfig.SlackChannelConfig{})
-	slackwf.RegisterAll(stdioWfMgr.Integration, stdioStubSlack)
-	// stdio path: register pickers too, even though the stub channel
-	// has no live API — calls will surface the configuration error
-	// rather than silently returning empty lists.
-	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubSlack)
-	stdioWfMgr.WithDataTablesDB(db)
-	// DB-primary workflow store also needs wiring in stdio mode so
-	// workflow_versions / workflow_diff_versions / workflow_restore_version
-	// + the DBService backing the body don't 503 in MCP clients.
-	stdioWfMgr.WithDB(db)
-	if err := stdioWfMgr.Start(context.Background()); err != nil {
-		log.Warn().Err(err).Msg("stdio: workflow bootstrap failed; workflow_* ops unavailable")
-	} else {
-		stdioRunner := wftest.New(stdioWfMgr.Engine, stdioWfMgr.Service, stdioWfMgr.Layout)
-		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
-	}
-
-	connectors.RegisterBuiltins()
-	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
-		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
-	}
-
-	// Bind the stdio context to the oldest real admin user so wick_enc_
-	// tokens minted here decrypt under that admin's session in the web
-	// UI. Per-user keys are HKDF(masterKey, salt=user.ID); a synthetic
-	// "local" salt would produce tokens nobody can reverse via /tools/
-	// encfields. Fall back to the synthetic id only on a fresh DB with
-	// no admin yet.
-	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
-	if u, err := authSvc.FirstAdmin(context.Background()); err == nil && u != nil {
-		localAdmin = u
-	}
-	ctx := login.WithUser(context.Background(), localAdmin, nil)
-
-	root, _ := os.Getwd()
-	h := mcp.NewHandler(connSvc).
-		WithBuildInfo(version, commit, buildTime).
-		WithWickRoot(root).
-		WithAppURL(configsSvc.AppURL).
-		WithDB(db)
-	return h, ctx
-}
-
-// RunMCPStdio initialises the connector layer and serves MCP JSON-RPC
-// over stdin/stdout. Intended for local clients (Claude Desktop, Cursor).
-func RunMCPStdio(version, commit, buildTime string) {
-	h, ctx := BuildMCPHandler(version, commit, buildTime)
-	h.ServeStdioOS(ctx)
-}
-
-// resolveWickGateBin finds the wick-gate binary: next to this executable,
-// then ./bin/ relative to cwd (where wick setup puts it), then PATH.
-func resolveWickGateBin() string {
-	names := []string{"wick-gate", "wick-gate.exe"}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		for _, name := range names {
-			if candidate := filepath.Join(dir, name); fileExists(candidate) {
-				return candidate
+	url := "/tools/agents/sessions/" + ev.SessionID
+	subscribers := append([]string(nil), sess.Meta.Subscribers...)
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, userID := range subscribers {
+			if _, err := pushSvc.SendToUser(bgCtx, userID, title, body, url); err != nil {
+				log.Warn().
+					Err(err).
+					Str("session", ev.SessionID).
+					Str("user", userID).
+					Str("lifecycle", ev.Lifecycle).
+					Msg("push: lifecycle dispatch had send errors")
 			}
 		}
+	}()
+}
+
+// lastAssistantPreview returns the trimmed first `max` runes of the
+// most recent assistant turn in the session's conversation.jsonl.
+// Empty string when nothing is readable (missing file, no assistant
+// turns yet, decode failure). Best-effort: errors are silently turned
+// into "" so callers can fall back to a label.
+//
+// Walks the file forward — for typical short sessions this is cheap;
+// long sessions might want a reverse scan but jsonl is line-oriented
+// so a forward scan is simplest and reliable.
+func lastAssistantPreview(layout agentconfig.Layout, sessionID string, max int) string {
+	if max <= 0 {
+		max = 140
 	}
-	if cwd, err := os.Getwd(); err == nil {
-		for _, name := range names {
-			if candidate := filepath.Join(cwd, "bin", name); fileExists(candidate) {
-				return candidate
-			}
+	var last string
+	storage.ReadJSONL(layout.SessionConversation(sessionID), func(line []byte) bool {
+		var t store.ConversationTurn
+		if json.Unmarshal(line, &t) != nil {
+			return true
 		}
+		if t.Role == "assistant" && strings.TrimSpace(t.Text) != "" {
+			last = t.Text
+		}
+		return true
+	})
+	last = strings.TrimSpace(last)
+	if last == "" {
+		return ""
 	}
-	if p, err := safeexec.LookPath("wick-gate"); err == nil {
-		return p
+	// Collapse newlines so the notification doesn't render a multi-
+	// line wall (most OS notif systems truncate vertically anyway).
+	last = strings.Join(strings.Fields(last), " ")
+	r := []rune(last)
+	if len(r) > max {
+		return string(r[:max]) + "…"
 	}
-	return ""
+	return last
 }
 
 func fileExists(path string) bool {

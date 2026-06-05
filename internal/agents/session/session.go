@@ -69,6 +69,57 @@ type Meta struct {
 	// Factory reads the preset content from presets/<name>/agent.md on
 	// every spawn so edits to the preset take effect on next respawn.
 	Preset string `json:"preset,omitempty"`
+	// Subscribers is the list of user IDs that opted in to receive
+	// browser push notifications for this session's lifecycle
+	// transitions (queue → working → idle). Persisted in meta.json so
+	// the subscription survives wick restart. Sessions are shared
+	// across users (anyone can open them) but pushes target only the
+	// IDs in this list — no auto-subscribe on session create.
+	Subscribers []string `json:"subscribers,omitempty"`
+}
+
+// IsSubscribed returns true when userID has opted in to receive
+// lifecycle push notifications for this session.
+func (m *Meta) IsSubscribed(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	for _, id := range m.Subscribers {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// AddSubscriber appends userID to Subscribers if not already present.
+// Returns true if the list changed (i.e. caller should persist Meta).
+func (m *Meta) AddSubscriber(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	for _, id := range m.Subscribers {
+		if id == userID {
+			return false
+		}
+	}
+	m.Subscribers = append(m.Subscribers, userID)
+	return true
+}
+
+// RemoveSubscriber drops userID from Subscribers. Returns true if the
+// list changed.
+func (m *Meta) RemoveSubscriber(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	for i, id := range m.Subscribers {
+		if id == userID {
+			m.Subscribers = append(m.Subscribers[:i], m.Subscribers[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // Session is the in-memory view: ID + meta + agent registry. Mirrors

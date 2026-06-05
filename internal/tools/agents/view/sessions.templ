@@ -536,6 +536,34 @@ templ chatComposer(vm SessionDetailVM) {
 			></textarea>
 			<div class="flex items-center justify-between px-3 pb-3 pt-1">
 				<div class="flex items-center gap-2">
+					<!-- Per-session subscribe bell. push.js owns visibility
+					     and icon state via data-state:
+					       setup   — browser push not enabled; click jumps
+					                 to /profile.
+					       off     — push on, this session NOT subscribed;
+					                 click POSTs subscribe.
+					       on      — green-dot bell; click POSTs unsubscribe.
+					       blocked — slash icon; click toasts site-settings
+					                 hint.
+					     Hidden when the browser doesn't support push.
+					     Session id is read from the wrapping
+					     data-session-id ancestor. -->
+					<button
+						type="button"
+						id="push-bell-btn"
+						data-push-bell
+						data-state="off"
+						aria-label="Notifications"
+						title="Notifications"
+						class="hidden relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+					>
+						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+							<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
+							<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
+							<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
+						</svg>
+						<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-200 dark:ring-navy-700" data-push-bell-dot aria-hidden="true"></span>
+					</button>
 					<button
 						type="button"
 						data-attach-toggle
@@ -776,8 +804,8 @@ templ assistantTurn(t TurnVM) {
 			if label != "" {
 				<span class="text-xs font-medium text-black-800 dark:text-black-600">{ label }</span>
 			}
-			if len(t.Events) > 0 {
-				<div class="flex flex-col gap-1">
+			if len(t.Events) > 0 || t.HasTrace {
+				<div class="flex flex-col gap-1" data-trace-container data-turn-id={ t.TurnID }>
 					<button
 						type="button"
 						data-trace-toggle
@@ -808,9 +836,18 @@ templ assistantTurn(t TurnVM) {
 			if t.Text != "" {
 				<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
 					<div class="prose-turn" data-md>{ t.Text }</div>
-					if t.Truncated {
+					if t.Interrupted {
+						<div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
+							<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path><path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path></svg>
+							<span class="text-xs text-amber-600 dark:text-amber-400">Interrupted — response was cut off</span>
+						</div>
+					} else if t.Truncated {
 						<p class="mt-2 text-xs text-black-600 dark:text-black-700 italic border-t border-white-300 dark:border-navy-600 pt-2">Output truncated — see raw.jsonl for full content.</p>
 					}
+				</div>
+			} else if t.Interrupted {
+				<div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm shadow-sm">
+					<p class="text-xs text-black-600 dark:text-black-700 italic">Interrupted — response was cut off</p>
 				</div>
 			}
 			if !t.Time.IsZero() {
