@@ -241,6 +241,21 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   fi
   install_gotty "$PREFIX/bin" "linux"
 
+  # ── proot — Termux prerequisite ───────────────────────────────────
+  # proot lets us bind-mount Termux's real DNS + CA bundle into the
+  # /etc paths that musl-linked binaries (codex, and other upstream
+  # CLIs distributed as static linux-arm64) hard-code. Install it
+  # unconditionally on Termux so the binding is available the first
+  # time any such tool is run — not only when codex happens to already
+  # be on PATH at install time.
+  if ! command -v proot >/dev/null 2>&1; then
+    echo ""
+    echo "→ installing proot (Termux prerequisite)…"
+    if ! pkg install -y proot >/dev/null 2>&1; then
+      echo "! pkg install proot failed — install it manually with: pkg install proot" >&2
+    fi
+  fi
+
   # ── Codex CLI fix for Termux ──────────────────────────────────────
   # OpenAI's Codex CLI ships a musl-linked binary that hard-codes:
   #   /etc/resolv.conf              (DNS)
@@ -265,12 +280,6 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     else
       echo ""
       echo "→ applying codex termux fix (proot bind-mount for DNS + CA bundle)"
-      if ! command -v proot >/dev/null 2>&1; then
-        echo "→ installing proot…"
-        if ! pkg install -y proot >/dev/null 2>&1; then
-          echo "! pkg install proot failed — install it manually, then re-run." >&2
-        fi
-      fi
       alias_line="alias codex='proot -b \$PREFIX/etc/resolv.conf:/etc/resolv.conf -b \$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt codex'  $codex_marker"
       printf '\n%s\n' "$alias_line" >> "$codex_rc"
       echo "  ✓ added to $codex_rc:"
