@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/preset"
@@ -165,6 +166,46 @@ func (m *Manager) RefreshSession(id string) error {
 	}
 	m.reg.upsertSession(s)
 	return nil
+}
+
+// SubscribeUser opts userID in to lifecycle push notifications for the
+// given session. Idempotent — calling twice with the same userID is a
+// no-op. Returns true when the subscriber list actually changed and
+// the meta file was rewritten, so callers can avoid unnecessary work.
+//
+// Sessions are shared across users (anyone can open them) but pushes
+// target only the IDs in meta.Subscribers — this is how the system
+// avoids paging users about sessions they don't care about.
+func (m *Manager) SubscribeUser(id, userID string) (bool, error) {
+	s, ok := m.reg.Session(id)
+	if !ok {
+		return false, fmt.Errorf("session %q not found", id)
+	}
+	if !s.Meta.AddSubscriber(userID) {
+		return false, nil
+	}
+	if err := session.SaveMeta(m.reg.layout, id, s.Meta); err != nil {
+		return false, err
+	}
+	m.reg.upsertSession(s)
+	return true, nil
+}
+
+// UnsubscribeUser is the inverse of SubscribeUser. Returns true when
+// the list changed.
+func (m *Manager) UnsubscribeUser(id, userID string) (bool, error) {
+	s, ok := m.reg.Session(id)
+	if !ok {
+		return false, fmt.Errorf("session %q not found", id)
+	}
+	if !s.Meta.RemoveSubscriber(userID) {
+		return false, nil
+	}
+	if err := session.SaveMeta(m.reg.layout, id, s.Meta); err != nil {
+		return false, err
+	}
+	m.reg.upsertSession(s)
+	return true, nil
 }
 
 // DeleteSession removes the session folder + cache entry.

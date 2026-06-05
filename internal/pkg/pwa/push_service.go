@@ -124,45 +124,6 @@ func (s *PushService) SendToUser(ctx context.Context, userID, title, body, url s
 	return s.sendToUser(ctx, userID, "", payload)
 }
 
-// SendToAll broadcasts one notification to every active subscription
-// across every user. Wick agents have no per-session owner today —
-// lifecycle pushes go out to whoever has notifications enabled and the
-// service worker on each receiver decides whether to surface it (e.g.
-// suppresses sound if a tab is already focused on the session URL).
-//
-// Returns the count of successful deliveries; individual send errors
-// are joined into the error return so the caller can log but does not
-// have to stop on a single dead endpoint.
-func (s *PushService) SendToAll(ctx context.Context, title, body, url string) (int, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Wick notification"
-	}
-	url = strings.TrimSpace(url)
-	if url == "" {
-		url = "/"
-	}
-	payload, _ := json.Marshal(map[string]string{
-		"title": title,
-		"body":  strings.TrimSpace(body),
-		"url":   url,
-	})
-	rows, err := s.repo.ListAllActive(ctx)
-	if err != nil {
-		return 0, err
-	}
-	sent := 0
-	var sendErr error
-	for _, row := range rows {
-		if err := s.send(ctx, row, payload); err != nil {
-			sendErr = errors.Join(sendErr, err)
-			continue
-		}
-		sent++
-	}
-	return sent, sendErr
-}
-
 func (s *PushService) sendToUser(ctx context.Context, userID, endpoint string, payload []byte) (int, error) {
 	rows, err := s.repo.ListActiveByUser(ctx, userID)
 	if err != nil {

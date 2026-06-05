@@ -159,6 +159,9 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
+	r.GET("/sessions/{id}/subscription", sessionSubscriptionStatus)
+	r.POST("/sessions/{id}/subscribe", sessionSubscribe)
+	r.POST("/sessions/{id}/unsubscribe", sessionUnsubscribe)
 	r.DELETE("/sessions/{id}", deleteSession)
 
 	r.GET("/sessions/{id}/uploads/{name}", sessionUploadServe)
@@ -1109,6 +1112,71 @@ func dequeueAgent(c *tool.Ctx) {
 func sessionWithMeta(sess session.Session, meta session.Meta) session.Session {
 	sess.Meta = meta
 	return sess
+}
+
+// sessionSubscriptionStatus reports whether the calling user is on the
+// session's lifecycle-push subscriber list. Used by the bell UI to
+// decide its on/off rendering — anyone can open any session, so the
+// bell state has to come from the server, not the browser.
+func sessionSubscriptionStatus(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"subscribed": sess.Meta.IsSubscribed(u.ID),
+	})
+}
+
+// sessionSubscribe adds the calling user to the session's lifecycle-
+// push subscriber list. Idempotent: subscribing twice is a no-op.
+// Sessions are shared (anyone can open them) but pushes target only
+// the IDs in meta.Subscribers, so a user "watching" a session
+// explicitly opts in via this endpoint.
+func sessionSubscribe(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id := c.PathValue("id")
+	if _, err := globalMgr.SubscribeUser(id, u.ID); err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"subscribed": true})
+}
+
+// sessionUnsubscribe drops the calling user from the subscriber list.
+// Idempotent: unsubscribing when not subscribed is a no-op.
+func sessionUnsubscribe(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id := c.PathValue("id")
+	if _, err := globalMgr.UnsubscribeUser(id, u.ID); err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"subscribed": false})
 }
 
 func killAgent(c *tool.Ctx) {

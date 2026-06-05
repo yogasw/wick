@@ -45,19 +45,6 @@ func (r *pushRepo) ListActiveByUser(ctx context.Context, userID string) ([]entit
 	return rows, err
 }
 
-// ListAllActive returns every active subscription across every user.
-// Used by broadcast paths (e.g. agent lifecycle notifications) that
-// fan out to anyone who has notifications enabled, without caring who
-// owns the row. Order is stable for deterministic iteration in tests.
-func (r *pushRepo) ListAllActive(ctx context.Context) ([]entity.PushSubscription, error) {
-	var rows []entity.PushSubscription
-	err := r.db.WithContext(ctx).
-		Where("disabled_at IS NULL").
-		Order("user_id, last_seen_at DESC, updated_at DESC").
-		Find(&rows).Error
-	return rows, err
-}
-
 func (r *pushRepo) DisableByEndpoint(ctx context.Context, userID, endpoint string) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).Model(&entity.PushSubscription{}).
