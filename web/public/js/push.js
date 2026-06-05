@@ -105,18 +105,58 @@
     if (helper && help) helper.textContent = help;
   }
 
-  function setAgentStatus(text, tone) {
+  // setAgentBanner renders a contained card inside #push-agent-status —
+  // used for the soft "Enable" CTA and the persistent "blocked" warning.
+  // Strips the templ shell's full-width border-b styling so the banner
+  // sits flush with the page padding instead of pushing layout down.
+  // Pass empty html to hide entirely.
+  function setAgentBanner(html, tone) {
     var el = document.getElementById('push-agent-status');
     if (!el) return;
-    if (!text) {
-      el.classList.add('hidden');
-      el.textContent = '';
+    if (!html) {
+      el.className = 'hidden';
+      el.innerHTML = '';
       return;
     }
-    el.classList.remove('hidden', 'text-pos-400', 'text-neg-400');
-    if (tone === 'ok') el.classList.add('text-pos-400');
-    if (tone === 'bad') el.classList.add('text-neg-400');
-    el.textContent = text;
+    var toneCls = tone === 'bad'
+      ? 'border-neg-200 bg-neg-100 text-neg-400'
+      : tone === 'ok'
+        ? 'border-pos-200 bg-pos-100 text-pos-400'
+        : 'border-white-300 bg-white-100 text-black-800 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600';
+    el.className = 'px-4 pt-3';
+    el.innerHTML = '<div class="flex items-center gap-3 rounded-lg border ' + toneCls + ' px-3 py-2 text-xs">' + html + '</div>';
+  }
+
+  // ensureToastStack lazily mounts the floating toast container.
+  // Bottom-right, fixed, pointer-events-none so the layer never blocks
+  // clicks unless a toast is actually present.
+  function ensureToastStack() {
+    var el = document.getElementById('push-toast-stack');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'push-toast-stack';
+    el.className = 'pointer-events-none fixed bottom-4 right-4 z-50 flex flex-col gap-2';
+    document.body.appendChild(el);
+    return el;
+  }
+
+  // showToast surfaces transient feedback ("Enabled.", "Test sent.")
+  // that doesn't need to persist. Auto-dismiss after 3s.
+  function showToast(text, tone) {
+    var stack = ensureToastStack();
+    var toast = document.createElement('div');
+    var toneCls = tone === 'ok'
+      ? 'border-pos-200 bg-pos-100 text-pos-400'
+      : tone === 'bad'
+        ? 'border-neg-200 bg-neg-100 text-neg-400'
+        : 'border-white-300 bg-white-100 text-black-800 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600';
+    toast.className = 'pointer-events-auto rounded-lg border px-4 py-2 text-sm shadow-md transition-opacity duration-200 ' + toneCls;
+    toast.textContent = text;
+    stack.appendChild(toast);
+    window.setTimeout(function () {
+      toast.style.opacity = '0';
+      window.setTimeout(function () { toast.remove(); }, 220);
+    }, 3000);
   }
 
   function renderDeviceList(devices, currentEndpoint) {
@@ -183,35 +223,56 @@
     }
   }
 
-  async function autoEnableForAgents() {
+  // CTA_DISMISS_KEY: per-tab "not now" flag so the soft prompt doesn't
+  // re-pop on every internal nav. sessionStorage (not localStorage) so
+  // a fresh tab/session asks again.
+  var CTA_DISMISS_KEY = 'wick.push.cta_dismissed';
+
+  function ctaDismissed() {
+    try { return window.sessionStorage.getItem(CTA_DISMISS_KEY) === '1'; }
+    catch (_) { return false; }
+  }
+
+  function rememberCTADismissed() {
+    try { window.sessionStorage.setItem(CTA_DISMISS_KEY, '1'); } catch (_) {}
+  }
+
+  // hydrateAgentBanner is the entry point for the agents-page status
+  // strip. Rule: silent when working, visible only when the user can
+  // act on it.
+  //
+  //   subscribed + granted → hide entirely (no nag on every page load)
+  //   denied / blocked     → persistent warning, dismissible
+  //   default (not asked)  → soft CTA with [Enable] + dismiss ×
+  //                          (replaces the previous auto-popup, which
+  //                          users tended to reflex-block before reading)
+  async function hydrateAgentBanner() {
     if (!/^\/tools\/agents(?:\/|$)/.test(window.location.pathname)) return;
-    if (!supportsPush()) {
-      setAgentStatus('Notifications are not supported in this browser.', 'bad');
+    if (!supportsPush()) return;
+    var sub = await currentSubscription().catch(function () { return null; });
+    if (sub && Notification.permission === 'granted') {
+      setAgentBanner('', '');
       return;
     }
     if (Notification.permission === 'denied') {
       await recordPermission('denied');
-      setAgentStatus('Browser notifications are blocked. You can unblock them from site settings; manual controls remain in Account.', 'bad');
+      setAgentBanner(
+        '<span class="flex-1">Browser notifications are blocked. Unblock them in site settings to get agent updates.</span>' +
+        '<button type="button" data-push-cta-dismiss class="opacity-60 transition-opacity hover:opacity-100" aria-label="Dismiss">&times;</button>',
+        'bad'
+      );
       return;
     }
-    try {
-      var sub = await currentSubscription();
-      if (sub) {
-        setAgentStatus('Notifications are enabled for this browser.', 'ok');
-        return;
-      }
-      setAgentStatus('Wick wants to enable notifications for agent updates.', '');
-      await subscribeCurrent();
-      await recordPermission(Notification.permission);
-      setAgentStatus('Notifications are enabled for agent updates.', 'ok');
-    } catch (err) {
-      if (Notification.permission === 'denied') {
-        await recordPermission('denied');
-        setAgentStatus('Browser notifications are blocked. You can unblock them from site settings; manual controls remain in Account.', 'bad');
-      } else {
-        setAgentStatus(err.message || 'Notifications were not enabled.', 'bad');
-      }
+    if (ctaDismissed()) {
+      setAgentBanner('', '');
+      return;
     }
+    setAgentBanner(
+      '<span class="flex-1">Get notified when agents finish or need your input.</span>' +
+      '<button type="button" data-push-cta-enable class="rounded-md bg-green-500 px-2.5 py-1 text-xs font-medium text-white-100 transition-colors hover:bg-green-600">Enable</button>' +
+      '<button type="button" data-push-cta-dismiss class="opacity-60 transition-opacity hover:opacity-100" aria-label="Hide for this session" title="Hide for this session">&times;</button>',
+      ''
+    );
   }
 
   document.addEventListener('click', async function (e) {
@@ -219,6 +280,8 @@
     var test = e.target.closest('#push-test-btn');
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
+    var ctaEnable = e.target.closest('[data-push-cta-enable]');
+    var ctaDismiss = e.target.closest('[data-push-cta-dismiss]');
     try {
       if (copyID) {
         var pushID = copyID.dataset.pushId || '';
@@ -228,11 +291,18 @@
           window.setTimeout(function () { copyID.textContent = 'Copy'; }, 1200);
         }
       }
-      if (enable) {
-        enable.disabled = true;
+      if (enable || ctaEnable) {
+        var btn = enable || ctaEnable;
+        btn.disabled = true;
         await subscribeCurrent();
         await recordPermission(Notification.permission);
+        showToast('Notifications enabled for this browser.', 'ok');
+        setAgentBanner('', '');
         await refreshProfile();
+      }
+      if (ctaDismiss) {
+        rememberCTADismissed();
+        setAgentBanner('', '');
       }
       if (test) {
         test.disabled = true;
@@ -243,6 +313,7 @@
           body: JSON.stringify({ endpoint: sub ? sub.endpoint : '' }),
         });
         test.disabled = false;
+        showToast('Test notification sent.', 'ok');
       }
       if (remove) {
         remove.disabled = true;
@@ -250,10 +321,18 @@
         var subForRemove = remove.getAttribute('data-current') === '1' ? await currentSubscription() : null;
         await unsubscribeEndpoint(endpoint, subForRemove);
         await refreshProfile();
+        showToast('Device removed.', '');
       }
     } catch (err) {
-      setStatus(err.message || 'Failed', 'bad');
+      // Profile page has its own status pill; everywhere else falls
+      // back to a toast so the failure doesn't get lost.
+      if (document.getElementById('push-current-status')) {
+        setStatus(err.message || 'Failed', 'bad');
+      } else {
+        showToast(err.message || 'Failed', 'bad');
+      }
       if (enable) enable.disabled = false;
+      if (ctaEnable) ctaEnable.disabled = false;
       if (test) test.disabled = false;
       if (remove) remove.disabled = false;
     }
@@ -275,7 +354,7 @@
   });
 
   window.addEventListener('load', function () {
-    autoEnableForAgents().catch(function () {});
+    hydrateAgentBanner().catch(function () {});
     refreshProfile().catch(function (err) {
       setStatus(err.message || 'Failed', 'bad');
     });
