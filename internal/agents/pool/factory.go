@@ -59,6 +59,15 @@ type ClaudeFactory struct {
 	// every preset. Preset stays the primary; this only adds to it.
 	SystemPromptLoader func() string
 
+	// TraceEventMaxKBLoader (optional) returns the current trace_event_max_kb
+	// config value. 0 = no cap.
+	TraceEventMaxKBLoader func() int
+
+	// TraceInlineKBLoader (optional) returns the current trace_event_inline_kb
+	// config value. Called on every Build so operators can change the threshold
+	// without restarting the server. 0 or negative = use DefaultTraceInlineBytes.
+	TraceInlineKBLoader func() int
+
 	// ConnectorCatalogLoader (optional) returns a "## Available wick
 	// connectors" markdown block listing the connectors the spawning
 	// agent should prefer over hand-rolled HTTP. Wired in server.go
@@ -114,12 +123,26 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	if storeProviderName == "" {
 		storeProviderName = storeProviderType
 	}
+	traceInlineBytes := 0
+	if f.TraceInlineKBLoader != nil {
+		if kb := f.TraceInlineKBLoader(); kb > 0 {
+			traceInlineBytes = kb * 1024
+		}
+	}
+	traceEventMaxBytes := 0
+	if f.TraceEventMaxKBLoader != nil {
+		if kb := f.TraceEventMaxKBLoader(); kb > 0 {
+			traceEventMaxBytes = kb * 1024
+		}
+	}
 	sto := store.New(store.Options{
-		Layout:    f.Layout,
-		SessionID: opt.SessionID,
-		AgentName: opt.AgentName,
-		Provider:  storeProviderType + "/" + storeProviderName,
-		RecordRaw: f.RecordRaw,
+		Layout:             f.Layout,
+		SessionID:          opt.SessionID,
+		AgentName:          opt.AgentName,
+		Provider:           storeProviderType + "/" + storeProviderName,
+		RecordRaw:          f.RecordRaw,
+		TraceInlineBytes:   traceInlineBytes,
+		TraceEventMaxBytes: traceEventMaxBytes,
 	})
 
 	// Layered system prompt (top wins on conflict):

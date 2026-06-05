@@ -15,6 +15,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -25,11 +26,6 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 )
-
-// MaxAssistantTurnBytes caps one assistant turn's body before it gets
-// written to conversation.jsonl. Anything beyond is truncated with a
-// note pointing at raw.jsonl. Matches §13 cap.
-const MaxAssistantTurnBytes = 32 * 1024
 
 // TurnEvent is one tool_use, tool_result, or thinking event recorded
 // within an assistant turn. Stored alongside the text so the UI can
@@ -60,7 +56,10 @@ type Attachment struct {
 }
 
 // ConversationTurn is the on-disk shape of one user/assistant turn.
+// Events are NOT stored here — they live in thinking/<TurnID>.json so
+// conversation.jsonl stays small regardless of tool payload size.
 type ConversationTurn struct {
+	TurnID      string       `json:"turn_id,omitempty"`
 	Timestamp   time.Time    `json:"ts"`
 	Role        string       `json:"role"`               // "user" | "assistant" | "system"
 	Agent       string       `json:"agent,omitempty"`    // assistant turn only
@@ -68,9 +67,52 @@ type ConversationTurn struct {
 	Source      string       `json:"source,omitempty"`
 	Text        string       `json:"text"`
 	Truncated   bool         `json:"truncated,omitempty"`
-	Events      []TurnEvent  `json:"events,omitempty"`      // tool/thinking trace
+	Interrupted bool         `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
+	HasTrace    bool         `json:"has_trace,omitempty"`   // true when thinking/<TurnID>.json exists
+	Events      []TurnEvent  `json:"events,omitempty"`      // legacy: populated only when reading old turns
 	Attachments []Attachment `json:"attachments,omitempty"` // user turn only
 }
+
+// TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
+// Events below the inline threshold have their Text embedded here.
+// Events at or above the threshold have Text omitted and Large=true —
+// UI must fetch thinking/<turn_id>/<event_id>.json separately.
+type TurnTraceIndex struct {
+	TurnID string            `json:"turn_id"`
+	Events []TurnEventIndex  `json:"events"`
+}
+
+// TurnEventIndex is one row in the trace index.
+type TurnEventIndex struct {
+	EventID   string    `json:"event_id"`
+	Type      string    `json:"type"`
+	ToolName  string    `json:"tool_name,omitempty"`
+	ToolUseID string    `json:"tool_use_id,omitempty"`
+	IsError   bool      `json:"is_error,omitempty"`
+	At        time.Time `json:"at,omitempty"`
+	EndAt     time.Time `json:"end_at,omitempty"`
+	// Inline payload — present only when size < threshold.
+	Text      string `json:"text,omitempty"`
+	ToolInput string `json:"tool_input,omitempty"`
+	// Large=true means payload lives in <event_id>.json, fetch on demand.
+	Large bool  `json:"large,omitempty"`
+	Size  int64 `json:"size,omitempty"`
+}
+
+// TurnEventPayload is written to thinking/<turn_id>/<event_id>.json
+// for large events.
+type TurnEventPayload struct {
+	EventID   string `json:"event_id"`
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	ToolInput string `json:"tool_input,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// DefaultTraceInlineBytes is the fallback threshold when no config is set.
+// Events with combined text+tool_input payload below this are stored inline
+// in the trace index; larger events get their own file.
+const DefaultTraceInlineBytes = 10 * 1024
 
 // Store collects events for one session+agent and persists them.
 type Store struct {
@@ -93,6 +135,13 @@ type Store struct {
 	// default per design (raw is opt-in, retention agressive).
 	recordRaw bool
 
+	// traceInlineBytes is the per-event payload threshold in bytes.
+	// Events larger than this are written to a separate file.
+	// 0 = use DefaultTraceInlineBytes.
+	traceInlineBytes int
+	// traceEventMaxBytes caps per-event file payload. 0 = no cap.
+	traceEventMaxBytes int
+
 	now func() time.Time
 }
 
@@ -101,12 +150,14 @@ type Store struct {
 // stamped on every assistant turn so the UI can render which model
 // produced it even after the active provider switches.
 type Options struct {
-	Layout    config.Layout
-	SessionID string
-	AgentName string
-	Provider  string
-	RecordRaw bool
-	Now       func() time.Time // optional; defaults to time.Now
+	Layout           config.Layout
+	SessionID        string
+	AgentName        string
+	Provider         string
+	RecordRaw        bool
+	TraceInlineBytes   int             // 0 = DefaultTraceInlineBytes
+	TraceEventMaxBytes int             // 0 = no cap on per-event file size
+	Now                func() time.Time // optional; defaults to time.Now
 }
 
 // New returns a Store ready to consume events. Caller owns the
@@ -116,13 +167,19 @@ func New(opt Options) *Store {
 	if now == nil {
 		now = time.Now
 	}
+	inlineBytes := opt.TraceInlineBytes
+	if inlineBytes <= 0 {
+		inlineBytes = DefaultTraceInlineBytes
+	}
 	return &Store{
-		layout:    opt.Layout,
-		sessionID: opt.SessionID,
-		agentName: opt.AgentName,
-		provider:  opt.Provider,
-		recordRaw: opt.RecordRaw,
-		now:       now,
+		layout:             opt.Layout,
+		sessionID:          opt.SessionID,
+		agentName:          opt.AgentName,
+		provider:           opt.Provider,
+		recordRaw:          opt.RecordRaw,
+		traceInlineBytes:   inlineBytes,
+		traceEventMaxBytes: opt.TraceEventMaxBytes,
+		now:                now,
 	}
 }
 
@@ -324,28 +381,40 @@ func (s *Store) Flush() error {
 // flushAssistantTurn writes the buffered text as one assistant turn
 // and resets the buffer. wasInterrupted=true sets Truncated on the
 // turn — used by Flush when there was no Done event.
+//
+// Events (tool_use, tool_result, thinking) are written to
+// thinking/<turn_id>.json so conversation.jsonl stays lean.
 func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 	if s.turnBuf.Len() == 0 && len(s.eventBuf) == 0 {
 		return nil
 	}
 	body := s.turnBuf.String()
 	truncated := wasInterrupted
-	if len(body) > MaxAssistantTurnBytes {
-		body = body[:MaxAssistantTurnBytes] + "\n…(truncated, see raw.jsonl)"
-		truncated = true
-	}
 	s.mu.Lock()
 	evSnap := s.eventBuf
 	s.eventBuf = nil
 	s.mu.Unlock()
+
+	now := s.now().UTC()
+	turnID := fmt.Sprintf("%d", now.UnixNano())
+
+	// Write trace index + per-event files before the conversation entry
+	// that references them.
+	hasTrace := false
+	if len(evSnap) > 0 {
+		hasTrace = s.writeTraceIndex(turnID, evSnap)
+	}
+
 	turn := ConversationTurn{
-		Timestamp: s.now().UTC(),
-		Role:      "assistant",
-		Agent:     s.agentName,
-		Provider:  s.provider,
-		Text:      body,
-		Truncated: truncated,
-		Events:    evSnap,
+		TurnID:      turnID,
+		Timestamp:   now,
+		Role:        "assistant",
+		Agent:       s.agentName,
+		Provider:    s.provider,
+		Text:        body,
+		Truncated:   truncated,
+		Interrupted: wasInterrupted,
+		HasTrace:    hasTrace,
 	}
 	s.turnBuf.Reset()
 	if err := storage.AppendJSONL(
@@ -364,6 +433,74 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		// non-fatal: log left to caller's discretion via raw.jsonl audit
 	}
 	return nil
+}
+
+// writeTraceIndex writes thinking/<turn_id>.json (the index) and, for
+// events whose payload exceeds s.traceInlineBytes, a separate file at
+// thinking/<turn_id>/<event_id>.json. Returns true when the index was
+// successfully written.
+// writeTraceIndexStatic is the package-level variant for callers without a *Store.
+func writeTraceIndexStatic(layout config.Layout, sessionID, turnID string, evs []TurnEvent, inlineBytes int) bool {
+	s := &Store{layout: layout, sessionID: sessionID, traceInlineBytes: inlineBytes}
+	return s.writeTraceIndex(turnID, evs)
+}
+
+func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
+	turnDir := s.layout.SessionThinkingTurnDir(s.sessionID, turnID)
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		return false
+	}
+	idx := TurnTraceIndex{TurnID: turnID}
+	for i, ev := range evs {
+		eventID := fmt.Sprintf("e%d", i)
+		payload := ev.Text + ev.ToolInput
+		row := TurnEventIndex{
+			EventID:   eventID,
+			Type:      ev.Type,
+			ToolName:  ev.ToolName,
+			ToolUseID: ev.ToolUseID,
+			IsError:   ev.IsError,
+			At:        ev.At,
+			EndAt:     ev.EndAt,
+		}
+		if len(payload) >= s.traceInlineBytes {
+			// Apply per-event max cap before writing to file.
+			text := ev.Text
+			toolInput := ev.ToolInput
+			truncated := false
+			if s.traceEventMaxBytes > 0 {
+				if len(text) > s.traceEventMaxBytes {
+					text = text[:s.traceEventMaxBytes]
+					truncated = true
+				}
+				if len(toolInput) > s.traceEventMaxBytes {
+					toolInput = toolInput[:s.traceEventMaxBytes]
+					truncated = true
+				}
+			}
+			ep := TurnEventPayload{
+				EventID:   eventID,
+				Type:      ev.Type,
+				Text:      text,
+				ToolInput: toolInput,
+				Truncated: truncated,
+			}
+			if data, err := json.Marshal(ep); err == nil {
+				_ = os.WriteFile(s.layout.SessionThinkingEvent(s.sessionID, turnID, eventID), data, 0o644)
+			}
+			row.Large = true
+			row.Size = int64(len(payload))
+		} else {
+			row.Text = ev.Text
+			row.ToolInput = ev.ToolInput
+		}
+		idx.Events = append(idx.Events, row)
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		return false
+	}
+	return os.WriteFile(s.layout.SessionThinking(s.sessionID, turnID), data, 0o644) == nil
 }
 
 // InflightEntry is one line of inflight.jsonl. Mirrors TurnEvent +
@@ -469,17 +606,19 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 		return false, nil
 	}
 	text := body.String()
-	if len(text) > MaxAssistantTurnBytes {
-		text = text[:MaxAssistantTurnBytes] + "\n…(truncated, see raw.jsonl)"
-	}
+	ts := now().UTC()
+	turnID := fmt.Sprintf("%d", ts.UnixNano())
+	hasTrace := writeTraceIndexStatic(layout, sessionID, turnID, events, DefaultTraceInlineBytes)
 	turn := ConversationTurn{
-		Timestamp: now().UTC(),
-		Role:      "assistant",
-		Agent:     agentName,
-		Provider:  provider,
-		Text:      text,
-		Truncated: true,
-		Events:    events,
+		TurnID:      turnID,
+		Timestamp:   ts,
+		Role:        "assistant",
+		Agent:       agentName,
+		Provider:    provider,
+		Text:        text,
+		Truncated:   true,
+		Interrupted: true,
+		HasTrace:    hasTrace,
 	}
 	if err := storage.AppendJSONL(
 		layout.SessionConversation(sessionID),

@@ -78,6 +78,7 @@ export default withMermaid(defineConfig({
           { text: 'Slack', link: '/connectors/slack' },
           { text: 'Wick Manager', link: '/connectors/wickmanager' },
           { text: 'Workflow', link: '/connectors/workflow' },
+          { text: 'Notifications', link: '/connectors/notifications' },
           { text: 'CRUD CRUD (lab)', link: '/connectors/crudcrud' },
         ],
       },

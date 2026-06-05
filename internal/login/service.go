@@ -6,6 +6,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -110,6 +111,22 @@ func (s *Service) SetPinnedAgentProject(ctx context.Context, userID, projectID s
 	}
 	meta := u.Metadata
 	meta.PinnedAgentProjectID = projectID
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+func (s *Service) SetPushPermission(ctx context.Context, userID, permission string) error {
+	permission = strings.TrimSpace(strings.ToLower(permission))
+	if permission != "granted" && permission != "denied" {
+		return nil
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	meta := u.Metadata
+	meta.PushPermission = permission
+	meta.PushPermissionAt = &now
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 

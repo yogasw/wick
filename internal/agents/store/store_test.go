@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,23 @@ func newStore(t *testing.T, agentName string, recordRaw bool) (*Store, config.La
 		Now:       func() time.Time { return clk },
 	})
 	return st, layout
+}
+
+// readTraceEvents reads thinking/<turn_id>/index.json and returns events.
+func readTraceEvents(t *testing.T, layout config.Layout, turn ConversationTurn) []TurnEventIndex {
+	t.Helper()
+	if !turn.HasTrace || turn.TurnID == "" {
+		return nil
+	}
+	data, err := os.ReadFile(layout.SessionThinking("S1", turn.TurnID))
+	if err != nil {
+		t.Fatalf("read trace index: %v", err)
+	}
+	var idx TurnTraceIndex
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("unmarshal trace index: %v", err)
+	}
+	return idx.Events
 }
 
 func readConvLines(t *testing.T, layout config.Layout) []ConversationTurn {
@@ -212,19 +230,6 @@ func TestRecordRawAppendsRawJSONL(t *testing.T) {
 	}
 }
 
-func TestLargeTurnTruncated(t *testing.T) {
-	st, layout := newStore(t, "backend", false)
-	huge := strings.Repeat("x", MaxAssistantTurnBytes+100)
-	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: huge})
-	st.Apply(event.AgentEvent{Type: event.Done})
-	lines := readConvLines(t, layout)
-	if len(lines) != 1 || !lines[0].Truncated {
-		t.Fatalf("expected truncated: %+v", lines[0].Truncated)
-	}
-	if len(lines[0].Text) > MaxAssistantTurnBytes+50 {
-		t.Fatalf("body not capped: %d", len(lines[0].Text))
-	}
-}
 
 func TestApplyThinkingBufferedInEvents(t *testing.T) {
 	st, layout := newStore(t, "backend", false)
@@ -235,12 +240,12 @@ func TestApplyThinkingBufferedInEvents(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("turns: %d", len(lines))
 	}
-	if len(lines[0].Events) != 1 {
-		t.Fatalf("events: %d, want 1", len(lines[0].Events))
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 1 {
+		t.Fatalf("events: %d, want 1", len(evs))
 	}
-	ev := lines[0].Events[0]
-	if ev.Type != "thinking" || ev.Text != "let me think" {
-		t.Fatalf("thinking event: %+v", ev)
+	if evs[0].Type != "thinking" || evs[0].Text != "let me think" {
+		t.Fatalf("thinking event: %+v", evs[0])
 	}
 }
 
@@ -264,7 +269,7 @@ func TestApplyToolUseAndResultBuffered(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("turns: %d", len(lines))
 	}
-	evs := lines[0].Events
+	evs := readTraceEvents(t, layout, lines[0])
 	if len(evs) != 2 {
 		t.Fatalf("events: %d, want 2", len(evs))
 	}
@@ -293,7 +298,7 @@ func TestApplyToolResultIsErrorFlagged(t *testing.T) {
 	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "sorry"})
 	st.Apply(event.AgentEvent{Type: event.Done})
 	lines := readConvLines(t, layout)
-	evs := lines[0].Events
+	evs := readTraceEvents(t, layout, lines[0])
 	if len(evs) != 2 {
 		t.Fatalf("events: %d", len(evs))
 	}
@@ -314,12 +319,12 @@ func TestThinkingOnlyTurnFlushed(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("want 1 turn, got %d (thinking-only turn was dropped)", len(lines))
 	}
-	if len(lines[0].Events) != 1 {
-		t.Fatalf("want 1 event, got %d", len(lines[0].Events))
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 1 {
+		t.Fatalf("want 1 event, got %d", len(evs))
 	}
-	ev := lines[0].Events[0]
-	if ev.Type != "thinking" || ev.Text != "silent reasoning" {
-		t.Fatalf("unexpected event: %+v", ev)
+	if evs[0].Type != "thinking" || evs[0].Text != "silent reasoning" {
+		t.Fatalf("unexpected event: %+v", evs[0])
 	}
 }
 
@@ -338,10 +343,12 @@ func TestEventBufferClearedBetweenTurns(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("turns: %d", len(lines))
 	}
-	if len(lines[0].Events) != 1 {
-		t.Fatalf("turn1 events: %d", len(lines[0].Events))
+	evs1 := readTraceEvents(t, layout, lines[0])
+	if len(evs1) != 1 {
+		t.Fatalf("turn1 events: %d", len(evs1))
 	}
-	if len(lines[1].Events) != 0 {
-		t.Fatalf("turn2 should have no events, got: %+v", lines[1].Events)
+	evs2 := readTraceEvents(t, layout, lines[1])
+	if len(evs2) != 0 {
+		t.Fatalf("turn2 should have no events, got: %+v", evs2)
 	}
 }

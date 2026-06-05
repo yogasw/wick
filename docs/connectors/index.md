@@ -21,6 +21,7 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 | [Slack](./slack) | `slack` | Read channels, threads, users; send / edit / delete messages; manage reactions. OAuth credentials supported on the row. | builtin |
 | [Wick Manager](./wickmanager) | `wickmanager` | Read and edit wick's own apps / jobs / tools / connectors / tray lifecycle. For asking the LLM to inspect or tweak wick itself, not third-party APIs. | runtime |
 | [Workflow](./workflow) | `workflow` | Create, edit, test, simulate, and run workflows over MCP — the LLM-facing surface for the [Workflows](/workflow/) feature. | runtime |
+| [Notifications](./notifications) | `notifications` | Send a browser push notification to a subscribed user by opaque PN ID. Pairs with the per-session subscribe bell on the agents UI. | runtime |
 | [CRUD CRUD](./crudcrud) | `crudcrud` | Demo connector wrapping the public crudcrud.com sandbox. Ships with [`cmd/lab`](https://github.com/yogasw/wick/tree/master/cmd/lab) only — useful as a copy-paste starting point. | lab sample |
 
 **Tiers:**

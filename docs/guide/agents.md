@@ -141,6 +141,48 @@ Combined with the existing `/tools/agents/*` `RequireToolAccess` middleware + se
 
 Ace + `marked` + `DOMPurify` are vendored locally under [`internal/tools/agents/js/vendor/`](https://github.com/yogasw/wick/tree/master/internal/tools/agents/js/vendor) (`go:embed`-ed at build time and served from `/tools/agents/static/js/vendor/`). The Ace bundle is trimmed to ~1.5 MB — only the modes wick is likely to encounter in a session cwd are kept (JS, TS, Go, Python, MD, HTML, CSS, JSON, YAML, SH, SQL, Java, Rust, Ruby, PHP, C/C++, Dockerfile, PowerShell, TOML, XML). No third-party CDN is contacted at runtime, so the panel works on an air-gapped install.
 
+## Lifecycle notifications
+
+Agents are async by nature — once you've sent the first message, the agent may take seconds or minutes to come back. Wick can fire a **browser push notification** when a session transitions to **idle** (the "your turn is back" moment) so you don't have to babysit the tab.
+
+### Opting in
+
+The push surface is opt-in twice — once per browser (must allow notifications) and once per session (the user has to explicitly subscribe to a session before its idle transitions push to them).
+
+| Surface | What it does |
+|---|---|
+| **Bell on the new-session composer** | Pre-toggle before submitting. The form carries a hidden `subscribe=1` flag and the server calls `Manager.SubscribeUser` right after `CreateSession`. Refresh clears the toggle — nothing persists pre-creation. |
+| **Bell on the session composer** | Live per-session toggle. Click POSTs `/sessions/{id}/subscribe` or `/unsubscribe`. Green dot = subscribed. |
+| **Bell on overview queue rows** | Hover-reveal bell per queued session. Same subscribe POST, scoped to whichever queued session you point at. |
+| **Master switch at `/profile`** | Per-browser device list (one row per Chrome / Firefox / mobile Safari), Send test, Copy PN ID. The bells elsewhere assume this is set up; the first click on any bell triggers `Notification.requestPermission()` if it isn't. |
+
+A reflex-Block on the browser's permission dialog is permanent for the origin. The bell flips to a slash icon — the only way to recover is unblocking in the browser's site settings.
+
+### Which transitions push
+
+Only `idle` (turn finished). `working` was deliberately dropped — it fires at the start of every turn, so the user would get pinged immediately after sending a message. `spawning` and `killed` don't trigger pushes either.
+
+### What the notification carries
+
+- **Title** — `Agent is idle — your turn`.
+- **Body** — first 140 runes of the most recent assistant turn (newlines collapsed). Falls back to the session label when the assistant turn hasn't been flushed yet.
+- **URL** — `/tools/agents/sessions/<id>`. Click navigates to the session.
+
+### In-app vs OS surface
+
+The service worker checks for same-origin clients on each push:
+
+- **Wick is open in at least one tab** → `postMessage` to every client. The page renders an in-app card (icon + title + body preview + click-to-open hint) and plays a short two-tone chime. The OS notification is suppressed (the `userVisibleOnly: true` subscription requires `showNotification` to be called, so the service worker calls it silently and immediately closes it — the OS surface never reaches the user).
+- **No wick tab is open anywhere** → OS notification with sound + banner. Click opens wick to the session URL (focuses an existing tab if one exists, otherwise opens a new tab).
+
+### Who receives a push
+
+Pushes are scoped to the session's `Subscribers` list (a list of user IDs stored in `meta.json`). Wick agent sessions are shared (any logged-in user can open them) but the push targets only the users who explicitly subscribed.
+
+### Sending notifications outside the lifecycle path
+
+The platform also exposes a [`notifications` connector](/connectors/notifications) for sending ad-hoc browser pushes to a specific subscribed user by their opaque PN ID. Useful when a workflow node or an LLM should send a notification on demand rather than waiting for an agent lifecycle event.
+
 ## Diagnostics
 
 ```bash

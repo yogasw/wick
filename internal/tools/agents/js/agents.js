@@ -1,6 +1,17 @@
 (function () {
   "use strict";
 
+  // Base URL for the agents tool — read from the session detail element
+  // so we never hard-code a path and it works under any mount prefix.
+  function agentsBase() {
+    var el = document.querySelector("[data-session-id]");
+    return el ? (el.dataset.base || "") : "";
+  }
+  function sessionID() {
+    var el = document.querySelector("[data-session-id]");
+    return el ? (el.dataset.sessionId || "") : "";
+  }
+
   // Shared trace toggle — wired by inline onclick on both top and
   // bottom toggle buttons inside an assistant turn. Reads the wrap's
   // hidden state, flips it, then syncs label + chevron + bottom-button
@@ -9,11 +20,43 @@
   window.wickToggleTrace = function (btn) {
     var section = btn.closest("[data-turn-events]");
     if (!section) return;
+    var container = section.querySelector("[data-trace-container]");
     var wrap = section.querySelector("[data-trace-wrap]");
     var top = section.querySelector("[data-trace-toggle]");
     var bottom = section.querySelector("[data-trace-toggle-bottom]");
     if (!wrap || !top) return;
     var willOpen = wrap.classList.contains("hidden");
+
+    // Lazy-load trace from server when wrap is empty and turn-id is known.
+    var turnID = container && container.dataset.turnId;
+    var alreadyLoaded = wrap.dataset.loaded === "1";
+    if (willOpen && turnID && !alreadyLoaded && wrap.children.length === 0) {
+      var sid = sessionID();
+      if (sid) {
+        var lbl = top.querySelector("[data-trace-label]");
+        if (lbl) lbl.textContent = "loading…";
+        fetch(agentsBase() + "/sessions/" + sid + "/turns/" + turnID, { credentials: "include" })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            wrap.dataset.loaded = "1";
+            var events = data.events || [];
+            events.forEach(function(ev) {
+              var card = buildTraceCard(ev, sessionID, turnID);
+              if (card) wrap.appendChild(card);
+            });
+            if (lbl) lbl.textContent = "hide trace";
+            wrap.classList.remove("hidden"); wrap.classList.add("flex", "flex-col");
+            var chev = top.querySelector("[data-chevron]");
+            if (chev) chev.style.transform = "";
+            if (bottom) { bottom.classList.remove("hidden"); bottom.classList.add("flex"); }
+          })
+          .catch(function() {
+            if (lbl) lbl.textContent = "show trace";
+          });
+        return;
+      }
+    }
+
     if (willOpen) { wrap.classList.remove("hidden"); wrap.classList.add("flex", "flex-col"); }
     else { wrap.classList.add("hidden"); wrap.classList.remove("flex", "flex-col"); }
     var chev = top.querySelector("[data-chevron]");
@@ -37,6 +80,63 @@
         target.scrollIntoView({ behavior: "smooth", block: "end" });
       }
     }
+  };
+
+  // buildTraceCard renders one TurnEventIndex as an HTML element.
+  // For large events (large:true), fetches payload on expand.
+  window.buildTraceCard = function(ev, sessionID, turnID) {
+    var d = document.createElement("div");
+    if (ev.type === "thinking") {
+      var text = ev.text || "";
+      d.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
+      d.innerHTML =
+        '<button type="button" onclick="var b=this.parentElement.querySelector(\'[data-thinking-body]\');b.classList.toggle(\'hidden\');this.querySelector(\'[data-chevron]\').style.transform=b.classList.contains(\'hidden\')?\'rotate(-90deg)\':\'\'" ' +
+        'class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors text-black-600 dark:text-black-700">' +
+        '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5.5v3l1.5 1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+        '<span class="italic">thinking</span>' +
+        '<svg data-chevron viewBox="0 0 16 16" class="ml-auto h-3 w-3 shrink-0 text-black-500 transition-transform" style="transform:rotate(-90deg)" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path></svg>' +
+        '</button>' +
+        '<div data-thinking-body class="hidden border-t border-white-300 dark:border-navy-600 px-3 py-2 italic text-black-600 dark:text-black-700 leading-relaxed break-words text-xs">' + esc(text) + '</div>';
+    } else if (ev.type === "tool_use") {
+      d.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
+      d.innerHTML =
+        '<div class="flex w-full items-center gap-2 px-3 py-2">' +
+        '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path><path d="M6 8h4" stroke-linecap="round"></path></svg>' +
+        '<span class="font-mono font-medium text-black-900 dark:text-white-100">' + esc(ev.tool_name || "") + '</span>' +
+        '<span class="ml-auto text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide shrink-0">tool call</span>' +
+        '</div>';
+    } else if (ev.type === "tool_result") {
+      var resultText = ev.large
+        ? '<span class="italic text-black-500 dark:text-black-600">' + Math.round((ev.size||0)/1024) + ' KB — click to load</span>'
+        : esc(ev.text || "");
+      d.className = "rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs";
+      if (ev.large) {
+        d.setAttribute("data-large-event", ev.event_id);
+        d.setAttribute("data-turn-id", turnID);
+        d.setAttribute("data-session-id", sessionID);
+        d.style.cursor = "pointer";
+        d.onclick = function() {
+          var eid = d.getAttribute("data-large-event");
+          var sid = d.getAttribute("data-session-id");
+          var tid = d.getAttribute("data-turn-id");
+          fetch(agentsBase() + "/sessions/" + sid + "/turns/" + tid + "/events/" + eid, { credentials: "include" })
+            .then(function(r) { return r.json(); })
+            .then(function(payload) {
+              d.onclick = null;
+              d.style.cursor = "";
+              d.innerHTML = '<div class="px-3 py-2 font-mono break-all whitespace-pre-wrap text-black-900 dark:text-white-100">' + esc(payload.text || "") + '</div>';
+            });
+        };
+      }
+      d.innerHTML = '<div class="flex items-center gap-2 px-3 py-2 border-b border-white-300 dark:border-navy-600">' +
+        (ev.is_error ? '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-red-500" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5.5v3" stroke-linecap="round"></path><circle cx="8" cy="11" r="0.5" fill="currentColor"></circle></svg>' : '<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l3.5 3.5L13 5" stroke-linecap="round" stroke-linejoin="round"></path></svg>') +
+        '<span class="text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide">' + (ev.is_error ? "error" : "result") + '</span>' +
+        '</div>' +
+        '<div class="px-3 py-2 font-mono break-all whitespace-pre-wrap text-black-900 dark:text-white-100">' + resultText + '</div>';
+    } else {
+      return null;
+    }
+    return d;
   };
 
   // ── Minimal markdown renderer ─────────────────────────────────────────
@@ -80,11 +180,15 @@
           var langLabel = codeLang
             ? '<span class="text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide">' + esc(codeLang) + '</span>'
             : '';
+          var codeText = codeLines.join("\n");
+          var copyBtn = '<button type="button" onclick="var btn=this;navigator.clipboard.writeText(this.dataset.code).then(function(){btn.textContent=\'Copied\';setTimeout(function(){btn.textContent=\'Copy\'},1500)}).catch(function(){})" ' +
+            'data-code="' + codeText.replace(/"/g, '&quot;') + '" ' +
+            'class="text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500">Copy</button>';
           out.push(
             '<div class="my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600">' +
-            (codeLang ? '<div class="flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600">' + langLabel + '</div>' : '') +
+            '<div class="flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600">' + langLabel + copyBtn + '</div>' +
             '<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed"><code>' +
-            esc(codeLines.join("\n")) + '</code></pre></div>'
+            esc(codeText) + '</code></pre></div>'
           );
           inCode = false; codeLang = ""; codeLines = [];
         }
@@ -168,7 +272,9 @@
     flushTable();
     flushList();
     if (inCode && codeLines.length) {
-      out.push('<pre class="text-xs font-mono bg-white-200 dark:bg-navy-800 px-4 py-3 rounded-lg overflow-x-auto"><code>' + esc(codeLines.join("\n")) + '</code></pre>');
+      var codeText2 = codeLines.join("\n");
+      var copyBtn2 = '<button type="button" onclick="var btn=this;navigator.clipboard.writeText(this.dataset.code).then(function(){btn.textContent=\'Copied\';setTimeout(function(){btn.textContent=\'Copy\'},1500)}).catch(function(){})" data-code="' + codeText2.replace(/"/g, '&quot;') + '" class="text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500">Copy</button>';
+      out.push('<div class="my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600"><div class="flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600"><span></span>' + copyBtn2 + '</div><pre class="text-xs font-mono bg-white-200 dark:bg-navy-800 px-4 py-3 overflow-x-auto"><code>' + esc(codeText2) + '</code></pre></div>');
     }
     return out.join("");
   }

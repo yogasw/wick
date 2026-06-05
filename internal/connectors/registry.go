@@ -47,6 +47,13 @@ func withConnectorTag(m connector.Meta, extra ...tool.DefaultTag) connector.Meta
 // All() returns this slice verbatim.
 var extra []connector.Module
 
+// listeners are notified for every Register call (including replacements)
+// AND replayed for every module already in `extra` at the time the
+// listener was added via OnRegister. Used by the workflow connector
+// registry to stay in sync without depending on boot ordering — see
+// internal/agents/workflow/setup/connectors.go.
+var listeners []func(connector.Module)
+
 // Register appends a fully-resolved Module record to the registry.
 // Called from app.RegisterConnector; do not call directly from app code.
 //
@@ -56,14 +63,44 @@ var extra []connector.Module
 // are rebuilt on each boot. A plain append would trip Bootstrap's
 // duplicate-key check; a skip would leave handlers wired to stale
 // services from the previous boot.
+//
+// After the (append|replace), every listener registered via OnRegister
+// is notified with the resolved module. Listeners run synchronously on
+// the calling goroutine — keep them cheap. Registrations all happen on
+// the main boot goroutine today; revisit if that ever changes.
 func Register(m connector.Module) {
 	for i, existing := range extra {
 		if existing.Meta.Key == m.Meta.Key {
 			extra[i] = m
+			notify(m)
 			return
 		}
 	}
 	extra = append(extra, m)
+	notify(m)
+}
+
+// OnRegister installs a listener that fires for every connector module
+// in the registry — once per module already present at the time of the
+// call (catch-up), then once per future Register call (catch future).
+// The catch-up loop matters: workflow setup runs after some builtins
+// have already been registered, and a future-only subscription would
+// silently drop them.
+//
+// Listeners are not removable. The registry lives for the lifetime of
+// the process; subscriptions are intended for setup-time wiring, not
+// dynamic plug-in/plug-out.
+func OnRegister(fn func(connector.Module)) {
+	for _, m := range extra {
+		fn(m)
+	}
+	listeners = append(listeners, fn)
+}
+
+func notify(m connector.Module) {
+	for _, fn := range listeners {
+		fn(m)
+	}
 }
 
 // RegisterBuiltins seeds in-house connectors every downstream wick app
@@ -119,6 +156,9 @@ func RegisterLabSamples() {
 }
 
 // registerOnce is the internal de-dupe helper for the seed paths.
+// Notifies listeners on first-time add so OnRegister callbacks stay in
+// sync regardless of whether RegisterBuiltins fires before or after
+// the subscriber attaches.
 func registerOnce(m connector.Module) {
 	for _, existing := range extra {
 		if existing.Meta.Key == m.Meta.Key {
@@ -126,6 +166,7 @@ func registerOnce(m connector.Module) {
 		}
 	}
 	extra = append(extra, m)
+	notify(m)
 }
 
 // All returns every registered connector definition in registration

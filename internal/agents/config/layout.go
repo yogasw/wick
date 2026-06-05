@@ -145,6 +145,29 @@ func (l Layout) SessionInflight(id string) string {
 	return filepath.Join(l.SessionDir(id), "inflight.jsonl")
 }
 
+// SessionThinkingDir is the root folder for all turn trace dirs.
+func (l Layout) SessionThinkingDir(id string) string {
+	return filepath.Join(l.SessionDir(id), "thinking")
+}
+
+// SessionThinkingTurnDir is the folder for one turn's trace:
+// thinking/<turn_id>/
+func (l Layout) SessionThinkingTurnDir(sessionID, turnID string) string {
+	return filepath.Join(l.SessionThinkingDir(sessionID), turnID)
+}
+
+// SessionThinking returns the index file for one turn's trace:
+// thinking/<turn_id>/index.json
+func (l Layout) SessionThinking(sessionID, turnID string) string {
+	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), "index.json")
+}
+
+// SessionThinkingEvent returns the payload file for one large event:
+// thinking/<turn_id>/<event_id>.json
+func (l Layout) SessionThinkingEvent(sessionID, turnID, eventID string) string {
+	return filepath.Join(l.SessionThinkingTurnDir(sessionID, turnID), eventID+".json")
+}
+
 // EnsureLayout creates the three top-level folders if they don't exist.
 // Idempotent — safe to call on every boot.
 func (l Layout) EnsureLayout() error {

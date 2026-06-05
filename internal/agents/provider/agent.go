@@ -521,10 +521,17 @@ func (a *Agent) run(ctx context.Context) {
 			a.resumeID = ev.SessionID
 			a.mu.Unlock()
 		}
-		a.state.Apply(ev)
+		// Persist BEFORE flipping the state machine so anything wired
+		// to lifecycle-idle (e.g. push notification dispatch) reads a
+		// conversation.jsonl that already has the just-finished
+		// assistant turn. Previous order fired state.Apply (which
+		// triggers the lifecycle hook synchronously) before store.Apply
+		// wrote the JSONL, so the notification body preview lagged by
+		// one turn.
 		if a.store != nil {
 			_, _ = a.store.Apply(ev)
 		}
+		a.state.Apply(ev)
 		if a.onEvent != nil {
 			a.onEvent(ev)
 		}

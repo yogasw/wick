@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	fyne.io/systray v1.12.1
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/a-h/templ v0.3.1020
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb
 	github.com/caarlos0/env/v9 v9.0.0
@@ -37,6 +38,7 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
