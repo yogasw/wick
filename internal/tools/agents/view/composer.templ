@@ -19,6 +19,12 @@ templ composerCard(vm ComposerVM) {
 			if !vm.ShowProjectPicker {
 				<input type="hidden" name="project_id" value={ selectedPID }/>
 			}
+			<!-- Hidden subscribe flag toggled by the pre-subscribe bell
+			     below. Value flips between "" and "1" via push.js; on
+			     submit, startNewSession reads c.Form("subscribe") and
+			     auto-adds the calling user to meta.Subscribers right
+			     after CreateSession. Pure form-state — refresh resets. -->
+			<input type="hidden" name="subscribe" value="" data-ns-subscribe-flag/>
 			<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden" data-composer-drop>
 				<div data-attach-chips class="hidden flex-wrap gap-2 px-3 pt-3"></div>
 				<input type="file" name="files" multiple class="hidden" data-attach-input/>
@@ -30,6 +36,28 @@ templ composerCard(vm ComposerVM) {
 					data-ns-textarea
 				>{ vm.Message }</textarea>
 				<div class="flex flex-wrap items-center gap-2 border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
+					<!-- Pre-subscribe bell. Client-side toggle only — the
+					     session doesn't exist yet, so we can't POST to a
+					     subscribe endpoint. push.js sets data-state via
+					     setNewSessionBellState (off/on/setup/blocked) and
+					     mirrors that into the hidden subscribe input
+					     above. Server reads the flag on submit. Refresh
+					     resets state because nothing persists. -->
+					<button
+						type="button"
+						data-ns-subscribe-bell
+						data-state="off"
+						aria-label="Notifications"
+						title="Subscribe to this session's idle notifications"
+						class="hidden relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+					>
+						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+							<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
+							<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
+							<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-ns-subscribe-bell-slash></path>
+						</svg>
+						<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-700" data-ns-subscribe-bell-dot aria-hidden="true"></span>
+					</button>
 					<button
 						type="button"
 						data-attach-toggle
