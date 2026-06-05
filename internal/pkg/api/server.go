@@ -31,6 +31,8 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/agents/store"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
@@ -450,13 +452,10 @@ func NewServer() *Server {
 				Int("pid", ev.PID).
 				Msg("lifecycle: broadcasting to SSE")
 			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
-			// Fan out to push subscribers for the transitions a user
-			// actually wants to be paged about: "working" (your turn
-			// just started) and "idle" (the agent is done — your turn
-			// to look at the output). Spawning is too noisy (every
-			// follow-up message goes spawning→working→idle) and killed
-			// is usually an explicit user action.
-			dispatchLifecyclePush(ev.Ctx, pushSvc, agentsMgr, ev)
+			// Fan out a push to opt-in subscribers when the agent
+			// goes idle (the "your turn is back" moment). Other
+			// transitions are skipped — see dispatchLifecyclePush.
+			dispatchLifecyclePush(ev.Ctx, pushSvc, agentsMgr, agentsLayout, ev)
 		},
 	})
 	// Wire the hook writer so Manager injects .claude/settings.local.json
@@ -1429,31 +1428,31 @@ func (s *Server) Run(ctx context.Context, port int) error {
 
 // dispatchLifecyclePush fans an agent lifecycle transition out to the
 // session's opt-in push subscribers (meta.Subscribers, populated via
-// POST /tools/agents/sessions/{id}/subscribe). Only "working" and
-// "idle" transitions are surfaced — spawning fires too often (every
-// follow-up turn is spawning→working→idle) and killed is usually a
-// deliberate user action that doesn't need a paging notification.
+// POST /tools/agents/sessions/{id}/subscribe).
+//
+// Only the "idle" transition surfaces a push — that's the "your turn
+// is back" moment users actually care about. "working" was dropped
+// because it fires at the START of a turn (noise — you just sent the
+// message), "spawning" / "killed" are operational events that don't
+// need a page.
+//
+// Body uses the last assistant message snippet so the notification
+// previews the result, not just a generic "agent finished". Falls
+// back to the session label when the snippet is unavailable.
 //
 // Sessions are shared (anyone with a wick login can open them) so
 // targeting via Subscribers means a user only gets paged about the
-// sessions they explicitly watched. SendToUser handles the
-// fan-out across each user's devices on the receiving side.
+// sessions they explicitly watched. SendToUser handles the fan-out
+// across each user's devices on the receiving side.
 //
-// Best-effort: errors are logged but never block the SSE broadcast that
-// happens just before this call. Service worker on each receiver
-// decides whether to play sound (suppresses if a focused tab is already
-// on the session URL — see web/public/js/sw.js).
-func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *agentregistry.Manager, ev agentpool.LifecycleEvent) {
+// Best-effort: errors are logged but never block the SSE broadcast.
+// Service worker on each receiver decides whether to surface as OS
+// notification or postMessage an in-app toast — see web/public/js/sw.js.
+func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *agentregistry.Manager, layout agentconfig.Layout, ev agentpool.LifecycleEvent) {
 	if pushSvc == nil || mgr == nil {
 		return
 	}
-	var title string
-	switch ev.Lifecycle {
-	case "working":
-		title = "Agent is working"
-	case "idle":
-		title = "Agent is idle — your turn"
-	default:
+	if ev.Lifecycle != "idle" {
 		return
 	}
 	sess, ok := mgr.Registry().Session(ev.SessionID)
@@ -1461,25 +1460,23 @@ func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *a
 		return
 	}
 	if len(sess.Meta.Subscribers) == 0 {
-		// No one opted in for this session — silent on the push side
-		// (SSE broadcast still fired upstream for live UI updates).
 		return
 	}
-	body := ev.AgentName
-	if label := strings.TrimSpace(sess.Meta.Label); label != "" {
-		if ev.AgentName != "" {
-			body = label + " · " + ev.AgentName
-		} else {
+	title := "Agent is idle — your turn"
+	body := lastAssistantPreview(layout, ev.SessionID, 140)
+	if body == "" {
+		// No assistant text available (early failure, killed mid-turn,
+		// etc.) — fall back to the session label so the user at least
+		// recognises which session pinged.
+		if label := strings.TrimSpace(sess.Meta.Label); label != "" {
 			body = label
+		} else {
+			body = ev.AgentName
 		}
 	}
 	url := "/tools/agents/sessions/" + ev.SessionID
 	subscribers := append([]string(nil), sess.Meta.Subscribers...)
 	go func() {
-		// Detach from the request ctx — webpush calls can take
-		// hundreds of ms each and we don't want to block lifecycle
-		// SSE delivery on push delivery. Tight deadline so a stuck
-		// endpoint can't pile up goroutines.
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		for _, userID := range subscribers {
@@ -1493,6 +1490,44 @@ func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *a
 			}
 		}
 	}()
+}
+
+// lastAssistantPreview returns the trimmed first `max` runes of the
+// most recent assistant turn in the session's conversation.jsonl.
+// Empty string when nothing is readable (missing file, no assistant
+// turns yet, decode failure). Best-effort: errors are silently turned
+// into "" so callers can fall back to a label.
+//
+// Walks the file forward — for typical short sessions this is cheap;
+// long sessions might want a reverse scan but jsonl is line-oriented
+// so a forward scan is simplest and reliable.
+func lastAssistantPreview(layout agentconfig.Layout, sessionID string, max int) string {
+	if max <= 0 {
+		max = 140
+	}
+	var last string
+	storage.ReadJSONL(layout.SessionConversation(sessionID), func(line []byte) bool {
+		var t store.ConversationTurn
+		if json.Unmarshal(line, &t) != nil {
+			return true
+		}
+		if t.Role == "assistant" && strings.TrimSpace(t.Text) != "" {
+			last = t.Text
+		}
+		return true
+	})
+	last = strings.TrimSpace(last)
+	if last == "" {
+		return ""
+	}
+	// Collapse newlines so the notification doesn't render a multi-
+	// line wall (most OS notif systems truncate vertically anyway).
+	last = strings.Join(strings.Fields(last), " ")
+	r := []rune(last)
+	if len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return last
 }
 
 func fileExists(path string) bool {

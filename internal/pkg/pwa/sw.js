@@ -33,28 +33,16 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(fetch(req).catch(() => caches.match(req)));
 });
 
-// isViewingTarget returns true when at least one of this origin's
-// windows is focused on the target URL path. Used by the push handler
-// to suppress sound + interaction on notifications the user clearly
-// doesn't need (they're already looking at the session).
-//
-// `userVisibleOnly: true` (set when subscribing) means we MUST call
-// showNotification for every push or the browser may revoke the
-// subscription. The compromise: still show the notification, but with
-// `silent: true` and `requireInteraction: false` so it doesn't beep,
-// vibrate, or pin to the action center. The OS still records it,
-// satisfying the policy.
-async function isViewingTarget(targetURL) {
+// sameOriginClients returns every window of this origin the service
+// worker can see. Used to decide whether to route the push to an
+// in-app toast (wick is open somewhere) or surface an OS notification
+// (wick is fully in the background — the user has no other channel).
+async function sameOriginClients() {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  for (const c of all) {
-    if (!c.focused) continue;
-    try {
-      const u = new URL(c.url);
-      if (u.origin !== self.location.origin) continue;
-      if (u.pathname === targetURL || u.pathname.startsWith(targetURL + '/')) return true;
-    } catch (_) {}
-  }
-  return false;
+  return all.filter((c) => {
+    try { return new URL(c.url).origin === self.location.origin; }
+    catch (_) { return false; }
+  });
 }
 
 self.addEventListener('push', (event) => {
@@ -66,28 +54,55 @@ self.addEventListener('push', (event) => {
   }
 
   const title = data.title || 'Wick notification';
+  const body = data.body || '';
   const targetURL = data.url || '/';
 
   event.waitUntil((async () => {
-    const viewing = await isViewingTarget(targetURL);
-    const options = {
-      body: data.body || '',
+    const clients = await sameOriginClients();
+    const hasClient = clients.length > 0;
+
+    // When wick is open anywhere (focused or not), route via
+    // postMessage so the page can render its own in-app toast that
+    // navigates within the SPA. We still HAVE to call
+    // showNotification because the subscription is userVisibleOnly —
+    // but we keep it silent (no sound, no vibration, no banner pin)
+    // so the OS surface stays out of the way. The in-app toast is
+    // what the user actually sees and interacts with.
+    if (hasClient) {
+      for (const c of clients) {
+        try {
+          c.postMessage({
+            type: 'wick:lifecycle_push',
+            title: title,
+            body: body,
+            url: targetURL,
+          });
+        } catch (_) {}
+      }
+      return self.registration.showNotification(title, {
+        body: body,
+        icon: '/public/img/icon-192.png',
+        badge: '/public/img/icon-192.png',
+        data: { url: targetURL },
+        silent: true,
+        requireInteraction: false,
+        tag: 'wick:' + targetURL,
+        renotify: false,
+      });
+    }
+
+    // No wick client at all — fall back to the real OS notification.
+    // Click navigates via notificationclick (opens wick + jumps to
+    // the session URL).
+    return self.registration.showNotification(title, {
+      body: body,
       icon: '/public/img/icon-192.png',
       badge: '/public/img/icon-192.png',
       data: { url: targetURL },
-      // When the user is already looking at the session URL, don't
-      // beep / vibrate / pin to the action center. The push is still
-      // delivered (required by userVisibleOnly) but stays out of the
-      // user's face.
-      silent: viewing,
       requireInteraction: false,
-      // Tag groups consecutive lifecycle pushes for the same session
-      // so the previous one collapses into the new one (e.g. working
-      // → idle within seconds doesn't stack two banners).
       tag: 'wick:' + targetURL,
-      renotify: !viewing,
-    };
-    return self.registration.showNotification(title, options);
+      renotify: true,
+    });
   })());
 });
 
