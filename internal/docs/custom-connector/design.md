@@ -736,16 +736,118 @@ sekali tidak bikin path baru:
 
 ## 9. Tags / ACL
 
-Sama persis dengan built-in:
+**Tags adalah surface utama** access control buat custom connector —
+sama persis pattern dengan built-in tools, jobs, dan connectors
+(lihat `internal/tags/defaults.go` & `connector-module` skill).
+Custom def tidak punya jalur ACL khusus, tidak ada "shared with
+users" picker terpisah. Semua granting akses lewat tag.
 
-- Custom def punya `tags` field di `connector_defs` (JSONB array of
-  tag IDs) → instance auto-inherit pas Bootstrap.
-- Per-op `Enabled` + `AdminOnly` toggles tetap ada (admin-only ops
-  hidden from non-admin via `connector_operations.admin_only`).
-- Destructive flag default off di tiap row (sama dengan built-in
-  `OpDestructive` default).
-- Non-admin lihat custom connector di `/manager/connectors` index
-  kalau dia punya tag access ≥ 1 instance — sama gating dengan built-in.
+### 9.1 Tiga flag tag (recap dari `internal/tags/defaults.go`)
+
+| Flag | Arti |
+|---|---|
+| `IsGroup` | Visual grouping — tagged item muncul di group ini di home / connector index |
+| `IsFilter` | Participates di access-filter rule — non-admin yg ngga carry tag ini, ngga lihat item-nya |
+| `IsSystem` | Admin UI nolak assign tag ini ke user → nobody carries → item invisible ke semua non-admin |
+
+### 9.2 Auto-tag at create — per-def filter tag
+
+Saat admin save custom connector (dari Flow A/B/C), wick **auto-create
+satu tag baru** dengan shape:
+
+```
+Name:        "custom:<def_key>"
+Description: "Access tag for custom connector '<Name>'. Assign to user groups to grant access."
+IsGroup:     false
+IsFilter:    true   ← penting: aktifin filter rule
+IsSystem:    false  ← admin BISA assign ke user (beda dengan System tag)
+SortOrder:   2000+  ← di bawah default catalog
+```
+
+Instance row dari def itu (`connectors` table) di-tag dengan:
+
+1. `custom:<def_key>` — filter tag yang baru dibuat (per-def)
+2. `Connector` group tag (visual: muncul di Connector group di home)
+3. Category tag pilihan admin di review step (`Communication` /
+   `Observability` / `Internal APIs` / `Development` / dst — sama
+   pilihan yang sudah ada di `defaults.go:51-99`)
+
+### 9.3 Default behavior = admin-only
+
+Begitu di-save:
+
+- **Tidak ada user** yang carry `custom:<def_key>` tag → filter rule
+  hide connector dari semua non-admin `/manager/connectors` index +
+  detail + `wick_list`.
+- Admin (via flag `IsAdmin`) bypass filter → admin lihat normal.
+
+Setara dengan System tag default — admin-only sampai admin opt in.
+
+Tapi **beda dari System tag** dalam dua hal:
+- `IsSystem=false` → admin UI tetap **boleh** assign tag ini ke user
+  / user group lewat `/admin/tags`. Itu yang nge-buka akses.
+- Tag belongs ke specific def (per-def, bukan global). Admin bisa
+  open `Stripe` ke group A doang, `Notion` ke group B doang.
+
+### 9.4 Membuka akses ke user / group
+
+Admin punya dua jalur:
+
+| Jalur | Lokasi | Efek |
+|---|---|---|
+| Assign per-user | `/admin/users/<id>` → Tags section, add `custom:<def_key>` | User itu carry tag → lihat connector di /manager + bisa call MCP |
+| Assign per-group | `/admin/tags/<tag_id>` → Members section, add users | Bulk grant — semua user di list dapet akses |
+
+Atau, kalau admin **mau full open** ke semua approved user:
+
+| Pilihan B | Lokasi | Efek |
+|---|---|---|
+| Hapus filter tag dari def | `/manager/connectors/<key>/<id>` → Access → remove `custom:<def_key>` tag | Connector kehilangan filter → terlihat oleh semua approved user. Tag rowtetap exist tapi tidak load-bearing |
+| Toggle "Open to all" | UI shortcut yang setara: remove `custom:<def_key>`, keep category + Connector group | Sama efek dengan pilihan B, satu klik |
+
+Pilihan B berguna untuk connector yang admin yakin OK buat semua
+orang (misal "Internal Knowledge Base"). Tag tetap di-keep untuk
+backward-restore (admin bisa re-attach kalau berubah pikiran).
+
+### 9.5 Per-operation ACL (existing, dipakai apa adanya)
+
+Selain row-level tag, per-op masih punya:
+
+- `ConnectorOperation.Enabled` (admin per-op on/off)
+- `ConnectorOperation.AdminOnly` (admin-only op meskipun row terbuka
+  untuk user lain — pas buat op destruktif yang user biasa shouldn't
+  call meskipun admin sudah grant connector access)
+- `OpDestructive` default-off (sama dengan built-in)
+
+Three independent off-switches resolve as: **call passes only when
+row tags allow + op enabled + op not admin-only-for-non-admin**.
+
+### 9.6 Bootstrap flow
+
+```
+admin save custom def (Flow A/B/C)
+  → connector_defs row INSERT
+  → wick.Tag.EnsureCustomDefTag(def_key, def_name) — idempotent
+       → INSERT tags row dengan IsFilter=true, IsSystem=false (sekali aja)
+  → registry rebuild → instance row INSERT di connectors table
+  → tag-link rows: connectors.id ↔ tag_ids =
+       [custom:<def_key>, Connector, <category pilihan admin>]
+  → admin redirect ke /manager/connectors/<key>/<id>
+  → Access section sudah pre-populated; admin lihat hint:
+       "Visible to admins only. Assign tag custom:<def_key> to user
+       groups at /admin/tags to grant access."
+```
+
+### 9.7 Delete cleanup
+
+Saat admin delete custom def:
+
+- `connector_defs` row hard-deleted (cascade ke `connector_def_ops`)
+- Instance `connectors` row hard-deleted
+- `custom:<def_key>` tag — **default keep** (admin mungkin re-create
+  dengan key sama nanti; tag-user links survive). Optional: cleanup
+  via "Also delete tag" checkbox di delete confirm modal.
+- Tag-link rows ke connector instance ke-cascade ke delete
 
 ---
 
@@ -861,6 +963,15 @@ custom connector identik dengan built-in.
   Configs / Operations stepper + Test button per op
 - [ ] Custom def appears in `/manager/connectors` index with "Custom"
   badge; cards stay grouped by tag category alongside built-in
+- [ ] **Tags / ACL** — at save, wick auto-creates `custom:<def_key>`
+  filter tag (`IsFilter=true, IsSystem=false`) + tags instance row
+  with [filter, Connector, category]. Default = admin-only (no user
+  carries the tag). `/admin/tags/<id>` assigns to user groups to
+  open access. `/manager/connectors/<key>/<id>` Access section shows
+  current visibility state + "Open to all" shortcut (removes filter
+  tag). Per-op `enabled` + `admin_only` reused as-is from built-in
+  framework. Three independent off-switches: row-tag, op-enabled,
+  op-admin-only
 - [ ] Edit flow: bump `updated_at`, show "Reload" banner; one-click
   rebuild Module without server restart
 - [ ] `connector_runs` writes the same shape for custom ops as for

@@ -562,6 +562,35 @@ wajib.</pre>
       </div>
     </div>
 
+    <!-- ACCESS SECTION at save time -->
+    <div class="mt-6">
+      <div class="section-h mb-2">Access (tags)</div>
+      <div class="card-sub p-4">
+        <p class="text-xs mb-3" style="color:var(--black-800)">
+          Wick will auto-create the filter tag <span class="chip chip-active" style="font-size:10px"><span class="mono">custom:stripe</span></span> on save.
+          By default <strong>only admins</strong> see this connector — non-admins can't see or call it.
+          You can open it up later under <code>/admin/tags</code>.
+        </p>
+
+        <label class="label">Category (visual group on the connector index)</label>
+        <select class="input mb-3" style="max-width:280px">
+          <option>Internal APIs (default)</option>
+          <option>Communication</option>
+          <option>Development</option>
+          <option>Observability</option>
+          <option>SCM</option>
+        </select>
+
+        <div class="card-sub p-3" style="background:var(--cau-100); border-color:var(--cau-400)">
+          <div class="text-xs" style="color:var(--black-800)">
+            <span style="color:var(--cau-400); font-weight:600">⚠ Default = admin-only.</span>
+            Auto-created tag is <code>IsFilter=true, IsSystem=false</code>. No user carries it at save, so the filter rule hides the connector from every non-admin /manager surface and MCP <code>wick_list</code>.
+            Grant access in two ways: (a) assign tag to user groups at <code>/admin/tags</code>, or (b) remove the filter tag entirely to open to all approved users.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="mt-6 flex items-center justify-between">
       <a href="#" class="btn btn-ghost">← Back</a>
       <div class="flex items-center gap-2">
@@ -1026,6 +1055,78 @@ wajib.</pre>
           </div>
         </div>
       </div>
+
+      <!-- ACCESS / TAGS section -->
+      <div class="mt-6">
+        <div class="section-h mb-2">Access (tags) — who can see &amp; call this connector</div>
+        <div class="card-sub p-4 space-y-4">
+
+          <!-- Tag editor -->
+          <div>
+            <label class="label">Tags on this connector instance</label>
+            <div class="flex flex-wrap gap-2 mb-2">
+              <span class="chip chip-active">
+                <span class="mono">custom:stripe</span>
+                <span class="badge badge-secret" style="font-size:9px">filter</span>
+                <button style="color:var(--black-800); font-size:11px">✕</button>
+              </span>
+              <span class="chip chip-muted">
+                Connector
+                <button style="color:var(--black-800); font-size:11px">✕</button>
+              </span>
+              <span class="chip chip-muted">
+                Internal APIs
+                <button style="color:var(--black-800); font-size:11px">✕</button>
+              </span>
+              <button class="chip chip-muted" style="border-style:dashed; cursor:pointer">+ Add tag</button>
+            </div>
+            <p class="helper">
+              <code>custom:stripe</code> is the per-def auto-tag — its filter flag is what makes this connector admin-only by default. Remove it to open to all approved users.
+            </p>
+          </div>
+
+          <!-- Visibility status -->
+          <div class="card-sub p-3" style="background:var(--cau-100); border-color:var(--cau-400)">
+            <div class="flex items-start gap-2">
+              <span style="color:var(--cau-400); font-weight:600">⚠</span>
+              <div class="text-xs" style="color:var(--black-800); flex:1">
+                <div style="font-weight:600; color:var(--cau-400)">Currently visible to: admins only</div>
+                <div class="mt-1">
+                  0 user groups carry <code>custom:stripe</code>. Assign at <a href="#" style="color:var(--green-600); text-decoration:underline">/admin/tags/custom:stripe</a>, or
+                  <a href="#" style="color:var(--green-600); text-decoration:underline">open to all</a> (removes the filter tag from this connector).
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Per-op admin-only quick shortcut -->
+          <div>
+            <label class="label">Per-operation overrides</label>
+            <div class="text-xs space-y-1" style="color:var(--black-800)">
+              <div class="flex items-center gap-2">
+                <span class="mono" style="color:var(--black-900); min-width:140px">post_charges</span>
+                <label class="flex items-center gap-1"><input type="checkbox" checked> enabled</label>
+                <label class="flex items-center gap-1"><input type="checkbox" checked> admin-only <span style="color:var(--black-700)">(destructive)</span></label>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="mono" style="color:var(--black-900); min-width:140px">get_charge</span>
+                <label class="flex items-center gap-1"><input type="checkbox" checked> enabled</label>
+                <label class="flex items-center gap-1"><input type="checkbox"> admin-only</label>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="mono" style="color:var(--black-900); min-width:140px">list_charges</span>
+                <label class="flex items-center gap-1"><input type="checkbox"> enabled</label>
+                <label class="flex items-center gap-1"><input type="checkbox"> admin-only</label>
+              </div>
+            </div>
+            <p class="helper">
+              Operation call passes only when: <strong>row tags allow</strong> AND <strong>op enabled</strong> AND (admin OR not admin-only). Three independent off-switches.
+            </p>
+          </div>
+
+        </div>
+      </div>
+
     </div>
   </div>
 </section>
