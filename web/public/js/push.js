@@ -150,7 +150,7 @@
       if (slash) slash.classList.remove('hidden');
     } else if (state === 'setup') {
       btn.className = baseCls + ' text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100';
-      btn.setAttribute('title', 'Set up notifications in Account first');
+      btn.setAttribute('title', 'Click to enable notifications for this session');
       if (dot) dot.classList.add('hidden');
       if (slash) slash.classList.add('hidden');
     } else {
@@ -430,19 +430,19 @@
 
   // handleBellClick: state machine for the chat composer bell.
   //
-  //   setup       → /profile (single place to set up the master push
-  //                 switch). We don't pop the permission prompt from
-  //                 the chat composer because a reflex Block here
-  //                 permanently kills push for this origin.
-  //   blocked     → toast pointing at site settings.
+  //   setup       → trigger browser permission prompt + subscribe via
+  //                 subscribeCurrent, then POST session subscribe so
+  //                 we land in 'on' in one click. No redirect to
+  //                 /profile — that round-trip is only useful when
+  //                 the user wants to MANAGE existing devices, not
+  //                 when they're trying to enable.
+  //   blocked     → toast pointing at site settings (only path to
+  //                 recover from a permanent Block is the browser
+  //                 site-settings dialog).
   //   off         → POST /sessions/<id>/subscribe, promote to on.
   //   on          → POST /sessions/<id>/unsubscribe, drop to off.
   async function handleBellClick(btn) {
     var state = btn.dataset.state || 'off';
-    if (state === 'setup') {
-      window.location.assign('/profile');
-      return;
-    }
     if (state === 'blocked') {
       showToast('Notifications are blocked. Unblock in site settings to enable.', 'bad');
       return;
@@ -453,8 +453,23 @@
       return;
     }
     btn.disabled = true;
-    var target = state === 'on' ? 'unsubscribe' : 'subscribe';
     try {
+      // In setup state the browser is missing a subscription (and
+      // possibly permission). Run subscribeCurrent first — it pops
+      // the permission prompt if needed and creates the push
+      // subscription. Then fall through to session subscribe so the
+      // single click takes the user all the way to 'on'.
+      if (state === 'setup') {
+        try {
+          await subscribeCurrent();
+          await recordPermission(Notification.permission);
+        } catch (err) {
+          await hydrateBell();
+          showToast(err.message || 'Could not enable notifications.', 'bad');
+          return;
+        }
+      }
+      var target = state === 'on' ? 'unsubscribe' : 'subscribe';
       var res = await fetch('/tools/agents/sessions/' + encodeURIComponent(sessionID) + '/' + target, {
         method: 'POST',
       });
@@ -500,7 +515,7 @@
       btn.classList.remove('text-amber-700', 'dark:text-amber-400', 'text-green-600', 'dark:text-green-400');
       if (dot) dot.classList.add('hidden');
     } else if (state === 'setup') {
-      btn.setAttribute('title', 'Set up notifications in Account first');
+      btn.setAttribute('title', 'Click to enable notifications and watch this session');
       btn.classList.add('text-amber-700', 'dark:text-amber-400');
       btn.classList.remove('text-green-600', 'dark:text-green-400', 'text-neg-400');
       if (dot) dot.classList.add('hidden');
@@ -566,10 +581,6 @@
           showToast('Notifications are not supported by this browser.', 'bad');
           return;
         }
-        if (qstate === 'setup') {
-          window.location.assign('/profile');
-          return;
-        }
         if (qstate === 'blocked') {
           showToast('Notifications are blocked. Unblock in site settings to enable.', 'bad');
           return;
@@ -581,6 +592,20 @@
           return;
         }
         queueBell.disabled = true;
+        // Setup state: pop browser permission + create push subscription
+        // first, then fall through to session subscribe so one click
+        // takes the user all the way to subscribed.
+        if (qstate === 'setup') {
+          try {
+            await subscribeCurrent();
+            await recordPermission(Notification.permission);
+          } catch (err) {
+            queueBell.disabled = false;
+            await refreshQueueBells();
+            showToast(err.message || 'Could not enable notifications.', 'bad');
+            return;
+          }
+        }
         var target = qstate === 'on' ? 'unsubscribe' : 'subscribe';
         try {
           var res = await fetch('/tools/agents/sessions/' + encodeURIComponent(sessionID) + '/' + target, {
