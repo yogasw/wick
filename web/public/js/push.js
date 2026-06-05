@@ -218,6 +218,75 @@
     }, 3000);
   }
 
+  // showLifecycleCard renders a rich, clickable in-app toast when the
+  // service worker relays a lifecycle push back to the page (wick was
+  // open, so we skipped the OS notification surface). Bigger than the
+  // small status toast — title + body preview + a footer hint —
+  // because the content here is the actual agent output the user
+  // wants to read at a glance.
+  //
+  // Click anywhere on the card navigates to the session URL. Auto-
+  // dismisses after 8s (longer than a status toast since users may
+  // need to skim the body) but the user can also click the × to
+  // dismiss early.
+  function showLifecycleCard(payload) {
+    var stack = ensureToastStack();
+    var card = document.createElement('div');
+    card.className = 'pointer-events-auto w-80 max-w-[calc(100vw-2rem)] cursor-pointer rounded-xl border border-white-300 bg-white-100 text-black-900 shadow-lg transition-opacity duration-200 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100';
+    var title = payload && payload.title ? String(payload.title) : 'Wick notification';
+    var body = payload && payload.body ? String(payload.body) : '';
+    var url = payload && payload.url ? String(payload.url) : '/';
+    card.innerHTML =
+      '<div class="flex items-start gap-3 px-4 py-3">' +
+        '<div class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-green-500/15 text-green-600 dark:text-green-400">' +
+          '<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
+            '<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>' +
+            '<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>' +
+          '</svg>' +
+        '</div>' +
+        '<div class="min-w-0 flex-1">' +
+          '<div class="text-sm font-medium leading-tight">' + escapeHTML(title) + '</div>' +
+          (body ? '<div class="mt-1 line-clamp-3 text-xs text-black-700 dark:text-black-600">' + escapeHTML(body) + '</div>' : '') +
+          '<div class="mt-2 text-[11px] text-green-600 dark:text-green-400">Click to open session →</div>' +
+        '</div>' +
+        '<button type="button" data-lifecycle-card-dismiss class="-mr-1 -mt-1 shrink-0 rounded-md p-1 text-black-600 opacity-60 transition-opacity hover:opacity-100 dark:text-black-700" aria-label="Dismiss">' +
+          '<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke-linecap="round"></path></svg>' +
+        '</button>' +
+      '</div>';
+    var dismissed = false;
+    function dismiss() {
+      if (dismissed) return;
+      dismissed = true;
+      card.style.opacity = '0';
+      window.setTimeout(function () { card.remove(); }, 220);
+    }
+    card.addEventListener('click', function (e) {
+      if (e.target.closest('[data-lifecycle-card-dismiss]')) {
+        e.stopPropagation();
+        dismiss();
+        return;
+      }
+      dismiss();
+      // Same-origin navigation keeps the SPA / tab state intact.
+      window.location.assign(url);
+    });
+    stack.appendChild(card);
+    window.setTimeout(dismiss, 8000);
+  }
+
+  // Service worker → page bridge for lifecycle pushes. When wick is
+  // open anywhere, sw.js routes the push via postMessage instead of
+  // (or alongside, silently) a real OS notification so the page can
+  // render a click-to-navigate in-app card. See sw.js push handler.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', function (event) {
+      var data = event.data || {};
+      if (data.type === 'wick:lifecycle_push') {
+        showLifecycleCard(data);
+      }
+    });
+  }
+
   function renderDeviceList(devices, currentEndpoint) {
     var list = document.getElementById('push-device-list');
     if (!list) return;
