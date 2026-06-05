@@ -1427,18 +1427,24 @@ func (s *Server) Run(ctx context.Context, port int) error {
 // Stdio MCP entry points (BuildMCPHandler, RunMCPStdio, resolveWickGateBin)
 // live in server_mcp.go. fileExists below is shared by both files.
 
-// dispatchLifecyclePush fans an agent lifecycle transition out to every
-// active push subscription via the service worker. Only "working" and
+// dispatchLifecyclePush fans an agent lifecycle transition out to the
+// session's opt-in push subscribers (meta.Subscribers, populated via
+// POST /tools/agents/sessions/{id}/subscribe). Only "working" and
 // "idle" transitions are surfaced — spawning fires too often (every
 // follow-up turn is spawning→working→idle) and killed is usually a
 // deliberate user action that doesn't need a paging notification.
+//
+// Sessions are shared (anyone with a wick login can open them) so
+// targeting via Subscribers means a user only gets paged about the
+// sessions they explicitly watched. SendToUser handles the
+// fan-out across each user's devices on the receiving side.
 //
 // Best-effort: errors are logged but never block the SSE broadcast that
 // happens just before this call. Service worker on each receiver
 // decides whether to play sound (suppresses if a focused tab is already
 // on the session URL — see web/public/js/sw.js).
 func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *agentregistry.Manager, ev agentpool.LifecycleEvent) {
-	if pushSvc == nil {
+	if pushSvc == nil || mgr == nil {
 		return
 	}
 	var title string
@@ -1450,32 +1456,41 @@ func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *a
 	default:
 		return
 	}
+	sess, ok := mgr.Registry().Session(ev.SessionID)
+	if !ok {
+		return
+	}
+	if len(sess.Meta.Subscribers) == 0 {
+		// No one opted in for this session — silent on the push side
+		// (SSE broadcast still fired upstream for live UI updates).
+		return
+	}
 	body := ev.AgentName
-	if mgr != nil {
-		if sess, ok := mgr.Registry().Session(ev.SessionID); ok {
-			if label := strings.TrimSpace(sess.Meta.Label); label != "" {
-				if ev.AgentName != "" {
-					body = label + " · " + ev.AgentName
-				} else {
-					body = label
-				}
-			}
+	if label := strings.TrimSpace(sess.Meta.Label); label != "" {
+		if ev.AgentName != "" {
+			body = label + " · " + ev.AgentName
+		} else {
+			body = label
 		}
 	}
 	url := "/tools/agents/sessions/" + ev.SessionID
+	subscribers := append([]string(nil), sess.Meta.Subscribers...)
 	go func() {
 		// Detach from the request ctx — webpush calls can take
-		// hundreds of ms and we don't want to block lifecycle SSE
-		// delivery on push delivery. Use a fresh context with a tight
-		// deadline so a stuck endpoint can't pile up goroutines.
+		// hundreds of ms each and we don't want to block lifecycle
+		// SSE delivery on push delivery. Tight deadline so a stuck
+		// endpoint can't pile up goroutines.
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if _, err := pushSvc.SendToAll(bgCtx, title, body, url); err != nil {
-			log.Warn().
-				Err(err).
-				Str("session", ev.SessionID).
-				Str("lifecycle", ev.Lifecycle).
-				Msg("push: lifecycle dispatch had send errors")
+		for _, userID := range subscribers {
+			if _, err := pushSvc.SendToUser(bgCtx, userID, title, body, url); err != nil {
+				log.Warn().
+					Err(err).
+					Str("session", ev.SessionID).
+					Str("user", userID).
+					Str("lifecycle", ev.Lifecycle).
+					Msg("push: lifecycle dispatch had send errors")
+			}
 		}
 	}()
 }
