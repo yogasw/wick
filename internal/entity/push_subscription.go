@@ -7,9 +7,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// PushSubscription is one browser/device endpoint for PWA Web Push.
+// PushSubscription is one browser/device endpoint for notifications.
 // A single user can have many rows: desktop Chrome, Android Chrome,
-// Safari PWA, Firefox, and so on. Endpoint is globally unique because
+// Safari, Firefox, and so on. Endpoint is globally unique because
 // vendors issue it per subscription.
 type PushSubscription struct {
 	ID          string `gorm:"type:varchar(36);primaryKey"`
