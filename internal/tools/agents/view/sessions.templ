@@ -536,27 +536,18 @@ templ chatComposer(vm SessionDetailVM) {
 			></textarea>
 			<div class="flex items-center justify-between px-3 pb-3 pt-1">
 				<div class="flex items-center gap-2">
-					<button
-						type="button"
-						data-attach-toggle
-						class="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
-						title="Attach file"
-					>
-						<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-						</svg>
-					</button>
-					<!-- Notification bell — inline composer affordance for
-					     enabling browser push for THIS browser. push.js owns
-					     visibility and icon state:
-					       off     — outline bell, click subscribes (browser
-					                 permission prompt)
-					       on      — bell + green dot, click jumps to /profile
-					                 to manage devices (the chat composer is
-					                 not the place to unsubscribe)
-					       blocked — bell + slash, click toasts the
-					                 site-settings hint
-					     Hidden entirely when the browser doesn't support push. -->
+					<!-- Per-session subscribe bell. push.js owns visibility
+					     and icon state via data-state:
+					       setup   — browser push not enabled; click jumps
+					                 to /profile.
+					       off     — push on, this session NOT subscribed;
+					                 click POSTs subscribe.
+					       on      — green-dot bell; click POSTs unsubscribe.
+					       blocked — slash icon; click toasts site-settings
+					                 hint.
+					     Hidden when the browser doesn't support push.
+					     Session id is read from the wrapping
+					     data-session-id ancestor. -->
 					<button
 						type="button"
 						id="push-bell-btn"
@@ -572,6 +563,16 @@ templ chatComposer(vm SessionDetailVM) {
 							<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
 						</svg>
 						<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-200 dark:ring-navy-700" data-push-bell-dot aria-hidden="true"></span>
+					</button>
+					<button
+						type="button"
+						data-attach-toggle
+						class="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+						title="Attach file"
+					>
+						<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+						</svg>
 					</button>
 					if len(vm.Providers) > 0 {
 						<div class="relative" data-row-action="">
