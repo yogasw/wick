@@ -133,7 +133,11 @@
     btn.dataset.state = state;
     var dot = btn.querySelector('[data-push-bell-dot]');
     var slash = btn.querySelector('[data-push-bell-slash]');
-    var baseCls = 'relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 transition-colors hover:bg-white-300 dark:hover:bg-navy-600';
+    // Bell sits absolute-positioned in the composer's top-right corner
+    // (see chatComposer in sessions.templ). Keep those position
+    // classes when rebuilding className — only swap the colour set
+    // that conveys current state.
+    var baseCls = 'absolute top-2 right-2 z-10 inline-flex items-center justify-center h-7 w-7 rounded-lg transition-colors hover:bg-white-200 dark:hover:bg-navy-700';
     if (state === 'on') {
       btn.className = baseCls + ' text-green-600 dark:text-green-400';
       btn.setAttribute('title', 'Subscribed — click to stop notifications for this session');
