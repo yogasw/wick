@@ -46,7 +46,7 @@ templ Overview(vm OverviewVM) {
 					<ul class="divide-y divide-amber-200 dark:divide-amber-800 text-sm" data-queue-list>
 						for _, q := range vm.Queued {
 							<li
-								class="flex items-center gap-3 px-5 py-2.5"
+								class="group flex items-center gap-3 px-5 py-2.5"
 								data-queue-row
 								data-queue-id={ q.SessionID }
 								data-queue-search-text={ q.Label + " " + q.Project + " " + q.SessionID }
@@ -65,6 +65,25 @@ templ Overview(vm OverviewVM) {
 										{ fmt.Sprintf("waiting %ds", q.WaitingMs/1000) }
 									</span>
 								</a>
+								<!-- Notify-when-ready bell. Reveals on hover
+								     (and stays visible on touch via :focus-within).
+								     Click enables push for this browser if not
+								     already on — once subscribed it stays "on"
+								     and quietly badges every queue row. push.js
+								     hides it entirely when the browser doesn't
+								     support push or when permission is denied. -->
+								<button
+									type="button"
+									data-queue-notify
+									title="Notify me when this session starts"
+									aria-label="Notify me when this session starts"
+									class="shrink-0 hidden opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity inline-flex items-center justify-center h-7 w-7 rounded-md border border-amber-300 dark:border-amber-800 bg-white-100 dark:bg-navy-800 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+								>
+									<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+										<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
+										<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
+									</svg>
+								</button>
 								<button
 									data-dequeue-session={ q.SessionID }
 									class="shrink-0 rounded-md border border-red-300 dark:border-red-800 px-2 py-0.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"

@@ -314,15 +314,57 @@
     }
   }
 
+  // Hides every queue-row bell once push is on (or completely
+  // unsupported / blocked) — no point showing an enable affordance if
+  // the user already has it on. Called on load and after each
+  // subscribe so the bells disappear without a page refresh.
+  async function refreshQueueBells() {
+    var bells = document.querySelectorAll('[data-queue-notify]');
+    if (!bells.length) return;
+    if (!supportsPush() || Notification.permission === 'denied') {
+      bells.forEach(function (b) { b.classList.add('hidden'); });
+      return;
+    }
+    var sub = await currentSubscription().catch(function () { return null; });
+    var on = !!(sub && Notification.permission === 'granted');
+    bells.forEach(function (b) {
+      if (on) b.classList.add('hidden');
+      else b.classList.remove('hidden');
+    });
+  }
+
   document.addEventListener('click', async function (e) {
     var bell = e.target.closest('#push-bell-btn');
     var enable = e.target.closest('#push-enable-btn');
     var test = e.target.closest('#push-test-btn');
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
+    var queueBell = e.target.closest('[data-queue-notify]');
     try {
       if (bell) {
         await handleBellClick(bell);
+        return;
+      }
+      // Queue row bell — preventDefault keeps the click from also
+      // navigating into the session link wrapper.
+      if (queueBell) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!supportsPush()) {
+          showToast('Notifications are not supported by this browser.', 'bad');
+          return;
+        }
+        if (Notification.permission === 'denied') {
+          showToast('Notifications are blocked. Unblock in site settings to enable.', 'bad');
+          return;
+        }
+        queueBell.disabled = true;
+        await subscribeCurrent();
+        await recordPermission(Notification.permission);
+        showToast('You’ll get a notification when this session starts.', 'ok');
+        await refreshQueueBells();
+        await refreshProfile().catch(function () {});
+        await hydrateBell();
         return;
       }
       if (copyID) {
@@ -394,6 +436,7 @@
 
   window.addEventListener('load', function () {
     hydrateBell().catch(function () {});
+    refreshQueueBells().catch(function () {});
     refreshProfile().catch(function (err) {
       setStatus(err.message || 'Failed', 'bad');
     });
