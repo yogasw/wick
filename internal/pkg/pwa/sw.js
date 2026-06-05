@@ -62,12 +62,16 @@ self.addEventListener('push', (event) => {
     const hasClient = clients.length > 0;
 
     // When wick is open anywhere (focused or not), route via
-    // postMessage so the page can render its own in-app toast that
-    // navigates within the SPA. We still HAVE to call
-    // showNotification because the subscription is userVisibleOnly —
-    // but we keep it silent (no sound, no vibration, no banner pin)
-    // so the OS surface stays out of the way. The in-app toast is
-    // what the user actually sees and interacts with.
+    // postMessage so the page renders its own in-app toast — the
+    // user shouldn't see a duplicate Chrome / OS notification
+    // alongside our custom card.
+    //
+    // userVisibleOnly: true (subscription constraint) requires us to
+    // call showNotification for every push. We satisfy the spec by
+    // calling it silently, then immediately closing it via
+    // getNotifications + .close(). Browser policies tolerate
+    // momentary visible notifications; users only see the in-app
+    // toast.
     if (hasClient) {
       for (const c of clients) {
         try {
@@ -79,16 +83,22 @@ self.addEventListener('push', (event) => {
           });
         } catch (_) {}
       }
-      return self.registration.showNotification(title, {
+      const tag = 'wick:' + targetURL;
+      await self.registration.showNotification(title, {
         body: body,
         icon: '/public/img/icon-192.png',
         badge: '/public/img/icon-192.png',
         data: { url: targetURL },
         silent: true,
         requireInteraction: false,
-        tag: 'wick:' + targetURL,
+        tag: tag,
         renotify: false,
       });
+      try {
+        const notes = await self.registration.getNotifications({ tag: tag });
+        notes.forEach((n) => { try { n.close(); } catch (_) {} });
+      } catch (_) {}
+      return;
     }
 
     // No wick client at all — fall back to the real OS notification.
