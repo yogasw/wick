@@ -367,6 +367,32 @@ templ SessionDetail(vm SessionDetailVM) {
 						<span data-sse-label></span>
 					</span>
 					@lifecycleBadge(effectiveStatus(vm.Lifecycle, string(vm.Session.Meta.Status)), vm.PID, vm.LastActiveMs, vm.IdleTimeoutMs)
+					<!-- Per-session subscribe toggle. push.js owns visibility
+					     and icon state via data-state:
+					       setup   — push not enabled for this browser; click
+					                 jumps to /profile.
+					       off     — push on but this session NOT subscribed
+					                 for the calling user; click POSTs subscribe.
+					       on      — green-dot bell; click POSTs unsubscribe.
+					       blocked — slash icon; click toasts site-settings hint.
+					     Hidden when the browser doesn't support push. Session
+					     id is read from the wrapping data-session-id ancestor. -->
+					<button
+						type="button"
+						id="push-bell-btn"
+						data-push-bell
+						data-state="off"
+						aria-label="Notifications"
+						title="Notifications"
+						class="hidden relative inline-flex items-center justify-center h-7 w-7 md:h-8 md:w-8 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+					>
+						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+							<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
+							<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
+							<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
+						</svg>
+						<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-700" data-push-bell-dot aria-hidden="true"></span>
+					</button>
 					<button data-kill={ vm.Session.ID } aria-label="Kill session" class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-2 md:px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors">
 						<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M4 4l4 4M8 4L4 8" stroke-linecap="round"></path></svg>
 						<span class="hidden md:inline">Kill</span>
@@ -545,36 +571,6 @@ templ chatComposer(vm SessionDetailVM) {
 						<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 							<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 7.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
 						</svg>
-					</button>
-					<!-- Notification bell — per-session subscribe toggle.
-					     push.js owns visibility and icon state:
-					       setup   — browser push not enabled at all, click
-					                 jumps to /profile to set it up
-					       off     — push on, but this session NOT subscribed,
-					                 click subscribes THIS user to THIS session
-					       on      — push on AND this session subscribed for
-					                 the calling user (green dot), click
-					                 unsubscribes
-					       blocked — browser permission denied (slash icon),
-					                 click toasts site-settings hint
-					     Hidden when the browser doesn't support push.
-					     The session-id is read from the wrapping
-					     data-session-id ancestor so the bell stays generic. -->
-					<button
-						type="button"
-						id="push-bell-btn"
-						data-push-bell
-						data-state="off"
-						aria-label="Notifications"
-						title="Notifications"
-						class="hidden relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
-					>
-						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-							<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
-							<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
-							<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
-						</svg>
-						<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-200 dark:ring-navy-700" data-push-bell-dot aria-hidden="true"></span>
 					</button>
 					if len(vm.Providers) > 0 {
 						<div class="relative" data-row-action="">
