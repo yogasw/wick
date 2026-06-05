@@ -228,6 +228,9 @@ export const workflowAPI = {
   create: (body: { name: string; template?: string }): Promise<{ id: string; name: string }> =>
     apiPost(`${BASE}/api/workflows/create`, body),
 
+  importWorkflow: (body: Workflow): Promise<{ id: string; name: string }> =>
+    apiPost(`${BASE}/api/workflows/import`, body),
+
   duplicate: (id: string): Promise<{ id: string; name: string }> =>
     apiPost(`${BASE}/api/workflows/duplicate/${encodeURIComponent(id)}`, {}),
 

@@ -59,6 +59,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.GET("/api/workflows/list", spaWorkflowList)
 	r.GET("/api/workflows/templates", spaWorkflowTemplates)
 	r.POST("/api/workflows/create", spaWorkflowCreate)
+	r.POST("/api/workflows/import", spaWorkflowImport)
 	r.POST("/api/workflows/duplicate/{id}", spaWorkflowDuplicate)
 	r.GET("/api/workflows/get/{id}", spaWorkflowGet)
 	r.POST("/api/workflows/save/{id}", spaWorkflowSave)
@@ -121,6 +122,43 @@ func spaWorkflowCreate(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
+}
+
+func spaWorkflowImport(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	raw, err := readBodyAll(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(raw) > 512*1024 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "file too large (max 512 KB)"})
+		return
+	}
+	w, err := parse.Parse("", raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid workflow JSON: " + err.Error()})
+		return
+	}
+	if r := parse.Validate(w); !r.Ok() {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "validation failed: " + r.Error()})
+		return
+	}
+	w.ID = ""
+	w.CreatedAt = time.Time{}
+	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w.ID = created.ID
+	if err := globalWorkflowMgr.Service.SaveDraft(created.ID, w); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"id": created.ID, "name": created.Name})
 }
 
 func spaWorkflowDuplicate(c *tool.Ctx) {
