@@ -55,7 +55,7 @@ type sendInput struct {
 func Operations(deps Deps) []connector.Operation {
 	h := handlers{deps: deps}
 	return []connector.Operation{
-		connector.OpDestructive("send_to_push_id", "Send Notification To PN ID",
+		connector.Op("send_to_push_id", "Send Notification To PN ID",
 			"Send a notification to every active subscribed browser/device for one opaque PN ID. Payload: push_id is required and comes from Account → Notifications; title/body/url control the browser notification content and click target. Returns {ok, sent}. This connector does not expose self-send, user search, user listing, or device inspection.",
 			sendInput{}, h.sendToUser, wickdocs.Docs{}),
 	}
