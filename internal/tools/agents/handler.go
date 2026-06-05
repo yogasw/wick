@@ -524,6 +524,19 @@ func startNewSession(c *tool.Ctx) {
 		renderCompose(c, text, err.Error())
 		return
 	}
+	// Pre-subscribe: the new-session composer carries a bell with a
+	// hidden "subscribe" input that flips to "1" when toggled on. If
+	// set, opt the calling user in to lifecycle pushes for this brand-
+	// new session right after creation. Best-effort — registry failures
+	// here would be confusing to surface inline because the session is
+	// already live; log and continue.
+	if c.Form("subscribe") == "1" {
+		if u := login.GetUser(c.Context()); u != nil {
+			if _, err := globalMgr.SubscribeUser(id, u.ID); err != nil {
+				log.Ctx(c.Context()).Warn().Err(err).Str("session", id).Msg("compose pre-subscribe failed")
+			}
+		}
+	}
 	atts, err := saveUploadsFromMultipart(c, id, c.Base())
 	if err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose save uploads: %s", err.Error())

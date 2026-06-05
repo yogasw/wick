@@ -559,6 +559,69 @@
     }));
   }
 
+  // setNewSessionBellState renders the pre-subscribe bell on the new-
+  // session composer. There's no session id yet (server creates it on
+  // form submit), so state is purely client-side: the bell's data-state
+  // plus a sibling hidden input `data-ns-subscribe-flag` that the form
+  // POSTs as `subscribe=1` when on. Refresh resets — that's by design.
+  function setNewSessionBellState(btn, state) {
+    if (!btn) return;
+    var form = btn.closest('form');
+    var flag = form ? form.querySelector('[data-ns-subscribe-flag]') : null;
+    if (state === 'unsupported') {
+      btn.classList.add('hidden');
+      if (flag) flag.value = '';
+      return;
+    }
+    btn.classList.remove('hidden');
+    btn.dataset.state = state;
+    var dot = btn.querySelector('[data-ns-subscribe-bell-dot]');
+    var slash = btn.querySelector('[data-ns-subscribe-bell-slash]');
+    if (state === 'on') {
+      btn.classList.add('text-green-600', 'dark:text-green-400');
+      btn.classList.remove('text-neg-400', 'text-black-700', 'dark:text-black-600');
+      btn.setAttribute('title', 'Subscribed — uncheck to skip notifications for this session');
+      if (dot) dot.classList.remove('hidden');
+      if (slash) slash.classList.add('hidden');
+      if (flag) flag.value = '1';
+    } else if (state === 'blocked') {
+      btn.classList.add('text-neg-400');
+      btn.classList.remove('text-green-600', 'dark:text-green-400', 'text-black-700', 'dark:text-black-600');
+      btn.setAttribute('title', 'Notifications blocked — unblock in site settings');
+      if (dot) dot.classList.add('hidden');
+      if (slash) slash.classList.remove('hidden');
+      if (flag) flag.value = '';
+    } else {
+      // off + setup share the same neutral look here — clicking either
+      // attempts to enable. Distinguish via hover title.
+      btn.classList.add('text-black-700', 'dark:text-black-600');
+      btn.classList.remove('text-green-600', 'dark:text-green-400', 'text-neg-400');
+      if (state === 'setup') {
+        btn.setAttribute('title', 'Click to enable notifications and subscribe to this session');
+      } else {
+        btn.setAttribute('title', 'Subscribe to this session\'s idle notifications');
+      }
+      if (dot) dot.classList.add('hidden');
+      if (slash) slash.classList.add('hidden');
+      if (flag) flag.value = '';
+    }
+  }
+
+  // hydrateNewSessionBells decides the initial state of every NS bell
+  // on the page. Mirrors hydrateBell / refreshQueueBells but never
+  // touches the server — bell is pre-creation, state is local.
+  async function hydrateNewSessionBells() {
+    var bells = document.querySelectorAll('[data-ns-subscribe-bell]');
+    if (!bells.length) return;
+    var ready = await browserPushReady();
+    var initial;
+    if (ready === 'unsupported') initial = 'unsupported';
+    else if (ready === 'blocked') initial = 'blocked';
+    else if (ready === 'setup') initial = 'setup';
+    else initial = 'off';
+    bells.forEach(function (b) { setNewSessionBellState(b, initial); });
+  }
+
   document.addEventListener('click', async function (e) {
     var bell = e.target.closest('#push-bell-btn');
     var enable = e.target.closest('#push-enable-btn');
@@ -566,9 +629,48 @@
     var remove = e.target.closest('[data-push-remove]');
     var copyID = e.target.closest('#push-copy-id-btn');
     var queueBell = e.target.closest('[data-queue-notify]');
+    var nsBell = e.target.closest('[data-ns-subscribe-bell]');
     try {
       if (bell) {
         await handleBellClick(bell);
+        return;
+      }
+      // New-session pre-subscribe bell — client-side toggle, no server
+      // call. On submit the form carries subscribe=1 and the server
+      // calls SubscribeUser right after CreateSession.
+      if (nsBell) {
+        e.preventDefault();
+        e.stopPropagation();
+        var ns = nsBell.dataset.state || 'off';
+        if (ns === 'unsupported') {
+          showToast('Notifications are not supported by this browser.', 'bad');
+          return;
+        }
+        if (ns === 'blocked') {
+          showToast('Notifications are blocked. Unblock in site settings to enable.', 'bad');
+          return;
+        }
+        if (ns === 'on') {
+          setNewSessionBellState(nsBell, 'off');
+          return;
+        }
+        // off or setup → enable. Setup also runs subscribeCurrent to
+        // pop the permission prompt and create the browser-side push
+        // subscription. After that, just flip the local state to 'on'
+        // — the server-side subscribe happens at form submit.
+        nsBell.disabled = true;
+        try {
+          if (ns === 'setup') {
+            await subscribeCurrent();
+            await recordPermission(Notification.permission);
+          }
+          setNewSessionBellState(nsBell, 'on');
+        } catch (err) {
+          await hydrateNewSessionBells();
+          showToast(err.message || 'Could not enable notifications.', 'bad');
+        } finally {
+          nsBell.disabled = false;
+        }
         return;
       }
       // Queue row bell — per-row subscribe toggle. Same state machine
@@ -701,6 +803,7 @@
   window.addEventListener('load', function () {
     hydrateBell().catch(function () {});
     refreshQueueBells().catch(function () {});
+    hydrateNewSessionBells().catch(function () {});
     refreshProfile().catch(function (err) {
       setStatus(err.message || 'Failed', 'bad');
     });
