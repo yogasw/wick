@@ -306,6 +306,17 @@ func HotReload(ctx context.Context, svc service.Service, router *trigger.Router,
 	return nil
 }
 
+func PublishAndReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string) (workflow.Workflow, error) {
+	w, err := svc.Publish(id)
+	if err != nil {
+		return workflow.Workflow{}, err
+	}
+	if err := HotReload(ctx, svc, router, cron, schedAt, id); err != nil {
+		return w, err
+	}
+	return w, nil
+}
+
 // CleanupOptions tunes the daily run-retention pass.
 type CleanupOptions struct {
 	SuccessTTL time.Duration
