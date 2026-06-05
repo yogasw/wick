@@ -161,34 +161,6 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 		</aside>
 		<!-- Main content -->
 		<main class="flex-1 min-w-0 overflow-y-auto bg-white-200 dark:bg-navy-800" data-main>
-			<!-- Notification bell — fixed top-right of the viewport in the
-			     main column. push.js owns its visibility and icon state:
-			     hidden when the browser doesn't support push, outline when
-			     not yet enabled, green dot when subscribed, slash when
-			     site-blocked. Click toggles subscribe/unsubscribe; blocked
-			     state surfaces a toast pointing at site settings. -->
-			<button
-				type="button"
-				id="push-bell-btn"
-				data-push-bell
-				data-state="off"
-				aria-label="Notifications"
-				title="Notifications"
-				class="hidden fixed top-3 right-3 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-white-300 dark:border-navy-600 bg-white-100/90 dark:bg-navy-700/90 backdrop-blur-sm shadow-sm text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
-			>
-				<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-					<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
-					<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
-					<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
-				</svg>
-				<span class="hidden absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-700" data-push-bell-dot aria-hidden="true"></span>
-			</button>
-			<!-- push-agent-status is the legacy inline banner slot. The bell
-			     above replaced it for soft prompts and blocked warnings, but
-			     push.js still uses this slot if it ever needs an inline
-			     message. Class is bare `hidden` so it doesn't reserve layout
-			     space — push.js sets full styling when rendering content. -->
-			<div id="push-agent-status" class="hidden"></div>
 			if vm.FullBleed {
 				{ children... }
 			} else {

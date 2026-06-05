@@ -119,6 +119,11 @@
   //
   // Hidden entirely when the browser doesn't support push (Safari < 16,
   // etc.) — no point teasing a feature the platform can't deliver.
+  // Bell lives inline in the chat composer toolbar — it's a sibling of
+  // the attach button, not a floating widget. Visual states only differ
+  // in icon overlay (dot for on, slash for blocked) and text color; the
+  // surrounding pill chrome stays the same so the composer toolbar
+  // doesn't visually jitter on state change.
   function setBellState(state) {
     var btn = document.getElementById('push-bell-btn');
     if (!btn) return;
@@ -129,20 +134,19 @@
     btn.dataset.state = state;
     var dot = btn.querySelector('[data-push-bell-dot]');
     var slash = btn.querySelector('[data-push-bell-slash]');
-    var baseCls = 'fixed top-3 right-3 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-white-300 dark:border-navy-600 bg-white-100/90 dark:bg-navy-700/90 backdrop-blur-sm shadow-sm transition-colors';
+    var baseCls = 'relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 transition-colors hover:bg-white-300 dark:hover:bg-navy-600';
     if (state === 'on') {
-      btn.className = baseCls + ' text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300';
-      btn.setAttribute('title', 'Notifications enabled — click to disable for this browser');
+      btn.className = baseCls + ' text-green-600 dark:text-green-400';
+      btn.setAttribute('title', 'Notifications enabled — manage devices in Account');
       if (dot) dot.classList.remove('hidden');
       if (slash) slash.classList.add('hidden');
     } else if (state === 'blocked') {
-      btn.className = baseCls + ' text-neg-400 hover:opacity-80';
+      btn.className = baseCls + ' text-neg-400';
       btn.setAttribute('title', 'Notifications blocked — unblock in site settings');
       if (dot) dot.classList.add('hidden');
       if (slash) slash.classList.remove('hidden');
     } else {
-      // off (default / never asked)
-      btn.className = baseCls + ' text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100';
+      btn.className = baseCls + ' text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100';
       btn.setAttribute('title', 'Enable notifications for this browser');
       if (dot) dot.classList.add('hidden');
       if (slash) slash.classList.add('hidden');
@@ -246,10 +250,10 @@
   }
 
   // hydrateBell decides the bell icon state on initial page load and
-  // any time the subscription state may have changed. Only runs on
-  // /tools/agents/* — the bell is mounted by the agents layout shell,
-  // so calling this elsewhere is a no-op via the early-return in
-  // setBellState (missing #push-bell-btn).
+  // any time the subscription state may have changed. Bell is mounted
+  // by chatComposer (session detail pages only), so calling this on
+  // /tools/agents/overview, /workflows, etc. is a no-op via the
+  // early-return below (missing #push-bell-btn).
   //
   // No auto-popup: we never call Notification.requestPermission() here.
   // The bell waits for an explicit click before triggering the browser
@@ -275,31 +279,28 @@
   }
 
   // handleBellClick implements the bell's state machine:
-  //   on      → unsubscribe current browser, drop to off
-  //   off     → subscribe (browser may prompt), promote to on
-  //   blocked → no-op except toast pointing at site settings
-  // Each transition surfaces a toast so the click feels confirmed.
+  //   on      → navigate to /profile so the user can manage devices
+  //             (remove this browser, send test, copy PN ID). The chat
+  //             composer is not the place to unsubscribe — too easy to
+  //             mis-click and lose your subscription mid-conversation.
+  //   off     → subscribe (browser permission prompt), promote to on
+  //   blocked → no-op except a toast pointing at site settings
   async function handleBellClick(btn) {
     var state = btn.dataset.state || 'off';
+    if (state === 'on') {
+      window.location.assign('/profile');
+      return;
+    }
     if (state === 'blocked') {
       showToast('Notifications are blocked. Unblock in site settings to enable.', 'bad');
       return;
     }
     btn.disabled = true;
     try {
-      if (state === 'on') {
-        var sub = await currentSubscription();
-        if (sub) await unsubscribeEndpoint(sub.endpoint, sub);
-        setBellState('off');
-        showToast('Notifications disabled for this browser.', '');
-      } else {
-        await subscribeCurrent();
-        await recordPermission(Notification.permission);
-        setBellState('on');
-        showToast('Notifications enabled for this browser.', 'ok');
-      }
-      // Refresh the profile page device list if we're on it — the
-      // bell toggle directly mutates a row there.
+      await subscribeCurrent();
+      await recordPermission(Notification.permission);
+      setBellState('on');
+      showToast('Notifications enabled for this browser.', 'ok');
       await refreshProfile().catch(function () {});
     } catch (err) {
       // Subscribe can fail because the user clicked Block in the
@@ -307,7 +308,7 @@
       // so the bell reflects whatever the browser ended up doing
       // (typically: 'denied' → blocked state, dot → slash).
       await hydrateBell();
-      showToast(err.message || 'Could not change notification state.', 'bad');
+      showToast(err.message || 'Could not enable notifications.', 'bad');
     } finally {
       btn.disabled = false;
     }
