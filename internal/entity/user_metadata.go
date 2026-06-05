@@ -36,7 +36,7 @@ type UserMetadata struct {
 	PinnedAgentProjectID string `json:"pinned_agent_project_id,omitempty"`
 
 	// PushPermission stores the last browser notification permission
-	// state reported by the PWA prompt ("granted" or "denied").
+	// state reported by the browser prompt ("granted" or "denied").
 	PushPermission   string     `json:"push_permission,omitempty"`
 	PushPermissionAt *time.Time `json:"push_permission_at,omitempty"`
 }

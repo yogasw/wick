@@ -31,12 +31,12 @@ func EnsurePushConfig(ctx context.Context, cfg pushConfigStore) error {
 		entity.Config{
 			Key:         pushConfigPublicKey,
 			Type:        "text",
-			Description: "VAPID public key used by browsers when subscribing to PWA push notifications.",
+			Description: "VAPID public key used by browsers when subscribing to notifications.",
 		},
 		entity.Config{
 			Key:         pushConfigPrivateKey,
 			Type:        "text",
-			Description: "VAPID private key used by the server to sign outbound PWA push notifications.",
+			Description: "VAPID private key used by the server to sign outbound notifications.",
 			IsSecret:    true,
 		},
 	); err != nil {
