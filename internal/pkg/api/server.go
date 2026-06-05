@@ -14,17 +14,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joho/godotenv"
-
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
-	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
-	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
@@ -68,7 +64,6 @@ import (
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/ui"
-	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
@@ -76,7 +71,6 @@ import (
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
-	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -1423,164 +1417,8 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	return nil
 }
 
-// BuildMCPHandler initialises the connector layer (DB + connectors
-// bootstrap) and returns a ready-to-serve MCP handler + admin context.
-// Callers must either call ServeStdioOS (for the production stdio path)
-// or ServeStdio with a custom reader/writer (for exec/test paths).
-func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.Context) {
-	// When spawned by an MCP client (Claude Desktop, Cursor, etc.) the
-	// working directory is the client's, not the project root. Chdir to
-	// the project root (parent of the bin/ dir) so .env and wick.db
-	// resolve correctly, then reload .env before config.Load().
-	if exe, err := os.Executable(); err == nil {
-		projectRoot := filepath.Dir(filepath.Dir(filepath.Clean(exe)))
-		if err := os.Chdir(projectRoot); err == nil {
-			_ = godotenv.Load()
-			name := appname.ResolveAfterChdir()
-			userconfig.ResolveDBPath(name, "")
-		}
-	}
-
-	cfg := config.Load()
-
-	db := postgres.NewGORM(cfg.Database)
-	postgres.Migrate(db)
-
-	// Bootstrap the configs service even in stdio mode — we don't
-	// expose it over HTTP here, but the encrypted-fields layer pulls
-	// the master key from it and the rest of the connector dispatch
-	// path expects encrypt/decrypt to behave the same as in HTTP.
-	configsSvc := configs.NewService(db)
-	if err := configsSvc.Bootstrap(context.Background()); err != nil {
-		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
-	}
-	encSvc, err := enc.New(configsSvc.EncryptionKey())
-	if err != nil {
-		log.Fatal().Msgf("enc init: %s", err.Error())
-	}
-	configsSvc.SetEncryptor(encSvc)
-	if err := pwa.EnsurePushConfig(context.Background(), configsSvc); err != nil {
-		log.Warn().Err(err).Msg("notification config bootstrap failed")
-	}
-	pushSvc := pwa.NewPushService(db, configsSvc)
-
-	connSvc := connectors.NewServiceFromDB(db)
-	connSvc.SetEnc(encSvc)
-	connSvc.SetConfigs(configsSvc)
-
-	// Stdio mode also needs wickmanager so the LLM can introspect
-	// wick configs over the same stdio link. Jobs / tools surface
-	// degrade to "no rows" because we don't run the manager service
-	// in stdio — that's intentional, the LLM can still read app vars
-	// and connector configs which is the common ask.
-	authSvc := login.NewService(db, cfg.App.AdminEmails)
-	jobsSvc := manager.NewServiceFromDB(db)
-	jobsSvc.SetConfigReader(configsSvc)
-	connectors.Register(wickmanager.Module(wickmanager.Deps{
-		Configs:    configsSvc,
-		Connectors: connSvc,
-		Jobs:       jobsSvc,
-		Login:      authSvc,
-		AppName:    appname.Resolve(),
-	}))
-	connectors.Register(notifications.Module(notifications.Deps{
-		DB:   db,
-		Push: pushSvc,
-	}))
-
-	// Workflow connector — bootstrap minimal workflow manager so MCP
-	// clients (Claude Desktop, Cursor) can introspect / create / edit /
-	// test workflows. Engine has no live channel / provider wiring here
-	// so type:channel + type:agent nodes will fail at run time; everything
-	// else (validate/simulate/test/file ops/canvas mutations) works.
-	stdioAgentsCfg := agentconfig.StorageConfig{
-		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
-		DefaultProjectID: configsSvc.GetOwned("agents", "default_project_id"),
-	}
-	stdioWfLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(stdioAgentsCfg))
-	stdioWfMgr := wfsetup.New(stdioWfLayout)
-	wfsetup.RegisterLiveConnectors(stdioWfMgr.Connectors)
-	stdioWfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connSvc))
-	// Register Slack workflow descriptors into the integration registry
-	// so workflow_integration / workflow_channels can surface full
-	// MatchSchema + InputSchema metadata. Execute closures bind to a
-	// stub Slack channel (no live API) — they error at runtime if a node
-	// actually fires, but AI discovery + workflow_validate work fully.
-	stdioStubSlack := agentslack.New(agentconfig.SlackChannelConfig{})
-	slackwf.RegisterAll(stdioWfMgr.Integration, stdioStubSlack)
-	// stdio path: register pickers too, even though the stub channel
-	// has no live API — calls will surface the configuration error
-	// rather than silently returning empty lists.
-	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubSlack)
-	stdioWfMgr.WithDataTablesDB(db)
-	// DB-primary workflow store also needs wiring in stdio mode so
-	// workflow_versions / workflow_diff_versions / workflow_restore_version
-	// + the DBService backing the body don't 503 in MCP clients.
-	stdioWfMgr.WithDB(db)
-	if err := stdioWfMgr.Start(context.Background()); err != nil {
-		log.Warn().Err(err).Msg("stdio: workflow bootstrap failed; workflow_* ops unavailable")
-	} else {
-		stdioRunner := wftest.New(stdioWfMgr.Engine, stdioWfMgr.Service, stdioWfMgr.Layout)
-		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
-	}
-
-	connectors.RegisterBuiltins()
-	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
-		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
-	}
-
-	// Bind the stdio context to the oldest real admin user so wick_enc_
-	// tokens minted here decrypt under that admin's session in the web
-	// UI. Per-user keys are HKDF(masterKey, salt=user.ID); a synthetic
-	// "local" salt would produce tokens nobody can reverse via /tools/
-	// encfields. Fall back to the synthetic id only on a fresh DB with
-	// no admin yet.
-	localAdmin := &entity.User{ID: "local", Role: entity.RoleAdmin}
-	if u, err := authSvc.FirstAdmin(context.Background()); err == nil && u != nil {
-		localAdmin = u
-	}
-	ctx := login.WithUser(context.Background(), localAdmin, nil)
-
-	root, _ := os.Getwd()
-	h := mcp.NewHandler(connSvc).
-		WithBuildInfo(version, commit, buildTime).
-		WithWickRoot(root).
-		WithAppURL(configsSvc.AppURL).
-		WithDB(db)
-	return h, ctx
-}
-
-// RunMCPStdio initialises the connector layer and serves MCP JSON-RPC
-// over stdin/stdout. Intended for local clients (Claude Desktop, Cursor).
-func RunMCPStdio(version, commit, buildTime string) {
-	h, ctx := BuildMCPHandler(version, commit, buildTime)
-	h.ServeStdioOS(ctx)
-}
-
-// resolveWickGateBin finds the wick-gate binary: next to this executable,
-// then ./bin/ relative to cwd (where wick setup puts it), then PATH.
-func resolveWickGateBin() string {
-	names := []string{"wick-gate", "wick-gate.exe"}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		for _, name := range names {
-			if candidate := filepath.Join(dir, name); fileExists(candidate) {
-				return candidate
-			}
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		for _, name := range names {
-			if candidate := filepath.Join(cwd, "bin", name); fileExists(candidate) {
-				return candidate
-			}
-		}
-	}
-	if p, err := safeexec.LookPath("wick-gate"); err == nil {
-		return p
-	}
-	return ""
-}
+// Stdio MCP entry points (BuildMCPHandler, RunMCPStdio, resolveWickGateBin)
+// live in server_mcp.go. fileExists below is shared by both files.
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
