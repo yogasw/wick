@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -439,7 +440,7 @@ func DeleteEntryFromDir(dir, name string) error {
 //
 // Returns (folderName, Result, error).
 func UploadProcessed(filename string, data []byte) (string, Result, error) {
-	dirs := KnownDirs()
+	dirs := uploadDirs()
 	res := Result{Dirs: dirs}
 	ext := strings.ToLower(filepath.Ext(filename))
 	stem := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
@@ -468,60 +469,30 @@ func UploadProcessed(filename string, data []byte) (string, Result, error) {
 		if err != nil {
 			return "", res, fmt.Errorf("invalid zip: %w", err)
 		}
-		// detect root folder
-		rootDir := ""
-		allUnderRoot := true
-		for _, f := range zr.File {
-			if strings.Contains(f.Name, "..") {
-				return "", res, fmt.Errorf("zip contains unsafe path: %s", f.Name)
-			}
-			parts := strings.SplitN(filepath.ToSlash(f.Name), "/", 2)
-			if rootDir == "" {
-				rootDir = parts[0]
-			} else if parts[0] != rootDir {
-				allUnderRoot = false
-				break
-			}
+		folderName, plan, err := planZipExtraction(stem, zr.File)
+		if err != nil {
+			return "", res, err
 		}
-		wrapDir := ""
-		if !allUnderRoot || rootDir == "" {
-			wrapDir = stem
-		}
-		folderName := rootDir
-		if wrapDir != "" {
-			folderName = wrapDir
-		}
-
 		for _, dir := range dirs {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				res.Errors = append(res.Errors, fmt.Sprintf("mkdir %s: %v", dir, err))
+			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("mkdir %s: %v", dir, mkErr))
 				continue
 			}
-			for _, f := range zr.File {
-				rel := filepath.ToSlash(f.Name)
-				if wrapDir != "" {
-					rel = wrapDir + "/" + rel
-				}
-				dst := filepath.Join(dir, filepath.FromSlash(rel))
-				if f.FileInfo().IsDir() {
-					if mkErr := os.MkdirAll(dst, 0o755); mkErr != nil {
-						res.Errors = append(res.Errors, fmt.Sprintf("mkdir %s: %v", dst, mkErr))
-					}
-					continue
-				}
+			for _, p := range plan {
+				dst := filepath.Join(dir, filepath.FromSlash(p.dest))
 				if mkErr := os.MkdirAll(filepath.Dir(dst), 0o755); mkErr != nil {
 					res.Errors = append(res.Errors, fmt.Sprintf("mkdir %s: %v", filepath.Dir(dst), mkErr))
 					continue
 				}
-				rc, oErr := f.Open()
+				rc, oErr := p.f.Open()
 				if oErr != nil {
-					res.Errors = append(res.Errors, fmt.Sprintf("open zip entry %s: %v", f.Name, oErr))
+					res.Errors = append(res.Errors, fmt.Sprintf("open zip entry %s: %v", p.f.Name, oErr))
 					continue
 				}
 				fdata, rErr := io.ReadAll(rc)
 				rc.Close()
 				if rErr != nil {
-					res.Errors = append(res.Errors, fmt.Sprintf("read zip entry %s: %v", f.Name, rErr))
+					res.Errors = append(res.Errors, fmt.Sprintf("read zip entry %s: %v", p.f.Name, rErr))
 					continue
 				}
 				if wErr := os.WriteFile(dst, fdata, 0o644); wErr != nil {
@@ -536,4 +507,134 @@ func UploadProcessed(filename string, data []byte) (string, Result, error) {
 	default:
 		return "", res, fmt.Errorf("unsupported file type: %s", ext)
 	}
+}
+
+func uploadDirs() []string {
+	if dirs := KnownDirs(); len(dirs) > 0 {
+		return dirs
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{filepath.Join(home, ".claude", "skills")}
+}
+
+type zipEntryPlan struct {
+	f    *zip.File
+	dest string
+}
+
+var skillMetadataNames = []string{"skill.md", "skill.txt", "tool.md", "tool.txt", "readme.md"}
+
+func isJunkPath(name string) bool {
+	for _, seg := range strings.Split(name, "/") {
+		switch seg {
+		case "__MACOSX", ".DS_Store", "Thumbs.db", "desktop.ini":
+			return true
+		}
+		if strings.HasPrefix(seg, "._") {
+			return true
+		}
+	}
+	return false
+}
+
+func planZipExtraction(stem string, files []*zip.File) (string, []zipEntryPlan, error) {
+	type realFile struct {
+		f    *zip.File
+		name string
+	}
+	var reals []realFile
+	for _, f := range files {
+		name := strings.TrimPrefix(filepath.ToSlash(f.Name), "./")
+		if name == "" {
+			continue
+		}
+		if strings.Contains(name, "..") {
+			return "", nil, fmt.Errorf("zip contains unsafe path: %s", f.Name)
+		}
+		if f.FileInfo().IsDir() || isJunkPath(name) {
+			continue
+		}
+		reals = append(reals, realFile{f: f, name: name})
+	}
+	if len(reals) == 0 {
+		return "", nil, fmt.Errorf("archive has no usable skill files")
+	}
+
+	prefix := ""
+	anchored := false
+	for _, meta := range skillMetadataNames {
+		best := ""
+		bestDepth := -1
+		for _, r := range reals {
+			if strings.ToLower(path.Base(r.name)) != meta {
+				continue
+			}
+			if depth := strings.Count(r.name, "/"); bestDepth == -1 || depth < bestDepth {
+				best = r.name
+				bestDepth = depth
+			}
+		}
+		if bestDepth != -1 {
+			if i := strings.LastIndex(best, "/"); i >= 0 {
+				prefix = best[:i+1]
+			}
+			anchored = true
+			break
+		}
+	}
+
+	if anchored {
+		folderName := stem
+		if prefix != "" {
+			folderName = path.Base(strings.TrimSuffix(prefix, "/"))
+		}
+		var plan []zipEntryPlan
+		for _, r := range reals {
+			if prefix != "" && !strings.HasPrefix(r.name, prefix) {
+				continue
+			}
+			plan = append(plan, zipEntryPlan{f: r.f, dest: folderName + "/" + strings.TrimPrefix(r.name, prefix)})
+		}
+		if len(plan) == 0 {
+			return "", nil, fmt.Errorf("archive has no usable skill files")
+		}
+		return folderName, plan, nil
+	}
+
+	roots := map[string]bool{}
+	for _, r := range reals {
+		top := r.name
+		if i := strings.Index(top, "/"); i >= 0 {
+			top = top[:i]
+		}
+		roots[top] = true
+	}
+	if len(roots) == 1 {
+		var only string
+		for k := range roots {
+			only = k
+		}
+		allUnder := true
+		for _, r := range reals {
+			if !strings.HasPrefix(r.name, only+"/") {
+				allUnder = false
+				break
+			}
+		}
+		if allUnder {
+			var plan []zipEntryPlan
+			for _, r := range reals {
+				plan = append(plan, zipEntryPlan{f: r.f, dest: r.name})
+			}
+			return only, plan, nil
+		}
+	}
+	var plan []zipEntryPlan
+	for _, r := range reals {
+		plan = append(plan, zipEntryPlan{f: r.f, dest: stem + "/" + r.name})
+	}
+	return stem, plan, nil
 }
