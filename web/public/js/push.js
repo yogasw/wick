@@ -133,11 +133,11 @@
     btn.dataset.state = state;
     var dot = btn.querySelector('[data-push-bell-dot]');
     var slash = btn.querySelector('[data-push-bell-slash]');
-    // Bell sits absolute-positioned in the composer's top-right corner
-    // (see chatComposer in sessions.templ). Keep those position
-    // classes when rebuilding className — only swap the colour set
-    // that conveys current state.
-    var baseCls = 'absolute top-2 right-2 z-10 inline-flex items-center justify-center h-7 w-7 rounded-lg transition-colors hover:bg-white-200 dark:hover:bg-navy-700';
+    // Bell is an inline pill in the composer toolbar (left of the
+    // attach button). Same h-7 w-7 rounded-lg + border + bg geometry
+    // as its toolbar siblings (attach, provider, project) so the row
+    // doesn't visually jitter on state change.
+    var baseCls = 'relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 transition-colors hover:bg-white-300 dark:hover:bg-navy-600';
     if (state === 'on') {
       btn.className = baseCls + ' text-green-600 dark:text-green-400';
       btn.setAttribute('title', 'Subscribed — click to stop notifications for this session');
@@ -218,12 +218,50 @@
     }, 3000);
   }
 
+  // playLifecycleChime emits a short two-tone ping via WebAudio when
+  // the in-app lifecycle card surfaces. OS notification is silent in
+  // the wick-open path (silent: true in sw.js so the OS surface stays
+  // out of the way), so the page is responsible for the audible cue
+  // — otherwise the user has no chance of noticing the card if they
+  // were looking at a different window or another tab.
+  //
+  // Best-effort: many browsers gate AudioContext on user interaction;
+  // any error swallows. WebAudio over a static asset means no extra
+  // HTTP request and no decode delay.
+  function playLifecycleChime() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      var ctx = new Ctx();
+      var t = ctx.currentTime;
+      // Two short notes — E5 → A5 — at low volume so it feels like a
+      // notification chime, not a system alert.
+      [
+        { freq: 659.25, start: 0,    dur: 0.15 },
+        { freq: 880.00, start: 0.16, dur: 0.22 },
+      ].forEach(function (n) {
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(n.freq, t + n.start);
+        gain.gain.setValueAtTime(0.0001, t + n.start);
+        gain.gain.exponentialRampToValueAtTime(0.18, t + n.start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + n.start + n.dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t + n.start);
+        osc.stop(t + n.start + n.dur + 0.02);
+      });
+      window.setTimeout(function () { try { ctx.close(); } catch (_) {} }, 600);
+    } catch (_) {}
+  }
+
   // showLifecycleCard renders a rich, clickable in-app toast when the
   // service worker relays a lifecycle push back to the page (wick was
   // open, so we skipped the OS notification surface). Bigger than the
   // small status toast — title + body preview + a footer hint —
   // because the content here is the actual agent output the user
-  // wants to read at a glance.
+  // wants to read at a glance. Plays a short chime via playLifecycleChime
+  // so the user notices even if the wick tab isn't focused.
   //
   // Click anywhere on the card navigates to the session URL. Auto-
   // dismisses after 8s (longer than a status toast since users may
@@ -271,6 +309,7 @@
       window.location.assign(url);
     });
     stack.appendChild(card);
+    playLifecycleChime();
     window.setTimeout(dismiss, 8000);
   }
 

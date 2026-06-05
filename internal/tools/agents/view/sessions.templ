@@ -522,34 +522,7 @@ templ chatEmptyState() {
 }
 
 templ chatComposer(vm SessionDetailVM) {
-	<div class="relative rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md" data-composer-drop>
-		<!-- Per-session subscribe bell, anchored to the composer top-right
-		     corner. push.js owns visibility and icon state via data-state:
-		       setup   — push not enabled for this browser; click jumps to
-		                 /profile so the master switch + permission prompt
-		                 happen in one place.
-		       off     — push on, this session NOT subscribed; click POSTs
-		                 subscribe.
-		       on      — green-dot bell; click POSTs unsubscribe.
-		       blocked — slash icon; click toasts the site-settings hint.
-		     Hidden when the browser doesn't support push. Session id is
-		     read from the wrapping data-session-id ancestor. -->
-		<button
-			type="button"
-			id="push-bell-btn"
-			data-push-bell
-			data-state="off"
-			aria-label="Notifications"
-			title="Notifications"
-			class="hidden absolute top-2 right-2 z-10 inline-flex items-center justify-center h-7 w-7 rounded-lg text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
-		>
-			<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-				<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
-				<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
-				<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
-			</svg>
-			<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-800" data-push-bell-dot aria-hidden="true"></span>
-		</button>
+	<div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-md" data-composer-drop>
 		<form data-send-form>
 			<div data-attach-chips class="hidden flex-wrap gap-2 px-3 pt-3"></div>
 			<input type="file" multiple class="hidden" data-attach-input/>
@@ -563,6 +536,34 @@ templ chatComposer(vm SessionDetailVM) {
 			></textarea>
 			<div class="flex items-center justify-between px-3 pb-3 pt-1">
 				<div class="flex items-center gap-2">
+					<!-- Per-session subscribe bell. push.js owns visibility
+					     and icon state via data-state:
+					       setup   — browser push not enabled; click jumps
+					                 to /profile.
+					       off     — push on, this session NOT subscribed;
+					                 click POSTs subscribe.
+					       on      — green-dot bell; click POSTs unsubscribe.
+					       blocked — slash icon; click toasts site-settings
+					                 hint.
+					     Hidden when the browser doesn't support push.
+					     Session id is read from the wrapping
+					     data-session-id ancestor. -->
+					<button
+						type="button"
+						id="push-bell-btn"
+						data-push-bell
+						data-state="off"
+						aria-label="Notifications"
+						title="Notifications"
+						class="hidden relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+					>
+						<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+							<path d="M8 2.25c-2.07 0-3.75 1.68-3.75 3.75v2.25L3 9.75v.75h10v-0.75L11.75 8.25V6c0-2.07-1.68-3.75-3.75-3.75z" stroke-linejoin="round"></path>
+							<path d="M6.5 12a1.5 1.5 0 0 0 3 0" stroke-linecap="round"></path>
+							<path d="M3 3l10 10" stroke-linecap="round" class="hidden" data-push-bell-slash></path>
+						</svg>
+						<span class="hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-200 dark:ring-navy-700" data-push-bell-dot aria-hidden="true"></span>
+					</button>
 					<button
 						type="button"
 						data-attach-toggle
