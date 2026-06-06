@@ -560,11 +560,16 @@ func (h *handlers) getRun(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) getRunEvents(c *connector.Ctx) (any, error) {
-	events, err := h.ops.StateStore.ListEvents(c.Input("id"), c.Input("run_id"))
+	const tailCap = 200
+	events, total, err := h.ops.StateStore.ListEventsTail(c.Input("id"), c.Input("run_id"), tailCap)
 	if err != nil {
 		return nil, err
 	}
-	return events, nil
+	return map[string]any{
+		"events":    events,
+		"total":     total,
+		"truncated": total > len(events),
+	}, nil
 }
 
 func (h *handlers) copyRunToEditor(c *connector.Ctx) (any, error) {

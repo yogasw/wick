@@ -9,6 +9,7 @@
   import RunListItem from "./executions/RunListItem.svelte";
   import RunDetail from "./executions/RunDetail.svelte";
   import { runKey } from "./executions/runHelpers";
+  import { toastError, toastOk } from "$lib/stores/toast";
 
   type Props = {
     workflowID: string;
@@ -78,6 +79,20 @@
     };
   });
 
+  async function handleDelete(runID: string) {
+    try {
+      await workflowAPI.deleteRun(workflowID, runID);
+      if (selectedRunID === runID) {
+        selectedRunID = null;
+        runDetail = null;
+      }
+      toastOk("Run deleted");
+      await refresh();
+    } catch (e) {
+      toastError("Delete failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function loadRun(runID: string) {
     selectedRunID = runID;
     runDetail = null;
@@ -86,9 +101,29 @@
       // events: [...] }. Flatten state into the top level so children
       // can read `runDetail.completed` without reaching through `state.`.
       const res = await workflowAPI.runState(workflowID, runID);
-      runDetail = { ...(res?.state ?? {}), events: res?.events ?? [] };
+      runDetail = {
+        ...(res?.state ?? {}),
+        events: res?.events ?? [],
+        events_total: res?.events_total ?? (res?.events?.length ?? 0),
+        events_truncated: res?.events_truncated ?? false,
+      };
     } catch (e) {
       console.error("run state fetch failed:", e);
+    }
+  }
+
+  async function loadAllEvents() {
+    if (!selectedRunID) return;
+    try {
+      const res = await workflowAPI.runState(workflowID, selectedRunID, 0);
+      runDetail = {
+        ...(res?.state ?? {}),
+        events: res?.events ?? [],
+        events_total: res?.events_total ?? (res?.events?.length ?? 0),
+        events_truncated: false,
+      };
+    } catch (e) {
+      toastError("Load all events failed", e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -236,7 +271,7 @@
         <div class="text-xs">Click any execution on the left to inspect its output.</div>
       </div>
     {:else}
-      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} />
+      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} onLoadAllEvents={loadAllEvents} />
     {/if}
   </section>
 </div>

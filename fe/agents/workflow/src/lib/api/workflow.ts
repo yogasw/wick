@@ -439,11 +439,15 @@ export const workflowAPI = {
       body,
     ),
 
-  runState: (id: string, runID: string): Promise<any> =>
-    // Legacy endpoint already returns JSON unconditionally.
-    apiGet(
-      `${BASE}/workflows/edit/${encodeURIComponent(id)}/runs/${encodeURIComponent(runID)}/state`,
-    ),
+  runState: (id: string, runID: string, eventsLimit?: number): Promise<any> => {
+    const qs = eventsLimit === undefined ? "" : `?events_limit=${eventsLimit}`;
+    return apiGet(
+      `${BASE}/workflows/edit/${encodeURIComponent(id)}/runs/${encodeURIComponent(runID)}/state${qs}`,
+    );
+  },
+
+  deleteRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
+    apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/delete`, {}),
 
   versions: (id: string): Promise<{ versions: WorkflowVersion[] }> =>
     apiGet(`${BASE}/api/workflows/versions/${encodeURIComponent(id)}`),

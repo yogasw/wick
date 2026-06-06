@@ -13,6 +13,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/repository"
+	"github.com/yogasw/wick/internal/agents/workflow/state"
 )
 
 // DBService is the database-primary implementation of Service. The
@@ -170,6 +171,7 @@ func (s *DBService) Delete(id string) error {
 	// Best-effort cleanup of runtime files; ignore not-exist since the
 	// folder may never have existed for fresh workflows.
 	_ = os.RemoveAll(s.Layout.WorkflowDir(id))
+	state.EvictIndex(s.Layout.WorkflowIndexDir(id))
 	return nil
 }
 

@@ -71,6 +71,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/lock/{id}", spaWorkflowLock)
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
+	r.POST("/api/workflows/runs/{id}/{runID}/delete", spaWorkflowRunDelete)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
 	r.POST("/api/workflows/template-test/{id}", spaTemplateTest)
 	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
@@ -585,6 +586,19 @@ func spaWorkflowRuns(c *tool.Ctx) {
 		"has_more": to < len(matched),
 		"total":    len(matched),
 	})
+}
+
+func spaWorkflowRunDelete(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	runID := c.PathValue("runID")
+	if err := globalWorkflowMgr.StateStore.Delete(id, runID); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
 // parseDateInput accepts "yyyy-mm-dd" (FE date input) or full RFC3339.
