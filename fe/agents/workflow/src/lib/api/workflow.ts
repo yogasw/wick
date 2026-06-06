@@ -411,6 +411,8 @@ export const workflowAPI = {
     slug: string,
   ): Promise<{ name: string; type: string }[]> =>
     apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
+  projectOptions: (): Promise<{ id: string; name: string; path: string }[]> =>
+    apiGet(`${BASE}/projects/options`),
 
   // n8n-style "Execute step" — run a single node in isolation against
   // an optional parent input + event envelope. Server runs the

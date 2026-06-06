@@ -83,6 +83,19 @@
   // the node to change.
   let mobilePane = $state<"input" | "editor" | "output">("editor");
 
+  let projectOptions = $state<{ id: string; name: string; path: string }[]>([]);
+  let projectOptionsLoaded = $state(false);
+  $effect(() => {
+    if (node?.type !== "session_init" || projectOptionsLoaded) return;
+    projectOptionsLoaded = true;
+    void workflowAPI
+      .projectOptions()
+      .then((r) => {
+        projectOptions = r ?? [];
+      })
+      .catch((e) => console.warn("project options fetch failed:", e));
+  });
+
   function close() {
     detailNodeID.set(null);
   }
@@ -1219,12 +1232,16 @@
                 {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Workspace override (optional)</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
-                    placeholder="(use run workspace)"
+                  <select
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.workspace ?? ""}
-                    oninput={(e) => patch("workspace", (e.target as HTMLInputElement).value)}
-                  />
+                    onchange={(e) => patch("workspace", (e.target as HTMLSelectElement).value)}
+                  >
+                    <option value="">(use run workspace)</option>
+                    {#each projectOptions as p (p.id)}
+                      <option value={p.id}>{p.name || p.id}</option>
+                    {/each}
+                  </select>
                 </label>
               {/if}
 
