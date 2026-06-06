@@ -142,6 +142,13 @@ func (r *Router) Unregister(id string) {
 	r.removeFromIndexLocked(id)
 }
 
+func (r *Router) Definition(id string) (workflow.Workflow, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	w, ok := r.defs[id]
+	return w, ok
+}
+
 // RunNow enqueues a manual run for one explicit id, bypassing
 // Enabled + trigger-match checks. Used by the UI Run-Now button so
 // admins can fire a disabled workflow (e.g. dry-run before enable)

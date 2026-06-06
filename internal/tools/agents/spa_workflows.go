@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -187,7 +189,7 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := globalWorkflowMgr.Service.Publish(w.ID); err != nil {
+	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, w.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -307,7 +309,7 @@ func spaWorkflowPublish(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
-	if _, err := globalWorkflowMgr.Service.Publish(id); err != nil {
+	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -338,13 +340,7 @@ func spaWorkflowToggle(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	w, err := globalWorkflowMgr.Service.LoadDraft(id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-	w.Enabled = body.Enabled
-	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
+	if err := setup.ToggleAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id, body.Enabled); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

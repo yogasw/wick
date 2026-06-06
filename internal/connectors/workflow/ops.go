@@ -172,6 +172,11 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	if err := h.ops.Service.Update(w.ID, w); err != nil {
 		return nil, fmt.Errorf("auto-publish: %w", err)
 	}
+	if h.ops.Reload != nil {
+		if err := h.ops.Reload(w.ID); err != nil {
+			return nil, fmt.Errorf("create ok, reload failed: %w", err)
+		}
+	}
 	return map[string]any{
 		"id":        w.ID,
 		"name":      w.Name,
@@ -298,6 +303,11 @@ func (h *handlers) publish(c *connector.Ctx) (any, error) {
 			return nil, fmt.Errorf("publish ok, enable failed: %w", err)
 		}
 		w.Enabled = true
+	}
+	if h.ops.Reload != nil {
+		if err := h.ops.Reload(id); err != nil {
+			return nil, fmt.Errorf("publish ok, reload failed: %w", err)
+		}
 	}
 	return map[string]any{
 		"ok":      true,

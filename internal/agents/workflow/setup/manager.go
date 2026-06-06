@@ -113,7 +113,7 @@ func New(layout config.Layout) *Manager {
 	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dtSvc, ss).WithIntegration(intReg)
 	ops.Guard = g
 
-	return &Manager{
+	m := &Manager{
 		Layout:      layout,
 		Service:     svc,
 		StateStore:  ss,
@@ -131,6 +131,10 @@ func New(layout config.Layout) *Manager {
 		Cost:        c,
 		MCP:         ops,
 	}
+	ops.Reload = func(id string) error {
+		return HotReload(context.Background(), m.Service, m.Router, m.Cron, m.ScheduleAt, id)
+	}
+	return m
 }
 
 // WithDB switches the workflow Service from the file-based store to
@@ -304,6 +308,24 @@ func HotReload(ctx context.Context, svc service.Service, router *trigger.Router,
 		schedAt.Sync(id, w)
 	}
 	return nil
+}
+
+func PublishAndReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string) (workflow.Workflow, error) {
+	w, err := svc.Publish(id)
+	if err != nil {
+		return workflow.Workflow{}, err
+	}
+	if err := HotReload(ctx, svc, router, cron, schedAt, id); err != nil {
+		return w, err
+	}
+	return w, nil
+}
+
+func ToggleAndReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string, enabled bool) error {
+	if err := svc.Toggle(id, enabled); err != nil {
+		return err
+	}
+	return HotReload(ctx, svc, router, cron, schedAt, id)
 }
 
 // CleanupOptions tunes the daily run-retention pass.
