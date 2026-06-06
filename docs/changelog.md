@@ -4,6 +4,24 @@ All notable changes to Wick are documented here.
 
 ---
 
+## Unreleased — Workflow version history improvements
+
+### Fixed
+- Workflow version history (History tab) now correctly receives `id`, `kind`, `message`, `created_at`, and `body` fields; a missing JSON serialization on the entity caused the tab to display empty rows.
+
+### Added
+- Delete a single history snapshot via the trash button in the History list.
+- **Clear all** button removes every snapshot for the current workflow (with confirmation).
+- History list auto-refreshes after each autosave.
+- New REST endpoints: `DELETE /api/workflows/versions/{id}/{versionID}` (single snapshot) and `DELETE /api/workflows/versions/{id}` (all snapshots).
+- Version compare now renders a real colored diff with an "All / Diff only" toggle; the same `JsonDiff` component is reused by the JSON preview tab.
+
+### Changed
+- Autosave debounce raised from 800 ms to 2 s.
+- Identical-body autosaves no longer create a new draft snapshot (dedup).
+
+---
+
 ## [v0.15.3](https://github.com/yogasw/wick/compare/v0.15.2...v0.15.3)
 
 _Released on 2026-06-06_

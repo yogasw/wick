@@ -60,6 +60,35 @@ The response also returns the run's per-node outputs. Pass them as `node_outputs
 
 Use this when iterating on a workflow against real-world failure data: load the failed run → edit the graph → exec-node with the captured outputs → publish when it's right.
 
+## Version history
+
+The **History** tab at the bottom of the workflow editor lists saved snapshots from the `workflow_versions` table. Each row shows the version ID, kind (`draft` or `published`), author, timestamp, and optional message.
+
+### What you can do
+
+| Action | How |
+|---|---|
+| **View** | Click **view** on any row to open a read-only JSON preview of that snapshot. |
+| **Restore** | Click **restore** to overwrite the current draft with the snapshot body. |
+| **Delete** | Click the trash button on a row to permanently remove that snapshot. |
+| **Clear all** | Click **Clear all** to remove every history snapshot for this workflow (requires confirmation). |
+| **Compare** | Tick the checkboxes on exactly two rows, then click **Compare** to open a side-by-side colored diff. Unchanged lines can be collapsed with the **Diff only** toggle. |
+
+### Auto-refresh and dedup
+
+The History list refreshes automatically after every autosave. Autosaves are debounced at 2 s. If the workflow body has not changed since the last snapshot, no new draft entry is created (identical-body dedup).
+
+### Retention
+
+Draft snapshots are capped at 50 per workflow; the oldest are pruned automatically. Published snapshots are unbounded.
+
+### REST endpoints
+
+| Method | Path | Effect |
+|---|---|---|
+| `DELETE` | `/api/workflows/versions/{id}/{versionID}` | Delete a single snapshot |
+| `DELETE` | `/api/workflows/versions/{id}` | Delete all snapshots for a workflow |
+
 ## See also
 
 - [Canvas editor ▶ Run timeline](./canvas#run-timeline) — the UI that reads this layout.
