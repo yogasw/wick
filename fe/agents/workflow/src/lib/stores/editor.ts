@@ -458,6 +458,42 @@ export function disconnect(from: string, to: string, caseKey?: string) {
   });
 }
 
+// applyEdgeCase returns a copy of `edges` with the case of the edge
+// matching (from, to, prevCase) set to nextCase. Empty nextCase removes
+// the case field, turning it back into an unconditional edge. Pure —
+// shared by setEdgeCase and unit-tested directly.
+export function applyEdgeCase(
+  edges: Edge[],
+  from: string,
+  to: string,
+  prevCase: string | undefined,
+  nextCase: string,
+): Edge[] {
+  return edges.map((e) => {
+    if (e.from === from && e.to === to && (e.case ?? "") === (prevCase ?? "")) {
+      const next = { ...e };
+      if (nextCase) {
+        next.case = nextCase;
+      } else {
+        delete next.case;
+      }
+      return next;
+    }
+    return e;
+  });
+}
+
+// setEdgeCase retags one branch/classify edge's case on the draft.
+export function setEdgeCase(from: string, to: string, prevCase: string | undefined, nextCase: string) {
+  if (lockGuard("editing edge case")) return;
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    ensureGraph(wf);
+    wf.graph.edges = applyEdgeCase(wf.graph.edges, from, to, prevCase, nextCase);
+    return wf;
+  });
+}
+
 // saveDraft writes the current draft to the backend, refreshes the
 // validation report, and updates saveStatus.
 //
