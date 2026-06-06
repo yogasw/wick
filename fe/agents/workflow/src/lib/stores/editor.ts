@@ -1,6 +1,6 @@
 import { writable, derived, get } from "svelte/store";
 import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
-import { workflowAPI, type ValidationReport, type ValidationIssue, type WorkflowState } from "$lib/api/workflow";
+import { workflowAPI, type ValidationReport, type ValidationIssue, type WorkflowState, type PaletteDrag } from "$lib/api/workflow";
 import { APIError } from "$lib/api/client";
 import { toastError, toastOk } from "./toast";
 
@@ -37,6 +37,14 @@ export const selectedNodeIDs = writable<Set<string>>(new Set());
 // full viewport; the floating "+" button on the canvas overlay toggles
 // it. Mirrors the legacy editor's "Add node" pattern.
 export const paletteOpen = writable<boolean>(false);
+
+// Tap-to-add bridge. HTML5 drag-and-drop (how the palette drops nodes
+// onto the canvas) is dead on touch screens, so on a tap the Palette
+// pushes the item's drag payload here and the Canvas — which owns the
+// pan / zoom transform needed to compute a sensible drop point — picks
+// it up, places the node at the current viewport centre, and resets
+// this back to null. Works on mouse too (click = add at centre).
+export const paletteAddRequest = writable<PaletteDrag | null>(null);
 
 // Search overlay open state — toggled from the top-right magnifier
 // button + Ctrl/Cmd+K. Centralised so EditorShell can mount the
@@ -225,7 +233,7 @@ export async function loadWorkflow(id: string) {
 // saveStatus through "pending" → "saving" → terminal.
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let autosaveArmed = false;
-const AUTOSAVE_MS = 800;
+const AUTOSAVE_MS = 2000;
 // Set before a draftWorkflow.update that should NOT arm the autosave
 // — used by the lock toggle which persists via its own endpoint, so
 // the regular save path doesn't reject "you can't edit a locked

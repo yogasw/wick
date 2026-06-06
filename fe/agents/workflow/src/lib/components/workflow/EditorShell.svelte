@@ -16,6 +16,7 @@
     draftWorkflow,
     paletteOpen,
     lastRunSummary,
+    lastSavedAt,
     saveDraft,
     selectedNodeID,
     selectedNodeIDs,
@@ -57,9 +58,23 @@
     } catch { /* DB not wired in this env */ }
   }
 
+  $effect(() => {
+    if ($lastSavedAt !== null) void refreshVersions();
+  });
+
   async function onRestoreVersion(versionID: number) {
     await workflowAPI.restoreVersion(workflowID, versionID);
     await loadWorkflow(workflowID);
+    await refreshVersions();
+  }
+
+  async function onDeleteVersion(versionID: number) {
+    await workflowAPI.deleteVersion(workflowID, versionID);
+    await refreshVersions();
+  }
+
+  async function onClearVersions() {
+    await workflowAPI.clearVersions(workflowID);
     await refreshVersions();
   }
 
@@ -158,7 +173,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex flex-col h-screen relative">
+<div class="flex flex-col h-screen w-full relative overflow-hidden">
   {#if $lastRunSummary}
     <div class="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium shadow-lg"
          class:bg-emerald-500={$lastRunSummary.status === "success"}
@@ -171,7 +186,7 @@
   <Toolbar topTab={topTab} />
 
   {#if $topTab === "editor"}
-    <div class="flex flex-1 min-h-0 relative">
+    <div class="flex flex-1 min-h-0 min-w-0 relative overflow-hidden">
       <Canvas />
       {#if $paletteOpen}
         <Palette />
@@ -179,7 +194,7 @@
     </div>
     <NodeDetailModal />
     <TriggerDetailModal />
-    <BottomTabs workflowID={workflowID} versions={versions} onRestoreVersion={onRestoreVersion} />
+    <BottomTabs workflowID={workflowID} versions={versions} onRestoreVersion={onRestoreVersion} onDeleteVersion={onDeleteVersion} onClearVersions={onClearVersions} />
   {:else}
     <ExecutionsPanel workflowID={workflowID} onReplay={onReplay} />
   {/if}

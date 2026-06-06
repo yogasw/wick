@@ -4,14 +4,16 @@
   // /api/workflows/versions endpoints.
   import type { WorkflowVersion } from "$lib/types/workflow";
   import { workflowAPI } from "$lib/api/workflow";
+  import JsonDiff from "../fields/JsonDiff.svelte";
 
   type Props = {
     workflowID: string;
     versions: WorkflowVersion[];
-    onpick?: (id: number) => void;
     onrestore?: (id: number) => void;
+    ondelete?: (id: number) => void;
+    onclear?: () => void;
   };
-  let { workflowID, versions, onpick, onrestore }: Props = $props();
+  let { workflowID, versions, onrestore, ondelete, onclear }: Props = $props();
 
   // Compare mode: at most two versions selected by checkbox. Once two
   // are picked the Compare button activates; clicking opens the diff
@@ -22,6 +24,20 @@
   let compareError = $state<string | null>(null);
   let diffFrom = $state<WorkflowVersion | null>(null);
   let diffTo = $state<WorkflowVersion | null>(null);
+  let viewing = $state<WorkflowVersion | null>(null);
+
+  function confirmDelete(id: number) {
+    if (!confirm(`Delete version v${id}? This removes the snapshot permanently.`)) return;
+    ondelete?.(id);
+    selected = selected.filter((x) => x !== id);
+  }
+
+  function confirmClear() {
+    if (versions.length === 0) return;
+    if (!confirm(`Clear all ${versions.length} history snapshot(s) for this workflow? This cannot be undone.`)) return;
+    onclear?.();
+    selected = [];
+  }
 
   function toggleSelect(id: number) {
     if (selected.includes(id)) {
@@ -76,11 +92,18 @@
     <span class="text-[11px] text-black-500 dark:text-white-100-700">
       {selected.length} of 2 selected for compare
     </span>
-    <button
-      class="text-xs px-2 py-0.5 rounded bg-emerald-500 text-white-100 disabled:opacity-40"
-      disabled={selected.length !== 2}
-      onclick={openCompare}
-    >Compare</button>
+    <div class="flex items-center gap-2">
+      <button
+        class="text-xs px-2 py-0.5 rounded bg-emerald-500 text-white-100 disabled:opacity-40"
+        disabled={selected.length !== 2}
+        onclick={openCompare}
+      >Compare</button>
+      <button
+        class="text-xs px-2 py-0.5 rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-40"
+        disabled={versions.length === 0}
+        onclick={confirmClear}
+      >Clear all</button>
+    </div>
   </div>
   <ul class="divide-y divide-white-300 dark:divide-navy-600">
     {#each versions as v}
@@ -100,16 +123,28 @@
         <span class="text-black-500 dark:text-white-100-700 tabular-nums">v{v.id}</span>
         <span class="flex-1 truncate">{v.message ?? "—"}</span>
         <span class="text-black-500 dark:text-white-100-700">{v.created_at}</span>
-        <button class="text-emerald-600" onclick={() => onpick?.(v.id)}>view</button>
+        <button class="text-emerald-600" onclick={() => (viewing = v)}>view</button>
         <button class="text-emerald-600" onclick={() => onrestore?.(v.id)}>restore</button>
+        <button class="text-red-600" title="Delete this snapshot" onclick={() => confirmDelete(v.id)}>🗑</button>
       </li>
     {/each}
   </ul>
 {/if}
 
 {#if compareOpen}
-  <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
-    <div class="bg-white dark:bg-navy-700 rounded shadow-lg w-[90vw] h-[85vh] flex flex-col">
+  <div
+    class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={closeCompare}
+    onkeydown={(e) => e.key === "Escape" && closeCompare()}
+  >
+    <div
+      class="bg-white-100 dark:bg-navy-700 rounded-lg shadow-2xl border border-slate-200 dark:border-navy-600 w-[90vw] h-[85vh] flex flex-col"
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+    >
       <div class="flex items-center justify-between px-3 py-2 border-b border-white-300 dark:border-navy-600">
         <span class="text-sm font-semibold">Compare versions</span>
         <button class="text-xs px-2 py-0.5 rounded bg-slate-200 dark:bg-navy-600" onclick={closeCompare}>Close</button>
@@ -119,21 +154,38 @@
       {:else if compareError}
         <div class="flex-1 p-3 text-xs text-red-600">{compareError}</div>
       {:else}
-        <div class="flex-1 grid grid-cols-2 gap-2 p-3 overflow-hidden">
-          <div class="flex flex-col overflow-hidden">
-            <span class="text-[11px] text-black-500 mb-1">
-              v{diffFrom?.id} · {diffFrom?.kind} · {diffFrom?.created_at}
-            </span>
-            <pre class="flex-1 overflow-auto bg-slate-50 dark:bg-navy-800 text-[11px] p-2 rounded">{bodyPretty(diffFrom)}</pre>
-          </div>
-          <div class="flex flex-col overflow-hidden">
-            <span class="text-[11px] text-black-500 mb-1">
-              v{diffTo?.id} · {diffTo?.kind} · {diffTo?.created_at}
-            </span>
-            <pre class="flex-1 overflow-auto bg-slate-50 dark:bg-navy-800 text-[11px] p-2 rounded">{bodyPretty(diffTo)}</pre>
-          </div>
+        <div class="flex-1 min-h-0">
+          <JsonDiff
+            leftText={bodyPretty(diffFrom)}
+            rightText={bodyPretty(diffTo)}
+            leftLabel={`v${diffFrom?.id ?? "?"} · ${diffFrom?.kind ?? ""}`}
+            rightLabel={`v${diffTo?.id ?? "?"} · ${diffTo?.kind ?? ""}`}
+          />
         </div>
       {/if}
+    </div>
+  </div>
+{/if}
+
+{#if viewing}
+  <div
+    class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={() => (viewing = null)}
+    onkeydown={(e) => e.key === "Escape" && (viewing = null)}
+  >
+    <div
+      class="bg-white-100 dark:bg-navy-700 rounded-lg shadow-2xl border border-slate-200 dark:border-navy-600 w-[80vw] h-[80vh] flex flex-col"
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="flex items-center justify-between px-3 py-2 border-b border-white-300 dark:border-navy-600">
+        <span class="text-sm font-semibold">v{viewing.id} · {viewing.kind} · {viewing.created_at}</span>
+        <button class="text-xs px-2 py-0.5 rounded bg-slate-200 dark:bg-navy-600" onclick={() => (viewing = null)}>Close</button>
+      </div>
+      <pre class="flex-1 overflow-auto bg-slate-50 dark:bg-navy-800 text-[11px] p-2 m-3 rounded">{bodyPretty(viewing)}</pre>
     </div>
   </div>
 {/if}

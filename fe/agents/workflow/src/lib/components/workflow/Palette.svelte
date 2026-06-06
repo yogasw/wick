@@ -4,7 +4,7 @@
   // endpoint owns categories, labels, badges, drill structure and drag
   // payloads. Adding a new node type / channel / connector on the
   // server lights up here automatically — no FE edit needed.
-  import { paletteOpen } from "$lib/stores/editor";
+  import { paletteOpen, paletteAddRequest } from "$lib/stores/editor";
   import { workflowAPI, type PaletteItem, type PaletteResponse } from "$lib/api/workflow";
   import { onMount } from "svelte";
 
@@ -109,10 +109,21 @@
   function close() {
     paletteOpen.set(false);
   }
+
+  // Tap / click to add — the touch-friendly path. Drag-and-drop still
+  // works on the desktop (pointer) side; this just gives touch users
+  // (and impatient mouse users) a one-tap way to drop the node at the
+  // canvas centre. Canvas owns the placement via the paletteAddRequest
+  // store. Drill rows keep their own onclick (enterDrill) and never
+  // reach here.
+  function tapAdd(item: PaletteItem) {
+    if (item.kind !== "drag" || !item.drag) return;
+    paletteAddRequest.set(item.drag);
+  }
 </script>
 
 <aside
-  class="absolute top-0 right-0 h-full w-[300px] z-30 flex flex-col
+  class="absolute top-0 right-0 h-full w-[min(300px,85vw)] z-30 flex flex-col
          bg-white-100 dark:bg-navy-800/95 backdrop-blur border-l border-white-300 dark:border-navy-600
          shadow-xl text-black-800 dark:text-white-100"
 >
@@ -152,6 +163,7 @@
           <button
             draggable="true"
             ondragstart={(e) => ondragstart(e, item)}
+            onclick={() => tapAdd(item)}
             class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
             title={item.description}
           >
@@ -192,6 +204,7 @@
               <button
                 draggable="true"
                 ondragstart={(e) => ondragstart(e, item)}
+                onclick={() => tapAdd(item)}
                 class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
                 title={item.description}
               >

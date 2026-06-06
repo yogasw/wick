@@ -141,15 +141,15 @@
 </script>
 
 <header
-  class="flex items-center gap-3 px-4 py-2 border-b border-white-300 dark:border-navy-600
+  class="flex items-center gap-1.5 md:gap-3 pl-11 pr-2 md:px-4 py-2 w-full min-w-0 overflow-hidden border-b border-white-300 dark:border-navy-600
          bg-white-100 dark:bg-navy-800 text-black-800 dark:text-white-100"
 >
   <!-- Breadcrumb + inline-renamable name. -->
   <div class="flex items-center gap-2 text-sm font-medium min-w-0">
-    <a href="/tools/agents/workflows" class="text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100">
+    <a href="/tools/agents/workflows" class="hidden md:inline-block text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100">
       Workflows
     </a>
-    <span class="text-black-700 dark:text-black-500">›</span>
+    <span class="hidden md:inline text-black-700 dark:text-black-500">›</span>
     {#if editingName}
       <input
         class="rounded border border-slate-300 dark:border-navy-500 bg-white dark:bg-navy-700 px-2 py-0.5 text-sm"
@@ -160,7 +160,7 @@
       />
     {:else}
       <button
-        class="truncate hover:text-emerald-500"
+        class="truncate min-w-0 hover:text-emerald-500"
         title="Click to rename (URL stays the same)"
         onclick={startRename}
       >{$draftWorkflow?.name ?? "—"}</button>
@@ -168,10 +168,10 @@
   </div>
 
   <!-- Editor / Executions tab toggle. -->
-  <div class="flex items-center bg-white-300 dark:bg-navy-700 rounded-lg p-0.5 text-xs gap-0.5">
+  <div class="shrink-0 flex items-center bg-white-300 dark:bg-navy-700 rounded-lg p-0.5 text-xs gap-0.5">
     {#each ["editor", "executions"] as t}
       <button
-        class="px-3 py-1 rounded font-medium capitalize transition-colors"
+        class="px-2 md:px-3 py-1 rounded font-medium transition-colors"
         class:bg-white-100={$topTab === t}
         class:dark:bg-navy-600={$topTab === t}
         class:shadow-sm={$topTab === t}
@@ -180,7 +180,11 @@
         class:text-black-700={$topTab !== t}
         class:dark:text-black-500={$topTab !== t}
         onclick={() => topTab.set(t as "editor" | "executions")}
-      >{t}</button>
+      >
+        <!-- Short labels on mobile to keep the toolbar on one row. -->
+        <span class="md:hidden">{t === "editor" ? "Edit" : "Runs"}</span>
+        <span class="hidden md:inline capitalize">{t}</span>
+      </button>
     {/each}
   </div>
 
@@ -191,7 +195,7 @@
        "Saved Xs ago" suffix ticks every second off lastSavedAt. -->
   {#if $saveStatus !== "idle"}
     <span
-      class="text-[11px] italic"
+      class="hidden md:inline text-[11px] italic"
       class:text-black-700={$saveStatus === "saving" || $saveStatus === "saved"}
       class:text-black-600={$saveStatus === "saving" || $saveStatus === "saved"}
       class:text-amber-600={$saveStatus === "pending"}
@@ -212,7 +216,7 @@
        all times. Hidden when validation is clean. -->
   {#if $validationErrorCount > 0}
     <span
-      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300"
+      class="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300"
       title="Validation errors block publish"
     >
       <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
@@ -220,7 +224,7 @@
     </span>
   {:else if $validationWarningCount > 0}
     <span
-      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+      class="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
       title="Warnings do not block publish"
     >
       <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
@@ -233,7 +237,7 @@
        operator knows the live version is the one auditors green-lit. -->
   {#if $workflowState?.approved}
     <span
-      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+      class="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
       title={$workflowState.approved_by
         ? `approved by ${$workflowState.approved_by}` + ($workflowState.approved_at ? ` · ${new Date($workflowState.approved_at).toLocaleString()}` : "")
         : "approved"}
@@ -245,7 +249,7 @@
 
   <!-- Draft pill — only when there's an unpublished draft. -->
   {#if $dirty}
-    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+    <span class="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
       <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
       draft
     </span>
@@ -257,7 +261,7 @@
   {#if $draftWorkflow}
     {@const blocked = !$draftWorkflow.enabled && !$canActivate}
     <button
-      class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+      class="shrink-0 inline-flex items-center gap-2 px-2.5 md:px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
       class:bg-emerald-500={$draftWorkflow.enabled}
       class:border-emerald-500={$draftWorkflow.enabled}
       class:text-white-100={$draftWorkflow.enabled}
@@ -280,17 +284,18 @@
     </button>
   {/if}
 
-  <!-- Save draft. -->
+  <!-- Save draft. Hidden on mobile (folds into the ⋮ menu) — auto-save
+       already covers most cases; the manual button stays on md+. -->
   <button
-    class="px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-navy-600 hover:bg-slate-200 dark:hover:bg-white-400 dark:bg-navy-500 disabled:opacity-50"
+    class="hidden md:inline-block shrink-0 px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-navy-600 hover:bg-slate-200 dark:hover:bg-white-400 dark:bg-navy-500 disabled:opacity-50"
     onclick={onSave}
     disabled={saving || !$dirty}
   >{saving ? "Saving…" : "Save"}</button>
 
   <!-- Publish split button. -->
-  <div class="relative flex">
+  <div class="relative flex shrink-0">
     <button
-      class="px-3 py-1.5 rounded-l text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white-100 disabled:opacity-50 disabled:cursor-not-allowed"
+      class="px-2.5 md:px-3 py-1.5 rounded md:rounded-r-none text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white-100 disabled:opacity-50 disabled:cursor-not-allowed"
       onclick={onPublish}
       disabled={publishing || !$draftWorkflow || $validationErrorCount > 0}
       title={$validationErrorCount > 0
@@ -298,7 +303,7 @@
         : "Publish the draft as the live version"}
     >{publishing ? "…" : "Publish"}</button>
     <button
-      class="px-2 py-1.5 rounded-r text-xs bg-emerald-600 hover:bg-emerald-700 text-white-100 border-l border-emerald-700"
+      class="hidden md:block px-2 py-1.5 rounded-r text-xs bg-emerald-600 hover:bg-emerald-700 text-white-100 border-l border-emerald-700"
       onclick={() => (publishMenuOpen = !publishMenuOpen)}
       aria-haspopup="menu"
       aria-expanded={publishMenuOpen}
@@ -321,7 +326,7 @@
 
   <!-- History icon. -->
   <button
-    class="h-7 w-7 rounded flex items-center justify-center text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
+    class="hidden md:flex h-7 w-7 rounded items-center justify-center text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
     title="Show execution history"
     aria-label="History"
   >
@@ -329,7 +334,7 @@
   </button>
 
   <!-- More menu (kebab). -->
-  <div class="relative">
+  <div class="relative shrink-0">
     <button
       class="h-7 w-7 rounded flex items-center justify-center text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
       onclick={() => (moreMenuOpen = !moreMenuOpen)}
@@ -342,6 +347,23 @@
     </button>
     {#if moreMenuOpen}
       <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-20">
+        <!-- Mobile-only: these are dedicated buttons on md+, folded here
+             on phones so the toolbar fits one row without scrolling. -->
+        <button
+          class="md:hidden w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600 disabled:opacity-50"
+          disabled={saving || !$dirty}
+          onclick={() => { moreMenuOpen = false; void onSave(); }}
+        >{saving ? "Saving…" : "Save draft"}</button>
+        <button
+          class="md:hidden w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600 disabled:opacity-50"
+          disabled={!$dirty}
+          onclick={() => { moreMenuOpen = false; confirmDiscard = true; }}
+        >Discard draft</button>
+        <button
+          class="md:hidden w-full px-3 py-2 text-left text-amber-700 dark:text-amber-300 hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
+          onclick={() => { moreMenuOpen = false; confirmUnpublish = true; }}
+        >Unpublish (deactivate)</button>
+        <div class="md:hidden border-t border-slate-200 dark:border-navy-600"></div>
         <a
           class="block w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600"
           href={`/tools/agents/workflows/edit/${$draftWorkflow?.id ?? ""}/download`}

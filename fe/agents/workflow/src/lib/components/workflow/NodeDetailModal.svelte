@@ -76,6 +76,26 @@
 
   let activeTab = $state<"params" | "settings">("params");
 
+  // Mobile pane switcher. On phones the 3 columns (Input / Editor /
+  // Output) can't fit side by side, so they stack into one and this
+  // picks which is shown. Ignored on lg+ where all three render as
+  // columns. Defaults to the editor — that's what the operator opened
+  // the node to change.
+  let mobilePane = $state<"input" | "editor" | "output">("editor");
+
+  let projectOptions = $state<{ id: string; name: string; path: string }[]>([]);
+  let projectOptionsLoaded = $state(false);
+  $effect(() => {
+    if (node?.type !== "session_init" || projectOptionsLoaded) return;
+    projectOptionsLoaded = true;
+    void workflowAPI
+      .projectOptions()
+      .then((r) => {
+        projectOptions = r ?? [];
+      })
+      .catch((e) => console.warn("project options fetch failed:", e));
+  });
+
   function close() {
     detailNodeID.set(null);
   }
@@ -290,6 +310,9 @@
       toastError("Execute step failed", errMsg);
     } finally {
       executing = false;
+      // On mobile the panes are stacked — surface the result the user
+      // just triggered. No-op on lg+ where all three columns show.
+      mobilePane = "output";
     }
   }
 
@@ -400,23 +423,39 @@
     onclick={close}
   >
     <div
-      class="rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
+      class="absolute inset-2 lg:left-4 lg:right-4 lg:top-8 lg:bottom-8
+             rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
              text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
-      style="position:absolute; left:16px; right:16px; top:32px; bottom:32px;"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
       <!-- Header. -->
       <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-navy-600">
         <span class="h-2 w-2 rounded-full bg-amber-400"></span>
-        <span class="text-sm font-semibold">{node.label || node.id}</span>
-        <span class="text-xs text-black-700 dark:text-black-600">{node.type}</span>
+        <span class="text-sm font-semibold truncate">{node.label || node.id}</span>
+        <span class="text-xs text-black-700 dark:text-black-600 shrink-0">{node.type}</span>
         <div class="flex-1"></div>
-        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none" onclick={close} aria-label="Close">✕</button>
+        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none shrink-0" onclick={close} aria-label="Close">✕</button>
       </header>
 
-      <!-- 3-column body. -->
-      <div class="flex-1 grid divide-x divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
+      <!-- Mobile pane switcher — hidden on lg where all 3 columns show. -->
+      <div class="lg:hidden flex border-b border-slate-200 dark:border-navy-600 text-xs font-medium shrink-0">
+        {#each [["input", "Input"], ["editor", "Editor"], ["output", "Output"]] as pane}
+          <button
+            type="button"
+            class="flex-1 py-2 border-b-2 transition-colors"
+            class:border-rose-500={mobilePane === pane[0]}
+            class:text-rose-600={mobilePane === pane[0]}
+            class:border-transparent={mobilePane !== pane[0]}
+            class:text-black-700={mobilePane !== pane[0]}
+            onclick={() => (mobilePane = pane[0] as "input" | "editor" | "output")}
+          >{pane[1]}</button>
+        {/each}
+      </div>
+
+      <!-- Body: single stacked pane on mobile (switched above), 3
+           columns side-by-side on lg+. -->
+      <div class="flex-1 flex flex-col lg:grid lg:grid-cols-[1fr_2fr_1fr] lg:divide-x divide-white-300 dark:divide-navy-600 min-h-0">
         <!-- LEFT: input. Source dropdown picks which upstream node's
              output feeds this pane (defaults to direct parent), then
              JSON / Schema tabs flip the view. JSON leaves are
@@ -424,7 +463,7 @@
              to insert {{.Node.<label>.path}} and auto-flip the field
              into Expression mode. Matches the legacy editor's
              renderInteractiveJSON UX. -->
-        <section class="flex flex-col p-3 overflow-y-auto">
+        <section class="flex flex-1 lg:flex min-h-0 flex-col p-3 overflow-y-auto" class:hidden={mobilePane !== "input"}>
           <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">INPUT</div>
           {#if upstreamWithOutput.length > 0 || inputResolved.source === "mock"}
             {#if upstreamWithOutput.length > 0}
@@ -483,7 +522,7 @@
         </section>
 
         <!-- MIDDLE: parameters. -->
-        <section class="flex flex-col overflow-y-auto">
+        <section class="flex flex-1 lg:flex min-h-0 flex-col overflow-y-auto" class:hidden={mobilePane !== "editor"}>
           <nav class="flex items-center border-b border-slate-200 dark:border-navy-600 px-4 text-sm">
             {#each ["params", "settings"] as t}
               <button
@@ -1193,12 +1232,16 @@
                 {/if}
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Workspace override (optional)</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
-                    placeholder="(use run workspace)"
+                  <select
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
                     value={node.workspace ?? ""}
-                    oninput={(e) => patch("workspace", (e.target as HTMLInputElement).value)}
-                  />
+                    onchange={(e) => patch("workspace", (e.target as HTMLSelectElement).value)}
+                  >
+                    <option value="">(use run workspace)</option>
+                    {#each projectOptions as p (p.id)}
+                      <option value={p.id}>{p.name || p.id}</option>
+                    {/each}
+                  </select>
                 </label>
               {/if}
 
@@ -1553,7 +1596,7 @@
              with status line + latency derived from the stored
              stepResult so closing + reopening the modal keeps the
              last run visible. -->
-        <section class="flex flex-col p-3 overflow-y-auto">
+        <section class="flex flex-1 lg:flex min-h-0 flex-col p-3 overflow-y-auto" class:hidden={mobilePane !== "output"}>
           <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2 flex items-center justify-between gap-2">
             <span>OUTPUT</span>
             {#if lastRun}
