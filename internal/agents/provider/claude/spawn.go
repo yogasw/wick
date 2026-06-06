@@ -186,16 +186,17 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// want the operator to see it rather than dropping it on the
 	// floor. WICK_CLAUDE_STDERR_LOG can redirect to a file for tests
 	// that need to inspect it.
+	stderrB := newStderrTail(4096)
+	var stderrDest io.Writer = os.Stderr
 	if logPath := os.Getenv("WICK_CLAUDE_STDERR_LOG"); logPath != "" {
-		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err == nil {
-			cmd.Stderr = f
-		} else {
-			cmd.Stderr = os.Stderr
+		if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			stderrDest = f
 		}
-	} else {
-		cmd.Stderr = os.Stderr
 	}
+	// Tee stderr to its destination AND a bounded tail buffer so an
+	// abnormal exit can surface the real failure (the tail) instead of a
+	// blank "agent error: ".
+	cmd.Stderr = io.MultiWriter(stderrB, stderrDest)
 
 	log.Info().
 		Str("bin", bin).
@@ -215,7 +216,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		Int("pid", cmd.Process.Pid).
 		Str("bin", bin).
 		Msg("agents.spawn: started")
-	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+	return &process{cmd: cmd, stdin: stdin, stdout: stdout, stderrB: stderrB}, nil
 }
 
 // applyHookConfig installs or removes the per-workspace hook config
@@ -300,14 +301,20 @@ func (t *teeReader) Close() error { _ = t.f.Close(); return t.src.Close() }
 
 // process implements provider.Process for a started claude subprocess.
 type process struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	stderrB *stderrTail
 }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
 func (p *process) Wait() error           { return p.cmd.Wait() }
+
+// StderrTail returns the tail of the subprocess's stderr. Satisfies the
+// optional provider.StderrTailer interface so the reader can log the
+// real failure on an abnormal exit.
+func (p *process) StderrTail() string { return p.stderrB.String() }
 func (p *process) Pid() int {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return 0

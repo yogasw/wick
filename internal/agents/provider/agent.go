@@ -866,6 +866,19 @@ drained:
 	if waitErr != nil {
 		ev = ev.Str("wait_err", waitErr.Error())
 	}
+	// On an abnormal exit, surface the subprocess's exit code + the tail
+	// of its stderr so failures (stale --resume, auth, crash) are
+	// diagnosable from the log instead of a blank "agent error: ".
+	if reason == ExitError {
+		if ec, ok := waitErr.(interface{ ExitCode() int }); ok {
+			ev = ev.Int("exit_code", ec.ExitCode())
+		}
+		if st, ok := a.proc.(interface{ StderrTail() string }); ok {
+			if tail := st.StderrTail(); tail != "" {
+				ev = ev.Str("stderr_tail", tail)
+			}
+		}
+	}
 	ev.Msg("agent.reader: subprocess exited")
 	a.exitReason(reason)
 }
