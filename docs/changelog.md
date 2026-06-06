@@ -37,6 +37,14 @@ _Released on 2026-06-06_
 ## Unreleased
 
 ### Fixed
+- Agent-node `max_turns` is now wired to Claude's `--max-turns` flag. Previously the field was stored but never forwarded to the subprocess, making it a silent no-op. `0` continues to mean unlimited (provider default).
+- Spawned Claude agents no longer stall on an interactive permission prompt for wick's own MCP tools. All five meta-tools (`wick_list`, `wick_search`, `wick_get`, `wick_execute`, `wick_list_providers`) are pre-approved via `--allowedTools` at spawn time.
+- Spawned Claude agents can now read skill files in `~/.claude/skills/` (and the matching `~/.codex/skills/`, `~/.gemini/skills/`, `~/.agents/skills/` paths). Claude spawns with `--add-dir ~/.claude/skills` when the directory exists; the system-prompt path table carves out `skills/**` as read-allowed while the rest of `~/.claude/**` stays denied.
+- Persistent (workflow_global) sessions now self-heal a stale `--resume` ID. When Claude exits with "No conversation found" the pool clears the stored CLI session ID so the next spawn starts fresh instead of retrying a dead ID.
+- Project backfill is skipped once a session already has a CLI conversation, preventing a cwd change from breaking `--resume`.
+- Agent subprocess failures are now diagnosable: exit code and a stderr tail are logged on abnormal exit, and an `error_during_execution` result subtype is no longer surfaced as a blank "agent error: " message.
+
+### Fixed
 - Workflow version history (History tab) now correctly receives `id`, `kind`, `message`, `created_at`, and `body` fields; a missing JSON serialization on the entity caused the tab to display empty rows.
 
 ### Added

@@ -32,29 +32,67 @@ func TestHelpHasMCPConfig(t *testing.T) {
 	}
 }
 
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
 func TestMCPConfigArgs(t *testing.T) {
 	ep, tok := "http://127.0.0.1:9425/mcp", "secret123"
 
-	// Default (non-strict): --mcp-config only, NO --strict-mcp-config, so
-	// the user's own MCP servers keep working (the regression fix).
+	// Default (non-strict): --mcp-config keeps the user's servers, plus
+	// --allowedTools pre-approves wick's tools for the headless agent.
 	def := mcpConfigArgs(ep, tok, false)
-	if len(def) != 2 || def[0] != "--mcp-config" {
-		t.Fatalf("default args = %v, want [--mcp-config <json>]", def)
+	if _, ok := argValue(def, "--mcp-config"); !ok {
+		t.Fatalf("default args missing --mcp-config: %v", def)
 	}
 	for _, a := range def {
 		if a == "--strict-mcp-config" {
 			t.Fatal("default path must NOT include --strict-mcp-config")
 		}
 	}
+	allowed, ok := argValue(def, "--allowedTools")
+	if !ok {
+		t.Fatalf("default args missing --allowedTools: %v", def)
+	}
+	for _, want := range []string{
+		"mcp__wick__wick_list",
+		"mcp__wick__wick_search",
+		"mcp__wick__wick_get",
+		"mcp__wick__wick_execute",
+		"mcp__wick__wick_list_providers",
+	} {
+		if !strings.Contains(allowed, want) {
+			t.Errorf("--allowedTools %q missing %q", allowed, want)
+		}
+	}
 
-	// Opt-in strict isolation.
+	// Opt-in strict isolation still carries both --strict-mcp-config and
+	// the pre-approved wick tools.
 	strict := mcpConfigArgs(ep, tok, true)
-	if len(strict) != 3 || strict[0] != "--strict-mcp-config" || strict[1] != "--mcp-config" {
-		t.Fatalf("strict args = %v, want [--strict-mcp-config --mcp-config <json>]", strict)
+	if strict[0] != "--strict-mcp-config" {
+		t.Fatalf("strict args = %v, want leading --strict-mcp-config", strict)
+	}
+	if _, ok := argValue(strict, "--allowedTools"); !ok {
+		t.Fatalf("strict args missing --allowedTools: %v", strict)
 	}
 
 	if mcpConfigArgs("", tok, false) != nil || mcpConfigArgs(ep, "", false) != nil {
 		t.Fatal("empty endpoint or token must yield nil args")
+	}
+}
+
+func TestMaxTurnsArgs(t *testing.T) {
+	if maxTurnsArgs(0) != nil || maxTurnsArgs(-1) != nil {
+		t.Fatal("0/negative must yield nil (unlimited)")
+	}
+	got := maxTurnsArgs(4)
+	if len(got) != 2 || got[0] != "--max-turns" || got[1] != "4" {
+		t.Fatalf("got %v, want [--max-turns 4]", got)
 	}
 }
 

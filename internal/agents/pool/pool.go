@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/processctl"
 )
 
@@ -88,9 +88,9 @@ type Pool struct {
 // bound. Empty = no default; the pool falls back to a per-session temp
 // dir so claude still has a stable cwd. See agents-design.md §0.2 D4.
 type PoolConfig struct {
-	MaxConcurrent    int
-	IdleTimeout      time.Duration
-	KillAfterIdle    time.Duration
+	MaxConcurrent int
+	IdleTimeout   time.Duration
+	KillAfterIdle time.Duration
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
 	// to wait for the idle TTL. The preempted session keeps its CLI session
@@ -177,11 +177,11 @@ type SpawnStartMeta struct {
 // are forwarded to the spawn logger so /tools/agents/providers can
 // surface per-provider history without re-parsing files.
 type FactoryOptions struct {
-	SessionID    string
-	AgentName    string
-	ProviderType string
-	ProviderName string
-	Workspace    string
+	SessionID     string
+	AgentName     string
+	ProviderType  string
+	ProviderName  string
+	Workspace     string
 	ResumeID      string
 	IdleTimeout   time.Duration
 	KillAfterIdle time.Duration
@@ -194,6 +194,9 @@ type FactoryOptions struct {
 	// into the spawn log so Recent Spawns can show the channel without a
 	// registry lookup.
 	Origin string
+	// MaxTurns caps agentic turns on the spawn (--max-turns). Pulled from
+	// the agent entry by the pool; 0 = no cap.
+	MaxTurns int
 }
 
 // queueEntry is one request waiting for a slot.
@@ -557,11 +560,13 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		}
 	}
 	resumeID := ""
+	maxTurns := 0
 	pType := ""
 	pName := ""
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
 			resumeID = a.CLISessionID
+			maxTurns = a.MaxTurns
 			// Provider field is stored as "type/name" (e.g. "claude/work").
 			// Fall back to bare type when no slash present.
 			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
@@ -591,6 +596,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		KillAfterIdle: p.cfg.KillAfterIdle,
 		PresetName:    sess.Meta.Preset,
 		Origin:        string(sess.Meta.Origin),
+		MaxTurns:      maxTurns,
 	})
 	if err != nil {
 		return err
@@ -886,6 +892,12 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // Concurrent calls for the same ID are safe — session.Create returns a
 // benign "already exists" error that we suppress.
 
+// SetMaxTurns persists the per-spawn turn cap on the session's agent
+// entry (creating it if missing) so the next spawn passes --max-turns.
+func (p *Pool) SetMaxTurns(sessionID, agentName string, maxTurns int) error {
+	return session.SetMaxTurns(p.cfg.Layout, sessionID, agentName, maxTurns)
+}
+
 // EnsureSession is the public wrapper for ensureSession. Workflow's
 // session_init executor calls this to materialize the registry entry +
 // sidebar row up-front, before any agent node actually dispatches a
@@ -898,8 +910,9 @@ func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID s
 func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID string) error {
 	existing, err := session.Load(p.cfg.Layout, sessionID)
 	if err == nil {
-		// Session exists — backfill project if it was created before one was configured.
-		if projectID != "" && existing.Meta.ProjectID == "" {
+		// Backfill project only before a conversation exists; moving the
+		// cwd after would orphan the resumable session (claude is per-cwd).
+		if projectID != "" && existing.Meta.ProjectID == "" && !sessionHasCLISession(existing) {
 			if swErr := session.SetProject(ctx, p.cfg.Layout, sessionID, projectID); swErr != nil {
 				log.Warn().Str("session", sessionID).Str("project", projectID).Err(swErr).Msg("pool: backfill project failed")
 			} else if updated, ldErr := session.Load(p.cfg.Layout, sessionID); ldErr == nil {
@@ -1239,6 +1252,9 @@ func (p *Pool) DequeueSession(sessionID string) int {
 // claude (append mode) keeps the 1-agent-1-process model: every exit is
 // the agent dying, so all reasons release.
 func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason) {
+	if reason == provider.ExitError {
+		p.healStaleResume(sessionID, agentName)
+	}
 	if reason == provider.ExitClean || reason == provider.ExitRespawn {
 		p.mu.Lock()
 		entry, ok := p.active[sessionKey(sessionID, agentName)]
@@ -1256,6 +1272,41 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 		}
 	}
 	p.onAgentExit(sessionID, agentName)
+}
+
+// healStaleResume clears the CLI session id when a --resume spawn failed
+// because the CLI couldn't find the conversation, so the next is fresh.
+func (p *Pool) healStaleResume(sessionID, agentName string) {
+	p.mu.Lock()
+	entry, ok := p.active[sessionKey(sessionID, agentName)]
+	p.mu.Unlock()
+	if !ok || entry.agent == nil {
+		return
+	}
+	if entry.agent.SpawnResumeID() == "" {
+		return // fresh spawn — nothing stale to clear
+	}
+	if !provider.IsResumeNotFound(entry.agent.StderrTail()) {
+		return
+	}
+	if err := session.SetCLISessionID(p.cfg.Layout, sessionID, agentName, ""); err != nil {
+		log.Warn().Str("session", sessionID).Str("agent", agentName).Err(err).
+			Msg("pool: failed clearing stale resume id")
+		return
+	}
+	log.Info().Str("session", sessionID).Str("agent", agentName).
+		Msg("pool: cleared stale CLI resume id (No conversation found) — next spawn starts fresh")
+}
+
+// sessionHasCLISession reports whether any agent already captured a CLI
+// session id (i.e. a resumable conversation exists for this session).
+func sessionHasCLISession(s session.Session) bool {
+	for _, a := range s.Agents {
+		if a.CLISessionID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionKey is the canonical map key for an active agent.
