@@ -67,6 +67,14 @@ type Instance struct {
 	// nil = sync disabled.
 	Storage *StorageConfig
 
+	// MaxConcurrent caps parallel spawns for this instance. 0 = follows global pool cap.
+	MaxConcurrent int
+
+	// SendMode overrides the message-delivery mechanism. Empty = the type
+	// default (claude → append, codex → queue). One of "", "append",
+	// "queue", "spawn". See SendMode / SendModeFor.
+	SendMode string
+
 	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
 	CodexConfig *CodexConfig
 }
@@ -539,14 +547,16 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 		}
 		for _, raw := range list {
 			ins := Instance{
-				Type:      t,
-				Name:      raw.Name,
-				Binary:    raw.BinaryPath,
-				ExtraArgs: raw.ExtraArgs,
-				Env:       raw.Env,
-				Disabled:  raw.Disabled,
-				Hooks:     hooksFromUser(raw.Hooks),
-				Storage:   storageFromUser(raw.Storage),
+				Type:          t,
+				Name:          raw.Name,
+				Binary:        raw.BinaryPath,
+				ExtraArgs:     raw.ExtraArgs,
+				Env:           raw.Env,
+				Disabled:      raw.Disabled,
+				Hooks:         hooksFromUser(raw.Hooks),
+				Storage:       storageFromUser(raw.Storage),
+				MaxConcurrent: raw.MaxConcurrent,
+				SendMode:      raw.SendMode,
 			}
 			if t == TypeCodex {
 				ins.CodexConfig = &CodexConfig{
@@ -585,13 +595,15 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 
 func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw := userconfig.ProviderInstance{
-		Name:       ins.Name,
-		BinaryPath: ins.Binary,
-		Disabled:   ins.Disabled,
-		ExtraArgs:  ins.ExtraArgs,
-		Env:        ins.Env,
-		Hooks:      hooksToUser(ins.Hooks),
-		Storage:    storageToUser(ins.Storage),
+		Name:          ins.Name,
+		BinaryPath:    ins.Binary,
+		Disabled:      ins.Disabled,
+		ExtraArgs:     ins.ExtraArgs,
+		Env:           ins.Env,
+		Hooks:         hooksToUser(ins.Hooks),
+		Storage:       storageToUser(ins.Storage),
+		MaxConcurrent: ins.MaxConcurrent,
+		SendMode:      ins.SendMode,
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)

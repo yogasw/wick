@@ -8,7 +8,10 @@ package provider
 // real codex binary.
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,7 +44,7 @@ func newCodexAgent(t *testing.T, sp *fakeSpawner) *Agent {
 		ParserFactory: func() event.Parser { return event.NewCodexParser() },
 		Spawner:       sp,
 		State:         st,
-		RespawnOnSend: true,
+		SendMode:      SendRespawnQueue,
 	})
 }
 
@@ -61,9 +64,10 @@ func TestCodexRespawnOnSend_FirstMessage(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// proc[0] = initial Start() spawn (no message), proc[1] = respawn from Send()
-	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, time.Second)
-	proc := sp.procAt(1)
+	// Start() defers spawn for RespawnOnSend providers, so proc[0] is the
+	// first respawn (carrying the prompt), not an empty Start spawn.
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 1 }, time.Second)
+	proc := sp.procAt(0)
 	if proc == nil {
 		t.Fatal("respawn not recorded")
 	}
@@ -81,8 +85,8 @@ func TestCodexRespawnOnSend_FirstMessage(t *testing.T) {
 // second spawn.
 func TestCodexRespawnOnSend_SessionIDCaptured(t *testing.T) {
 	sp := &fakeSpawner{Lines: [][]string{
-		codexLines("sess-abc", "first reply"),
-		codexLines("sess-abc", "second reply"),
+		codexLines("sess-abc", "first reply"),  // proc[0]: first Send respawn
+		codexLines("sess-abc", "second reply"), // proc[1]: second Send respawn
 	}}
 	collected := collectingHook{}
 	st := state.New(nil)
@@ -93,7 +97,7 @@ func TestCodexRespawnOnSend_SessionIDCaptured(t *testing.T) {
 		Spawner:       sp,
 		State:         st,
 		OnEvent:       collected.add,
-		RespawnOnSend: true,
+		SendMode:      SendRespawnQueue,
 	})
 
 	if err := a.Start(context.Background()); err != nil {
@@ -104,9 +108,9 @@ func TestCodexRespawnOnSend_SessionIDCaptured(t *testing.T) {
 	if err := a.Send("first"); err != nil {
 		t.Fatalf("Send 1: %v", err)
 	}
-	// Wait for respawn from first Send to exit so session_id is captured.
-	// proc[0]=Start spawn, proc[1]=first Send respawn
-	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 && !a.Running() }, time.Second)
+	// Wait for the first Send respawn to exit so session_id is captured.
+	// proc[0] = first Send respawn (Start defers spawn for codex).
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 1 && !a.Running() }, time.Second)
 
 	if got := a.ResumeID(); got != "sess-abc" {
 		t.Fatalf("ResumeID after first turn = %q, want sess-abc", got)
@@ -116,10 +120,10 @@ func TestCodexRespawnOnSend_SessionIDCaptured(t *testing.T) {
 	if err := a.Send("second"); err != nil {
 		t.Fatalf("Send 2: %v", err)
 	}
-	// proc[2] = second Send respawn
-	waitFor(t, func() bool { return sp.callsSnapshot() >= 3 }, time.Second)
+	// proc[1] = second Send respawn
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, time.Second)
 
-	proc2 := sp.procAt(2)
+	proc2 := sp.procAt(1)
 	if proc2 == nil {
 		t.Fatal("second spawn not recorded")
 	}
@@ -146,9 +150,9 @@ func TestCodexRespawnOnSend_NoStdinWrite(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// proc[0]=Start, proc[1]=Send respawn
-	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, time.Second)
-	proc := sp.procAt(1)
+	// proc[0] = Send respawn (Start defers spawn for codex)
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 1 }, time.Second)
+	proc := sp.procAt(0)
 	if proc == nil {
 		t.Fatal("no respawn")
 	}
@@ -163,8 +167,7 @@ func TestCodexRespawnOnSend_NoStdinWrite(t *testing.T) {
 // from the codex JSON stream are delivered via OnEvent.
 func TestCodexRespawnOnSend_EventsDelivered(t *testing.T) {
 	sp := &fakeSpawner{Lines: [][]string{
-		{}, // proc[0]: initial Start() — no output
-		codexLines("sess-1", "pong"), // proc[1]: respawn from Send()
+		codexLines("sess-1", "pong"), // proc[0]: respawn from Send() (Start defers)
 	}}
 	collected := collectingHook{}
 	st := state.New(nil)
@@ -175,7 +178,7 @@ func TestCodexRespawnOnSend_EventsDelivered(t *testing.T) {
 		Spawner:       sp,
 		State:         st,
 		OnEvent:       collected.add,
-		RespawnOnSend: true,
+		SendMode:      SendRespawnQueue,
 	})
 
 	if err := a.Start(context.Background()); err != nil {
@@ -185,8 +188,8 @@ func TestCodexRespawnOnSend_EventsDelivered(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// proc[0]=Start, proc[1]=Send respawn — wait for respawn to finish
-	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, time.Second)
+	// proc[0] = Send respawn — wait for it to finish
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 1 }, time.Second)
 	waitFor(t, func() bool { return !a.Running() }, time.Second)
 
 	types := collected.types()
@@ -204,6 +207,69 @@ func TestCodexRespawnOnSend_EventsDelivered(t *testing.T) {
 	if !has(event.TextDelta) {
 		t.Errorf("missing TextDelta in events: %v", types)
 	}
+}
+
+// TestCodexRespawnKillsHungSpawn reproduces the real codex bug: the
+// initial Start() spawn blocks (codex exec with no prompt waits on
+// stdin) and its stdout never EOFs after Kill (Windows). The first
+// Send() must respawn without deadlocking at the kill-current-process
+// step. Spawn #1 is stubborn (hangs); spawn #2 is a normal fake.
+func TestCodexRespawnKillsHungSpawn(t *testing.T) {
+	sp := &mixedSpawner{
+		second: &fakeSpawner{Lines: [][]string{
+			codexLines("sess-1", "hi"),
+		}},
+	}
+	st := state.New(nil)
+	a := New(Options{
+		Workspace:     t.TempDir(),
+		IdleTimeout:   10 * time.Second,
+		ParserFactory: func() event.Parser { return event.NewCodexParser() },
+		Spawner:       sp,
+		State:         st,
+		SendMode:      SendRespawnQueue,
+	})
+
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- a.Send("first prompt") }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Send returned error: %v", err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("Send() deadlocked respawning over a hung spawn (codex stuck-spawning bug)")
+	}
+}
+
+// mixedSpawner returns a stubborn (hanging) process on the first Spawn
+// and delegates to `second` for all subsequent spawns.
+type mixedSpawner struct {
+	mu     sync.Mutex
+	calls  int
+	second *fakeSpawner
+}
+
+func (s *mixedSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process, error) {
+	s.mu.Lock()
+	n := s.calls
+	s.calls++
+	s.mu.Unlock()
+	if n == 0 {
+		pr, pw := io.Pipe()
+		return &stubbornProcess{
+			stdoutR: pr, stdoutW: pw,
+			stdinBuf: &bytes.Buffer{},
+			done:     make(chan struct{}),
+			pid:      93000,
+		}, nil
+	}
+	return s.second.Spawn(ctx, opt)
 }
 
 // fakeSpawner helpers used here but defined in fake_spawner_test.go.

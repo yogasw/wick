@@ -148,3 +148,64 @@ func (s *keepAliveSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process
 func makePipePair() (*io.PipeReader, *io.PipeWriter) {
 	return io.Pipe()
 }
+
+// stubbornSpawner mimics a Windows subprocess where Kill() does NOT
+// immediately EOF the stdout pipe — the scanner.Scan() in agent.run
+// keeps blocking after Kill. This reproduces the "Stop hangs server"
+// bug: if Stop relies solely on the reader loop ending via stdout EOF,
+// it deadlocks at <-done. A correct Stop must close the stdout reader
+// itself (or not block forever).
+type stubbornSpawner struct {
+	mu   sync.Mutex
+	last *stubbornProcess
+}
+
+func (s *stubbornSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process, error) {
+	pr, pw := io.Pipe()
+	proc := &stubbornProcess{
+		stdoutR:  pr,
+		stdoutW:  pw,
+		stdinBuf: &bytes.Buffer{},
+		done:     make(chan struct{}),
+		pid:      92000,
+	}
+	s.mu.Lock()
+	s.last = proc
+	s.mu.Unlock()
+	return proc, nil
+}
+
+type stubbornProcess struct {
+	stdoutR  *io.PipeReader
+	stdoutW  *io.PipeWriter
+	stdinMu  sync.Mutex
+	stdinBuf *bytes.Buffer
+	done     chan struct{}
+	once     sync.Once
+	pid      int
+}
+
+func (p *stubbornProcess) Stdout() io.Reader     { return p.stdoutR }
+func (p *stubbornProcess) Stdin() io.WriteCloser { return &stubbornStdin{p: p} }
+func (p *stubbornProcess) Pid() int              { return p.pid }
+func (p *stubbornProcess) Binary() string        { return "" }
+func (p *stubbornProcess) Argv() []string        { return nil }
+func (p *stubbornProcess) Wait() error           { <-p.done; return nil }
+
+// Kill marks the process dead but deliberately does NOT close the
+// stdout pipe — simulating Windows where the OS pipe stays open until
+// the next read attempt fails. The scanner keeps blocking. This is the
+// adversarial case Stop must survive.
+func (p *stubbornProcess) Kill() error {
+	p.once.Do(func() { close(p.done) })
+	return nil
+}
+
+type stubbornStdin struct{ p *stubbornProcess }
+
+func (f *stubbornStdin) Write(b []byte) (int, error) {
+	f.p.stdinMu.Lock()
+	defer f.p.stdinMu.Unlock()
+	return f.p.stdinBuf.Write(b)
+}
+func (f *stubbornStdin) Close() error { return nil }

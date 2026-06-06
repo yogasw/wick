@@ -113,11 +113,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		// caused by a stale --resume ID, not this flag.
 		"--include-partial-messages",
 	}
-	// Use the live MCP HTTP server when wired + supported; else fall
-	// back to the existing ~/.claude.json stdio config untouched.
+	// Add the live wick MCP HTTP server when wired + supported. By
+	// default it MERGES with the user's existing MCP servers (no
+	// --strict-mcp-config) so their own connectors keep working; set
+	// WICK_STRICT_MCP to isolate to just the wick server.
 	if s.MCPToken != "" && os.Getenv("WICK_DISABLE_SHARED_MCP") == "" {
-		if endpoint := mcpEndpointFromEnv(); endpoint != "" && strictMCPConfigSupported(bin) {
-			args = append(args, "--strict-mcp-config", "--mcp-config", mcpConfigArg(endpoint, s.MCPToken))
+		if endpoint := mcpEndpointFromEnv(); endpoint != "" && mcpConfigSupported(bin) {
+			strict := os.Getenv("WICK_STRICT_MCP") != "" && strictMCPConfigSupported(bin)
+			args = append(args, mcpConfigArgs(endpoint, s.MCPToken, strict)...)
 		}
 	}
 	// Trust the workspace explicitly so claude doesn't refuse to run

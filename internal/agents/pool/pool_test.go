@@ -372,6 +372,139 @@ func TestPreemptDisabledRespectsIdleTTL(t *testing.T) {
 	}
 }
 
+// setupCodexSession creates a session whose agent uses the codex provider
+// so the factory builds a respawn-mode (SendRespawnQueue) agent.
+func setupCodexSession(t *testing.T, layout config.Layout, sessionID string) {
+	t.Helper()
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{
+		ID:     sessionID,
+		Origin: session.OriginUI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.AddAgent(layout, sessionID, "default", "codex"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// codexTurn is one codex --json turn that completes cleanly.
+func codexTurn(threadID, text string) []string {
+	return []string{
+		`{"type":"thread.started","thread_id":"` + threadID + `"}`,
+		`{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"` + text + `"}}`,
+		`{"type":"turn.completed","usage":{}}`,
+	}
+}
+
+// TestCodexTurnEndKeepsSlot is the regression for the double-spawn bug:
+// codex is one-shot per turn, so a turn-end process exit (ExitClean) must
+// NOT release the pool slot. If it did, the next Send would see "no live
+// subprocess" and spawn a SECOND concurrent codex agent. After a turn
+// completes the runEntry must still be present (1 active, not 0, not 2).
+func TestCodexTurnEndKeepsSlot(t *testing.T) {
+	sp := &scriptedSpawner{Lines: [][]string{
+		codexTurn("sess-1", "reply one"),
+		codexTurn("sess-1", "reply two"),
+	}}
+	// Long idle TTL so the slot can only be freed by a real terminal exit,
+	// not the idle timer — proves ExitClean alone didn't release it.
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+	p := New(PoolConfig{
+		MaxConcurrent: 5,
+		IdleTimeout:   5 * time.Second,
+		Layout:        layout,
+		Factory:       factory,
+	})
+	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
+
+	setupCodexSession(t, layout, "C")
+
+	if err := p.Send(context.Background(), "C", "default", "ui", "user", "first"); err != nil {
+		t.Fatal(err)
+	}
+	// First turn spawns once and runs to turn.completed.
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 1 }, 2*time.Second)
+	// After the turn completes the agent idles BUT the slot stays held —
+	// exactly one active entry, never zero.
+	waitFor(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, e := range p.active {
+			if e.sessID == "C" && e.state != nil && e.state.Lifecycle().String() == "idle" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+	if got := p.Active(); got != 1 {
+		t.Fatalf("after codex turn-end: active=%d, want 1 (slot must persist across turns)", got)
+	}
+
+	// Second Send must route into the SAME agent (respawn), not spawn a new
+	// pool entry. Still exactly one active, and the spawner saw a 2nd call
+	// via the agent's internal respawn.
+	if err := p.Send(context.Background(), "C", "default", "ui", "user", "second"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, 2*time.Second)
+	if got := p.Active(); got != 1 {
+		t.Fatalf("after 2nd send: active=%d, want 1 (no double-spawn)", got)
+	}
+}
+
+// TestCodexKillBetweenTurns covers the "can't kill codex" bug: between
+// turns a codex agent holds its slot with running=false (turn process
+// already exited). Kill → agent.Stop() must still fire the exit hook so
+// the pool releases the slot, dropping the entry to 0 active.
+func TestCodexKillBetweenTurns(t *testing.T) {
+	sp := &scriptedSpawner{Lines: [][]string{
+		codexTurn("sess-1", "reply"),
+	}}
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+	p := New(PoolConfig{
+		MaxConcurrent: 5,
+		IdleTimeout:   5 * time.Second, // long, so only Kill frees the slot
+		Layout:        layout,
+		Factory:       factory,
+	})
+	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
+
+	setupCodexSession(t, layout, "C")
+	if err := p.Send(context.Background(), "C", "default", "ui", "user", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	// Turn completes → agent idles between turns, slot still held.
+	waitFor(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, e := range p.active {
+			if e.sessID == "C" && e.state != nil && e.state.Lifecycle().String() == "idle" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+	if got := p.Active(); got != 1 {
+		t.Fatalf("before kill: active=%d, want 1", got)
+	}
+
+	if err := p.Kill("C", "default"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	waitFor(t, func() bool { return p.Active() == 0 }, 2*time.Second)
+}
+
 func TestStopShutsDownActives(t *testing.T) {
 	sp := &scriptedSpawner{Lines: [][]string{{}}}
 	p, layout := newPool(t, 1, sp)

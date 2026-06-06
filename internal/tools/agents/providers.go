@@ -15,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/mcpconfig"
+	"github.com/yogasw/wick/internal/processctl"
 
 	// Blank-import each provider sub-package so its init() fires when
 	// the agents UI module loads. Without this, capability.Lookup
@@ -54,35 +55,8 @@ func providersPage(c *tool.Ctx) {
 		statuses[i].Probing = capability.IsProbing(string(statuses[i].Instance.Type))
 	}
 
-	const perPage = 10
-	page := 1
-	if v := c.Query("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			page = n
-		}
-	}
-	var spawns []provider.SpawnLogFile
-	hasNext := false
 	if globalSpawnLog != nil {
-		// Enforce the retention cap on view so the list never grows past
-		// MaxSpawnLogs even for spawns logged before pruning was added
-		// (prune otherwise only fires on a new spawn).
 		_ = globalSpawnLog.Prune(provider.MaxSpawnLogs)
-		all, err := globalSpawnLog.List("", "", "")
-		if err != nil {
-			log.Ctx(c.Context()).Warn().Msgf("providers spawns list: %s", err.Error())
-		} else {
-			start := (page - 1) * perPage
-			if start > len(all) {
-				start = len(all)
-			}
-			end := start + perPage
-			if end > len(all) {
-				end = len(all)
-			}
-			spawns = all[start:end]
-			hasNext = end < len(all)
-		}
 	}
 
 	mcpVM := buildMCPStatusVM()
@@ -91,13 +65,12 @@ func providersPage(c *tool.Ctx) {
 		Layout:        sidebarVM(c, "providers", ""),
 		Base:          c.Base(),
 		Statuses:      statuses,
-		Spawns:        spawns,
-		Page:          page,
-		HasNext:       hasNext,
-		PoolActive:    globalPool.Active(),
-		PoolQueueLen:  globalPool.QueueLen(),
-		PoolMax:       poolMaxConcurrent(),
-		SupportedKeys: supportedTypeKeys(),
+		PoolActive:         globalPool.Active(),
+		PoolQueueLen:       globalPool.QueueLen(),
+		PoolMax:            poolMaxConcurrent(),
+		LiveProcesses:      liveProcessesVM(),
+		ProviderCaps:       providerCapacities(),
+		SupportedKeys:      supportedTypeKeys(),
 		Gate:          gateStatusVM(),
 		AutoRescan:    autoRescanEnabled(),
 		MCP:           mcpVM,
@@ -281,6 +254,131 @@ func runBackgroundProbeAll() {
 			}
 		}()
 	}
+}
+
+// providerDetailPage renders the per-provider detail + edit page.
+func providerDetailPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.Error(http.StatusNotFound, "provider not found")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
+	defer cancel()
+	st := provider.Probe(ctx, ins)
+
+	// active processes for this provider (match by exe basename)
+	var activePIDs []view.LiveProcessVM
+	if globalPool != nil {
+		for _, e := range globalPool.ActiveSnapshot() {
+			activePIDs = append(activePIDs, view.LiveProcessVM{
+				SessionID: e.SessionID,
+				AgentName: e.AgentName,
+				PID:       e.PID,
+				Lifecycle: e.Lifecycle,
+				Substate:  e.Substate,
+			})
+		}
+	}
+
+	const perPage = 20
+	page := 1
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	var pageSpawns []provider.SpawnLogFile
+	hasNext := false
+	if globalSpawnLog != nil {
+		raw, _ := globalSpawnLog.List(string(t), name, "")
+		all := normalizeSpawnStatus(raw)
+		start := (page - 1) * perPage
+		if start > len(all) {
+			start = len(all)
+		}
+		end := start + perPage
+		if end > len(all) {
+			end = len(all)
+		}
+		pageSpawns = all[start:end]
+		hasNext = end < len(all)
+	}
+
+	actionBase := c.Base() + "/providers/detail/" + string(t) + "/" + name
+	c.HTML(view.ProviderDetailPage(view.ProviderDetailVM{
+		Layout:      sidebarVM(c, "providers", ""),
+		Base:        c.Base(),
+		Status:      st,
+		GlobalMax:   poolMaxConcurrent(),
+		ActiveCount: len(activePIDs),
+		ActivePIDs:  activePIDs,
+		Rows:        provider.SeedInstanceConfig(st.Instance),
+		ActionBase:  actionBase,
+		Spawns:      pageSpawns,
+		Page:        page,
+		HasNext:     hasNext,
+		Gate:        gateStatusVM(),
+		Flash:       c.Query("flash"),
+		Error:       c.Query("error"),
+	}))
+}
+
+// saveProviderDetail saves per-provider settings from the detail page.
+func saveProviderDetail(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.Error(http.StatusNotFound, "provider not found")
+		return
+	}
+	ins.Binary = strings.TrimSpace(c.Form("binary"))
+	ins.ExtraArgs = splitFields(c.Form("extra_args"))
+	ins.Env = splitLines(c.Form("env"))
+	ins.Disabled = c.Form("disabled") == "on"
+	ins.MaxConcurrent = parseIntForm(c.Form("max_concurrent"))
+	if t == provider.TypeCodex {
+		if ins.CodexConfig == nil {
+			ins.CodexConfig = &provider.CodexConfig{}
+		}
+		ins.CodexConfig.SandboxMode = provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode")))
+	}
+	if err := provider.Save(ins); err != nil {
+		c.Redirect(c.Base()+"/providers/detail/"+string(t)+"/"+name+"?error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+	c.Redirect(c.Base()+"/providers/detail/"+string(t)+"/"+name+"?flash=saved", http.StatusSeeOther)
+}
+
+// saveProviderConfigKey handles per-key AJAX saves from ConfigsTable.
+// POST /providers/detail/{type}/{name}/{key}  body: value=...
+func saveProviderConfigKey(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	key := c.PathValue("key")
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	provider.ApplyInstanceConfigKey(&ins, key, c.Form("value"))
+	if err := provider.Save(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // saveProviderInstance creates or updates one named runtime instance
@@ -911,6 +1009,69 @@ func poolMaxConcurrent() int {
 		return 0
 	}
 	return globalPool.MaxConcurrent()
+}
+
+// activePerProvider counts running spawns (no exit event) per "type/name".
+// normalizeSpawnStatus fixes stale "running" entries in spawnlog:
+// if ExitReason=="" but PID is dead → mark as "unclean" so UI shows
+// correct status instead of "running" for crashed/restarted processes.
+func normalizeSpawnStatus(spawns []provider.SpawnLogFile) []provider.SpawnLogFile {
+	for i := range spawns {
+		if spawns[i].ExitReason == "" && spawns[i].PID > 0 {
+			if !processctl.ProcessAlive(spawns[i].PID) {
+				spawns[i].ExitReason = "unclean"
+			}
+		}
+	}
+	return spawns
+}
+
+// providerCapacities returns used + effective-max per "type/name" so the
+// provider cards show "<used> / <provider cap>" (not the global cap).
+// Effective max = the per-instance MaxConcurrent (0 → shown as global cap,
+// since an unlimited provider is bounded only by global). Source of truth
+// is the pool's capacity calc, so UI and spawn gate agree.
+func providerCapacities() map[string]view.ProviderCapVM {
+	out := map[string]view.ProviderCapVM{}
+	if globalPool == nil {
+		return out
+	}
+	globalMax := globalPool.MaxConcurrent()
+	instances, _ := provider.Load()
+	for _, ins := range instances {
+		cap := globalPool.ProviderCapacity(string(ins.Type), ins.Name)
+		// Effective finite cap: provider's own if set, else the global cap.
+		// Unlimited only when BOTH provider and global are 0 — nothing
+		// bounds it to a finite number.
+		max := cap.Max
+		if max <= 0 {
+			max = globalMax
+		}
+		out[string(ins.Type)+"/"+ins.Name] = view.ProviderCapVM{
+			Used:      cap.Used,
+			Max:       max,
+			Unlimited: cap.Max <= 0 && globalMax <= 0,
+		}
+	}
+	return out
+}
+
+func liveProcessesVM() []view.LiveProcessVM {
+	if globalPool == nil {
+		return nil
+	}
+	entries := globalPool.ActiveSnapshot()
+	out := make([]view.LiveProcessVM, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, view.LiveProcessVM{
+			SessionID: e.SessionID,
+			AgentName: e.AgentName,
+			PID:       e.PID,
+			Lifecycle: e.Lifecycle,
+			Substate:  e.Substate,
+		})
+	}
+	return out
 }
 
 // providerChoices probes every configured provider and returns only

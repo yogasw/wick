@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/processctl"
 )
 
 // augmentWithAttachments returns text plus a trailing block listing
@@ -73,6 +74,12 @@ type Pool struct {
 	// drain) to finish before returning. Without this, tests that
 	// observe Active==0 race the trailing meta.json writes.
 	wg sync.WaitGroup
+
+	// providerMax resolves a provider instance's MaxConcurrent cap. Defaults
+	// to the registry lookup (provider.Find); tests inject a pure stub so
+	// capacity math is exercised without touching disk or the global
+	// provider registry (which Save mutates via an async rescan).
+	providerMax func(pType, pName string) int
 }
 
 // PoolConfig knobs.
@@ -205,6 +212,11 @@ type runEntry struct {
 	sessID  string
 	agentNm string
 	cwd     string // resolved workspace path (used by RouteByCWD)
+	// provType / provName identify the resolved provider for this entry,
+	// used to enforce the per-provider concurrency cap alongside the
+	// global one. Set at spawn time from the session's agents.json.
+	provType string
+	provName string
 	// ctx is the spawn-time context (HTTP Send → pool.spawn). It
 	// carries the zerolog logger the middleware attached, so async
 	// post-spawn callbacks (onAgentExit, OnLifecycle) recover the
@@ -215,9 +227,14 @@ type runEntry struct {
 }
 
 // New returns an empty pool.
+//
+// MaxConcurrent <= 0 means UNLIMITED at the global scope (bounded only by
+// per-provider caps and host resources). The config UI seeds a sane
+// default of 2, but an operator may set 0 deliberately to lift the global
+// ceiling — capacity math treats 0 as "no global cap".
 func New(cfg PoolConfig) *Pool {
-	if cfg.MaxConcurrent <= 0 {
-		cfg.MaxConcurrent = 2
+	if cfg.MaxConcurrent < 0 {
+		cfg.MaxConcurrent = 0 // normalise negatives to the unlimited sentinel
 	}
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 120 * time.Second
@@ -228,12 +245,44 @@ func New(cfg PoolConfig) *Pool {
 		spawningKeys: map[string]struct{}{},
 		buffers:      map[string]*Buffer{},
 		stopCh:       make(chan struct{}),
+		providerMax:  providerMaxConcurrent,
 	}
 	if cfg.PreemptIdle {
 		p.wg.Add(1)
 		go p.preemptLoop()
 	}
+	// Always run the dead-process reaper, even without PreemptIdle — a
+	// crashed / externally-killed subprocess that the reader never saw
+	// EOF leaves a zombie slot that must be reclaimed regardless.
+	p.wg.Add(1)
+	go p.reconcileLoop()
 	return p
+}
+
+// reconcileLoop periodically reaps active entries whose subprocess died
+// without the reader detecting it. 3s cadence keeps the UI badge close
+// to realtime — signal-0 probes are cheap. When a dead entry is reaped,
+// Stop → exit hook → OnLifecycle broadcasts pool_stats, so the Process
+// badge drops on its own without needing a manual refresh.
+func (p *Pool) reconcileLoop() {
+	defer p.wg.Done()
+	t := time.NewTicker(3 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-t.C:
+			p.mu.Lock()
+			closed := p.closed
+			empty := len(p.active) == 0
+			p.mu.Unlock()
+			if closed || empty {
+				continue
+			}
+			p.ReconcileDead()
+		}
+	}
 }
 
 // preemptLoop periodically re-tries preemption while the queue is
@@ -329,7 +378,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
 		}
-		return entry.agent.Send(augmentWithAttachments(text, atts))
+		err := entry.agent.Send(augmentWithAttachments(text, atts))
+		// Nudge SSE so the Process panel's queued count updates in
+		// realtime — a RespawnQueue (codex) Send while busy just appended
+		// to the agent's pending queue, which fires no lifecycle event on
+		// its own.
+		p.notifyLifecycle(ctx, entry, sessionID, agentName)
+		return err
 	}
 	log.Ctx(ctx).Debug().
 		Str("component", "pool").
@@ -368,6 +423,10 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// We build a transient Store because no entry.store exists yet.
 	p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
 
+	// Resolve the provider for this session so the slot check can enforce
+	// the per-provider cap alongside the global one.
+	pType, pName := p.providerForSession(sessionID, agentName)
+
 	p.mu.Lock()
 	// If this session is already mid-spawn, the in-flight spawn's Drain
 	// will pick up the buffered message — nothing more to do here.
@@ -375,9 +434,10 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		p.mu.Unlock()
 		return nil
 	}
-	// Count in-flight spawns against the cap so concurrent Sends cannot
-	// each see "slot free" and all call spawn simultaneously.
-	if len(p.active)+len(p.spawningKeys) < p.cfg.MaxConcurrent {
+	// Spawn only when both the global and per-provider caps allow it;
+	// otherwise queue. spawningKeys counted in so concurrent Sends can't
+	// each see a free slot.
+	if p.slotFreeLocked(pType, pName) {
 		p.spawningKeys[key] = struct{}{}
 		p.mu.Unlock()
 		err := p.spawn(ctx, sessionID, agentName, source)
@@ -539,13 +599,15 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	// Wire OnExit so the pool reclaims the slot.
 	key := sessionKey(sessionID, agentName)
 	entry := &runEntry{
-		agent:   a,
-		state:   st,
-		store:   sto,
-		sessID:  sessionID,
-		agentNm: agentName,
-		cwd:     cwd,
-		ctx:     ctx,
+		agent:    a,
+		state:    st,
+		store:    sto,
+		sessID:   sessionID,
+		agentNm:  agentName,
+		cwd:      cwd,
+		ctx:      ctx,
+		provType: pType,
+		provName: pName,
 	}
 	// Spawn-local logger derived from the same ctx — consumers in the
 	// rest of this function reuse it without redoing the With() chain.
@@ -682,10 +744,76 @@ func (p *Pool) onAgentExit(sessionID, agentName string) {
 	p.tryGrantQueue()
 }
 
+// notifyLifecycle re-fires the OnLifecycle hook with the entry's current
+// lifecycle. Used to nudge SSE (pool_stats rebuild) when something the
+// state machine doesn't emit changes — e.g. a message queued onto a busy
+// RespawnQueue agent. No-op when no hook or no state.
+func (p *Pool) notifyLifecycle(ctx context.Context, entry *runEntry, sessionID, agentName string) {
+	if p.cfg.OnLifecycle == nil || entry == nil || entry.state == nil {
+		return
+	}
+	p.cfg.OnLifecycle(LifecycleEvent{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Lifecycle: entry.state.Lifecycle().String(),
+		Ctx:       ctx,
+		PID:       entry.agent.PID(),
+		At:        time.Now().UTC(),
+	})
+}
+
 func (p *Pool) releaseSlot(key string) {
 	p.mu.Lock()
 	delete(p.active, key)
 	p.mu.Unlock()
+}
+
+// slotFreeLocked reports whether a new spawn for the given provider may
+// proceed under both the global cap and that provider's per-instance cap.
+// Caller MUST hold p.mu. spawningKeys count in so concurrent Sends can't
+// each see a free slot. pType/pName "" skips the per-provider check
+// (callers that don't know the provider yet — rare).
+//
+// Per-provider cap comes from provider.Find(type,name).MaxConcurrent;
+// 0 = unlimited (the instance follows only the global cap).
+func (p *Pool) slotFreeLocked(pType, pName string) bool {
+	// Remaining != 0 means free: a positive count, or -1 for unlimited.
+	if pType == "" {
+		// Provider unknown — gate on the global cap only.
+		return p.capacityLocked().Remaining != 0
+	}
+	return p.providerCapacityLocked(pType, pName).Remaining != 0
+}
+
+// providerForSession reads the session's agents.json and returns the
+// resolved provider type/name for the agent. Empty strings when the
+// session or agent can't be loaded — callers treat that as "global cap
+// only". Mirrors the parse in spawn().
+func (p *Pool) providerForSession(sessionID, agentName string) (pType, pName string) {
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil {
+		return "", ""
+	}
+	for _, a := range sess.Agents {
+		if a.Name != agentName {
+			continue
+		}
+		if idx := strings.Index(a.Provider, "/"); idx >= 0 {
+			return a.Provider[:idx], a.Provider[idx+1:]
+		}
+		return a.Provider, a.Provider
+	}
+	return "", ""
+}
+
+// providerMaxConcurrent looks up the per-instance MaxConcurrent for a
+// provider. Returns 0 (unlimited) when the instance can't be resolved.
+func providerMaxConcurrent(pType, pName string) int {
+	ins, err := provider.Find(provider.Type(pType), pName)
+	if err != nil {
+		return 0
+	}
+	return ins.MaxConcurrent
 }
 
 // tryGrantQueue pops the head of the queue and spawns it if a slot is
@@ -698,14 +826,23 @@ func (p *Pool) tryGrantQueue() {
 		p.mu.Unlock()
 		return
 	}
-	// Count in-flight spawns — same as Send — so two concurrent exit
-	// hooks cannot both see "slot free" and each pop from the queue.
-	if len(p.active)+len(p.spawningKeys) >= p.cfg.MaxConcurrent {
+	// Find the first queued entry whose provider still has a free slot
+	// (global + per-provider). A head-of-line entry blocked by its
+	// provider cap shouldn't starve a different provider behind it.
+	idx := -1
+	for i, q := range p.queue {
+		pType, pName := p.providerForSession(q.sessionID, q.agentName)
+		if p.slotFreeLocked(pType, pName) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
 		p.mu.Unlock()
 		return
 	}
-	q := p.queue[0]
-	p.queue = p.queue[1:]
+	q := p.queue[idx]
+	p.queue = append(p.queue[:idx], p.queue[idx+1:]...)
 	key := sessionKey(q.sessionID, q.agentName)
 	p.spawningKeys[key] = struct{}{}
 	p.wg.Add(1)
@@ -928,9 +1065,11 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 	out := make([]ActiveEntry, 0, len(p.active))
 	for _, e := range p.active {
 		entry := ActiveEntry{
-			SessionID: e.sessID,
-			AgentName: e.agentNm,
-			CWD:       e.cwd,
+			SessionID:    e.sessID,
+			AgentName:    e.agentNm,
+			ProviderType: e.provType,
+			ProviderName: e.provName,
+			CWD:          e.cwd,
 		}
 		if e.state != nil {
 			entry.Lifecycle = e.state.Lifecycle().String()
@@ -939,6 +1078,8 @@ func (p *Pool) ActiveSnapshot() []ActiveEntry {
 		}
 		if e.agent != nil {
 			entry.PID = e.agent.PID()
+			entry.Queued = e.agent.QueuedCount()
+			entry.Respawns = e.agent.Respawns()
 			entry.InFlightEvents = e.agent.InFlightEvents()
 			entry.PartialText = e.agent.PartialText()
 		}
@@ -958,8 +1099,12 @@ func (p *Pool) IdleTimeout() time.Duration { return p.cfg.IdleTimeout }
 type ActiveEntry struct {
 	SessionID      string
 	AgentName      string
+	ProviderType   string // resolved provider type (claude / codex / gemini)
+	ProviderName   string // instance name within that type
 	CWD            string // resolved workspace path, used by RouteByCWD
 	PID            int
+	Queued         int  // messages waiting after the current turn (RespawnQueue)
+	Respawns       bool // one process per turn (codex): a dead PID between turns is normal, not a zombie
 	Lifecycle      string
 	Substate       string
 	LastActive     time.Time
@@ -987,10 +1132,49 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 	p.mu.Unlock()
 	for _, e := range entries {
 		if err := e.agent.Stop(); err != nil {
+			log.Error().Str("session", e.sessID).Str("agent", e.agentNm).Err(err).Msg("pool.kill: agent.Stop failed")
 			return err
 		}
 	}
 	return nil
+}
+
+// ReconcileDead scans active entries and Stops any whose subprocess is
+// no longer alive at the OS level — a crash or external kill that the
+// reader loop never saw as stdout EOF (common on Windows, where killing
+// a process does not reliably close its pipe). Stop() fires the exit
+// hook, releasing the slot and draining the queue, so a zombie entry
+// can't wedge the pool. Cheap signal-0 probe per entry; safe to call
+// from request handlers (panel open) and a periodic ticker.
+func (p *Pool) ReconcileDead() {
+	p.mu.Lock()
+	var dead []*runEntry
+	for _, e := range p.active {
+		if e.agent == nil {
+			continue
+		}
+		// Respawn-mode agents (codex) intentionally have NO live process
+		// between turns — the one-shot turn process exits and the agent
+		// idles until the next message or its idle TTL. A dead pid here is
+		// normal, not a zombie; reaping it would kill an idle-but-healthy
+		// agent. Their lifecycle is self-managed (idle TTL → ExitIdle).
+		if e.agent.Respawns() {
+			continue
+		}
+		pid := e.agent.PID()
+		if pid == 0 {
+			continue // pre-PID spawn or test fake — can't verify, leave it
+		}
+		if !processctl.ProcessAlive(pid) {
+			dead = append(dead, e)
+		}
+	}
+	p.mu.Unlock()
+	for _, e := range dead {
+		log.Warn().Str("session", e.sessID).Str("agent", e.agentNm).
+			Int("pid", e.agent.PID()).Msg("pool.reconcile: subprocess dead, releasing slot")
+		_ = e.agent.Stop()
+	}
 }
 
 // Dequeue drops every queued request matching sessionID+agentName.
@@ -1044,10 +1228,33 @@ func (p *Pool) DequeueSession(sessionID string) int {
 }
 
 // HandleExit is the public hook the factory wires into agent.OnExit.
-// It defers to the unexported onAgentExit but accepts the reason so
-// future code can branch (e.g. don't grant queue if the previous exit
-// was an error).
-func (p *Pool) HandleExit(sessionID, agentName string, _ provider.ExitReason) {
+// It frees the pool slot when a process exit means the AGENT is done —
+// but for respawn-mode providers (codex) one agent spans many short-lived
+// processes, so a turn-boundary exit (ExitClean) or an internal respawn
+// kill (ExitRespawn) must NOT release the slot. Only a terminal reason
+// (idle TTL, Stop/Kill, crash) tears the runEntry down. Without this gate
+// every codex turn-end deletes the entry, and the next Send sees "no live
+// subprocess" and spawns a SECOND concurrent agent (the double-spawn bug).
+//
+// claude (append mode) keeps the 1-agent-1-process model: every exit is
+// the agent dying, so all reasons release.
+func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason) {
+	if reason == provider.ExitClean || reason == provider.ExitRespawn {
+		p.mu.Lock()
+		entry, ok := p.active[sessionKey(sessionID, agentName)]
+		respawns := ok && entry.agent != nil && entry.agent.Respawns()
+		p.mu.Unlock()
+		if respawns {
+			// Turn boundary, not agent death. Keep the slot; the agent
+			// either respawns now (queued message) or idles until its TTL
+			// fires ExitIdle, which DOES release. Nudge SSE so the panel's
+			// lifecycle/queued counts stay live across the turn boundary.
+			if ok {
+				p.notifyLifecycle(entry.ctx, entry, sessionID, agentName)
+			}
+			return
+		}
+	}
 	p.onAgentExit(sessionID, agentName)
 }
 

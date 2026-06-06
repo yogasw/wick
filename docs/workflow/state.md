@@ -31,6 +31,16 @@ env.json               ← per-workflow env values (when set)
 
 Retention is per-workflow (default: keep last 50 runs on disk). Older runs are pruned at boot; the cleanup is best-effort and a manual delete of `runs/<id>/` is always safe.
 
+## Inspecting a run
+
+The executions view ([canvas ▶ run timeline](./canvas#run-timeline)) opens a detail panel for any run:
+
+- **Events** — the full `events.jsonl` stream (`node_started` / `node_completed` / `node_failed` / `edge_traversed`) with timestamps, so you can see exactly which node fired last and how long each took.
+- **Nodes** — per-node status (success / failed / running) and each node's output.
+- **JSON preview** — the full run state (`state.json`) for the run.
+
+A run can also be **deleted** from the panel — it removes that run's `runs/<run-id>/` folder. Active runs aren't touched; deletion is for clearing out finished history you no longer need, on top of the automatic 50-run retention above.
+
 ## Replay
 
 Open a run in the timeline → click **Rerun** → navigates to the manual runner pre-filled with the original payload. There is no one-click replay-and-execute; you review before re-running.

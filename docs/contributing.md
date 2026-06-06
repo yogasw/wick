@@ -102,6 +102,11 @@ Subject line ≤ 72 characters. No period at the end. Body only when the *why* i
 4. Open a pull request against `master`
 5. Fill in the PR description: what changed, why, how to test
 
+> **Docs stay in sync.** When you work in this repo with Claude Code, a
+> `doc-sync` agent reviews your branch diff before a PR is opened — a
+> `PreToolUse` hook blocks `gh pr create` until it has run — and updates
+> `docs/` when the change is user-facing. See `.claude/agents/doc-sync.md`.
+
 ## Reporting issues
 
 Open an issue at [github.com/yogasw/wick/issues](https://github.com/yogasw/wick/issues) with:

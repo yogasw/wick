@@ -57,6 +57,8 @@ Six layers, in order:
 
 Add a `"default"` case in your downstream branch to handle the "model gave up" path — otherwise the run dead-ends.
 
+The outgoing edges that route each verdict carry a `case:` label you can set directly in the [canvas editor](../canvas) — see [`branch` ▶ Setting edge cases in the canvas](./branch#setting-edge-cases-in-the-canvas).
+
 ## Pair with
 
 - [`branch`](./branch) / [`switch`](./switch) — route the verdict.

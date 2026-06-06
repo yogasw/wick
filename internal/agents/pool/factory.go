@@ -326,14 +326,33 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		Spawner:       spawner,
 		Store:         sto,
 		State:         st,
-		OnEvent:       onEvent,
-		OnExit:        onExit,
-		Instance:      &insCopy,
-		GateBinary:    gateBin,
-		Preset:        presetContent,
-		RespawnOnSend: pType == provider.TypeCodex,
+		OnEvent:    onEvent,
+		OnExit:     onExit,
+		Instance:   &insCopy,
+		GateBinary: gateBin,
+		Preset:     presetContent,
+		// claude = persistent stdin (append); codex = one-shot per turn,
+		// queue mid-turn sends so spam doesn't stack subprocesses. A
+		// per-instance override (providers UI) takes precedence over the
+		// type default.
+		SendMode: sendModeFor(pType, resolvedIns.SendMode),
 	})
 	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
+}
+
+// sendModeFor resolves an instance's Send behaviour. A non-empty
+// per-instance override (set in the providers UI: "append" | "queue" |
+// "spawn") wins; otherwise it falls back to the provider type's default:
+// codex is one-shot per turn (respawn + queue mid-turn sends); claude /
+// gemini keep a persistent stdin and append.
+func sendModeFor(pType provider.Type, override string) provider.SendMode {
+	if m, ok := provider.ParseSendMode(override); ok {
+		return m
+	}
+	if pType == provider.TypeCodex {
+		return provider.SendRespawnQueue
+	}
+	return provider.SendAppend
 }
 
 // attachGateConfig writes the gate hook into the workspace's
@@ -412,6 +431,8 @@ func exitReasonString(r provider.ExitReason) string {
 		return "stopped"
 	case provider.ExitError:
 		return "error"
+	case provider.ExitRespawn:
+		return "respawn"
 	}
 	return "unknown"
 }

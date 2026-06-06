@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +65,32 @@ type Agent struct {
 	// when both the idle goroutine and the reader-exit path race.
 	exitReasonSet bool
 
+	// pendingQueue holds messages that arrived while a RespawnOnSend
+	// (codex) turn was in flight, in FIFO order. Codex is one-shot per
+	// spawn, so we can't respawn mid-turn (it would orphan the running
+	// process and stack subprocesses past MaxConcurrent). Each queued
+	// message runs as its own turn after the current one ends — every
+	// Enter is processed, none are dropped. drainPending pops the head.
+	pendingQueue []string
+	// turnActive is true for RespawnOnSend agents between a respawn and
+	// its turn completing (lifecycle returns to idle). Gates whether a
+	// fresh Send respawns now or just appends to pendingQueue.
+	turnActive bool
+
+	// respawning is set while respawnWithMessage is tearing down the
+	// current process to start a fresh turn. The reader's ctx.Done path
+	// reads it to fire ExitRespawn (agent lives on) instead of
+	// ExitStopped (agent dead), so the pool keeps the slot. Cleared once
+	// the new process is wired up.
+	respawning bool
+
+	// stopped latches once Stop() runs. A respawn-mode (codex) agent can
+	// have a drainPending goroutine in flight when Stop is called; without
+	// this latch that goroutine would respawn a fresh process AFTER the
+	// kill, resurrecting an agent the pool already released. respawnWithMessage
+	// and drainPending bail when stopped is set.
+	stopped bool
+
 	// activityCh is signalled on every stdout line so the grace-period
 	// watcher can cancel the kill when the subprocess produces output
 	// during the KillAfterIdle window.
@@ -79,6 +106,12 @@ const (
 	ExitIdle                    // idle TTL killed it
 	ExitStopped                 // Stop() was called
 	ExitError                   // wait returned an error
+	// ExitRespawn is the internal kill of the current process by
+	// respawnWithMessage so a fresh turn can spawn. The AGENT lives on —
+	// only one of its short-lived processes ended. The pool uses this to
+	// keep the slot for respawn-mode (codex) agents across turn
+	// boundaries instead of treating each turn-end as agent death.
+	ExitRespawn
 )
 
 // Options is the constructor argument. ParserFactory returns a fresh
@@ -117,12 +150,75 @@ type Options struct {
 	// tokens or routing keys.
 	ExtraEnv []string
 	// MessageEncoder formats a user message before writing to stdin.
-	// nil = default Claude stream-json envelope. Ignored when RespawnOnSend=true.
+	// nil = default Claude stream-json envelope. Ignored unless SendMode
+	// is SendAppend.
 	MessageEncoder func(text string) string
-	// RespawnOnSend, when true, means Send() kills the current process and
-	// spawns a new one with the message as InitialMessage (positional arg).
-	// Used by codex which is one-shot per invocation, not long-lived.
-	RespawnOnSend bool
+	// SendMode decides what Send() does with a user message. See SendMode
+	// docs. Zero value (SendAppend) keeps the long-lived-stdin behaviour.
+	SendMode SendMode
+}
+
+// SendMode controls how an Agent delivers a user message to its CLI.
+// Different runtimes have different process models:
+type SendMode int
+
+const (
+	// SendAppend writes the message to the long-lived subprocess stdin.
+	// The process persists across turns and queues input itself. Used by
+	// claude (stream-json over stdin). No respawn, no per-message process.
+	SendAppend SendMode = iota
+
+	// SendRespawnQueue is for one-shot-per-invocation CLIs (codex): each
+	// turn is a fresh subprocess with the prompt as an argv arg. While a
+	// turn runs, a new Send is QUEUED (parked as pendingMsg) and respawns
+	// once the turn finishes — never spawning a second concurrent process.
+	// This keeps one process per session and respects MaxConcurrent.
+	SendRespawnQueue
+
+	// SendSpawnEach spawns a brand-new subprocess for EVERY message, in
+	// parallel, with no queueing. Each counts against the pool slot/queue
+	// like an independent run. Use only for truly stateless one-shot tools
+	// where concurrent fan-out is desired. (Not used by built-in providers.)
+	SendSpawnEach
+)
+
+// respawns reports whether this mode spawns a fresh process per turn
+// (vs. SendAppend's persistent stdin).
+func (m SendMode) respawns() bool { return m == SendRespawnQueue || m == SendSpawnEach }
+
+// Respawns reports whether this agent spawns a fresh process per turn
+// (codex) rather than holding one long-lived process (claude). The pool
+// reads it to decide whether a process exit means the agent died (claude:
+// yes) or just a turn ended (codex: no — keep the slot).
+func (a *Agent) Respawns() bool { return a.cfg.SendMode.respawns() }
+
+// String renders a SendMode as its config-key value. Inverse of
+// ParseSendMode. Used by the providers UI to show the current selection.
+func (m SendMode) String() string {
+	switch m {
+	case SendRespawnQueue:
+		return "queue"
+	case SendSpawnEach:
+		return "spawn"
+	default:
+		return "append"
+	}
+}
+
+// ParseSendMode maps a config string to a SendMode. Unknown / empty
+// strings return (SendAppend, false) so callers fall back to the
+// per-type default rather than silently forcing append.
+func ParseSendMode(s string) (SendMode, bool) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case "append":
+		return SendAppend, true
+	case "queue":
+		return SendRespawnQueue, true
+	case "spawn":
+		return SendSpawnEach, true
+	default:
+		return SendAppend, false
+	}
 }
 
 // New builds an Agent from Options. Doesn't spawn — call Start.
@@ -159,6 +255,17 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.rootCtx = ctx
 	a.parser = a.cfg.ParserFactory()
 
+	// Respawn-per-turn providers (codex) take the prompt as a positional
+	// argv arg and run one-shot per message. Spawning here with no
+	// prompt would launch a process that immediately errors (codex exec
+	// with no [PROMPT] exits 1) — pure waste. Defer the first spawn to
+	// the first Send(), which carries the prompt via respawnWithMessage.
+	if a.cfg.SendMode.respawns() {
+		a.running = true
+		a.mu.Unlock()
+		return nil
+	}
+
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:  a.cfg.Workspace,
@@ -192,9 +299,21 @@ func (a *Agent) Start(ctx context.Context) error {
 // conversation.jsonl reflects the message; we don't double-write here
 // because some transports (replay tests) skip storage.
 func (a *Agent) Send(text string) error {
-	if a.cfg.RespawnOnSend {
+	switch a.cfg.SendMode {
+	case SendRespawnQueue:
+		// Queue mid-turn, respawn once when free. respawnWithMessage
+		// handles the turnActive gate.
+		return a.respawnWithMessage(text)
+	case SendSpawnEach:
+		// Always a fresh process, even mid-turn. No queue gate: clear
+		// turnActive so respawnWithMessage spawns immediately. Parallel
+		// turns are the caller's intent for this mode.
+		a.mu.Lock()
+		a.turnActive = false
+		a.mu.Unlock()
 		return a.respawnWithMessage(text)
 	}
+	// SendAppend: write to the persistent subprocess stdin.
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.running || a.proc == nil {
@@ -217,23 +336,73 @@ func (a *Agent) Send(text string) error {
 // respawnWithMessage stops the current process (if any) and spawns a new one
 // with text as the InitialMessage positional arg. Used by codex which is
 // one-shot per invocation.
+// drainPending clears the turn-active flag and, if a message was parked
+// while the turn ran, respawns once with it. Called from the reader on
+// Done/Error. Runs the respawn in a goroutine so the reader loop (which
+// holds no lock here but is mid-iteration) isn't blocked by the spawn.
+func (a *Agent) drainPending() {
+	a.mu.Lock()
+	a.turnActive = false
+	if a.stopped || len(a.pendingQueue) == 0 {
+		a.mu.Unlock()
+		return
+	}
+	next := a.pendingQueue[0]
+	a.pendingQueue = a.pendingQueue[1:]
+	a.mu.Unlock()
+	log.Debug().Int("remaining", len(a.pendingQueue)).Msg("agent.drain: running next queued message after turn completion")
+	go func() {
+		if err := a.respawnWithMessage(next); err != nil {
+			log.Warn().Err(err).Msg("agent.drain: respawn for queued message failed")
+		}
+	}()
+}
+
 func (a *Agent) respawnWithMessage(text string) error {
 	a.mu.Lock()
+	// Agent was stopped (Kill / Stop). Do not resurrect it — a late
+	// drainPending goroutine or a Send racing the kill must not spawn a
+	// fresh process the pool already let go.
+	if a.stopped {
+		a.mu.Unlock()
+		return errors.New("agent stopped")
+	}
+	// A turn is already running. Codex is one-shot per spawn, so we must
+	// NOT kill+respawn now — that orphans the live process and stacks up
+	// subprocesses past MaxConcurrent. Append to the FIFO queue; each
+	// message runs as its own turn after the current one ends (drainPending
+	// pops the head). Every Enter is processed in order — none dropped.
+	if a.turnActive {
+		a.pendingQueue = append(a.pendingQueue, text)
+		a.mu.Unlock()
+		log.Debug().Int("queued", len(a.pendingQueue)).Msg("agent.respawn: turn in flight, message queued")
+		return nil
+	}
+	a.turnActive = true
 	ctx := a.rootCtx
 	resumeID := a.resumeID
-	// Kill current process if alive.
+	// Kill current process if alive. Uses terminateProc so a hung
+	// subprocess (e.g. codex spawned without a prompt, blocking on
+	// stdin) doesn't freeze the respawn at <-done — same Windows
+	// stdout-EOF issue Stop() guards against.
+	//
+	// respawning gates the old reader's ctx.Done exit: it fires
+	// ExitRespawn (agent lives, pool keeps slot) instead of ExitStopped
+	// (agent dead, pool frees slot).
 	if a.running && a.proc != nil {
+		a.respawning = true
 		if a.cancel != nil {
 			a.cancel()
 		}
-		_ = a.proc.Stdin().Close()
-		_ = a.proc.Kill()
+		proc := a.proc
 		done := a.done
 		a.mu.Unlock()
-		<-done
+		terminateProc(proc, done)
 		a.mu.Lock()
+		a.respawning = false
 	}
 	if ctx == nil {
+		a.turnActive = false
 		a.mu.Unlock()
 		return errors.New("agent not started")
 	}
@@ -253,6 +422,8 @@ func (a *Agent) respawnWithMessage(text string) error {
 		InitialMessage: text,
 	})
 	if err != nil {
+		// Spawn failed — clear turnActive so a retry isn't parked forever.
+		a.turnActive = false
 		cancel()
 		a.mu.Unlock()
 		return err
@@ -278,27 +449,80 @@ func (a *Agent) respawnWithMessage(text string) error {
 // Stop kills the subprocess and waits for the reader to exit.
 // Idempotent: calling on a stopped agent returns nil. The accompanying
 // store is flushed so partial assistant turns don't disappear.
-func (a *Agent) Stop() error {
-	a.mu.Lock()
-	if !a.running {
-		a.mu.Unlock()
-		return nil
-	}
-	proc := a.proc
-	cancel := a.cancel
-	done := a.done
-	a.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
+// terminateProc kills proc and waits for the reader loop to signal done.
+// The reader (run) selects on ctx.Done(), so once the caller has
+// cancelled the spawn ctx it exits promptly even if the stdout pipe
+// hasn't EOF'd (Windows Kill does not reliably EOF) — no <-done hang.
+// A short timeout still guards against any unexpected stall. Safe with
+// a nil proc.
+func terminateProc(proc Process, done <-chan struct{}) {
+	pid := 0
 	if proc != nil {
+		pid = proc.Pid()
 		_ = proc.Stdin().Close()
 		_ = proc.Kill()
 	}
-	<-done
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Warn().Int("pid", pid).Msg("agent.terminate: reader did not exit within 5s after kill; proceeding")
+	}
+}
+
+func (a *Agent) Stop() error {
+	a.mu.Lock()
+	// stopped latches first so any in-flight drainPending / Send bails out
+	// instead of respawning a fresh process after the kill.
+	a.stopped = true
+	// respawn-mode (codex) is one process per turn: between turns the
+	// process is dead but the AGENT still owns its pool slot. Its reader
+	// exits via ExitClean (which the pool deliberately ignores to keep the
+	// slot across turns), so a Stop MUST fire ExitStopped itself or the
+	// slot never frees (badge stuck, Kill a no-op). We force that fire
+	// below regardless of which teardown branch ran.
+	respawn := a.cfg.SendMode.respawns()
+	running := a.running
+	proc := a.proc
+	cancel := a.cancel
+	done := a.done
+	a.turnActive = false
+	a.pendingQueue = nil
+	if respawn {
+		// The last turn's ExitClean already consumed exitReasonSet; reset so
+		// the forced ExitStopped below actually fires the hook.
+		a.exitReasonSet = false
+	}
+	a.mu.Unlock()
+
+	if running {
+		if cancel != nil {
+			cancel()
+		}
+		terminateProc(proc, done)
+		a.mu.Lock()
+		a.turnActive = false
+		a.pendingQueue = nil
+		a.mu.Unlock()
+	}
 	if a.store != nil {
 		_ = a.store.Flush()
+	}
+	if respawn {
+		// claude (append mode) frees its slot via the reader's ctx.Done →
+		// ExitStopped path; only respawn-mode needs the explicit fire here.
+		//
+		// Reset exitReasonSet AFTER teardown: a between-turns reader exit
+		// fires ExitClean (which the pool ignores to keep the slot), which
+		// would otherwise latch exitReasonSet and swallow our ExitStopped.
+		// Resetting here, once the reader has finished, guarantees the
+		// forced fire reaches onAgentExit and frees the slot.
+		a.mu.Lock()
+		a.exitReasonSet = false
+		a.mu.Unlock()
+		a.exitReason(ExitStopped)
 	}
 	return nil
 }
@@ -323,6 +547,15 @@ func (a *Agent) PID() int {
 		return 0
 	}
 	return a.proc.Pid()
+}
+
+// QueuedCount returns how many messages are waiting to run after the
+// current turn (RespawnQueue providers). 0 for append-mode agents.
+// Surfaced in the Process panel so the operator sees the backlog.
+func (a *Agent) QueuedCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.pendingQueue)
 }
 
 // Binary returns the resolved binary path of the running subprocess.
@@ -382,6 +615,26 @@ func (a *Agent) run(ctx context.Context) {
 
 	scanner := bufio.NewScanner(a.proc.Stdout())
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+
+	// Read lines in a dedicated goroutine and feed them over a channel.
+	// On Windows, killing the subprocess does NOT reliably EOF the stdout
+	// pipe, so a bare `for scanner.Scan()` can block forever after Kill —
+	// freezing Stop()'s <-done wait and, through it, the whole server.
+	// By selecting between this channel and ctx.Done(), the reader loop
+	// exits promptly on cancel (Stop/respawn cancel the ctx) even while
+	// the orphaned Scan goroutine is still parked; it unparks and exits
+	// when the OS eventually tears the pipe down after process reap.
+	lineCh := make(chan string)
+	go func() {
+		defer close(lineCh)
+		for scanner.Scan() {
+			select {
+			case lineCh <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	idle := time.NewTimer(a.cfg.IdleTimeout)
 	defer idle.Stop()
@@ -443,8 +696,42 @@ func (a *Agent) run(ctx context.Context) {
 	// the tool finishes.
 	toolInFlight := false
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		var line string
+		select {
+		case l, ok := <-lineCh:
+			if !ok {
+				// stdout closed / EOF — normal end of stream.
+				goto drained
+			}
+			line = l
+		case <-ctx.Done():
+			// Killed (Stop / respawn). Exit immediately. Do NOT block on
+			// proc.Wait() here — on Windows Wait() can hang for seconds
+			// waiting for stdout/stderr copies to finish while the Scan
+			// goroutine is still parked on a not-yet-EOF pipe, which would
+			// freeze Stop()'s <-done wait. Reap the process asynchronously
+			// instead so the reader (and thus done) closes immediately.
+			go func() { _ = a.proc.Wait() }()
+			// Fire the exit hook so the pool releases the slot and drains
+			// the queue. Without this a preempt/Stop leaves the slot held
+			// forever — the queued session never spawns (the "stuck idle,
+			// queue never runs" bug). exitReason is idempotent.
+			//
+			// If this cancel came from respawnWithMessage (codex turn
+			// boundary), report ExitRespawn so the pool keeps the slot for
+			// the incoming process instead of tearing the runEntry down and
+			// double-spawning on the next Send.
+			a.mu.Lock()
+			respawning := a.respawning
+			a.mu.Unlock()
+			if respawning {
+				a.exitReason(ExitRespawn)
+			} else {
+				a.exitReason(ExitStopped)
+			}
+			return
+		}
 
 		ev, err := a.parser.Parse(line)
 		if err != nil {
@@ -497,6 +784,11 @@ func (a *Agent) run(ctx context.Context) {
 			case a.activityCh <- struct{}{}:
 			default:
 			}
+			// RespawnOnSend (codex) turn finished. Mark the turn idle and
+			// drain any message that arrived mid-turn, respawning exactly
+			// once. This is what prevents codex spam from stacking
+			// subprocesses past MaxConcurrent.
+			a.drainPending()
 		default:
 			// For every other line reset the idle timer only when no
 			// tool is in flight — tool execution keeps stdout silent
@@ -537,6 +829,7 @@ func (a *Agent) run(ctx context.Context) {
 		}
 	}
 
+drained:
 	// Reader exited — wait for process so resources are reaped.
 	waitErr := a.proc.Wait()
 	a.state.MarkIdle()
@@ -585,6 +878,8 @@ func exitReasonName(r ExitReason) string {
 		return "stopped"
 	case ExitError:
 		return "error"
+	case ExitRespawn:
+		return "respawn"
 	}
 	return "unknown"
 }

@@ -9,5 +9,19 @@
       "Skill(design-system)",
       "Skill(design-system:*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ensure-docs-synced.sh",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
   }
 }
