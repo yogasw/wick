@@ -124,6 +124,38 @@ APP_ADMIN_PASSWORD=changeme
 
 ---
 
+## Agent MCP
+
+When a workflow `agent` node (or a chat agent) spawns Claude, wick points it
+at the live MCP server over loopback (`http://127.0.0.1:<PORT>/mcp`) so it
+can use connectors without cold-starting a separate `mcp serve` process per
+run. These two vars tune that behavior.
+
+### `WICK_DISABLE_SHARED_MCP`
+**Default:** unset (shared MCP enabled)
+
+Set to any non-empty value to stop wick from injecting the loopback MCP
+config into spawned Claude agents. They then fall back to whatever MCP
+servers the user's own config (`~/.claude.json`, `.mcp.json`) provides.
+
+```env
+WICK_DISABLE_SHARED_MCP=1
+```
+
+### `WICK_STRICT_MCP`
+**Default:** unset (merge mode)
+
+By default the injected wick MCP server is **merged** with the user's
+existing MCP servers (no `--strict-mcp-config`), so their own connectors
+keep working. Set this to pass `--strict-mcp-config`, isolating the agent
+to **only** the wick MCP server.
+
+```env
+WICK_STRICT_MCP=1
+```
+
+---
+
 ## Build-time
 
 These are read by [`wick build`](./build), not by the running binary. They populate `app.BuildAppName` / `BuildAppVersion` / `GitHubPAT` / `GitHubRepo` via Go ldflags. Each falls back to the matching field in `wick.yml` (or empty for the GitHub pair) when not set.

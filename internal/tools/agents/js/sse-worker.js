@@ -27,7 +27,8 @@ self.onconnect = function (e) {
     if (data.type === "subscribe") {
       var sid = data.sessionID;
       var base = data.base;
-      if (!sid || !base) return;
+      // sid="" is valid — global subscriber (pool_stats, etc.)
+      if (sid === undefined || sid === null || !base) return;
 
       // Register port for this session.
       if (!ports[sid]) ports[sid] = new Set();
@@ -70,7 +71,7 @@ self.onconnect = function (e) {
 
     } else if (data.type === "unsubscribe") {
       var sid = data.sessionID;
-      if (!sid || !ports[sid]) return;
+      if ((sid === undefined || sid === null) || !ports[sid]) return;
       ports[sid].delete(port);
       // If no pages left watching this session, close the EventSource.
       if (ports[sid].size === 0) {

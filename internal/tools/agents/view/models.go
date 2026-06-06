@@ -7,6 +7,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // AgentsLayoutVM carries sidebar data for the full-screen Claude-style shell.
@@ -436,20 +437,55 @@ type PresetDetailVM struct {
 // ProvidersVM holds data for the Providers page — runtime instance
 // statuses, recent spawn log files, and live pool capacity. Spawns
 // is the current page slice; Page/HasNext drive the pager.
+// ProviderCapVM is the used / effective-max slot count for one provider
+// instance, shown on its card as "<Used> / <Max>" — or "<Used> / ∞" when
+// Unlimited (no finite cap at provider or global scope).
+type ProviderCapVM struct {
+	Used      int
+	Max       int
+	Unlimited bool
+}
+
 type ProvidersVM struct {
 	Layout        AgentsLayoutVM
 	Base          string
 	Statuses      []provider.Status
+	PoolActive     int
+	PoolQueueLen   int
+	PoolMax        int
+	LiveProcesses      []LiveProcessVM
+	ProviderCaps       map[string]ProviderCapVM // key = "type/name"
+	SupportedKeys  []string
+	Gate           GateStatusVM
+	AutoRescan     bool
+	MCP            MCPStatusVM
+}
+
+// ProviderDetailVM is the view model for the per-provider detail page.
+type ProviderDetailVM struct {
+	Layout        AgentsLayoutVM
+	Base          string
+	Status        provider.Status
+	GlobalMax     int
+	ActiveCount   int
+	ActivePIDs    []LiveProcessVM
+	Rows          []entity.Config
+	ActionBase    string
 	Spawns        []provider.SpawnLogFile
 	Page          int
 	HasNext       bool
-	PoolActive    int
-	PoolQueueLen  int
-	PoolMax       int
-	SupportedKeys []string
 	Gate          GateStatusVM
-	AutoRescan    bool
-	MCP           MCPStatusVM
+	Flash         string
+	Error         string
+}
+
+// LiveProcessVM is one row in the Active Processes panel on the Providers page.
+type LiveProcessVM struct {
+	SessionID string
+	AgentName string
+	PID       int
+	Lifecycle string // "spawning" | "working" | "idle" | "killed"
+	Substate  string
 }
 
 // SkillSyncVM holds the current state of skill directories for the sync card on Providers page.

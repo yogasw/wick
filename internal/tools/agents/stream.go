@@ -214,6 +214,44 @@ func (b *Broadcaster) PublishAskUserResolved(sessionID, requestID string) {
 
 // PublishRaw fires an arbitrary typed SSE event. Used to inject synthetic
 // agent events (e.g. text_delta + done for a switch confirmation reply).
+// PoolStatsPayload is the JSON shape of a pool_stats SSE event.
+// Sent to global ("") subscribers on every lifecycle transition so
+// the Providers page can update the Active Processes panel without reload.
+type PoolStatsPayload struct {
+	Active        int                `json:"active"`
+	Max           int                `json:"max"`
+	QueueLen      int                `json:"queue_len"`
+	LiveProcesses []LiveProcessEntry `json:"live_processes"`
+}
+
+// LiveProcessEntry is one row in PoolStatsPayload.
+type LiveProcessEntry struct {
+	SessionID string `json:"session_id"`
+	AgentName string `json:"agent_name"`
+	Provider  string `json:"provider,omitempty"` // "type/name"
+	PID       int    `json:"pid,omitempty"`
+	Queued    int    `json:"queued,omitempty"` // messages waiting after current turn
+	Alive     bool   `json:"alive"`            // false only for a genuinely dead process (zombie). Respawn-mode idle-between-turns is alive.
+	Lifecycle string `json:"lifecycle"`
+	Substate  string `json:"substate,omitempty"`
+}
+
+// PublishPoolStats broadcasts a pool_stats event to all global SSE
+// subscribers (sessionID == ""). Called after every lifecycle
+// transition so the Providers page stays live.
+func (b *Broadcaster) PublishPoolStats(active, max, queueLen int, procs []LiveProcessEntry) {
+	body, _ := json.Marshal(PoolStatsPayload{
+		Active:        active,
+		Max:           max,
+		QueueLen:      queueLen,
+		LiveProcesses: procs,
+	})
+	b.fanout("", Event{
+		Type: "pool_stats",
+		Data: string(body),
+	})
+}
+
 func (b *Broadcaster) PublishRaw(sessionID, agentName, evType, data string) {
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,

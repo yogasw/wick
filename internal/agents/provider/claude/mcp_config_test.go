@@ -20,6 +20,44 @@ func TestHelpHasStrictMCP(t *testing.T) {
 	}
 }
 
+func TestHelpHasMCPConfig(t *testing.T) {
+	if !helpHasMCPConfig("  --mcp-config <configs...>  Load MCP servers") {
+		t.Fatal("expected true when --mcp-config present")
+	}
+	if helpHasMCPConfig("  --foo  bar") {
+		t.Fatal("expected false when --mcp-config absent")
+	}
+	if helpHasMCPConfig("") {
+		t.Fatal("expected false for empty help")
+	}
+}
+
+func TestMCPConfigArgs(t *testing.T) {
+	ep, tok := "http://127.0.0.1:9425/mcp", "secret123"
+
+	// Default (non-strict): --mcp-config only, NO --strict-mcp-config, so
+	// the user's own MCP servers keep working (the regression fix).
+	def := mcpConfigArgs(ep, tok, false)
+	if len(def) != 2 || def[0] != "--mcp-config" {
+		t.Fatalf("default args = %v, want [--mcp-config <json>]", def)
+	}
+	for _, a := range def {
+		if a == "--strict-mcp-config" {
+			t.Fatal("default path must NOT include --strict-mcp-config")
+		}
+	}
+
+	// Opt-in strict isolation.
+	strict := mcpConfigArgs(ep, tok, true)
+	if len(strict) != 3 || strict[0] != "--strict-mcp-config" || strict[1] != "--mcp-config" {
+		t.Fatalf("strict args = %v, want [--strict-mcp-config --mcp-config <json>]", strict)
+	}
+
+	if mcpConfigArgs("", tok, false) != nil || mcpConfigArgs(ep, "", false) != nil {
+		t.Fatal("empty endpoint or token must yield nil args")
+	}
+}
+
 func TestMCPEndpointFromEnv(t *testing.T) {
 	t.Setenv("WICK_PORT", "9425")
 	if got := mcpEndpointFromEnv(); got != "http://127.0.0.1:9425/mcp" {

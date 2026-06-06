@@ -104,7 +104,7 @@ templ simpleFieldInner(row entity.Config) {
 				Overridden by <span class="font-mono">{ row.EnvOverride }</span> environment variable. Unset it and restart to edit from here.
 			</p>
 		} else if row.Description != "" {
-			<p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed">{ row.Description }</p>
+			<p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed whitespace-pre-line">{ descText(row.Description) }</p>
 		}
 	</div>
 }
@@ -332,7 +332,7 @@ templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 				<span data-save-status class="ml-auto text-[10px] transition-all"></span>
 			</div>
 			if row.Description != "" {
-				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{ row.Description }</p>
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(row.Description) }</p>
 			}
 		</div>
 		<div class="p-5">
@@ -424,7 +424,7 @@ templ pickerBlock(row entity.Config, chips []map[string]string) {
 				<span data-save-status class="ml-auto text-[10px] transition-all"></span>
 			</div>
 			if row.Description != "" {
-				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">{ row.Description }</p>
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(row.Description) }</p>
 			}
 		</div>
 		<div class="p-5">

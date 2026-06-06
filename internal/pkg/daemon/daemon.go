@@ -82,14 +82,12 @@ func Check(p Paths) (Status, error) {
 	}
 	s.PID = pid
 	s.Started = mtime
-	// Two-step check: (1) process exists, (2) exe matches our binary.
-	// Guards against PID reuse where an unrelated OS process inherits
-	// the stale PID — processAlive alone would return true, causing
-	// Start to report ErrAlreadyRunning for a process that isn't wick.
-	if processAlive(pid) {
-		if exe := processExePath(pid); exe == "" || exe == p.ExePath {
-			s.Running = true
-		}
+	// Two-step check: (1) process exists, (2) process is ours.
+	// queryProcess reads exe+name+uid; Verified() matches against our
+	// binary path. If nothing is readable (e.g. Termux, process owned
+	// by another user) Verified returns false → treat as not running.
+	if processAlive(pid) && queryProcess(pid).Verified(p.ExePath) {
+		s.Running = true
 	}
 	return s, nil
 }

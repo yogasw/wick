@@ -22,6 +22,17 @@ func HasHealthCheck(mod connector.Module) bool {
 // through a same-package helper keeps the template clean.
 func strings_Join(parts []string, sep string) string { return strings.Join(parts, sep) }
 
+// descText turns a config Description into display text with real line
+// breaks. Go struct tags can't carry literal newlines, so a wick:"desc=…"
+// uses the two-character escape `\n` to mark a break; this expands it to
+// a real newline. The desc <p> uses `whitespace-pre-line` so those
+// newlines render as separate lines. Authors split a long description
+// into "what it is" + "per-option meaning" so the dropdown help reads as
+// a short list, not one run-on paragraph.
+func descText(s string) string {
+	return strings.ReplaceAll(s, `\n`, "\n")
+}
+
 // HealthBanner is the data the row detail page renders right above the
 // Operations section after a health-check round-trip. Kind picks the
 // styling; the three slices show op transitions and granular errors.
