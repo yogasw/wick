@@ -893,9 +893,7 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // benign "already exists" error that we suppress.
 
 // SetMaxTurns persists the per-spawn turn cap on the session's agent
-// entry so the next spawn passes --max-turns. 0 = no cap (provider
-// default). Creates the entry if missing — workflow agent nodes call
-// this before their first send, which is also what materializes it.
+// entry (creating it if missing) so the next spawn passes --max-turns.
 func (p *Pool) SetMaxTurns(sessionID, agentName string, maxTurns int) error {
 	return session.SetMaxTurns(p.cfg.Layout, sessionID, agentName, maxTurns)
 }
@@ -1276,13 +1274,8 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 	p.onAgentExit(sessionID, agentName)
 }
 
-// healStaleResume clears the captured CLI session id when a spawn that
-// used --resume failed because the CLI couldn't find that conversation
-// (e.g. it was created in a different cwd). Without this the session is
-// wedged: every retry re-spawns with the same dead id and fails the
-// same way. After clearing, the next spawn starts a fresh conversation
-// and re-captures a usable id. Read the agent BEFORE onAgentExit
-// releases the slot.
+// healStaleResume clears the CLI session id when a --resume spawn failed
+// because the CLI couldn't find the conversation, so the next is fresh.
 func (p *Pool) healStaleResume(sessionID, agentName string) {
 	p.mu.Lock()
 	entry, ok := p.active[sessionKey(sessionID, agentName)]

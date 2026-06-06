@@ -541,18 +541,16 @@ func (a *Agent) ResumeID() string {
 	return a.resumeID
 }
 
-// SpawnResumeID returns the --resume id this spawn was STARTED with (vs
-// ResumeID which reflects the live captured id). Pool reads it on exit
-// to tell a fresh-spawn failure from a stale-resume failure.
+// SpawnResumeID returns the --resume id this spawn started with, so the
+// pool can tell a fresh-spawn failure from a stale-resume failure.
 func (a *Agent) SpawnResumeID() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.cfg.ResumeID
 }
 
-// StderrTail returns the tail of the current/last subprocess's stderr,
-// or "" if the spawner doesn't capture it. Safe after exit — the dead
-// process still holds its buffer.
+// StderrTail returns the tail of the subprocess's stderr ("" if not
+// captured). Safe after exit — the dead process still holds its buffer.
 func (a *Agent) StderrTail() string {
 	a.mu.Lock()
 	p := a.proc
@@ -563,11 +561,8 @@ func (a *Agent) StderrTail() string {
 	return ""
 }
 
-// IsResumeNotFound reports whether subprocess output indicates a
-// --resume id the CLI couldn't find (a stale session, e.g. resumed from
-// a different cwd than it was created in). The pool clears the captured
-// CLI session id on this so the next spawn starts fresh instead of
-// failing on the same dead id forever.
+// IsResumeNotFound reports whether output indicates a --resume id the
+// CLI couldn't find, so the pool can clear the stale id and respawn fresh.
 func IsResumeNotFound(s string) bool {
 	return strings.Contains(strings.ToLower(s), "no conversation found")
 }
@@ -897,9 +892,8 @@ drained:
 	if waitErr != nil {
 		ev = ev.Str("wait_err", waitErr.Error())
 	}
-	// On an abnormal exit, surface the subprocess's exit code + the tail
-	// of its stderr so failures (stale --resume, auth, crash) are
-	// diagnosable from the log instead of a blank "agent error: ".
+	// On abnormal exit, log the exit code + stderr tail so failures are
+	// diagnosable instead of a blank "agent error: ".
 	if reason == ExitError {
 		if ec, ok := waitErr.(interface{ ExitCode() int }); ok {
 			ev = ev.Int("exit_code", ec.ExitCode())

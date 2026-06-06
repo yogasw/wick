@@ -5,10 +5,8 @@ import (
 	"sync"
 )
 
-// stderrTail is an io.Writer that retains only the last maxBytes written
-// to it. The agent reader logs this on an abnormal subprocess exit so an
-// operator sees claude's real failure (e.g. "No conversation found with
-// session ID: ...") instead of reconstructing the spawn by hand.
+// stderrTail is an io.Writer retaining only the last maxBytes, logged on
+// an abnormal exit so the real failure is visible (not reconstructed).
 type stderrTail struct {
 	mu  sync.Mutex
 	buf []byte

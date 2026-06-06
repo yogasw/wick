@@ -67,9 +67,7 @@ func AddAgent(layout config.Layout, id, name, provider string) error {
 }
 
 // SetCLISessionID writes (or clears, with "") the CLI resume id on the
-// agent entry. No-op when the entry doesn't exist. The pool clears it
-// after a stale-resume failure so the next spawn starts a fresh
-// conversation instead of failing on the dead id forever.
+// agent entry. No-op when the entry doesn't exist.
 func SetCLISessionID(layout config.Layout, id, name, cliID string) error {
 	sess, err := Load(layout, id)
 	if err != nil {
@@ -85,9 +83,7 @@ func SetCLISessionID(layout config.Layout, id, name, cliID string) error {
 }
 
 // SetMaxTurns persists the per-spawn turn cap on the agent entry,
-// creating the entry if it doesn't exist yet (workflow nodes set this
-// before the first send, which is also what materializes the entry).
-// spawn reads it to pass --max-turns; 0 = unlimited (provider default).
+// creating it if missing. 0 = unlimited (provider default).
 func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
 	sess, err := Load(layout, id)
 	if err != nil {

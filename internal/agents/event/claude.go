@@ -15,18 +15,18 @@ import (
 //
 // Wire shape per turn:
 //
-//	1. {"type":"system","subtype":"hook_started", ...}        // optional, skip
-//	2. {"type":"system","subtype":"hook_response", ...}       // optional, skip
-//	3. {"type":"system","subtype":"init", "session_id":"...", ...}
-//	4. {"type":"assistant","message":{"content":[
-//	       {"type":"text","text":"..."},
-//	       {"type":"tool_use","id":"t1","name":"Bash","input":{}}
-//	   ]}}
-//	5. {"type":"user","message":{"content":[
-//	       {"type":"tool_result","tool_use_id":"t1","content":"..."}
-//	   ]}}                                                    // tool result wrapped as user msg
-//	6. {"type":"result","subtype":"success","is_error":false,"result":"..."}
-//	7. ... process stays alive, next turn starts at step 3 again
+//  1. {"type":"system","subtype":"hook_started", ...}        // optional, skip
+//  2. {"type":"system","subtype":"hook_response", ...}       // optional, skip
+//  3. {"type":"system","subtype":"init", "session_id":"...", ...}
+//  4. {"type":"assistant","message":{"content":[
+//     {"type":"text","text":"..."},
+//     {"type":"tool_use","id":"t1","name":"Bash","input":{}}
+//     ]}}
+//  5. {"type":"user","message":{"content":[
+//     {"type":"tool_result","tool_use_id":"t1","content":"..."}
+//     ]}}                                                    // tool result wrapped as user msg
+//  6. {"type":"result","subtype":"success","is_error":false,"result":"..."}
+//  7. ... process stays alive, next turn starts at step 3 again
 //
 // Concurrency: not safe for concurrent use. One parser per subprocess.
 type ClaudeParser struct {
@@ -285,10 +285,8 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// for short replies — claude can batch them).
 		p.partialTextEmitted = false
 		if raw.IsError {
-			// error_during_execution (e.g. a stale --resume id) puts the
-			// human detail on stderr, leaving .result empty — fall back to
-			// the subtype so the node doesn't fail with a blank
-			// "agent error: ".
+			// error_during_execution puts the detail on stderr, leaving
+			// .result empty — fall back to subtype so the error isn't blank.
 			msg := raw.Result
 			if msg == "" {
 				msg = raw.Subtype

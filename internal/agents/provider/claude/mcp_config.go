@@ -29,21 +29,12 @@ func helpHasMCPConfig(help string) bool {
 	return strings.Contains(help, "--mcp-config")
 }
 
-// wickMCPAllowedTools pre-approves wick's own MCP meta tools on the
-// spawned agent. Agent nodes run headless — there is no human to answer
-// a permission prompt — so without this every mcp__wick__* call is
-// denied "permissions not granted yet" and the agent stalls. Scoped to
-// wick's own server only (least privilege); the user's other tools
-// still gate normally.
+// wickMCPAllowedTools pre-approves wick's own MCP meta tools so the
+// headless agent isn't blocked on a permission prompt nobody can answer.
 const wickMCPAllowedTools = "mcp__wick__wick_list,mcp__wick__wick_search,mcp__wick__wick_get,mcp__wick__wick_execute,mcp__wick__wick_list_providers"
 
-// mcpConfigArgs builds the claude argv for pointing at the wick MCP HTTP
-// server. By default it does NOT add --strict-mcp-config, so the wick
-// server MERGES with the user's existing MCP servers (~/.claude.json,
-// .mcp.json) rather than replacing them. strict=true opts into isolation
-// (only the wick server is visible). It always pre-approves wick's own
-// MCP tools via --allowedTools (see wickMCPAllowedTools). Empty
-// endpoint/token → no args.
+// mcpConfigArgs builds the claude argv for the wick MCP HTTP server.
+// strict=true isolates to only wick; always pre-approves wick's tools.
 func mcpConfigArgs(endpoint, token string, strict bool) []string {
 	if endpoint == "" || token == "" {
 		return nil

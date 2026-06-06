@@ -130,10 +130,8 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if opt.Workspace != "" {
 		args = append(args, "--add-dir", opt.Workspace)
 	}
-	// Skills live under ~/.claude/skills/ (outside the workspace), so
-	// without trusting that dir the agent can't read a skill's bundled
-	// resource files (rules/templates/scripts) and silently falls back
-	// to whatever is inline in SKILL.md.
+	// Trust ~/.claude/skills so the agent can read a skill's bundled
+	// resource files (they live outside the workspace).
 	if home, err := os.UserHomeDir(); err == nil {
 		args = append(args, skillAddDirArgs(home, dirExists)...)
 	}
@@ -193,9 +191,8 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 			stderrDest = f
 		}
 	}
-	// Tee stderr to its destination AND a bounded tail buffer so an
-	// abnormal exit can surface the real failure (the tail) instead of a
-	// blank "agent error: ".
+	// Tee stderr to its destination + a bounded tail buffer so an abnormal
+	// exit can surface the real failure instead of a blank "agent error: ".
 	cmd.Stderr = io.MultiWriter(stderrB, stderrDest)
 
 	log.Info().
@@ -311,9 +308,8 @@ func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
 func (p *process) Wait() error           { return p.cmd.Wait() }
 
-// StderrTail returns the tail of the subprocess's stderr. Satisfies the
-// optional provider.StderrTailer interface so the reader can log the
-// real failure on an abnormal exit.
+// StderrTail returns the tail of the subprocess's stderr (optional
+// provider.StderrTailer) so the reader can log the real failure on exit.
 func (p *process) StderrTail() string { return p.stderrB.String() }
 func (p *process) Pid() int {
 	if p.cmd == nil || p.cmd.Process == nil {
