@@ -245,6 +245,21 @@ func validateCreatePullRequestComment(c *connector.Ctx) (requestParams, map[stri
 	payload := map[string]any{
 		"content": map[string]any{"raw": body},
 	}
+	inlinePath := strings.TrimSpace(c.Input("inline_path"))
+	inlineTo := c.InputInt("inline_to")
+	inlineFrom := c.InputInt("inline_from")
+	if inlinePath == "" && (inlineTo > 0 || inlineFrom > 0) {
+		return requestParams{}, nil, errors.New("inline_path is required when inline_to or inline_from is set")
+	}
+	if inlinePath != "" {
+		inline := map[string]any{"path": inlinePath}
+		if inlineTo > 0 {
+			inline["to"] = inlineTo
+		} else if inlineFrom > 0 {
+			inline["from"] = inlineFrom
+		}
+		payload["inline"] = inline
+	}
 	return requestParams{Method: http.MethodPost, URL: u}, payload, nil
 }
 
