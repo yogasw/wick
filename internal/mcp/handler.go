@@ -1,9 +1,12 @@
 package mcp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -113,10 +116,61 @@ func (h *Handler) responder() handlers.Responder {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	// Streamable HTTP transport (MCP spec 2025-03-26): POST carries
+	// JSON-RPC, GET opens the server→client SSE channel the client needs
+	// to complete its handshake, DELETE tears the session down.
+	switch r.Method {
+	case http.MethodPost:
+		h.handlePost(w, r)
+	case http.MethodGet:
+		h.handleGetStream(w, r)
+	case http.MethodDelete:
+		// Stateless server — no per-session resources to free. Ack so
+		// the client's teardown succeeds instead of seeing a 404/405.
+		w.WriteHeader(http.StatusOK)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleGetStream holds open the server→client SSE channel. wick emits no
+// server-initiated messages, so the stream just heartbeats until the
+// client disconnects — but its presence is what lets the client's
+// Streamable-HTTP handshake finish and register the tools.
+func (h *Handler) handleGetStream(w http.ResponseWriter, r *http.Request) {
+	if sid := r.Header.Get("Mcp-Session-Id"); sid != "" {
+		w.Header().Set("Mcp-Session-Id", sid)
+	}
+	sess, ok := newSSESession(w)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	defer sess.close()
+	ticker := time.NewTicker(sseHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			sess.writeKeepalive()
+		}
+	}
+}
+
+// newSessionID mints an opaque id for the Mcp-Session-Id header. The
+// server is stateless (each POST is self-contained), so the id is only
+// for client-side correlation of its GET stream with its session.
+func newSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "wick"
+	}
+	return hex.EncodeToString(b)
+}
+
+func (h *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		writeRPCError(w, nil, errParseError, "could not read request", nil)
@@ -185,6 +239,7 @@ type initializeParams struct {
 }
 
 func (h *Handler) handleInitialize(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
+	w.Header().Set("Mcp-Session-Id", newSessionID())
 	var p initializeParams
 	_ = json.Unmarshal(req.Params, &p)
 	writeRPCResult(w, req.ID, initializeResult{
@@ -270,4 +325,3 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
 	}
 }
-

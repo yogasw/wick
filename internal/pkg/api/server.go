@@ -1124,7 +1124,14 @@ func NewServer() *Server {
 	// token). Mounted on the cookie-bypass mux because LLM clients
 	// carry a bearer header, not a session cookie — RequireAuth would
 	// 302 them into /auth/login which they can't follow.
-	r.Handle("POST /mcp", mcpAuth.Wrap(mcpHandler))
+	//
+	// Full Streamable HTTP transport: POST (JSON-RPC), GET (server→client
+	// SSE channel the client needs to finish its handshake), DELETE
+	// (session teardown). One wrapped handler dispatches by method.
+	wrappedMCP := mcpAuth.Wrap(mcpHandler)
+	r.Handle("POST /mcp", wrappedMCP)
+	r.Handle("GET /mcp", wrappedMCP)
+	r.Handle("DELETE /mcp", wrappedMCP)
 
 	// Channel webhooks — public, no session auth (each channel enforces
 	// integrity inside its handler, e.g. Slack HMAC). Mounted from

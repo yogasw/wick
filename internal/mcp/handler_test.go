@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,46 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
+
+// Streamable HTTP transport completeness — the agent's MCP client needs
+// the GET SSE channel, a session id on initialize, and DELETE teardown,
+// otherwise it stays "still connecting" and tools never register.
+
+func TestInitializeSetsSessionID(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	(&Handler{}).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if sid := rr.Header().Get("Mcp-Session-Id"); sid == "" {
+		t.Fatal("initialize must set the Mcp-Session-Id response header")
+	}
+}
+
+func TestGetOpensSSEStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so the keep-alive loop returns immediately
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+	(&Handler{}).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("GET Content-Type = %q, want text/event-stream", ct)
+	}
+}
+
+func TestDeleteReturns200(t *testing.T) {
+	req := httptest.NewRequest(http.MethodDelete, "/mcp", nil)
+	rr := httptest.NewRecorder()
+	(&Handler{}).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, want 200", rr.Code)
+	}
+}
 
 func TestNegotiateProtocolVersion(t *testing.T) {
 	cases := []struct {
@@ -154,7 +195,7 @@ type plainWriter struct {
 	hdr http.Header
 }
 
-func (p *plainWriter) Header() http.Header        { return p.hdr }
+func (p *plainWriter) Header() http.Header         { return p.hdr }
 func (p *plainWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (*plainWriter) WriteHeader(int)               {}
 
