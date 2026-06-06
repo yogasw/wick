@@ -321,6 +321,13 @@ func PublishAndReload(ctx context.Context, svc service.Service, router *trigger.
 	return w, nil
 }
 
+func ToggleAndReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string, enabled bool) error {
+	if err := svc.Toggle(id, enabled); err != nil {
+		return err
+	}
+	return HotReload(ctx, svc, router, cron, schedAt, id)
+}
+
 // CleanupOptions tunes the daily run-retention pass.
 type CleanupOptions struct {
 	SuccessTTL time.Duration

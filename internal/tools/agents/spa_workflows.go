@@ -302,13 +302,7 @@ func spaWorkflowToggle(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	w, err := globalWorkflowMgr.Service.LoadDraft(id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-	w.Enabled = body.Enabled
-	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
+	if err := setup.ToggleAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id, body.Enabled); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

@@ -51,6 +51,29 @@ func TestPublishAndReload_RefreshesRouterDefinition(t *testing.T) {
 	require.Equal(t, "v2", got2.Name, "router must serve the freshly published body after PublishAndReload")
 }
 
+func TestToggleAndReload_RefreshesEnabledWithoutDraft(t *testing.T) {
+	m := newMgr(t)
+	require.NoError(t, m.Start(context.Background()))
+	ctx := context.Background()
+	id := "toggle-reload"
+
+	wf := minimalWorkflow(id, "v1")
+	wf.Enabled = false
+	require.NoError(t, m.Service.Create(id, wf))
+	require.NoError(t, HotReload(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt, id))
+
+	got, ok := m.Router.Definition(id)
+	require.True(t, ok)
+	require.False(t, got.Enabled)
+
+	require.NoError(t, ToggleAndReload(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt, id, true))
+
+	got2, ok := m.Router.Definition(id)
+	require.True(t, ok)
+	require.True(t, got2.Enabled, "router must reflect the enabled flip after ToggleAndReload")
+	require.False(t, m.Service.HasDraft(id), "toggling enabled must not create a spurious draft")
+}
+
 func TestManagerMCPReload_RefreshesRouterDefinition(t *testing.T) {
 	m := newMgr(t)
 	require.NoError(t, m.Start(context.Background()))
