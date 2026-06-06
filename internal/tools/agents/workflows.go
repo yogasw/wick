@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -565,10 +566,20 @@ func workflowRunStateAPI(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]any{"error": err.Error()})
 		return
 	}
-	events, _ := globalWorkflowMgr.StateStore.ListEvents(id, runID)
+	limit := 200
+	if v := strings.TrimSpace(c.Query("events_limit")); v != "" {
+		if v == "all" {
+			limit = 0
+		} else if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	events, total, _ := globalWorkflowMgr.StateStore.ListEventsTail(id, runID, limit)
 	c.JSON(http.StatusOK, map[string]any{
-		"state":  st,
-		"events": events,
+		"state":            st,
+		"events":           events,
+		"events_total":     total,
+		"events_truncated": total > len(events),
 	})
 }
 

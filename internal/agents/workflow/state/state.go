@@ -5,9 +5,8 @@
 package state
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
-	"fmt"
 	"os"
 	"time"
 
@@ -16,6 +15,10 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
 
+// maxEventLine bounds one events.jsonl line so a malformed file can't
+// exhaust memory. Matches the shardedlog scanner cap.
+const maxEventLine = 1 << 20
+
 // Store persists RunState + appends RunEvent for one workflow's
 // runs/ folder.
 type Store interface {
@@ -23,6 +26,7 @@ type Store interface {
 	Load(id, runID string) (workflow.RunState, error)
 	AppendEvent(id, runID string, ev workflow.RunEvent) error
 	ListEvents(id, runID string) ([]workflow.RunEvent, error)
+	ListEventsTail(id, runID string, limit int) ([]workflow.RunEvent, int, error)
 	ListRuns(id string) ([]string, error)
 	Delete(id, runID string) error
 	IndexAppend(id string, entry IndexEntry) error
@@ -83,25 +87,71 @@ func (s *FileStore) AppendEvent(id, runID string, ev workflow.RunEvent) error {
 	return err
 }
 
-// ListEvents reads + decodes the full events.jsonl. Empty file → nil.
+// ListEvents streams the full events.jsonl. Absent file → nil; corrupt
+// lines are skipped so one bad row never blanks the history.
 func (s *FileStore) ListEvents(id, runID string) ([]workflow.RunEvent, error) {
-	data, err := os.ReadFile(s.Layout.WorkflowRunEvents(id, runID))
+	out := []workflow.RunEvent{}
+	err := s.scanEvents(id, runID, func(ev workflow.RunEvent) {
+		out = append(out, ev)
+	})
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	out := []workflow.RunEvent{}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	for dec.More() {
-		var ev workflow.RunEvent
-		if err := dec.Decode(&ev); err != nil {
-			return nil, fmt.Errorf("events.jsonl decode: %w", err)
-		}
-		out = append(out, ev)
-	}
 	return out, nil
+}
+
+// ListEventsTail returns the most recent `limit` events (chronological)
+// plus the total valid count. limit <= 0 returns all; memory is O(limit).
+func (s *FileStore) ListEventsTail(id, runID string, limit int) ([]workflow.RunEvent, int, error) {
+	if limit <= 0 {
+		all, err := s.ListEvents(id, runID)
+		if err != nil {
+			return nil, 0, err
+		}
+		return all, len(all), nil
+	}
+	ring := make([]workflow.RunEvent, 0, limit)
+	total := 0
+	err := s.scanEvents(id, runID, func(ev workflow.RunEvent) {
+		total++
+		if len(ring) < limit {
+			ring = append(ring, ev)
+			return
+		}
+		copy(ring, ring[1:])
+		ring[limit-1] = ev
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return ring, total, nil
+}
+
+// scanEvents walks events.jsonl line by line, calling fn per decoded
+// event. Absent file is a no-op (a run with no events is valid).
+func (s *FileStore) scanEvents(id, runID string, fn func(workflow.RunEvent)) error {
+	f, err := os.Open(s.Layout.WorkflowRunEvents(id, runID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 4096), maxEventLine)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var ev workflow.RunEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+		fn(ev)
+	}
+	return sc.Err()
 }
 
 // ListRuns returns runs/<id> names sorted, newest first.

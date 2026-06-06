@@ -21,7 +21,7 @@ import (
 // reads/writes the moment the goroutine wins a race against peek.
 type watchStore struct {
 	mu     sync.Mutex
-	index  map[string][]state.IndexEntry  // workflow-id → rows (newest first)
+	index  map[string][]state.IndexEntry   // workflow-id → rows (newest first)
 	states map[[2]string]workflow.RunState // (wfID, runID) → state
 }
 
@@ -62,9 +62,12 @@ func (s *watchStore) Load(id, runID string) (workflow.RunState, error) {
 }
 func (s *watchStore) AppendEvent(string, string, workflow.RunEvent) error    { return nil }
 func (s *watchStore) ListEvents(string, string) ([]workflow.RunEvent, error) { return nil, nil }
-func (s *watchStore) ListRuns(string) ([]string, error)                      { return nil, nil }
-func (s *watchStore) Delete(string, string) error                            { return nil }
-func (s *watchStore) IndexAppend(string, state.IndexEntry) error             { return nil }
+func (s *watchStore) ListEventsTail(string, string, int) ([]workflow.RunEvent, int, error) {
+	return nil, 0, nil
+}
+func (s *watchStore) ListRuns(string) ([]string, error)          { return nil, nil }
+func (s *watchStore) Delete(string, string) error                { return nil }
+func (s *watchStore) IndexAppend(string, state.IndexEntry) error { return nil }
 func (s *watchStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

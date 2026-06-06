@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/env"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	"github.com/yogasw/wick/internal/agents/workflow/state"
 )
 
 // ErrNotFound is returned when an id is missing.
@@ -193,7 +194,9 @@ func (s *FileService) Delete(id string) error {
 	if !storage.PathExists(dir) {
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	return os.RemoveAll(dir)
+	err := os.RemoveAll(dir)
+	state.EvictIndex(s.Layout.WorkflowIndexDir(id))
+	return err
 }
 
 // Toggle flips enabled flag atomically.

@@ -11,8 +11,13 @@
     case?: string;
     data?: Record<string, any>;
   };
-  type Props = { events: Ev[] };
-  let { events }: Props = $props();
+  type Props = {
+    events: Ev[];
+    total?: number;
+    truncated?: boolean;
+    onLoadAll?: () => void;
+  };
+  let { events, total, truncated = false, onLoadAll }: Props = $props();
 
   let open = $state<Set<number>>(new Set());
   function toggle(i: number) {
@@ -54,7 +59,16 @@
 <section>
   <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2 flex items-center gap-2">
     <span>EVENTS</span>
-    <span class="text-black-700 dark:text-black-500">{events.length}</span>
+    {#if truncated}
+      <span class="text-black-700 dark:text-black-500 normal-case tracking-normal">last {events.length} of {total}</span>
+      {#if onLoadAll}
+        <button type="button" class="ml-auto text-link-400 hover:underline normal-case tracking-normal" onclick={() => onLoadAll?.()}>
+          Load all
+        </button>
+      {/if}
+    {:else}
+      <span class="text-black-700 dark:text-black-500">{events.length}</span>
+    {/if}
   </div>
   {#if events.length === 0}
     <p class="text-xs text-black-700 dark:text-black-600 italic">No events recorded.</p>
