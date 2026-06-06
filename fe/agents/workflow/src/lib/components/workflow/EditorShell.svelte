@@ -16,6 +16,7 @@
     draftWorkflow,
     paletteOpen,
     lastRunSummary,
+    lastSavedAt,
     saveDraft,
     selectedNodeID,
     selectedNodeIDs,
@@ -57,9 +58,23 @@
     } catch { /* DB not wired in this env */ }
   }
 
+  $effect(() => {
+    if ($lastSavedAt !== null) void refreshVersions();
+  });
+
   async function onRestoreVersion(versionID: number) {
     await workflowAPI.restoreVersion(workflowID, versionID);
     await loadWorkflow(workflowID);
+    await refreshVersions();
+  }
+
+  async function onDeleteVersion(versionID: number) {
+    await workflowAPI.deleteVersion(workflowID, versionID);
+    await refreshVersions();
+  }
+
+  async function onClearVersions() {
+    await workflowAPI.clearVersions(workflowID);
     await refreshVersions();
   }
 
@@ -179,7 +194,7 @@
     </div>
     <NodeDetailModal />
     <TriggerDetailModal />
-    <BottomTabs workflowID={workflowID} versions={versions} onRestoreVersion={onRestoreVersion} />
+    <BottomTabs workflowID={workflowID} versions={versions} onRestoreVersion={onRestoreVersion} onDeleteVersion={onDeleteVersion} onClearVersions={onClearVersions} />
   {:else}
     <ExecutionsPanel workflowID={workflowID} onReplay={onReplay} />
   {/if}

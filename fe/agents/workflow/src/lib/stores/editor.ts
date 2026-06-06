@@ -225,7 +225,7 @@ export async function loadWorkflow(id: string) {
 // saveStatus through "pending" → "saving" → terminal.
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let autosaveArmed = false;
-const AUTOSAVE_MS = 800;
+const AUTOSAVE_MS = 2000;
 // Set before a draftWorkflow.update that should NOT arm the autosave
 // — used by the lock toggle which persists via its own endpoint, so
 // the regular save path doesn't reject "you can't edit a locked
