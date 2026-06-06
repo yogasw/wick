@@ -442,6 +442,9 @@ export const workflowAPI = {
       `${BASE}/workflows/edit/${encodeURIComponent(id)}/runs/${encodeURIComponent(runID)}/state`,
     ),
 
+  deleteRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
+    apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/delete`, {}),
+
   versions: (id: string): Promise<{ versions: WorkflowVersion[] }> =>
     apiGet(`${BASE}/api/workflows/versions/${encodeURIComponent(id)}`),
 

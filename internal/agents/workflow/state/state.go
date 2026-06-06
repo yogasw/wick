@@ -24,6 +24,7 @@ type Store interface {
 	AppendEvent(id, runID string, ev workflow.RunEvent) error
 	ListEvents(id, runID string) ([]workflow.RunEvent, error)
 	ListRuns(id string) ([]string, error)
+	Delete(id, runID string) error
 	IndexAppend(id string, entry IndexEntry) error
 	IndexList(id string, page, pageSize int) ([]IndexEntry, bool, error)
 }
@@ -113,4 +114,14 @@ func (s *FileStore) ListRuns(id string) ([]string, error) {
 		names[i], names[j] = names[j], names[i]
 	}
 	return names, nil
+}
+
+// Delete removes a run's on-disk folder (state.json + events.jsonl)
+// and drops its row from the sharded index.
+func (s *FileStore) Delete(id, runID string) error {
+	if err := os.RemoveAll(s.Layout.WorkflowRunDir(id, runID)); err != nil {
+		return err
+	}
+	_, err := s.indexStore(id).Remove(func(e IndexEntry) bool { return e.ID == runID })
+	return err
 }

@@ -63,6 +63,7 @@ func (s *watchStore) Load(id, runID string) (workflow.RunState, error) {
 func (s *watchStore) AppendEvent(string, string, workflow.RunEvent) error    { return nil }
 func (s *watchStore) ListEvents(string, string) ([]workflow.RunEvent, error) { return nil, nil }
 func (s *watchStore) ListRuns(string) ([]string, error)                      { return nil, nil }
+func (s *watchStore) Delete(string, string) error                            { return nil }
 func (s *watchStore) IndexAppend(string, state.IndexEntry) error             { return nil }
 func (s *watchStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
 	s.mu.Lock()

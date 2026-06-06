@@ -9,6 +9,7 @@
   import RunListItem from "./executions/RunListItem.svelte";
   import RunDetail from "./executions/RunDetail.svelte";
   import { runKey } from "./executions/runHelpers";
+  import { toastError, toastOk } from "$lib/stores/toast";
 
   type Props = {
     workflowID: string;
@@ -77,6 +78,20 @@
       if (debounceID) clearTimeout(debounceID);
     };
   });
+
+  async function handleDelete(runID: string) {
+    try {
+      await workflowAPI.deleteRun(workflowID, runID);
+      if (selectedRunID === runID) {
+        selectedRunID = null;
+        runDetail = null;
+      }
+      toastOk("Run deleted");
+      await refresh();
+    } catch (e) {
+      toastError("Delete failed", e instanceof Error ? e.message : String(e));
+    }
+  }
 
   async function loadRun(runID: string) {
     selectedRunID = runID;
@@ -236,7 +251,7 @@
         <div class="text-xs">Click any execution on the left to inspect its output.</div>
       </div>
     {:else}
-      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} />
+      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} />
     {/if}
   </section>
 </div>

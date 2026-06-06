@@ -18,6 +18,7 @@ func (s *errStore) Load(id, runID string) (workflow.RunState, error)  { return w
 func (s *errStore) AppendEvent(id, runID string, ev workflow.RunEvent) error { return nil }
 func (s *errStore) ListEvents(id, runID string) ([]workflow.RunEvent, error) { return nil, nil }
 func (s *errStore) ListRuns(id string) ([]string, error)                     { return nil, nil }
+func (s *errStore) Delete(id, runID string) error                            { return nil }
 func (s *errStore) IndexAppend(id string, entry state.IndexEntry) error      { return nil }
 func (s *errStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
 	return nil, false, nil
@@ -34,6 +35,7 @@ func (s *okStore) Load(id, runID string) (workflow.RunState, error)          { r
 func (s *okStore) AppendEvent(id, runID string, ev workflow.RunEvent) error  { return nil }
 func (s *okStore) ListEvents(id, runID string) ([]workflow.RunEvent, error)  { return nil, nil }
 func (s *okStore) ListRuns(id string) ([]string, error)                      { return nil, nil }
+func (s *okStore) Delete(id, runID string) error                             { return nil }
 func (s *okStore) IndexAppend(id string, entry state.IndexEntry) error       { return nil }
 func (s *okStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
 	return nil, false, nil
