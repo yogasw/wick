@@ -4,7 +4,7 @@ All notable changes to Wick are documented here.
 
 ---
 
-## Unreleased — Workflow version history improvements
+## Unreleased
 
 ### Fixed
 - Workflow version history (History tab) now correctly receives `id`, `kind`, `message`, `created_at`, and `body` fields; a missing JSON serialization on the entity caused the tab to display empty rows.
@@ -19,6 +19,9 @@ All notable changes to Wick are documented here.
 ### Changed
 - Autosave debounce raised from 800 ms to 2 s.
 - Identical-body autosaves no longer create a new draft snapshot (dedup).
+
+### Improved
+- Workflow editor: `session_init` node "Workspace override" field is now a dropdown populated from existing projects instead of a free-text input, preventing the `ensure session: project not found` runtime error caused by typing a non-existent project ID.
 
 ---
 
