@@ -471,4 +471,12 @@ export const workflowAPI = {
     apiGet(
       `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/diff?from=${from}&to=${to}`,
     ),
+
+  deleteVersion: (id: string, versionID: number): Promise<{ ok: boolean }> =>
+    apiDelete(
+      `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/${versionID}`,
+    ),
+
+  clearVersions: (id: string): Promise<{ ok: boolean; deleted: number }> =>
+    apiDelete(`${BASE}/api/workflows/versions/${encodeURIComponent(id)}`),
 };

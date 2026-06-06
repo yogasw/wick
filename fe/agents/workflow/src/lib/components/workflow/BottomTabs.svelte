@@ -114,6 +114,8 @@
     logs?: any[];
     versions?: any[];
     onRestoreVersion?: (id: number) => void;
+    onDeleteVersion?: (id: number) => void;
+    onClearVersions?: () => void;
   };
   let {
     workflowID,
@@ -123,6 +125,8 @@
     logs = [],
     versions = [],
     onRestoreVersion,
+    onDeleteVersion,
+    onClearVersions,
   }: Props = $props();
 
   // Clicking a tab while collapsed both opens the panel AND switches to
@@ -172,7 +176,7 @@
       {:else if active === "tests"}<TestsTab cases={testsData.length > 0 ? testsData : tests} onRunAll={() => refreshPanel("tests")} running={panelLoading} />
       {:else if active === "logs"}<LogsTab lines={logs} />
       {:else if active === "json"}<JsonTab />
-      {:else if active === "history"}<HistoryTab workflowID={workflowID} versions={versions} onrestore={onRestoreVersion} />
+      {:else if active === "history"}<HistoryTab workflowID={workflowID} versions={versions} onrestore={onRestoreVersion} ondelete={onDeleteVersion} onclear={onClearVersions} />
       {/if}
     </div>
   {/if}
