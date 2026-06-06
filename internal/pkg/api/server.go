@@ -43,6 +43,7 @@ import (
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/internal/appname"
+	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
@@ -385,7 +386,9 @@ func NewServer() *Server {
 		},
 	}
 	maxConc := 2
-	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n > 0 {
+	// n >= 0 so an explicit 0 (unlimited) is honoured; only a parse error
+	// or absent key falls back to the default of 2.
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "max_concurrent")); err == nil && n >= 0 {
 		maxConc = n
 	}
 	idleSec := 120
@@ -476,6 +479,14 @@ func NewServer() *Server {
 				Int("pid", ev.PID).
 				Msg("lifecycle: broadcasting to SSE")
 			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+			// Broadcast updated pool stats to Providers page global
+			// subscribers. MUST run async: this hook can fire while the
+			// pool already holds p.mu (e.g. onAgentExit → MarkKilled →
+			// lifecycle hook), and broadcastPoolStats calls
+			// pool.ActiveSnapshot() which re-locks p.mu — a synchronous
+			// call would self-deadlock and freeze every pool-touching
+			// request (the "agents page hangs" bug).
+			go broadcastPoolStats(agentsBcast, agentsPool)
 			// Fan out a push to opt-in subscribers when the agent
 			// goes idle (the "your turn is back" moment). Other
 			// transitions are skipped — see dispatchLifecyclePush.
@@ -1479,6 +1490,31 @@ func (s *Server) Run(ctx context.Context, port int) error {
 // Best-effort: errors are logged but never block the SSE broadcast.
 // Service worker on each receiver decides whether to surface as OS
 // notification or postMessage an in-app toast — see web/public/js/sw.js.
+func broadcastPoolStats(b *agentstool.Broadcaster, pool *agentpool.Pool) {
+	if b == nil || pool == nil {
+		return
+	}
+	entries := pool.ActiveSnapshot()
+	procs := make([]agentstool.LiveProcessEntry, 0, len(entries))
+	for _, e := range entries {
+		prov := e.ProviderType
+		if e.ProviderName != "" && e.ProviderName != e.ProviderType {
+			prov = e.ProviderType + "/" + e.ProviderName
+		}
+		procs = append(procs, agentstool.LiveProcessEntry{
+			SessionID: e.SessionID,
+			AgentName: e.AgentName,
+			Provider:  prov,
+			PID:       e.PID,
+			Queued:    e.Queued,
+			Alive:     e.Respawns || e.PID == 0 || processctl.ProcessAlive(e.PID),
+			Lifecycle: e.Lifecycle,
+			Substate:  e.Substate,
+		})
+	}
+	b.PublishPoolStats(pool.Active(), pool.MaxConcurrent(), pool.QueueLen(), procs)
+}
+
 func dispatchLifecyclePush(ctx context.Context, pushSvc *pwa.PushService, mgr *agentregistry.Manager, layout agentconfig.Layout, ev agentpool.LifecycleEvent) {
 	if pushSvc == nil || mgr == nil {
 		return

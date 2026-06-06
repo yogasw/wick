@@ -34,14 +34,63 @@ templ ProvidersPage(vm ProvidersVM) {
 			</div>
 			<!-- Pool stats -->
 			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
-				@statCard("Active Slots", fmt.Sprintf("%d / %d", vm.PoolActive, vm.PoolMax), "blue")
-				@statCard("Queued", fmt.Sprintf("%d", vm.PoolQueueLen), "amber")
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
+					<p class="text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">Active Slots</p>
+					<p id="pool-active-slots" class="mt-1 text-3xl font-bold text-blue-600 dark:text-blue-400">{ fmt.Sprintf("%d / %d", vm.PoolActive, vm.PoolMax) }</p>
+				</div>
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm">
+					<p class="text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">Queued</p>
+					<p id="pool-queue-len" class="mt-1 text-3xl font-bold text-amber-600 dark:text-amber-400">{ fmt.Sprintf("%d", vm.PoolQueueLen) }</p>
+				</div>
 				@statCard("Configured", fmt.Sprintf("%d", len(vm.Statuses)), "default")
+			</div>
+			<!-- Active processes (always rendered; JS shows/hides via id) -->
+			<div id="live-processes-panel" style={ func() templ.SafeCSS { if len(vm.LiveProcesses) == 0 { return "display:none" }; return "" }() } class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				<div class="px-5 py-3 flex items-center justify-between border-b border-white-300 dark:border-navy-600">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Active Processes</h2>
+					<span data-pool-badge class="rounded bg-blue-100 dark:bg-blue-900 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300">{ fmt.Sprintf("%d / %d", len(vm.LiveProcesses), vm.PoolMax) }</span>
+				</div>
+				<table class="w-full text-xs">
+					<thead>
+						<tr class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
+							<th class="px-5 py-2 text-left font-medium">Session</th>
+							<th class="px-5 py-2 text-left font-medium">Agent</th>
+							<th class="px-5 py-2 text-left font-medium">PID</th>
+							<th class="px-5 py-2 text-left font-medium">State</th>
+							<th class="px-5 py-2 text-right font-medium">Action</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, p := range vm.LiveProcesses {
+							<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800">
+								<td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{ p.SessionID[:min(8, len(p.SessionID))] }</td>
+								<td class="px-5 py-2 text-black-900 dark:text-white-100">{ p.AgentName }</td>
+								<td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">
+									if p.PID > 0 {
+										{ fmt.Sprintf("%d", p.PID) }
+									} else {
+										—
+									}
+								</td>
+								<td class="px-5 py-2">
+									@lifecycleBadge(p.Lifecycle, p.PID, 0, 0)
+								</td>
+								<td class="px-5 py-2 text-right">
+									<button
+										data-kill-session={ p.SessionID }
+										class="kill-process-btn rounded px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800 transition-colors"
+									>Kill</button>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
 			</div>
 			<!-- Provider cards -->
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-2 overflow-x-clip">
 				for _, st := range vm.Statuses {
-					@providerCard(vm.Base, st, vm.Gate)
+					{{ cap := vm.ProviderCaps[string(st.Instance.Type)+"/"+st.Instance.Name] }}
+					@providerCard(vm.Base, st, vm.Gate, cap)
 				}
 			</div>
 			<!-- Command Gate master switch -->
@@ -49,92 +98,85 @@ templ ProvidersPage(vm ProvidersVM) {
 			<!-- MCP Wick install status -->
 			@mcpWickCard(vm.MCP, vm.Base)
 			<!-- Recent spawns -->
-			<details data-remember-open="spawns" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
-				<summary class="px-5 py-3 flex items-center gap-2 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-					<svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
-					if len(vm.Spawns) > 0 {
-						<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", len(vm.Spawns)) }</span>
-					}
-					<span class="text-xs text-black-700 dark:text-black-600 ml-1">one file per spawn under <code class="font-mono">~/.&lt;app&gt;/agents/providers/spawns/</code> — only the latest 50 are kept; older spawns are pruned automatically.</span>
-				</summary>
-				<div class="border-t border-white-300 dark:divide-navy-600">
-					if len(vm.Spawns) == 0 {
-						<div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
-					} else {
-						<table class="w-full text-sm">
-							<thead>
-								<tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-									<th class="px-5 py-2.5 text-left">Started</th>
-									<th class="px-5 py-2.5 text-left">Session</th>
-									<th class="px-5 py-2.5 text-left">Channel</th>
-									<th class="px-5 py-2.5 text-left">Provider</th>
-									<th class="px-5 py-2.5 text-left">PID</th>
-									<th class="px-5 py-2.5 text-left">First Message</th>
-								</tr>
-							</thead>
-							<tbody>
-								for _, f := range vm.Spawns {
-									<tr
-										data-row-link={ vm.Base + "/providers/spawns/" + filenameOf(f.Path) }
-										class="cursor-pointer border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-									>
-										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">{ f.StartedAt.Local().Format("2006-01-02 15:04:05") }</td>
-										<td class="px-5 py-3 font-mono text-xs text-black-800 dark:text-black-600">
-											if f.SessionID != "" {
-												{ shortID(f.SessionID) }
-											} else {
-												<span class="text-black-600 dark:text-black-700">—</span>
-											}
-										</td>
-										<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600">
-											if f.Origin != "" {
-												{ f.Origin }
-											} else {
-												<span class="text-black-600 dark:text-black-700">—</span>
-											}
-										</td>
-										<td class="px-5 py-3 text-black-800 dark:text-black-600">{ f.ProviderType }/{ f.ProviderName }</td>
-										<td class="px-5 py-3 font-mono text-xs text-black-900 dark:text-white-100">
-											if f.PID > 0 {
-												{ fmt.Sprintf("%d", f.PID) }
-											} else {
-												<span class="text-black-600 dark:text-black-700">—</span>
-											}
-										</td>
-										<td class="px-5 py-3 text-xs text-black-800 dark:text-black-600 max-w-xs truncate">
-											if f.FirstUserMessage != "" {
-												{ f.FirstUserMessage }
-											} else {
-												<span class="text-black-600 dark:text-black-700">—</span>
-											}
-										</td>
-									</tr>
-								}
-							</tbody>
-						</table>
-						if vm.Page > 1 || vm.HasNext {
-							<div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
-								if vm.Page > 1 {
-									<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page-1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</a>
-								} else {
-									<span></span>
-								}
-								<span class="text-xs text-black-700 dark:text-black-600">Page { fmt.Sprintf("%d", vm.Page) }</span>
-								if vm.HasNext {
-									<a href={ templ.SafeURL(fmt.Sprintf("%s/providers?page=%d", vm.Base, vm.Page+1)) } class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</a>
-								} else {
-									<span></span>
-								}
-							</div>
-						}
-					}
-				</div>
-			</details>
 			<!-- Add custom modal -->
 			@addProviderModal(vm)
 		</div>
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
+		<script>
+		(function() {
+			var base = document.querySelector('meta[name="wick-base"]')?.content || '';
+			var worker;
+			try { worker = new SharedWorker(base + '/static/js/sse-worker.js'); worker.port.start(); } catch(_) {}
+			if (!worker) return;
+
+			worker.port.postMessage({ type: 'subscribe', sessionID: '', base: base + '/tools/agents' });
+
+			worker.port.onmessage = function(msg) {
+				var d = msg.data;
+				if (!d || d.type !== 'event') return;
+				var ev = d.event;
+				if (!ev || ev.type !== 'pool_stats') return;
+				var stats;
+				try { stats = JSON.parse(ev.data); } catch(_) { return; }
+				updatePoolPanel(stats);
+			};
+
+			function lifecycleBadgeHTML(lc) {
+				var colors = { working: 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300', idle: 'bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300', spawning: 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300', killed: 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300' };
+				var cls = colors[lc] || 'bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600';
+				return '<span class="rounded px-2 py-0.5 text-xs font-medium ' + cls + '">' + (lc || '—') + '</span>';
+			}
+
+			function updatePoolPanel(stats) {
+				// Update stat cards
+				var slotEl = document.getElementById('pool-active-slots');
+				if (slotEl) slotEl.textContent = stats.active + ' / ' + stats.max;
+				var queueEl = document.getElementById('pool-queue-len');
+				if (queueEl) queueEl.textContent = stats.queue_len;
+
+				// Rebuild active processes panel
+				var panel = document.getElementById('live-processes-panel');
+				var procs = stats.live_processes || [];
+				if (!panel) return;
+
+				if (procs.length === 0) {
+					panel.style.display = 'none';
+					return;
+				}
+				panel.style.display = '';
+
+				var badge = panel.querySelector('[data-pool-badge]');
+				if (badge) badge.textContent = procs.length + ' / ' + stats.max;
+
+				var tbody = panel.querySelector('tbody');
+				if (!tbody) return;
+				tbody.innerHTML = procs.map(function(p) {
+					var sid = p.session_id || '';
+					var shortSid = sid.substring(0, 8);
+					var pid = p.pid > 0 ? p.pid : '—';
+					return '<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800">' +
+						'<td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">' + shortSid + '</td>' +
+						'<td class="px-5 py-2 text-black-900 dark:text-white-100">' + (p.agent_name || '—') + '</td>' +
+						'<td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">' + pid + '</td>' +
+						'<td class="px-5 py-2">' + lifecycleBadgeHTML(p.lifecycle) + '</td>' +
+						'<td class="px-5 py-2 text-right"><button data-kill-session="' + sid + '" class="kill-process-btn rounded px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800 transition-colors">Kill</button></td>' +
+						'</tr>';
+				}).join('');
+			}
+
+			document.addEventListener('click', function(e) {
+				var btn = e.target.closest('.kill-process-btn');
+				if (!btn) return;
+				var sid = btn.dataset.killSession;
+				if (!sid || !confirm('Kill this process?')) return;
+				fetch(base + '/tools/agents/sessions/' + encodeURIComponent(sid) + '/kill', { method: 'POST', credentials: 'include' });
+			});
+
+			window.addEventListener('beforeunload', function() {
+				if (worker) worker.port.postMessage({ type: 'unsubscribe', sessionID: '' });
+			});
+		})();
+		</script>
 	}
 }
 
@@ -285,11 +327,20 @@ func mcpCounts(clients []MCPClientStatusVM) (installed, detected int) {
 	return
 }
 
-templ providerCard(base string, st provider.Status, gate GateStatusVM) {
+templ providerCard(base string, st provider.Status, gate GateStatusVM, cap ProviderCapVM) {
 	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-3">
 		<div class="flex items-start justify-between gap-3">
 			<div>
-				<p class="text-base font-semibold text-black-900 dark:text-white-100">{ string(st.Instance.Type) }/{ st.Instance.Name }</p>
+				<div class="flex items-center gap-2">
+					<p class="text-base font-semibold text-black-900 dark:text-white-100">{ string(st.Instance.Type) }/{ st.Instance.Name }</p>
+					<span class={ "rounded px-1.5 py-0.5 text-xs font-medium", templ.KV("bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300", cap.Used > 0), templ.KV("bg-white-300 dark:bg-navy-600 text-black-600 dark:text-black-500", cap.Used == 0) }>
+						if cap.Unlimited {
+							{ fmt.Sprintf("%d / ∞", cap.Used) }
+						} else {
+							{ fmt.Sprintf("%d / %d", cap.Used, cap.Max) }
+						}
+					</span>
+				</div>
 				if st.Instance.Disabled {
 					<p class="text-xs text-amber-600 dark:text-amber-400 mt-0.5">disabled</p>
 				} else if !st.PathFound {
@@ -304,46 +355,7 @@ templ providerCard(base string, st provider.Status, gate GateStatusVM) {
 				<form method="POST" action={ templ.SafeURL(base + "/providers/rescan/" + string(st.Instance.Type) + "/" + st.Instance.Name) } class="text-xs">
 					<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" data-tooltip="Re-probe this provider's binary + version">Rescan</button>
 				</form>
-				<form method="POST" action={ templ.SafeURL(base + "/providers") } class="text-xs">
-					<input type="hidden" name="type" value={ string(st.Instance.Type) }/>
-					<input type="hidden" name="name" value={ st.Instance.Name }/>
-					<details class="relative">
-						<summary class="cursor-pointer rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 list-none">Edit</summary>
-					<div class="absolute right-0 mt-2 w-72 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-3 shadow-lg z-10 space-y-2">
-						<label class="block">
-							<span class="text-xs text-black-800 dark:text-black-600">Binary path (empty = auto)</span>
-							<input type="text" name="binary" value={ st.Instance.Binary } placeholder={ binaryPlaceholder(st) } class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100"/>
-						</label>
-						<label class="block">
-							<span class="text-xs text-black-800 dark:text-black-600">Extra args (space separated)</span>
-							<input type="text" name="extra_args" value={ strings.Join(st.Instance.ExtraArgs, " ") } class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100"/>
-						</label>
-						<label class="block">
-							<span class="text-xs text-black-800 dark:text-black-600">Env (one KEY=VALUE per line)</span>
-							<textarea name="env" rows="3" class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100">{ strings.Join(st.Instance.Env, "\n") }</textarea>
-						</label>
-						<label class="flex items-center gap-2 text-xs text-black-800 dark:text-black-600">
-							<input type="checkbox" name="disabled" value="on" checked?={ st.Instance.Disabled }/>
-							disabled
-						</label>
-						if st.Instance.Type == provider.TypeCodex {
-							{{ sandboxMode := string(provider.CodexSandboxFullAccess) }}
-							if st.Instance.CodexConfig != nil && st.Instance.CodexConfig.SandboxMode != "" {
-								{{ sandboxMode = string(st.Instance.CodexConfig.SandboxMode) }}
-							}
-							<label class="block">
-								<span class="text-xs text-black-800 dark:text-black-600">Sandbox mode</span>
-								<select name="sandbox_mode" class="mt-1 w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs text-black-900 dark:text-white-100">
-									<option value="danger-full-access" selected?={ sandboxMode == "danger-full-access" }>danger-full-access</option>
-									<option value="workspace-write" selected?={ sandboxMode == "workspace-write" }>workspace-write</option>
-									<option value="read-only" selected?={ sandboxMode == "read-only" }>read-only</option>
-								</select>
-							</label>
-						}
-						<button type="submit" class="w-full rounded bg-green-500 px-2 py-1 text-xs font-medium text-white-100 hover:bg-green-600">Save</button>
-					</div>
-				</details>
-			</form>
+				<a href={ templ.SafeURL(base + "/providers/detail/" + string(st.Instance.Type) + "/" + st.Instance.Name) } class="text-xs rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Detail</a>
 			</div>
 		</div>
 		<dl class="text-xs space-y-1">
@@ -393,6 +405,55 @@ templ providerCard(base string, st provider.Status, gate GateStatusVM) {
 // Enable / Disable / Test button trio. Enable runs the probe and
 // flips the user's intent in one click. Disable just flips intent
 // off. Test re-runs the probe without touching intent.
+// providerGateCard is hookCapabilitySection wrapped in a standalone card
+// for the detail page — no border-t/pt-3 since it's not inside another card.
+templ providerGateCard(base string, st provider.Status, gate GateStatusVM) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden px-5 py-4 space-y-2">
+		{{ hc, _ := st.Hooks[provider.HookEventPreToolUse] }}
+		{{ intent := st.Instance.HookEnabled(provider.HookEventPreToolUse) }}
+		{{ urlBase := base + "/providers/" + string(st.Instance.Type) + "/" + st.Instance.Name + "/hooks/" + provider.HookEventPreToolUse }}
+		{{ masterOn := gate.Enabled }}
+		<div class="flex items-center justify-between gap-2">
+			<div class="flex items-center gap-2 flex-wrap">
+				<span class="text-xs font-semibold text-black-900 dark:text-white-100">Command Gate</span>
+				if gate.BypassLocked {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked (bypass)</span>
+				} else if !masterOn {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked</span>
+				} else if st.Probing {
+					<span class="rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white-100 animate-pulse">testing…</span>
+				} else if intent && hc.Verified {
+					<span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100">enabled ✓</span>
+				} else if intent && !hc.Verified {
+					<span class="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white-100">enabled (unverified)</span>
+				} else if hc.Verified {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">ready</span>
+				} else {
+					<span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">disabled</span>
+				}
+			</div>
+			if masterOn {
+				<div class="flex items-center gap-1 shrink-0">
+					if st.Probing {
+						<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-700 dark:text-black-600 opacity-60 cursor-not-allowed">Testing…</button>
+					} else if intent {
+						<button type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800" data-check-hook data-check-url={ urlBase + "/check" }>Test</button>
+						<button type="button" class="rounded-lg border border-red-400 dark:border-red-700 px-2 py-1 text-xs text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20" data-hook-action data-action-url={ urlBase + "/disable" }>Disable</button>
+					} else {
+						<button type="button" class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600" data-hook-action data-action-url={ urlBase + "/enable" }>Enable</button>
+					}
+				</div>
+			}
+		</div>
+		if hc.Error != "" {
+			<p class="font-mono text-xs text-red-600 dark:text-red-400 break-all">{ hc.Error }</p>
+		}
+		if !hc.ProbedAt.IsZero() {
+			<p class="font-mono text-xs text-black-700 dark:text-black-600">last probed: { hc.ProbedAt.Local().Format("2006-01-02 15:04:05") }</p>
+		}
+	</div>
+}
+
 templ hookCapabilitySection(base string, st provider.Status, gate GateStatusVM) {
 	{{ hc, _ := st.Hooks[provider.HookEventPreToolUse] }}
 	{{ intent := st.Instance.HookEnabled(provider.HookEventPreToolUse) }}

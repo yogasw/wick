@@ -131,6 +131,36 @@ func TestAgentIdleTTLKills(t *testing.T) {
 	}
 }
 
+// TestAgentStopDoesNotHangOnStubbornStdout reproduces the Windows bug
+// where killing a subprocess does not immediately EOF its stdout pipe.
+// Stop() must return within a bounded time even when the reader loop's
+// scanner.Scan() is still blocking on a pipe that never closes.
+func TestAgentStopDoesNotHangOnStubbornStdout(t *testing.T) {
+	spawner := &stubbornSpawner{}
+	a := New(Options{
+		Workspace:     t.TempDir(),
+		IdleTimeout:   10 * time.Second,
+		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
+		Spawner:       spawner,
+		State:         state.New(nil),
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- a.Stop() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Stop returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop() deadlocked — subprocess stdout never EOF'd after Kill (Windows hang bug)")
+	}
+}
+
 func TestAgentStopIdempotent(t *testing.T) {
 	spawner := &fakeSpawner{Lines: [][]string{{}}}
 	a := New(Options{
