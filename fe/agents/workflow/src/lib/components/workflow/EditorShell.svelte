@@ -158,7 +158,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex flex-col h-screen relative">
+<div class="flex flex-col h-screen w-full relative overflow-hidden">
   {#if $lastRunSummary}
     <div class="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium shadow-lg"
          class:bg-emerald-500={$lastRunSummary.status === "success"}
@@ -171,7 +171,7 @@
   <Toolbar topTab={topTab} />
 
   {#if $topTab === "editor"}
-    <div class="flex flex-1 min-h-0 relative">
+    <div class="flex flex-1 min-h-0 min-w-0 relative overflow-hidden">
       <Canvas />
       {#if $paletteOpen}
         <Palette />

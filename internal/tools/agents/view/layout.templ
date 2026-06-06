@@ -21,6 +21,37 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	<style>
 		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 	</style>
+	<!-- Compact / landscape-phone shell. The md: width breakpoint pins
+	     the sidebar open as a static column once the viewport is ≥768px
+	     wide — which a phone in LANDSCAPE is, even though it's only a few
+	     hundred px tall. That leaves no way to dismiss it (the md:hidden
+	     hamburger / close button are gone) and squeezes the canvas. When
+	     the viewport is short, force the mobile drawer behaviour instead:
+	     overlay the sidebar, bring back the hamburger / close / backdrop,
+	     and let the script below toggle it. Paired with the matchMedia
+	     query in the script (max-width:767px OR max-height:600px). -->
+	<style>
+		@media (max-height: 600px) {
+			[data-agents-shell] [data-sidebar] {
+				position: fixed !important;
+				top: 0; bottom: 0; left: 0;
+				width: 18rem !important;
+				z-index: 50 !important;
+				transform: translateX(-100%) !important;
+				transition: transform 200ms ease-out !important;
+			}
+			[data-agents-shell] [data-sidebar].sidebar-open {
+				transform: translateX(0) !important;
+			}
+			[data-agents-shell] [data-sidebar-open],
+			[data-agents-shell] [data-sidebar-close] {
+				display: flex !important;
+			}
+			[data-agents-shell] [data-sidebar-backdrop].sidebar-backdrop-show {
+				display: block !important;
+			}
+		}
+	</style>
 	{{ user := login.GetUser(ctx) }}
 	<div class="flex w-full h-[100dvh]" data-agents-shell>
 		<!-- Mobile hamburger (md:hidden). Hidden when drawer open. -->
@@ -184,16 +215,24 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			var openBtn = shell.querySelector('[data-sidebar-open]');
 			var closeBtn = shell.querySelector('[data-sidebar-close]');
 			if (!sb) return;
-			var mq = window.matchMedia('(max-width: 767px)');
+			// Drawer mode applies when the viewport is narrow (phone
+			// portrait) OR short (phone landscape). The two toggle paths
+			// below cover both: removing/adding `-translate-x-full` drives
+			// the Tailwind md: drawer (narrow case), while `sidebar-open` /
+			// `sidebar-backdrop-show` drive the !important CSS overrides for
+			// the short-landscape case where md: utilities would otherwise win.
+			var mq = window.matchMedia('(max-width: 767px), (max-height: 600px)');
 			function isMobile() { return mq.matches; }
 			function open() {
 				sb.classList.remove('-translate-x-full');
-				if (bd) bd.classList.remove('hidden');
+				sb.classList.add('sidebar-open');
+				if (bd) { bd.classList.remove('hidden'); bd.classList.add('sidebar-backdrop-show'); }
 				if (openBtn) { openBtn.classList.add('opacity-0','pointer-events-none'); }
 			}
 			function close() {
 				sb.classList.add('-translate-x-full');
-				if (bd) bd.classList.add('hidden');
+				sb.classList.remove('sidebar-open');
+				if (bd) { bd.classList.add('hidden'); bd.classList.remove('sidebar-backdrop-show'); }
 				if (openBtn) { openBtn.classList.remove('opacity-0','pointer-events-none'); }
 			}
 			if (openBtn) openBtn.addEventListener('click', open);
@@ -210,11 +249,14 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			// Reset state when crossing breakpoint so desktop view is clean
 			mq.addEventListener('change', function () {
 				if (!isMobile()) {
-					sb.classList.remove('-translate-x-full');
-					if (bd) bd.classList.add('hidden');
+					sb.classList.remove('-translate-x-full', 'sidebar-open');
+					if (bd) { bd.classList.add('hidden'); bd.classList.remove('sidebar-backdrop-show'); }
 					if (openBtn) openBtn.classList.remove('opacity-0','pointer-events-none');
 				} else {
 					sb.classList.add('-translate-x-full');
+					sb.classList.remove('sidebar-open');
+					if (bd) { bd.classList.add('hidden'); bd.classList.remove('sidebar-backdrop-show'); }
+					if (openBtn) openBtn.classList.remove('opacity-0','pointer-events-none');
 				}
 			});
 		})();
