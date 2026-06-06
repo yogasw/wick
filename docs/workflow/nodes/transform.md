@@ -40,9 +40,37 @@ Pure data shaping. No I/O — reshape between nodes via gotemplate / jsonpath / 
 |---|---|---|
 | `gotemplate` | ✅ | Default. Same template engine + helpers as every other templated field. |
 | `jsonpath` | ⚠️ placeholder | Minimal walker. Useful for trivial extractions; not full JSONPath. |
-| `jq` | ❌ not implemented | Reserved — emits an error at runtime. |
+| `jq` | ✅ | Full [jq](https://jqlang.github.io/jq/) via [`gojq`](https://github.com/itchyny/gojq). The `expression` is a jq program. |
 
 For anything beyond a one-line reshape, reach for [`go_script`](./go-script) instead — it gives you real Go with full stdlib.
+
+## jq engine
+
+Set `engine: jq` and put a jq program in `expression`. The program runs against the JSON parsed from `input` — or, when `input` is blank, against the full render context marshalled to JSON.
+
+```yaml
+- id: shape
+  type: transform
+  engine: jq
+  input: '{{.Node.fetch.body}}'
+  expression: '{items: [.data[] | {id, name}]}'
+```
+
+```yaml
+- id: active_only
+  type: transform
+  engine: jq
+  input: '{{.Node.list.body}}'
+  expression: '.[] | select(.status == "active") | {id, name}'
+```
+
+Output rules:
+
+- **One result** → `result` holds that value bare.
+- **Multiple results** (a stream, like the `active_only` example above) → `result` is an array of them.
+- **No result** → `result` is `null`.
+
+A jq compile error, non-JSON `input`, or a runtime error fails the node — the message names the offending program or input.
 
 ## Pair with
 
