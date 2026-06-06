@@ -130,6 +130,13 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if opt.Workspace != "" {
 		args = append(args, "--add-dir", opt.Workspace)
 	}
+	// Skills live under ~/.claude/skills/ (outside the workspace), so
+	// without trusting that dir the agent can't read a skill's bundled
+	// resource files (rules/templates/scripts) and silently falls back
+	// to whatever is inline in SKILL.md.
+	if home, err := os.UserHomeDir(); err == nil {
+		args = append(args, skillAddDirArgs(home, dirExists)...)
+	}
 	// bypassPermissions and gate are mutually exclusive:
 	//
 	//   - gateActive=true  → DO NOT pass bypassPermissions. Claude
