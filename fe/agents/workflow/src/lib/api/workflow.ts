@@ -411,6 +411,8 @@ export const workflowAPI = {
     slug: string,
   ): Promise<{ name: string; type: string }[]> =>
     apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
+  projectOptions: (): Promise<{ id: string; name: string; path: string }[]> =>
+    apiGet(`${BASE}/projects/options`),
 
   // n8n-style "Execute step" — run a single node in isolation against
   // an optional parent input + event envelope. Server runs the
@@ -471,4 +473,12 @@ export const workflowAPI = {
     apiGet(
       `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/diff?from=${from}&to=${to}`,
     ),
+
+  deleteVersion: (id: string, versionID: number): Promise<{ ok: boolean }> =>
+    apiDelete(
+      `${BASE}/api/workflows/versions/${encodeURIComponent(id)}/${versionID}`,
+    ),
+
+  clearVersions: (id: string): Promise<{ ok: boolean; deleted: number }> =>
+    apiDelete(`${BASE}/api/workflows/versions/${encodeURIComponent(id)}`),
 };

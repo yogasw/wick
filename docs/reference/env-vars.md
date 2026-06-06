@@ -98,6 +98,10 @@ On Termux (and any host where `localhost` isn't enough) open `/admin/variables`,
 Suggestions are read-only by design: the install script never writes the allowlist for you because a phone may be on public Wi-Fi where exposing the manager to every device on the SSID would be unsafe.
 :::
 
+::: info Loopback `/mcp` is always allowed
+The internal agent MCP connects to `/mcp` over loopback (`127.0.0.1:<PORT>`). That endpoint is exempt from the host allowlist regardless of `APP_URL` / `ALLOWED_ORIGINS`, so workflow & agent connectors work out of the box — you do **not** need to add `127.0.0.1` here for them. The exemption is scoped to `/mcp` from loopback hosts only, and `/mcp` stays bearer-authed.
+:::
+
 ---
 
 ## Admin

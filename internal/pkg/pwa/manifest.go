@@ -46,8 +46,12 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		"start_url":        "/",
 		"scope":            "/",
 		"display":          "standalone",
+		// Splash / task-switcher colours. Kept neutral-dark to match the
+		// app shell — the live in-app status bar is themed per-user by the
+		// theme-color sync script in ui.Layout (the manifest is a static,
+		// pre-auth asset so it can't know the user's selected theme).
 		"background_color": "#142638",
-		"theme_color":      "#10b981",
+		"theme_color":      "#142638",
 		"icons": []icon{
 			{Src: "/public/img/icon-192.png", Sizes: "192x192", Type: "image/png", Purpose: "any"},
 			{Src: "/public/img/icon-512.png", Sizes: "512x512", Type: "image/png", Purpose: "any"},

@@ -1280,6 +1280,16 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// The internal agent MCP connects to /mcp over loopback
+		// (127.0.0.1:<port>); exempt that so shared-MCP works even when
+		// app_url is a remote/tunnel domain. Scoped to /mcp + loopback Host
+		// only — other paths/hosts still enforce the allowlist. Safe:
+		// DNS-rebinding attacks send the attacker's own domain as Host,
+		// never a loopback address, and /mcp stays Bearer-authed.
+		if mcpLoopbackExempt(r.URL.Path, r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		allowed := collectAllowedHosts(s.configsSvc.AppURL(), s.configsSvc.AllowedOrigins())
 		if len(allowed) == 0 {
 			next.ServeHTTP(w, r)
@@ -1300,6 +1310,28 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 		log.Warn().Str("request_host", got).Strs("allowed_hosts", allowed).Msg("hostAllowlist: forbidden — host mismatch")
 		http.Error(w, "Forbidden", http.StatusForbidden)
 	})
+}
+
+// mcpLoopbackExempt reports whether the request is the internal agent MCP
+// path reached over loopback — /mcp from 127.0.0.1 / ::1 / localhost. Such
+// requests bypass the host allowlist so shared-MCP works regardless of
+// app_url. Scoped to /mcp only.
+func mcpLoopbackExempt(path, host string) bool {
+	return path == "/mcp" && isLoopbackHost(host)
+}
+
+// isLoopbackHost reports whether host (a Host header, with or without a
+// port) refers to the loopback interface.
+func isLoopbackHost(hostport string) bool {
+	h := strings.TrimSpace(hostport)
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // collectAllowedHosts extracts the host:port of app_url plus each entry

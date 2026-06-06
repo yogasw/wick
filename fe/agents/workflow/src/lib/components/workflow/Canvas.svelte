@@ -5,7 +5,7 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField, searchOpen } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, paletteAddRequest, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField, searchOpen } from "$lib/stores/editor";
   import { toastError } from "$lib/stores/toast";
   import { get } from "svelte/store";
 
@@ -53,7 +53,7 @@
     if (warn) return { kind: "warning", msg: warn };
     return null;
   }
-  import { workflowAPI } from "$lib/api/workflow";
+  import { workflowAPI, type PaletteDrag } from "$lib/api/workflow";
   import { componentFor } from "./nodes";
   import TriggerNode from "./nodes/TriggerNode.svelte";
   import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
@@ -237,6 +237,69 @@
       });
     }
   }
+
+  // ── Tap-to-add (touch) ──────────────────────────────────────────────
+  // The Palette pushes a drag payload to `paletteAddRequest` on tap
+  // (drag-and-drop is dead on touch). Drop it at the current viewport
+  // centre — same three payload shapes as ondrop above — then clear the
+  // request. Reuses Canvas's pan/zoom so the node lands where the user
+  // is actually looking.
+  function placeFromPalette(drag: PaletteDrag, x: number, y: number) {
+    if (drag.type === "node") {
+      if (drag.channel || drag.module || drag.op) {
+        addNode({
+          id: "",
+          type: drag.node_type as NodeType,
+          ...(drag.channel ? { channel: drag.channel } : {}),
+          ...(drag.module ? { module: drag.module } : {}),
+          ...(drag.op ? { op: drag.op } : {}),
+          _canvas: { x, y },
+        } as any);
+      } else {
+        addNode({ id: "", type: drag.node_type as NodeType, _canvas: { x, y } } as any);
+      }
+      return;
+    }
+    if (drag.type === "channel-trigger") {
+      const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
+      draftWorkflow.update((wf) => {
+        if (!wf) return wf;
+        wf.triggers = [...(wf.triggers ?? []), { id, type: "channel", channel: drag.channel, event: drag.event }];
+        const canvas = ((wf as any)._canvas ?? {}) as any;
+        if (!canvas.positions) canvas.positions = {};
+        canvas.positions[id] = { x, y };
+        (wf as any)._canvas = canvas;
+        return wf;
+      });
+      return;
+    }
+    if (drag.type === "trigger") {
+      const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
+      draftWorkflow.update((wf) => {
+        if (!wf) return wf;
+        wf.triggers = [...(wf.triggers ?? []), { id, type: drag.trigger_type as any }];
+        const canvas = ((wf as any)._canvas ?? {}) as any;
+        if (!canvas.positions) canvas.positions = {};
+        canvas.positions[id] = { x, y };
+        (wf as any)._canvas = canvas;
+        return wf;
+      });
+    }
+  }
+
+  $effect(() => {
+    const req = $paletteAddRequest;
+    if (!req) return;
+    if (locked || !canvasEl) {
+      paletteAddRequest.set(null); // can't place — drop the request
+      return;
+    }
+    const rect = canvasEl.getBoundingClientRect();
+    const cx = (rect.width / 2 - pan.x) / zoom;
+    const cy = (rect.height / 2 - pan.y) / zoom;
+    placeFromPalette(req, cx - NODE_W / 2, cy - NODE_H / 2);
+    paletteAddRequest.set(null);
+  });
 
   // Drag origin distinguishes nodes (stored in graph.nodes[].
   // _canvas) from triggers (stored in workflow._canvas.positions[id]).
@@ -622,6 +685,12 @@
 
   function oncanvaspointerdown(e: PointerEvent) {
     if (e.target !== canvasEl) return;
+    if (e.pointerType === "touch") {
+      // Touch on empty canvas → pan / pinch (handled separately). Skip
+      // the marquee path entirely; touch users get pan instead.
+      onTouchCanvasDown(e);
+      return;
+    }
     if (spaceHeld) return; // space+drag pans; no marquee
     if (!canvasEl) return;
     selectedNodeID.set(null);
@@ -727,6 +796,93 @@
       x: panDrag.startPanX + (e.clientX - panDrag.startX),
       y: panDrag.startPanY + (e.clientY - panDrag.startY),
     };
+  }
+
+  // ── Touch pan + pinch-zoom ──────────────────────────────────────────
+  // Pointer events unify mouse / touch, but touch has no wheel (zoom)
+  // and no spacebar (pan). So on touch we drive pan from a one-finger
+  // drag on the empty canvas and pinch-zoom from two fingers. Mouse
+  // keeps its existing wheel / space-drag / marquee behaviour untouched.
+  // Only pointers that land on the empty canvas land in `touchPts` —
+  // node / trigger / port handlers stopPropagation before this runs, so
+  // dragging a card is unaffected (it flows through onnodepointerdown).
+  // `touch-action: none` on the canvas (see markup) stops the browser
+  // hijacking these gestures as page scroll / pinch.
+  let touchPts = new Map<number, { x: number; y: number }>();
+  let touchPan = $state<{ panX: number; panY: number; x: number; y: number } | null>(null);
+  let pinch: { dist: number; midX: number; midY: number } | null = null;
+
+  function touchDist(): number {
+    const p = [...touchPts.values()];
+    if (p.length < 2) return 0;
+    return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+  }
+  function touchMid(): { x: number; y: number } {
+    const p = [...touchPts.values()];
+    return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 };
+  }
+
+  function onTouchCanvasDown(e: PointerEvent) {
+    if (!canvasEl) return;
+    touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    if (touchPts.size === 1) {
+      // One finger on empty canvas → pan (never marquee on touch).
+      marquee = null;
+      touchPan = { panX: pan.x, panY: pan.y, x: e.clientX, y: e.clientY };
+      pinch = null;
+    } else if (touchPts.size === 2) {
+      // Second finger → pinch-zoom; cancel the pan in progress.
+      touchPan = null;
+      const rect = canvasEl.getBoundingClientRect();
+      const mid = touchMid();
+      pinch = { dist: touchDist(), midX: mid.x - rect.left, midY: mid.y - rect.top };
+    }
+  }
+
+  function onTouchMove(e: PointerEvent) {
+    if (!canvasEl || !touchPts.has(e.pointerId)) return;
+    touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && touchPts.size >= 2) {
+      const rect = canvasEl.getBoundingClientRect();
+      const newDist = touchDist();
+      if (newDist === 0) return;
+      const mid = touchMid();
+      const mx = mid.x - rect.left;
+      const my = mid.y - rect.top;
+      const factor = newDist / pinch.dist;
+      const nextZoom = Math.max(0.25, Math.min(2.5, zoom * factor));
+      const f = nextZoom / zoom;
+      // Zoom anchored at the current pinch midpoint, plus follow the
+      // midpoint's own drift so two-finger drag pans at the same time.
+      pan = {
+        x: mx - (mx - pan.x) * f + (mx - pinch.midX),
+        y: my - (my - pan.y) * f + (my - pinch.midY),
+      };
+      zoom = nextZoom;
+      pinch.dist = newDist;
+      pinch.midX = mx;
+      pinch.midY = my;
+    } else if (touchPan && touchPts.size === 1) {
+      pan = {
+        x: touchPan.panX + (e.clientX - touchPan.x),
+        y: touchPan.panY + (e.clientY - touchPan.y),
+      };
+    }
+  }
+
+  function onTouchUp(e: PointerEvent) {
+    if (!touchPts.has(e.pointerId)) return;
+    touchPts.delete(e.pointerId);
+    if (touchPts.size < 2) pinch = null;
+    if (touchPts.size === 0) {
+      touchPan = null;
+    } else if (touchPts.size === 1) {
+      // Dropped 2→1 finger: hand panning to the remaining pointer so
+      // the canvas doesn't jump.
+      const [pt] = [...touchPts.values()];
+      touchPan = { panX: pan.x, panY: pan.y, x: pt.x, y: pt.y };
+    }
   }
 
   let confirmDeleteNode = $state(false);
@@ -940,9 +1096,9 @@
 </script>
 
 <svelte:window
-  onpointermove={(e) => { onpointermove(e); onConnectMove(e); onPanDragMove(e); onMarqueeMove(e); }}
-  onpointerup={(e) => { onpointerup(); finishConnect(e); panDrag = null; onMarqueeUp(); }}
-  onpointercancel={() => { connecting = null; connectCursor = null; }}
+  onpointermove={(e) => { onpointermove(e); onConnectMove(e); onPanDragMove(e); onMarqueeMove(e); onTouchMove(e); }}
+  onpointerup={(e) => { onpointerup(); finishConnect(e); panDrag = null; onMarqueeUp(); onTouchUp(e); }}
+  onpointercancel={(e) => { connecting = null; connectCursor = null; onTouchUp(e); }}
   onpointerdown={(e) => {
     // Backup cancel — if a connect drag was orphaned (pointer left the
     // window mid-drag, browser ate the pointerup, etc.), the next
@@ -970,8 +1126,9 @@
 <div
   class="flex-1 relative overflow-hidden wf-canvas-bg"
   class:cursor-grab={spaceHeld && !panDrag}
-  class:cursor-grabbing={panDrag}
+  class:cursor-grabbing={panDrag || touchPan}
   class:wf-canvas-locked={locked && !spaceHeld && !panDrag}
+  style="touch-action: {$searchOpen ? 'auto' : 'none'};"
   ondragover={(e) => e.preventDefault()}
   ondrop={ondrop}
   onwheel={onwheel}
@@ -1098,7 +1255,7 @@
                create an edge. Transparent overlay sits on BaseNode's
                bottom-centre white circle. -->
           <button
-            class="absolute left-1/2 -translate-x-1/2 -bottom-[10px] h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
+            class="absolute left-1/2 -translate-x-1/2 -bottom-[10px] wf-port h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
             onpointerdown={(e) => startConnect(e, node.id, "node")}
             title="Drag to connect (output)"
             aria-label="Connect output"
@@ -1108,7 +1265,7 @@
                (creates an edge from the dropped node TO this one).
                Matches legacy editor where both directions worked. -->
           <button
-            class="absolute left-1/2 -translate-x-1/2 -top-[10px] h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
+            class="absolute left-1/2 -translate-x-1/2 -top-[10px] wf-port h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
             onpointerdown={(e) => startConnect(e, node.id, "node-input")}
             title="Drag to connect (input)"
             aria-label="Connect input"
@@ -1206,7 +1363,7 @@
                BaseNode's white circle (BaseNode is shared with regular
                nodes, so we don't re-draw the port handle here). -->
           <button
-            class="absolute left-1/2 -translate-x-1/2 -bottom-[10px] h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
+            class="absolute left-1/2 -translate-x-1/2 -bottom-[10px] wf-port h-5 w-5 rounded-full cursor-crosshair opacity-0 hover:opacity-100 transition-opacity"
             onpointerdown={(e) => startConnect(e, trig.id ?? "", "trigger")}
             title="Drag to connect to the entry node"
             aria-label="Connect trigger"
@@ -1465,6 +1622,15 @@
     background-color: #f1efeb;
     background-image: radial-gradient(circle, #d6cfc4 1px, transparent 1px);
     background-size: 18px 18px;
+  }
+  /* Connection ports are hover-reveal on desktop (opacity-0 →
+     hover:opacity-100). Touch devices have no hover, so the ports would
+     be invisible + undiscoverable. On coarse / no-hover pointers, keep
+     them faintly visible so users can see where to drag an edge from. */
+  @media (hover: none), (pointer: coarse) {
+    .wf-port {
+      opacity: 0.45;
+    }
   }
   :global(.dark) .wf-canvas-bg {
     background-color: #131c2f;

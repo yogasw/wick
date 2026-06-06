@@ -281,7 +281,7 @@ export type WorkflowVersion = {
   id: number;
   workflow_id: string;
   kind: "draft" | "published";
-  yaml: string;
+  body: string;
   message?: string;
   created_by?: string;
   created_at: string;

@@ -114,6 +114,8 @@
     logs?: any[];
     versions?: any[];
     onRestoreVersion?: (id: number) => void;
+    onDeleteVersion?: (id: number) => void;
+    onClearVersions?: () => void;
   };
   let {
     workflowID,
@@ -123,6 +125,8 @@
     logs = [],
     versions = [],
     onRestoreVersion,
+    onDeleteVersion,
+    onClearVersions,
   }: Props = $props();
 
   // Clicking a tab while collapsed both opens the panel AND switches to
@@ -140,10 +144,10 @@
   class="flex flex-col border-t border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 transition-[height] duration-150"
   style:height={collapsed ? "auto" : "260px"}
 >
-  <nav class="flex items-center border-b border-white-300 dark:border-navy-600 text-xs">
+  <nav class="flex items-center border-b border-white-300 dark:border-navy-600 text-xs overflow-x-auto">
     {#each tabs as t}
       <button
-        class="px-3 py-1.5 border-b-2 transition-colors flex items-center gap-1.5"
+        class="shrink-0 whitespace-nowrap px-3 py-1.5 border-b-2 transition-colors flex items-center gap-1.5"
         class:border-emerald-500={!collapsed && active === t}
         class:border-transparent={collapsed || active !== t}
         class:text-emerald-600={!collapsed && active === t}
@@ -157,7 +161,7 @@
       </button>
     {/each}
     <button
-      class="ml-auto px-3 py-1.5 text-[11px] text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100"
+      class="ml-auto shrink-0 whitespace-nowrap px-3 py-1.5 text-[11px] text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100"
       onclick={toggle}
       aria-expanded={!collapsed}
       title={collapsed ? "Expand panel" : "Collapse panel"}
@@ -172,7 +176,7 @@
       {:else if active === "tests"}<TestsTab cases={testsData.length > 0 ? testsData : tests} onRunAll={() => refreshPanel("tests")} running={panelLoading} />
       {:else if active === "logs"}<LogsTab lines={logs} />
       {:else if active === "json"}<JsonTab />
-      {:else if active === "history"}<HistoryTab workflowID={workflowID} versions={versions} onrestore={onRestoreVersion} />
+      {:else if active === "history"}<HistoryTab workflowID={workflowID} versions={versions} onrestore={onRestoreVersion} ondelete={onDeleteVersion} onclear={onClearVersions} />
       {/if}
     </div>
   {/if}

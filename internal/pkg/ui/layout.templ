@@ -14,7 +14,9 @@ templ Layout(title string) {
 			<link rel="manifest" href="/public/manifest.json"/>
 			<link rel="icon" type="image/svg+xml" href="/public/img/icon.svg"/>
 			<link rel="apple-touch-icon" href="/public/img/icon-192.png"/>
-			<meta name="theme-color" content="#10b981"/>
+			<!-- Neutral dark default; the sync script below overwrites this
+			     with the active theme's real surface colour before paint. -->
+			<meta name="theme-color" content="#142638"/>
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 			<meta name="apple-mobile-web-app-title" content={ AppNameFromContext(ctx) }/>
@@ -24,6 +26,41 @@ templ Layout(title string) {
 					(function(){var h=document.documentElement;if(window.matchMedia('(prefers-color-scheme:dark)').matches){h.classList.add('theme-dark','dark')}else{h.classList.add('theme-light')}})()
 				</script>
 			}
+			<!-- PWA status-bar tint. The <meta theme-color> drives the
+			     Android/Chrome status bar; a static value can't follow the
+			     12 user-selectable themes (incl. custom ones via CSS vars).
+			     Read the active theme's actual surface colour off the CSS
+			     variables (dark themes carry the `dark` class) and write it
+			     to the meta. Runs in <head> after the stylesheet + theme
+			     class are applied (script is blocked on the preceding
+			     stylesheet) so it lands before first paint — no flash — and a
+			     MutationObserver re-syncs whenever the theme switcher swaps
+			     the class on <html>. -->
+			<script>
+				(function () {
+					function sync() {
+						var h = document.documentElement;
+						var isDark = h.classList.contains('dark');
+						var triplet = getComputedStyle(h)
+							.getPropertyValue(isDark ? '--color-navy-800' : '--color-white-100')
+							.trim();
+						if (!triplet) return;
+						var meta = document.querySelector('meta[name="theme-color"]');
+						if (!meta) {
+							meta = document.createElement('meta');
+							meta.setAttribute('name', 'theme-color');
+							document.head.appendChild(meta);
+						}
+						meta.setAttribute('content', 'rgb(' + triplet.split(/\s+/).join(',') + ')');
+					}
+					sync();
+					new MutationObserver(sync).observe(document.documentElement, {
+						attributes: true,
+						attributeFilter: ['class'],
+					});
+					window.addEventListener('DOMContentLoaded', sync);
+				})()
+			</script>
 		</head>
 		<body>
 			{ children... }

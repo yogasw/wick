@@ -123,6 +123,22 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 		if err := tx.Save(&existing).Error; err != nil {
 			return err
 		}
+		// Dedup: a debounced autosave fires on any canvas mutation, so
+		// no-op edits (drag-and-revert, reopening the inspector) would
+		// otherwise pile up identical snapshots. Skip when the newest
+		// draft already holds this exact body.
+		var lastDraft entity.WorkflowVersion
+		switch err := tx.Where("workflow_id = ? AND kind = ?", id, KindDraft).
+			Order("id desc").First(&lastDraft).Error; err {
+		case nil:
+			if lastDraft.Body == string(body) {
+				version = lastDraft.ID
+				return nil
+			}
+		case gorm.ErrRecordNotFound:
+		default:
+			return err
+		}
 		snap := entity.WorkflowVersion{
 			WorkflowID: id,
 			Kind:       KindDraft,
@@ -370,6 +386,31 @@ func (r *Repo) Restore(id string, versionID uint, createdBy string) (uint, error
 		return 0, err
 	}
 	return r.SaveDraft(id, w, createdBy, "restored from v"+itoa(versionID))
+}
+
+// DeleteVersion removes a single snapshot. Errors when the row is
+// missing or belongs to a different workflow, so a stray id can't drop
+// another workflow's history. Only touches workflow_versions — the live
+// draft/published bodies on the workflows row are untouched.
+func (r *Repo) DeleteVersion(workflowID string, versionID uint) error {
+	res := r.db.Where("id = ? AND workflow_id = ?", versionID, workflowID).
+		Delete(&entity.WorkflowVersion{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("version not found for this workflow")
+	}
+	return nil
+}
+
+// ClearVersions deletes every snapshot for a workflow and returns the
+// count removed. The live draft/published bodies live on the workflows
+// row, so clearing history never affects the running workflow — it only
+// drops restore points.
+func (r *Repo) ClearVersions(workflowID string) (int64, error) {
+	res := r.db.Where("workflow_id = ?", workflowID).Delete(&entity.WorkflowVersion{})
+	return res.RowsAffected, res.Error
 }
 
 // pruneDrafts deletes old draft snapshots beyond the retention cap.

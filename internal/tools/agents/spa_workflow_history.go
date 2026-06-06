@@ -19,6 +19,8 @@ func registerSPAWorkflowHistory(r tool.Router) {
 	r.GET("/api/workflows/versions/{id}/diff", spaWorkflowVersionDiff)
 	r.GET("/api/workflows/versions/{id}/{versionID}", spaWorkflowVersionDetail)
 	r.POST("/api/workflows/versions/{id}/{versionID}/restore", spaWorkflowVersionRestore)
+	r.DELETE("/api/workflows/versions/{id}/{versionID}", spaWorkflowVersionDelete)
+	r.DELETE("/api/workflows/versions/{id}", spaWorkflowVersionsClear)
 }
 
 func newWorkflowRepo() *repository.Repo {
@@ -87,6 +89,40 @@ func spaWorkflowVersionRestore(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true, "new_draft_version_id": newDraftID})
+}
+
+func spaWorkflowVersionDelete(c *tool.Ctx) {
+	repo := newWorkflowRepo()
+	if repo == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "DB not wired"})
+		return
+	}
+	id := c.PathValue("id")
+	vid, err := strconv.ParseUint(c.PathValue("versionID"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid versionID"})
+		return
+	}
+	if err := repo.DeleteVersion(id, uint(vid)); err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+func spaWorkflowVersionsClear(c *tool.Ctx) {
+	repo := newWorkflowRepo()
+	if repo == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "DB not wired"})
+		return
+	}
+	id := c.PathValue("id")
+	deleted, err := repo.ClearVersions(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "deleted": deleted})
 }
 
 // spaWorkflowVersionDiff returns both snapshots' full body so the FE

@@ -40,13 +40,13 @@ func (Workflow) TableName() string { return "workflows" }
 // publish ("fix slack template", "add retry"). `CreatedBy` is the
 // authenticated user id captured by the handler.
 type WorkflowVersion struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement"`
-	WorkflowID string `gorm:"type:varchar(64);not null;index"`
-	Kind       string `gorm:"type:varchar(16);not null;index"` // "draft" | "published"
-	Body       string `gorm:"type:text;not null"`
-	Message    string `gorm:"type:varchar(512);default:''"`
-	CreatedBy  string `gorm:"type:varchar(128);default:''"`
-	CreatedAt  time.Time
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	WorkflowID string    `gorm:"type:varchar(64);not null;index" json:"workflow_id"`
+	Kind       string    `gorm:"type:varchar(16);not null;index" json:"kind"` // "draft" | "published"
+	Body       string    `gorm:"type:text;not null" json:"body"`
+	Message    string    `gorm:"type:varchar(512);default:''" json:"message"`
+	CreatedBy  string    `gorm:"type:varchar(128);default:''" json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 func (WorkflowVersion) TableName() string { return "workflow_versions" }
