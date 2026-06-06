@@ -7,9 +7,8 @@ import (
 
 func TestClaudeParserResultErrorIncludesSubtype(t *testing.T) {
 	p := NewClaudeParser()
-	// error_during_execution carries the human-readable detail on stderr,
-	// not in .result, so .result is often empty. The subtype must still
-	// surface or the workflow node fails with a blank "agent error: ".
+	// error_during_execution leaves .result empty (detail is on stderr),
+	// so the subtype must surface or the node error is blank.
 	ev, err := p.Parse(`{"type":"result","subtype":"error_during_execution","is_error":true,"result":""}`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)

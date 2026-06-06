@@ -44,10 +44,8 @@ func argValue(args []string, flag string) (string, bool) {
 func TestMCPConfigArgs(t *testing.T) {
 	ep, tok := "http://127.0.0.1:9425/mcp", "secret123"
 
-	// Default (non-strict): --mcp-config (so the user's own MCP servers
-	// keep working) PLUS --allowedTools pre-approving wick's own MCP
-	// tools — the agent runs headless, so wick_* calls must not block on
-	// a permission prompt nobody can answer.
+	// Default (non-strict): --mcp-config keeps the user's servers, plus
+	// --allowedTools pre-approves wick's tools for the headless agent.
 	def := mcpConfigArgs(ep, tok, false)
 	if _, ok := argValue(def, "--mcp-config"); !ok {
 		t.Fatalf("default args missing --mcp-config: %v", def)
