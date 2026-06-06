@@ -141,7 +141,7 @@
 </script>
 
 <header
-  class="flex items-center gap-1.5 md:gap-3 pl-11 pr-2 md:px-4 py-2 w-full min-w-0 overflow-hidden border-b border-white-300 dark:border-navy-600
+  class="flex items-center gap-1.5 md:gap-3 pl-11 pr-2 md:px-4 py-2 w-full min-w-0 border-b border-white-300 dark:border-navy-600
          bg-white-100 dark:bg-navy-800 text-black-800 dark:text-white-100"
 >
   <!-- Breadcrumb + inline-renamable name. -->
