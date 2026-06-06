@@ -218,6 +218,41 @@
     }, 3000);
   }
 
+  // chimeCtx is a singleton AudioContext used by playLifecycleChime.
+  // We can't construct it lazily inside the chime call: macOS Safari
+  // and Chrome gate AudioContext start on a user gesture (autoplay
+  // policy), and a service-worker postMessage callback doesn't count
+  // as a gesture. So we create it once on the first real click /
+  // keydown / touchstart anywhere on the page and keep it warm —
+  // every subsequent lifecycle chime then plays without re-priming.
+  var chimeCtx = null;
+  var chimePrimed = false;
+
+  function primeChimeContext() {
+    if (chimePrimed) return;
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try {
+      chimeCtx = new Ctx();
+    } catch (_) {
+      return;
+    }
+    // resume() must be called from a user gesture on Safari and some
+    // Chrome versions; the listeners that call primeChimeContext are
+    // attached to user events below.
+    if (chimeCtx && chimeCtx.state === 'suspended' && chimeCtx.resume) {
+      try { chimeCtx.resume(); } catch (_) {}
+    }
+    chimePrimed = true;
+  }
+
+  // Prime on the first user gesture, whatever it is. Capture-phase
+  // listeners so we run before any handler that might preventDefault.
+  // { once: true } detaches them after firing.
+  ['click', 'keydown', 'touchstart'].forEach(function (ev) {
+    document.addEventListener(ev, primeChimeContext, { capture: true, once: true, passive: true });
+  });
+
   // playLifecycleChime emits a short two-tone ping via WebAudio when
   // the in-app lifecycle card surfaces. OS notification is silent in
   // the wick-open path (silent: true in sw.js so the OS surface stays
@@ -225,33 +260,34 @@
   // — otherwise the user has no chance of noticing the card if they
   // were looking at a different window or another tab.
   //
-  // Best-effort: many browsers gate AudioContext on user interaction;
-  // any error swallows. WebAudio over a static asset means no extra
-  // HTTP request and no decode delay.
+  // No-op until the user has interacted with the page once (primes
+  // chimeCtx via the listeners above). Best-effort throughout.
   function playLifecycleChime() {
+    if (!chimeCtx) return;
     try {
-      var Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      var ctx = new Ctx();
-      var t = ctx.currentTime;
-      // Two short notes — E5 → A5 — at low volume so it feels like a
-      // notification chime, not a system alert.
+      // Re-attempt resume in case the context was suspended again
+      // (some browsers auto-suspend after long idle). Fire-and-forget.
+      if (chimeCtx.state === 'suspended' && chimeCtx.resume) {
+        chimeCtx.resume().catch(function () {});
+      }
+      var t = chimeCtx.currentTime;
+      // Two short notes — E5 → A5 — at moderate volume so it carries
+      // even on a backgrounded tab without sounding like an alert.
       [
-        { freq: 659.25, start: 0,    dur: 0.15 },
-        { freq: 880.00, start: 0.16, dur: 0.22 },
+        { freq: 659.25, start: 0,    dur: 0.18 },
+        { freq: 880.00, start: 0.18, dur: 0.26 },
       ].forEach(function (n) {
-        var osc = ctx.createOscillator();
-        var gain = ctx.createGain();
+        var osc = chimeCtx.createOscillator();
+        var gain = chimeCtx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(n.freq, t + n.start);
         gain.gain.setValueAtTime(0.0001, t + n.start);
-        gain.gain.exponentialRampToValueAtTime(0.18, t + n.start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.32, t + n.start + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.0001, t + n.start + n.dur);
-        osc.connect(gain).connect(ctx.destination);
+        osc.connect(gain).connect(chimeCtx.destination);
         osc.start(t + n.start);
         osc.stop(t + n.start + n.dur + 0.02);
       });
-      window.setTimeout(function () { try { ctx.close(); } catch (_) {} }, 600);
     } catch (_) {}
   }
 
