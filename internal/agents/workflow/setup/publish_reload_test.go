@@ -42,7 +42,7 @@ func TestPublishAndReload_RefreshesRouterDefinition(t *testing.T) {
 
 	require.NoError(t, m.Service.SaveDraft(id, minimalWorkflow(id, "v2")))
 
-	pub, err := PublishAndReload(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt, id)
+	pub, err := PublishAndReload(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt, id, "")
 	require.NoError(t, err)
 	require.Equal(t, "v2", pub.Name)
 
@@ -88,7 +88,7 @@ func TestManagerMCPReload_RefreshesRouterDefinition(t *testing.T) {
 	require.Equal(t, "v1", got.Name)
 
 	require.NoError(t, m.Service.SaveDraft(id, minimalWorkflow(id, "v2")))
-	if _, err := m.Service.Publish(id); err != nil {
+	if _, err := m.Service.Publish(id, ""); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	require.NoError(t, m.MCP.Reload(id))

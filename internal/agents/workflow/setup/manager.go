@@ -310,8 +310,8 @@ func HotReload(ctx context.Context, svc service.Service, router *trigger.Router,
 	return nil
 }
 
-func PublishAndReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id string) (workflow.Workflow, error) {
-	w, err := svc.Publish(id)
+func PublishAndReload(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler, id, actorID string) (workflow.Workflow, error) {
+	w, err := svc.Publish(id, actorID)
 	if err != nil {
 		return workflow.Workflow{}, err
 	}

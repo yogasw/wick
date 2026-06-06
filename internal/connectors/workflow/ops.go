@@ -294,7 +294,7 @@ func (h *handlers) toggle(c *connector.Ctx) (any, error) {
 func (h *handlers) publish(c *connector.Ctx) (any, error) {
 	id := c.Input("id")
 	enable := c.Input("enable") != "false" // default true
-	w, err := h.ops.Service.Publish(id)
+	w, err := h.ops.Service.Publish(id, "")
 	if err != nil {
 		return nil, err
 	}

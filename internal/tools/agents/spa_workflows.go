@@ -186,11 +186,14 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 	src.ID = w.ID
 	src.Name = w.Name
 	src.Enabled = false
+	if a := actorID(c); a != "" {
+		src.CreatedBy = a
+	}
 	if err := globalWorkflowMgr.Service.SaveDraft(w.ID, src); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, w.ID); err != nil {
+	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, w.ID, actorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -291,6 +294,9 @@ func spaWorkflowSave(c *tool.Ctx) {
 			return
 		}
 	}
+	if a := actorID(c); a != "" {
+		w.CreatedBy = a
+	}
 	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -310,7 +316,7 @@ func spaWorkflowPublish(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
-	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id); err != nil {
+	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id, actorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

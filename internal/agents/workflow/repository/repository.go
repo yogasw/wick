@@ -156,9 +156,21 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 			return errors.New("no draft to publish")
 		}
 		now := time.Now()
-		row.BodyPublished = row.BodyDraft
+		newVersion := row.Version + 1
+		body := row.BodyDraft
+		if w, perr := parse.Parse(id, []byte(row.BodyDraft)); perr == nil {
+			w.Version = newVersion
+			if b, merr := parse.Marshal(w); merr == nil {
+				body = string(b)
+			}
+		}
+		row.BodyPublished = body
 		row.BodyDraft = ""
 		row.HasDraft = false
+		row.Version = newVersion
+		if createdBy != "" {
+			row.CreatedBy = createdBy
+		}
 		row.UpdatedAt = now
 		if err := tx.Save(&row).Error; err != nil {
 			return err
@@ -166,7 +178,7 @@ func (r *Repo) Publish(id, createdBy, message string) (uint, error) {
 		snap := entity.WorkflowVersion{
 			WorkflowID: id,
 			Kind:       KindPublished,
-			Body:       row.BodyPublished,
+			Body:       body,
 			Message:    message,
 			CreatedBy:  createdBy,
 			CreatedAt:  now,
