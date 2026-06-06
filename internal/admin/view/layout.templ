@@ -38,7 +38,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						{Href: "/admin/tags", Label: "Tags", Active: activeTab == "tags"},
 					})
 				</div>
-				<div class="flex items-center gap-3 md:order-last">
+				<div class="flex items-center gap-3 ml-auto md:order-last md:ml-0">
 					<button
 						onclick="toggleDark()"
 						aria-label="Toggle dark mode"

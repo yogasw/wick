@@ -202,21 +202,45 @@
   }
 }
 
-/* Responsive data tables: stack rows into cards below md (768px) so wide
-   admin tables fit mobile, with no overflow box that would clip in-cell dropdowns. */
+/* Responsive data tables: below md (768px) each row becomes a standalone
+   card (no horizontal overflow; in-cell dropdowns stay un-clipped). */
 @media (max-width: 767px) {
   .resp-table,
-  .resp-table > tbody,
-  .resp-table > tbody > tr,
-  .resp-table > tbody > tr > td {
+  .resp-table tbody {
     display: block;
     width: 100%;
   }
-  .resp-table > thead {
+  .resp-table thead {
     display: none;
   }
-  .resp-table > tbody > tr > td {
+  .resp-table tr {
+    display: block;
+    margin-bottom: 0.75rem;
+    border: 1px solid rgb(var(--color-white-300));
+    border-radius: 0.75rem;
+    background: rgb(var(--color-white-100));
+    padding: 0.5rem 0.75rem;
+  }
+  .resp-table tr:last-child {
+    margin-bottom: 0;
+  }
+  .resp-table td {
+    display: block;
+    width: 100%;
+    border: 0 !important;
+    padding: 0.375rem 0;
     text-align: left;
+  }
+  .dark .resp-table tr {
+    border-color: rgb(var(--color-navy-600));
+    background: rgb(var(--color-navy-700));
+  }
+  /* The bordered table wrapper goes chrome-less on mobile so the cards
+     stand alone instead of nesting in a box. */
+  .resp-table-wrap {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 }
 
