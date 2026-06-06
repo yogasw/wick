@@ -183,10 +183,11 @@ type Node struct {
 	Examples            []ClassifyExample `yaml:"examples,omitempty"             json:"examples,omitempty"`
 
 	// agent
-	Workspace string   `yaml:"workspace,omitempty"  json:"workspace,omitempty"`
-	Skills    []string `yaml:"skills,omitempty"     json:"skills,omitempty"`
-	Tools     []string `yaml:"tools,omitempty"      json:"tools,omitempty"`
-	MaxTurns  int      `yaml:"max_turns,omitempty"  json:"max_turns,omitempty"`
+	Workspace     string   `yaml:"workspace,omitempty"      json:"workspace,omitempty"`
+	Skills        []string `yaml:"skills,omitempty"         json:"skills,omitempty"`
+	Tools         []string `yaml:"tools,omitempty"          json:"tools,omitempty"`
+	MaxTurns      int      `yaml:"max_turns,omitempty"      json:"max_turns,omitempty"`
+	RequireStatus bool     `yaml:"require_status,omitempty" json:"require_status,omitempty"`
 
 	// channel (action) — Channel field name avoided clash with Event.Channel
 	ChannelName string            `yaml:"channel,omitempty"   json:"channel,omitempty"`

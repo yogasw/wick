@@ -13,12 +13,16 @@ import (
 // errStore is a state.Store stub whose Save always fails.
 type errStore struct{ saveErr error }
 
-func (s *errStore) Save(id, runID string, st workflow.RunState) error { return s.saveErr }
-func (s *errStore) Load(id, runID string) (workflow.RunState, error)  { return workflow.RunState{}, nil }
+func (s *errStore) Save(id, runID string, st workflow.RunState) error        { return s.saveErr }
+func (s *errStore) Load(id, runID string) (workflow.RunState, error)         { return workflow.RunState{}, nil }
 func (s *errStore) AppendEvent(id, runID string, ev workflow.RunEvent) error { return nil }
 func (s *errStore) ListEvents(id, runID string) ([]workflow.RunEvent, error) { return nil, nil }
-func (s *errStore) ListRuns(id string) ([]string, error)                     { return nil, nil }
-func (s *errStore) IndexAppend(id string, entry state.IndexEntry) error      { return nil }
+func (s *errStore) ListEventsTail(id, runID string, limit int) ([]workflow.RunEvent, int, error) {
+	return nil, 0, nil
+}
+func (s *errStore) ListRuns(id string) ([]string, error)                { return nil, nil }
+func (s *errStore) Delete(id, runID string) error                       { return nil }
+func (s *errStore) IndexAppend(id string, entry state.IndexEntry) error { return nil }
 func (s *errStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
 	return nil, false, nil
 }
@@ -30,11 +34,15 @@ func (s *okStore) Save(id, runID string, st workflow.RunState) error {
 	s.saved++
 	return nil
 }
-func (s *okStore) Load(id, runID string) (workflow.RunState, error)          { return workflow.RunState{}, nil }
-func (s *okStore) AppendEvent(id, runID string, ev workflow.RunEvent) error  { return nil }
-func (s *okStore) ListEvents(id, runID string) ([]workflow.RunEvent, error)  { return nil, nil }
-func (s *okStore) ListRuns(id string) ([]string, error)                      { return nil, nil }
-func (s *okStore) IndexAppend(id string, entry state.IndexEntry) error       { return nil }
+func (s *okStore) Load(id, runID string) (workflow.RunState, error)         { return workflow.RunState{}, nil }
+func (s *okStore) AppendEvent(id, runID string, ev workflow.RunEvent) error { return nil }
+func (s *okStore) ListEvents(id, runID string) ([]workflow.RunEvent, error) { return nil, nil }
+func (s *okStore) ListEventsTail(id, runID string, limit int) ([]workflow.RunEvent, int, error) {
+	return nil, 0, nil
+}
+func (s *okStore) ListRuns(id string) ([]string, error)                { return nil, nil }
+func (s *okStore) Delete(id, runID string) error                       { return nil }
+func (s *okStore) IndexAppend(id string, entry state.IndexEntry) error { return nil }
 func (s *okStore) IndexList(id string, page, pageSize int) ([]state.IndexEntry, bool, error) {
 	return nil, false, nil
 }

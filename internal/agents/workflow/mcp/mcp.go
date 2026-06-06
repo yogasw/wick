@@ -54,6 +54,7 @@ type Ops struct {
 	// Always non-nil after New(); setup code registers sources via
 	// Pickers.Register(...). See picker.go.
 	Pickers *PickerRegistry
+	Reload  func(id string) error
 }
 
 // New wires the dispatcher.

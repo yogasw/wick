@@ -106,6 +106,15 @@ func SetConfigs(c *configs.Service) { globalConfigs = c }
 // project) can be read/written from the agents tool.
 func SetAuth(a *login.Service) { globalAuth = a }
 
+// actorID returns the logged-in user's id for authorship stamping, or
+// "" when no user is in context (internal / MCP callers).
+func actorID(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
 //

@@ -536,15 +536,25 @@ func (e *Engine) recordSuccess(ctx context.Context, id string, st *workflow.RunS
 	st.Completed = append(st.Completed, n.ID)
 	st.Outputs = rc.Outputs
 	st.UpdatedAt = e.Now()
-	e.emit(ctx, id, st.RunID, workflow.RunEvent{
-		Event: workflow.EventNodeCompleted,
-		Node:  n.ID,
-		Data: map[string]any{
-			"verdict":    out.Verdict,
-			"latency_ms": latencyMs,
-			"output":     truncateForEvent(nodeOutputAsMap(out)),
-		},
-	})
+	outTrunc := truncateForEvent(nodeOutputAsMap(out))
+	data := map[string]any{
+		"type":       string(n.Type),
+		"verdict":    out.Verdict,
+		"latency_ms": latencyMs,
+		"output":     outTrunc,
+	}
+	if n.Label != "" {
+		data["label"] = n.Label
+	}
+	if tu, ok := out.Fields["tools_used"]; ok {
+		data["tools_used"] = tu
+	}
+	if m, ok := outTrunc.(map[string]any); ok {
+		if _, truncated := m["_truncated"]; truncated {
+			data["output_truncated"] = true
+		}
+	}
+	e.emit(ctx, id, st.RunID, workflow.RunEvent{Event: workflow.EventNodeCompleted, Node: n.ID, Data: data})
 	e.saveState(ctx, id, st)
 }
 
@@ -552,7 +562,11 @@ func (e *Engine) failNode(ctx context.Context, id string, st *workflow.RunState,
 	st.Failed = append(st.Failed, n.ID)
 	st.Error = &workflow.NodeError{Node: n.ID, Type: string(n.Type), Message: err.Error()}
 	st.UpdatedAt = e.Now()
-	e.emit(ctx, id, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: map[string]any{"error": err.Error()}})
+	failData := map[string]any{"error": err.Error(), "type": string(n.Type)}
+	if n.Label != "" {
+		failData["label"] = n.Label
+	}
+	e.emit(ctx, id, st.RunID, workflow.RunEvent{Event: workflow.EventNodeFailed, Node: n.ID, Data: failData})
 	e.saveState(ctx, id, st)
 	return &workflow.ExecError{Node: n.ID, Type: n.Type, Wrapped: err}
 }

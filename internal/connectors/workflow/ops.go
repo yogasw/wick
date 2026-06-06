@@ -172,6 +172,11 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	if err := h.ops.Service.Update(w.ID, w); err != nil {
 		return nil, fmt.Errorf("auto-publish: %w", err)
 	}
+	if h.ops.Reload != nil {
+		if err := h.ops.Reload(w.ID); err != nil {
+			return nil, fmt.Errorf("create ok, reload failed: %w", err)
+		}
+	}
 	return map[string]any{
 		"id":        w.ID,
 		"name":      w.Name,
@@ -289,7 +294,7 @@ func (h *handlers) toggle(c *connector.Ctx) (any, error) {
 func (h *handlers) publish(c *connector.Ctx) (any, error) {
 	id := c.Input("id")
 	enable := c.Input("enable") != "false" // default true
-	w, err := h.ops.Service.Publish(id)
+	w, err := h.ops.Service.Publish(id, "")
 	if err != nil {
 		return nil, err
 	}
@@ -298,6 +303,11 @@ func (h *handlers) publish(c *connector.Ctx) (any, error) {
 			return nil, fmt.Errorf("publish ok, enable failed: %w", err)
 		}
 		w.Enabled = true
+	}
+	if h.ops.Reload != nil {
+		if err := h.ops.Reload(id); err != nil {
+			return nil, fmt.Errorf("publish ok, reload failed: %w", err)
+		}
 	}
 	return map[string]any{
 		"ok":      true,
@@ -550,11 +560,16 @@ func (h *handlers) getRun(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) getRunEvents(c *connector.Ctx) (any, error) {
-	events, err := h.ops.StateStore.ListEvents(c.Input("id"), c.Input("run_id"))
+	const tailCap = 200
+	events, total, err := h.ops.StateStore.ListEventsTail(c.Input("id"), c.Input("run_id"), tailCap)
 	if err != nil {
 		return nil, err
 	}
-	return events, nil
+	return map[string]any{
+		"events":    events,
+		"total":     total,
+		"truncated": total > len(events),
+	}, nil
 }
 
 func (h *handlers) copyRunToEditor(c *connector.Ctx) (any, error) {
