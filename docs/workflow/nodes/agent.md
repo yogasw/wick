@@ -20,7 +20,7 @@ Spawn an agent turn through the existing pool. Templated prompt, optional skills
 | `provider` | string | | Provider name (`claude`, `codex`, `gemini`, …). Optional — falls back to workflow default. |
 | `skills` | array | | Skill names to expose to this turn. Per-provider — see [Providers](/guide/agents/providers). |
 | `tools` | array | | Tool names to allowlist. Empty = provider default. |
-| `max_turns` | int | | Cap on agent turns. Default unlimited. |
+| `max_turns` | int | | Cap on agentic turns passed as `--max-turns` to the provider CLI. `0` (default) = unlimited (provider default). |
 | `session` | string | | `new` = fresh session per run, empty = inherit the run's session. |
 
 ## Output
