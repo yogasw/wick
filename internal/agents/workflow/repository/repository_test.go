@@ -109,6 +109,70 @@ func TestSaveDraftThenPublish(t *testing.T) {
 	}
 }
 
+// TestPublishBumpsVersionAndRecordsPublisher verifies publish increments
+// the workflows.version, records the acting publisher on both the row and
+// the published snapshot, and syncs the version into the published body.
+func TestPublishBumpsVersionAndRecordsPublisher(t *testing.T) {
+	r := New(openMem(t))
+	if err := r.Create("gamma", "Gamma", "creator-uuid"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	w := sampleWorkflow("gamma")
+	w.Version = 3
+	if _, err := r.SaveDraft("gamma", w, "drafter-uuid", "edit"); err != nil {
+		t.Fatalf("save draft: %v", err)
+	}
+	before, _ := r.Get("gamma")
+	if before.Version != 3 {
+		t.Fatalf("version after save should mirror body (3), got %d", before.Version)
+	}
+
+	if _, err := r.Publish("gamma", "publisher-uuid", "ship"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	row, _ := r.Get("gamma")
+	if row.Version != 4 {
+		t.Errorf("version should increment to 4 on publish, got %d", row.Version)
+	}
+	if row.CreatedBy != "publisher-uuid" {
+		t.Errorf("workflows.created_by should be the publisher, got %q", row.CreatedBy)
+	}
+	if !strings.Contains(row.BodyPublished, `"version": 4`) {
+		t.Errorf("published body version should sync to 4: %s", row.BodyPublished)
+	}
+
+	vs, _ := r.Versions("gamma")
+	var pubCreatedBy string
+	for i := range vs {
+		if vs[i].Kind == "published" {
+			pubCreatedBy = vs[i].CreatedBy
+			break
+		}
+	}
+	if pubCreatedBy != "publisher-uuid" {
+		t.Errorf("published snapshot created_by should be publisher, got %q", pubCreatedBy)
+	}
+}
+
+// TestPublishKeepsCreatorWhenActorEmpty ensures an empty actor (e.g. MCP
+// with no user context) does not blank an existing created_by.
+func TestPublishKeepsCreatorWhenActorEmpty(t *testing.T) {
+	r := New(openMem(t))
+	if err := r.Create("delta", "Delta", "creator-uuid"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := r.SaveDraft("delta", sampleWorkflow("delta"), "creator-uuid", "edit"); err != nil {
+		t.Fatalf("save draft: %v", err)
+	}
+	if _, err := r.Publish("delta", "", "ship"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	row, _ := r.Get("delta")
+	if row.CreatedBy != "creator-uuid" {
+		t.Errorf("empty actor must not blank created_by, got %q", row.CreatedBy)
+	}
+}
+
 // TestDiscardDraft clears the draft slot without touching published or
 // the history.
 func TestDiscardDraft(t *testing.T) {

@@ -255,7 +255,7 @@ func (s *DBService) SaveDraft(id string, w workflow.Workflow) error {
 // Publish promotes the draft to the published slot, appends a
 // published-kind snapshot, and validates before committing so a broken
 // draft can't go live.
-func (s *DBService) Publish(id string) (workflow.Workflow, error) {
+func (s *DBService) Publish(id, actorID string) (workflow.Workflow, error) {
 	if err := parse.ValidateID(id); err != nil {
 		return workflow.Workflow{}, err
 	}
@@ -277,8 +277,16 @@ func (s *DBService) Publish(id string) (workflow.Workflow, error) {
 	if r := parse.Validate(draft); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("cannot publish — fix validation errors:\n%s", r.Error())
 	}
-	if _, err := s.repo.Publish(id, draft.CreatedBy, ""); err != nil {
+	publisher := actorID
+	if publisher == "" {
+		publisher = draft.CreatedBy
+	}
+	if _, err := s.repo.Publish(id, publisher, ""); err != nil {
 		return workflow.Workflow{}, err
+	}
+	draft.Version++
+	if actorID != "" {
+		draft.CreatedBy = actorID
 	}
 	return draft, nil
 }
