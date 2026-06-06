@@ -51,6 +51,11 @@
 
   let activeTab = $state<"params" | "settings">("params");
 
+  // Mobile pane switcher — same pattern as NodeDetailModal: the 3
+  // columns stack on phones and this picks which is shown. Ignored on
+  // lg+ where all three render side by side.
+  let mobilePane = $state<"input" | "editor" | "output">("editor");
+
   // Channel + event search filter — useful when an integration ships
   // many events (Slack's ~12). Empty string = show all.
   let channelFilter = $state("");
@@ -151,25 +156,40 @@
     onclick={close}
   >
     <div
-      class="rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
+      class="absolute inset-2 lg:left-4 lg:right-4 lg:top-8 lg:bottom-8
+             rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
              text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
-      style="position:absolute; left:16px; right:16px; top:32px; bottom:32px;"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
       <!-- Header. -->
       <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200 dark:border-navy-600">
         <span class="h-2 w-2 rounded-full {triggerHeadColour[trigger.type] ?? 'bg-amber-400'}"></span>
-        <span class="text-sm font-semibold">{trigger.label || trigger.type}</span>
-        <span class="text-xs text-black-700 dark:text-black-600 font-mono">trigger · {trigger.type}</span>
+        <span class="text-sm font-semibold truncate">{trigger.label || trigger.type}</span>
+        <span class="text-xs text-black-700 dark:text-black-600 font-mono shrink-0">trigger · {trigger.type}</span>
         <div class="flex-1"></div>
-        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none" onclick={close} aria-label="Close">✕</button>
+        <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100 text-xl leading-none shrink-0" onclick={close} aria-label="Close">✕</button>
       </header>
 
-      <!-- 3-column body. -->
-      <div class="flex-1 grid divide-x divide-white-300 dark:divide-navy-600 dark:divide-white-300 dark:divide-navy-600 min-h-0" style="grid-template-columns: 1fr 2fr 1fr;">
+      <!-- Mobile pane switcher — hidden on lg where all 3 columns show. -->
+      <div class="lg:hidden flex border-b border-slate-200 dark:border-navy-600 text-xs font-medium shrink-0">
+        {#each [["input", "Input"], ["editor", "Editor"], ["output", "Output"]] as pane}
+          <button
+            type="button"
+            class="flex-1 py-2 border-b-2 transition-colors"
+            class:border-rose-500={mobilePane === pane[0]}
+            class:text-rose-600={mobilePane === pane[0]}
+            class:border-transparent={mobilePane !== pane[0]}
+            class:text-black-700={mobilePane !== pane[0]}
+            onclick={() => (mobilePane = pane[0] as "input" | "editor" | "output")}
+          >{pane[1]}</button>
+        {/each}
+      </div>
+
+      <!-- Body: single stacked pane on mobile, 3 columns on lg+. -->
+      <div class="flex-1 flex flex-col lg:grid lg:grid-cols-[1fr_2fr_1fr] lg:divide-x divide-white-300 dark:divide-navy-600 min-h-0">
         <!-- LEFT: trigger has no upstream by definition. -->
-        <section class="flex flex-col p-4 overflow-y-auto">
+        <section class="flex flex-1 lg:flex min-h-0 flex-col p-4 overflow-y-auto" class:hidden={mobilePane !== "input"}>
           <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">INPUT</div>
           <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
             <div class="text-2xl">⤓</div>
@@ -181,7 +201,7 @@
         </section>
 
         <!-- MIDDLE: parameters + settings. -->
-        <section class="flex flex-col overflow-y-auto">
+        <section class="flex flex-1 lg:flex min-h-0 flex-col overflow-y-auto" class:hidden={mobilePane !== "editor"}>
           <nav class="flex items-center border-b border-slate-200 dark:border-navy-600 px-4 text-sm">
             {#each ["params", "settings"] as t}
               <button
@@ -492,7 +512,7 @@
         <!-- RIGHT: last received event preview. Empty until the SSE
              stream surfaces a payload — same n8n-style affordance as
              NodeDetailModal's output column. -->
-        <section class="flex flex-col p-4 overflow-y-auto">
+        <section class="flex flex-1 lg:flex min-h-0 flex-col p-4 overflow-y-auto" class:hidden={mobilePane !== "output"}>
           <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">OUTPUT</div>
           <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
             <div class="text-2xl">⤒</div>
