@@ -136,13 +136,17 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)
 
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stdin pipe: %w", err)
-	}
+	// Codex reads its prompt from argv (positional [PROMPT]), never from
+	// stdin. We must give the child an already-closed stdin so codex sees
+	// immediate EOF and does not block on "Reading additional input from
+	// stdin". A StdinPipe + Close() is NOT reliable here: on Windows the
+	// codex.cmd batch → node wrapper does not always propagate the pipe
+	// close as EOF, so the node process hangs forever. Setting Stdin to a
+	// nil/closed reader makes Go wire the child's stdin to the OS null
+	// device (NUL / /dev/null), which always EOFs instantly.
+	cmd.Stdin = nil
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = stdin.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = os.Stderr
@@ -154,15 +158,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		Str("resume", opt.ResumeID).
 		Msg("agents.spawn: starting (codex)")
 	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
 		log.Error().Err(err).Str("bin", bin).Msg("agents.spawn: codex start failed")
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
-	// Close stdin immediately — codex reads the prompt from argv, not stdin.
-	// Leaving stdin open causes codex to block on "Reading additional input from stdin".
-	_ = stdin.Close()
 	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (codex)")
-	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+	return &process{cmd: cmd, stdout: stdout}, nil
 }
 
 // applyHookConfig installs / removes the per-workspace hook config
@@ -196,14 +196,21 @@ func (s Spawner) applyHookConfig(opt provider.SpawnOptions) bool {
 }
 
 // process implements provider.Process for a started codex subprocess.
+// Codex takes its prompt from argv, so there is no stdin writer — Stdin()
+// returns a no-op closer to satisfy the Process interface.
 type process struct {
 	cmd    *exec.Cmd
-	stdin  io.WriteCloser
 	stdout io.ReadCloser
 }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
-func (p *process) Stdin() io.WriteCloser { return p.stdin }
+func (p *process) Stdin() io.WriteCloser { return noopWriteCloser{} }
+
+// noopWriteCloser discards writes; codex never reads stdin.
+type noopWriteCloser struct{}
+
+func (noopWriteCloser) Write(b []byte) (int, error) { return len(b), nil }
+func (noopWriteCloser) Close() error                { return nil }
 func (p *process) Wait() error           { return p.cmd.Wait() }
 func (p *process) Pid() int {
 	if p.cmd == nil || p.cmd.Process == nil {

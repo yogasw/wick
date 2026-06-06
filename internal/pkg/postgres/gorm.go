@@ -1,10 +1,11 @@
 package postgres
 
 import (
-	"github.com/yogasw/wick/internal/pkg/config"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/yogasw/wick/internal/pkg/config"
 
 	"github.com/glebarez/sqlite"
 	"github.com/rs/zerolog/log"
@@ -24,7 +25,7 @@ func NewGORM(c config.Database) *gorm.DB {
 	}
 
 	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger: NewLogLevel("warn"),
+		// Logger: NewLogLevel("debug"),
 	})
 	if err != nil {
 		log.Fatal().Msgf("failed to opening db conn: %s", err.Error())

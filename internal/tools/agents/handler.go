@@ -24,6 +24,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -178,6 +179,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
+	r.GET("/sessions/{id}/processes", sessionProcesses)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
 	r.POST("/sessions/{id}/files/save", sessionContextSave)
@@ -214,6 +216,10 @@ func Register(r tool.Router) {
 	r.DELETE("/presets/{name}", deletePreset)
 
 	r.GET("/providers", providersPage)
+	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
+	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
+	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
+	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
@@ -1201,6 +1207,62 @@ func sessionUnsubscribe(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"subscribed": false})
 }
 
+// sessionProcesses returns active pool entries for the given session as JSON.
+func sessionProcesses(c *tool.Ctx) {
+	id := c.PathValue("id")
+	type procEntry struct {
+		SessionID string `json:"session_id"`
+		AgentName string `json:"agent_name"`
+		Provider  string `json:"provider"` // "type/name" e.g. codex/codex
+		PID       int    `json:"pid"`
+		Queued    int    `json:"queued"` // messages waiting after current turn
+		Lifecycle string `json:"lifecycle"`
+		Substate  string `json:"substate"`
+		Alive     bool   `json:"alive"` // OS-verified: PID exists AND is our process
+	}
+	var out []procEntry
+	if globalPool != nil {
+		// Opening the panel is a natural reconcile trigger: drop any
+		// active entry whose subprocess is actually dead (crashed /
+		// externally killed without the reader seeing EOF). Releases the
+		// slot + drains the queue so a zombie idle entry can't wedge it.
+		globalPool.ReconcileDead()
+		// Cross-session view: list every active spawn in the pool, not just
+		// this session's. With a high concurrency cap + multi-agent, the
+		// operator wants the whole picture from any session's panel.
+		_ = id
+		for _, e := range globalPool.ActiveSnapshot() {
+			// PID alive AND identity matches (recycled PID owned by another
+			// process reads as not-alive). 0 = test fake / pre-PID spawn.
+			//
+			// Respawn-mode agents (codex) have NO live process between turns
+			// by design — the one-shot turn process exits and the agent idles
+			// until the next message. A dead PID there is healthy, not a
+			// zombie, so don't flag it dead; the lifecycle/substate
+			// (idle/working) already conveys the real status.
+			alive := e.Respawns || e.PID == 0 || processctl.ProcessAlive(e.PID)
+			prov := e.ProviderType
+			if e.ProviderName != "" && e.ProviderName != e.ProviderType {
+				prov = e.ProviderType + "/" + e.ProviderName
+			}
+			out = append(out, procEntry{
+				SessionID: e.SessionID,
+				AgentName: e.AgentName,
+				Provider:  prov,
+				PID:       e.PID,
+				Queued:    e.Queued,
+				Lifecycle: e.Lifecycle,
+				Substate:  e.Substate,
+				Alive:     alive,
+			})
+		}
+	}
+	if out == nil {
+		out = []procEntry{}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
 func killAgent(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1622,6 +1684,43 @@ func deletePreset(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// poolStatsEvent builds a pool_stats SSE Event JSON string for the
+// current pool state. Returns "" when no pool is available.
+func poolStatsEvent() string {
+	if globalPool == nil {
+		return ""
+	}
+	entries := globalPool.ActiveSnapshot()
+	procs := make([]LiveProcessEntry, 0, len(entries))
+	for _, e := range entries {
+		prov := e.ProviderType
+		if e.ProviderName != "" && e.ProviderName != e.ProviderType {
+			prov = e.ProviderType + "/" + e.ProviderName
+		}
+		procs = append(procs, LiveProcessEntry{
+			SessionID: e.SessionID,
+			AgentName: e.AgentName,
+			Provider:  prov,
+			PID:       e.PID,
+			Queued:    e.Queued,
+			Alive:     e.Respawns || e.PID == 0 || processctl.ProcessAlive(e.PID),
+			Lifecycle: e.Lifecycle,
+			Substate:  e.Substate,
+		})
+	}
+	ev := Event{
+		Type: "pool_stats",
+	}
+	payload, _ := json.Marshal(PoolStatsPayload{
+		Active:        globalPool.Active(),
+		Max:           globalPool.MaxConcurrent(),
+		QueueLen:      globalPool.QueueLen(),
+		LiveProcesses: procs,
+	})
+	ev.Data = string(payload)
+	return ev.JSON()
+}
+
 // ── SSE ───────────────────────────────────────────────────────────────
 
 func streamSSE(c *tool.Ctx) {
@@ -1660,6 +1759,14 @@ func streamSSE(c *tool.Ctx) {
 			fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ev.JSON())
 		}
 		flush()
+	}
+	// Global subscriber: emit current pool_stats immediately on connect
+	// so the Process panel shows live data without waiting for next lifecycle event.
+	if sessionID == "" && globalPool != nil {
+		if ps := poolStatsEvent(); ps != "" {
+			fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ps)
+			flush()
+		}
 	}
 
 	for {

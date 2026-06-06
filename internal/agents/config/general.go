@@ -6,7 +6,7 @@ package config
 // Gate settings live in GateConfig; channel settings in SlackChannelConfig.
 type GeneralConfig struct {
 	Enabled               bool   `wick:"bool;desc=Enable the Agents feature."`
-	MaxConcurrent         int    `wick:"number;desc=Max concurrent agent subprocesses. Default: 2."`
+	MaxConcurrent         int    `wick:"number;desc=Max concurrent agent subprocesses across all providers. 0 = unlimited. Default: 2."`
 	IdleTimeoutSec        int    `wick:"number;desc=Seconds of inactivity before subprocess is killed. Default: 120."`
 	DefaultProvider       string `wick:"dropdown=claude|codex|gemini;desc=Default CLI provider."`
 	KillAfterIdleSec      int    `wick:"number;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`

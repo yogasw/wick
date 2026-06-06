@@ -163,6 +163,19 @@ type ProviderInstance struct {
 	// Only meaningful for codex instances; ignored by claude/gemini.
 	SandboxMode string `json:"sandbox_mode,omitempty"`
 
+	// MaxConcurrent caps how many parallel spawns this instance may
+	// have running at once. 0 = unlimited (follows the global pool cap).
+	MaxConcurrent int `json:"max_concurrent,omitempty"`
+
+	// SendMode overrides how this instance delivers a user message to its
+	// CLI. Empty = the provider type's default (claude → "append", codex →
+	// "queue"). Values: "append" (persistent stdin, one process; the CLI
+	// queues input itself), "queue" (one-shot per turn, mid-turn sends
+	// wait then run in order — every message processed, none lost), "spawn"
+	// (one-shot, every send a fresh parallel process — no queue, contexts
+	// independent). See provider.SendMode.
+	SendMode string `json:"send_mode,omitempty"`
+
 	// Storage configures credential/config file syncing for this
 	// instance. nil = sync disabled.
 	Storage *StorageConfig `json:"storage,omitempty"`

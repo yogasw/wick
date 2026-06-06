@@ -31,8 +31,12 @@
     editorHost = $("[data-context-editor]", modal);
     previewHost = $("[data-context-preview]", modal);
 
-    var openBtn = $("[data-context-open]");
-    if (openBtn) openBtn.addEventListener("click", openPanel);
+    $$("[data-context-open]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var tab = btn.dataset.openTab || "context";
+        openPanel(tab);
+      });
+    });
 
     $("[data-context-close]", panel).addEventListener("click", closePanel);
     if (backdrop) backdrop.addEventListener("click", closePanel);
@@ -69,9 +73,42 @@
       }
     });
 
+    // Tab switching: context / process
+    $$("[data-panel-tab]", panel).forEach(function (btn) {
+      btn.addEventListener("click", function () { switchPanelTab(btn.dataset.panelTab); });
+    });
+    switchPanelTab("context");
+
     // Prefetch file count so the FAB badge shows up immediately.
     prefetchCount();
   }
+
+  function switchPanelTab(tab) {
+    $$("[data-panel-tab]", panel).forEach(function (btn) {
+      var active = btn.dataset.panelTab === tab;
+      btn.classList.toggle("text-green-600", active);
+      btn.classList.toggle("dark:text-green-400", active);
+      btn.classList.toggle("border-t-2", active);
+      btn.classList.toggle("border-green-500", active);
+      btn.classList.toggle("text-black-700", !active);
+      btn.classList.toggle("dark:text-black-600", !active);
+      btn.classList.toggle("border-t-2", false);
+      if (active) btn.classList.add("border-t-2", "border-green-500");
+      else btn.classList.remove("border-t-2", "border-green-500");
+    });
+    $$("[data-panel-content]", panel).forEach(function (el) {
+      var show = el.dataset.panelContent === tab;
+      el.classList.toggle("hidden", !show);
+      el.classList.toggle("flex", show);
+    });
+    var title = panel.querySelector("[data-panel-title]");
+    if (title) title.textContent = tab === "process" ? "Active Processes" : "Context";
+  }
+
+  // Exported so process.js can switch to process tab programmatically.
+  window.switchContextPanelTab = function (tab) {
+    if (panel && !panel.classList.contains("hidden")) switchPanelTab(tab);
+  };
 
   function prefetchCount() {
     fetch(base() + "/sessions/" + sessionID() + "/files")
@@ -95,18 +132,23 @@
   function sessionID() { return panel.dataset.sessionId || ""; }
 
   // ── Panel open/close ───────────────────────────────────────────────
-  function openPanel() {
+  function panelHandle() {
+    var btn = document.querySelector("[data-context-open]");
+    return btn ? btn.closest("div") : null;
+  }
+  function openPanel(tab) {
     panel.classList.remove("hidden");
     if (backdrop) backdrop.classList.remove("hidden");
-    var fab = $("[data-context-open]");
-    if (fab) fab.classList.add("hidden");
-    loadList(true);
+    var h = panelHandle();
+    if (h) h.classList.add("hidden");
+    switchPanelTab(tab || "context");
+    if ((tab || "context") === "context") loadList(true);
   }
   function closePanel() {
     panel.classList.add("hidden");
     if (backdrop) backdrop.classList.add("hidden");
-    var fab = $("[data-context-open]");
-    if (fab) fab.classList.remove("hidden");
+    var h = panelHandle();
+    if (h) h.classList.remove("hidden");
   }
 
   function updateFabBadge(n) {
