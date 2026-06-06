@@ -912,8 +912,9 @@ func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID s
 func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID string) error {
 	existing, err := session.Load(p.cfg.Layout, sessionID)
 	if err == nil {
-		// Session exists — backfill project if it was created before one was configured.
-		if projectID != "" && existing.Meta.ProjectID == "" {
+		// Backfill project only before a conversation exists; moving the
+		// cwd after would orphan the resumable session (claude is per-cwd).
+		if projectID != "" && existing.Meta.ProjectID == "" && !sessionHasCLISession(existing) {
 			if swErr := session.SetProject(ctx, p.cfg.Layout, sessionID, projectID); swErr != nil {
 				log.Warn().Str("session", sessionID).Str("project", projectID).Err(swErr).Msg("pool: backfill project failed")
 			} else if updated, ldErr := session.Load(p.cfg.Layout, sessionID); ldErr == nil {
@@ -1302,6 +1303,17 @@ func (p *Pool) healStaleResume(sessionID, agentName string) {
 	}
 	log.Info().Str("session", sessionID).Str("agent", agentName).
 		Msg("pool: cleared stale CLI resume id (No conversation found) — next spawn starts fresh")
+}
+
+// sessionHasCLISession reports whether any agent already captured a CLI
+// session id (i.e. a resumable conversation exists for this session).
+func sessionHasCLISession(s session.Session) bool {
+	for _, a := range s.Agents {
+		if a.CLISessionID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionKey is the canonical map key for an active agent.
