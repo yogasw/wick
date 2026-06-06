@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 	"strings"
@@ -43,6 +44,22 @@ type AuthMiddleware struct {
 	users          userResolver
 	oauth          oauthValidator // optional; nil disables OAuth validation
 	resourceMetaURL string        // absolute URL to /.well-known/oauth-protected-resource
+	// internalToken authenticates wick's own agent spawns over loopback;
+	// matching it grants a synthetic admin principal. Empty = off.
+	internalToken string
+}
+
+// WithInternalToken sets the per-boot internal MCP secret agent spawns
+// send as their Bearer token to reach the live MCP server over loopback.
+func (m *AuthMiddleware) WithInternalToken(token string) *AuthMiddleware {
+	m.internalToken = token
+	return m
+}
+
+// internalSystemUser is the synthetic admin principal the internal
+// token maps to (full connector visibility, never persisted).
+func internalSystemUser() *entity.User {
+	return &entity.User{ID: "wick-agent-internal", Name: "wick agent (internal)", Role: entity.RoleAdmin, Approved: true}
 }
 
 // NewAuthMiddleware wires the bearer middleware. Pass nil oauth to
@@ -62,6 +79,12 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		token, ok := bearerFromHeader(r)
 		if !ok {
 			m.reject(w, "")
+			return
+		}
+
+		if m.internalToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.internalToken)) == 1 {
+			ctx := login.WithUser(r.Context(), internalSystemUser(), nil)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
