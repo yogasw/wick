@@ -167,3 +167,33 @@ func TestSetMaxTurns(t *testing.T) {
 		t.Fatalf("after update want 1 agent maxTurns=9, got %+v", s.Agents)
 	}
 }
+
+func TestSetCLISessionID(t *testing.T) {
+	layout := newLayout(t)
+	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S1", Origin: OriginUI})
+	if err := AddAgent(layout, "S1", "main", "claude"); err != nil {
+		t.Fatalf("add agent: %v", err)
+	}
+
+	if err := SetCLISessionID(layout, "S1", "main", "abc-123"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	s, _ := Load(layout, "S1")
+	if s.Agents[0].CLISessionID != "abc-123" {
+		t.Fatalf("set cli id: got %q", s.Agents[0].CLISessionID)
+	}
+
+	// Clearing with "" wipes the stale id so the next spawn is fresh.
+	if err := SetCLISessionID(layout, "S1", "main", ""); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	s, _ = Load(layout, "S1")
+	if s.Agents[0].CLISessionID != "" {
+		t.Fatalf("clear cli id: got %q", s.Agents[0].CLISessionID)
+	}
+
+	// Unknown agent → no-op, no error.
+	if err := SetCLISessionID(layout, "S1", "ghost", "x"); err != nil {
+		t.Fatalf("missing agent should be no-op: %v", err)
+	}
+}

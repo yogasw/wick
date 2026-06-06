@@ -1253,6 +1253,9 @@ func (p *Pool) DequeueSession(sessionID string) int {
 // claude (append mode) keeps the 1-agent-1-process model: every exit is
 // the agent dying, so all reasons release.
 func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason) {
+	if reason == provider.ExitError {
+		p.healStaleResume(sessionID, agentName)
+	}
 	if reason == provider.ExitClean || reason == provider.ExitRespawn {
 		p.mu.Lock()
 		entry, ok := p.active[sessionKey(sessionID, agentName)]
@@ -1270,6 +1273,35 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 		}
 	}
 	p.onAgentExit(sessionID, agentName)
+}
+
+// healStaleResume clears the captured CLI session id when a spawn that
+// used --resume failed because the CLI couldn't find that conversation
+// (e.g. it was created in a different cwd). Without this the session is
+// wedged: every retry re-spawns with the same dead id and fails the
+// same way. After clearing, the next spawn starts a fresh conversation
+// and re-captures a usable id. Read the agent BEFORE onAgentExit
+// releases the slot.
+func (p *Pool) healStaleResume(sessionID, agentName string) {
+	p.mu.Lock()
+	entry, ok := p.active[sessionKey(sessionID, agentName)]
+	p.mu.Unlock()
+	if !ok || entry.agent == nil {
+		return
+	}
+	if entry.agent.SpawnResumeID() == "" {
+		return // fresh spawn — nothing stale to clear
+	}
+	if !provider.IsResumeNotFound(entry.agent.StderrTail()) {
+		return
+	}
+	if err := session.SetCLISessionID(p.cfg.Layout, sessionID, agentName, ""); err != nil {
+		log.Warn().Str("session", sessionID).Str("agent", agentName).Err(err).
+			Msg("pool: failed clearing stale resume id")
+		return
+	}
+	log.Info().Str("session", sessionID).Str("agent", agentName).
+		Msg("pool: cleared stale CLI resume id (No conversation found) — next spawn starts fresh")
 }
 
 // sessionKey is the canonical map key for an active agent.

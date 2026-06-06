@@ -541,6 +541,37 @@ func (a *Agent) ResumeID() string {
 	return a.resumeID
 }
 
+// SpawnResumeID returns the --resume id this spawn was STARTED with (vs
+// ResumeID which reflects the live captured id). Pool reads it on exit
+// to tell a fresh-spawn failure from a stale-resume failure.
+func (a *Agent) SpawnResumeID() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.ResumeID
+}
+
+// StderrTail returns the tail of the current/last subprocess's stderr,
+// or "" if the spawner doesn't capture it. Safe after exit — the dead
+// process still holds its buffer.
+func (a *Agent) StderrTail() string {
+	a.mu.Lock()
+	p := a.proc
+	a.mu.Unlock()
+	if t, ok := p.(interface{ StderrTail() string }); ok {
+		return t.StderrTail()
+	}
+	return ""
+}
+
+// IsResumeNotFound reports whether subprocess output indicates a
+// --resume id the CLI couldn't find (a stale session, e.g. resumed from
+// a different cwd than it was created in). The pool clears the captured
+// CLI session id on this so the next spawn starts fresh instead of
+// failing on the same dead id forever.
+func IsResumeNotFound(s string) bool {
+	return strings.Contains(strings.ToLower(s), "no conversation found")
+}
+
 // PID returns the OS pid of the current subprocess, or 0 if not
 // running. Pool reads this after Start so the spawn log captures the
 // real pid (Build runs before Start, so the start event written there
