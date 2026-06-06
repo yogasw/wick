@@ -81,6 +81,16 @@ A workflow is **not** an agent — it's the layer above. An [`agent`](./nodes/ag
 
 The workflow body is stored in the database. Per-run artefacts (state snapshot, event log) land under `<BaseDir>/workflows/<id>/runs/<run-id>/` — see [Run state](./state).
 
+## Import & export
+
+The workflow list has an **Import** action next to **New Workflow**. Paste (or drop) the JSON of a previously exported workflow — the same graph shape shown in [Anatomy](#anatomy) above — and wick validates it, creates a new workflow, and opens it in the [canvas editor](./canvas) as a draft.
+
+Use this to back up a workflow, move one between environments, or share a starting point with a teammate. Import always lands as a **draft**: nothing goes live until you Publish.
+
+## Publishing
+
+Editing happens on a draft copy; **Publish** promotes the draft to the live version. Publishing is **hot** — wick immediately re-registers the workflow's triggers (channel / webhook inbound rules and cron / `schedule_at` scheduled jobs) with no server restart. A cron tick or Slack mention that arrives right after you publish runs the new graph. The same hot-reload fires when you toggle a workflow enabled/disabled.
+
 ## Gate integration
 
 Workflow `shell` and `agent` nodes participate in the [Command Gate](/guide/command-gate) policy:

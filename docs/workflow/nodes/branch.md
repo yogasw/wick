@@ -51,6 +51,10 @@ Boolean check:
 
 Engine routes to one matching edge. If no edge matches, the run dead-ends — add a default edge for catch-all.
 
+### Setting edge cases in the canvas
+
+In the [canvas editor](../canvas) each outgoing edge of a `branch` (or [`classify`](./classify)) node carries a `case:` label that decides which verdict routes down it. Select the edge and set its case from the inspector — no need to hand-edit the graph JSON. Edges show their case as a badge, so the routing is readable at a glance, and you can mark one edge as the catch-all default.
+
 ## Pair with
 
 - [`classify`](./classify) — produces a verdict you can route here.

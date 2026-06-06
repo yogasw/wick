@@ -85,7 +85,42 @@ Slack ops are a common right-hand side of a workflow `connector` node:
     text: "New ticket from {{.Node.trigger.payload.user}}: {{.Node.trigger.payload.text}}"
 ```
 
-For Slack actions that aren't 1:1 with a Web API call — modals, `respond_url`, App Home publish — use a `channel` node instead of `connector`. See [Workflows ▶ channel node](/workflow/nodes/channel).
+### Channel-node actions
+
+For Slack actions that aren't 1:1 with a plain Web API call — modals, ephemerals, App Home, slash-command replies — use a [`channel`](/workflow/nodes/channel) node (`channel: slack`) and pick the action with `op`. These are wired to the live Slack API and complement the connector ops above.
+
+| `op` | Destructive | Inputs | Returns |
+|---|---|---|---|
+| `send_message` | no | `channel`, `text`, `thread_ts?` | `ts`, `channel` |
+| `reply_thread` | no | `channel`, `thread`, `text` | `ts` |
+| `send_dm` | no | `user`, `text` | `ts`, `channel` |
+| `send_ephemeral` | no | `channel`, `user`, `text` | `ts` |
+| `update_message` | yes | `channel`, `ts`, `text` | `ts` |
+| `react` | no | `channel`, `message_ts`, `emoji` | `ok` |
+| `open_modal` | no | `trigger_id`, `view` | `view_id`, `view_hash` |
+| `update_modal` | no | `view_id`, `view`, `view_hash?` | `view_id` |
+| `push_modal` | no | `trigger_id`, `view` | `view_id`, `view_hash` |
+| `open_dm` | no | `user` | `channel` |
+| `publish_home` | no | `user_id`, `view` | `view_id` |
+| `respond_url` | no | `response_url`, `text?`, `replace_original?`, `delete_original?`, `response_type?` | `ok` |
+
+```yaml
+- id: ask
+  type: channel
+  channel: slack
+  op: open_modal
+  args:
+    trigger_id: "{{.Node.trigger.payload.trigger_id}}"
+    view: "{{.Node.build_view.result}}"
+```
+
+Notes:
+
+- `view` is a Slack [Block Kit](https://api.slack.com/block-kit) view JSON (string or object). Build it with a [`transform`](/workflow/nodes/transform) node upstream.
+- `open_modal` / `push_modal` need a fresh `trigger_id` — Slack expires it ~3s after the interaction, so the path from inbound event to the modal op must be short.
+- `react` is idempotent — re-adding an existing emoji is a no-op, not an error.
+
+See [Workflows ▶ channel node](/workflow/nodes/channel).
 
 ## See also
 
