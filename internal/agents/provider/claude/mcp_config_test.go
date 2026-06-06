@@ -32,25 +32,55 @@ func TestHelpHasMCPConfig(t *testing.T) {
 	}
 }
 
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
 func TestMCPConfigArgs(t *testing.T) {
 	ep, tok := "http://127.0.0.1:9425/mcp", "secret123"
 
-	// Default (non-strict): --mcp-config only, NO --strict-mcp-config, so
-	// the user's own MCP servers keep working (the regression fix).
+	// Default (non-strict): --mcp-config (so the user's own MCP servers
+	// keep working) PLUS --allowedTools pre-approving wick's own MCP
+	// tools — the agent runs headless, so wick_* calls must not block on
+	// a permission prompt nobody can answer.
 	def := mcpConfigArgs(ep, tok, false)
-	if len(def) != 2 || def[0] != "--mcp-config" {
-		t.Fatalf("default args = %v, want [--mcp-config <json>]", def)
+	if _, ok := argValue(def, "--mcp-config"); !ok {
+		t.Fatalf("default args missing --mcp-config: %v", def)
 	}
 	for _, a := range def {
 		if a == "--strict-mcp-config" {
 			t.Fatal("default path must NOT include --strict-mcp-config")
 		}
 	}
+	allowed, ok := argValue(def, "--allowedTools")
+	if !ok {
+		t.Fatalf("default args missing --allowedTools: %v", def)
+	}
+	for _, want := range []string{
+		"mcp__wick__wick_list",
+		"mcp__wick__wick_search",
+		"mcp__wick__wick_get",
+		"mcp__wick__wick_execute",
+		"mcp__wick__wick_list_providers",
+	} {
+		if !strings.Contains(allowed, want) {
+			t.Errorf("--allowedTools %q missing %q", allowed, want)
+		}
+	}
 
-	// Opt-in strict isolation.
+	// Opt-in strict isolation still carries both --strict-mcp-config and
+	// the pre-approved wick tools.
 	strict := mcpConfigArgs(ep, tok, true)
-	if len(strict) != 3 || strict[0] != "--strict-mcp-config" || strict[1] != "--mcp-config" {
-		t.Fatalf("strict args = %v, want [--strict-mcp-config --mcp-config <json>]", strict)
+	if strict[0] != "--strict-mcp-config" {
+		t.Fatalf("strict args = %v, want leading --strict-mcp-config", strict)
+	}
+	if _, ok := argValue(strict, "--allowedTools"); !ok {
+		t.Fatalf("strict args missing --allowedTools: %v", strict)
 	}
 
 	if mcpConfigArgs("", tok, false) != nil || mcpConfigArgs(ep, "", false) != nil {

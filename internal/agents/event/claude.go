@@ -285,9 +285,17 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// for short replies — claude can batch them).
 		p.partialTextEmitted = false
 		if raw.IsError {
+			// error_during_execution (e.g. a stale --resume id) puts the
+			// human detail on stderr, leaving .result empty — fall back to
+			// the subtype so the node doesn't fail with a blank
+			// "agent error: ".
+			msg := raw.Result
+			if msg == "" {
+				msg = raw.Subtype
+			}
 			return AgentEvent{
 				Type:     Error,
-				ErrorMsg: raw.Result,
+				ErrorMsg: msg,
 				Raw:      trimmed,
 			}, nil
 		}
