@@ -74,6 +74,12 @@ type Pool struct {
 	// drain) to finish before returning. Without this, tests that
 	// observe Active==0 race the trailing meta.json writes.
 	wg sync.WaitGroup
+
+	// providerMax resolves a provider instance's MaxConcurrent cap. Defaults
+	// to the registry lookup (provider.Find); tests inject a pure stub so
+	// capacity math is exercised without touching disk or the global
+	// provider registry (which Save mutates via an async rescan).
+	providerMax func(pType, pName string) int
 }
 
 // PoolConfig knobs.
@@ -239,6 +245,7 @@ func New(cfg PoolConfig) *Pool {
 		spawningKeys: map[string]struct{}{},
 		buffers:      map[string]*Buffer{},
 		stopCh:       make(chan struct{}),
+		providerMax:  providerMaxConcurrent,
 	}
 	if cfg.PreemptIdle {
 		p.wg.Add(1)

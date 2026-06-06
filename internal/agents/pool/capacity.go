@@ -64,7 +64,11 @@ func (p *Pool) ProviderCapacity(pType, pName string) Capacity {
 
 func (p *Pool) providerCapacityLocked(pType, pName string) Capacity {
 	used := p.providerUsedLocked(pType, pName)
-	max := providerMaxConcurrent(pType, pName)
+	maxFn := p.providerMax
+	if maxFn == nil {
+		maxFn = providerMaxConcurrent
+	}
+	max := maxFn(pType, pName)
 
 	global := p.capacityLocked()
 

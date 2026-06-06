@@ -1,22 +1,32 @@
 package pool
 
 import (
-	"runtime"
 	"testing"
-
-	"github.com/yogasw/wick/internal/agents/provider"
 )
 
 // newCapPool builds a bare Pool with just the fields capacity math reads
 // (active, spawningKeys, cfg.MaxConcurrent). No spawner / factory — we
 // poke p.active directly to model "N entries for provider X running".
+//
+// providerMax defaults to "everything unlimited" (0) so tests that only
+// exercise the global scope need no per-provider config. Tests that need a
+// finite per-provider cap call withProviderCaps to inject one — a pure
+// in-memory stub, so no disk write / async provider rescan / global
+// AppName mutation (all of which raced under -race in the old version).
 func newCapPool(globalMax int) *Pool {
 	return &Pool{
 		cfg:          PoolConfig{MaxConcurrent: globalMax},
 		active:       map[string]*runEntry{},
 		spawningKeys: map[string]struct{}{},
 		stopCh:       make(chan struct{}),
+		providerMax:  func(_, _ string) int { return 0 },
 	}
+}
+
+// withProviderCaps points the pool's cap resolver at a fixed map keyed by
+// "type/name". Missing keys = 0 (unlimited).
+func (p *Pool) withProviderCaps(caps map[string]int) {
+	p.providerMax = func(pType, pName string) int { return caps[pType+"/"+pName] }
 }
 
 func (p *Pool) addActive(key, pType, pName string) {
@@ -110,32 +120,11 @@ func TestProviderCapacity_CappedByGlobal(t *testing.T) {
 }
 
 // TestProviderCapacity_PerInstanceCap exercises the finite per-provider
-// path. providerMaxConcurrent reads userconfig via provider.Find, so we
-// point AppName + HOME at a temp dir and Save a codex instance with
-// MaxConcurrent=1. Then global 10, codex 1 → codex hard-capped at 1.
+// path: global 10, codex capped at 1 → codex hard-capped at 1 regardless
+// of global headroom.
 func TestProviderCapacity_PerInstanceCap(t *testing.T) {
-	tmp := t.TempDir()
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	} else {
-		t.Setenv("HOME", tmp)
-	}
-	prevApp := provider.AppName
-	provider.AppName = "wick-captest"
-	t.Cleanup(func() {
-		provider.AppName = prevApp
-		provider.InvalidateProbeCache("", "")
-	})
-
-	if err := provider.Save(provider.Instance{
-		Type:          provider.TypeCodex,
-		Name:          "codex",
-		MaxConcurrent: 1,
-	}); err != nil {
-		t.Fatalf("save codex instance: %v", err)
-	}
-
 	p := newCapPool(10)
+	p.withProviderCaps(map[string]int{"codex/codex": 1})
 
 	// No codex running yet: effective remaining = min(cap 1, global 10) = 1.
 	c := p.ProviderCapacity("codex", "codex")
@@ -167,21 +156,8 @@ func TestProviderCapacity_PerInstanceCap(t *testing.T) {
 // still applies even when the global cap is unlimited. global 0, codex 1
 // → codex hard-capped at 1.
 func TestProviderCapacity_FiniteUnderUnlimitedGlobal(t *testing.T) {
-	tmp := t.TempDir()
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	} else {
-		t.Setenv("HOME", tmp)
-	}
-	prevApp := provider.AppName
-	provider.AppName = "wick-captest3"
-	t.Cleanup(func() {
-		provider.AppName = prevApp
-		provider.InvalidateProbeCache("", "")
-	})
-	_ = provider.Save(provider.Instance{Type: provider.TypeCodex, Name: "codex", MaxConcurrent: 1})
-
 	p := newCapPool(0) // global unlimited
+	p.withProviderCaps(map[string]int{"codex/codex": 1})
 	c := p.ProviderCapacity("codex", "codex")
 	if c.Remaining != 1 {
 		t.Fatalf("codex idle under unlimited global: rem got %d want 1", c.Remaining)
@@ -196,21 +172,8 @@ func TestProviderCapacity_FiniteUnderUnlimitedGlobal(t *testing.T) {
 // TestSlotFreeLocked_GatesOnBothScopes: the spawn gate honours whichever
 // scope is tighter.
 func TestSlotFreeLocked_PerProviderTighter(t *testing.T) {
-	tmp := t.TempDir()
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", tmp)
-	} else {
-		t.Setenv("HOME", tmp)
-	}
-	prevApp := provider.AppName
-	provider.AppName = "wick-captest2"
-	t.Cleanup(func() {
-		provider.AppName = prevApp
-		provider.InvalidateProbeCache("", "")
-	})
-	_ = provider.Save(provider.Instance{Type: provider.TypeCodex, Name: "codex", MaxConcurrent: 1})
-
 	p := newCapPool(10)
+	p.withProviderCaps(map[string]int{"codex/codex": 1})
 	p.mu.Lock()
 	free := p.slotFreeLocked("codex", "codex")
 	p.mu.Unlock()
