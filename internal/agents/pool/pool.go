@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/processctl"
 )
 
@@ -88,9 +88,9 @@ type Pool struct {
 // bound. Empty = no default; the pool falls back to a per-session temp
 // dir so claude still has a stable cwd. See agents-design.md §0.2 D4.
 type PoolConfig struct {
-	MaxConcurrent    int
-	IdleTimeout      time.Duration
-	KillAfterIdle    time.Duration
+	MaxConcurrent int
+	IdleTimeout   time.Duration
+	KillAfterIdle time.Duration
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
 	// to wait for the idle TTL. The preempted session keeps its CLI session
@@ -177,11 +177,11 @@ type SpawnStartMeta struct {
 // are forwarded to the spawn logger so /tools/agents/providers can
 // surface per-provider history without re-parsing files.
 type FactoryOptions struct {
-	SessionID    string
-	AgentName    string
-	ProviderType string
-	ProviderName string
-	Workspace    string
+	SessionID     string
+	AgentName     string
+	ProviderType  string
+	ProviderName  string
+	Workspace     string
 	ResumeID      string
 	IdleTimeout   time.Duration
 	KillAfterIdle time.Duration
@@ -194,6 +194,9 @@ type FactoryOptions struct {
 	// into the spawn log so Recent Spawns can show the channel without a
 	// registry lookup.
 	Origin string
+	// MaxTurns caps agentic turns on the spawn (--max-turns). Pulled from
+	// the agent entry by the pool; 0 = no cap.
+	MaxTurns int
 }
 
 // queueEntry is one request waiting for a slot.
@@ -557,11 +560,13 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		}
 	}
 	resumeID := ""
+	maxTurns := 0
 	pType := ""
 	pName := ""
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
 			resumeID = a.CLISessionID
+			maxTurns = a.MaxTurns
 			// Provider field is stored as "type/name" (e.g. "claude/work").
 			// Fall back to bare type when no slash present.
 			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
@@ -591,6 +596,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		KillAfterIdle: p.cfg.KillAfterIdle,
 		PresetName:    sess.Meta.Preset,
 		Origin:        string(sess.Meta.Origin),
+		MaxTurns:      maxTurns,
 	})
 	if err != nil {
 		return err
@@ -885,6 +891,14 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // their own session ID (thread_ts) without going through the UI create flow.
 // Concurrent calls for the same ID are safe — session.Create returns a
 // benign "already exists" error that we suppress.
+
+// SetMaxTurns persists the per-spawn turn cap on the session's agent
+// entry so the next spawn passes --max-turns. 0 = no cap (provider
+// default). Creates the entry if missing — workflow agent nodes call
+// this before their first send, which is also what materializes it.
+func (p *Pool) SetMaxTurns(sessionID, agentName string, maxTurns int) error {
+	return session.SetMaxTurns(p.cfg.Layout, sessionID, agentName, maxTurns)
+}
 
 // EnsureSession is the public wrapper for ensureSession. Workflow's
 // session_init executor calls this to materialize the registry entry +

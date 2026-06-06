@@ -4,12 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/yogasw/wick/internal/safeexec"
 )
+
+// maxTurnsArgs builds the --max-turns argv. n <= 0 = no cap (provider
+// default / unlimited), so no flag is emitted.
+func maxTurnsArgs(n int) []string {
+	if n <= 0 {
+		return nil
+	}
+	return []string{"--max-turns", strconv.Itoa(n)}
+}
 
 func helpHasStrictMCP(help string) bool {
 	return strings.Contains(help, "--mcp-config") && strings.Contains(help, "--strict-mcp-config")

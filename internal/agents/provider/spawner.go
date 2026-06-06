@@ -96,4 +96,9 @@ type SpawnOptions struct {
 	// prompt as a positional arg (codex) rather than via stdin after spawn.
 	// Empty = no positional prompt arg appended. claude ignores this field.
 	InitialMessage string
+
+	// MaxTurns caps agentic turns for this spawn (--max-turns on claude).
+	// 0 = no cap (provider default / unlimited). Threaded from the
+	// workflow agent node's max_turns via the agent entry.
+	MaxTurns int
 }

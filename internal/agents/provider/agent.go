@@ -102,10 +102,10 @@ type Agent struct {
 type ExitReason int
 
 const (
-	ExitClean ExitReason = iota // subprocess returned normally
-	ExitIdle                    // idle TTL killed it
-	ExitStopped                 // Stop() was called
-	ExitError                   // wait returned an error
+	ExitClean   ExitReason = iota // subprocess returned normally
+	ExitIdle                      // idle TTL killed it
+	ExitStopped                   // Stop() was called
+	ExitError                     // wait returned an error
 	// ExitRespawn is the internal kill of the current process by
 	// respawnWithMessage so a fresh turn can spawn. The AGENT lives on —
 	// only one of its short-lived processes ended. The pool uses this to
@@ -118,9 +118,9 @@ const (
 // parser per spawn (parsers carry per-stream state — block index map
 // and so on — so we can't reuse one across processes).
 type Options struct {
-	Workspace     string
-	ResumeID      string
-	IdleTimeout   time.Duration
+	Workspace   string
+	ResumeID    string
+	IdleTimeout time.Duration
 	// KillAfterIdle is the extra grace period after IdleTimeout fires
 	// before the subprocess is actually killed. 0 = kill immediately.
 	// During the grace period, new output from the subprocess resets
@@ -156,6 +156,9 @@ type Options struct {
 	// SendMode decides what Send() does with a user message. See SendMode
 	// docs. Zero value (SendAppend) keeps the long-lived-stdin behaviour.
 	SendMode SendMode
+	// MaxTurns caps agentic turns on each spawn (--max-turns). 0 = no cap.
+	// Forwarded verbatim into SpawnOptions.
+	MaxTurns int
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -274,6 +277,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		Instance:   a.cfg.Instance,
 		GateBinary: a.cfg.GateBinary,
 		Preset:     a.cfg.Preset,
+		MaxTurns:   a.cfg.MaxTurns,
 	})
 	if err != nil {
 		cancel()
@@ -420,6 +424,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 		GateBinary:     a.cfg.GateBinary,
 		Preset:         a.cfg.Preset,
 		InitialMessage: text,
+		MaxTurns:       a.cfg.MaxTurns,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.

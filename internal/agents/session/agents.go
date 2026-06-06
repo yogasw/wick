@@ -24,6 +24,9 @@ type AgentEntry struct {
 	CreatedAt        time.Time         `json:"created_at"`
 	LastActive       time.Time         `json:"last_active,omitempty"`
 	ProviderSessions map[string]string `json:"provider_sessions,omitempty"`
+	// MaxTurns caps agentic turns on the next spawn (--max-turns).
+	// 0 = unlimited (provider default). Set per workflow agent node.
+	MaxTurns int `json:"max_turns,omitempty"`
 }
 
 // SaveAgents atomically rewrites sessions/<id>/agents.json. nil
@@ -59,6 +62,30 @@ func AddAgent(layout config.Layout, id, name, provider string) error {
 		Provider:  provider,
 		Status:    "idle",
 		CreatedAt: time.Now().UTC(),
+	})
+	return SaveAgents(layout, id, sess.Agents)
+}
+
+// SetMaxTurns persists the per-spawn turn cap on the agent entry,
+// creating the entry if it doesn't exist yet (workflow nodes set this
+// before the first send, which is also what materializes the entry).
+// spawn reads it to pass --max-turns; 0 = unlimited (provider default).
+func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	for i := range sess.Agents {
+		if sess.Agents[i].Name == name {
+			sess.Agents[i].MaxTurns = maxTurns
+			return SaveAgents(layout, id, sess.Agents)
+		}
+	}
+	sess.Agents = append(sess.Agents, AgentEntry{
+		Name:      name,
+		Status:    "idle",
+		CreatedAt: time.Now().UTC(),
+		MaxTurns:  maxTurns,
 	})
 	return SaveAgents(layout, id, sess.Agents)
 }

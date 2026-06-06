@@ -144,3 +144,26 @@ func TestInvalidID(t *testing.T) {
 		t.Fatal("bad id accepted")
 	}
 }
+
+func TestSetMaxTurns(t *testing.T) {
+	layout := newLayout(t)
+	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S1", Origin: OriginUI})
+
+	// Upsert: creates the agent entry when none exists yet.
+	if err := SetMaxTurns(layout, "S1", "main", 4); err != nil {
+		t.Fatalf("set (create): %v", err)
+	}
+	s, _ := Load(layout, "S1")
+	if len(s.Agents) != 1 || s.Agents[0].MaxTurns != 4 {
+		t.Fatalf("after create want 1 agent maxTurns=4, got %+v", s.Agents)
+	}
+
+	// Updates the existing entry in place (no duplicate row).
+	if err := SetMaxTurns(layout, "S1", "main", 9); err != nil {
+		t.Fatalf("set (update): %v", err)
+	}
+	s, _ = Load(layout, "S1")
+	if len(s.Agents) != 1 || s.Agents[0].MaxTurns != 9 {
+		t.Fatalf("after update want 1 agent maxTurns=9, got %+v", s.Agents)
+	}
+}

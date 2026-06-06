@@ -88,6 +88,16 @@ func TestMCPConfigArgs(t *testing.T) {
 	}
 }
 
+func TestMaxTurnsArgs(t *testing.T) {
+	if maxTurnsArgs(0) != nil || maxTurnsArgs(-1) != nil {
+		t.Fatal("0/negative must yield nil (unlimited)")
+	}
+	got := maxTurnsArgs(4)
+	if len(got) != 2 || got[0] != "--max-turns" || got[1] != "4" {
+		t.Fatalf("got %v, want [--max-turns 4]", got)
+	}
+}
+
 func TestMCPEndpointFromEnv(t *testing.T) {
 	t.Setenv("WICK_PORT", "9425")
 	if got := mcpEndpointFromEnv(); got != "http://127.0.0.1:9425/mcp" {
