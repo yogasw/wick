@@ -310,7 +310,7 @@
       aria-label="Publish menu"
     >▾</button>
     {#if publishMenuOpen}
-      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-20">
+      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-50">
         <button
           class="w-full px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-white-300 dark:bg-navy-600 disabled:opacity-50"
           disabled={!$dirty}
@@ -346,7 +346,7 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
     </button>
     {#if moreMenuOpen}
-      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-20">
+      <div class="absolute right-0 top-full mt-1 min-w-[180px] rounded shadow-lg bg-white dark:bg-navy-700 border border-slate-200 dark:border-navy-600 text-xs z-50">
         <!-- Mobile-only: these are dedicated buttons on md+, folded here
              on phones so the toolbar fits one row without scrolling. -->
         <button
