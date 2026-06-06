@@ -202,6 +202,24 @@
   }
 }
 
+/* Responsive data tables: stack rows into cards below md (768px) so wide
+   admin tables fit mobile, with no overflow box that would clip in-cell dropdowns. */
+@media (max-width: 767px) {
+  .resp-table,
+  .resp-table > tbody,
+  .resp-table > tbody > tr,
+  .resp-table > tbody > tr > td {
+    display: block;
+    width: 100%;
+  }
+  .resp-table > thead {
+    display: none;
+  }
+  .resp-table > tbody > tr > td {
+    text-align: left;
+  }
+}
+
 /* ── Keyframes ──────────────────────────────────────────────── */
 @keyframes tw-spin {
   to { transform: rotate(360deg); }

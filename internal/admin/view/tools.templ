@@ -12,7 +12,7 @@ templ ToolsPage(rows []ToolRow, allTags []*entity.Tag, user *entity.User) {
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Tool Permissions</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Public: anyone. Private: approved users — add <b>filter</b> tags to restrict further. Group tags are cosmetic (home grouping) unless they also toggle "Access filter". Disabling a tool hides it from everyone (admins too) and returns 404 on direct access.</p>
 			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-				<table class="w-full text-sm">
+				<table class="w-full text-sm resp-table">
 					<thead>
 						<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Tool</th>
