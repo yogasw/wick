@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/env"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	"github.com/yogasw/wick/internal/agents/workflow/state"
 )
 
 // ErrNotFound is returned when an id is missing.
@@ -55,7 +56,7 @@ type Service interface {
 	LoadDraft(id string) (workflow.Workflow, error)
 	HasDraft(id string) bool
 	SaveDraft(id string, w workflow.Workflow) error
-	Publish(id string) (workflow.Workflow, error)
+	Publish(id, actorID string) (workflow.Workflow, error)
 	DiscardDraft(id string) error
 
 	// Test fixtures live under the workflow as named cases. Name is the
@@ -193,7 +194,9 @@ func (s *FileService) Delete(id string) error {
 	if !storage.PathExists(dir) {
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	return os.RemoveAll(dir)
+	err := os.RemoveAll(dir)
+	state.EvictIndex(s.Layout.WorkflowIndexDir(id))
+	return err
 }
 
 // Toggle flips enabled flag atomically.
@@ -401,7 +404,7 @@ func (s *FileService) SaveDraft(id string, w workflow.Workflow) error {
 // Publish promotes the draft to workflow.yaml and removes the draft.
 // Returns the published workflow. No-op (returns current published)
 // when no draft exists.
-func (s *FileService) Publish(id string) (workflow.Workflow, error) {
+func (s *FileService) Publish(id, actorID string) (workflow.Workflow, error) {
 	if err := parse.ValidateID(id); err != nil {
 		return workflow.Workflow{}, err
 	}
@@ -425,7 +428,15 @@ func (s *FileService) Publish(id string) (workflow.Workflow, error) {
 	if r := parse.Validate(w); !r.Ok() {
 		return workflow.Workflow{}, fmt.Errorf("cannot publish — fix validation errors:\n%s", r.Error())
 	}
-	if err := WriteAtomic(s.Layout.WorkflowFile(id), data); err != nil {
+	w.Version++
+	if actorID != "" {
+		w.CreatedBy = actorID
+	}
+	out, err := parse.Marshal(w)
+	if err != nil {
+		return workflow.Workflow{}, err
+	}
+	if err := WriteAtomic(s.Layout.WorkflowFile(id), out); err != nil {
 		return workflow.Workflow{}, err
 	}
 	if err := os.Remove(draftPath); err != nil && !errors.Is(err, os.ErrNotExist) {

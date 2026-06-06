@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentprovider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
 	"github.com/yogasw/wick/internal/safeexec"
 )
@@ -131,11 +132,32 @@ func (p *cliProvider) AgentCall(ctx context.Context, req provider.AgentRequest) 
 	return provider.AgentResult{Text: strings.TrimSpace(string(out)), Usage: usage}, nil
 }
 
-// ListSkills returns the empty catalog — claude exposes skills via
-// `~/.claude/skills/` discovery which is provider-specific; deferred
-// for a follow-up adapter once a stable shape is needed.
 func (p *cliProvider) ListSkills(ctx context.Context) ([]provider.Skill, error) {
-	return []provider.Skill{}, nil
+	return skillsForProvider(p.Name()), nil
+}
+
+func skillsForProvider(name string) []provider.Skill {
+	out := []provider.Skill{}
+	for _, info := range skillsync.ListSkills() {
+		if !skillInProvider(info, name) {
+			continue
+		}
+		out = append(out, provider.Skill{
+			Name:        info.Name,
+			Description: info.Meta["description"],
+			Source:      "disk",
+		})
+	}
+	return out
+}
+
+func skillInProvider(info skillsync.SkillInfo, name string) bool {
+	for _, loc := range info.InProviders {
+		if loc.Label == name || loc.Label == "agents" {
+			return true
+		}
+	}
+	return false
 }
 
 // tryParseJSONObject scans the input for a `{...}` slice and decodes

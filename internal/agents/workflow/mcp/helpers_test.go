@@ -33,14 +33,14 @@ func (s *stubService) FindByName(string, string) (string, error) { return "", ni
 func (s *stubService) LoadDraft(string) (workflow.Workflow, error) {
 	return workflow.Workflow{}, service.ErrNotFound
 }
-func (s *stubService) HasDraft(string) bool                      { return false }
-func (s *stubService) SaveDraft(string, workflow.Workflow) error { return nil }
-func (s *stubService) Publish(string) (workflow.Workflow, error) { return s.wf, nil }
-func (s *stubService) DiscardDraft(string) error                 { return nil }
-func (s *stubService) ListTests(string) ([]string, error)        { return nil, nil }
-func (s *stubService) GetTest(string, string) ([]byte, error)    { return nil, fmt.Errorf("stub") }
-func (s *stubService) SaveTest(string, string, []byte) error     { return nil }
-func (s *stubService) DeleteTest(string, string) error           { return nil }
+func (s *stubService) HasDraft(string) bool                              { return false }
+func (s *stubService) SaveDraft(string, workflow.Workflow) error         { return nil }
+func (s *stubService) Publish(string, string) (workflow.Workflow, error) { return s.wf, nil }
+func (s *stubService) DiscardDraft(string) error                         { return nil }
+func (s *stubService) ListTests(string) ([]string, error)                { return nil, nil }
+func (s *stubService) GetTest(string, string) ([]byte, error)            { return nil, fmt.Errorf("stub") }
+func (s *stubService) SaveTest(string, string, []byte) error             { return nil }
+func (s *stubService) DeleteTest(string, string) error                   { return nil }
 func (s *stubService) LoadState(string) (workflow.WorkflowState, error) {
 	return workflow.WorkflowState{}, nil
 }

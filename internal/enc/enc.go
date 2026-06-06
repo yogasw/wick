@@ -35,6 +35,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -302,70 +303,79 @@ func (s *Service) DecryptMaster(token string) (string, error) {
 
 // Mask replaces every occurrence of every value in `values` inside
 // `data` with its wick_enc_ token. Identical values receive identical
-// tokens within one call — the per-call cache guarantees the LLM does
-// not see two distinct ciphertexts for the same secret and conclude
-// they are different secrets.
-//
-// When the service is disabled, returns data unchanged.
+// tokens within one call so the LLM does not mistake duplicates for
+// distinct credentials. When the service is disabled, returns data
+// unchanged.
 func (s *Service) Mask(data string, values []string, userUUID string) string {
-	if s.disabled || data == "" || len(values) == 0 {
-		return data
-	}
-	cache := make(map[string]string, len(values))
-	out := data
-	for _, v := range values {
-		if v == "" || !strings.Contains(out, v) {
-			continue
-		}
-		token, ok := cache[v]
-		if !ok {
-			t, err := s.EncryptValue(v, userUUID)
-			if err != nil || t == v {
-				continue
-			}
-			cache[v] = t
-			token = t
-		}
-		out = strings.ReplaceAll(out, v, token)
-	}
-	return out
+	return s.maskWith(data, values, userUUID, false)
 }
 
 // MaskIgnoreCase is the case-insensitive variant of Mask. Every case
-// variant of a keyword in `data` is replaced with a single token derived
-// from the keyword's configured form (so the LLM, when it passes the
-// token back, gets the configured spelling on decrypt). Keywords that
-// differ only in case share one token via a lowercased cache key.
-//
-// Implementation uses regexp with the (?i) flag and quotes the keyword
-// so regex metacharacters in user-supplied values are matched literally.
+// variant of a keyword maps to one token derived from the keyword's
+// configured spelling, so the LLM gets that spelling back on decrypt.
 func (s *Service) MaskIgnoreCase(data string, values []string, userUUID string) string {
+	return s.maskWith(data, values, userUUID, true)
+}
+
+// maskWith masks all present values in a single regex pass: one
+// alternation compiled per call (longest-first so an overlapping shorter
+// secret can't shadow a longer one), not one regex per value. Values
+// that fail to encrypt are left untouched; ignoreCase folds case for
+// both keying and matching.
+func (s *Service) maskWith(data string, values []string, userUUID string, ignoreCase bool) string {
 	if s.disabled || data == "" || len(values) == 0 {
 		return data
 	}
-	cache := make(map[string]string, len(values))
-	out := data
+	hay := data
+	if ignoreCase {
+		hay = strings.ToLower(data)
+	}
+	tokens := make(map[string]string, len(values))
+	present := make([]string, 0, len(values))
 	for _, v := range values {
 		if v == "" {
 			continue
 		}
-		key := strings.ToLower(v)
-		token, ok := cache[key]
-		if !ok {
-			t, err := s.EncryptValue(v, userUUID)
-			if err != nil || t == v {
-				continue
-			}
-			cache[key] = t
-			token = t
+		key := v
+		if ignoreCase {
+			key = strings.ToLower(v)
 		}
-		re, err := regexp.Compile("(?i)" + regexp.QuoteMeta(v))
-		if err != nil {
+		if !strings.Contains(hay, key) {
 			continue
 		}
-		out = re.ReplaceAllString(out, token)
+		if _, ok := tokens[key]; ok {
+			continue
+		}
+		t, err := s.EncryptValue(v, userUUID)
+		if err != nil || t == v {
+			continue
+		}
+		tokens[key] = t
+		present = append(present, v)
 	}
-	return out
+	if len(present) == 0 {
+		return data
+	}
+	sort.SliceStable(present, func(i, j int) bool { return len(present[i]) > len(present[j]) })
+	quoted := make([]string, len(present))
+	for i, v := range present {
+		quoted[i] = regexp.QuoteMeta(v)
+	}
+	expr := strings.Join(quoted, "|")
+	if ignoreCase {
+		expr = "(?i)(?:" + expr + ")"
+	}
+	re := regexp.MustCompile(expr)
+	return re.ReplaceAllStringFunc(data, func(m string) string {
+		key := m
+		if ignoreCase {
+			key = strings.ToLower(m)
+		}
+		if t, ok := tokens[key]; ok {
+			return t
+		}
+		return m
+	})
 }
 
 // tokenRegex matches wick_enc_<base64url> within free-form text. The
@@ -386,24 +396,25 @@ func (s *Service) Unmask(data, userUUID string) (string, error) {
 	if s.disabled || data == "" {
 		return data, nil
 	}
-	tokens := tokenRegex.FindAllString(data, -1)
-	if len(tokens) == 0 {
-		return data, nil
-	}
-	seen := make(map[string]string, len(tokens))
-	for _, tok := range tokens {
-		if _, ok := seen[tok]; ok {
-			continue
+	seen := map[string]string{}
+	var firstErr error
+	out := tokenRegex.ReplaceAllStringFunc(data, func(tok string) string {
+		if firstErr != nil {
+			return tok
+		}
+		if plain, ok := seen[tok]; ok {
+			return plain
 		}
 		plain, err := s.DecryptValue(tok, userUUID)
 		if err != nil {
-			return data, fmt.Errorf("decrypt token: %w", err)
+			firstErr = fmt.Errorf("decrypt token: %w", err)
+			return tok
 		}
 		seen[tok] = plain
-	}
-	out := data
-	for tok, plain := range seen {
-		out = strings.ReplaceAll(out, tok, plain)
+		return plain
+	})
+	if firstErr != nil {
+		return data, firstErr
 	}
 	return out, nil
 }

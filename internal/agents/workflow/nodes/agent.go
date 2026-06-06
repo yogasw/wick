@@ -2,8 +2,10 @@ package nodes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,12 +18,14 @@ import (
 )
 
 type agentSchema struct {
-	Prompt   string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
-	Provider string `wick:"key=provider;desc=Provider name"`
-	Skills     string `wick:"key=skills;desc=YAML list of skill names to expose"`
-	Tools      string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
-	MaxTurns   int    `wick:"key=max_turns;desc=Max agent turns (default unlimited)"`
-	Session    string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
+	Prompt        string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
+	Provider      string `wick:"key=provider;desc=Provider name"`
+	Skills        string `wick:"key=skills;desc=YAML list of skill names to expose"`
+	Tools         string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
+	MaxTurns      int    `wick:"key=max_turns;desc=Max agent turns (default unlimited)"`
+	Session       string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
+	TimeoutSec    int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
+	RequireStatus bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}; any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
 }
 
 // AgentEvent is the minimal event shape the agent executor consumes
@@ -88,6 +92,8 @@ func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 				"skills_used": "List of skill names the agent loaded. Useful for audit / cost attribution.",
 				"usage":       "Provider token usage breakdown (input/output/total). Provider-specific shape.",
 				"session_id":  "Resolved session ID. Reuse via session_from on a downstream agent to continue the conversation.",
+				"status":      "Only when require_status=true — done|blocked|needs_input parsed from the agent's final JSON object. Exposed as the node Verdict; any non-done value fails the node.",
+				"summary":     "Only when require_status=true — the agent's one-line summary from the status JSON.",
 			},
 			TemplateableFields: []string{"prompt"},
 			Quirks: []string{
@@ -155,8 +161,17 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 		return workflow.NodeOutput{}, err
 	}
 	prompt := n.Prompt
+	if n.RequireStatus {
+		prompt += agentStatusInstruction
+	}
 	if err := validateSkills(ctx, prov, n.Skills); err != nil {
 		return workflow.NodeOutput{}, err
+	}
+
+	if n.TimeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(n.TimeoutSec)*time.Second)
+		defer cancel()
 	}
 
 	sessionID, err := resolveAgentSessionID(n, rc)
@@ -188,16 +203,12 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("agent call: %w", err)
 	}
-	return workflow.NodeOutput{
-		Result: res.Text,
-		Fields: map[string]any{
-			"text":        res.Text,
-			"tools_used":  res.ToolsUsed,
-			"skills_used": res.SkillsUsed,
-			"usage":       res.Usage,
-			"session_id":  sessionID,
-		},
-	}, nil
+	return finalizeAgent(n, res.Text, map[string]any{
+		"tools_used":  res.ToolsUsed,
+		"skills_used": res.SkillsUsed,
+		"usage":       res.Usage,
+		"session_id":  sessionID,
+	})
 }
 
 // runViaPool enqueues the agent prompt through the agent pool and
@@ -222,6 +233,9 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 	for {
 		select {
 		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded && n.TimeoutSec > 0 {
+				return workflow.NodeOutput{}, fmt.Errorf("agent node timed out after %ds with no completion — the agent may be stuck (e.g. connector/MCP tools never connected); %d tool call(s) seen", n.TimeoutSec, len(toolsUsed))
+			}
 			return workflow.NodeOutput{}, ctx.Err()
 		case ev, ok := <-evCh:
 			if !ok {
@@ -237,15 +251,10 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 			case "error":
 				return workflow.NodeOutput{}, fmt.Errorf("agent error: %s", ev.Data)
 			case "done":
-				text := strings.TrimSpace(textBuf.String())
-				return workflow.NodeOutput{
-					Result: text,
-					Fields: map[string]any{
-						"text":       text,
-						"tools_used": toolsUsed,
-						"session_id": sessionID,
-					},
-				}, nil
+				return finalizeAgent(n, strings.TrimSpace(textBuf.String()), map[string]any{
+					"tools_used": toolsUsed,
+					"session_id": sessionID,
+				})
 			}
 		}
 	}
@@ -310,4 +319,44 @@ func validateSkills(ctx context.Context, prov provider.Provider, skills []string
 		}
 	}
 	return nil
+}
+
+const agentStatusInstruction = "\n\n---\nIMPORTANT: End your reply with a single JSON object on its own line: {\"status\": \"done\" | \"blocked\" | \"needs_input\", \"summary\": \"<one sentence>\"}. Use \"done\" only when you fully completed the requested actions. Use \"blocked\" or \"needs_input\" if you could not — missing tool, missing info, or you are asking a question instead of acting."
+
+func parseAgentStatus(text string) (string, string) {
+	var s struct {
+		Status  string `json:"status"`
+		Summary string `json:"summary"`
+	}
+	trimmed := strings.TrimSpace(text)
+	if json.Unmarshal([]byte(trimmed), &s) == nil && s.Status != "" {
+		return strings.ToLower(strings.TrimSpace(s.Status)), s.Summary
+	}
+	if i := strings.LastIndex(trimmed, "{"); i >= 0 {
+		if j := strings.LastIndex(trimmed, "}"); j > i {
+			if json.Unmarshal([]byte(trimmed[i:j+1]), &s) == nil && s.Status != "" {
+				return strings.ToLower(strings.TrimSpace(s.Status)), s.Summary
+			}
+		}
+	}
+	return "", ""
+}
+
+func finalizeAgent(n workflow.Node, text string, fields map[string]any) (workflow.NodeOutput, error) {
+	fields["text"] = text
+	if !n.RequireStatus {
+		return workflow.NodeOutput{Result: text, Fields: fields}, nil
+	}
+	status, summary := parseAgentStatus(text)
+	if status == "" {
+		return workflow.NodeOutput{}, fmt.Errorf("require_status: agent did not return a {\"status\":...} JSON object")
+	}
+	fields["status"] = status
+	if summary != "" {
+		fields["summary"] = summary
+	}
+	if status != "done" {
+		return workflow.NodeOutput{}, fmt.Errorf("agent reported status=%q (not done): %s", status, summary)
+	}
+	return workflow.NodeOutput{Result: text, Verdict: status, Fields: fields}, nil
 }

@@ -60,6 +60,9 @@ type Spawner struct {
 	// any caller-supplied ResumeID. Useful for tests / debugging
 	// (--debug, --verbose-extra, ...).
 	ExtraArgs []string
+	// MCPToken points the agent at the live wick MCP HTTP server
+	// (loopback) instead of cold-starting `wick mcp serve` per run.
+	MCPToken string
 }
 
 // Spawn starts the subprocess.
@@ -109,6 +112,13 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		// end-to-end without crash. Earlier exit-status-1 reports were
 		// caused by a stale --resume ID, not this flag.
 		"--include-partial-messages",
+	}
+	// Use the live MCP HTTP server when wired + supported; else fall
+	// back to the existing ~/.claude.json stdio config untouched.
+	if s.MCPToken != "" && os.Getenv("WICK_DISABLE_SHARED_MCP") == "" {
+		if endpoint := mcpEndpointFromEnv(); endpoint != "" && strictMCPConfigSupported(bin) {
+			args = append(args, "--strict-mcp-config", "--mcp-config", mcpConfigArg(endpoint, s.MCPToken))
+		}
 	}
 	// Trust the workspace explicitly so claude doesn't refuse to run
 	// inside an "untrusted" directory. Without this, agent sessions

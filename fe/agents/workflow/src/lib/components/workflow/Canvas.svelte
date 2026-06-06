@@ -5,8 +5,9 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField, searchOpen } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField, searchOpen } from "$lib/stores/editor";
   import { toastError } from "$lib/stores/toast";
+  import { get } from "svelte/store";
 
   // Resolve a validation issue's Path/Message back to the node it
   // points at. Errors usually carry `graph.nodes[<label>]…` in Path,
@@ -334,6 +335,25 @@
     closeCtxMenu();
   }
 
+  function edgeSourceIsCaseNode(target: CtxTarget): boolean {
+    if (target.kind !== "edge") return false;
+    const t = get(draftWorkflow)?.graph?.nodes?.find((n) => n.id === target.from)?.type;
+    return t === "branch" || t === "classify";
+  }
+
+  function setCaseCtxTarget() {
+    const t = ctxMenu?.target;
+    if (!t || t.kind !== "edge") return;
+    const label = window.prompt(
+      "Case label for this branch/classify edge (e.g. yes, default). Empty = unconditional:",
+      t.caseKey ?? "",
+    );
+    if (label !== null) {
+      setEdgeCase(t.from, t.to, t.caseKey, label.trim());
+    }
+    closeCtxMenu();
+  }
+
   function startConnect(e: PointerEvent, fromID: string, fromKind: "node" | "trigger" | "node-input") {
     if (locked) {
       showLockedHint(e);
@@ -420,11 +440,17 @@
         // node-input → reverse direction (drop becomes the source).
         const from = connecting.fromKind === "node-input" ? bestID : connecting.fromID;
         const to = connecting.fromKind === "node-input" ? connecting.fromID : bestID;
+        const srcType = get(draftWorkflow)?.graph?.nodes?.find((n) => n.id === from)?.type;
+        let caseLabel = "";
+        if (srcType === "branch" || srcType === "classify") {
+          caseLabel = (window.prompt(`Case label for this ${srcType} edge (e.g. yes, default). Empty = unconditional:`, "") ?? "").trim();
+        }
         draftWorkflow.update((current) => {
           if (!current) return current;
           const dup = (current.graph.edges ?? []).some((edge) => edge.from === from && edge.to === to);
           if (!dup) {
-            current.graph.edges = [...(current.graph.edges ?? []), { from, to }];
+            const edge: Edge = caseLabel ? { from, to, case: caseLabel } : { from, to };
+            current.graph.edges = [...(current.graph.edges ?? []), edge];
           }
           return current;
         });
@@ -1388,6 +1414,21 @@
     onclick={(e) => e.stopPropagation()}
     oncontextmenu={(e) => e.preventDefault()}
   >
+    {#if ctxMenu.target.kind === "edge" && edgeSourceIsCaseNode(ctxMenu.target)}
+      <button
+        type="button"
+        class="w-full text-left px-3 py-1.5 flex items-center gap-2 text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600"
+        onclick={setCaseCtxTarget}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 11l3 3L22 4"></path>
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+        </svg>
+        <span>Set case…</span>
+      </button>
+    {/if}
     <button
       type="button"
       class="w-full text-left px-3 py-1.5 flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30"

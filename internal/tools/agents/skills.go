@@ -65,6 +65,11 @@ func skillsUpload(c *tool.Ctx) {
 	errMsg := ""
 	if err != nil {
 		errMsg = err.Error()
+	} else if res.Copied == 0 {
+		errMsg = fmt.Sprintf("nothing imported from %q — check the archive structure", filename)
+		if len(res.Errors) > 0 {
+			errMsg += fmt.Sprintf(" (%s)", strings.Join(res.Errors, "; "))
+		}
 	} else {
 		flash = fmt.Sprintf("Uploaded %q as skill %q to %d dir(s).", filename, folderName, res.Copied)
 		if len(res.Errors) > 0 {

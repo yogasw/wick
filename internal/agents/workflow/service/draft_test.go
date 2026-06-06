@@ -80,7 +80,7 @@ func TestPublishPromotesDraft(t *testing.T) {
 	if err := svc.SaveDraft("wf", w2); err != nil {
 		t.Fatalf("save draft: %v", err)
 	}
-	if _, err := svc.Publish("wf"); err != nil {
+	if _, err := svc.Publish("wf", ""); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if svc.HasDraft("wf") {

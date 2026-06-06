@@ -14,6 +14,7 @@ require (
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/google/uuid v1.4.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/itchyny/gojq v0.12.19
 	github.com/jackmordaunt/icns/v3 v3.0.1
 	github.com/joho/godotenv v1.5.1
 	github.com/josephspurrier/goversioninfo v1.5.0
@@ -39,8 +40,8 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
+	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect

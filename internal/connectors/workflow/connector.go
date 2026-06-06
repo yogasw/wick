@@ -205,7 +205,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 			"Get full run state: node outputs, events, path_taken, status, cost.",
 			getRunInput{}, h.getRun, wickdocs.Docs{}),
 		connector.Op("workflow_get_run_events", "Get Run Events",
-			"Get the raw events.jsonl stream for a run: every node_started / node_completed / node_failed / edge_traversed entry with timestamps and data payloads. Use this when workflow_get_run doesn't have enough detail — e.g. user gives you a failed run ID and asks why it broke.",
+			"Get the events.jsonl stream for a run: every node_started / node_completed / node_failed / edge_traversed entry with timestamps and data payloads. Use this when workflow_get_run doesn't have enough detail — e.g. user gives you a failed run ID and asks why it broke. Returns {events, total, truncated}; capped to the 200 most recent events (failures are at the tail), with total = full count.",
 			getRunInput{}, h.getRunEvents, wickdocs.Docs{}),
 		connector.Op("workflow_watch", "Watch Recent Runs",
 			"Bounded read over recent runs. Cheap by design: returns only [run_id, workflow_id, status, started_at, ended_at, trigger_id]. AI follows up with workflow_get_run_log(diagnose=true) per chosen id. wait_seconds>0 subscribes to the live event stream and returns the moment expect / stop_on_first is met, otherwise expires at wait_seconds (server caps at 30s, limit at 50). Multi-dim filter: workflow_id + trigger_id + node_id + status + since.",

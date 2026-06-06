@@ -92,6 +92,9 @@ type CreatePullRequestCommentInput struct {
 	RepoSlug      string `wick:"required;desc=Repository slug."`
 	PullRequestID int    `wick:"required;desc=Pull request ID."`
 	Body          string `wick:"textarea;required;desc=Comment body."`
+	InlinePath    string `wick:"key=inline_path;desc=Optional. File path to anchor an inline comment (e.g. src/main.go). Required for any inline comment."`
+	InlineTo      int    `wick:"key=inline_to;number;desc=Optional. Line number in the NEW (post-diff) version to anchor the inline comment. Needs inline_path."`
+	InlineFrom    int    `wick:"key=inline_from;number;desc=Optional. Line number in the OLD (pre-diff) version; use instead of inline_to to comment on a removed/old line. Needs inline_path."`
 }
 
 func Meta() connector.Meta {
@@ -196,7 +199,7 @@ func Operations() []connector.Operation {
 		connector.OpDestructive(
 			"create_pull_request_comment",
 			"Create Pull Request Comment",
-			"Post a comment to a pull request. Mutates the pull request discussion.",
+			"Post a comment to a pull request — top-level, or inline on a file via inline_path plus inline_to (new-side line) or inline_from (old-side line). Mutates the PR discussion.",
 			CreatePullRequestCommentInput{},
 			createPullRequestComment,
 			wickdocs.Docs{},

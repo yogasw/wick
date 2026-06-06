@@ -113,7 +113,7 @@ func TestDBService_Versions(t *testing.T) {
 	if err := svc.Create(id, sampleWF(id)); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.Publish(id); err != nil {
+	if _, err := svc.Publish(id, ""); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	// Two snapshots expected: initial draft + first publish.

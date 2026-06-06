@@ -12,8 +12,10 @@
     runID: string;
     runDetail: any | null;
     onReplay?: (triggerID: string | null) => void;
+    onDelete?: (runID: string) => void;
+    onLoadAllEvents?: () => void;
   };
-  let { runID, runDetail, onReplay }: Props = $props();
+  let { runID, runDetail, onReplay, onDelete, onLoadAllEvents }: Props = $props();
 
   // Resolve the firing trigger to a friendly label. trigger_id comes
   // off the event payload (spaWorkflowRunNow stuffs it there); we
@@ -43,7 +45,7 @@
       </span>
       <span class="font-mono text-xs text-black-500 dark:text-white-100 break-all">{runID}</span>
       <div class="flex-1"></div>
-      <RunActions {runID} {runDetail} {onReplay} />
+      <RunActions {runID} {runDetail} {onReplay} {onDelete} />
     </div>
     <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-black-700 dark:text-black-600">
       <span class="flex items-center gap-1.5">
@@ -67,7 +69,7 @@
   {/if}
 
   <div class="grid grid-cols-2 gap-4">
-    <RunNodes completed={completed} failed={failed} />
-    <RunEvents events={events} />
+    <RunNodes completed={completed} failed={failed} outputs={runDetail.outputs ?? {}} />
+    <RunEvents events={events} total={runDetail.events_total ?? events.length} truncated={runDetail.events_truncated ?? false} onLoadAll={onLoadAllEvents} />
   </div>
 {/if}

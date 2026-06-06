@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	wfengine "github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
+	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -59,6 +61,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.GET("/api/workflows/list", spaWorkflowList)
 	r.GET("/api/workflows/templates", spaWorkflowTemplates)
 	r.POST("/api/workflows/create", spaWorkflowCreate)
+	r.POST("/api/workflows/import", spaWorkflowImport)
 	r.POST("/api/workflows/duplicate/{id}", spaWorkflowDuplicate)
 	r.GET("/api/workflows/get/{id}", spaWorkflowGet)
 	r.POST("/api/workflows/save/{id}", spaWorkflowSave)
@@ -68,6 +71,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/lock/{id}", spaWorkflowLock)
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
+	r.POST("/api/workflows/runs/{id}/{runID}/delete", spaWorkflowRunDelete)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
 	r.POST("/api/workflows/template-test/{id}", spaTemplateTest)
 	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
@@ -123,6 +127,43 @@ func spaWorkflowCreate(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
+func spaWorkflowImport(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	raw, err := readBodyAll(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(raw) > 512*1024 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "file too large (max 512 KB)"})
+		return
+	}
+	w, err := parse.Parse("", raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid workflow JSON: " + err.Error()})
+		return
+	}
+	if r := parse.Validate(w); !r.Ok() {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "validation failed: " + r.Error()})
+		return
+	}
+	w.ID = ""
+	w.CreatedAt = time.Time{}
+	created, err := globalWorkflowMgr.MCP.Create(mcp.CreateInput{Name: w.Name})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w.ID = created.ID
+	if err := globalWorkflowMgr.Service.SaveDraft(created.ID, w); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"id": created.ID, "name": created.Name})
+}
+
 func spaWorkflowDuplicate(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -145,11 +186,14 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 	src.ID = w.ID
 	src.Name = w.Name
 	src.Enabled = false
+	if a := actorID(c); a != "" {
+		src.CreatedBy = a
+	}
 	if err := globalWorkflowMgr.Service.SaveDraft(w.ID, src); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := globalWorkflowMgr.Service.Publish(w.ID); err != nil {
+	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, w.ID, actorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -250,6 +294,9 @@ func spaWorkflowSave(c *tool.Ctx) {
 			return
 		}
 	}
+	if a := actorID(c); a != "" {
+		w.CreatedBy = a
+	}
 	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -269,7 +316,7 @@ func spaWorkflowPublish(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
-	if _, err := globalWorkflowMgr.Service.Publish(id); err != nil {
+	if _, err := setup.PublishAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id, actorID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -300,13 +347,7 @@ func spaWorkflowToggle(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	w, err := globalWorkflowMgr.Service.LoadDraft(id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-	w.Enabled = body.Enabled
-	if err := globalWorkflowMgr.Service.SaveDraft(id, w); err != nil {
+	if err := setup.ToggleAndReload(context.Background(), globalWorkflowMgr.Service, globalWorkflowMgr.Router, globalWorkflowMgr.Cron, globalWorkflowMgr.ScheduleAt, id, body.Enabled); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -551,6 +592,19 @@ func spaWorkflowRuns(c *tool.Ctx) {
 		"has_more": to < len(matched),
 		"total":    len(matched),
 	})
+}
+
+func spaWorkflowRunDelete(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	runID := c.PathValue("runID")
+	if err := globalWorkflowMgr.StateStore.Delete(id, runID); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
 // parseDateInput accepts "yyyy-mm-dd" (FE date input) or full RFC3339.

@@ -11,8 +11,21 @@
     runID: string;
     runDetail: any | null;
     onReplay?: (triggerID: string | null) => void;
+    onDelete?: (runID: string) => void;
   };
-  let { runID, runDetail, onReplay }: Props = $props();
+  let { runID, runDetail, onReplay, onDelete }: Props = $props();
+
+  let showPreview = $state(false);
+  const previewText = $derived(runDetail ? JSON.stringify(runDetail, null, 2) : "");
+
+  async function copyJSON() {
+    try {
+      await navigator.clipboard.writeText(previewText);
+      toastOk("Run JSON copied");
+    } catch (e) {
+      toastError("Copy failed", e instanceof Error ? e.message : String(e));
+    }
+  }
 
   async function copyID() {
     try {
@@ -37,6 +50,11 @@
 
   function replay() {
     onReplay?.(triggerIDOf(runDetail));
+  }
+
+  function del() {
+    if (!confirm("Delete this run log? Its files are removed and this cannot be undone.")) return;
+    onDelete?.(runID);
   }
 </script>
 
@@ -67,4 +85,54 @@
   >
     export JSON
   </button>
+  <button
+    type="button"
+    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"
+    onclick={() => (showPreview = true)}
+    disabled={!runDetail}
+    title="Preview the full run JSON without downloading"
+  >
+    preview JSON
+  </button>
+  <button
+    type="button"
+    class="px-2 py-1 rounded border border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300 hover:bg-rose-500/20"
+    onclick={del}
+    disabled={!runDetail}
+    title="Delete this run log (removes its files)"
+  >
+    delete
+  </button>
 </div>
+
+{#if showPreview}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    onclick={(e) => { if (e.target === e.currentTarget) showPreview = false; }}
+  >
+    <div class="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-xl bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 shadow-lg overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-white-300 dark:border-navy-600">
+        <h2 class="text-sm font-semibold text-black-800 dark:text-white-100">Run JSON</h2>
+        <div class="flex items-center gap-2 text-xs">
+          <button
+            type="button"
+            class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-600 text-black-500 dark:text-white-100"
+            onclick={copyJSON}
+          >
+            copy
+          </button>
+          <button
+            type="button"
+            class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-navy-600 text-black-500 dark:text-white-100"
+            onclick={() => (showPreview = false)}
+          >
+            close
+          </button>
+        </div>
+      </div>
+      <pre class="flex-1 overflow-auto px-4 py-3 text-[11px] font-mono text-black-800 dark:text-white-100 whitespace-pre-wrap">{previewText}</pre>
+    </div>
+  </div>
+{/if}

@@ -83,6 +83,10 @@ type ClaudeFactory struct {
 	// `exit` from the OnExit hook so the Backends UI can list spawn
 	// history per backend by `ls`-ing the directory. nil = no logging.
 	SpawnLogger *provider.SpawnLogger
+
+	// MCPToken is the per-boot internal MCP secret forwarded to the
+	// claude spawner so agents reach the live MCP server over loopback.
+	MCPToken string
 }
 
 // GateConfig describes the gate plumbing: where the wick-gate binary
@@ -226,7 +230,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		case provider.TypeGemini:
 			spawner = geminipkg.Spawner{Binary: bin, YoloMode: bypassPerms}
 		default:
-			spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms}
+			spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms, MCPToken: f.MCPToken}
 		}
 	}
 

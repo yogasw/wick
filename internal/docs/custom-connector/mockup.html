@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Custom Connector — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Tokens mirror wick design-system: green (accent), navy (dark surface),
+     black ramp (text), white ramp (light surface), status pos/cau/neg. */
+  :root {
+    --green-200:#D1ECE5; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-400:#288C7A; --cau-100:#FBF1DD; --cau-400:#D78E08; --neg-100:#FCE7E2; --neg-400:#EB5757;
+    --prog-100:#EEFAFE; --prog-400:#56CCF2;
+  }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--white-200); color: var(--black-900); }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+  /* Surfaces */
+  .card        { background: var(--white-100); border: 1px solid var(--white-300); border-radius: 12px; }
+  .card-sub    { background: var(--white-200); border: 1px solid var(--white-300); border-radius: 8px; }
+  .panel-dark  { background: var(--navy-700); color: var(--white-100); border-radius: 12px; }
+
+  /* Chips & badges */
+  .chip        { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .chip-active { background: var(--green-200); color: var(--green-700); border:1px solid var(--green-500); }
+  .chip-muted  { background: var(--white-300); color: var(--black-800); border:1px solid var(--white-400); }
+  .badge       { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }
+  .badge-custom { background: var(--green-200); color: var(--green-700); }
+  .badge-builtin{ background: var(--white-300); color: var(--black-800); }
+  .badge-destr  { background: var(--neg-100); color: var(--neg-400); }
+  .badge-secret { background: var(--cau-100); color: var(--cau-400); }
+
+  /* Buttons */
+  .btn         { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; }
+  .btn-primary { background: var(--green-500); color: var(--white-100); }
+  .btn-primary:hover { background: var(--green-600); }
+  .btn-ghost   { background: var(--white-100); color: var(--black-900); border:1px solid var(--white-400); }
+  .btn-ghost:hover { border-color: var(--green-500); color: var(--green-600); }
+  .btn-danger  { background: var(--neg-100); color: var(--neg-400); border:1px solid var(--neg-400); }
+
+  /* Inputs */
+  .input       { width:100%; padding:8px 12px; border:1px solid var(--white-400); border-radius:8px; font-size:13px; background:var(--white-100); color:var(--black-900); }
+  .input:focus { outline:none; border-color: var(--green-500); box-shadow: 0 0 0 3px rgba(39,177,153,0.15); }
+  .label       { font-size:12px; font-weight:600; color: var(--black-800); margin-bottom:4px; display:block; }
+  .helper      { font-size:11px; color: var(--black-800); margin-top:4px; }
+
+  /* JSON preview */
+  .json-key { color: #9ACD32; }
+  .json-str { color: #FFD580; }
+  .json-num { color: #FFA0A0; }
+  .json-cmt { color: var(--black-700); font-style: italic; }
+
+  /* Section header */
+  .section-h { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--black-800); }
+
+  /* Tabs (stepper) */
+  .step        { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:500; color: var(--black-800); }
+  .step.active { background: var(--green-200); color: var(--green-700); font-weight:600; }
+  .step-num    { width:20px; height:20px; border-radius:999px; background:var(--white-300); color:var(--black-800); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+  .step.active .step-num { background: var(--green-500); color: var(--white-100); }
+</style>
+</head>
+<body class="text-slate-800">
+
+<!-- HERO -->
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-4">
+  <div class="text-xs font-semibold tracking-widest uppercase" style="color:var(--green-600)">Wick · Custom Connector</div>
+  <h1 class="text-3xl font-bold mt-1" style="color:var(--black-900)">Custom Connector — Add From cURL / MCP / Form</h1>
+  <p class="mt-2 max-w-3xl" style="color:var(--black-800)">
+    Three import paths into the same generic executor: paste a cURL, register an MCP server, or build by hand.
+    Built-in connectors stay canonical; custom defs live in DB rows and ride the same encrypted-fields, tags, audit, and MCP dispatch layers.
+  </p>
+  <p class="mt-2 text-xs" style="color:var(--black-800)">
+    Paired with <code>design.md</code>. Update keduanya barengan kalau layout / kontrak berubah.
+  </p>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 pb-20 space-y-12">
+
+<!-- ============================================================ -->
+<!-- STATE 0: CONNECTORS INDEX — entry point -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⓪ Connectors index — "+ New connector" dropdown</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    Entry point. Tambah satu tombol di kanan-atas list. Dropdown reveals three sources. Existing search + filter chrome tetap.
+  </p>
+
+  <div class="card p-6">
+    <!-- breadcrumb -->
+    <div class="flex items-center gap-2 text-sm" style="color:var(--black-800)">
+      <a href="#" style="color:var(--green-600)">Home</a>
+      <span>/</span>
+      <span style="color:var(--black-900); font-weight:500">Connectors</span>
+    </div>
+
+    <div class="mt-4 flex items-start justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="flex h-12 w-12 items-center justify-center rounded-lg text-lg font-semibold" style="background:var(--green-200); color:var(--green-700)">🔌</div>
+        <div>
+          <h3 class="text-lg font-semibold" style="color:var(--black-900)">Connectors</h3>
+          <p class="text-sm" style="color:var(--black-800)">LLM-callable connectors that wrap external APIs.</p>
+        </div>
+      </div>
+      <div class="relative">
+        <button class="btn btn-primary">＋ New connector ▾</button>
+        <!-- dropdown preview (always-open for mockup) -->
+        <div class="absolute right-0 mt-2 w-72 card p-2 shadow-lg" style="z-index:10">
+          <a href="#flow-curl" class="flex items-start gap-3 p-3 rounded-lg hover:bg-[color:var(--white-200)]">
+            <div class="flex h-9 w-9 items-center justify-center rounded-md text-lg" style="background:var(--green-200); color:var(--green-700)">📋</div>
+            <div>
+              <div class="text-sm font-semibold" style="color:var(--black-900)">From cURL</div>
+              <div class="text-xs" style="color:var(--black-800)">Paste a command, wick extracts fields</div>
+            </div>
+          </a>
+          <a href="#flow-mcp" class="flex items-start gap-3 p-3 rounded-lg hover:bg-[color:var(--white-200)]">
+            <div class="flex h-9 w-9 items-center justify-center rounded-md text-lg" style="background:var(--green-200); color:var(--green-700)">🔌</div>
+            <div>
+              <div class="text-sm font-semibold" style="color:var(--black-900)">From MCP server</div>
+              <div class="text-xs" style="color:var(--black-800)">HTTP MCP — pick tools to import (auth header / SSO supported)</div>
+            </div>
+          </a>
+          <a href="#flow-manual" class="flex items-start gap-3 p-3 rounded-lg hover:bg-[color:var(--white-200)]">
+            <div class="flex h-9 w-9 items-center justify-center rounded-md text-lg" style="background:var(--green-200); color:var(--green-700)">✎</div>
+            <div>
+              <div class="text-sm font-semibold" style="color:var(--black-900)">Blank / manual</div>
+              <div class="text-xs" style="color:var(--black-800)">Build Meta + Configs + Operations by hand</div>
+            </div>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- search row -->
+    <div class="mt-6 flex max-w-lg items-center gap-3 card-sub px-4 py-3">
+      <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" placeholder="Search connectors…" class="flex-1 bg-transparent text-sm outline-none">
+      <kbd class="text-xs px-2 py-0.5 rounded border" style="border-color:var(--white-400); color:var(--black-700)">/</kbd>
+    </div>
+
+    <!-- filter chips -->
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <button class="chip chip-active">All</button>
+      <button class="chip chip-muted">Internal APIs</button>
+      <button class="chip chip-muted">Observability</button>
+      <button class="chip chip-muted">Messaging</button>
+      <button class="chip chip-muted">SCM</button>
+      <button class="chip chip-muted">⭐ Custom</button>
+    </div>
+
+    <!-- cards -->
+    <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <!-- built-in -->
+      <div class="card-sub p-4 flex items-start gap-3">
+        <div class="h-12 w-12 flex-shrink-0 rounded-lg flex items-center justify-center text-lg" style="background:var(--green-200); color:var(--green-700)">🐙</div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <p class="font-semibold" style="color:var(--black-900)">GitHub</p>
+            <span class="badge badge-builtin">Built-in</span>
+          </div>
+          <p class="text-xs mt-1" style="color:var(--black-800)">Read repos, issues, and pull requests on GitHub.</p>
+          <p class="text-xs mt-2" style="color:var(--black-800)">5 operations · 1 active</p>
+        </div>
+      </div>
+      <!-- custom -->
+      <div class="card-sub p-4 flex items-start gap-3" style="border-color:var(--green-500)">
+        <div class="h-12 w-12 flex-shrink-0 rounded-lg flex items-center justify-center text-lg" style="background:var(--green-200); color:var(--green-700)">💳</div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <p class="font-semibold" style="color:var(--black-900)">Stripe (custom)</p>
+            <span class="badge badge-custom">Custom</span>
+          </div>
+          <p class="text-xs mt-1" style="color:var(--black-800)">Payments — imported from cURL on 2026-06-05.</p>
+          <p class="text-xs mt-2" style="color:var(--black-800)">3 operations · 1 active · <span style="color:var(--cau-400); font-weight:500">needs reload</span></p>
+        </div>
+      </div>
+      <!-- custom mcp -->
+      <div class="card-sub p-4 flex items-start gap-3" style="border-color:var(--green-500)">
+        <div class="h-12 w-12 flex-shrink-0 rounded-lg flex items-center justify-center text-lg" style="background:var(--green-200); color:var(--green-700)">🧰</div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <p class="font-semibold" style="color:var(--black-900)">Internal Tools MCP</p>
+            <span class="badge badge-custom">Custom · MCP</span>
+          </div>
+          <p class="text-xs mt-1" style="color:var(--black-800)">7 tools imported from <code class="text-xs">internal-tools mcp</code>.</p>
+          <p class="text-xs mt-2" style="color:var(--black-800)">7 operations · 7 active</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- FLOW A — cURL paste -->
+<!-- ============================================================ -->
+<section id="flow-curl">
+  <h2 class="text-xl font-bold mb-1">① Flow A — paste · cURL or AI-assisted parser</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    Two parsers behind one paste box. <strong>cURL parser</strong> is deterministic (regex grammar, fast, no LLM call) — pick this when you have a real cURL string.
+    <strong>AI parser</strong> handles anything else: raw API docs, <code>fetch()</code> snippet, JS axios call, Postman export blob. Falls back to LLM extraction.
+  </p>
+
+  <div class="card p-6">
+    <div class="flex items-center gap-2 text-sm mb-4" style="color:var(--black-800)">
+      <a href="#" style="color:var(--green-600)">Connectors</a>
+      <span>/</span>
+      <span>New custom</span>
+      <span>/</span>
+      <span style="color:var(--black-900); font-weight:500">From paste</span>
+    </div>
+
+    <!-- parser tab toggle -->
+    <div class="flex items-center gap-2 mb-4 p-1 card-sub" style="width:fit-content">
+      <button class="step active" style="padding:6px 14px"><span class="step-num">📋</span> cURL parser</button>
+      <button class="step" style="padding:6px 14px"><span class="step-num">✨</span> AI parser</button>
+    </div>
+
+    <h3 class="text-lg font-semibold mb-2" style="color:var(--black-900)">cURL parser — deterministic, $0, sync</h3>
+    <p class="text-sm mb-4" style="color:var(--black-800)">
+      Wick reads <code>-X</code>, <code>-H</code>, <code>-d</code>, <code>-u</code>, the URL, query string, and basic Bash escaping. Tokens that look like secrets are auto-flagged.
+    </p>
+
+    <label class="label">cURL command</label>
+    <textarea class="input mono" rows="9" style="font-size:12px">curl -X POST 'https://api.stripe.com/v1/charges' \
+  -H 'Authorization: Bearer sk_test_xxx' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'amount=2000&amp;currency=usd&amp;customer=cus_123&amp;description=Test%20charge'</textarea>
+    <p class="helper">Tip: copy from browser DevTools → Network → Copy as cURL. Bash and PowerShell variants both supported.</p>
+
+    <!-- cURL example gallery — clickable presets to populate the textarea -->
+    <p class="mt-4 text-xs uppercase tracking-wide font-bold" style="color:var(--black-800)">More cURL shapes you can paste (click to try)</p>
+    <div class="mt-2 grid grid-cols-2 gap-3">
+
+      <!-- GET with query string -->
+      <div class="card-sub p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold" style="color:var(--black-900)">GET · query string</span>
+          <span class="chip chip-muted" style="font-size:10px">→ 2 inputs</span>
+        </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">curl 'https://api.github.com/repos/anthropics/claude-code/issues?state=open&amp;per_page=10' \
+  -H 'Authorization: Bearer ghp_xxxxxxxxxxxx' \
+  -H 'Accept: application/vnd.github+json'</pre>
+        <p class="helper">Extracts to <code>state</code> + <code>per_page</code> Inputs; <code>auth_value</code> auto-secret.</p>
+      </div>
+
+      <!-- POST JSON body -->
+      <div class="card-sub p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold" style="color:var(--black-900)">POST · JSON body</span>
+          <span class="chip chip-muted" style="font-size:10px">→ 3 inputs</span>
+        </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">curl -X POST https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-proj-xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"temperature":0.7}'</pre>
+        <p class="helper">Body keys flattened: <code>model</code>, <code>messages</code> (json), <code>temperature</code>.</p>
+      </div>
+
+      <!-- PUT with path variable -->
+      <div class="card-sub p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold" style="color:var(--black-900)">PUT · path variable</span>
+          <span class="chip chip-muted" style="font-size:10px">→ 1 path input</span>
+        </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">curl -X PUT 'https://api.example.com/v1/users/42' \
+  -H 'X-API-Key: abc123' \
+  -d '{"name":"Andrian","role":"admin"}'</pre>
+        <p class="helper">Numeric path segment <code>/42</code> → <code>user_id</code> input (heuristic).</p>
+      </div>
+
+      <!-- Basic auth -->
+      <div class="card-sub p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold" style="color:var(--black-900)">Basic auth (-u)</span>
+          <span class="chip chip-muted" style="font-size:10px">→ user + pass</span>
+        </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">curl -u 'admin:hunter2' \
+  https://elastic.internal:9200/_cluster/health \
+  -H 'Accept: application/json'</pre>
+        <p class="helper"><code>-u</code> → split jadi <code>basic_user</code> + <code>basic_pass</code> (pass auto-secret).</p>
+      </div>
+
+    </div>
+
+    <!-- AI parser preview — visible side-by-side, not collapsed -->
+    <div class="mt-6 card-sub p-4" style="border-color:var(--green-500)">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <span class="text-sm font-semibold" style="color:var(--black-900)">✨ AI parser tab — preview</span>
+          <p class="text-xs mt-0.5" style="color:var(--black-800)">Same paste box, LLM extracts. Same review form. Tab hidden if no provider configured. Raw paste not persisted.</p>
+        </div>
+        <span class="chip chip-muted" style="font-size:10px">1 LLM call · async</span>
+      </div>
+
+      <p class="text-xs mt-3 mb-2 uppercase tracking-wide font-bold" style="color:var(--black-800)">Inputs that AI parser accepts (cURL parser tolak semua ini)</p>
+
+      <div class="grid grid-cols-2 gap-3 mt-2">
+
+        <!-- fetch() JS -->
+        <div class="card-sub p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold" style="color:var(--black-900)">JS fetch() snippet</span>
+            <span class="chip chip-muted" style="font-size:10px">browser DevTools "Copy as fetch"</span>
+          </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">fetch("https://api.stripe.com/v1/charges", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer sk_test_xxx",
+    "Content-Type": "application/x-www-form-urlencoded"
+  },
+  body: new URLSearchParams({
+    amount: "2000",
+    currency: "usd",
+    customer: "cus_123"
+  })
+})</pre>
+        </div>
+
+        <!-- axios -->
+        <div class="card-sub p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold" style="color:var(--black-900)">axios call</span>
+            <span class="chip chip-muted" style="font-size:10px">code from SDK doc</span>
+          </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">axios.post('https://api.qiscus.com/api/v3/messages', {
+  room_id: 12345,
+  message: 'hello',
+  type: 'text'
+}, {
+  headers: {
+    'QISCUS-SDK-APP-ID': 'my-app',
+    'QISCUS-SDK-SECRET': 'sk_xxx'
+  }
+})</pre>
+        </div>
+
+        <!-- raw API doc -->
+        <div class="card-sub p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold" style="color:var(--black-900)">Raw API doc paragraph</span>
+            <span class="chip chip-muted" style="font-size:10px">prose from README</span>
+          </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">POST https://api.internal/v2/tickets
+
+Headers:
+  Authorization: Bearer &lt;your-token&gt;
+  X-Workspace-Id: required
+
+Body (JSON):
+  title       (string, required)
+  priority    (low|medium|high)
+  assignee_id (uuid, optional)
+
+Returns the created ticket object.</pre>
+        </div>
+
+        <!-- Plain English -->
+        <div class="card-sub p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold" style="color:var(--black-900)">Plain English description</span>
+            <span class="chip chip-muted" style="font-size:10px">last-resort fallback</span>
+          </div>
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">Saya mau call POST ke api.notion.com/v1/pages,
+auth pakai Bearer token, body JSON dengan field
+"parent" (database id), "properties" (object berisi
+title dan tags). Header "Notion-Version: 2022-06-28"
+wajib.</pre>
+        </div>
+
+      </div>
+
+      <!-- AI parser output preview -->
+      <p class="text-xs mt-4 mb-2 uppercase tracking-wide font-bold" style="color:var(--black-800)">Apa pun input di atas, AI parser keluarin shape ini → review form</p>
+      <div class="panel-dark p-3 mono text-xs">
+<pre style="line-height:1.6">{
+  <span class="json-key">"method"</span>: <span class="json-str">"POST"</span>,
+  <span class="json-key">"url"</span>: <span class="json-str">"https://api.notion.com/v1/pages"</span>,
+  <span class="json-key">"headers"</span>: [
+    { <span class="json-key">"key"</span>: <span class="json-str">"Authorization"</span>, <span class="json-key">"value"</span>: <span class="json-str">"Bearer …"</span>, <span class="json-key">"secret"</span>: true },
+    { <span class="json-key">"key"</span>: <span class="json-str">"Notion-Version"</span>, <span class="json-key">"value"</span>: <span class="json-str">"2022-06-28"</span> }
+  ],
+  <span class="json-key">"body"</span>: { <span class="json-key">"content_type"</span>: <span class="json-str">"application/json"</span>, <span class="json-key">"keys"</span>: [<span class="json-str">"parent"</span>, <span class="json-str">"properties"</span>] },
+  <span class="json-key">"suggested_op_name"</span>: <span class="json-str">"create_page"</span>,
+  <span class="json-key">"suggested_inputs"</span>: [
+    { <span class="json-key">"key"</span>: <span class="json-str">"parent"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"required"</span>: true },
+    { <span class="json-key">"key"</span>: <span class="json-str">"properties"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"textarea"</span>, <span class="json-key">"required"</span>: true }
+  ]
+}</pre>
+      </div>
+
+      <!-- failure path -->
+      <details class="mt-3">
+        <summary class="text-xs cursor-pointer font-semibold" style="color:var(--black-800)">Show failure / fallback state</summary>
+        <div class="mt-2 card-sub p-3" style="background:var(--neg-100); border-color:var(--neg-400)">
+          <div class="text-sm" style="color:var(--neg-400); font-weight:600">✗ AI parser couldn't extract a clean HTTP call</div>
+          <div class="text-xs mt-1" style="color:var(--black-800)">
+            Common causes: paste too short / too long (8 KB cap) / multiple endpoints mixed in / non-HTTP content.<br>
+            → Switch to cURL parser tab, or paste only ONE endpoint at a time.
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="mt-6 flex items-center justify-between">
+      <a href="#" class="btn btn-ghost">← Cancel</a>
+      <button class="btn btn-primary">Parse →</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- FLOW A REVIEW -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">② Flow A — review · Configs vs Inputs split</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    Left: extracted fields with widget pickers and secret toggles. Right: live JSON preview of what gets written to <code>connector_defs</code>.
+    Admin sets Meta (Key / Name / Icon) at the top before saving.
+  </p>
+
+  <div class="card p-6">
+    <!-- Meta -->
+    <div class="grid grid-cols-12 gap-4">
+      <div class="col-span-3">
+        <label class="label">Icon</label>
+        <input class="input text-center text-lg" value="💳">
+      </div>
+      <div class="col-span-4">
+        <label class="label">Key (slug, unique)</label>
+        <input class="input mono" value="stripe">
+        <p class="helper">Used in MCP <code>tool_id</code>. Lowercase, kebab/snake.</p>
+      </div>
+      <div class="col-span-5">
+        <label class="label">Display name</label>
+        <input class="input" value="Stripe (custom)">
+      </div>
+    </div>
+
+    <div class="grid grid-cols-12 gap-6 mt-6">
+      <!-- LEFT: extracted -->
+      <div class="col-span-7 space-y-5">
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="section-h">Configs (per-instance, stable)</span>
+            <button class="btn btn-ghost" style="padding:4px 10px; font-size:11px">+ Add field</button>
+          </div>
+          <div class="card-sub p-3 space-y-2">
+            <!-- row -->
+            <div class="grid grid-cols-12 gap-2 items-center">
+              <input class="input col-span-3 mono" value="base_url">
+              <select class="input col-span-2">
+                <option>url</option><option>text</option><option>secret</option>
+              </select>
+              <input class="input col-span-5" value="https://api.stripe.com/v1">
+              <label class="col-span-2 flex items-center gap-1 text-xs" style="color:var(--black-800)">
+                <input type="checkbox" checked> required
+              </label>
+            </div>
+            <!-- row secret -->
+            <div class="grid grid-cols-12 gap-2 items-center" style="background:var(--cau-100); border-radius:6px; padding:6px">
+              <input class="input col-span-3 mono" value="auth_value">
+              <select class="input col-span-2">
+                <option selected>secret</option><option>text</option>
+              </select>
+              <input class="input col-span-5" type="password" value="sk_test_xxx">
+              <div class="col-span-2 flex items-center gap-1">
+                <span class="badge badge-secret">Secret</span>
+              </div>
+              <p class="helper col-span-12">Auto-flagged: header value matched <code>Bearer …</code>. Encrypted-at-rest + masked in MCP responses.</p>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="section-h">Operation · <code>post_charges</code></span>
+            <span class="badge badge-destr">Destructive</span>
+          </div>
+          <div class="card-sub p-3 space-y-3">
+            <div class="grid grid-cols-12 gap-2 items-center">
+              <span class="col-span-3 text-xs" style="color:var(--black-800)">Method</span>
+              <select class="input col-span-3">
+                <option>POST</option><option>GET</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+              </select>
+              <span class="col-span-2 text-xs" style="color:var(--black-800)">URL</span>
+              <input class="input col-span-4 mono" value="{{.cfg.base_url}}/charges">
+            </div>
+
+            <span class="section-h">Inputs (per-call, LLM provides)</span>
+
+            <div class="grid grid-cols-12 gap-2 items-center">
+              <input class="input col-span-3 mono" value="amount">
+              <select class="input col-span-2"><option>number</option></select>
+              <input class="input col-span-5" placeholder="default" value="">
+              <label class="col-span-2 flex items-center gap-1 text-xs" style="color:var(--black-800)">
+                <input type="checkbox" checked> required
+              </label>
+            </div>
+            <div class="grid grid-cols-12 gap-2 items-center">
+              <input class="input col-span-3 mono" value="currency">
+              <select class="input col-span-2"><option>text</option></select>
+              <input class="input col-span-5" value="usd">
+              <label class="col-span-2 flex items-center gap-1 text-xs" style="color:var(--black-800)">
+                <input type="checkbox"> required
+              </label>
+            </div>
+            <div class="grid grid-cols-12 gap-2 items-center">
+              <input class="input col-span-3 mono" value="customer">
+              <select class="input col-span-2"><option>text</option></select>
+              <input class="input col-span-5" placeholder="cus_…">
+              <label class="col-span-2 flex items-center gap-1 text-xs" style="color:var(--black-800)">
+                <input type="checkbox" checked> required
+              </label>
+            </div>
+            <button class="btn btn-ghost" style="padding:4px 10px; font-size:11px">+ Add input</button>
+
+            <label class="label mt-2">Body template (Go text/template)</label>
+            <textarea class="input mono" rows="3" style="font-size:11px">amount={{.in.amount}}&amp;currency={{.in.currency}}&amp;customer={{.in.customer}}</textarea>
+            <p class="helper">Whitelist funcs: <code>urlquery</code>, <code>js</code>, <code>printf</code>, <code>default</code>, <code>lower</code>, <code>upper</code>. No shell, no file IO.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: JSON preview -->
+      <div class="col-span-5">
+        <div class="panel-dark p-4 sticky top-4" style="font-size:12px">
+          <div class="section-h mb-2" style="color:var(--black-600)">connector_defs row preview</div>
+<pre class="mono leading-relaxed"><span class="json-cmt">// row in <code>connector_defs</code></span>
+{
+  <span class="json-key">"key"</span>: <span class="json-str">"stripe"</span>,
+  <span class="json-key">"name"</span>: <span class="json-str">"Stripe (custom)"</span>,
+  <span class="json-key">"icon"</span>: <span class="json-str">"💳"</span>,
+  <span class="json-key">"source"</span>: <span class="json-str">"curl"</span>,
+  <span class="json-key">"configs"</span>: [
+    { <span class="json-key">"key"</span>: <span class="json-str">"base_url"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"url"</span>, <span class="json-key">"required"</span>: true },
+    { <span class="json-key">"key"</span>: <span class="json-str">"auth_value"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"secret"</span>, <span class="json-key">"secret"</span>: true, <span class="json-key">"required"</span>: true }
+  ]
+}
+
+<span class="json-cmt">// row in <code>connector_def_ops</code></span>
+{
+  <span class="json-key">"key"</span>: <span class="json-str">"post_charges"</span>,
+  <span class="json-key">"name"</span>: <span class="json-str">"Create charge"</span>,
+  <span class="json-key">"destructive"</span>: true,
+  <span class="json-key">"inputs"</span>: [
+    { <span class="json-key">"key"</span>: <span class="json-str">"amount"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"number"</span>, <span class="json-key">"required"</span>: true },
+    { <span class="json-key">"key"</span>: <span class="json-str">"currency"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"default"</span>: <span class="json-str">"usd"</span> },
+    { <span class="json-key">"key"</span>: <span class="json-str">"customer"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"required"</span>: true }
+  ],
+  <span class="json-key">"request"</span>: {
+    <span class="json-key">"method"</span>: <span class="json-str">"POST"</span>,
+    <span class="json-key">"url_template"</span>: <span class="json-str">"{{.cfg.base_url}}/charges"</span>,
+    <span class="json-key">"headers"</span>: { <span class="json-key">"Authorization"</span>: <span class="json-str">"Bearer {{.cfg.auth_value}}"</span> },
+    <span class="json-key">"body_template"</span>: <span class="json-str">"amount={{.in.amount}}&amp;…"</span>,
+    <span class="json-key">"content_type"</span>: <span class="json-str">"application/x-www-form-urlencoded"</span>
+  }
+}</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACCESS SECTION at save time -->
+    <div class="mt-6">
+      <div class="section-h mb-2">Access (tags)</div>
+      <div class="card-sub p-4">
+        <p class="text-xs mb-3" style="color:var(--black-800)">
+          Wick will auto-create the filter tag <span class="chip chip-active" style="font-size:10px"><span class="mono">custom:stripe</span></span> on save.
+          By default <strong>only admins</strong> see this connector — non-admins can't see or call it.
+          You can open it up later under <code>/admin/tags</code>.
+        </p>
+
+        <label class="label">Category (visual group on the connector index)</label>
+        <select class="input mb-3" style="max-width:280px">
+          <option>Internal APIs (default)</option>
+          <option>Communication</option>
+          <option>Development</option>
+          <option>Observability</option>
+          <option>SCM</option>
+        </select>
+
+        <div class="card-sub p-3" style="background:var(--cau-100); border-color:var(--cau-400)">
+          <div class="text-xs" style="color:var(--black-800)">
+            <span style="color:var(--cau-400); font-weight:600">⚠ Default = admin-only.</span>
+            Auto-created tag is <code>IsFilter=true, IsSystem=false</code>. No user carries it at save, so the filter rule hides the connector from every non-admin /manager surface and MCP <code>wick_list</code>.
+            Grant access in two ways: (a) assign tag to user groups at <code>/admin/tags</code>, or (b) remove the filter tag entirely to open to all approved users.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-6 flex items-center justify-between">
+      <a href="#" class="btn btn-ghost">← Back</a>
+      <div class="flex items-center gap-2">
+        <button class="btn btn-ghost">⚡ Test run</button>
+        <button class="btn btn-primary">Save connector →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- FLOW B — MCP server -->
+<!-- ============================================================ -->
+<section id="flow-mcp">
+  <h2 class="text-xl font-bold mb-1">③ Flow B — MCP server registration (HTTP forwarder)</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    Register an MCP server by URL + auth headers. Wick is a forwarder — no process spawn, no lifecycle to babysit. Per-call outbound JSON-RPC over HTTP.
+    Stdio MCPs are out of scope for v1; expose them via a sidecar (<code>mcp-proxy</code> / <code>supergateway</code>) if needed.
+  </p>
+
+  <div class="card p-6">
+    <div class="flex items-center gap-2 text-sm mb-4" style="color:var(--black-800)">
+      <a href="#" style="color:var(--green-600)">Connectors</a>
+      <span>/</span>
+      <span>New custom</span>
+      <span>/</span>
+      <span style="color:var(--black-900); font-weight:500">From MCP server</span>
+    </div>
+
+    <div class="grid grid-cols-12 gap-4">
+      <div class="col-span-5">
+        <label class="label">Label</label>
+        <input class="input" value="Internal Tools MCP">
+        <p class="helper">Display name. Imported tools will be grouped under one custom definition.</p>
+      </div>
+      <div class="col-span-7">
+        <label class="label">MCP URL <span style="color:var(--neg-400)">*</span></label>
+        <input class="input mono" value="https://mcp.internal.example.com/v1">
+        <p class="helper">Streamable-HTTP endpoint. Wick POSTs JSON-RPC (<code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>) here per request.</p>
+      </div>
+    </div>
+
+    <!-- AUTH SECTION -->
+    <div class="mt-5">
+      <label class="label">Auth scheme</label>
+      <div class="flex flex-wrap gap-3">
+        <label class="flex items-center gap-2 card-sub px-3 py-2 cursor-pointer">
+          <input type="radio" name="auth">
+          <span class="text-sm font-medium">None</span>
+        </label>
+        <label class="flex items-center gap-2 card-sub px-3 py-2 cursor-pointer" style="border-color:var(--green-500)">
+          <input type="radio" name="auth" checked>
+          <span class="text-sm font-medium">Bearer token</span>
+        </label>
+        <label class="flex items-center gap-2 card-sub px-3 py-2 cursor-pointer">
+          <input type="radio" name="auth">
+          <span class="text-sm font-medium">Custom header</span>
+        </label>
+        <label class="flex items-center gap-2 card-sub px-3 py-2 cursor-pointer">
+          <input type="radio" name="auth">
+          <span class="text-sm font-medium">SSO (forward caller's session)</span>
+        </label>
+      </div>
+      <p class="helper">Each scheme shows different inputs below. Switching schemes preserves any extra Headers row you've added.</p>
+    </div>
+
+    <!-- AUTH SCHEME SAMPLES — all four shown side by side for design review -->
+    <p class="mt-4 text-xs uppercase tracking-wide font-bold" style="color:var(--black-800)">All four auth panels (one is rendered at runtime depending on radio)</p>
+
+    <div class="mt-2 grid grid-cols-2 gap-3">
+
+      <!-- A. None -->
+      <div class="card-sub p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold" style="color:var(--black-900)">Auth = None</span>
+          <span class="chip chip-muted" style="font-size:10px">no inputs</span>
+        </div>
+        <div class="text-xs mb-3" style="color:var(--black-800)">
+          MCP server is open / network-restricted. Wick sends JSON-RPC without any auth header beyond the default <code>Content-Type</code> and <code>Accept</code>.
+        </div>
+        <div class="card-sub p-3" style="background:var(--prog-100); border-color:var(--prog-400)">
+          <div class="text-xs mono" style="color:var(--black-800); line-height:1.6">
+            <span style="color:var(--prog-400); font-weight:600">POST</span> /v1<br>
+            Content-Type: application/json<br>
+            Accept: application/json
+          </div>
+        </div>
+        <p class="helper mt-2">Recommended only inside a private network or behind a service mesh that handles auth.</p>
+      </div>
+
+      <!-- B. Bearer token -->
+      <div class="card-sub p-4" style="border-color:var(--green-500)">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold" style="color:var(--black-900)">Auth = Bearer token <span class="badge badge-custom ml-1">selected</span></span>
+          <span class="badge badge-secret">1 secret</span>
+        </div>
+        <label class="label">Bearer token <span style="color:var(--neg-400)">*</span></label>
+        <input class="input mono" type="password" value="•••••••••••••••••" placeholder="eyJhbGc…">
+        <p class="helper">Stored as <code>wick_enc_…</code>. Decrypted server-side per request, masked in audit logs.</p>
+        <div class="card-sub p-3 mt-3" style="background:var(--prog-100); border-color:var(--prog-400)">
+          <div class="text-xs mono" style="color:var(--black-800); line-height:1.6">
+            <span style="color:var(--prog-400); font-weight:600">POST</span> /v1<br>
+            <span style="color:var(--cau-400)">Authorization: Bearer ••••••••</span><br>
+            Content-Type: application/json
+          </div>
+        </div>
+        <p class="helper mt-2">Most common shared-secret case (OAuth access token, API key in Bearer form, etc).</p>
+      </div>
+
+      <!-- C. Custom header -->
+      <div class="card-sub p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold" style="color:var(--black-900)">Auth = Custom header</span>
+          <span class="badge badge-secret">N secrets</span>
+        </div>
+        <p class="text-xs mb-3" style="color:var(--black-800)">Define arbitrary header KV pairs. Toggle <span class="badge badge-secret">Sec</span> per row — secret values encrypt at rest.</p>
+        <div class="space-y-2">
+          <div class="grid grid-cols-12 gap-2 items-center" style="background:var(--cau-100); border-radius:6px; padding:6px">
+            <input class="input col-span-5 mono" value="X-API-Key" style="font-size:11px">
+            <input class="input col-span-5" type="password" value="••••••••" style="font-size:11px">
+            <div class="col-span-2 flex justify-end"><span class="badge badge-secret">Sec</span></div>
+          </div>
+          <div class="grid grid-cols-12 gap-2 items-center">
+            <input class="input col-span-5 mono" value="X-Tenant-Id" style="font-size:11px">
+            <input class="input col-span-5" value="qiscus-prod" style="font-size:11px">
+            <div class="col-span-2 flex justify-end">
+              <label class="text-xs flex items-center gap-1" style="color:var(--black-800)"><input type="checkbox"> Sec</label>
+            </div>
+          </div>
+          <button class="btn btn-ghost" style="padding:4px 10px; font-size:11px">+ Add row</button>
+        </div>
+        <div class="card-sub p-3 mt-3" style="background:var(--prog-100); border-color:var(--prog-400)">
+          <div class="text-xs mono" style="color:var(--black-800); line-height:1.6">
+            <span style="color:var(--prog-400); font-weight:600">POST</span> /v1<br>
+            <span style="color:var(--cau-400)">X-API-Key: ••••••••</span><br>
+            X-Tenant-Id: qiscus-prod
+          </div>
+        </div>
+        <p class="helper mt-2">Use for APIs that don't fit Bearer (e.g. Azure AAD <code>Ocp-Apim-Subscription-Key</code>, AWS sigv4 isn't covered here, providers with paired ID + secret headers).</p>
+      </div>
+
+      <!-- D. SSO -->
+      <div class="card-sub p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold" style="color:var(--black-900)">Auth = SSO (forward caller)</span>
+          <span class="chip chip-active" style="font-size:10px">zero secret</span>
+        </div>
+        <p class="text-xs mb-3" style="color:var(--black-800)">
+          Wick mints a short-lived (5-min) ED25519-signed JWT representing <em>the user who triggered the MCP call</em> and forwards it as <code>X-Wick-User</code>. MCP server validates against wick's pubkey at <code>/.well-known/wick-pubkey.pem</code>.
+        </p>
+
+        <label class="label">Claim mapping (preview, read-only)</label>
+        <div class="panel-dark p-3 mono text-xs" style="line-height:1.6">
+          <div><span class="json-key">"sub"</span>: <span class="json-str">"user.id (uuid)"</span>,</div>
+          <div><span class="json-key">"email"</span>: <span class="json-str">"user.email"</span>,</div>
+          <div><span class="json-key">"name"</span>: <span class="json-str">"user.display_name"</span>,</div>
+          <div><span class="json-key">"groups"</span>: <span class="json-str">"user.tag_ids[]"</span>,</div>
+          <div><span class="json-key">"aud"</span>: <span class="json-str">"mcp.internal.example.com"</span>,</div>
+          <div><span class="json-key">"iss"</span>: <span class="json-str">"https://wick.qiscus.com"</span>,</div>
+          <div><span class="json-key">"iat"</span>: <span class="json-num">1717564800</span>,</div>
+          <div><span class="json-key">"exp"</span>: <span class="json-num">1717565100</span></div>
+        </div>
+
+        <div class="mt-3 grid grid-cols-2 gap-2">
+          <div>
+            <label class="label">Audience (<code>aud</code> claim)</label>
+            <input class="input mono" value="mcp.internal.example.com" style="font-size:11px">
+            <p class="helper">Defaults to MCP URL host. MCP server should validate this.</p>
+          </div>
+          <div>
+            <label class="label">Token TTL</label>
+            <select class="input" style="font-size:11px">
+              <option>1 min</option>
+              <option selected>5 min (default)</option>
+              <option>15 min</option>
+            </select>
+            <p class="helper">Re-minted per request — short TTL OK.</p>
+          </div>
+        </div>
+
+        <div class="card-sub p-3 mt-3" style="background:var(--prog-100); border-color:var(--prog-400)">
+          <div class="text-xs mono" style="color:var(--black-800); line-height:1.6">
+            <span style="color:var(--prog-400); font-weight:600">POST</span> /v1<br>
+            <span style="color:var(--cau-400)">X-Wick-User: eyJhbGciOi…</span> <span style="color:var(--black-700)">// signed, per-caller, 5-min</span><br>
+            Content-Type: application/json
+          </div>
+        </div>
+
+        <div class="mt-3 card-sub p-3" style="background:#F1F9EF; border-color:var(--pos-400)">
+          <p class="text-xs" style="color:var(--black-800)">
+            <span style="color:var(--pos-400); font-weight:600">✓ Why SSO:</span>
+            no shared secret stored in wick; MCP can do per-user RBAC + audit; revoking a wick user revokes downstream access instantly (no token rotation needed).
+          </p>
+        </div>
+        <div class="mt-2 card-sub p-3" style="background:var(--cau-100); border-color:var(--cau-400)">
+          <p class="text-xs" style="color:var(--black-800)">
+            <span style="color:var(--cau-400); font-weight:600">⚠ Server requirement:</span>
+            MCP server must implement JWT validation against <code>/.well-known/wick-pubkey.pem</code>. Not supported by stock open-source MCP servers — typically only your in-house ones.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Extra headers (always on, regardless of scheme) -->
+    <div class="mt-5">
+      <div class="flex items-center justify-between mb-2">
+        <span class="label" style="margin-bottom:0">Extra headers (any scheme — appended on top)</span>
+        <button class="btn btn-ghost" style="padding:4px 10px; font-size:11px">+ Add header</button>
+      </div>
+      <div class="card-sub p-3 space-y-2">
+        <div class="grid grid-cols-12 gap-2 items-center">
+          <input class="input col-span-4 mono" value="X-Request-Source">
+          <input class="input col-span-7" value="wick">
+          <div class="col-span-1"></div>
+        </div>
+      </div>
+      <p class="helper">For routing / tenancy headers that aren't auth. Each row is independently markable as secret.</p>
+    </div>
+
+    <!-- TEST CONNECTION -->
+    <div class="mt-5 card-sub p-4">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <p class="text-sm font-semibold" style="color:var(--black-900)">Test connection</p>
+          <p class="text-xs" style="color:var(--black-800)">Fires <code>initialize</code> + <code>tools/list</code> with the current URL + headers. Save is blocked until at least one successful test.</p>
+        </div>
+        <button class="btn btn-primary" style="padding:6px 14px">▶ Test now</button>
+      </div>
+      <!-- successful test result preview -->
+      <div class="card-sub p-3" style="border-color:var(--pos-400); background: #F1F9EF">
+        <div class="flex items-center gap-2 text-sm" style="color:var(--pos-400); font-weight:600">
+          ✓ Connected · 12 tools discovered · 142ms
+        </div>
+        <div class="mt-2 mono text-xs" style="color:var(--black-800)">
+          <div>lookup_user · disable_user · audit_query · grant_role · list_tenants · …</div>
+        </div>
+      </div>
+      <!-- alt: failure shape (kept for reference) -->
+      <details class="mt-2">
+        <summary class="text-xs cursor-pointer" style="color:var(--black-800)">Show failure example</summary>
+        <div class="mt-2 card-sub p-3" style="border-color:var(--neg-400); background: var(--neg-100)">
+          <div class="text-sm" style="color:var(--neg-400); font-weight:600">✗ 401 Unauthorized</div>
+          <div class="mono text-xs mt-1" style="color:var(--black-800)">POST https://mcp.internal.example.com/v1 — auth header invalid. Check token + scopes.</div>
+        </div>
+      </details>
+    </div>
+
+    <div class="mt-6 flex items-center justify-between">
+      <a href="#" class="btn btn-ghost">← Cancel</a>
+      <button class="btn btn-primary">Continue → pick tools</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- FLOW B — tool import -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">④ Flow B — pick tools to import</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    After <code>tools/list</code>, admin reviews the catalog and selects which tools become Operations. JSON Schema is mapped to wick widgets; admin can override per-field.
+  </p>
+
+  <div class="card p-0 overflow-hidden">
+    <div class="px-6 py-3 flex items-center justify-between" style="background:var(--white-200); border-bottom:1px solid var(--white-300)">
+      <div class="flex items-center gap-3">
+        <span class="font-semibold" style="color:var(--black-900)">Internal Tools MCP</span>
+        <span class="chip chip-active">connected · 12 tools</span>
+      </div>
+      <span class="text-xs" style="color:var(--black-800)">3 selected</span>
+    </div>
+
+    <table class="w-full text-sm">
+      <thead style="background:var(--white-200); border-bottom:1px solid var(--white-300)">
+        <tr>
+          <th class="w-8"></th>
+          <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Tool</th>
+          <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Description</th>
+          <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Inputs</th>
+          <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Destructive?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="border-b" style="border-color:var(--white-300)">
+          <td class="px-4 py-3"><input type="checkbox" checked></td>
+          <td class="px-4 py-3 mono" style="color:var(--black-900)">lookup_user</td>
+          <td class="px-4 py-3" style="color:var(--black-800)">Find a user by email or id.</td>
+          <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">email?, id?</td>
+          <td class="px-4 py-3"><span class="text-xs" style="color:var(--black-800)">no</span></td>
+        </tr>
+        <tr class="border-b" style="border-color:var(--white-300)">
+          <td class="px-4 py-3"><input type="checkbox" checked></td>
+          <td class="px-4 py-3 mono" style="color:var(--black-900)">disable_user</td>
+          <td class="px-4 py-3" style="color:var(--black-800)">Disable a user account.</td>
+          <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">user_id</td>
+          <td class="px-4 py-3"><span class="badge badge-destr">Destructive</span></td>
+        </tr>
+        <tr class="border-b" style="border-color:var(--white-300)">
+          <td class="px-4 py-3"><input type="checkbox" checked></td>
+          <td class="px-4 py-3 mono" style="color:var(--black-900)">audit_query</td>
+          <td class="px-4 py-3" style="color:var(--black-800)">Query the audit log with time-range + filter.</td>
+          <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">since, until, action?</td>
+          <td class="px-4 py-3"><span class="text-xs" style="color:var(--black-800)">no</span></td>
+        </tr>
+        <tr class="border-b" style="border-color:var(--white-300); opacity:0.6">
+          <td class="px-4 py-3"><input type="checkbox"></td>
+          <td class="px-4 py-3 mono" style="color:var(--black-900)">delete_records</td>
+          <td class="px-4 py-3" style="color:var(--black-800)">Delete N records matching a filter.</td>
+          <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">filter, limit</td>
+          <td class="px-4 py-3"><span class="badge badge-destr">Destructive</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="px-6 py-3 flex items-center justify-between" style="background:var(--white-200); border-top:1px solid var(--white-300)">
+      <p class="text-xs" style="color:var(--black-800)">Imports create one connector def with N ops. You can split into multiple defs later via "Move to new connector".</p>
+      <div class="flex items-center gap-2">
+        <button class="btn btn-ghost">← Back</button>
+        <button class="btn btn-primary">Import 3 tools →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- FLOW C — Manual stepper -->
+<!-- ============================================================ -->
+<section id="flow-manual">
+  <h2 class="text-xl font-bold mb-1">⑤ Flow C — manual builder</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    Three-step stepper for greenfield definitions. Each step persists draft state; admin can leave + resume.
+  </p>
+
+  <div class="card p-6">
+    <!-- stepper -->
+    <div class="flex items-center gap-3 mb-6">
+      <div class="step"><span class="step-num">1</span> Meta</div>
+      <span style="color:var(--black-700)">›</span>
+      <div class="step active"><span class="step-num">2</span> Configs</div>
+      <span style="color:var(--black-700)">›</span>
+      <div class="step"><span class="step-num">3</span> Operations</div>
+    </div>
+
+    <h3 class="text-lg font-semibold mb-2" style="color:var(--black-900)">Step 2 · Configs</h3>
+    <p class="text-sm mb-4" style="color:var(--black-800)">
+      Define per-instance fields shared across every operation. Use <code>secret</code> for credentials — wick auto-encrypts at rest and masks in MCP responses.
+    </p>
+
+    <div class="card-sub p-3 space-y-2">
+      <div class="grid grid-cols-12 gap-2 items-center">
+        <input class="input col-span-3 mono" value="base_url" placeholder="key">
+        <select class="input col-span-2"><option>url</option></select>
+        <input class="input col-span-4" placeholder="https://api…">
+        <input class="input col-span-2" placeholder="default">
+        <label class="col-span-1 flex items-center gap-1 text-xs"><input type="checkbox" checked> req</label>
+      </div>
+      <div class="grid grid-cols-12 gap-2 items-center">
+        <input class="input col-span-3 mono" placeholder="(empty)">
+        <select class="input col-span-2"><option>text</option></select>
+        <input class="input col-span-4" placeholder="">
+        <input class="input col-span-2" placeholder="">
+        <label class="col-span-1 flex items-center gap-1 text-xs"><input type="checkbox"> req</label>
+      </div>
+      <button class="btn btn-ghost" style="padding:4px 10px; font-size:11px">+ Add row</button>
+    </div>
+
+    <div class="mt-6 flex items-center justify-between">
+      <button class="btn btn-ghost">← Step 1</button>
+      <button class="btn btn-primary">Step 3 — Operations →</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- DETAIL PAGE -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⑥ Custom connector detail (same chrome as built-in + reload banner)</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">
+    Same page as <code>/manager/connectors/&lt;key&gt;/&lt;id&gt;</code> for built-in: instance Configs editor, per-op toggles, history. Differences: "Custom" badge in header, "Edit definition" link, and a "needs reload" banner when def is dirty.
+  </p>
+
+  <div class="card p-0 overflow-hidden">
+    <!-- banner -->
+    <div class="px-6 py-3 flex items-center gap-3" style="background:var(--cau-100); border-bottom:1px solid var(--white-300)">
+      <span style="color:var(--cau-400); font-weight:600">⚠</span>
+      <div class="flex-1 text-sm">
+        <span style="font-weight:600; color:var(--cau-400)">Definition updated</span>
+        <span style="color:var(--black-800)">— click Reload to apply changes to live MCP dispatch. Current in-memory executor still serves until reload.</span>
+      </div>
+      <button class="btn btn-primary" style="padding:6px 12px">Reload</button>
+    </div>
+
+    <div class="p-6">
+      <div class="flex items-start gap-3">
+        <div class="h-12 w-12 rounded-lg flex items-center justify-center text-lg" style="background:var(--green-200); color:var(--green-700)">💳</div>
+        <div class="flex-1">
+          <div class="flex items-center gap-2">
+            <h3 class="text-lg font-semibold" style="color:var(--black-900)">Stripe (custom)</h3>
+            <span class="badge badge-custom">Custom · cURL</span>
+            <a href="#" class="text-xs" style="color:var(--green-600)">Edit definition →</a>
+          </div>
+          <p class="text-sm mt-1" style="color:var(--black-800)">Payments — imported from cURL on 2026-06-05 by riska@qiscus.com.</p>
+        </div>
+      </div>
+
+      <div class="mt-6 grid grid-cols-12 gap-6">
+        <!-- left: configs -->
+        <div class="col-span-7">
+          <div class="section-h mb-2">Configs (this instance)</div>
+          <div class="card-sub p-3 space-y-3">
+            <div>
+              <label class="label">base_url <span style="color:var(--neg-400)">*</span></label>
+              <input class="input" value="https://api.stripe.com/v1">
+            </div>
+            <div>
+              <label class="label">auth_value <span style="color:var(--neg-400)">*</span> <span class="badge badge-secret ml-2">Secret</span></label>
+              <input class="input mono" type="password" value="••••••••">
+              <p class="helper">Stored as <code>wick_enc_…</code>. Decryption happens server-side per call.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- right: operations -->
+        <div class="col-span-5">
+          <div class="section-h mb-2">Operations</div>
+          <div class="card-sub p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-sm font-medium mono" style="color:var(--black-900)">post_charges</div>
+                <div class="text-xs" style="color:var(--black-800)">Create charge</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="badge badge-destr">Destructive</span>
+                <input type="checkbox" checked>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-sm font-medium mono" style="color:var(--black-900)">get_charge</div>
+                <div class="text-xs" style="color:var(--black-800)">Retrieve charge by id</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="checkbox" checked>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-sm font-medium mono" style="color:var(--black-900)">list_charges</div>
+                <div class="text-xs" style="color:var(--black-800)">List charges</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="checkbox">
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-3 flex items-center gap-2">
+            <a href="#" class="btn btn-ghost" style="flex:1; justify-content:center">⚡ Test</a>
+            <a href="#" class="btn btn-ghost" style="flex:1; justify-content:center">📜 History</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- ACCESS / TAGS section -->
+      <div class="mt-6">
+        <div class="section-h mb-2">Access (tags) — who can see &amp; call this connector</div>
+        <div class="card-sub p-4 space-y-4">
+
+          <!-- Tag editor -->
+          <div>
+            <label class="label">Tags on this connector instance</label>
+            <div class="flex flex-wrap gap-2 mb-2">
+              <span class="chip chip-active">
+                <span class="mono">custom:stripe</span>
+                <span class="badge badge-secret" style="font-size:9px">filter</span>
+                <button style="color:var(--black-800); font-size:11px">✕</button>
+              </span>
+              <span class="chip chip-muted">
+                Connector
+                <button style="color:var(--black-800); font-size:11px">✕</button>
+              </span>
+              <span class="chip chip-muted">
+                Internal APIs
+                <button style="color:var(--black-800); font-size:11px">✕</button>
+              </span>
+              <button class="chip chip-muted" style="border-style:dashed; cursor:pointer">+ Add tag</button>
+            </div>
+            <p class="helper">
+              <code>custom:stripe</code> is the per-def auto-tag — its filter flag is what makes this connector admin-only by default. Remove it to open to all approved users.
+            </p>
+          </div>
+
+          <!-- Visibility status -->
+          <div class="card-sub p-3" style="background:var(--cau-100); border-color:var(--cau-400)">
+            <div class="flex items-start gap-2">
+              <span style="color:var(--cau-400); font-weight:600">⚠</span>
+              <div class="text-xs" style="color:var(--black-800); flex:1">
+                <div style="font-weight:600; color:var(--cau-400)">Currently visible to: admins only</div>
+                <div class="mt-1">
+                  0 user groups carry <code>custom:stripe</code>. Assign at <a href="#" style="color:var(--green-600); text-decoration:underline">/admin/tags/custom:stripe</a>, or
+                  <a href="#" style="color:var(--green-600); text-decoration:underline">open to all</a> (removes the filter tag from this connector).
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Per-op admin-only quick shortcut -->
+          <div>
+            <label class="label">Per-operation overrides</label>
+            <div class="text-xs space-y-1" style="color:var(--black-800)">
+              <div class="flex items-center gap-2">
+                <span class="mono" style="color:var(--black-900); min-width:140px">post_charges</span>
+                <label class="flex items-center gap-1"><input type="checkbox" checked> enabled</label>
+                <label class="flex items-center gap-1"><input type="checkbox" checked> admin-only <span style="color:var(--black-700)">(destructive)</span></label>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="mono" style="color:var(--black-900); min-width:140px">get_charge</span>
+                <label class="flex items-center gap-1"><input type="checkbox" checked> enabled</label>
+                <label class="flex items-center gap-1"><input type="checkbox"> admin-only</label>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="mono" style="color:var(--black-900); min-width:140px">list_charges</span>
+                <label class="flex items-center gap-1"><input type="checkbox"> enabled</label>
+                <label class="flex items-center gap-1"><input type="checkbox"> admin-only</label>
+              </div>
+            </div>
+            <p class="helper">
+              Operation call passes only when: <strong>row tags allow</strong> AND <strong>op enabled</strong> AND (admin OR not admin-only). Three independent off-switches.
+            </p>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- LEGEND -->
+<!-- ============================================================ -->
+<section class="card p-6">
+  <h2 class="text-base font-semibold mb-3" style="color:var(--black-900)">Token legend (design-system compliance)</h2>
+  <div class="grid grid-cols-3 gap-3 text-xs" style="color:var(--black-800)">
+    <div><span class="badge badge-custom">Custom</span> <span class="ml-2">Custom-def origin (green-200 / green-700)</span></div>
+    <div><span class="badge badge-builtin">Built-in</span> <span class="ml-2">RegisterBuiltins (white-300 / black-800)</span></div>
+    <div><span class="badge badge-destr">Destructive</span> <span class="ml-2">OpDestructive (neg-100 / neg-400)</span></div>
+    <div><span class="badge badge-secret">Secret</span> <span class="ml-2">Encrypted-field (cau-100 / cau-400)</span></div>
+    <div><span class="chip chip-active">Active filter</span> <span class="ml-2">green-200 + green-500 border</span></div>
+    <div><span class="chip chip-muted">Idle filter</span> <span class="ml-2">white-300 + white-400 border</span></div>
+  </div>
+  <p class="text-xs mt-4" style="color:var(--black-800)">
+    Spacing follows 8-grid; cards use <code>rounded-xl</code> (12px); inputs <code>rounded-lg</code> (8px); chips <code>rounded-full</code>.
+    Dark-mode pair: <code>navy-700</code> surfaces with <code>white-100</code> text and <code>navy-600</code> borders.
+  </p>
+</section>
+
+</main>
+
+</body>
+</html>

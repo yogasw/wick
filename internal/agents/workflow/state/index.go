@@ -38,6 +38,14 @@ var (
 	indexStores   = map[string]*shardedlog.Store[IndexEntry]{}
 )
 
+// EvictIndex drops the cached Store for an index dir after its workflow
+// is deleted, so the global cache stops pinning a dead directory.
+func EvictIndex(indexDir string) {
+	indexStoresMu.Lock()
+	defer indexStoresMu.Unlock()
+	delete(indexStores, indexDir)
+}
+
 func (s *FileStore) indexStore(id string) *shardedlog.Store[IndexEntry] {
 	indexStoresMu.Lock()
 	defer indexStoresMu.Unlock()

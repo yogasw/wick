@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { workflowAPI, type WorkflowSummary } from "$lib/api/workflow";
+  import type { Workflow } from "$lib/types/workflow";
 
   type Props = { onpick?: (id: string) => void; base?: string };
   let { onpick, base = "" }: Props = $props();
@@ -21,6 +22,10 @@
   let saving      = $state(false);
   let menuOpenId  = $state<string | null>(null);
   let actionMsg   = $state<string | null>(null);
+  let createMode  = $state<"template" | "import">("template");
+  let importFile  = $state<File | null>(null);
+  let importing   = $state(false);
+  let fileInput   : HTMLInputElement;
 
   type Template = { value: string; label: string; desc: string };
   let templates = $state<Template[]>([]);
@@ -35,6 +40,8 @@
   function openCreateModal() {
     newName = nextName();
     newTemplate = "empty";
+    createMode = "template";
+    importFile = null;
     creating = true;
   }
 
@@ -78,6 +85,41 @@
       flash((e as Error).message, true);
     } finally {
       saving = false;
+    }
+  }
+
+  function pickImportFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    importFile = input.files?.[0] ?? null;
+    input.value = "";
+  }
+
+  async function importWorkflow() {
+    if (!importFile) return;
+    if (importFile.size > 512 * 1024) {
+      flash("File too large (max 512 KB)", true);
+      return;
+    }
+    importing = true;
+    try {
+      const text = await importFile.text();
+      let parsed: Workflow;
+      try {
+        parsed = JSON.parse(text) as Workflow;
+      } catch {
+        flash("Invalid JSON file", true);
+        return;
+      }
+      const res = await workflowAPI.importWorkflow(parsed);
+      await load();
+      creating = false;
+      importFile = null;
+      flash(`Imported "${res.name}"`);
+      open(res.id);
+    } catch (e) {
+      flash((e as Error).message, true);
+    } finally {
+      importing = false;
     }
   }
 
@@ -199,7 +241,6 @@
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
          onclick={(e) => { if (e.target === e.currentTarget) creating = false; }}>
       <div class="w-full max-w-md mx-4 rounded-2xl bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 shadow-lg overflow-hidden">
-        <!-- Modal header -->
         <div class="flex items-center justify-between px-5 py-4 border-b border-white-300 dark:border-navy-600">
           <h2 class="font-semibold text-black-800 dark:text-white-100">New workflow</h2>
           <button class="text-black-600 dark:text-black-600 hover:text-black-800 dark:hover:text-white-100 transition-colors" onclick={() => creating = false}>
@@ -207,47 +248,102 @@
           </button>
         </div>
 
-        <!-- Name -->
-        <div class="px-5 pt-5 pb-3">
-          <label class="block text-xs font-medium text-black-700 dark:text-black-500 mb-1.5">Name</label>
-          <input
-            type="text"
-            bind:value={newName}
-            class="w-full bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg px-3 py-2 text-sm text-black-800 dark:text-white-100 focus:outline-none focus:border-green-500"
-            onkeydown={(e) => e.key === "Enter" && createWorkflow()}
-          />
-        </div>
-
-        <!-- Template cards -->
-        <div class="px-5 pb-5">
-          <label class="block text-xs font-medium text-black-700 dark:text-black-500 mb-2">Template</label>
-          <div class="grid grid-cols-2 gap-2">
-            {#each templates as t}
-              <button
-                type="button"
-                class={`text-left px-3 py-2.5 rounded-xl border transition-all ${
-                  newTemplate === t.value
-                    ? "border-green-500 bg-green-50 dark:bg-green-900/20"
-                    : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 hover:border-white-400 dark:hover:border-navy-500"
-                }`}
-                onclick={() => newTemplate = t.value}
-              >
-                <div class="text-xs font-medium text-black-800 dark:text-white-100">{t.label}</div>
-                <div class="text-[10px] text-black-700 dark:text-black-600 mt-0.5 leading-tight">{t.desc}</div>
-              </button>
-            {/each}
+        <div class="px-5 pt-4">
+          <div class="flex gap-1 p-1 rounded-lg bg-white-200 dark:bg-navy-800">
+            <button
+              type="button"
+              class={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                createMode === "template"
+                  ? "bg-white-100 dark:bg-navy-600 text-black-800 dark:text-white-100 shadow-sm"
+                  : "text-black-700 dark:text-black-500 hover:text-black-800 dark:hover:text-white-100"
+              }`}
+              onclick={() => createMode = "template"}
+            >From template</button>
+            <button
+              type="button"
+              class={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                createMode === "import"
+                  ? "bg-white-100 dark:bg-navy-600 text-black-800 dark:text-white-100 shadow-sm"
+                  : "text-black-700 dark:text-black-500 hover:text-black-800 dark:hover:text-white-100"
+              }`}
+              onclick={() => createMode = "import"}
+            >Import file</button>
           </div>
         </div>
 
-        <!-- Actions -->
+        {#if createMode === "template"}
+          <div class="px-5 pt-5 pb-3">
+            <label class="block text-xs font-medium text-black-700 dark:text-black-500 mb-1.5">Name</label>
+            <input
+              type="text"
+              bind:value={newName}
+              class="w-full bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg px-3 py-2 text-sm text-black-800 dark:text-white-100 focus:outline-none focus:border-green-500"
+              onkeydown={(e) => e.key === "Enter" && createWorkflow()}
+            />
+          </div>
+
+          <div class="px-5 pb-5">
+            <label class="block text-xs font-medium text-black-700 dark:text-black-500 mb-2">Template</label>
+            <div class="grid grid-cols-2 gap-2">
+              {#each templates as t}
+                <button
+                  type="button"
+                  class={`text-left px-3 py-2.5 rounded-xl border transition-all ${
+                    newTemplate === t.value
+                      ? "border-green-500 bg-green-50 dark:bg-green-900/20"
+                      : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 hover:border-white-400 dark:hover:border-navy-500"
+                  }`}
+                  onclick={() => newTemplate = t.value}
+                >
+                  <div class="text-xs font-medium text-black-800 dark:text-white-100">{t.label}</div>
+                  <div class="text-[10px] text-black-700 dark:text-black-600 mt-0.5 leading-tight">{t.desc}</div>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <div class="px-5 pt-5 pb-5">
+            <label class="block text-xs font-medium text-black-700 dark:text-black-500 mb-1.5">Workflow file</label>
+            <input
+              type="file"
+              accept="application/json,.json"
+              bind:this={fileInput}
+              onchange={pickImportFile}
+              class="hidden"
+            />
+            <button
+              type="button"
+              class="w-full flex flex-col items-center justify-center gap-2 px-4 py-8 rounded-xl border border-dashed border-white-400 dark:border-navy-500 bg-white-200 dark:bg-navy-700 hover:border-green-500 transition-colors"
+              onclick={() => fileInput.click()}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-black-700 dark:text-black-600"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              {#if importFile}
+                <span class="text-sm text-black-800 dark:text-white-100">{importFile.name}</span>
+                <span class="text-[11px] text-black-600 dark:text-black-600">Choose a different file</span>
+              {:else}
+                <span class="text-sm text-black-800 dark:text-white-100">Choose a .workflow.json file</span>
+                <span class="text-[11px] text-black-600 dark:text-black-600">Exported via a workflow's Download JSON</span>
+              {/if}
+            </button>
+          </div>
+        {/if}
+
         <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800/80">
           <button class="px-4 py-1.5 rounded-lg text-sm text-black-700 dark:text-black-500 hover:text-black-800 dark:hover:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
                   onclick={() => creating = false}>Cancel</button>
-          <button
-            class="px-5 py-1.5 rounded-lg bg-green-500 hover:bg-green-400 text-white-100 text-sm font-medium disabled:opacity-50 transition-colors"
-            onclick={createWorkflow}
-            disabled={saving || !newName.trim()}
-          >{saving ? "Creating…" : "Create workflow"}</button>
+          {#if createMode === "template"}
+            <button
+              class="px-5 py-1.5 rounded-lg bg-green-500 hover:bg-green-400 text-white-100 text-sm font-medium disabled:opacity-50 transition-colors"
+              onclick={createWorkflow}
+              disabled={saving || !newName.trim()}
+            >{saving ? "Creating…" : "Create workflow"}</button>
+          {:else}
+            <button
+              class="px-5 py-1.5 rounded-lg bg-green-500 hover:bg-green-400 text-white-100 text-sm font-medium disabled:opacity-50 transition-colors"
+              onclick={importWorkflow}
+              disabled={importing || !importFile}
+            >{importing ? "Importing…" : "Import"}</button>
+          {/if}
         </div>
       </div>
     </div>

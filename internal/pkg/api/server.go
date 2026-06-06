@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,6 +84,16 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
+
+// genMCPInternalToken returns a random per-boot secret (in-memory only)
+// authenticating agent spawns to the loopback MCP server.
+func genMCPInternalToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
 
 func NewServer() *Server {
 	cfg := config.Load()
@@ -343,9 +355,13 @@ func NewServer() *Server {
 	}
 	var agentsPool *agentpool.Pool
 	channelReg := agentchannels.NewRegistry()
+	// Per-boot secret: agent spawns use it to reach the live MCP server
+	// over loopback instead of cold-starting `wick mcp serve` per run.
+	mcpInternalToken := genMCPInternalToken()
 	agentsFactory := &agentpool.ClaudeFactory{
 		Layout:      agentsLayout,
 		RecordRaw:   false,
+		MCPToken:    mcpInternalToken,
 		SpawnLogger: agentsSpawnLogger,
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
@@ -884,7 +900,7 @@ func NewServer() *Server {
 		authSvc,
 		oauthSvc,
 		strings.TrimRight(configsSvc.AppURL(), "/")+"/.well-known/oauth-protected-resource",
-	)
+	).WithInternalToken(mcpInternalToken)
 
 	// Tools declare routes through a write-only Router; wick collects
 	// them here so duplicate "METHOD PATH" across modules fails the boot

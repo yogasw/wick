@@ -117,7 +117,7 @@ func TestOps_Versions(t *testing.T) {
 	if err := svc.Create(id, sampleWF(id)); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.Publish(id); err != nil {
+	if _, err := svc.Publish(id, ""); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	w := sampleWF(id)

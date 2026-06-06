@@ -136,6 +136,54 @@ func (s *Store[T]) Page(page, pageSize int) ([]T, bool, error) {
 	return out, false, nil
 }
 
+// Remove drops every entry for which pred returns true, rewriting the
+// affected shards (deleting any that end up empty). Returns the count.
+func (s *Store[T]) Remove(pred func(T) bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	shards, err := listShards(s.Dir)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, name := range shards {
+		path := filepath.Join(s.Dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		kept := make([]string, 0)
+		changed := false
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			var e T
+			if json.Unmarshal([]byte(line), &e) == nil && pred(e) {
+				removed++
+				changed = true
+				continue
+			}
+			kept = append(kept, line)
+		}
+		if !changed {
+			continue
+		}
+		if len(kept) == 0 {
+			_ = os.Remove(path)
+			continue
+		}
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, []byte(strings.Join(kept, "\n")+"\n"), 0o644); err != nil {
+			return removed, err
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
 // pickShard finds the active shard name to append to. Reuses today's
 // latest shard if it's still under the cap; otherwise rolls to the
 // next seq for today.
