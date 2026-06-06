@@ -93,6 +93,7 @@ jobs:
       pr_title: ${{ steps.pr_data.outputs.title }}
       pr_body: ${{ steps.pr_data.outputs.body }}
       commit_log: ${{ steps.pr_data.outputs.commit_log }}
+      contributors: ${{ steps.pr_data.outputs.contributors }}
 
     steps:
       - name: Checkout repository
@@ -128,16 +129,44 @@ jobs:
             core.setOutput("title", pr.title);
             core.setOutput("body", pr.body || "No description");
 
-            const commits = await github.rest.pulls.listCommits({
+            // Paginate so PRs with >30 commits (a release bundles many)
+            // surface every commit + contributor, not just the first page.
+            const commitList = await github.paginate(github.rest.pulls.listCommits, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number
+              pull_number: context.issue.number,
+              per_page: 100
             });
 
-            const messages = commits.data.map(c =>
+            const messages = commitList.map(c =>
               `- ${c.commit.message} (${c.commit.author.name})`
             );
             core.setOutput("commit_log", messages.join('\\n'));
+
+            // Contributor credit list for the release body. Prefer the
+            // GitHub @login (so it renders as a real mention/notification);
+            // fall back to the git author name when the commit email isn't
+            // linked to a GitHub account (login is null). Skip bots.
+            const seen = new Set();
+            const credits = [];
+            for (const c of commitList) {
+              const login = c.author && c.author.login;
+              if (login) {
+                if (/\[bot\]$/i.test(login) || login === 'github-actions') continue;
+                const key = login.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                credits.push('@' + login);
+              } else {
+                const name = c.commit.author.name;
+                if (!name) continue;
+                const key = 'name:' + name.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                credits.push(name);
+              }
+            }
+            core.setOutput("contributors", credits.join(', '));
 
   generate-summary:
     name: Generate Release Summary
@@ -361,12 +390,34 @@ jobs:
       contents: write
 
     steps:
+      - name: Build release body with contributor credits
+        id: body
+        env:
+          SUMMARY: ${{ needs.generate-summary.outputs.summary }}
+          CONTRIBUTORS: ${{ needs.prepare.outputs.contributors }}
+        run: |
+          {
+            printf '%s\n' "$SUMMARY"
+            if [ -n "$CONTRIBUTORS" ]; then
+              echo ""
+              echo "## Contributors"
+              echo ""
+              echo "Thanks to everyone who contributed to this release: ${CONTRIBUTORS} 🎉"
+            fi
+          } > release_body.md
+          {
+            echo "body<<EOF_BODY"
+            cat release_body.md
+            echo "EOF_BODY"
+          } >> "$GITHUB_OUTPUT"
+          rm -f release_body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
         with:
           tag_name: v${{ needs.prepare.outputs.version }}
           name: ${{ needs.generate-summary.outputs.title }}
-          body: ${{ needs.generate-summary.outputs.summary }}
+          body: ${{ steps.body.outputs.body }}
 
   merge-to-master:
     name: Merge to Master

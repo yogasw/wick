@@ -79,10 +79,10 @@ func wantsSSE(r *http.Request) bool {
 // loop (which writes heartbeats and the final result). Without the
 // mutex they would interleave bytes mid-frame and corrupt the stream.
 type sseSession struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	mu      sync.Mutex
-	closed  bool
+	w      http.ResponseWriter
+	rc     *http.ResponseController
+	mu     sync.Mutex
+	closed bool
 }
 
 // newSSESession writes the SSE response headers and flushes them so the
@@ -94,17 +94,38 @@ type sseSession struct {
 // point of streaming. Cache-Control: no-cache is required by the SSE
 // spec; Connection: keep-alive is the conventional hint.
 func newSSESession(w http.ResponseWriter) (*sseSession, bool) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	// Probe flush support by walking the Unwrap chain BEFORE writing
+	// headers, so callers can cleanly fall back to JSON when the writer
+	// genuinely can't stream. The status-capturing middleware
+	// (internal/pkg/api.responseWriter) wraps the writer with Unwrap but
+	// no Flush, so a direct w.(http.Flusher) misses the real Flusher one
+	// layer down — use the same traversal http.NewResponseController does.
+	if !canFlush(w) {
 		return nil, false
 	}
+	rc := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-	return &sseSession{w: w, flusher: flusher}, true
+	_ = rc.Flush()
+	return &sseSession{w: w, rc: rc}, true
+}
+
+// canFlush reports whether w — or anything it Unwraps to — implements
+// http.Flusher, the same chain http.NewResponseController traverses.
+func canFlush(w http.ResponseWriter) bool {
+	for {
+		if _, ok := w.(http.Flusher); ok {
+			return true
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return false
+		}
+		w = u.Unwrap()
+	}
 }
 
 // writeMessage frames a JSON-RPC payload as one SSE "message" event and
@@ -123,7 +144,7 @@ func (s *sseSession) writeMessage(payload any) error {
 	if _, err := fmt.Fprintf(s.w, "event: message\ndata: %s\n\n", body); err != nil {
 		return err
 	}
-	s.flusher.Flush()
+	_ = s.rc.Flush()
 	return nil
 }
 
@@ -137,7 +158,7 @@ func (s *sseSession) writeKeepalive() {
 		return
 	}
 	_, _ = fmt.Fprint(s.w, ": keepalive\n\n")
-	s.flusher.Flush()
+	_ = s.rc.Flush()
 }
 
 // close marks the session as no-write. Used after the final frame so
@@ -187,7 +208,7 @@ func (s *sseSession) writeRawMessage(payload []byte) error {
 	if _, err := fmt.Fprintf(s.w, "event: message\ndata: %s\n\n", payload); err != nil {
 		return err
 	}
-	s.flusher.Flush()
+	_ = s.rc.Flush()
 	return nil
 }
 

@@ -351,6 +351,16 @@ For `auto` / `build` / `rebuild` modes the entry uses the compiled wick binary w
 
 After saving, restart Claude Code (or reload MCP servers via `/mcp`). The four `wick_*` tools appear in Claude Code's tool list with no token required.
 
+## Workflow & agent access (loopback)
+
+When a workflow `agent` node (or a chat agent) spawns Claude as a subprocess, wick points it at the **already-running MCP server over loopback** (`http://127.0.0.1:<PORT>/mcp`) so it can use connectors without cold-starting a separate stdio `mcp serve` per run. This is automatic — no PAT, no manual config:
+
+- wick mints a random **per-boot internal token** (in-memory) and injects it into the spawned agent's MCP config as the `Authorization: Bearer …` header.
+- The agent connects over the full MCP **Streamable HTTP** transport: `POST /mcp` (JSON-RPC), `GET /mcp` (the server→client SSE channel), `DELETE /mcp` (teardown).
+- By default the wick server **merges** with the user's own MCP servers (`~/.claude.json`, `.mcp.json`) — set [`WICK_STRICT_MCP`](../reference/env-vars#wick-strict-mcp) to isolate, or [`WICK_DISABLE_SHARED_MCP`](../reference/env-vars#wick-disable-shared-mcp) to turn the loopback injection off entirely (falling back to the user's stdio config).
+
+If a spawned agent reports `MCP servers are still connecting: wick` and the `wick_*` tools never register, the loopback handshake isn't completing — confirm the server build is current and that `GET /mcp` returns `200` (a streaming `text/event-stream`), not `404`/`500`.
+
 ## End-to-end test from a fresh project
 
 1. **Register a connector** — the scaffolded template ships [`connectors/crudcrud/`](./connector-module). Confirm it's registered in `main.go`.

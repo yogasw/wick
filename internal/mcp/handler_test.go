@@ -53,6 +53,34 @@ func TestDeleteReturns200(t *testing.T) {
 	}
 }
 
+// unflushableWrapper mimics internal/pkg/api.responseWriter: it implements
+// Unwrap() but NOT Flush(), so a direct w.(http.Flusher) assertion fails.
+// Reaching the Flusher requires http.NewResponseController traversing Unwrap.
+type unflushableWrapper struct {
+	http.ResponseWriter
+}
+
+func (u unflushableWrapper) Unwrap() http.ResponseWriter { return u.ResponseWriter }
+
+// TestGetStreamThroughUnflushableWrapper reproduces the production 500:
+// behind the status-capturing middleware (Unwrap, no Flush), GET /mcp must
+// still open the SSE stream — not 500 because the type assertion missed
+// the Flusher hidden one Unwrap down.
+func TestGetStreamThroughUnflushableWrapper(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+	inner := newFlushRecorder()
+	w := unflushableWrapper{ResponseWriter: inner}
+	(&Handler{}).ServeHTTP(w, req)
+	if inner.Code != http.StatusOK {
+		t.Fatalf("GET through wrapper = %d, want 200 (Flusher hidden under Unwrap → 500 before fix)", inner.Code)
+	}
+	if ct := inner.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
+	}
+}
+
 func TestNegotiateProtocolVersion(t *testing.T) {
 	cases := []struct {
 		name      string
