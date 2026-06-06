@@ -50,3 +50,27 @@ func TestPublishAndReload_RefreshesRouterDefinition(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "v2", got2.Name, "router must serve the freshly published body after PublishAndReload")
 }
+
+func TestManagerMCPReload_RefreshesRouterDefinition(t *testing.T) {
+	m := newMgr(t)
+	require.NoError(t, m.Start(context.Background()))
+	require.NotNil(t, m.MCP.Reload, "Manager.New must wire MCP.Reload so MCP/connector publish refreshes the router")
+	ctx := context.Background()
+	id := "mcp-reload"
+
+	require.NoError(t, m.Service.Create(id, minimalWorkflow(id, "v1")))
+	require.NoError(t, HotReload(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt, id))
+	got, ok := m.Router.Definition(id)
+	require.True(t, ok)
+	require.Equal(t, "v1", got.Name)
+
+	require.NoError(t, m.Service.SaveDraft(id, minimalWorkflow(id, "v2")))
+	if _, err := m.Service.Publish(id); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	require.NoError(t, m.MCP.Reload(id))
+
+	got2, ok := m.Router.Definition(id)
+	require.True(t, ok)
+	require.Equal(t, "v2", got2.Name)
+}

@@ -113,7 +113,7 @@ func New(layout config.Layout) *Manager {
 	ops := mcp.New(svc, eng, router, can, chReg, conReg, provReg, dtSvc, ss).WithIntegration(intReg)
 	ops.Guard = g
 
-	return &Manager{
+	m := &Manager{
 		Layout:      layout,
 		Service:     svc,
 		StateStore:  ss,
@@ -131,6 +131,10 @@ func New(layout config.Layout) *Manager {
 		Cost:        c,
 		MCP:         ops,
 	}
+	ops.Reload = func(id string) error {
+		return HotReload(context.Background(), m.Service, m.Router, m.Cron, m.ScheduleAt, id)
+	}
+	return m
 }
 
 // WithDB switches the workflow Service from the file-based store to
