@@ -197,10 +197,21 @@ func NewServer() *Server {
 		log.Warn().Err(err).Msg("configs: seed connector_oauth:slack rows failed")
 	}
 	// Seed from env on first boot only — once the row exists in the DB
-	// the admin UI is the only way to change it.
-	if configsSvc.AppName() == configs.DefaultAppName && cfg.App.Name != "" {
-		if err := configsSvc.Set(context.Background(), configs.KeyAppName, cfg.App.Name); err != nil {
-			log.Warn().Msgf("seed app_name: %s", err.Error())
+	// the admin UI is the only way to change it. When APP_NAME is unset,
+	// fall back to the resolved app brand (appname.Resolve(): ldflag →
+	// wick.yml → exe name) so each build (wick-agent, wick-lab, …) gets a
+	// distinct display name + PWA identity out of the box instead of every
+	// instance sharing the generic "Wick Mini Tools" default — which made
+	// two local instances collide on PWA install + cookie scope.
+	if configsSvc.AppName() == configs.DefaultAppName {
+		seedName := cfg.App.Name
+		if seedName == "" {
+			seedName = appname.Resolve()
+		}
+		if seedName != "" && seedName != configs.DefaultAppName {
+			if err := configsSvc.Set(context.Background(), configs.KeyAppName, seedName); err != nil {
+				log.Warn().Msgf("seed app_name: %s", err.Error())
+			}
 		}
 	}
 	if configsSvc.AppURL() == "" && cfg.App.URL != "" {
