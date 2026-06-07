@@ -4,6 +4,13 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **MCP SSE transport**: Tools such as `wick_info`, `ask_user`, `wick_list_providers`, `wick_skill_list`, and `wick_skill_sync` now work correctly over the Streamable HTTP/SSE transport (shared loopback MCP). Previously they were advertised in `tools/list` but returned "unknown tool" on `tools/call`; only the stdio transport served them. The SSE dispatcher now delegates all non-streaming tools to the canonical handler, so all transports behave identically and new tools are automatically available everywhere.
+
+---
+
 ## [v0.15.7](https://github.com/yogasw/wick/compare/v0.15.6...v0.15.7)
 
 _Released on 2026-06-07_
