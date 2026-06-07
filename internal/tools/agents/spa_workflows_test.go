@@ -3,7 +3,36 @@ package agents
 import (
 	"strings"
 	"testing"
+	"time"
+
+	wf "github.com/yogasw/wick/internal/agents/workflow"
 )
+
+// TestRerunEvent confirms a re-run reuses the original run's trigger
+// event (payload + routing) but with a fresh timestamp.
+func TestRerunEvent(t *testing.T) {
+	orig := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+	st := wf.RunState{
+		Event: wf.Event{
+			Type:      "webhook",
+			Channel:   "bitbucket",
+			TriggerID: "trg-1",
+			Payload:   map[string]any{"foo": "bar"},
+			At:        orig,
+		},
+	}
+	got := rerunEvent(st, now)
+	if got.Type != "webhook" || got.Channel != "bitbucket" || got.TriggerID != "trg-1" {
+		t.Fatalf("event identity not preserved: %+v", got)
+	}
+	if got.Payload["foo"] != "bar" {
+		t.Fatalf("payload not preserved: %+v", got.Payload)
+	}
+	if !got.At.Equal(now) {
+		t.Fatalf("At not refreshed: got %v want %v", got.At, now)
+	}
+}
 
 // TestNormaliseWorkflowBody_RawWorkflowJSON confirms the FE can post
 // the Workflow object directly and the normaliser round-trips it back

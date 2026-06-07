@@ -4,6 +4,13 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased] — Workflow run re-run
+
+### Added
+- One-click **re-run** button in the workflow run detail panel. Re-fires the current draft with the original run's trigger payload (same input, fresh timestamp). Endpoint: `POST /api/workflows/runs/{id}/{runID}/rerun`. The UI jumps to the newly created run immediately after firing.
+
+---
+
 ## [Unreleased] — Admin & Workflow Mobile Responsiveness
 
 ### Fixed
