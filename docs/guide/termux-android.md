@@ -168,6 +168,23 @@ Unrooted Android has no firewall, so binding `:9425` to all interfaces leaks the
 - **SSH tunnel** (built-in, no extra dep) — bind to localhost and forward from your laptop. Covered in [Codex login](#codex-login-port-forward-from-your-laptop) above; same pattern works for `9425`.
 - **Outbound tunnel** (no port-forward on either side) — set `startup_script` at `/admin/variables` to `ngrok http 9425` or `cloudflared tunnel run my-tunnel`, toggle `startup_script_enabled` on, and restart. The tunnel spawns alongside the server and dies when you stop wick. Details: [Admin Panel — Startup script](./admin-panel#startup-script).
 
+## DNS and TLS on Termux
+
+The wick binary handles DNS and TLS automatically on Termux — no proot or manual environment variables required:
+
+- **DNS:** when Android's read-only `/etc/resolv.conf` has no usable nameserver, wick installs a fallback resolver. Priority: `WICK_DNS_SERVERS` env → `$PREFIX/etc/resolv.conf` → Android system properties (`net.dns1`/`net.dns2`) → public defaults (1.1.1.1, 8.8.8.8).
+- **TLS:** when the system cert store is absent and `$PREFIX` is set, wick points Go's TLS stack at `$PREFIX/etc/tls/cert.pem` (the CA bundle shipped with Termux's `ca-certificates` package).
+
+If you need to override DNS manually, set `WICK_DNS_SERVERS` before starting wick:
+
+```bash
+WICK_DNS_SERVERS=1.1.1.1,8.8.8.8 wick-agent start
+```
+
+This is a no-op on normal Linux/macOS hosts.
+
+---
+
 ## What you don't get on Termux
 
 - **System tray / GUI** — no desktop to attach to. Use `wick-agent start` (daemon).
