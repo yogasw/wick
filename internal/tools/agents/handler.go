@@ -924,6 +924,11 @@ func sessionDetail(c *tool.Ctx) {
 		}
 		break
 	}
+	// Chat is a full-height app surface — skip the layout's px-6 py-6
+	// gutter so the composer sits flush at the viewport bottom (no
+	// leftover padding to fight the keyboard) and the overlay header
+	// aligns to the true top instead of being shifted by a -mt-6 hack.
+	vm.Layout.FullBleed = true
 	c.HTML(view.SessionDetail(vm))
 }
 
