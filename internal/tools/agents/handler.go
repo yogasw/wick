@@ -186,6 +186,9 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)
 
+	// Git source control (session cwd, multi-repo).
+	registerSCM(r)
+
 	// Gate approval (Stage 5). Modal in the UI POSTs the user's
 	// decision here; revoke removes a previously-approved match key.
 	r.POST("/sessions/{id}/approve", approveCommand)
@@ -902,6 +905,7 @@ func sessionDetail(c *tool.Ctx) {
 		Projects:        globalMgr.Registry().Projects(),
 		ProjectList:     globalMgr.Registry().ProjectIDs(),
 		ActiveProjectID: sess.Meta.ProjectID,
+		SCMAssetURL:     spaAssetURL("scm"),
 		Gate: view.GateStatusVM{
 			Enabled: gs.Enabled,
 			Binary:  gs.Binary,
@@ -1739,6 +1743,18 @@ func streamSSE(c *tool.Ctx) {
 	_ = rc.SetWriteDeadline(time.Time{})
 	ch, unsub := globalBcast.Subscribe(sessionID)
 	defer unsub()
+
+	// Start a git fs-watcher for session-scoped subscribers so the SCM
+	// rail badge gets live git_status events. Ref-counted: stops when the
+	// last subscriber for this session disconnects.
+	if sessionID != "" && globalMgr != nil {
+		if sess, found := globalMgr.Registry().Session(sessionID); found {
+			if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
+				globalGitWatch.acquire(sessionID, cwd)
+				defer globalGitWatch.release(sessionID)
+			}
+		}
+	}
 
 	ctx := c.R.Context()
 	keepalive := time.NewTicker(15 * time.Second)

@@ -451,6 +451,11 @@ export const workflowAPI = {
   deleteRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
     apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/delete`, {}),
 
+  // Re-run a past run: re-fires the current draft with that run's original
+  // trigger event (same input). Returns {ok}; caller refreshes the runs list.
+  rerunRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
+    apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/rerun`, {}),
+
   versions: (id: string): Promise<{ versions: WorkflowVersion[] }> =>
     apiGet(`${BASE}/api/workflows/versions/${encodeURIComponent(id)}`),
 

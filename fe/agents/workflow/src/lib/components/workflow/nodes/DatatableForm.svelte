@@ -287,7 +287,7 @@
             onChange={(v) => updateCondition(i, { column: v })}
           />
           <select
-            class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 text-[12px]"
+            class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-[12px]"
             value={cond.op}
             onchange={(e) => updateCondition(i, { op: (e.target as HTMLSelectElement).value })}
           >
@@ -338,7 +338,7 @@
           onChange={(v) => updateOrder(i, { column: v })}
         />
         <select
-          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 text-[12px]"
+          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-[12px]"
           value={ord.direction ?? "asc"}
           onchange={(e) => updateOrder(i, { direction: (e.target as HTMLSelectElement).value })}
         >
@@ -358,7 +358,7 @@
       <span class="text-xs font-medium">Limit</span>
       <input
         type="number"
-        class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+        class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
         placeholder="25"
         value={node.limit ?? 0}
         oninput={(e) => patch("limit", Number((e.target as HTMLInputElement).value) || 0)}
@@ -368,7 +368,7 @@
       <span class="text-xs font-medium">Offset</span>
       <input
         type="number"
-        class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+        class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
         placeholder="0"
         value={node.offset ?? 0}
         oninput={(e) => patch("offset", Number((e.target as HTMLInputElement).value) || 0)}
@@ -423,7 +423,7 @@
         onChange={(v) => (newRowColumn = v)}
       />
       <input
-        class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
+        class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
         placeholder="value"
         bind:value={newRowValue}
         onkeydown={(e) => e.key === "Enter" && addRow()}

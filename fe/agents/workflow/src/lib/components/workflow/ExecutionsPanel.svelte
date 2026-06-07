@@ -93,6 +93,19 @@
     }
   }
 
+  // Re-run a past run with its original input, then jump to the fresh run
+  // (newest after refresh) so the user watches it live.
+  async function handleRerun(runID: string) {
+    try {
+      await workflowAPI.rerunRun(workflowID, runID);
+      toastOk("Re-running…");
+      await refresh();
+      if (runs.length > 0) await loadRun(runKey(runs[0]));
+    } catch (e) {
+      toastError("Re-run failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function loadRun(runID: string) {
     selectedRunID = runID;
     runDetail = null;
@@ -139,7 +152,7 @@
 
 <div class="flex flex-1 min-h-0">
   <!-- Left: runs list. -->
-  <aside class="shrink-0 border-r border-slate-200 dark:border-navy-600 flex flex-col" style="width:380px;">
+  <aside class={`shrink-0 border-r border-slate-200 dark:border-navy-600 flex-col w-full md:w-96 ${selectedRunID ? "hidden md:flex" : "flex"}`}>
     <header class="px-4 py-2 border-b border-slate-200 dark:border-navy-600 flex items-center gap-3 text-xs">
       <span class="font-semibold text-black-500 dark:text-white-100">
         {runs.length} {filterActive && total >= 0 ? `of ${total}` : ""} runs
@@ -215,7 +228,7 @@
         <input
           type="search"
           placeholder="Search run id…"
-          class="w-full rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono"
+          class="w-full rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono"
           bind:value={searchID}
         />
         <div class="grid grid-cols-2 gap-2">
@@ -223,7 +236,7 @@
             <span class="uppercase tracking-wider text-[10px]">From</span>
             <input
               type="date"
-              class="rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1"
+              class="rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1"
               bind:value={fromDate}
             />
           </label>
@@ -231,7 +244,7 @@
             <span class="uppercase tracking-wider text-[10px]">To</span>
             <input
               type="date"
-              class="rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1"
+              class="rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1"
               bind:value={toDate}
             />
           </label>
@@ -262,8 +275,8 @@
     </div>
   </aside>
 
-  <!-- Right: run detail. -->
-  <section class="flex-1 overflow-y-auto p-4">
+  <!-- Right: run detail. Mobile shows list OR detail (toggled by selection). -->
+  <section class={`flex-1 overflow-y-auto p-4 ${selectedRunID ? "block" : "hidden md:block"}`}>
     {#if !selectedRunID}
       <div class="h-full flex flex-col items-center justify-center text-black-700 dark:text-black-600 text-sm gap-3">
         <span class="text-2xl">⊜</span>
@@ -271,7 +284,12 @@
         <div class="text-xs">Click any execution on the left to inspect its output.</div>
       </div>
     {:else}
-      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} onLoadAllEvents={loadAllEvents} />
+      <button
+        type="button"
+        class="md:hidden mb-3 inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
+        onclick={() => (selectedRunID = null)}
+      >← Back to runs</button>
+      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} onRerun={handleRerun} onLoadAllEvents={loadAllEvents} />
     {/if}
   </section>
 </div>
