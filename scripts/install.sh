@@ -267,10 +267,6 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
   # paths codex expects without modifying the binary or the system.
   #
   # Workaround source: https://gist.github.com/netanel-haber/77b91c4148249394d75546348bae7698
-  #
-  # Marker prefix is intentionally different from the ALLOWED_ORIGINS
-  # marker below so the "clear / edit" cleanup grep there doesn't nuke
-  # this alias.
   codex_rc="$HOME/.bashrc"
   codex_marker="# $APP installer: codex-termux fix"
   if command -v codex >/dev/null 2>&1; then
@@ -288,73 +284,6 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     fi
   fi
 
-  # LAN access setup — Termux defaults to localhost, which is
-  # unreachable from your laptop or another phone on the same Wi-Fi.
-  # Surface every private-range IPv4 we can see and whitelist them so
-  # the UI is reachable from other devices immediately after install.
-  # Check for existing managed ALLOWED_ORIGINS in ~/.bashrc — re-runs
-  # should be config-only, not force-edit every time.
-  rc="$HOME/.bashrc"
-  existing_origins=""
-  if [ -f "$rc" ]; then
-    existing_origins=$(grep -F "added by $APP installer" "$rc" 2>/dev/null \
-                       | sed -n 's/^export ALLOWED_ORIGINS="\([^"]*\)".*/\1/p' | head -1)
-  fi
-  if [ -n "$existing_origins" ]; then
-    echo ""
-    echo "  LAN whitelist — existing ALLOWED_ORIGINS in $rc:"
-    echo "    $existing_origins"
-    echo "  ✓ keeping existing whitelist."
-    start_agent "$PREFIX/bin/$APP"
-    exit 0
-  fi
-
-  if command -v ip >/dev/null 2>&1; then
-    lan_ips=$(ip -4 addr show 2>/dev/null | awk '/inet (10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ {print $2}' | cut -d/ -f1)
-  else
-    lan_ips=$(ifconfig 2>/dev/null | awk '/inet (10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ {print $2}')
-  fi
-  if [ -n "$lan_ips" ]; then
-    # Collect into a positional list — sh has no arrays, but `set --`
-    # gives us $1..$N with stable indices for display.
-    set --
-    for ip in $lan_ips; do set -- "$@" "$ip"; done
-    n=$#
-    echo ""
-    echo "  LAN access — detected $n IPv4 address(es) on this device:"
-    i=0
-    for ip in "$@"; do
-      i=$((i + 1))
-      echo "    [$i] http://$ip:9425"
-    done
-    echo ""
-    echo "  Whitelisting all detected LAN URLs automatically."
-    selected="$lan_ips"
-    if [ -n "$selected" ]; then
-      # Build comma-separated URL list for ALLOWED_ORIGINS.
-      origins=""
-      for ip in $selected; do
-        url="http://$ip:9425"
-        [ -z "$origins" ] && origins="$url" || origins="$origins,$url"
-      done
-      # Append (idempotently) to ~/.bashrc so every `$APP server` run
-      # picks it up. We grep first to avoid stacking duplicates on
-      # repeated installs.
-      rc="$HOME/.bashrc"
-      line="export ALLOWED_ORIGINS=\"$origins\"  # added by $APP installer"
-      if [ -f "$rc" ] && grep -qF "added by $APP installer" "$rc" 2>/dev/null; then
-        # Replace the existing managed line instead of appending again.
-        tmp="$rc.tmp.$$"
-        grep -vF "added by $APP installer" "$rc" > "$tmp" && mv "$tmp" "$rc"
-      fi
-      printf '\n%s\n' "$line" >> "$rc"
-      echo "  ✓ added to $rc:"
-      echo "    $line"
-      echo "  Re-open your shell (or run: source $rc) before starting $APP."
-    else
-      echo "  Skipped — set ALLOWED_ORIGINS manually or add via /admin/variables later."
-    fi
-  fi
   start_agent "$PREFIX/bin/$APP"
   exit 0
 fi
