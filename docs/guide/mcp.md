@@ -44,9 +44,26 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 
 Why not a static list?
 
-- **Dynamic instances** — adding or removing a connector row in the admin UI must not invalidate the LLM client's cached tool list. With four fixed tools, the cache is always valid.
+- **Dynamic instances** — adding or removing a connector row in the admin UI must not invalidate the LLM client's cached tool list. With a small fixed set of meta-tools, the cache is always valid.
 - **Token economy** — `wick_list` does not return per-op `input_schema`. The LLM only pays the schema cost when it commits to calling a specific op via `wick_get`.
-- **Scale** — a server with hundreds of connectors still has a four-entry `tools/list` response.
+- **Scale** — a server with hundreds of connectors still has a compact `tools/list` response.
+
+## Wick Manager top-level tools
+
+The [Wick Manager connector](../connectors/wickmanager) is a special case. Its operations are surfaced **directly** in `tools/list` as `wick_manager_<op>` tools — for example `wick_manager_app_list`, `wick_manager_job_run_now`, `wick_manager_connector_list`. The LLM can call them without the `wick_list` → `wick_get` → `wick_execute` discovery cycle.
+
+```
+wick_manager_app_list          → list all app-level configuration variables
+wick_manager_job_run_now       → trigger an out-of-cycle job run
+wick_manager_connector_list    → list connector instances visible to the caller
+… (one entry per enabled wickmanager op)
+```
+
+Because these tools appear directly, `wickmanager` is excluded from `wick_list` and `wick_search` to avoid double-exposure.
+
+**Visibility** follows the same rules as every other connector: the caller only sees `wick_manager_*` tools when the `wickmanager` row is visible to their user (tag match or admin). Per-op access gates are unchanged — each call routes through `wick_execute` internally and re-validates the per-op enable state.
+
+The `wick_manager_*` tools work over both the stdio transport and the Streamable HTTP/SSE transport.
 
 ### Tool ID format
 
@@ -239,7 +256,7 @@ curl -X POST https://<your-wick-host>/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
-Expect a response containing the four `wick_*` tools. Then call `wick_list` to enumerate the connector rows visible to your token's user.
+Expect a response containing the `wick_*` meta-tools (plus any `wick_manager_*` tools if the wickmanager connector is visible to your token's user). Then call `wick_list` to enumerate the connector rows visible to your token's user.
 
 ```bash
 curl -X POST https://<your-wick-host>/mcp \
@@ -349,7 +366,7 @@ For `auto` / `build` / `rebuild` modes the entry uses the compiled wick binary w
 }
 ```
 
-After saving, restart Claude Code (or reload MCP servers via `/mcp`). The four `wick_*` tools appear in Claude Code's tool list with no token required.
+After saving, restart Claude Code (or reload MCP servers via `/mcp`). The `wick_*` meta-tools appear in Claude Code's tool list with no token required.
 
 ## Workflow & agent access (loopback)
 
@@ -387,7 +404,7 @@ Default response is `Content-Type: application/json` — single round-trip. Wick
 - The client requested it via `Accept: text/event-stream`.
 - The connector calls `c.ReportProgress(...)` mid-execution.
 
-Server-initiated push (`GET /mcp`) is not currently used. Because the meta-tool list is always four entries, `notifications/tools/list_changed` is unnecessary.
+Server-initiated push (`GET /mcp`) is not currently used. The tool list only changes when connector rows are added/removed in the admin UI; clients can re-fetch `tools/list` on demand, so `notifications/tools/list_changed` is not emitted.
 
 ## Audit trail
 
