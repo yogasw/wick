@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/netboot"
 
 	"github.com/glebarez/sqlite"
 	"github.com/rs/zerolog/log"
@@ -14,6 +15,10 @@ import (
 )
 
 func NewGORM(c config.Database) *gorm.DB {
+	// Universal chokepoint before the first DNS lookup (DB connect): every
+	// entry point and distribution reaches NewGORM, even paths that bypass main.
+	netboot.Setup()
+
 	var dialector gorm.Dialector
 
 	if strings.HasPrefix(c.URL, "postgres://") || strings.HasPrefix(c.URL, "postgresql://") {
