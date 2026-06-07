@@ -215,7 +215,7 @@
         <input
           type="search"
           placeholder="Search run id…"
-          class="w-full rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono"
+          class="w-full rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono"
           bind:value={searchID}
         />
         <div class="grid grid-cols-2 gap-2">
@@ -223,7 +223,7 @@
             <span class="uppercase tracking-wider text-[10px]">From</span>
             <input
               type="date"
-              class="rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1"
+              class="rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1"
               bind:value={fromDate}
             />
           </label>
@@ -231,7 +231,7 @@
             <span class="uppercase tracking-wider text-[10px]">To</span>
             <input
               type="date"
-              class="rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1"
+              class="rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1"
               bind:value={toDate}
             />
           </label>

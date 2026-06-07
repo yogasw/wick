@@ -214,7 +214,7 @@
     role="presentation"
   >
     <div
-      class="rounded-xl bg-white dark:bg-navy-800 border border-slate-200 dark:border-navy-600 shadow-2xl flex flex-col overflow-hidden"
+      class="rounded-xl bg-white-100 dark:bg-navy-800 border border-slate-200 dark:border-navy-600 shadow-2xl flex flex-col overflow-hidden"
       style="width: min(560px, 92%); height: min(480px, 92%);"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}

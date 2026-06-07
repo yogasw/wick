@@ -96,7 +96,7 @@
     <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
       <div class="flex items-center gap-2">
         <input
-          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
           value={k}
           onchange={(e) => renameKey(k, (e.target as HTMLInputElement).value)}
         />
@@ -119,13 +119,13 @@
   {/each}
   <div class="flex items-center gap-2 pt-1">
     <input
-      class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
       placeholder={keyPlaceholder}
       bind:value={newKey}
       onkeydown={(e) => e.key === "Enter" && add()}
     />
     <input
-      class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
       placeholder={valuePlaceholder}
       bind:value={newValue}
       onkeydown={(e) => e.key === "Enter" && add()}
