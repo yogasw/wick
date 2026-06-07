@@ -167,20 +167,13 @@ func Validate(w workflow.Workflow) *Result {
 	for i, tr := range w.Triggers {
 		validateTrigger(r, fmt.Sprintf("triggers[%d]", i), tr)
 	}
-	if w.Graph.Entry == "" {
-		anyEntry := false
-		for _, tr := range w.Triggers {
-			if tr.EntryNode != "" {
-				anyEntry = true
-				break
-			}
-		}
-		if !anyEntry {
-			r.Errors = append(r.Errors, Error{Path: "graph.entry", Message: "is required when no trigger sets entry_node"})
-		}
-	}
+	// Start/end (entry) nodes are NOT mandatory. A workflow may publish
+	// with just a trigger and no entry wired up — the only hard publish
+	// requirement is ≥1 trigger (checked above). A missing graph.entry is
+	// therefore allowed; the engine treats an unresolved entry as a no-op.
+	// An empty graph is valid — start/end nodes aren't required. With no
+	// nodes there are no IDs, edges, or entry targets left to check.
 	if len(w.Graph.Nodes) == 0 {
-		r.Errors = append(r.Errors, Error{Path: "graph.nodes", Message: "at least one node required"})
 		return r
 	}
 
@@ -223,15 +216,19 @@ func Validate(w workflow.Workflow) *Result {
 		validateNodeBody(r, path, n)
 	}
 
+	// A dangling entry reference (typically a scaffolded "start"/"end"
+	// node the user later deleted) must NOT block publish — start/end
+	// nodes aren't mandatory. Surface it as a warning instead; the engine
+	// treats an unresolved entry as a no-op run.
 	if w.Graph.Entry != "" {
 		if _, ok := nodesByID[w.Graph.Entry]; !ok {
-			r.Errors = append(r.Errors, Error{Path: "graph.entry", Message: fmt.Sprintf("references unknown node %q", w.Graph.Entry)})
+			r.Warnings = append(r.Warnings, Error{Path: "graph.entry", Message: fmt.Sprintf("references unknown node %q (ignored)", w.Graph.Entry)})
 		}
 	}
 	for i, tr := range w.Triggers {
 		if tr.EntryNode != "" {
 			if _, ok := nodesByID[tr.EntryNode]; !ok {
-				r.Errors = append(r.Errors, Error{Path: fmt.Sprintf("triggers[%d].entry_node", i), Message: fmt.Sprintf("references unknown node %q", tr.EntryNode)})
+				r.Warnings = append(r.Warnings, Error{Path: fmt.Sprintf("triggers[%d].entry_node", i), Message: fmt.Sprintf("references unknown node %q (ignored)", tr.EntryNode)})
 			}
 		}
 	}
