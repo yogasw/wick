@@ -217,6 +217,22 @@ Tailwind classes live in `.templ` files only. Never edit `*_templ.go` by hand �
 
 ---
 
+## Network
+
+### `WICK_DNS_SERVERS`
+**Default:** unset
+
+Comma- or space-separated list of nameservers the binary uses for DNS when `/etc/resolv.conf` configures no usable nameserver (the Termux/Android case). Port defaults to `53` if omitted.
+
+```env
+WICK_DNS_SERVERS=1.1.1.1,8.8.8.8
+WICK_DNS_SERVERS=192.168.1.1:53 8.8.4.4
+```
+
+This override is checked before `$PREFIX/etc/resolv.conf` and Android system properties (`net.dns1`/`net.dns2`). A configured loopback resolver (e.g. systemd-resolved's `127.0.0.53`) is always left alone — this var has no effect on normal Linux/macOS hosts.
+
+---
+
 ## Command Gate
 
 The [Command Gate](../guide/command-gate) sidecar (`<app>-gate`) reads no environment variables. Earlier iterations had `WICK_GATE_BIN` / `GATE_BIN` / `WICK_GATE_SPEC` / `GATE_SPEC` — all dropped. Resolution is automatic:

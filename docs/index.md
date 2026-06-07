@@ -92,7 +92,7 @@ Web UI at `http://localhost:9425`. Initial credentials in the daemon log / conta
 Need humans-facing tool pages, scheduled jobs, or LLM-facing connectors that live in your codebase? The framework lets Claude scaffold them as real Go files.
 
 ```bash
-go install github.com/yogasw/wick@v0.15.5
+go install github.com/yogasw/wick@v0.15.6
 wick init my-app
 cd my-app && wick dev
 ```

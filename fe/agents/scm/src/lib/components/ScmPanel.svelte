@@ -122,11 +122,13 @@
             <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h3M3 8h6M6 8v4h3M3 4v8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           {/if}
         </button>
+        <!-- Pin only makes sense for the desktop push dock; on mobile the
+             panel is a full-screen overlay, so hide the pin below lg. -->
         <button
           type="button"
           onclick={() => onPinToggle?.()}
           title={pinned ? "Unpin" : "Pin to sidebar"}
-          class={"inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors " + (pinned ? "text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30" : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
+          class={"hidden lg:inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors " + (pinned ? "text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30" : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800")}
         >
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill={pinned ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.3"><path d="M10 2l4 4-2 .5-2.5 2.5L9 12l-1 1-3-3 1-1 3-.5L11.5 6 12 4z" stroke-linejoin="round"/><path d="M5 11L2 14" stroke-linecap="round"/></svg>
         </button>

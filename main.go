@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/cmd/cli"
+	"github.com/yogasw/wick/internal/pkg/netboot"
 )
 
 //go:embed all:template
@@ -23,6 +24,7 @@ var installScriptsFS embed.FS
 var version string
 
 func main() {
+	netboot.Setup()
 	cli.AppVersion = "v" + strings.TrimSpace(version)
 	cli.Execute(templateFS, wickSkillsFS, installScriptsFS)
 }
