@@ -4,6 +4,15 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased] — Workflow fixed-mode template guard + lockable arg mode
+
+### Added
+- **Fixed-mode template guard**: publishing a workflow now fails with an Error (not just a warning) when any field has `arg_modes` set to `fixed` but its value contains a Go template (`{{...}}`). The template would never evaluate at runtime, silently shipping a broken URL, body, or prompt. Draft Save is unaffected — only the Publish step (UI button and `workflow_publish` MCP op) is gated.
+- **Auto-switch to Expression**: the workflow canvas editor automatically switches a fixed field to expression mode when the user types `{{` into it.
+- **`wick:"mode=fixed|expression"` config tag**: connector and channel op authors can lock the Fixed ⇄ Expression toggle for a schema field. `mode=fixed` or `mode=expression` greys out the toggle; omitting the tag leaves it enabled. Toggle now renders on every field kind in the inspector.
+
+---
+
 ## [v0.15.7](https://github.com/yogasw/wick/compare/v0.15.6...v0.15.7)
 
 _Released on 2026-06-07_
