@@ -68,7 +68,7 @@ The page also surfaces three quick stats: active token count, distinct users wit
 
 Every MCP call carries the user identity into `connector_runs.user_id`, plus the caller IP and User-Agent. As of this writing, **the specific token used is not tracked** — a user with multiple PATs sees all calls aggregated by user, not by token. If you need per-token audit (e.g. to triage a leaked token), the workaround is to issue a new token, revoke the old one, and let the run history continue accruing — the gap maps cleanly.
 
-Per-token audit is on the roadmap; see [`internal/docs/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/docs/connectors-design.md) section 10.7.
+Per-token audit is on the roadmap; see [`internal/planning/archive/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/planning/archive/connectors-design.md) section 10.7.
 
 ## Common questions
 
@@ -84,4 +84,4 @@ Per-token audit is on the roadmap; see [`internal/docs/connectors-design.md`](ht
 
 - MCP transport: [MCP for LLMs](./mcp)
 - OAuth alternative: [OAuth Connections](./oauth-connections)
-- Token format and storage details: [`internal/docs/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/docs/connectors-design.md) section 8.2
+- Token format and storage details: [`internal/planning/archive/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/planning/archive/connectors-design.md) section 8.2

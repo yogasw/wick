@@ -33,7 +33,7 @@ Intentionally empty (`type Configs struct{}`). Wick Manager talks to in-process 
 
 ## Access control
 
-Single source of truth for **who-can-call-what** is the "Akses control — full per-op rule" table in `internal/docs/plan_wickmanager.md`. The handlers mirror it through dedicated gate helpers in [`access.go`](https://github.com/yogasw/wick/blob/master/internal/connectors/wickmanager/access.go):
+Single source of truth for **who-can-call-what** is the "Akses control — full per-op rule" table in `internal/planning/archive/plan_wickmanager.md`. The handlers mirror it through dedicated gate helpers in [`access.go`](https://github.com/yogasw/wick/blob/master/internal/connectors/wickmanager/access.go):
 
 - `requireAdmin` — every `app_*` op + every `system_*` op.
 - `requireJobAccess` / `requireToolAccess` / `requireConnectorAccess` — `*_get`, `*_set_config`, `*_list_runs`, `*_run_now` operate per-resource. Admin sees all; non-admin sees only the resources their tags grant access to.

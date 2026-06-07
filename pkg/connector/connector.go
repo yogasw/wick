@@ -119,7 +119,7 @@ type Operation struct {
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
 	// quirks, templateable fields, pair-with, common pitfalls).
 	// Zero-value Docs = current behaviour; populate per op when worth
-	// it. See pkg/wickdocs + internal/docs/workflow/24-describe-contract.md.
+	// it. See pkg/wickdocs + internal/planning/archive/workflow/24-describe-contract.md.
 	wickdocs.Docs
 }
 

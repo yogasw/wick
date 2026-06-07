@@ -19,7 +19,7 @@ Data tables are wick's shared key/value store. One data table = one named rowset
 | | |
 |---|---|
 | **Source** | [`internal/agents/workflow/nodes/datatable.go`](https://github.com/yogasw/wick/blob/master/internal/agents/workflow/nodes/datatable.go) |
-| **Engine** | In-memory by default — see the [data tables design doc](https://github.com/yogasw/wick/blob/master/internal/docs/workflow/12-data-tables.md) for the Postgres-backed roadmap. |
+| **Engine** | In-memory by default — see the [data tables design doc](https://github.com/yogasw/wick/blob/master/internal/planning/archive/workflow/12-data-tables.md) for the Postgres-backed roadmap. |
 
 ## Schema (per type)
 

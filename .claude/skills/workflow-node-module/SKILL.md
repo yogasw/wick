@@ -377,7 +377,7 @@ Implement on the executor struct (pointer receiver). Optional but **strongly rec
 | `Example` | YAML snippet copy-pasteable into workflow.yaml. Use real field values, not placeholders |
 | `Schema` | `integration.StructSchema(myOpSchema{})` — never hardcode the map |
 | `Output` | `map[string]string` field name → description. Becomes `{{.Node.<id>.<key>}}` reference in templates |
-| `Docs` (embedded `wickdocs.Docs`) | Opt-in self-documentation: `Quirks`, `Examples`, `InputSample`, `OutputSample`, `TemplateableFields`, `PairWith`, `CommonPitfalls`. Surfaced by `workflow_node_detail`. Zero-value = no extra context. See [pkg/wickdocs/docs.go](../../../pkg/wickdocs/docs.go) and design [doc 24](../../../internal/docs/workflow/24-describe-contract.md). |
+| `Docs` (embedded `wickdocs.Docs`) | Opt-in self-documentation: `Quirks`, `Examples`, `InputSample`, `OutputSample`, `TemplateableFields`, `PairWith`, `CommonPitfalls`. Surfaced by `workflow_node_detail`. Zero-value = no extra context. See [pkg/wickdocs/docs.go](../../../pkg/wickdocs/docs.go) and design [doc 24](../../../internal/planning/archive/workflow/24-describe-contract.md). |
 
 ### Optional declarer interfaces (`engine/declarers.go`)
 
@@ -519,7 +519,7 @@ AI clients reach your node via the workflow connector. Five ops to know:
 | `workflow_get_run_log(id, run_id, diagnose=true?)` | Default: status + per-node duration. With `diagnose=true`: classify error into one of 8 known classes (template_missing_key / channel_action_missing / connector_op_missing / secret_leak / branch_no_edge / agent_session_invalid / provider_skill_missing / unknown), surface `available_keys` + a `suggested_fix` with confidence level | `mcp.diagnose.go` rule registry |
 | `workflow_watch({workflow_id?, trigger_id?, node_id?, status?, since?, limit?, wait_seconds?, expect?, stop_on_first?})` | Bounded, filterable read over recent runs. Returns only `[run_id, workflow_id, status, started_at, ended_at, trigger_id]` — AI follows up with `workflow_get_run_log(diagnose=true)` per chosen id. `wait_seconds>0` subscribes to the live event stream and returns the moment `expect`/`stop_on_first` is met. Server caps `limit=50` + `wait_seconds=30`. | `mcp.watch.go` + `engine.broker.go` |
 
-**Watch usage patterns** (see [doc 25](../../../internal/docs/workflow/25-diagnose-watch.md)):
+**Watch usage patterns** (see [doc 25](../../../internal/planning/archive/workflow/25-diagnose-watch.md)):
 
 - **Integration test, one trigger:** `wait_seconds=15, stop_on_first=true` — AI is blocked until run lands, returns in ~1s when user triggers.
 - **Test N triggers in one shot:** `wait_seconds=20, expect=2` — returns after the 2nd run, not after 20s.

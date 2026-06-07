@@ -3,7 +3,7 @@
 // app.RegisterConnector; the MCP and admin-UI layers walk All() at boot
 // to validate definitions and seed default instances.
 //
-// Shape of a connector module (see internal/docs/connectors-design.md
+// Shape of a connector module (see internal/planning/archive/connectors-design.md
 // for the full design):
 //
 //  1. Package under internal/connectors/<name>/ exposing a Meta builder,

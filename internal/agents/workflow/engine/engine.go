@@ -40,7 +40,7 @@ import (
 // examples, templateable fields, pair-with, common pitfalls) projected
 // by the MCP `workflow_node_detail` op. Zero-value Docs = current
 // behaviour; populate per executor when worth it. See
-// internal/agents/workflow/docs and internal/docs/workflow/24-describe-contract.md.
+// internal/agents/workflow/docs and internal/planning/archive/workflow/24-describe-contract.md.
 // PaletteCategory is the typed bucket label each descriptor declares.
 // Defined as a named string type (not a bare string field) so callers
 // can't typo "LOIGIC" — the compiler catches it at the descriptor site.

@@ -68,7 +68,7 @@ func Migrate(db *gorm.DB) {
 		&entity.DataTable{},
 		&entity.DataTableRow{},
 		// Workflow storage migration — see
-		// internal/docs/workflow/svelte-migration.md. Tables added in
+		// internal/planning/archive/workflow/svelte-migration.md. Tables added in
 		// parallel with the existing file-based store; the importer in
 		// internal/agents/workflow/repository (future phase) hydrates
 		// the rows from disk on boot before any handler reads them.

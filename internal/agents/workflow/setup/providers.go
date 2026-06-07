@@ -20,7 +20,7 @@ import (
 // for structured + agent calls.
 //
 // Claude lives behind the agent pool in production (see
-// internal/docs/workflow/pool.md), but cliProvider stays as the
+// internal/planning/archive/workflow/pool.md), but cliProvider stays as the
 // fallback for codex/gemini and for any path that runs without the
 // pool wired (tests, headless MCP).
 type cliProvider struct {

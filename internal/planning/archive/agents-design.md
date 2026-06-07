@@ -170,7 +170,7 @@ Use case = **shared folder berisi banyak repo, dipakai berulang oleh banyak sess
 | Tests | `internal/agents/project/project_test.go` | Rewrite → workspace tests. Buang `TestCreateWithClone`, `TestCreateNoRepo` |
 | Tests | `internal/agents/session/session_test.go` | `TestWithProject` assertion `worktree missing` → `workspace path resolves`. `TestSwitchProject` → `TestSwitchWorkspace` (no fs swap) |
 | Tests | `internal/agents/multiturn_scenarios_test.go` | `SessionWorkspace` → `WorkspacePath` lookups |
-| Doc | `internal/docs/agents-design.md` (this file) | Rewrite §0 TL;DR, §3, §4.1-4.3, §5, §6 setelah R3 selesai |
+| Doc | `internal/planning/archive/agents-design.md` (this file) | Rewrite §0 TL;DR, §3, §4.1-4.3, §5, §6 setelah R3 selesai |
 
 ### Phase tracker
 

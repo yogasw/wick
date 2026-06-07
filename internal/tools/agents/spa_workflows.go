@@ -52,7 +52,7 @@ func normaliseWorkflowBody(id string, raw []byte) ([]byte, error) {
 // JSON-only API wrappers consumed by the Svelte SPA under
 // /tools/agents-v2/. Mounted at /api/workflows/* to keep the surface
 // separate from the legacy templ + HTMX routes. Both stay live during
-// the migration (see internal/docs/workflow/svelte-migration.md).
+// the migration (see internal/planning/archive/workflow/svelte-migration.md).
 
 // registerSPAWorkflows wires the JSON workflow endpoints. Call from
 // handler.Register after the legacy routes — the dual-mount works
