@@ -409,19 +409,21 @@ templ SessionDetail(vm SessionDetailVM) {
 				</div>
 			</div>
 		</div>
-		<!-- Docked SCM sidebar (push). Hidden until pinned/opened; the
-		     Svelte island mounts into [data-scm-host] in sidebar mode.
-		     Width + pin state are persisted by scm-dock.js. -->
+		<!-- Docked SCM sidebar. Hidden until opened from the rail tab.
+		     Mobile (below lg): full-screen overlay, not resizable, not pinnable.
+		     Desktop (lg and up): resizable push dock; width comes from the
+		     scm-w CSS var set by scm-dock.js (drag + persisted). Pin state
+		     persisted by scm-dock.js (desktop only). -->
 		<aside
 			data-scm-dock
 			data-scm-session={ vm.Session.ID }
 			data-scm-base={ vm.Base }
 			data-scm-asset={ vm.SCMAssetURL }
-			class="hidden shrink-0 h-full border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 relative"
-			style="width: 260px;"
+			class="hidden h-full bg-white-100 dark:bg-navy-700 border-white-300 dark:border-navy-600 fixed inset-0 z-40 w-full lg:static lg:inset-auto lg:z-auto lg:w-[var(--scm-w)] lg:shrink-0 lg:border-l lg:relative"
+			style="--scm-w: 260px;"
 		>
-			<!-- Drag handle to resize the dock. -->
-			<div data-scm-resize class="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-green-400/40 z-10"></div>
+			<!-- Drag handle to resize the dock (desktop only). -->
+			<div data-scm-resize class="hidden lg:block absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-green-400/40 z-10"></div>
 			<div data-scm-host class="h-full w-full">
 				<div data-scm-loading class="flex h-full items-center justify-center text-xs text-black-700 dark:text-black-600">Loading source control…</div>
 			</div>

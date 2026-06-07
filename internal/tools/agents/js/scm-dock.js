@@ -27,15 +27,23 @@
   var WIDTH_KEY = "wick.scm.width";
   var MIN_W = 240, MAX_W = 640, DEFAULT_W = 260;
 
+  // Below lg (1024px) the dock is a full-screen overlay (see sessions.templ):
+  // no resize, no pin, no auto-open on load. Keep this breakpoint in sync
+  // with the `lg:` Tailwind classes on [data-scm-dock].
+  var mqDesktop = window.matchMedia("(min-width: 1024px)");
+  function isDesktop() { return mqDesktop.matches; }
+
   // ── State ───────────────────────────────────────────────────────
   function isOpen() { return !dock.classList.contains("hidden"); }
   function savedWidth() {
     var w = parseInt(localStorage.getItem(WIDTH_KEY) || String(DEFAULT_W), 10);
     return isNaN(w) ? DEFAULT_W : Math.min(MAX_W, Math.max(MIN_W, w));
   }
+  // Width drives a CSS var that only the `lg:w-[var(--scm-w)]` class reads,
+  // so on mobile the dock stays `w-full` regardless of the saved width.
   function applyWidth(w) {
     w = Math.min(MAX_W, Math.max(MIN_W, w));
-    dock.style.width = w + "px";
+    dock.style.setProperty("--scm-w", w + "px");
     localStorage.setItem(WIDTH_KEY, String(w));
   }
 
@@ -125,8 +133,15 @@
     });
   }
 
-  // Restore pinned dock on load.
-  if (isPinned()) openDock();
+  // Restore pinned dock on load — desktop only. On mobile the dock is a
+  // full-screen overlay with no pin affordance, so never auto-open it.
+  if (isPinned() && isDesktop()) openDock();
+
+  // If the viewport crosses the breakpoint while the dock is open, re-apply
+  // the saved width so the desktop var is fresh (mobile ignores it).
+  mqDesktop.addEventListener("change", function () {
+    if (isOpen() && isDesktop()) applyWidth(savedWidth());
+  });
 
   // ── Resize drag ─────────────────────────────────────────────────
   if (resizeHandle) {
