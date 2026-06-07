@@ -54,6 +54,14 @@ type Config struct {
 	// only while the named field's current value equals <value>. Not
 	// persisted — pure presentation hint.
 	VisibleWhen string `gorm:"-" json:"visible_when,omitempty"`
+	// Mode locks the workflow editor's Fixed ⇄ Expression toggle for this
+	// field, sourced from the `wick:"mode=fixed"` / `wick:"mode=expression"`
+	// tag. Empty = operator chooses freely (toggle enabled, defaults to
+	// fixed). "fixed" or "expression" = toggle greyed out, forced to that
+	// mode. Pure presentation hint for the SPA workflow inspector — the
+	// admin Settings page (templ) does not render a mode toggle. Not
+	// persisted.
+	Mode string `gorm:"-" json:"mode,omitempty"`
 	// EnvOverride names the environment variable currently overriding
 	// this row's value. Set by Service.ListOwned when the operator has
 	// exported an env var declared in configs.envOverrides — the UI

@@ -146,6 +146,7 @@ func WorkspaceFormatContracts() map[string]any {
 			"fixed":  "literal value, not rendered as template",
 			"expression": "Go template rendered with RenderCtx — use for {{...}} values",
 			"default": "absent key = expression mode (template render)",
+			"publish_block": "mode=fixed on a value that contains {{...}} is a validation ERROR and blocks workflow_publish — the template would never render. Set mode=expression or remove the {{...}}.",
 		},
 		"trigger_json": map[string]any{
 			"rule":    "workflow_set_triggers JSON uses Go PascalCase field names, not snake_case.",
