@@ -71,6 +71,7 @@ type Config struct {
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Pure presentation hint — value is still seeded / saved normally. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
+| `mode=fixed` / `mode=expression` | **Workflow editor only.** Locks the per-field Fixed ⇄ Expression toggle to that mode — the pill renders greyed out and can't be changed. Omit (default) to leave the toggle free (defaults to fixed). Use `mode=fixed` for values that must never be templated (a literal enum, a fixed endpoint path) and `mode=expression` for values that only make sense as a template. Any value other than `fixed`/`expression` is ignored (treated as free). Pure UI hint — the admin Settings page (templ) renders no toggle. |
 
 ## Key derivation
 

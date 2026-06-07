@@ -76,6 +76,7 @@ func StructToConfigs(cfg any) []Config {
 			Description:   tag["desc"],
 			Hidden:        tag["hidden"] == "true",
 			VisibleWhen:   tag["visible_when"],
+			Mode:          normalizeMode(tag["mode"]),
 		})
 	}
 	return out
@@ -140,6 +141,19 @@ func widgetFor(k reflect.Kind, tag map[string]string) (widget, options string) {
 		return "number", ""
 	default:
 		return "text", ""
+	}
+}
+
+// normalizeMode validates the `wick:"mode=..."` tag value. Only "fixed"
+// and "expression" lock the editor toggle; anything else (including the
+// bare-flag form `mode` → "true", or a typo) is treated as unset so the
+// operator keeps a free, enabled toggle rather than a silently broken lock.
+func normalizeMode(v string) string {
+	switch v {
+	case "fixed", "expression":
+		return v
+	default:
+		return ""
 	}
 }
 

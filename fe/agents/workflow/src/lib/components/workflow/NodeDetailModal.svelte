@@ -1320,7 +1320,9 @@
                     <SchemaForm
                       schema={currentChannelOp.args_schema}
                       values={(node.args ?? {}) as Record<string, unknown>}
+                      modes={node.arg_modes}
                       onChange={(k, v) => patchArgs("args", { ...(node.args ?? {}), [k]: v })}
+                      onModeChange={(k, m) => patchMode(k, m)}
                       onClear={(k) => {
                         const next = { ...(node.args ?? {}) };
                         delete next[k];
@@ -1421,7 +1423,9 @@
                     <SchemaForm
                       schema={currentConnectorOp.args_schema}
                       values={(node.args ?? {}) as Record<string, unknown>}
+                      modes={node.arg_modes}
                       onChange={(k, v) => patchArgs("args", { ...(node.args ?? {}), [k]: v })}
+                      onModeChange={(k, m) => patchMode(k, m)}
                       onClear={(k) => {
                         const next = { ...(node.args ?? {}) };
                         delete next[k];

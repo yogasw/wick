@@ -91,6 +91,9 @@ export type CatalogConfigField = {
   visible_when?: string;
   env_override?: string;
   col_options?: Record<string, string>;
+  // mode locks the Fixed/Expression toggle: "" = free (defaults to fixed),
+  // "fixed"/"expression" = toggle greyed out, forced to that mode.
+  mode?: "fixed" | "expression";
 };
 
 export type ChannelEventDescriptor = {

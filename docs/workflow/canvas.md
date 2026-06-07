@@ -22,7 +22,7 @@ The canvas at `/tools/agents/workflows/<id>` is the visual editor. Built on Draw
 2. Double-click to focus the inspector. Fill required fields (red asterisk).
 3. Drag from a node's output port to another node's input port to add an edge. `case:` labels appear on outgoing ports of branching nodes.
 4. **Save** writes the current state to `workflow.draft.yaml`.
-5. **Publish** validates the canvas state, runs the same `workflow_diagnose` checks the MCP surface uses, and only writes `workflow.yaml` if every check passes. Failed checks land inline next to the offending node.
+5. **Publish** validates the canvas state, runs the same `workflow_diagnose` checks the MCP surface uses, and only writes `workflow.yaml` if every check passes. Failed checks land inline next to the offending node. One class of check is a **publish-blocker**: any field whose `arg_modes` entry is `fixed` but whose value contains a Go template (`{{...}}`) is reported as an Error — the template would never evaluate at runtime. Draft Save is not affected; only the Publish step is gated.
 
 ::: info Two ways to edit the same file
 The canvas + MCP `workflow_*` ops mutate the same `workflow.yaml`. An LLM can scaffold the graph over MCP, you tighten it in the canvas, and version control sees a single file. There is no separate "AI mode" / "canvas mode" — both write through the same engine validator.
@@ -49,6 +49,10 @@ The **Copy to editor** button on a run loads the run state, saves the current pu
 
 - **Doctor** button → runs `workflow_diagnose` across every workflow and reports the union (broken refs, missing triggers, unreachable nodes) in one report.
 - **Validate** button (per workflow) → runs `workflow_validate` on the current draft and shows errors inline. Errors are decorated with did-you-mean hints (`templateMissingKey`, `channel_action_missing`, `picker scalar vs object`, …) when wick recognises the failure.
+
+**Fixed-mode template guard** — if a field's arg mode is `fixed` (literal string) and its value contains `{{...}}`, validation raises an Error that blocks publish. Go templates never render in fixed mode; the string would reach the connector/HTTP call verbatim. To fix: either switch the field's toggle to Expression, or remove the template syntax. The editor auto-switches a field to Expression when you type `{{` into it.
+
+Connector and channel op authors can lock the toggle for a field in code via the `wick:"mode=fixed"` / `wick:"mode=expression"` [config tag](../reference/config-tags#modifiers-any-widget), preventing users from accidentally setting the wrong mode on fields that must always be literal or always be templated.
 
 ## See also
 

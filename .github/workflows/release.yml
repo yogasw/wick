@@ -94,6 +94,7 @@ jobs:
       pr_body: ${{ steps.pr_data.outputs.body }}
       commit_log: ${{ steps.pr_data.outputs.commit_log }}
       contributors: ${{ steps.pr_data.outputs.contributors }}
+      manual_notes: ${{ steps.manual_notes.outputs.notes }}
 
     steps:
       - name: Checkout repository
@@ -114,6 +115,34 @@ jobs:
         run: |
           TAG_EXISTS=$(git ls-remote --tags origin refs/tags/v${{ steps.read_version.outputs.version }} | wc -l)
           echo "tag_exists=$TAG_EXISTS" >> $GITHUB_OUTPUT
+
+      - name: Extract manual Unreleased notes from changelog
+        id: manual_notes
+        run: |
+          # The changelog's "## [Unreleased]" block holds hand-written notes
+          # that carry context the bare commit log can't. Feed it to Gemini as
+          # an authoritative draft. Block = lines between the 1st and 2nd '---'
+          # separator; we drop the leading "## [Unreleased]..." heading so only
+          # the body (### Added / ### Fixed bullets) reaches the prompt.
+          NOTES=""
+          if [ -f docs/changelog.md ]; then
+            SEPS=$(grep -n '^---$' docs/changelog.md | head -2 | cut -d: -f1)
+            START=$(echo "$SEPS" | sed -n '1p')
+            END=$(echo "$SEPS" | sed -n '2p')
+            if [ -n "$START" ] && [ -n "$END" ] && [ "$END" -gt "$START" ]; then
+              NOTES=$(sed -n "$((START + 1)),$((END - 1))p" docs/changelog.md \
+                | sed -E '/^## \[Unreleased\]/d' \
+                | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+            fi
+          fi
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No manual Unreleased notes found in docs/changelog.md."
+          fi
+          {
+            echo "notes<<EOF_NOTES"
+            printf '%s\n' "$NOTES"
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Get PR Info and Commits
         id: pr_data
@@ -186,6 +215,7 @@ jobs:
           PR_TITLE: ${{ needs.prepare.outputs.pr_title }}
           PR_BODY: ${{ needs.prepare.outputs.pr_body }}
           COMMIT_LOG: ${{ needs.prepare.outputs.commit_log }}
+          MANUAL_NOTES: ${{ needs.prepare.outputs.manual_notes }}
         run: |
           VERSION=v${{ needs.prepare.outputs.version }}
 
@@ -196,8 +226,9 @@ jobs:
 
           printf "%s\n" "$COMMIT_LOG" > commit_log.txt
           COMMITS=$(cat commit_log.txt)
+          MANUAL=${MANUAL_NOTES:-"(none provided)"}
 
-          PROMPT=$(printf "Release version: %s\n\nPull Request: %s\n\nDescription:\n%s\n\nCommits:\n%s\n\nYou are an agent responsible for generating GitHub release summaries from pull request commits. Output ONLY valid Markdown compatible with VitePress (no MDX, no HTML tags, no custom components, no frontmatter).\n\nThe FIRST line of your output MUST be a sentinel of the form:\n\nHEADLINE: <value>\n\nWhere <value> is either:\n- 1 to 3 words naming the headline theme of this release (e.g. 'AI Agents', 'Cross-Platform Builds', 'MCP & Connectors') — ONLY when one major theme clearly dominates the commits and PR description\n- empty (so the sentinel becomes literally 'HEADLINE:' with nothing after) for routine bug-fix / chore / small improvement releases that have no single dominant theme\n\nAfter the HEADLINE sentinel line, leave one blank line, then output the summary body.\n\nIn the summary body use only these heading levels: ### Added, ### Fixed, ### Improved — include only categories present in the commits. Under each heading use bullet points starting with '- '. Do not add introductory sentences, version headings, or trailing notes. Describe each item specifically and concisely. Professional tone suitable for public changelogs." "$VERSION" "$PR_TITLE" "$PR_BODY" "$COMMITS")
+          PROMPT=$(printf "Release version: %s\n\nPull Request: %s\n\nDescription:\n%s\n\nMaintainer draft notes (hand-written, authoritative):\n%s\n\nCommits:\n%s\n\nYou are an agent responsible for generating GitHub release summaries. You are given THREE inputs: (1) maintainer draft notes hand-written for this release, (2) the raw commit log, (3) the PR description. The maintainer draft notes are authoritative — they capture intent and context the bare commit log lacks. Combine all three into one summary: start from the maintainer draft notes, then cross-check against the commits to catch anything the maintainer missed, fold in those extra items, and refine wording for clarity. Do not drop any item present in the maintainer draft notes. Output ONLY valid Markdown compatible with VitePress (no MDX, no HTML tags, no custom components, no frontmatter).\n\nThe FIRST line of your output MUST be a sentinel of the form:\n\nHEADLINE: <value>\n\nWhere <value> is either:\n- 1 to 3 words naming the headline theme of this release (e.g. 'AI Agents', 'Cross-Platform Builds', 'MCP & Connectors') — ONLY when one major theme clearly dominates the release\n- empty (so the sentinel becomes literally 'HEADLINE:' with nothing after) for routine bug-fix / chore / small improvement releases that have no single dominant theme\n\nAfter the HEADLINE sentinel line, leave one blank line, then output the summary body.\n\nIn the summary body use only these heading levels: ### Added, ### Fixed, ### Improved — include only categories present in the release. Under each heading use bullet points starting with '- '. Do not add introductory sentences, version headings, or trailing notes. Describe each item specifically and concisely. Professional tone suitable for public changelogs." "$VERSION" "$PR_TITLE" "$PR_BODY" "$MANUAL" "$COMMITS")
 
           PAYLOAD=$(jq -n --arg text "$PROMPT" '{"contents":[{"parts":[{"text":$text}]}]}')
           SUMMARY=""
@@ -281,8 +312,21 @@ jobs:
 
           if [ -f docs/changelog.md ]; then
             docs_tempfile=$(mktemp)
-            SEPARATOR_LINE=$(grep -n '^---$' docs/changelog.md | head -1 | cut -d: -f1)
             REPO="yogasw/wick"
+
+            # Layout: title/intro, '---' (#1), "## [Unreleased]" manual block,
+            # '---' (#2), then prior releases. The manual block's content has
+            # already been folded into $SUMMARY by Gemini, so on release we:
+            #   1. keep the title/intro through separator #1,
+            #   2. drop the consumed Unreleased block and reset it to an empty
+            #      scaffold for the next cycle,
+            #   3. insert the new "## [vX.Y.Z]" release entry,
+            #   4. keep every prior release (everything after separator #2).
+            SEPS=$(grep -n '^---$' docs/changelog.md | head -2 | cut -d: -f1)
+            HEAD_END=$(echo "$SEPS" | sed -n '1p')
+            BLOCK_END=$(echo "$SEPS" | sed -n '2p')
+            # Fall back to single-separator behavior if no Unreleased block.
+            if [ -z "$BLOCK_END" ]; then BLOCK_END=$HEAD_END; fi
 
             PREV_TAG=$(git tag --sort=-version:refname | grep -v "^v${VERSION}$" | head -1)
             if [ -n "$PREV_TAG" ]; then
@@ -297,8 +341,14 @@ jobs:
               HEADING_SUFFIX=" — ${HEADLINE}"
             fi
 
-            head -n "$SEPARATOR_LINE" docs/changelog.md > "$docs_tempfile"
+            head -n "$HEAD_END" docs/changelog.md > "$docs_tempfile"
             {
+              echo ""
+              echo "## [Unreleased]"
+              echo ""
+              echo "_Nothing yet — notes for the next release go here._"
+              echo ""
+              echo "---"
               echo ""
               echo "## [v${VERSION}](${COMPARE_URL})${HEADING_SUFFIX}"
               echo ""
@@ -308,7 +358,7 @@ jobs:
               echo ""
               echo "---"
               echo ""
-              tail -n +$((SEPARATOR_LINE + 1)) docs/changelog.md
+              tail -n +$((BLOCK_END + 1)) docs/changelog.md
             } >> "$docs_tempfile"
             mv "$docs_tempfile" docs/changelog.md
           fi

@@ -19,14 +19,30 @@
   import PickerField from "./PickerField.svelte";
   import type { CatalogConfigField } from "$lib/api/workflow";
 
+  type Mode = "fixed" | "expression";
   type Props = {
     schema: CatalogConfigField[];
     values: Record<string, unknown>;
     onChange: (key: string, value: unknown) => void;
     onClear?: (key: string) => void;
+    // Per-field arg_modes map (node.arg_modes). onModeChange persists a
+    // single field's mode back to it. When omitted, fields render without
+    // the Fixed/Expression toggle (e.g. the trigger match form).
+    modes?: Record<string, string>;
+    onModeChange?: (key: string, mode: Mode) => void;
   };
 
-  let { schema, values, onChange, onClear }: Props = $props();
+  let { schema, values, onChange, onClear, modes, onModeChange }: Props = $props();
+
+  // Engine default for an absent arg_modes key is "expression" (template
+  // renders). The editor convention is fixed-by-default, so we treat a
+  // missing entry as "fixed" in the UI and write it explicitly the first
+  // time the operator touches the toggle — keeping UI and engine aligned.
+  function modeFor(f: CatalogConfigField): Mode {
+    if (f.mode === "fixed" || f.mode === "expression") return f.mode; // locked by tag
+    const m = modes?.[f.Key];
+    return m === "expression" ? "expression" : "fixed";
+  }
 
   function isVisible(f: CatalogConfigField): boolean {
     if (f.hidden) return false;
@@ -87,6 +103,10 @@
           helper={f.Description}
           required={f.Required}
           placeholder={f.Value}
+          expression={!!onModeChange}
+          mode={modeFor(f)}
+          lockedMode={f.mode === "fixed" || f.mode === "expression"}
+          onModeChange={onModeChange ? (m) => onModeChange(f.Key, m) : undefined}
         />
         {#if onClear && v !== undefined && v !== "" && v !== false && v !== null && f.Type !== "checkbox" && f.Type !== "bool"}
           <button

@@ -19,6 +19,14 @@ outline: deep
 Every other connector already gets discovery (`wick_list`, `wick_get`, `wick_search`), per-instance admin pages, tag-based access control, encrypted-fields support, and `connector_runs` audit. Reusing the contract here avoids a parallel MCP code path. The trade-off: it shares the destructive-opt-in model, so high-impact ops (`app_regenerate_config`, `system_server_stop`, …) need explicit per-op enable on the row.
 :::
 
+## MCP surface
+
+Wick Manager's enabled ops appear **directly** in `tools/list` as `wick_manager_<op>` tools (e.g. `wick_manager_app_list`, `wick_manager_job_run_now`). LLM clients can call them without going through the `wick_list` → `wick_get` → `wick_execute` meta-tool cycle. To avoid double-exposure, the `wickmanager` row is excluded from `wick_list` and `wick_search`.
+
+Visibility follows the standard tag-based access rules on the connector row. Each `wick_manager_*` call routes through `wick_execute` internally and re-validates the per-op enable state on every invocation.
+
+See [Wick Manager top-level tools](/guide/mcp#wick-manager-top-level-tools) in the MCP guide for details.
+
 ## Configs
 
 Intentionally empty (`type Configs struct{}`). Wick Manager talks to in-process services, not an external API — the empty struct exists so the admin form renders **"no config required"** rather than nothing.
@@ -93,7 +101,7 @@ Every op routes through `audit.go`'s deferred-elapsed logger which emits a struc
 ## See also
 
 - [Connector Module](/guide/connector-module) — the contract Wick Manager reuses.
-- [MCP for LLMs](/guide/mcp) — meta-tool pattern Wick Manager's ops surface through.
+- [MCP for LLMs](/guide/mcp) — meta-tool pattern and `wick_manager_*` top-level tools.
 - [Background Job](/guide/job-module) — what `job_*` operates on.
 - [Tool Module](/guide/tool-module) — what `tool_*` operates on.
 - [Desktop Tray](/guide/desktop-tray) — what `system_*` operates on.

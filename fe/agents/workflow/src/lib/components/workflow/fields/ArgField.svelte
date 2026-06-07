@@ -15,6 +15,10 @@
     label: string;
     value: string;
     mode?: Mode;
+    // lockedMode greys out the Fixed/Expression pill so the operator can't
+    // change it — set when the field's wick tag pinned a mode. The pill
+    // still renders (so the chosen mode is visible) but is non-interactive.
+    lockedMode?: boolean;
     placeholder?: string;
     rows?: number;
     multiline?: boolean;
@@ -30,6 +34,7 @@
     label,
     value,
     mode = "fixed",
+    lockedMode = false,
     placeholder,
     rows = 4,
     multiline = false,
@@ -133,6 +138,12 @@
   function handleInput(e: Event) {
     const el = e.target as HTMLTextAreaElement | HTMLInputElement;
     onValueChange(el.value);
+    // Typing `{{` in a fixed field is almost always intent to template —
+    // flip to expression so it actually renders (and the publish gate
+    // stays green). Skipped when the mode is locked by config.
+    if (mode === "fixed" && !lockedMode && el.value.includes("{{")) {
+      onModeChange?.("expression");
+    }
     if (mode === "expression") {
       const partial = detectPartial(el.value, el.selectionStart ?? 0);
       if (partial !== null) {
@@ -262,7 +273,11 @@
   <div class="flex items-center justify-between gap-2">
     <span class="text-xs font-medium">{label}</span>
     {#if onModeChange}
-      <div class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide">
+      <div
+        class="inline-flex rounded border border-slate-300 dark:border-navy-600 overflow-hidden text-[10px] uppercase tracking-wide"
+        class:opacity-50={lockedMode}
+        title={lockedMode ? "Mode locked by this field's config — cannot change" : undefined}
+      >
         {#each (["fixed","expression"] as const) as m}
           <button
             type="button"
@@ -271,7 +286,9 @@
             class:text-white-100={mode === m}
             class:text-black-700={mode !== m}
             class:text-black-600={mode !== m}
-            onclick={() => onModeChange?.(m)}
+            class:cursor-not-allowed={lockedMode}
+            disabled={lockedMode}
+            onclick={() => { if (!lockedMode) onModeChange?.(m); }}
             title={m === "fixed" ? "Literal value — {{ }} NOT rendered (verbatim output)" : "Go template — {{ ... }} evaluated at runtime"}
           >{m}</button>
         {/each}
@@ -380,11 +397,14 @@
     </div>
   {/if}
 
-  <!-- Fixed + {{ warning -->
+  <!-- Fixed + {{ warning — editable now (save is fine), but this is a
+       publish-blocking validation error: the template would never render.
+       Red to match the publish gate; the toolbar disables Publish until
+       you switch to expression or drop the {{...}}. -->
   {#if fixedWithTemplate}
-    <p class="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+    <p class="text-[11px] text-rose-600 dark:text-rose-400 flex items-center gap-1">
       <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 12.5A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11zM7.25 5.5h1.5v4h-1.5zm0 5h1.5v1.5h-1.5z"/></svg>
-      mode=fixed — template will NOT render, set mode=expression
+      mode=fixed but value has a template — it will NOT render; blocks publish. Set mode=expression.
     </p>
   {/if}
 
