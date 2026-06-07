@@ -93,6 +93,19 @@
     }
   }
 
+  // Re-run a past run with its original input, then jump to the fresh run
+  // (newest after refresh) so the user watches it live.
+  async function handleRerun(runID: string) {
+    try {
+      await workflowAPI.rerunRun(workflowID, runID);
+      toastOk("Re-running…");
+      await refresh();
+      if (runs.length > 0) await loadRun(runKey(runs[0]));
+    } catch (e) {
+      toastError("Re-run failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function loadRun(runID: string) {
     selectedRunID = runID;
     runDetail = null;
@@ -276,7 +289,7 @@
         class="md:hidden mb-3 inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
         onclick={() => (selectedRunID = null)}
       >← Back to runs</button>
-      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} onLoadAllEvents={loadAllEvents} />
+      <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} onRerun={handleRerun} onLoadAllEvents={loadAllEvents} />
     {/if}
   </section>
 </div>
