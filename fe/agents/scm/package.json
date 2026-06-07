@@ -1,0 +1,18 @@
+{
+  "name": "@wick-fe/agents-scm",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "lint:gotchas": "node ../workflow/scripts/check-svelte-gotchas.mjs",
+    "build": "vite build",
+    "build:watch": "vite build --watch",
+    "preview": "vite preview",
+    "check": "tsc --noEmit && vite build",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "monaco-editor": "^0.52.0"
+  }
+}
