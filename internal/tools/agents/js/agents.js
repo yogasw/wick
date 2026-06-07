@@ -759,10 +759,10 @@
         var el = document.createElement("div");
         el.className = "flex justify-center py-1";
         el.innerHTML =
-          '<div class="flex flex-col items-center gap-1">' +
-          '<div class="inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600">' +
-          '<svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M6 4v2l1 1" stroke-linecap="round"></path></svg>' +
-          escapeHtml(text) +
+          '<div class="flex flex-col items-center gap-1 max-w-full">' +
+          '<div class="inline-flex items-start gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full">' +
+          '<svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"></circle><path d="M6 4v2l1 1" stroke-linecap="round"></path></svg>' +
+          '<span class="whitespace-pre-wrap break-words min-w-0">' + escapeHtml(text) + '</span>' +
           '</div>' +
           stepsHtml +
           '</div>';
