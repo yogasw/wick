@@ -14,11 +14,13 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
 	"github.com/yogasw/wick/internal/pkg/api"
+	"github.com/yogasw/wick/internal/pkg/netboot"
 	"github.com/yogasw/wick/internal/tools"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
 func main() {
+	netboot.Setup()
 	userconfig.ResolveDBPath(appname.Resolve(), "")
 
 	tools.RegisterBuiltins()

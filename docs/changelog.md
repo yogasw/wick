@@ -35,6 +35,13 @@ _Released on 2026-06-07_
 ---
 
 
+## [Unreleased] — Native DNS + CA fallback for Android/Termux
+
+### Added
+- The wick binary now configures DNS and TLS automatically on Termux/Android — no proot or manual `SSL_CERT_FILE` required. When `/etc/resolv.conf` has no usable nameserver, a pure-Go fallback resolver is installed using `$PREFIX/etc/resolv.conf`, Android system properties (`net.dns1`/`net.dns2`), or public defaults (1.1.1.1, 8.8.8.8) — in that order. A new `WICK_DNS_SERVERS` env var (comma/space-separated) overrides all of these. TLS: when `$PREFIX` is set and no system cert store exists, `SSL_CERT_FILE` is pointed at `$PREFIX/etc/tls/cert.pem`. Both are no-ops on normal Linux/macOS hosts.
+
+---
+
 ## [Unreleased] — Slack empty-ping fix & session-context pill responsiveness
 
 ### Fixed
