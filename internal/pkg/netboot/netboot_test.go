@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+func TestSetupIdempotent(t *testing.T) {
+	Setup()
+	Setup()
+	Setup()
+	if setupCount != 1 {
+		t.Fatalf("Setup ran %d times, want exactly 1 (must be idempotent across all entry points)", setupCount)
+	}
+}
+
 func TestHasConfiguredNameserver(t *testing.T) {
 	cases := []struct {
 		name string
