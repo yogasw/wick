@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // TestSCMEndpointsEndToEnd wires the real registry + layout, creates a
@@ -21,7 +21,7 @@ import (
 // through the test router — exercising the full request path
 // (route → session lookup → cwd resolve → repo resolve → git CLI).
 func TestSCMEndpointsEndToEnd(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
+	if _, err := safeexec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
 
@@ -140,7 +140,7 @@ func gitInitRepo(t *testing.T, dir string) {
 		{"config", "user.email", "t@e.com"},
 		{"config", "user.name", "T"},
 	} {
-		cmd := exec.Command("git", args...)
+		cmd := safeexec.Command("git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -150,7 +150,7 @@ func gitInitRepo(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"add", "."}, {"commit", "-q", "-m", "init"}} {
-		cmd := exec.Command("git", args...)
+		cmd := safeexec.Command("git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)

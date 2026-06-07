@@ -3,10 +3,11 @@ package scm
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yogasw/wick/internal/safeexec"
 )
 
 // gitInit creates a repo at dir with an initial commit so HEAD exists.
@@ -24,7 +25,7 @@ func gitInit(t *testing.T, dir string) {
 
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := safeexec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -33,7 +34,7 @@ func mustGit(t *testing.T, dir string, args ...string) {
 
 func skipNoGit(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
+	if _, err := safeexec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
 }
@@ -382,7 +383,7 @@ func TestDiscard(t *testing.T) {
 
 func revParse(t *testing.T, dir string) string {
 	t.Helper()
-	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd := safeexec.Command("git", "rev-parse", "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
