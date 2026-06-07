@@ -157,4 +157,4 @@ If you suspect an OAuth grant has been compromised:
 - Authorization Server Metadata (RFC 8414): <https://www.rfc-editor.org/rfc/rfc8414>
 - Protected Resource Metadata (RFC 9728): <https://www.rfc-editor.org/rfc/rfc9728>
 - PAT alternative: [Access Tokens](./access-tokens)
-- Implementation: [`internal/docs/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/docs/connectors-design.md) section 8
+- Implementation: [`internal/planning/archive/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/planning/archive/connectors-design.md) section 8

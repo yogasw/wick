@@ -30,7 +30,7 @@ Provider CLIs expose a pre-execution hook — the gate is the binary called by t
 | Codex (0.129+) | `PreToolUse` | `{"permissionDecision":"allow"}` | `{"permissionDecision":"deny","reason":"..."}` | 0 or 2 |
 | Gemini | `BeforeTool` | exit 0 | `{"decision":"deny","reason":"..."}` | 2 |
 
-The gate uses an **adapter per provider** (`internal/agents/gate/adapter/<provider>/`) that translates between the provider-specific stdin/stdout shape and the canonical internal protocol. This isolates contract drift — when Claude changed from `exit 2` to `exit 0 + JSON` in v2.1.138, only the claude adapter changed; everything else was untouched. See [command-gate-claude-2.1-fix.md](https://github.com/yogasw/wick/blob/master/internal/docs/command-gate-claude-2.1-fix.md) for the full incident write-up.
+The gate uses an **adapter per provider** (`internal/agents/gate/adapter/<provider>/`) that translates between the provider-specific stdin/stdout shape and the canonical internal protocol. This isolates contract drift — when Claude changed from `exit 2` to `exit 0 + JSON` in v2.1.138, only the claude adapter changed; everything else was untouched. See [command-gate-claude-2.1-fix.md](https://github.com/yogasw/wick/blob/master/internal/planning/archive/command-gate-claude-2.1-fix.md) for the full incident write-up.
 
 We do **not** pass bypass flags (`--permission-mode bypassPermissions`, `--ask-for-approval=never`, etc.) when a gate is attached — those flags suppress the hook entirely, defeating the gate. The bypass flag and per-instance gate are mutually exclusive; factory enforces this.
 
@@ -320,7 +320,7 @@ Wick ships a separate **AskUser MCP tool** for the case where an agent legitimat
 
 ## Adding a new provider
 
-See [command-gate-multi-provider.md](https://github.com/yogasw/wick/blob/master/internal/docs/command-gate-multi-provider.md) for the full contributor checklist. Short version:
+See [command-gate-multi-provider.md](https://github.com/yogasw/wick/blob/master/internal/planning/archive/command-gate-multi-provider.md) for the full contributor checklist. Short version:
 
 1. `provider/provider.go` — add `TypeFoo Type = "foo"`
 2. `gate/adapter/foo/` — implement `adapter.Adapter` (Parse + Emit), register via `init()`

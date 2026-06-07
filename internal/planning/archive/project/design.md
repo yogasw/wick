@@ -419,9 +419,9 @@ Below adalah peta high-level zona berdasarkan grep awal (Jun 2026,
 
 ### 10.6 Docs (cross-ref update setelah code ship)
 
-- `internal/docs/agents-design.md` — mention workspace concept; update post-impl
-- `internal/docs/workflow/*.md` — workflow docs reference workspace; sweep after code
-- `internal/docs/command-gate-*.md` — hook injection target naming
+- `internal/planning/archive/agents-design.md` — mention workspace concept; update post-impl
+- `internal/planning/archive/workflow/*.md` — workflow docs reference workspace; sweep after code
+- `internal/planning/archive/command-gate-*.md` — hook injection target naming
 - Mockups: workflow mockup mentions workspace (low priority)
 
 ### 10.7 Strategi implementasi

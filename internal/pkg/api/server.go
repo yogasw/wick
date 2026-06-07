@@ -590,7 +590,7 @@ func NewServer() *Server {
 	// tools/agents.Broadcaster events into the slim AgentEvent the
 	// workflow executor consumes. Pool-routed agent nodes go through
 	// the FIFO queue + session reuse machinery — see
-	// internal/docs/workflow/pool.md.
+	// internal/planning/archive/workflow/pool.md.
 	wfMgr.WithAgentRuntime(agentsPool, func(sessionID string) (<-chan wfnodes.AgentEvent, func()) {
 		raw, unsub := agentsBcast.Subscribe(sessionID)
 		out := make(chan wfnodes.AgentEvent, 256)

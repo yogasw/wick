@@ -11,7 +11,7 @@ Scope:
 5. Update `template/AGENTS.md` + `template/README.md` ke pattern connector.
 6. **Sweep semua docs existing** (intro, getting-started, ai-quickstart, tool-module, job-module, cli, index, env-vars, changelog) — cek typo, gambar, content gap, sebut connector di tempat yg relevan.
 
-Sumber kebenaran desain: [internal/docs/connectors-design.md](./connectors-design.md). Plan ini turunin desain itu jadi material AI-readable + user-facing.
+Sumber kebenaran desain: [internal/planning/archive/connectors-design.md](./connectors-design.md). Plan ini turunin desain itu jadi material AI-readable + user-facing.
 
 ---
 
@@ -46,7 +46,7 @@ paths:
   - "internal/connectors/**"
   - "internal/mcp/**"
   - "pkg/connector/**"
-  - "internal/docs/connectors-design.md"
+  - "internal/planning/archive/connectors-design.md"
 ---
 ```
 
@@ -118,7 +118,7 @@ Reference contoh: `internal/connectors/crudcrud/` (5 ops, 1 destructive, JSON va
 | Built-in example | `internal/connectors/crudcrud/` | `connectors/crudcrud/` (port verbatim) |
 | Imports | `github.com/yogasw/wick/pkg/connector` (sama) | sama |
 | Build verification | `go build ./...` | `wick dev` (smoke test, kill port 9425 setelah selesai per memori `feedback_kill_port`) |
-| Docs link | `internal/docs/connectors-design.md` | `<https://yogasw.github.io/wick/guide/connector-module>` (yg akan kita tulis di sec 5) |
+| Docs link | `internal/planning/archive/connectors-design.md` | `<https://yogasw.github.io/wick/guide/connector-module>` (yg akan kita tulis di sec 5) |
 
 **Sections:** sama structure dgn wick-core skill. Sertain section "What this skill does NOT cover" yg tunjuk ke wick-core skill kalau dev mau modify wick framework itself (jarang, tapi guard).
 
@@ -552,7 +552,7 @@ Kalau ada user existing yg upgrade dari pre-connector wick: sebut bahwa `connect
 
 ### 9.6 Sync warning di design.md
 
-Tambahin baris di header `internal/docs/connectors-design.md`:
+Tambahin baris di header `internal/planning/archive/connectors-design.md`:
 > **User-facing docs:** see `docs/guide/connector-module.md`, `docs/guide/mcp.md`, dst. Update those when changing user-visible behavior.
 
 **Status:** in-scope — 1 line edit.

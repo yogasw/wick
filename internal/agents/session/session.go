@@ -7,7 +7,7 @@
 // shared bundle (see internal/agents/project) whose folder the pool
 // resolves to a cwd at spawn time. See agents-design.md §0.2 for the
 // refactor that removed the per-session git worktree, and the project
-// design (internal/docs/project/design.md) for the Workspace→Project
+// design (internal/planning/archive/project/design.md) for the Workspace→Project
 // rename.
 //
 // Files in this package:

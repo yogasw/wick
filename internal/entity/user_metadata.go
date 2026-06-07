@@ -32,7 +32,7 @@ type UserMetadata struct {
 	// PinnedAgentProjectID is the agents Project this user pinned as
 	// their personal default. One per user. When set, opening the agents
 	// tool lands scoped to this project. Empty = unpinned. See
-	// internal/docs/project/design.md.
+	// internal/planning/archive/project/design.md.
 	PinnedAgentProjectID string `json:"pinned_agent_project_id,omitempty"`
 
 	// PushPermission stores the last browser notification permission

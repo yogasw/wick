@@ -1676,7 +1676,7 @@ Plus: a generic HTTP connector, a GitHub connector, per-connector rate-limiting 
 - **Provider rename** from "backend" — `session.AgentEntry.Provider`, `pool.FactoryOptions.ProviderType/Name`, `userconfig.ProvidersConfig`. Single package `internal/agents/provider/` consolidating driver + spawner + per-instance config + spawn logger.
 - **Registry split.** `RegisterBuiltins` (default-on agents tools) vs `RegisterLabSamples` (lab-only); `cmd/lab/` renamed to `cmd/wick-lab/`.
 - **Multi-turn + multi-session integration tests** via simulated spawners; 91 tests across 21 packages green at release.
-- **Design docs synced** to implementation for agent phases 1–7 (foundation, pool, gate, UI, providers, Slack, mid-session approval). Stage 9 follow-ups (env vars dropped, single shared spec/socket, installer-shipped sidecar) captured in [command-gate-architecture.md](https://github.com/yogasw/wick/blob/master/internal/docs/command-gate-architecture.md).
+- **Design docs synced** to implementation for agent phases 1–7 (foundation, pool, gate, UI, providers, Slack, mid-session approval). Stage 9 follow-ups (env vars dropped, single shared spec/socket, installer-shipped sidecar) captured in [command-gate-architecture.md](https://github.com/yogasw/wick/blob/master/internal/planning/archive/command-gate-architecture.md).
 
 ### Migration
 

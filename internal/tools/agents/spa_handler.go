@@ -11,7 +11,7 @@ import (
 
 // SPA mount point under the agents tool — kept distinct from the legacy
 // templ routes so both can run side-by-side during the migration phase
-// (see internal/docs/workflow/svelte-migration.md). The dist tree shape
+// (see internal/planning/archive/workflow/svelte-migration.md). The dist tree shape
 // is `dist/<app>/...` with one Vite app per directory (currently only
 // `workflow/`); the SPA shell handler rewrites unknown paths to the
 // matching app's index.html so client-side routing works without server

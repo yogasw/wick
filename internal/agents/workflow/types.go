@@ -7,7 +7,7 @@
 // run, and reuses existing wick infra (channels, connectors, providers,
 // pool).
 //
-// See `internal/docs/workflow-design.md` for the full contract.
+// See `internal/planning/archive/workflow-design.md` for the full contract.
 package workflow
 
 import (
@@ -276,7 +276,7 @@ const (
 // design; they remain in the constant list so loaders that touch old
 // YAML round-trip cleanly, but the engine treats them as equivalent to
 // the per-run default (no override). New workflows should use the
-// `session_init` node instead — see internal/docs/workflow/pool.md.
+// `session_init` node instead — see internal/planning/archive/workflow/pool.md.
 const (
 	SessionNew        = "new"
 	SessionRoot       = "root"

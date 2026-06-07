@@ -7,7 +7,7 @@ paths:
   - "internal/mcp/**"
   - "internal/jobs/connector-runs-purge/**"
   - "pkg/connector/**"
-  - "internal/docs/connectors-design.md"
+  - "internal/planning/archive/connectors-design.md"
   - "AGENTS.md"
 ---
 
@@ -26,7 +26,7 @@ A connector wraps **one external API** for LLM consumption.
 - An admin can create many rows per definition at runtime; each row carries its own credential values, label, and tags. Same Go code, different rows = different (env, team, account).
 - LLMs do not see N×M static tools. The MCP server exposes a fixed meta surface (`wick_list`, `wick_search`, `wick_get`, `wick_execute`); each (row × operation) pair is addressed by an opaque `tool_id` of the form `conn:{connector_id}/{op_key}`.
 
-The full design lives in [`internal/docs/connectors-design.md`](../../../internal/docs/connectors-design.md). This skill is the operational summary; that document is the source of truth for any architectural question.
+The full design lives in [`internal/planning/archive/connectors-design.md`](../../../internal/planning/archive/connectors-design.md). This skill is the operational summary; that document is the source of truth for any architectural question.
 
 ## Applies to (non-exhaustive triggers)
 
@@ -177,7 +177,7 @@ See [`internal/connectors/crudcrud/`](../../../internal/connectors/crudcrud/) fo
 3. **MUST** read configs via `c.Cfg(...)` / inputs via `c.Input(...)`. Never via process-level singletons or env vars at call time — that breaks the multi-row model.
 4. **MUST** use `c.HTTP` as the starting client (carries a 30s default timeout from `pkg/connector.DefaultHTTPTimeout`). Replace it locally if you need a different transport, but document why.
 5. **SHOULD** wrap upstream errors with `fmt.Errorf("...: %w", err)` so the chain reads cleanly in the history detail panel.
-6. **SHOULD** transform the upstream response into a typed struct or map shape that's stable across upstream changes. Returning the raw upstream body works but means LLMs see noise (envelopes, pagination cursors, debug fields) and break when upstream tweaks the shape. See [`connectors-design.md` § 10.1](../../../internal/docs/connectors-design.md).
+6. **SHOULD** transform the upstream response into a typed struct or map shape that's stable across upstream changes. Returning the raw upstream body works but means LLMs see noise (envelopes, pagination cursors, debug fields) and break when upstream tweaks the shape. See [`connectors-design.md` § 10.1](../../../internal/planning/archive/connectors-design.md).
 7. **SHOULD** mark destructive operations with `OpDestructive(...)` — the framework defaults the toggle off so it's an explicit admin opt-in.
 8. **MAY** emit progress with `c.ReportProgress(progress, total, message)` for long-running calls. Safe to call from any goroutine; no-op on the JSON transport.
 
@@ -456,7 +456,7 @@ The retention job [`internal/jobs/connector-runs-purge`](../../../internal/jobs/
 ## Reference
 
 - Canonical example: [`internal/connectors/crudcrud/connector.go`](../../../internal/connectors/crudcrud/connector.go)
-- Design source of truth: [`internal/docs/connectors-design.md`](../../../internal/docs/connectors-design.md)
+- Design source of truth: [`internal/planning/archive/connectors-design.md`](../../../internal/planning/archive/connectors-design.md)
 - Public API: [`pkg/connector/`](../../../pkg/connector/) — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `ExecuteFunc`, `Ctx`
 - MCP server: [`internal/mcp/`](../../../internal/mcp/)
 - Retention job: [`internal/jobs/connector-runs-purge/`](../../../internal/jobs/connector-runs-purge/)

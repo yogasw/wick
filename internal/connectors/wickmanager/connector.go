@@ -22,7 +22,7 @@
 //     processctl.MCPLogger().
 //
 // Single source of truth for who-can-call-what is the "Akses control —
-// full per-op rule" table in internal/docs/plan_wickmanager.md. Op
+// full per-op rule" table in internal/planning/archive/plan_wickmanager.md. Op
 // handlers below MUST mirror that table — adding a new op without the
 // matching gate helper is a security hole.
 package wickmanager

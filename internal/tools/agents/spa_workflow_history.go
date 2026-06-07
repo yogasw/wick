@@ -10,7 +10,7 @@ import (
 
 // JSON endpoints for the workflow version history surface. Tables live
 // alongside the file store during the migration window (see
-// internal/docs/workflow/svelte-migration.md). When `globalDB` is nil
+// internal/planning/archive/workflow/svelte-migration.md). When `globalDB` is nil
 // (tests without a DB) the handlers return an empty result rather than
 // erroring — keeps the SPA tab rendering clean.
 
