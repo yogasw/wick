@@ -515,7 +515,7 @@ Outbound headers example:
 ```
 POST /v1
 X-API-Key: <decrypted>
-X-Tenant-Id: qiscus-prod
+X-Tenant-Id: prod
 Content-Type: application/json
 ```
 
