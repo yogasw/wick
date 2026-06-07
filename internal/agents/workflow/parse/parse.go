@@ -426,12 +426,16 @@ func validateMatchSpec(r *Result, path string, spec map[string]any) {
 	}
 }
 
-// validateArgModes warns when arg_modes[key] is "fixed" but the
+// validateArgModes blocks publish when arg_modes[key] is "fixed" but the
 // corresponding field value contains a Go template `{{...}}` — the
-// engine will pass that string through literally, which is almost
-// always a mistake (user expected the template to render). The
-// inverse (mode=expression on a string without `{{`) is silent because
-// it's harmless.
+// engine passes that string through literally, so the template silently
+// never renders. That is almost always a mistake (user expected it to
+// evaluate) and ships a broken URL/body/prompt to production, so it is
+// an Error (blocks publish) rather than a warning. Draft SaveDraft does
+// not run Validate, so editing is never blocked — the mismatch only
+// gates the publish promotion (UI form + MCP workflow_publish alike).
+// The inverse (mode=expression on a string without `{{`) is silent
+// because it's harmless.
 func validateArgModes(r *Result, path string, n workflow.Node) {
 	if len(n.ArgModes) == 0 {
 		return
@@ -440,6 +444,12 @@ func validateArgModes(r *Result, path string, n workflow.Node) {
 		s, ok := v.(string)
 		return ok && strings.Contains(s, "{{")
 	}
+	block := func(key, field string) {
+		r.Errors = append(r.Errors, Error{
+			Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
+			Message: fmt.Sprintf("mode=fixed but %s contains {{...}} — template will NOT render; set mode=expression or remove the {{...}}", field),
+		})
+	}
 	for key, mode := range n.ArgModes {
 		if mode != "fixed" {
 			continue
@@ -447,39 +457,24 @@ func validateArgModes(r *Result, path string, n workflow.Node) {
 		switch key {
 		case "prompt":
 			if strings.Contains(n.Prompt, "{{") {
-				r.Warnings = append(r.Warnings, Error{
-					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
-					Message: fmt.Sprintf("mode=fixed but %q contains {{...}} — template will NOT render, set mode=expression if you want it evaluated", key),
-				})
+				block(key, "prompt")
 			}
 		case "url":
 			if strings.Contains(n.URL, "{{") {
-				r.Warnings = append(r.Warnings, Error{
-					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
-					Message: "mode=fixed but url contains {{...}} — template will NOT render, set mode=expression",
-				})
+				block(key, "url")
 			}
 		case "body":
 			if strings.Contains(n.Body, "{{") {
-				r.Warnings = append(r.Warnings, Error{
-					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
-					Message: "mode=fixed but body contains {{...}} — template will NOT render, set mode=expression",
-				})
+				block(key, "body")
 			}
 		case "expression":
 			if strings.Contains(n.Expression, "{{") {
-				r.Warnings = append(r.Warnings, Error{
-					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
-					Message: "mode=fixed but expression contains {{...}} — template will NOT render, set mode=expression",
-				})
+				block(key, "expression")
 			}
 		default:
 			// Inside the args map (channel + connector nodes).
 			if v, ok := n.Args[key]; ok && hasTemplate(v) {
-				r.Warnings = append(r.Warnings, Error{
-					Path:    fmt.Sprintf("%s.arg_modes.%s", path, key),
-					Message: fmt.Sprintf("mode=fixed but args.%s contains {{...}} — template will NOT render, set mode=expression", key),
-				})
+				block(key, "args."+key)
 			}
 		}
 	}
