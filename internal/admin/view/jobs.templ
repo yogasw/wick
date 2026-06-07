@@ -12,8 +12,8 @@ templ AdminJobsPage(rows []JobRow, allTags []*entity.Tag, user *entity.User) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Job Permissions</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Assign access tags and enable/disable job visibility. Schedule and run management lives in Job Settings.</p>
-			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-				<table class="w-full text-sm">
+			<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
+				<table class="w-full text-sm resp-table">
 					<thead>
 						<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 							<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Job</th>

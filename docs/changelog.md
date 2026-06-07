@@ -4,6 +4,18 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased] — Admin & Workflow Mobile Responsiveness
+
+### Fixed
+- Admin nav tabs wrap to a second row on narrow screens instead of overflowing.
+- Admin data tables (connector instances, users, tools, jobs) and the connector-detail operations table render as stacked cards below 768 px via new `.resp-table` / `.resp-table-wrap` CSS utilities.
+- Hover styles are now only emitted for devices that support hover (`hoverOnlyWhenSupported`), preventing buttons from staying stuck in `:hover` state after a tap on touch screens.
+- Agents content area and the workflows SPA header receive top padding on mobile so the fixed sidebar burger no longer overlaps page titles.
+- Workflows list search input is now fluid and the count label no longer wraps; card metadata is hidden on very small screens to avoid overflow.
+- Workflow Run tab renders a single-pane list-or-detail view on mobile with a Back button; the run-detail Nodes/Events grid collapses to a single column below md.
+
+---
+
 ## [v0.15.4](https://github.com/yogasw/wick/compare/v0.15.3...v0.15.4) — Mobile & Workflow
 
 _Released on 2026-06-06_

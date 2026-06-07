@@ -139,7 +139,7 @@
 
 <div class="flex flex-1 min-h-0">
   <!-- Left: runs list. -->
-  <aside class="shrink-0 border-r border-slate-200 dark:border-navy-600 flex flex-col" style="width:380px;">
+  <aside class={`shrink-0 border-r border-slate-200 dark:border-navy-600 flex-col w-full md:w-96 ${selectedRunID ? "hidden md:flex" : "flex"}`}>
     <header class="px-4 py-2 border-b border-slate-200 dark:border-navy-600 flex items-center gap-3 text-xs">
       <span class="font-semibold text-black-500 dark:text-white-100">
         {runs.length} {filterActive && total >= 0 ? `of ${total}` : ""} runs
@@ -262,8 +262,8 @@
     </div>
   </aside>
 
-  <!-- Right: run detail. -->
-  <section class="flex-1 overflow-y-auto p-4">
+  <!-- Right: run detail. Mobile shows list OR detail (toggled by selection). -->
+  <section class={`flex-1 overflow-y-auto p-4 ${selectedRunID ? "block" : "hidden md:block"}`}>
     {#if !selectedRunID}
       <div class="h-full flex flex-col items-center justify-center text-black-700 dark:text-black-600 text-sm gap-3">
         <span class="text-2xl">⊜</span>
@@ -271,6 +271,11 @@
         <div class="text-xs">Click any execution on the left to inspect its output.</div>
       </div>
     {:else}
+      <button
+        type="button"
+        class="md:hidden mb-3 inline-flex items-center gap-1 text-xs text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
+        onclick={() => (selectedRunID = null)}
+      >← Back to runs</button>
       <RunDetail runID={selectedRunID} runDetail={runDetail} {onReplay} onDelete={handleDelete} onLoadAllEvents={loadAllEvents} />
     {/if}
   </section>

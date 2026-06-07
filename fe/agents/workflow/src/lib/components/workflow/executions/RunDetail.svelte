@@ -68,7 +68,7 @@
     </div>
   {/if}
 
-  <div class="grid grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <RunNodes completed={completed} failed={failed} outputs={runDetail.outputs ?? {}} />
     <RunEvents events={events} total={runDetail.events_total ?? events.length} truncated={runDetail.events_truncated ?? false} onLoadAll={onLoadAllEvents} />
   </div>
