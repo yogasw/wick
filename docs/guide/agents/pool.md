@@ -92,6 +92,7 @@ type AgentEntry struct {
     Status        Status
     CreatedAt     time.Time
     LastActive    time.Time
+    MaxTurns      int       // --max-turns cap; 0 = unlimited (provider default)
 }
 ```
 
@@ -157,6 +158,18 @@ Preemption fires from two places:
 | `Send` (one-shot) | At the moment a session enqueues | Skipped if no active session is currently Idle. |
 | `preemptLoop` (1 s ticker) | Background, while `len(queue) > 0` | Closes the gap where every active was Working at enqueue time but later went Idle — without the retry, the queue would wait out the full idle TTL. Only runs when `PreemptIdle = true`. |
 
+## Spawn environment (Claude)
+
+Each Claude spawn includes some fixed extra flags:
+
+| What | Flag(s) | Why |
+|---|---|---|
+| MCP tool pre-approval | `--allowedTools mcp__wick__wick_list,...` | Headless agents can't answer an interactive permission prompt. All five wick meta-tools (`wick_list`, `wick_search`, `wick_get`, `wick_execute`, `wick_list_providers`) are pre-approved automatically so MCP tool calls don't stall. |
+| Skills dir | `--add-dir ~/.claude/skills` | Agents can read skill files bundled outside the workspace. Only added when `~/.claude/skills/` exists on disk. The system-prompt path table carves out `~/.claude/skills/**` (and the matching `~/.codex/skills/**`, `~/.gemini/skills/**`, `~/.agents/skills/**`) as read-allowed while the rest of `~/.claude/**` remains denied. |
+| Max turns | `--max-turns N` | Only added when `max_turns > 0` (set on the workflow agent node). `0` = omit the flag, letting the provider default apply. |
+
+`WICK_CLAUDE_STDERR_LOG` (env var, unset by default) redirects the spawned Claude process's stderr to a file instead of wick's stderr. Regardless of this setting, the last ~4 KB of stderr is always captured in memory so abnormal exits can surface the real error in logs (`exit_code` + `stderr_tail` fields).
+
 ## Exit flow
 
 When the agent subprocess exits ([pool.go: `onAgentExit`](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L369)):
@@ -197,6 +210,10 @@ T+5min  User sends new message
 
 The CLI is responsible for replaying its own conversation context from the resume ID — wick doesn't replay `conversation.jsonl` into the subprocess.
 
+### Stale resume self-heal
+
+If a `--resume` spawn exits with "No conversation found" (the CLI can't find the stored session, e.g. after a full Claude data clear), the pool automatically clears the stale `CLISessionID` from `agents.json`. The next spawn starts fresh instead of retrying a dead ID. A log line at `INFO` level records the clear.
+
 The format of the resume ID is CLI-specific:
 
 | CLI | Where it comes from | How to pass it |
@@ -210,6 +227,10 @@ Today, only Claude is wired end-to-end. Codex / Gemini parsers are stubs in [`in
 ## Project cwd resolution
 
 [`pool.resolveCwd`](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go) at spawn time:
+
+::: info CWD stability for resumable sessions
+Once a session has a `CLISessionID` (i.e. a real conversation exists), project backfill is skipped. Changing the project binding after that point would move the cwd, which would break `--resume` (Claude's resume is per-cwd). If you need to change the project for an existing session, reset it first.
+:::
 
 1. `sess.Meta.ProjectID` non-empty → `project.ResolvePath(layout, id)`. Returns custom path or `<base>/projects/<id>/files/`.
 2. Empty → `cfg.DefaultProjectID` set? → resolve that.

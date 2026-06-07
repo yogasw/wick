@@ -128,8 +128,8 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 				if len(mod.Operations) == 0 {
 					<p class="mt-3 text-sm text-black-700 dark:text-black-600">This connector exposes no operations.</p>
 				} else {
-					<div class="mt-4 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-						<table class="w-full text-sm">
+					<div class="mt-4 overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
+						<table class="w-full text-sm resp-table">
 							<thead>
 								<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 									<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>

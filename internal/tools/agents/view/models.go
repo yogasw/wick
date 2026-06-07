@@ -258,6 +258,9 @@ type SessionDetailVM struct {
 	Projects        map[string]project.Project
 	ProjectList     []string
 	ActiveProjectID string
+	// SCMAssetURL is the hashed SCM Svelte bundle URL, injected lazily
+	// into the Source Control modal. Empty when the bundle isn't built.
+	SCMAssetURL string
 }
 
 // ProjectName resolves a project id to its display name (detail VM helper).

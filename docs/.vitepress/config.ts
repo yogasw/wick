@@ -102,6 +102,7 @@ export default withMermaid(defineConfig({
           { text: 'Providers', link: '/guide/agents/providers' },
           { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
+          { text: 'Source Control', link: '/guide/agents/source-control' },
           { text: 'Command Gate', link: '/guide/command-gate' },
         ],
       },

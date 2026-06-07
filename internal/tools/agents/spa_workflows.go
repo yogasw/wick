@@ -72,6 +72,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
 	r.POST("/api/workflows/runs/{id}/{runID}/delete", spaWorkflowRunDelete)
+	r.POST("/api/workflows/runs/{id}/{runID}/rerun", spaWorkflowRerun)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
 	r.POST("/api/workflows/template-test/{id}", spaTemplateTest)
 	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
@@ -444,6 +445,39 @@ func spaWorkflowRunNow(c *tool.Ctx) {
 		},
 	}
 	if err := globalWorkflowMgr.MCP.RunNowWith(c.Context(), id, &w, evt); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// rerunEvent returns the event to re-fire for a past run: its original
+// trigger payload + routing, with a fresh timestamp.
+func rerunEvent(st wf.RunState, now time.Time) wf.Event {
+	e := st.Event
+	e.At = now
+	return e
+}
+
+// spaWorkflowRerun re-runs a past run by re-firing the current draft with
+// that run's original trigger event (same input). Full re-run only.
+func spaWorkflowRerun(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	runID := c.PathValue("runID")
+	st, err := globalWorkflowMgr.StateStore.Load(id, runID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found: " + err.Error()})
+		return
+	}
+	w, err := globalWorkflowMgr.Service.LoadDraft(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := globalWorkflowMgr.MCP.RunNowWith(c.Context(), id, &w, rerunEvent(st, time.Now().UTC())); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

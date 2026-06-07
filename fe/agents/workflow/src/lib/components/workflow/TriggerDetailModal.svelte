@@ -157,7 +157,7 @@
   >
     <div
       class="absolute inset-2 lg:left-4 lg:right-4 lg:top-8 lg:bottom-8
-             rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
+             rounded-lg overflow-hidden bg-white-100 dark:bg-[#0f172a]
              text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
@@ -238,7 +238,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   class:border-rose-500={labelErr}
                   class:border-white-400={!labelErr}
                   class:border-navy-600={!labelErr}
@@ -266,7 +266,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Schedule (cron)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="0 */15 * * * *"
                     value={trigger.schedule ?? ""}
                     oninput={(e) => patch("schedule", (e.target as HTMLInputElement).value)}
@@ -276,7 +276,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Timezone</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="Asia/Jakarta"
                     value={trigger.timezone ?? ""}
                     oninput={(e) => patch("timezone", (e.target as HTMLInputElement).value)}
@@ -289,7 +289,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Path</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="/hooks/my-hook"
                     value={trigger.path ?? ""}
                     oninput={(e) => patch("path", (e.target as HTMLInputElement).value)}
@@ -298,7 +298,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={trigger.method ?? ""}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
@@ -311,7 +311,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Secret ref (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="env:WEBHOOK_SECRET"
                     value={trigger.secret_ref ?? ""}
                     oninput={(e) => patch("secret_ref", (e.target as HTMLInputElement).value)}
@@ -324,7 +324,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Button label</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="Run now"
                     value={trigger.button_label ?? ""}
                     oninput={(e) => patch("button_label", (e.target as HTMLInputElement).value)}
@@ -333,7 +333,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Require role (optional)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="admin"
                     value={trigger.require_role ?? ""}
                     oninput={(e) => patch("require_role", (e.target as HTMLInputElement).value)}
@@ -422,12 +422,12 @@
                       {#each Object.entries(trigger.match ?? {}) as [k, v] (k)}
                         <div class="flex items-center gap-2">
                           <input
-                            class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                            class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                             value={k}
                             readonly
                           />
                           <input
-                            class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                            class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                             value={typeof v === "string" ? v : JSON.stringify(v)}
                             oninput={(e) => patchMatchEntry(k, (e.target as HTMLInputElement).value)}
                           />
@@ -436,12 +436,12 @@
                       {/each}
                       <div class="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-navy-600">
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="key"
                           bind:value={newMatchKey}
                         />
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="value"
                           bind:value={newMatchValue}
                           onkeydown={(e) => e.key === "Enter" && addMatchEntry()}
@@ -458,7 +458,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Fire at (ISO 8601)</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="2026-12-31T15:00:00Z"
                     value={trigger.at ?? ""}
                     oninput={(e) => patch("at", (e.target as HTMLInputElement).value)}
@@ -494,7 +494,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Entry node ID</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="(set by drawing an edge from the trigger output port)"
                   value={trigger.entry_node ?? ""}
                   oninput={(e) => patch("entry_node", (e.target as HTMLInputElement).value)}

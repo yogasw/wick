@@ -424,7 +424,7 @@
   >
     <div
       class="absolute inset-2 lg:left-4 lg:right-4 lg:top-8 lg:bottom-8
-             rounded-lg overflow-hidden bg-white dark:bg-[#0f172a]
+             rounded-lg overflow-hidden bg-white-100 dark:bg-[#0f172a]
              text-slate-900 dark:text-white-100 shadow-2xl flex flex-col"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
@@ -468,7 +468,7 @@
           {#if upstreamWithOutput.length > 0 || inputResolved.source === "mock"}
             {#if upstreamWithOutput.length > 0}
               <select
-                class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 text-xs"
+                class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
                 bind:value={selectedInputSource}
               >
                 {#each upstreamWithOutput as src}
@@ -558,7 +558,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Label</span>
                 <input
-                  class="rounded border bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   class:border-rose-500={labelErr}
                   class:border-white-400={!labelErr}
                   class:border-navy-600={!labelErr}
@@ -583,7 +583,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Description</span>
                 <textarea
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 text-sm"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm"
                   rows="2"
                   placeholder="Notes for collaborators (optional)"
                   value={node.description ?? ""}
@@ -596,7 +596,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.method ?? "GET"}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
@@ -656,7 +656,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Parse response</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.parse_response ?? "json"}
                     onchange={(e) => patch("parse_response", (e.target as HTMLSelectElement).value)}
                   >
@@ -711,7 +711,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Parse output</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.parse_output ?? "raw"}
                     onchange={(e) => patch("parse_output", (e.target as HTMLSelectElement).value)}
                   >
@@ -723,7 +723,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Timeout</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="30s"
                     value={node.timeout ?? ""}
                     oninput={(e) => patch("timeout", (e.target as HTMLInputElement).value)}
@@ -750,7 +750,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="prompts/my-prompt.md"
                     value={node.prompt_file ?? ""}
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
@@ -778,7 +778,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Skills (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder="skill_a&#10;skill_b"
                     value={(node.skills ?? []).join("\n")}
@@ -792,7 +792,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Tools (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder="tool_a&#10;tool_b"
                     value={(node.tools ?? []).join("\n")}
@@ -807,7 +807,7 @@
                   <span class="text-xs font-medium">Max turns</span>
                   <input
                     type="number"
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="0 = unlimited"
                     value={node.max_turns ?? 0}
                     oninput={(e) => patch("max_turns", Number((e.target as HTMLInputElement).value) || 0)}
@@ -816,7 +816,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Session override</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.session ?? ""}
                     onchange={(e) => patch("session", (e.target as HTMLSelectElement).value)}
                   >
@@ -827,7 +827,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Reuse session from node</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="(node id of an upstream agent/session_init)"
                     value={node.session_from ?? ""}
                     oninput={(e) => patch("session_from", (e.target as HTMLInputElement).value)}
@@ -840,7 +840,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Output cases (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="4"
                     placeholder="positive&#10;negative&#10;neutral"
                     value={(node.output_cases ?? []).join("\n")}
@@ -917,7 +917,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Prompt file</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="prompts/classify.md"
                     value={node.prompt_file ?? ""}
                     oninput={(e) => patch("prompt_file", (e.target as HTMLInputElement).value)}
@@ -936,7 +936,7 @@
                   <span class="text-xs font-medium">Retry on mismatch</span>
                   <input
                     type="number"
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     placeholder="0"
                     value={node.retry_on_mismatch ?? 0}
                     oninput={(e) => patch("retry_on_mismatch", Number((e.target as HTMLInputElement).value) || 0)}
@@ -999,7 +999,7 @@
                       <label class="flex flex-col gap-1">
                         <span class="text-[11px] text-black-700 dark:text-black-600">When</span>
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px]"
                           placeholder={'{{ eq .Node.x.case "yes" }}'}
                           value={rule.when}
                           oninput={(e) => {
@@ -1011,7 +1011,7 @@
                       </label>
                       <div class="flex items-center gap-2">
                         <input
-                          class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+                          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
                           placeholder="case-label"
                           value={rule.case}
                           oninput={(e) => {
@@ -1035,7 +1035,7 @@
                   <label class="flex flex-col gap-1">
                     <span class="text-xs font-medium">Default case</span>
                     <input
-                      class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                       placeholder="fallback-label"
                       value={node.default_case ?? ""}
                       oninput={(e) => patch("default_case", (e.target as HTMLInputElement).value)}
@@ -1081,7 +1081,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Engine</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.engine ?? "gotemplate"}
                     onchange={(e) => patch("engine", (e.target as HTMLSelectElement).value)}
                   >
@@ -1122,7 +1122,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Database</span>
                   <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                     placeholder="DSN ref configured in workspace"
                     value={node.database ?? ""}
                     oninput={(e) => patch("database", (e.target as HTMLInputElement).value)}
@@ -1145,7 +1145,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">SQL args (one per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="3"
                     placeholder={"{{.Event.Payload.user_id}}"}
                     value={(node.sql_args ?? []).join("\n")}
@@ -1182,7 +1182,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Sharing mode</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={sessionMode}
                     onchange={(e) => {
                       const m = (e.target as HTMLSelectElement).value;
@@ -1224,7 +1224,7 @@
                     </div>
                     <button
                       type="button"
-                      class="h-9 px-3 rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 text-xs hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
+                      class="h-9 px-3 rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-xs hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
                       title="Generate a fresh UUID"
                       onclick={() => patch("session_id", crypto?.randomUUID?.() ?? "")}
                     >regen</button>
@@ -1233,7 +1233,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Workspace override (optional)</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.workspace ?? ""}
                     onchange={(e) => patch("workspace", (e.target as HTMLSelectElement).value)}
                   >
@@ -1448,7 +1448,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Branches (one node id per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="5"
                     placeholder="step_a&#10;step_b&#10;step_c"
                     value={(node.branches ?? []).join("\n")}
@@ -1466,7 +1466,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Inputs (one node id per line)</span>
                   <textarea
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                     rows="4"
                     placeholder="step_a&#10;step_b"
                     value={(node.inputs ?? []).join("\n")}
@@ -1480,7 +1480,7 @@
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Strategy</span>
                   <select
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                     value={node.strategy ?? "all"}
                     onchange={(e) => patch("strategy", (e.target as HTMLSelectElement).value)}
                   >
@@ -1516,7 +1516,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Mock input (JSON)</span>
                 <textarea
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm"
                   rows="6"
                   placeholder={'{ "text": "hello" }'}
                   value={(node as unknown as { mock_input?: string }).mock_input ?? ""}
@@ -1534,7 +1534,7 @@
                 <span class="text-xs font-medium">Timeout (sec)</span>
                 <input
                   type="number"
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                   placeholder="0"
                   value={node.timeout_sec ?? 0}
                   oninput={(e) => patch("timeout_sec", Number((e.target as HTMLInputElement).value) || 0)}
@@ -1543,7 +1543,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">On failure</span>
                 <select
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                   value={node.on_failure ?? "halt"}
                   onchange={(e) => patch("on_failure", (e.target as HTMLSelectElement).value)}
                 >
@@ -1555,7 +1555,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Fallback node</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="(node id used when on_failure = fallback)"
                   value={node.fallback ?? ""}
                   oninput={(e) => patch("fallback", (e.target as HTMLInputElement).value)}
@@ -1565,7 +1565,7 @@
                 <span class="text-xs font-medium">Retry — max attempts</span>
                 <input
                   type="number"
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
                   placeholder="0"
                   value={node.retry?.max ?? 0}
                   oninput={(e) =>
@@ -1578,7 +1578,7 @@
               <label class="flex flex-col gap-1">
                 <span class="text-xs font-medium">Retry — backoff</span>
                 <input
-                  class="rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono"
+                  class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
                   placeholder="exponential / 500ms / 2s"
                   value={node.retry?.backoff ?? ""}
                   oninput={(e) =>

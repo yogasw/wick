@@ -41,24 +41,22 @@ The executions view ([canvas ▶ run timeline](./canvas#run-timeline)) opens a d
 
 A run can also be **deleted** from the panel — it removes that run's `runs/<run-id>/` folder. Active runs aren't touched; deletion is for clearing out finished history you no longer need, on top of the automatic 50-run retention above.
 
-## Replay
+## Re-run
 
-Open a run in the timeline → click **Rerun** → navigates to the manual runner pre-filled with the original payload. There is no one-click replay-and-execute; you review before re-running.
+The run detail panel has a **re-run** button (green, top of the action toolbar). Clicking it:
 
-This is the same pattern as the [connector test panel](/guide/connector-module#test-panel-postman-style). Rationale: an LLM-driven workflow might have side-effected on a downstream API; blindly re-running can double-fire. Manual review + Run keeps the human in the loop.
+1. Fires `POST /api/workflows/runs/{id}/{runID}/rerun`.
+2. The server loads the stored `RunState.Event` for that run and re-fires the workflow's current draft with the exact same trigger payload and routing — only the timestamp is refreshed.
+3. The UI refreshes the runs list and jumps to the new (latest) run so you can watch it live.
 
-From MCP, `workflow_replay_run` is the equivalent convenience wrapper — loads `RunState.Event` from `run_id` and calls `workflow_run_now`. Returns a new `run_id`.
+This is a **full re-run from the start node** — there is no resume-from-failed-node. Use it after fixing a failed run and wanting to verify the fix with the same real-world input without having to re-trigger the original event.
 
-## Copy to editor
+From MCP, `workflow_replay_run` is the equivalent — loads `RunState.Event` from `run_id` and calls `workflow_run_now`. Returns a new `run_id`.
 
-The **Copy to editor** button (timeline + the MCP `workflow_copy_run_to_editor` op) does two things in one call:
+### Copy to editor (pre-fill runner)
 
-1. Loads the run state.
-2. Saves the current published workflow as draft (so you can edit without overwriting prod).
+The **Copy to editor** button (and the MCP `workflow_copy_run_to_editor` op) loads the run state and saves the current published workflow as draft so you can edit without overwriting production. Use this when iterating on a workflow against real-world failure data: load the failed run → edit the graph → re-run.
 
-The response also returns the run's per-node outputs. Pass them as `node_outputs` to `workflow_exec_node` when you want Execute Step to prefill from the original run's data.
-
-Use this when iterating on a workflow against real-world failure data: load the failed run → edit the graph → exec-node with the captured outputs → publish when it's right.
 
 ## Version history
 

@@ -348,7 +348,11 @@ templ SessionDetail(vm SessionDetailVM) {
 		}
 	}}
 	@AgentsLayout(vm.Layout) {
-		<div class="relative flex flex-col -mt-6 -mx-6 h-[100dvh]" data-session-id={ vm.Session.ID } data-base={ vm.Base } data-active-agent={ activeAgent } data-active-provider={ activeProvider }>
+		<!-- Row wrapper: chat column + docked SCM sidebar (push, not overlay).
+		     The SCM aside is width-0/hidden until pinned; scm-dock.js flips
+		     data-scm-pinned + the width so the chat column reflows. -->
+		<div class="flex -mt-6 -mx-6 h-[100dvh]" data-scm-row>
+		<div class="relative flex flex-col flex-1 min-w-0" data-session-id={ vm.Session.ID } data-base={ vm.Base } data-active-agent={ activeAgent } data-active-provider={ activeProvider }>
 			<!-- Zone 1: transparent overlay bar -->
 			<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">
 				<!-- Left: tab dropdown -->
@@ -405,11 +409,30 @@ templ SessionDetail(vm SessionDetailVM) {
 				</div>
 			</div>
 		</div>
+		<!-- Docked SCM sidebar (push). Hidden until pinned/opened; the
+		     Svelte island mounts into [data-scm-host] in sidebar mode.
+		     Width + pin state are persisted by scm-dock.js. -->
+		<aside
+			data-scm-dock
+			data-scm-session={ vm.Session.ID }
+			data-scm-base={ vm.Base }
+			data-scm-asset={ vm.SCMAssetURL }
+			class="hidden shrink-0 h-full border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 relative"
+			style="width: 260px;"
+		>
+			<!-- Drag handle to resize the dock. -->
+			<div data-scm-resize class="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-green-400/40 z-10"></div>
+			<div data-scm-host class="h-full w-full">
+				<div data-scm-loading class="flex h-full items-center justify-center text-xs text-black-700 dark:text-black-600">Loading source control…</div>
+			</div>
+		</aside>
+		</div>
 		@ApprovalModal(vm.Base)
 		@ContextPanel(vm.Base, vm.Session.ID)
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
 		<script src={ vm.Base + "/static/js/context.js" }></script>
 		<script src={ vm.Base + "/static/js/process.js" }></script>
+		<script src={ vm.Base + "/static/js/scm-dock.js" }></script>
 	}
 }
 

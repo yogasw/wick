@@ -36,7 +36,7 @@
     onkeydown={(e) => e.key === "Escape" && onCancel()}
   >
     <div
-      class="w-[440px] max-w-[92vw] rounded-lg bg-white dark:bg-navy-700 text-slate-900 dark:text-white-100 shadow-2xl border border-slate-200 dark:border-navy-600"
+      class="w-[440px] max-w-[92vw] rounded-lg bg-white-100 dark:bg-navy-700 text-slate-900 dark:text-white-100 shadow-2xl border border-slate-200 dark:border-navy-600"
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >

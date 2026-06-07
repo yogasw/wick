@@ -22,7 +22,7 @@ type agentSchema struct {
 	Provider      string `wick:"key=provider;desc=Provider name"`
 	Skills        string `wick:"key=skills;desc=YAML list of skill names to expose"`
 	Tools         string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
-	MaxTurns      int    `wick:"key=max_turns;desc=Max agent turns (default unlimited)"`
+	MaxTurns      int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
 	Session       string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
 	TimeoutSec    int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
 	RequireStatus bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}; any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
@@ -221,6 +221,14 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt, sessionID string) (workflow.NodeOutput, error) {
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
+
+	// Persist the turn cap before the send (re)spawns the agent.
+	// 0 = unlimited, so only write when set.
+	if n.MaxTurns > 0 {
+		if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
+			return workflow.NodeOutput{}, fmt.Errorf("set max turns: %w", err)
+		}
+	}
 
 	// n.Workspace carries the project id binding for this agent node
 	// (legacy field name; empty = inherit session/default project).

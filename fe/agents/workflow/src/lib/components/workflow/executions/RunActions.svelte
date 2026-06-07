@@ -12,8 +12,9 @@
     runDetail: any | null;
     onReplay?: (triggerID: string | null) => void;
     onDelete?: (runID: string) => void;
+    onRerun?: (runID: string) => void;
   };
-  let { runID, runDetail, onReplay, onDelete }: Props = $props();
+  let { runID, runDetail, onReplay, onDelete, onRerun }: Props = $props();
 
   let showPreview = $state(false);
   const previewText = $derived(runDetail ? JSON.stringify(runDetail, null, 2) : "");
@@ -56,9 +57,22 @@
     if (!confirm("Delete this run log? Its files are removed and this cannot be undone.")) return;
     onDelete?.(runID);
   }
+
+  function rerun() {
+    onRerun?.(runID);
+  }
 </script>
 
-<div class="flex items-center gap-1.5 text-xs">
+<div class="flex flex-wrap items-center gap-1.5 text-xs">
+  <button
+    type="button"
+    class="px-2 py-1 rounded border border-emerald-500 bg-emerald-500 text-white-100 hover:bg-emerald-600 disabled:opacity-40"
+    onclick={rerun}
+    disabled={!runDetail}
+    title="Re-run this workflow with the same trigger input"
+  >
+    re-run
+  </button>
   <button
     type="button"
     class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"

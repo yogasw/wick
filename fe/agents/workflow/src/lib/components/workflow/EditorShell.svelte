@@ -173,7 +173,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex flex-col h-screen w-full relative overflow-hidden">
+<div class="flex flex-col h-full w-full relative">
   {#if $lastRunSummary}
     <div class="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium shadow-lg"
          class:bg-emerald-500={$lastRunSummary.status === "success"}

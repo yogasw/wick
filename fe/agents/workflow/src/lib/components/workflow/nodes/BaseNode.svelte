@@ -107,7 +107,7 @@
   {/if}
   {#if outputs > 0}
     <span
-      class="absolute left-1/2 -translate-x-1/2 -bottom-[7px] h-[14px] w-[14px] rounded-full bg-white border-2 border-slate-400 dark:border-navy-500 shadow"
+      class="absolute left-1/2 -translate-x-1/2 -bottom-[7px] h-[14px] w-[14px] rounded-full bg-white-100 border-2 border-slate-400 dark:border-navy-500 shadow"
       data-port="out"
     ></span>
   {/if}

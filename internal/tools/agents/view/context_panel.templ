@@ -33,6 +33,22 @@ templ ContextPanel(base, sessionID string) {
 			<span class="text-[9px] font-medium text-black-700 dark:text-black-600 [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide">Process</span>
 			<span data-process-fab-count class="hidden items-center justify-center min-w-[16px] h-[16px] px-0.5 rounded-full bg-green-500 text-white-100 text-[9px] font-semibold">0</span>
 		</button>
+		<!-- Source Control section — opens the SCM SPA in a full modal. -->
+		<button
+			type="button"
+			data-scm-open
+			title="Source control"
+			class="group inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors border-t border-white-300 dark:border-navy-600"
+		>
+			<svg viewBox="0 0 16 16" class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="4" cy="4" r="1.5"></circle>
+				<circle cx="4" cy="12" r="1.5"></circle>
+				<circle cx="12" cy="5" r="1.5"></circle>
+				<path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"></path>
+			</svg>
+			<span class="text-[9px] font-medium text-black-700 dark:text-black-600 [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide">Source</span>
+			<span data-scm-fab-count class="hidden items-center justify-center min-w-[16px] h-[16px] px-0.5 rounded-full bg-green-500 text-white-100 text-[9px] font-semibold">0</span>
+		</button>
 	</div>
 	<!-- Backdrop -->
 	<div

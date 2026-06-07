@@ -16,8 +16,8 @@ templ ConnectorsAdminPage(rows []ConnectorAdminRow, allTags []*entity.Tag, user 
 					No connector instances yet. They are auto-seeded for every code-registered connector on first boot.
 				</div>
 			} else {
-				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
-					<table class="w-full text-sm">
+				<div class="mt-6 overflow-visible rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm resp-table-wrap">
+					<table class="w-full text-sm resp-table">
 						<thead>
 							<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
 								<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Instance</th>
@@ -84,7 +84,7 @@ templ connectorAdminRowFragment(row ConnectorAdminRow, tagsJSON string) {
 		<td class="px-4 py-3 align-top">
 			<form action={ templ.SafeURL("/admin/connectors/" + id + "/tags") } method="POST" class="flex items-start gap-2">
 				<div
-					class="tag-picker w-64"
+					class="tag-picker w-full md:w-64"
 					data-tags={ tagsJSON }
 					data-selected={ strings.Join(row.TagIDs, ",") }
 					data-can-create="true"

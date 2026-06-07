@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/ui"
 )
@@ -55,7 +57,28 @@ func NewMiddleware(svc *Service, secrets SecretProvider) *Middleware {
 	return &Middleware{svc: svc, secrets: secrets}
 }
 
-const cookieName = "_st_sess"
+// sessionCookieName is per-app so two wick builds served from the same
+// host but different ports (e.g. localhost:9425 wick-agent + localhost:9999
+// wick-lab dev) don't share one session jar — cookies ignore port, so a
+// shared name meant logging out of one logged out the other. Suffixing the
+// resolved app brand keeps each instance's session independent. Computed
+// lazily (not a package-init var) so it reads appname.Resolve() after the
+// server has settled its working dir / ldflag rather than at import time.
+func sessionCookieName() string {
+	slug := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return -1
+		}
+	}, appname.Resolve())
+	if slug == "" {
+		return "_st_sess"
+	}
+	return "_st_sess_" + slug
+}
+
 const guestThemeCookie = "_st_theme"
 
 // Session decrypts the AES-GCM session cookie and populates the user and
@@ -63,7 +86,7 @@ const guestThemeCookie = "_st_theme"
 // are wiped. For guests (no session), it reads the guest theme cookie.
 func (m *Middleware) Session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(cookieName)
+		cookie, err := r.Cookie(sessionCookieName())
 		if err != nil {
 			var g ui.GuestTheme
 			if tc, err2 := r.Cookie(guestThemeCookie); err2 == nil {
@@ -245,7 +268,7 @@ func (m *Middleware) SetSessionCookie(w http.ResponseWriter, userID string, tagI
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     cookieName,
+		Name:     sessionCookieName(),
 		Value:    value,
 		Path:     "/",
 		MaxAge:   int(sessionTTL.Seconds()),
@@ -259,7 +282,7 @@ func (m *Middleware) SetSessionCookie(w http.ResponseWriter, userID string, tagI
 func (m *Middleware) ClearSessionCookie(w http.ResponseWriter) { clearCookie(w) }
 
 func clearCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, MaxAge: -1, Path: "/"})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName(), MaxAge: -1, Path: "/"})
 }
 
 func parseGuestThemeCookie(value string) ui.GuestTheme {

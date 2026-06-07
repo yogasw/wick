@@ -14,7 +14,8 @@ debugging", "admin approved", etc.).
 
 | Path | Access |
 |---|---|
-| `~/.claude/**` | denied |
+| `~/.claude/skills/**`, `~/.codex/skills/**`, `~/.gemini/skills/**`, `~/.agents/skills/**` | read |
+| `~/.claude/**` (except `skills/`) | denied |
 | `~/.{{app}}/**` (root and other subfolders) | denied |
 | `~/.{{app}}/sessions/**` | read/write |
 | `~/.{{app}}/workspaces/**` | read/write |

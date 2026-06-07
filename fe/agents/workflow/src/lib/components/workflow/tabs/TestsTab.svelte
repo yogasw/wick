@@ -329,7 +329,7 @@
 
 {#if modalCase}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div class="w-[640px] max-h-[80vh] flex flex-col rounded-lg bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-[#2c3a5a] shadow-xl">
+    <div class="w-[640px] max-h-[80vh] flex flex-col rounded-lg bg-white-100 dark:bg-[#0f172a] border border-slate-200 dark:border-[#2c3a5a] shadow-xl">
       <header class="px-4 py-2 border-b border-slate-200 dark:border-[#2c3a5a] flex items-center justify-between">
         <h3 class="text-sm font-semibold">
           {editingExisting ? "Edit test case" : "Add test case"}
@@ -345,7 +345,7 @@
             <span class="block mb-1 text-black-600 dark:text-black-600">Name</span>
             <input
               type="text"
-              class="w-full px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] font-mono disabled:opacity-50"
+              class="w-full px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white-100 dark:bg-[#0f172a] font-mono disabled:opacity-50"
               bind:value={modalCase.name}
               placeholder="happy_path"
               disabled={editingExisting}
@@ -358,7 +358,7 @@
           <label class="block">
             <span class="block mb-1 text-black-600 dark:text-black-600">Trigger event (JSON)</span>
             <textarea
-              class="w-full h-32 px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] font-mono text-[11px]"
+              class="w-full h-32 px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white-100 dark:bg-[#0f172a] font-mono text-[11px]"
               bind:value={inputJson}
               placeholder={'{\n  "Provider": "slack",\n  "ChannelID": "abc"\n}'}
             ></textarea>
@@ -382,12 +382,12 @@
                   <li class="grid grid-cols-[1fr_auto_1fr_auto] gap-1.5 items-center">
                     <input
                       type="text"
-                      class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] font-mono text-[11px]"
+                      class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white-100 dark:bg-[#0f172a] font-mono text-[11px]"
                       bind:value={a.subject}
                       placeholder="nodes.send.output.ok"
                     />
                     <select
-                      class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a]"
+                      class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white-100 dark:bg-[#0f172a]"
                       bind:value={a.operator}
                     >
                       {#each OPERATORS as op}
@@ -397,7 +397,7 @@
                     {#if operatorTakesValue(a.operator)}
                       <input
                         type="text"
-                        class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white dark:bg-[#0f172a] font-mono text-[11px]"
+                        class="px-2 py-1 rounded border border-slate-300 dark:border-[#2c3a5a] bg-white-100 dark:bg-[#0f172a] font-mono text-[11px]"
                         bind:value={a.value}
                         placeholder="true / 42 / hello"
                       />

@@ -2,6 +2,12 @@
 module.exports = {
   darkMode: 'class',
 
+  // Only emit hover: styles on devices that actually support hover, so
+  // tapping on touch screens doesn't leave buttons stuck in :hover.
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
+
   // Scan .templ source files and generated Go files for class names.
   // FE/Svelte files are scanned too so classes used only by the Svelte
   // workflow editor (`right-3`, `translate-x-3.5`, dark:bg-slate-* etc.)

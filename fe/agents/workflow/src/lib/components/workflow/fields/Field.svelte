@@ -64,7 +64,7 @@
   }: Props = $props();
 
   const baseInput =
-    "rounded border bg-white dark:bg-navy-700 px-3 py-1.5 text-sm";
+    "rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm";
   // Error wins the colour, then required-empty (amber), else slate.
   function borderClass(hasError: boolean): string {
     if (hasError) {

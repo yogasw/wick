@@ -1,6 +1,36 @@
 package event
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestClaudeParserResultErrorIncludesSubtype(t *testing.T) {
+	p := NewClaudeParser()
+	// error_during_execution leaves .result empty (detail is on stderr),
+	// so the subtype must surface or the node error is blank.
+	ev, err := p.Parse(`{"type":"result","subtype":"error_during_execution","is_error":true,"result":""}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ev.Type != Error {
+		t.Fatalf("type = %v, want Error", ev.Type)
+	}
+	if !strings.Contains(ev.ErrorMsg, "error_during_execution") {
+		t.Fatalf("ErrorMsg = %q, want it to carry the subtype", ev.ErrorMsg)
+	}
+}
+
+func TestClaudeParserResultErrorKeepsResultText(t *testing.T) {
+	p := NewClaudeParser()
+	ev, err := p.Parse(`{"type":"result","subtype":"error","is_error":true,"result":"boom"}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !strings.Contains(ev.ErrorMsg, "boom") {
+		t.Fatalf("ErrorMsg = %q, want it to keep the result text", ev.ErrorMsg)
+	}
+}
 
 // parseAll feeds lines through a parser and returns all non-Unknown
 // events. Errors fail the test.
