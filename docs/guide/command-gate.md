@@ -94,6 +94,10 @@ The gate uses a catch-all `.*` matcher, so **every tool call** routes through th
 
 File tools within the project scope are auto-allowed without a popup, so normal agent file operations stay fast. Only out-of-scope file access and all MCP/shell calls prompt you.
 
+::: tip wick's own MCP tools are pre-approved
+The "always ask" rule for MCP tools applies to **third-party** servers. wick spawns its agents with `--allowedTools mcp__wick`, so wick's own tools — `wick_list`/`wick_get`/`wick_execute`, `wick_info`, and the `wick_manager_*` management ops — skip the gate prompt and are guarded **server-side** instead (e.g. wickmanager's `requireAdmin`/`requireTray`). If you need management ops reviewed at the gate, see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
+:::
+
 ## Approval modes
 
 When a tool call isn't auto-approved, the gate dials a Unix socket and the daemon broadcasts an SSE event. The web UI renders a modal with four choices:

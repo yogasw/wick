@@ -59,16 +59,10 @@ func TestMCPConfigArgs(t *testing.T) {
 	if !ok {
 		t.Fatalf("default args missing --allowedTools: %v", def)
 	}
-	for _, want := range []string{
-		"mcp__wick__wick_list",
-		"mcp__wick__wick_search",
-		"mcp__wick__wick_get",
-		"mcp__wick__wick_execute",
-		"mcp__wick__wick_list_providers",
-	} {
-		if !strings.Contains(allowed, want) {
-			t.Errorf("--allowedTools %q missing %q", allowed, want)
-		}
+	// Server-level allow covers every wick tool (meta + wick_manager_*)
+	// dynamically, so new tools never need a static allowlist edit.
+	if allowed != "mcp__wick" {
+		t.Errorf("--allowedTools = %q, want server-level %q", allowed, "mcp__wick")
 	}
 
 	// Opt-in strict isolation still carries both --strict-mcp-config and
