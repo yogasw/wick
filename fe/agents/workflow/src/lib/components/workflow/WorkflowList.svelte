@@ -197,7 +197,7 @@
 <div class="flex flex-col h-full text-black-800 dark:text-white-100 select-none">
 
   <!-- Header — matches Channels page layout -->
-  <header class="px-6 pt-6 pb-2">
+  <header class="px-6 pt-14 pb-2 md:pt-6">
     <div class="flex items-start justify-between gap-4 mb-4">
       <div>
         <h1 class="text-xl font-semibold text-black-800 dark:text-white-100">Workflows</h1>
@@ -213,17 +213,17 @@
     </div>
     <!-- Search inline, no separator border -->
     <div class="flex items-center gap-3 pb-4">
-      <div class="relative max-w-xs">
+      <div class="relative flex-1 max-w-xs">
         <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 text-black-700 dark:text-black-600" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         <input
           type="text"
           bind:value={search}
           placeholder="Search workflows…"
-          class="w-64 bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg pl-8 pr-3 py-1.5 text-sm text-black-800 dark:text-white-100 placeholder-black-700 dark:placeholder-black-600 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20"
+          class="w-full bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600 rounded-lg pl-8 pr-3 py-1.5 text-sm text-black-800 dark:text-white-100 placeholder-black-700 dark:placeholder-black-600 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20"
         />
       </div>
       {#if !loading}
-        <span class="text-sm text-black-700 dark:text-black-600">{filtered.length} workflow{filtered.length !== 1 ? "s" : ""}</span>
+        <span class="flex-shrink-0 whitespace-nowrap text-sm text-black-700 dark:text-black-600">{filtered.length} workflow{filtered.length !== 1 ? "s" : ""}</span>
       {/if}
       {#if actionMsg}
         <span class="text-xs ml-auto transition-opacity"
@@ -399,19 +399,19 @@
                 {/if}
               </div>
               {#if wf.updated_at || wf.created_at}
-                <div class="flex items-center gap-2 mt-0.5 text-[11px] text-black-600 dark:text-black-600">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-[11px] text-black-600 dark:text-black-600">
                   {#if wf.updated_at}
                     <span title={fullDate(wf.updated_at)}>Updated {timeAgo(wf.updated_at)}</span>
                   {/if}
                   {#if wf.created_at}
-                    <span class="text-black-600 dark:text-black-700">Created {fullDate(wf.created_at)}</span>
+                    <span class="hidden sm:inline text-black-600 dark:text-black-700">Created {fullDate(wf.created_at)}</span>
                   {/if}
                 </div>
               {/if}
             </div>
 
             <!-- Version badge -->
-            <span class="text-[10px] text-black-600 dark:text-black-700 font-mono flex-shrink-0">v{wf.version ?? 1}</span>
+            <span class="hidden sm:inline text-[10px] text-black-600 dark:text-black-700 font-mono flex-shrink-0">v{wf.version ?? 1}</span>
 
             <!-- Status text -->
             <span class="text-[11px] flex-shrink-0 w-16 text-right"
