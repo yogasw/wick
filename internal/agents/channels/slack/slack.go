@@ -666,6 +666,19 @@ func threadKey(threadTS, msgTS string) string {
 	return msgTS
 }
 
+// pingFallbackText stands in for an empty mention/ping so the agent
+// greets the user instead of reacting to an empty turn.
+const pingFallbackText = "(The user greeted you with no message — greet them briefly and ask how you can help.)"
+
+// normalizeUserText returns a usable prompt: the user's text, or the
+// ping fallback when they sent nothing but a bare mention.
+func normalizeUserText(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return pingFallbackText
+	}
+	return text
+}
+
 // stripBotMention removes the leading <@BOTID> mention Slack prepends to app_mention text.
 func stripBotMention(text string) string {
 	if !strings.HasPrefix(text, "<@") {
@@ -844,6 +857,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.setReaction(reactionQueued, chID, msgTS, "")
 	})
 
+	userText := normalizeUserText(ev.Text)
 	if !s.sessionOnDisk(threadTS) {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
@@ -856,7 +870,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	if err := s.sendFn(context.Background(), threadTS, "main", "slack", "user", ev.Text); err != nil {
+	if err := s.sendFn(context.Background(), threadTS, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", threadTS).Err(err).Msg("pool send failed")
 		old := s.cancelQueueTimer(threadTS, ev.Channel, ev.TimeStamp)
 		_ = old
