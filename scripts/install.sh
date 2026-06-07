@@ -283,12 +283,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
       echo "  Re-open your shell (or run: source $codex_rc) before calling codex."
     fi
   fi
-
-  # LAN auto-whitelist removed (security). The installer used to detect
-  # private-range IPv4s and silently append `export ALLOWED_ORIGINS=…`
-  # to ~/.bashrc, widening the host allowlist without consent. Set
-  # ALLOWED_ORIGINS yourself, or add origins via /admin/variables, when
-  # you actually need to reach the UI from another device on the LAN.
+  
   start_agent "$PREFIX/bin/$APP"
   exit 0
 fi
