@@ -11,6 +11,9 @@ All notable changes to Wick are documented here.
 - **Auto-switch to Expression**: the workflow canvas editor automatically switches a fixed field to expression mode when the user types `{{` into it.
 - **`wick:"mode=fixed|expression"` config tag**: connector and channel op authors can lock the Fixed ⇄ Expression toggle for a schema field. `mode=fixed` or `mode=expression` greys out the toggle; omitting the tag leaves it enabled. Toggle now renders on every field kind in the inspector.
 
+### Added
+- **Wick Manager top-level MCP tools**: The `wickmanager` connector's operations are now surfaced directly in `tools/list` as `wick_manager_<op>` tools (e.g. `wick_manager_app_list`, `wick_manager_job_run_now`). LLM clients no longer need the `wick_list` → `wick_get` → `wick_execute` discovery cycle to reach manager ops. Works over both stdio and the Streamable HTTP/SSE transport. Visibility is gated by the connector row's existing tag-based access rules; per-op access gates are unchanged. To avoid double-exposure, `wickmanager` is excluded from `wick_list` and `wick_search`.
+
 ### Fixed
 - **MCP SSE transport**: Tools such as `wick_info`, `ask_user`, `wick_list_providers`, `wick_skill_list`, and `wick_skill_sync` now work correctly over the Streamable HTTP/SSE transport (shared loopback MCP). Previously they were advertised in `tools/list` but returned "unknown tool" on `tools/call`; only the stdio transport served them. The SSE dispatcher now delegates all non-streaming tools to the canonical handler, so all transports behave identically and new tools are automatically available everywhere.
 
