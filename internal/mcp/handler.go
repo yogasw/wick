@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/askuser"
@@ -261,8 +262,13 @@ func negotiateProtocolVersion(requested string) string {
 
 // ── tools/list ───────────────────────────────────────────────────────
 
-func (h *Handler) handleToolsList(w http.ResponseWriter, _ *http.Request, req rpcRequest) {
-	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: handlers.MetaToolDescriptors()})
+func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rpcRequest) {
+	tools := handlers.MetaToolDescriptors()
+	if user := login.GetUser(r.Context()); user != nil {
+		tagIDs := login.GetUserTagIDs(r.Context())
+		tools = append(tools, handlers.WickManagerToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
+	}
+	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: tools})
 }
 
 // ── tools/call ───────────────────────────────────────────────────────
@@ -322,6 +328,10 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	case "wick_skill_sync":
 		handlers.WickSkillSync(w, hreq, rsp)
 	default:
-		writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
+		if strings.HasPrefix(p.Name, handlers.WickManagerPrefix) {
+			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, p.Name, p.Arguments, user, tagIDs)
+		} else {
+			writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
+		}
 	}
 }
