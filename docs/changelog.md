@@ -35,6 +35,15 @@ _Released on 2026-06-07_
 ---
 
 
+## [Unreleased] — Slack empty-ping fix & session-context pill responsiveness
+
+### Fixed
+- Slack connector: a bare `@bot` mention with no message text no longer leaves the agent stalled. The empty turn is normalized to a short greeting instruction so the agent responds naturally.
+- Session-context pill (the injected system-turn badge in the session view) now wraps long text and is width-capped, preventing overflow on mobile viewports.
+
+---
+
+
 ## [Unreleased] — Source Control panel for agent sessions
 
 ### Added
