@@ -71,6 +71,9 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	summaries := make([]connectorSummary, 0, len(rows))
 	totalTools := 0
 	for _, row := range rows {
+		if row.Key == wickManagerKey {
+			continue // surfaced as top-level wick_manager_* tools, not via meta-tools
+		}
 		mod, ok := svc.Module(row.Key)
 		if !ok {
 			continue
@@ -124,6 +127,9 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	groups := make([]searchGroup, 0)
 	total := 0
 	for _, row := range rows {
+		if row.Key == wickManagerKey {
+			continue // surfaced as top-level wick_manager_* tools, not via meta-tools
+		}
 		mod, ok := svc.Module(row.Key)
 		if !ok {
 			continue

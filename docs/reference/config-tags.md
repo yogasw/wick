@@ -70,6 +70,7 @@ type Config struct {
 | `regen` | Shows a regenerate button in admin UI — key must have a registered generator |
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Use `field:a\|b\|c` (pipe-separated) to allow a set. Pure presentation hint — value is still seeded / saved normally. |
+| `mode=fixed` / `mode=expression` | Lock the workflow editor's Fixed ⇄ Expression toggle for this field. `mode=fixed` forces fixed-literal mode; `mode=expression` forces template mode. Omit the tag (default) to leave the toggle enabled. Pure presentation hint for the workflow canvas inspector — has no effect on the admin Settings page. Not persisted. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
 
 ## Key derivation
