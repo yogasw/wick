@@ -6,7 +6,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -256,8 +255,18 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		StartedAt:  e.Now(),
 		UpdatedAt:  e.Now(),
 	}
-	if st.Entry == "" {
-		return st, errors.New("no entry node (graph.entry + no trigger entry_node)")
+	// Start/end nodes aren't mandatory, so a published workflow may have
+	// an empty or dangling entry (e.g. just a trigger and no graph). Such
+	// a run is a clean no-op: emit started/completed and finish success
+	// rather than erroring. entryRunnable gates the walk below.
+	entryRunnable := false
+	if st.Entry != "" {
+		for _, n := range w.Graph.Nodes {
+			if n.ID == st.Entry {
+				entryRunnable = true
+				break
+			}
+		}
 	}
 	envVals, _ := e.Service.LoadEnvValues(w.ID)
 	triggerNodeID := ""
@@ -329,7 +338,10 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	cctx, cancel := context.WithTimeout(ctx, maxDuration)
 	defer cancel()
 
-	err := e.walk(cctx, w, st.Entry, rc, &st)
+	var err error
+	if entryRunnable {
+		err = e.walk(cctx, w, st.Entry, rc, &st)
+	}
 	end := e.Now()
 	if err != nil {
 		st.Status = workflow.StatusFailed
