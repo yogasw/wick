@@ -263,39 +263,17 @@ func (h *Handler) handleToolsCallSSE(w http.ResponseWriter, r *http.Request, req
 	}
 	defer sess.close()
 
-	rsp := h.responder()
-	hreq := handlers.RPCRequest{ID: req.ID, Params: req.Params}
-
-	switch p.Name {
-	case "wick_list":
-		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			handlers.WickList(buf, r, hreq, rsp, h.connectors, tagIDs, user.IsAdmin())
-		})
-	case "wick_search":
-		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			handlers.WickSearch(buf, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
-		})
-	case "wick_get":
-		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			handlers.WickGet(buf, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
-		})
-	case "wick_encrypt":
-		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			handlers.WickEncrypt(buf, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
-		})
-	case "wick_decrypt":
-		h.sseStaticTool(sess, func(buf *bufferingWriter) {
-			handlers.WickDecrypt(buf, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
-		})
-	case "wick_execute":
+	// wick_execute streams progress events over SSE; every other tool is a
+	// fast JSON response. Delegate the rest to the canonical dispatcher,
+	// buffered into one SSE frame, so the tool switch lives in exactly one
+	// place — new tools work on both transports without touching this file.
+	if p.Name == "wick_execute" {
 		h.sseWickExecute(sess, r, req, p, user, tagIDs)
-	default:
-		_ = sess.writeMessage(rpcErrorResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   rpcError{Code: errInvalidParams, Message: "unknown tool: " + p.Name},
-		})
+		return
 	}
+	h.sseStaticTool(sess, func(buf *bufferingWriter) {
+		h.handleToolsCall(buf, r, req)
+	})
 }
 
 // sseStaticTool runs a JSON-shaped handler against an in-memory buffer
