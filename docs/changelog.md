@@ -13,6 +13,7 @@ _Released on 2026-06-07_
 - Native DNS and CA fallback implemented for Android/Termux, resolving network and SSL certificate issues for the pure-Go binary.
 
 ### Fixed
+- Termux/Android DNS and CA fallback now actually runs in the released `wick-agent` binary. The previous fix (#589) wired `netboot.Setup()` only into the in-repo entry points; Go's internal-package rule prevented the separate `wick-agent` wrapper module from importing it, so the fallback was dead-code-eliminated from the shipped binary. Setup is now called inside `postgres.NewGORM()` — a chokepoint every entry point reaches before the first DNS lookup — and is guarded by `sync.Once` so it runs exactly once.
 - Empty Slack pings (bare `@bot` mentions) are now normalized, ensuring the agent greets the user instead of stalling.
 - System-turn pills (e.g., `[Slack thread context]`) are now responsive on mobile, wrapping text and fitting within container width to prevent overflow.
 
