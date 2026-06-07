@@ -1387,7 +1387,7 @@
       Canvas locked
       <button
         type="button"
-        class="ml-1 px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-[11px]"
+        class="ml-1 px-2 py-0.5 rounded bg-white-100/20 hover:bg-white-100/30 text-[11px]"
         onclick={toggleLock}
       >unlock</button>
     </div>
@@ -1564,7 +1564,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="fixed z-[80] min-w-[140px] rounded-md border border-slate-200 dark:border-navy-600
-           bg-white dark:bg-navy-700 shadow-lg py-1 text-sm"
+           bg-white-100 dark:bg-navy-700 shadow-lg py-1 text-sm"
     style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;"
     role="menu"
     tabindex="-1"

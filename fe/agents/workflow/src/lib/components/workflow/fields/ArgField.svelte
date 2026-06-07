@@ -283,7 +283,7 @@
   {#if multiline}
     <textarea
       bind:this={inputEl as HTMLTextAreaElement}
-      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm transition-colors"
+      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm transition-colors"
       class:text-emerald-700={mode === "expression"}
       class:text-emerald-400={mode === "expression"}
       class:border-emerald-500={dragHover}
@@ -302,7 +302,7 @@
   {:else}
     <input
       bind:this={inputEl as HTMLInputElement}
-      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white dark:bg-navy-700 px-3 py-1.5 font-mono text-sm transition-colors"
+      class="w-full rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono text-sm transition-colors"
       class:text-emerald-700={mode === "expression"}
       class:text-emerald-400={mode === "expression"}
       class:border-emerald-500={dragHover}
