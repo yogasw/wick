@@ -351,7 +351,7 @@ templ SessionDetail(vm SessionDetailVM) {
 		<!-- Row wrapper: chat column + docked SCM sidebar (push, not overlay).
 		     The SCM aside is width-0/hidden until pinned; scm-dock.js flips
 		     data-scm-pinned + the width so the chat column reflows. -->
-		<div class="flex -mt-6 -mx-6 h-[100dvh]" data-scm-row>
+		<div class="flex h-full min-w-0" data-scm-row>
 		<div class="relative flex flex-col flex-1 min-w-0" data-session-id={ vm.Session.ID } data-base={ vm.Base } data-active-agent={ activeAgent } data-active-provider={ activeProvider }>
 			<!-- Zone 1: transparent overlay bar -->
 			<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">

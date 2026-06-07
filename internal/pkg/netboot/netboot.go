@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -41,11 +42,19 @@ var defaultNameservers = []string{"1.1.1.1:53", "8.8.8.8:53"}
 // one means the host can verify HTTPS without help.
 var systemCertLocations = []string{"/etc/ssl/certs", "/etc/ssl/cert.pem", "/etc/pki/tls/certs"}
 
-// Setup installs the DNS + CA fallbacks. Safe to call once per process,
-// before any network use. No-op when the host is already usable.
+var (
+	setupOnce  sync.Once
+	setupCount int // guarded by setupOnce; observed by tests
+)
+
+// Setup installs the DNS + CA fallbacks once. Idempotent and safe to call
+// from any entry point; no-op when the host is already usable.
 func Setup() {
-	setupDNS()
-	setupCA()
+	setupOnce.Do(func() {
+		setupCount++
+		setupDNS()
+		setupCA()
+	})
 }
 
 // setupDNS points net.DefaultResolver at an explicit nameserver only when
