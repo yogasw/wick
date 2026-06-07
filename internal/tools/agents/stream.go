@@ -150,6 +150,19 @@ func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName
 	})
 }
 
+// PublishGitStatusJSON broadcasts a pre-marshalled git_status payload to
+// a session's subscribers. The payload is the full repo+status snapshot
+// (built by the fs watcher) so the FE updates entirely from the event —
+// no follow-up fetch, hence no polling. The marshalling lives in the
+// caller (scm_watch.go) to avoid an import cycle on the scm types.
+func (b *Broadcaster) PublishGitStatusJSON(sessionID, jsonPayload string) {
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		Type:      "git_status",
+		Data:      jsonPayload,
+	})
+}
+
 // PublishApprovalRequest fires when the gate binary dials the daemon socket
 // with an unrecognised command. Browsers render this as a modal with
 // 4 decision buttons (approve_once / approve_session / approve_always

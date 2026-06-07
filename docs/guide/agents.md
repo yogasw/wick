@@ -25,6 +25,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 | **Command Gate** — `<app>-gate` sidecar binary intercepts every Bash command for whitelist + 4-mode interactive approval | [Command Gate](./command-gate) |
 | **AskUser MCP tool** — agent asks a question mid-turn, web UI renders a card, answer goes back as MCP tool result | (covered in [Channels ▶ Web UI](./agents/channels#web-ui)) |
 | **Context file panel** — slide-over on session detail to browse / read / edit / download / delete files in the agent's working directory, with markdown + HTML preview and Ace syntax highlighting | _[below](#context-file-panel)_ |
+| **Source Control panel** — docked, pinnable SCM sidebar on the session detail page: multi-repo git status, tree/list view, stage/unstage/discard, commit, branches, push/pull, Monaco diff viewer, commit history, live SSE updates | [Source Control](./agents/source-control) |
 | **Persistent state on disk** — everything under `~/.<app>/agents/`. Backup is `tar`. Restart re-scans, no DB migration. | _below_ |
 
 ## Quick tour
@@ -198,6 +199,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 - [**Providers**](./agents/providers) — multi-instance config, binary resolution chain, status cache.
 - [**Channels**](./agents/channels) — Slack, Telegram, web UI; access control; meta-commands.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.
+- [**Source Control**](./agents/source-control) — git SCM panel on the session detail page.
 - [**Command Gate**](./command-gate) — shell-command approval system.
 
 ## See also

@@ -4,6 +4,13 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased] — Source Control panel for agent sessions
+
+### Added
+- **Source Control** panel on the session detail page (`/tools/agents/sessions/<id>`): a docked, pinnable VSCode-style SCM sidebar. Features: multi-repo discovery of all git repos inside the session cwd; tree or list view for staged / unstaged changes (toggle persisted in `localStorage`); per-file stage (+), unstage (−), and discard (↺) actions (discard is destructive — confirms before running `git restore` / `git clean`); one-line commit input; branch dropdown with checkout and create+checkout; Pull / Push buttons with ahead/behind count; Monaco diff editor modal (git-correct diffs for staged, unstaged, and untracked files); commit History tab with per-commit file list and diffs; edit + save from the diff modal. Pin state and panel width (240–640 px, default 260 px) persist in `localStorage`. Live updates via a server-side fs watcher that pushes `git_status` SSE events — the Changes section and the **Source** rail tab badge refresh with zero polling. Backend: new Go package `internal/agents/scm/`; endpoints under `/tools/agents/api/sessions/{id}/git/*`. Requires `git` on `PATH`.
+
+---
+
 ## [Unreleased] — Workflow run re-run
 
 ### Added
