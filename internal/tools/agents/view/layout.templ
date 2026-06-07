@@ -53,7 +53,12 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 		}
 	</style>
 	{{ user := login.GetUser(ctx) }}
-	<div class="flex w-full h-[100dvh]" data-agents-shell>
+	<!-- 100svh (not 100dvh): the small-viewport unit is the always-visible
+	     height (address bar counted in), so the bottom-pinned chat composer
+	     isn't pushed below the fold on first paint before the dynamic
+	     viewport settles. Keyboard still shrinks it via the viewport meta's
+	     interactive-widget=resizes-content. -->
+	<div class="flex w-full h-[100svh]" data-agents-shell>
 		<!-- Mobile hamburger (md:hidden). Hidden when drawer open. -->
 		<button
 			type="button"
@@ -577,11 +582,14 @@ templ lifecycleStyles() {
 			display: flex;
 			flex-direction: column;
 		}
+		/* Direct child is the chat row (data-scm-row, a flex ROW: chat
+		   column + docked SCM aside). Make it fill the locked main and be
+		   shrinkable so the inner [data-chat-panel] scrolls — but DON'T
+		   force flex-direction here, or the SCM dock stacks below the chat
+		   instead of sitting beside it. */
 		[data-main]:has([data-chat-panel]) > div {
 			flex: 1;
 			min-height: 0;
-			display: flex;
-			flex-direction: column;
 		}
 	</style>
 }
