@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestNormalizeUserText(t *testing.T) {
+	if got := normalizeUserText("hello"); got != "hello" {
+		t.Errorf("non-empty text changed: %q", got)
+	}
+	if got := normalizeUserText("   "); got != pingFallbackText {
+		t.Errorf("blank text not normalized: %q", got)
+	}
+	if got := normalizeUserText(""); got != pingFallbackText {
+		t.Errorf("empty text not normalized: %q", got)
+	}
+}
+
 func TestChunkText(t *testing.T) {
 	tests := []struct {
 		name   string
