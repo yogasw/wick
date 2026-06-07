@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+- **Spawned-agent tool pre-approval widened to the whole wick MCP server**: agents now spawn with `--allowedTools mcp__wick` (server-level) instead of a static five-tool list, so `wick_manager_*` (and `wick_info`, `ask_user`, `wick_skill_*`, `wick_encrypt`/`wick_decrypt`) no longer hit the command gate's "always ask" prompt on the gated path. Not a security change — wick still enforces per-op access server-side; see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
 
 ---
 
