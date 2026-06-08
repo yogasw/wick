@@ -79,9 +79,17 @@ func (m *Ops) TemplateTest(in TemplateTestInput) (TemplateTestResult, error) {
 	previewRctx.Secret = maskedSecret
 
 	// Collect env/secret key lists for FE autocomplete.
+	// Secret keys appear in rctx.Env (as ••••••••) AND rctx.Secret.
+	// Exclude from envKeys so FE autocomplete only lists them once (as secret_keys).
+	secretKeySet := map[string]bool{}
+	for k := range rctx.Secret {
+		secretKeySet[k] = true
+	}
 	envKeys := make([]string, 0, len(rctx.Env))
 	for k := range rctx.Env {
-		envKeys = append(envKeys, k)
+		if !secretKeySet[k] {
+			envKeys = append(envKeys, k)
+		}
 	}
 	sort.Strings(envKeys)
 	secretKeys := make([]string, 0, len(rctx.Secret))
