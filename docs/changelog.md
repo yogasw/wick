@@ -11,6 +11,14 @@ All notable changes to Wick are documented here.
 - **Workflow env & secrets**: per-workflow key-value environment variables, configurable via **⋮ → Settings** in the canvas editor. Values are accessible in every node template as `{{.Env.KEY}}`. Marking a var as **Secret** encrypts it at rest (`wick_cenc_` token in `workflows.env_values` DB column); the engine decrypts with a per-run cache so plaintext only lives in memory during execution.
 - **Secret masking**: secret values are automatically masked as `••••••••` in template preview (`workflow_template_test`), execute-step output, SSE events, and stored run state. The mask is applied with the existing single-pass algorithm, with overlapping-secret protection.
 - **Themed UI components**: `<Select>` dropdown and toolbar ⋮ more menu are now fully theme-aware with click-outside close. The ⋮ menu exposes the new Settings action alongside existing workflow actions.
+- **Webhook trigger — dual endpoints**: every webhook trigger now gets two distinct HTTP endpoints. `POST /webhook/{wf_id}/{slug}` targets the **published** workflow (production traffic). `POST /webhook-test/{wf_id}/{slug}` targets the **draft** workflow for testing without publishing. Both URLs are shown side-by-side in the trigger inspector with copy buttons and a tabbed Test / Live preview.
+- **Webhook trigger — slug-based path storage**: the trigger's `path` field now stores only the URL-safe slug (no leading slash, no `wf_id` prefix). The engine constructs the full request path at runtime, keeping trigger JSON portable across workflow IDs.
+
+### Fixed
+- **Webhook multi-trigger dispatch**: workflows with more than one webhook trigger (different slugs) now correctly dispatch each inbound call to its matching trigger and entry node. Previously, the dispatch loop keyed candidates on workflow ID alone, causing all but one trigger to be silently dropped.
+- **Webhook entry-node routing**: each webhook trigger routes to its own entry node; prior to this fix every inbound webhook always started at the first entry node regardless of which trigger matched.
+- **Publish enabled-flag preservation**: publishing a workflow no longer resets the enabled/disabled flag set before the publish action.
+- **Theme / dark-mode fixes**: executions panel, toolbar, and history tab now render correctly in all themes including dark mode.
 
 ---
 
