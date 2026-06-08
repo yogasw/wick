@@ -371,6 +371,37 @@
                     {/each}
                   </select>
                 </label>
+
+                <!-- Respond mode — mirrors n8n's 3-option picker. -->
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Respond</span>
+                  <div class="flex flex-col gap-1 rounded border border-slate-200 dark:border-navy-600 overflow-hidden">
+                    {#each [
+                      { value: "immediately",   label: "Immediately",                  desc: "202 Accepted at enqueue — fire and forget (default)." },
+                      { value: "last_node",      label: "When Last Node Finishes",      desc: "Block until the workflow completes, return last node output as JSON." },
+                      { value: "respond_node",   label: "Using 'Respond to Webhook' Node", desc: "Block until a webhook_respond node sets the status, body, and headers." },
+                    ] as opt}
+                      {@const active = (trigger.respond_mode ?? "immediately") === opt.value}
+                      <button
+                        type="button"
+                        class={`flex items-start gap-3 px-3 py-2.5 text-left transition-colors border-b border-slate-100 dark:border-navy-700 last:border-0 ${active ? "bg-emerald-50 dark:bg-emerald-950/30" : "hover:bg-slate-50 dark:hover:bg-navy-700"}`}
+                        onclick={() => patch("respond_mode", opt.value)}
+                      >
+                        <span class={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${active ? "border-emerald-500 bg-emerald-500" : "border-slate-400 dark:border-navy-500"}`}></span>
+                        <span class="flex flex-col gap-0.5">
+                          <span class={`text-xs font-medium ${active ? "text-emerald-700 dark:text-emerald-300" : "text-black-800 dark:text-black-300"}`}>{opt.label}</span>
+                          <span class="text-[11px] text-slate-500 dark:text-black-500">{opt.desc}</span>
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                  {#if (trigger.respond_mode ?? "immediately") !== "immediately"}
+                    <p class="text-[11px] text-amber-600 dark:text-amber-400">
+                      ⚠ Blocking mode — the webhook caller waits up to 30s for the workflow to finish.
+                    </p>
+                  {/if}
+                </div>
+
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Secret ref (optional)</span>
                   <input

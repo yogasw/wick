@@ -1245,6 +1245,50 @@
                 </label>
               {/if}
 
+              <!-- ── webhook_respond ────────────────────────────── -->
+              {#if node.type === "webhook_respond"}
+                <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Status code</span>
+                  <input
+                    type="number"
+                    min="100"
+                    max="599"
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
+                    value={(node as any).respond_status ?? 200}
+                    oninput={(e) => patch("respond_status" as any, Number((e.target as HTMLInputElement).value) || 200)}
+                    placeholder="200"
+                  />
+                  <span class="text-[11px] text-black-700 dark:text-black-500">HTTP status returned to the webhook caller (200, 201, 400, etc.)</span>
+                </label>
+                <ArgField
+                  {workflowId}
+                  {nodeLabels}
+                  {nodeOutputs}
+                  label="Response body"
+                  value={(node as any).respond_body ?? ""}
+                  mode={modeFor("respond_body")}
+                  multiline
+                  rows={5}
+                  placeholder={`{"ok": true, "id": "{{.Node.upstream.id}}"}`}
+                  helper="Rendered as Go template. Leave blank for empty body. JSON body auto-sets Content-Type: application/json."
+                  onValueChange={(v) => patch("respond_body" as any, v)}
+                  onModeChange={(m) => patchMode("respond_body", m)}
+                />
+                <KvListField
+                  label="Response headers"
+                  entries={(node as any).respond_headers}
+                  modes={node.arg_modes}
+                  helper="Each value is rendered as a Go template. Content-Type defaults to application/json when body starts with brace or bracket."
+                  keyPlaceholder="Content-Type"
+                  valuePlaceholder="application/json"
+                  onChange={(next) => patchStringMap("respond_headers" as any, next)}
+                  onModeChange={(m) => patchModeMap("arg_modes", m)}
+                />
+                <div class="rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+                  Requires the firing trigger's <strong>Respond mode</strong> = "Using 'Respond to Webhook' Node". Timeout: 30s from webhook fire.
+                </div>
+              {/if}
+
               <!-- ── channel ────────────────────────────────────── -->
               {#if node.type === "channel"}
                 {#if node.channel && node.op}

@@ -31,7 +31,14 @@ type SvelteEditorVM struct {
 // canvas — same trade-off sveltempl makes upstream.
 templ SvelteEditor(vm SvelteEditorVM) {
 	@view.AgentsLayout(vm.Layout) {
-		<div class="h-[calc(100vh-3.5rem)]" data-wick-island-root>
+		<style>
+			/* Workflow editor needs a fixed viewport — no page scroll. */
+			[data-main]:has([data-wick-island-root]) {
+				overflow: hidden !important;
+				height: 100%;
+			}
+		</style>
+		<div class="h-full overflow-hidden" data-wick-island-root>
 			if vm.AssetURL == "" {
 				<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
 					Workflow editor bundle not built yet. Run

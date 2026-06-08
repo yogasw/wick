@@ -15,6 +15,21 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
 
+// respondTimeout caps how long a blocking webhook handler (respond_mode =
+// last_node or respond_node) waits for the workflow to complete before
+// returning HTTP 504 Gateway Timeout to the caller.
+//
+// 30s is chosen as a safe upper bound:
+//   - Long enough for most I/O-bound workflows (HTTP calls, DB queries).
+//   - Short enough that reverse-proxies and load-balancers (nginx default
+//     60s, AWS ALB 60s) don't kill the connection first.
+//
+// If your workflow legitimately takes longer, use respond_mode = "immediately"
+// and poll for the result via the run-status API instead.
+//
+// Var (not const) so tests can set a short value without sleeping.
+var respondTimeout = 30 * time.Second
+
 // DraftLoader loads the draft copy of a workflow by ID. Satisfied by
 // service.Service — injected so the trigger package stays free of the
 // service import cycle.
@@ -46,9 +61,25 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	matched := h.Router.Dispatch(context.Background(), evt)
-	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `{"matched":%d}`, matched)
+	// Resolve respond_mode from the matching trigger.
+	mode := h.Router.respondModeFor(strippedPath, evt)
+	if mode == "" || mode == workflow.RespondModeImmediately {
+		matched := h.Router.Dispatch(context.Background(), evt)
+		if matched == 0 {
+			http.Error(w, "no webhook trigger matches this path", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintf(w, `{"matched":%d}`, matched)
+		return
+	}
+	// Blocking modes: dispatch with Done channels and wait.
+	dones := h.Router.DispatchWithDone(context.Background(), evt)
+	if len(dones) == 0 {
+		http.Error(w, "no webhook trigger matches this path", http.StatusNotFound)
+		return
+	}
+	writeWebhookResult(w, dones[0], mode)
 }
 
 // DraftWebhookHandler dispatches inbound POSTs against the **draft**
@@ -75,7 +106,6 @@ func (h *DraftWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Extract wf_id — first non-empty segment of the stripped path.
-	// strippedPath = /{wf_id}/{slug} or /{wf_id}
 	parts := strings.SplitN(strings.TrimPrefix(strippedPath, "/"), "/", 2)
 	wfID := parts[0]
 	if wfID == "" {
@@ -87,29 +117,157 @@ func (h *DraftWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "draft not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
-	// Optional HMAC: look up secret from the draft's matching trigger.
-	if h.SecretLookup != nil {
-		for _, tr := range draft.Triggers {
-			if tr.Type != workflow.TriggerWebhook || tr.SecretRef == "" {
-				continue
-			}
-			full := webhookFullPath(wfID, tr.Path)
-			if PathMatches(full, strippedPath) {
-				if !verifyWebhookSecret(w, body, tr.SecretRef, r.Header.Get("X-Wick-Sig"), h.SecretLookup) {
-					return
-				}
-				break
+	// Find the matching webhook trigger by path. No match = 404.
+	var mode string
+	matched := false
+	for _, tr := range draft.Triggers {
+		if tr.Type != workflow.TriggerWebhook {
+			continue
+		}
+		full := webhookFullPath(wfID, tr.Path)
+		if !PathMatches(full, strippedPath) {
+			continue
+		}
+		matched = true
+		mode = tr.RespondMode
+		if tr.Method != "" && !strings.EqualFold(tr.Method, r.Method) {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if tr.SecretRef != "" && h.SecretLookup != nil {
+			if !verifyWebhookSecret(w, body, tr.SecretRef, r.Header.Get("X-Wick-Sig"), h.SecretLookup) {
+				return
 			}
 		}
+		break
+	}
+	if !matched {
+		http.Error(w, "no webhook trigger matches this path", http.StatusNotFound)
+		return
 	}
 	evt.Payload["draft"] = true
 	evt.Payload["source"] = "webhook-test"
-	if err := h.Router.RunNowWith(context.Background(), wfID, &draft, evt); err != nil {
+	if mode == "" || mode == workflow.RespondModeImmediately {
+		if err := h.Router.RunNowWith(context.Background(), wfID, &draft, evt); err != nil {
+			http.Error(w, "dispatch failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintf(w, `{"matched":1,"draft":true}`)
+		return
+	}
+	done, err := h.Router.RunNowWithDone(context.Background(), wfID, &draft, evt)
+	if err != nil {
 		http.Error(w, "dispatch failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `{"matched":1,"draft":true}`)
+	writeWebhookResult(w, done, mode)
+}
+
+// writeWebhookResult waits for a run to complete and writes the HTTP
+// response according to mode. Handles last_node and respond_node.
+func writeWebhookResult(w http.ResponseWriter, done <-chan RunResult, mode string) {
+	ctx, cancel := context.WithTimeout(context.Background(), respondTimeout)
+	defer cancel()
+	var result RunResult
+	select {
+	case result = <-done:
+	case <-ctx.Done():
+		http.Error(w, "webhook response timeout — workflow did not finish in time", http.StatusGatewayTimeout)
+		return
+	}
+	if result.Err != nil {
+		http.Error(w, result.Err.Error(), http.StatusInternalServerError)
+		return
+	}
+	st := result.State
+	switch mode {
+	case workflow.RespondModeLastNode:
+		// Return the last completed node's output as JSON.
+		var lastOut any
+		for _, nodeID := range st.Completed {
+			if out, ok := st.Outputs[nodeID]; ok {
+				lastOut = out
+			}
+		}
+		writeJSONResponse(w, http.StatusOK, lastOut)
+	case workflow.RespondModeRespondNode:
+		status, body, headers, found := extractRespondNodeOutput(st)
+		if !found {
+			// Workflow completed but no webhook_respond node ran.
+			// Run is persisted; only the HTTP response is affected.
+			http.Error(w, "workflow completed but no webhook_respond node produced a response", http.StatusBadGateway)
+			return
+		}
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+		// Auto content-type: JSON when body looks like JSON, else text/plain.
+		if w.Header().Get("Content-Type") == "" {
+			trimmed := strings.TrimSpace(body)
+			if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+				w.Header().Set("Content-Type", "application/json")
+			} else {
+				w.Header().Set("Content-Type", "text/plain")
+			}
+		}
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	default:
+		writeJSONResponse(w, http.StatusOK, st.Outputs)
+	}
+}
+
+// extractRespondNodeOutput scans RunState.Outputs for the first
+// webhook_respond node (identified by the "_webhook_respond" sentinel
+// key) and returns its status, body, headers. Falls back to 200 + empty
+// when no such node ran.
+func extractRespondNodeOutput(st workflow.RunState) (status int, body string, headers map[string]string, found bool) {
+	for _, nodeID := range st.Completed {
+		out, ok := st.Outputs[nodeID]
+		if !ok {
+			continue
+		}
+		outMap, ok := out.(map[string]any)
+		if !ok {
+			continue
+		}
+		if flag, _ := outMap["_webhook_respond"].(bool); !flag {
+			continue
+		}
+		statusInt := http.StatusOK
+		switch s := outMap["status"].(type) {
+		case int:
+			statusInt = s
+		case float64:
+			statusInt = int(s)
+		}
+		bodyStr, _ := outMap["body"].(string)
+		hdrs := map[string]string{}
+		if hMap, ok := outMap["headers"].(map[string]any); ok {
+			for k, v := range hMap {
+				if vs, ok := v.(string); ok {
+					hdrs[k] = vs
+				}
+			}
+		} else if hMap, ok := outMap["headers"].(map[string]string); ok {
+			hdrs = hMap
+		}
+		return statusInt, bodyStr, hdrs, true
+	}
+	return http.StatusOK, "", nil, false
+}
+
+// writeJSONResponse serialises v as JSON and writes it with status code.
+func writeJSONResponse(w http.ResponseWriter, code int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(data)
 }
 
 // parseWebhookRequest reads the body + builds the Event payload.
