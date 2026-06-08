@@ -133,6 +133,69 @@ func TestDBService_Versions(t *testing.T) {
 	}
 }
 
+// TestDBService_EnvValues confirms env values round-trip through the
+// env_values column and stay OUT of the version history — changing
+// config must not append a draft/publish snapshot.
+func TestDBService_EnvValues(t *testing.T) {
+	svc, db := newDBSvc(t)
+	id := "env-db"
+	if err := svc.Create(id, sampleWF(id)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Empty before any save.
+	got, err := svc.LoadEnvValues(id)
+	if err != nil {
+		t.Fatalf("load empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty env, got %v", got)
+	}
+
+	// Count snapshots before touching env so we can prove env writes
+	// don't grow the audit trail.
+	var before int64
+	db.Model(&entity.WorkflowVersion{}).Where("workflow_id = ?", id).Count(&before)
+
+	want := map[string]string{
+		"slack_channel": "#support-prod",
+		"github_pat":    "wick_enc_aGVsbG8=",
+		"allowed_users": `[{"id":"U100","name":"Yoga"}]`,
+	}
+	if err := svc.SaveEnvValues(id, want); err != nil {
+		t.Fatalf("save env: %v", err)
+	}
+
+	got, err = svc.LoadEnvValues(id)
+	if err != nil {
+		t.Fatalf("load env: %v", err)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("env %q: got %q want %q", k, got[k], v)
+		}
+	}
+
+	// Secret ciphertext stays verbatim — no decrypt on the storage path.
+	if got["github_pat"] != "wick_enc_aGVsbG8=" {
+		t.Errorf("secret mangled: %q", got["github_pat"])
+	}
+
+	// Version history must be unchanged.
+	var after int64
+	db.Model(&entity.WorkflowVersion{}).Where("workflow_id = ?", id).Count(&after)
+	if after != before {
+		t.Errorf("env save changed version count: before=%d after=%d", before, after)
+	}
+
+	// Body untouched too — env lives in its own column.
+	var row entity.Workflow
+	db.Where("id = ?", id).First(&row)
+	if row.EnvValues == "" {
+		t.Error("env_values column not persisted")
+	}
+}
+
 // TestDBService_FilesRejected confirms the legacy file path is
 // unreachable through the test surface — only __tests__/ goes through.
 func TestDBService_OnlyTestsAddressable(t *testing.T) {

@@ -10,6 +10,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -295,6 +296,48 @@ func (r *Repo) Delete(id string) error {
 		}
 		return tx.Where("id = ?", id).Delete(&entity.Workflow{}).Error
 	})
+}
+
+// ── Env values ───────────────────────────────────────────────────────
+//
+// Runtime config lives in the workflows.env_values column as a JSON
+// blob, separate from the body so it never rides the version history.
+// Secrets are wick_enc_ ciphertext; the engine decrypts at run time.
+
+// LoadEnvValues decodes the env_values JSON blob into a flat map. A
+// blank column (zero-config workflow) returns an empty map, not an
+// error.
+func (r *Repo) LoadEnvValues(id string) (map[string]string, error) {
+	row, err := r.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	if row.EnvValues == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(row.EnvValues), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveEnvValues serializes the map to JSON and writes only the
+// env_values column — body, draft, and version history are untouched.
+func (r *Repo) SaveEnvValues(id string, values map[string]string) error {
+	if values == nil {
+		values = map[string]string{}
+	}
+	blob, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	return r.db.Model(&entity.Workflow{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"env_values": string(blob),
+			"updated_at": time.Now(),
+		}).Error
 }
 
 // ── Test cases ───────────────────────────────────────────────────────

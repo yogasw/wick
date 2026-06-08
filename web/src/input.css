@@ -188,6 +188,19 @@
   textarea, input, select {
     @apply font-sans;
   }
+
+  /* Global select theming — native <select> option list inherits the
+     element's background, so setting bg here fixes the white-on-dark
+     problem without touching every callsite. appearance-none strips the
+     OS arrow so a custom SVG chevron (from .select-arrow or inline)
+     can replace it. Scoped to selects that carry appearance-none so
+     plain selects without custom styling still get the OS arrow. */
+  select {
+    color-scheme: light;
+  }
+  .dark select {
+    color-scheme: dark;
+  }
 }
 
 /* ── Components layer ───────────────────────────────────────── */

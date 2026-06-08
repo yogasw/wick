@@ -615,6 +615,10 @@ func NewServer() *Server {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
 	agentstool.SetWorkflowManager(wfMgr)
+	agentstool.SetWorkflowEncService(encSvc)
+	// Wire master-key decryptor into the engine so wick_enc_ workflow
+	// secrets are decrypted at run time without a user context.
+	wfMgr.Engine.Decryptor = encDecryptorFunc(encSvc.DecryptMaster)
 	agentstool.SetDataTables(wfMgr.DataTables)
 	providerstoragetool.SetSyncManager(syncMgr)
 	provider.AppName = appname.Resolve()
@@ -1668,3 +1672,10 @@ func parseGateRules(raw string) []gate.CommandRule {
 	}
 	return rules
 }
+
+// encDecryptorFunc adapts a func(string)(string,error) to the
+// engine.SecretDecryptor interface so enc.Service.DecryptMaster can
+// be wired into the engine without a new concrete type in enc/.
+type encDecryptorFunc func(string) (string, error)
+
+func (f encDecryptorFunc) Decrypt(token string) (string, error) { return f(token) }

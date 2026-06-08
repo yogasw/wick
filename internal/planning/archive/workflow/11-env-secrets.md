@@ -1,17 +1,49 @@
 ## 11. Environment & secrets — workflow config
 
 Workflow butuh config: Slack channel target, GitHub PAT, max retry,
-toggle feature, dst. **Schema** declared di `workflow.yaml` (developer
-contract, version-controlled). **Values** di file terpisah
-`<id>/env.yaml` (UI-managed, secrets encrypted).
+toggle feature, dst.
 
-**Reuse vocabulary `wick:"..."` config-tag yang sudah ada** di
-[docs/reference/config-tags.md](../../docs/reference/config-tags.md).
-Same widget + modifier names, same form renderer, same UI behavior.
-Beda cuma: untuk Go module schema di struct tag, untuk workflow schema
-di YAML — keduanya consume rendering pipeline yang sama.
+**Schema** (developer contract, version-controlled) declared di workflow
+body `env:` block — ikut `body_draft` / `body_published` di tabel
+`workflows`. **Values** (UI/AI-managed, secrets encrypted) disimpan
+**terpisah di kolom `workflows.env_values`** sebagai JSON blob — current
+only, ga ikut version history.
 
-### Schema di `workflow.yaml`
+### TODO
+
+- [ ] DB: tambah kolom `env_values TEXT NOT NULL DEFAULT ''` di
+      [`entity.Workflow`](../../entity/workflow.go) + AutoMigrate
+- [ ] Migration one-shot: kalau file `<id>/env.json` ada di disk, baca →
+      tulis ke kolom → hapus file (file-era cleanup, idempotent)
+- [ ] `repository.Repo`: `LoadEnvValues(id)` / `SaveEnvValues(id, map)`
+      baca/tulis kolom `env_values` (bukan body — ga lewat `parse.Marshal`)
+- [ ] `DBService`: override `LoadEnvValues`/`SaveEnvValues` (sekarang
+      masih jatuh ke embedded `FileService` → file). Signature tetap.
+- [ ] FE: tab **Settings** di Toolbar (sejajar Editor | Executions),
+      reuse config-tags form renderer
+- [ ] MCP ops: `workflow_get_env_schema` / `_get_env_values` /
+      `_set_env_values`
+
+### Kenapa begini
+
+- **DB, bukan file.** Workflow body + versions + test cases udah pindah
+  ke DB ([`entity.Workflow`](../../entity/workflow.go)). Env nyusul biar
+  konsisten — satu source of truth, ga ada drift file ↔ DB.
+- **Reuse config-tags, bukan tabel `configs`.** Yang di-reuse cuma
+  **vocabulary + renderer** (widget names, secret machinery, form
+  components) dari [config-tags](../../../docs/reference/config-tags.md).
+  Values **ga** masuk tabel `configs` — disimpan per-workflow di kolom
+  `env_values`. Beda dari connector (yang pakai `owner="connector:{id}"`
+  di tabel `configs`): workflow env nempel ke workflow row, satu blob,
+  ga ada join.
+- **Kolom terpisah, ga ikut body.** `env_values` di-handle di luar
+  `parse.Marshal` body. Ganti config (channel target, retry cap) =
+  **ga** masuk version snapshot. Secret ciphertext ga ke-duplikat di 50
+  draft history. Config = runtime state, bukan struktur graph.
+
+### Schema di workflow body (`env:` block)
+
+Type: [`workflow.EnvField`](../../../internal/agents/workflow/types.go).
 
 ```yaml
 env:
@@ -71,7 +103,7 @@ env:
 |---|---|---|
 | `text` (default) | string | single-line input |
 | `textarea` | string | multi-line textarea |
-| `secret` | string (encrypted on disk) | password input, "Reveal" button |
+| `secret` | string (encrypted, `wick_enc_`) | password input, "Reveal" button |
 | `number` | int/float | number input |
 | `checkbox` | bool | toggle |
 | `dropdown` | string | select dropdown (needs `options:`) |
@@ -81,7 +113,7 @@ env:
 | `date` | string ISO date | date picker |
 | `datetime` | string ISO 8601 | datetime-local picker |
 | `kvlist` | JSON array of objects | editable inline table (needs `columns:`) |
-| `picker` | JSON array `[{id,name}]` | searchable typeahead chips (needs `source:` registered di [`LookupProvider`](../agents/channels/slack/lookup.go)) |
+| `picker` | JSON array `[{id,name}]` | searchable typeahead chips (needs `source:` registered di [`LookupProvider`](../../agents/channels/slack/lookup.go)) |
 
 Field type derivable: int/float field → widget auto = `number`. bool
 field → widget auto = `checkbox`. Override pakai `widget:` explicit.
@@ -92,10 +124,10 @@ field → widget auto = `checkbox`. Override pakai `widget:` explicit.
 |---|---|---|
 | Help text | shown below field | `desc:` |
 | Default value | seed kalau ga di-set | `default:` |
-| Required | block save kalau kosong, `c.Missing()` flag | `required: true` |
+| Required | block save kalau kosong, validation flag | `required: true` |
 | Read-only | set once at boot | `locked: true` |
 | Regenerate button | UI button regen (need registered generator) | `regen: true` |
-| Hide from form | seeded di DB, akses via `c.Cfg()`, ga muncul di UI form | `hidden: true` |
+| Hide from form | seeded, akses runtime, ga muncul di UI form | `hidden: true` |
 | Conditional visibility | tampil cuma kalau field lain == value | `visible_when: <field>:<value>` |
 
 ### Key derivation
@@ -110,30 +142,30 @@ Field `name:` auto snake-case ke env key (sama config-tags rule):
 
 Atau eksplisit: `key: legacy_api_key` override default.
 
-### Values di `<id>/env.yaml`
+### Values di kolom `workflows.env_values`
 
-```yaml
-# env.yaml — UI-managed, hand-edit OK
-# Schema authoritative dari workflow.yaml. Field di luar schema = warning.
-SLACK_CHANNEL: "#support-prod"
-GITHUB_PAT: wick_enc_aGVsbG8gd29ybGQ=    # encrypted, kelihatan di UI saat Reveal
-MAX_DAILY_RUNS: 500
-ESCALATION_MODE: pager
-GUARD_PROMPT_EXTRA: |
-  Reject workflow yang notify ke channel #leadership tanpa approval explicit.
-ENABLE_AUTO_TRIAGE: true
-ALLOWED_SLACK_CHANNELS:                  # kvlist value = JSON array
-  - { id: "C123", name: "#support" }
-  - { id: "C456", name: "#support-prod" }
-ALLOWED_USERS:                           # picker value = same shape as kvlist=id|name
-  - { id: "U100", name: "Yoga" }
-GITHUB_WEBHOOK_URL: "https://hooks.example.com/gh"
-NOTIFY_EMAIL: "alerts@abc.com"
+Satu JSON blob per workflow. Plain literal buat field biasa, `wick_enc_`
+ciphertext buat `widget: secret`, JSON-string buat kvlist/picker.
+Storage format identik dengan `configs.value` column — same parser bisa
+read di Go.
+
+```json
+{
+  "slack_channel": "#support-prod",
+  "github_pat": "wick_enc_aGVsbG8gd29ybGQ=",
+  "max_daily_runs": "500",
+  "escalation_mode": "pager",
+  "guard_prompt_extra": "Reject workflow yang notify ke channel #leadership tanpa approval explicit.",
+  "enable_auto_triage": "true",
+  "allowed_slack_channels": "[{\"id\":\"C123\",\"name\":\"#support\"},{\"id\":\"C456\",\"name\":\"#support-prod\"}]",
+  "allowed_users": "[{\"id\":\"U100\",\"name\":\"Yoga\"}]",
+  "github_webhook_url": "https://hooks.example.com/gh",
+  "notify_email": "alerts@abc.com"
+}
 ```
 
-Storage format identical dengan `configs.value` column di config-tags
-pattern — JSON array of `{key: value}` objects buat kvlist/picker,
-plain literal buat lainnya. Same parser bisa read di Go.
+Field di luar schema (ada di `env_values` tapi ga di `env:` block) =
+warning, ga di-render di form. Schema authoritative dari body.
 
 ### Reference dari node
 
@@ -154,47 +186,67 @@ plain literal buat lainnya. Same parser bisa read di Go.
 
 `{{.Env.<NAME>}}` untuk semua field non-secret; `{{.Secret.<NAME>}}`
 hanya untuk `widget: secret`. Engine reject mixing — secret ga bisa
-di-render via `.Env.` (prevent accidental log leak).
+di-render via `.Env.` (prevent accidental log leak). Resolusi di
+[`env.ResolveSecrets`](../../agents/workflow/env/env.go), leak guard di
+[`env.LeakGuard`](../../agents/workflow/env/env.go).
 
-### UI form
+### UI form — tab Settings
 
-Tab "Settings" di workflow editor — **reuse existing config-tags
-form renderer**. Same widget components, same auto-save behavior
-(800ms debounce after last keystroke), same secret reveal/regen
-buttons, same kvlist Tab-add-row behavior, same picker debounced
-lookup.
+Tab **Settings** di workflow editor Toolbar — sejajar **Editor** |
+**Executions** (lihat [`EditorShell.svelte`](../../../fe/agents/workflow/src/lib/components/workflow/EditorShell.svelte)),
+**bukan** di bottom panel (bottom = per-run debug output: Logs / JSON /
+Validation / Guard / Tests / History). Env = config persisten
+per-workflow, butuh full-screen surface sendiri.
+
+**Reuse existing config-tags form renderer** — same widget components,
+same auto-save behavior (800ms debounce), same secret reveal/regen
+buttons, same kvlist Tab-add-row, same picker debounced lookup.
 
 Save handler:
 - `widget: secret` value → encrypt via existing `wick_enc_` helper
-  before write
+  ([`internal/enc`](../../enc/enc.go)) before write
 - `widget: kvlist` / `picker` → JSON serialize before write
 - Required field kosong → block save, show row error
-- `visible_when` field tetep seeded (just hidden from form)
+- `visible_when` field tetep disimpan (just hidden from form)
 
-Validation runtime saat workflow load:
-- Schema diff (field added/removed di workflow.yaml) → migration prompt
-- `required` field kosong di env.yaml → workflow ga jalan, surface
-  "Missing config" di UI workflow list (badge merah)
+Validation runtime saat workflow load
+([`env.ValidateValues`](../../agents/workflow/env/env.go)):
+- Schema diff (field added/removed di `env:` block) → migration prompt
+- `required` field kosong → workflow ga jalan, surface "Missing config"
+  di UI workflow list (badge merah)
 
-### Hand-edit ↔ UI consistency
+### Storage flow
 
-UI list page baca `env.yaml` saat render. fsnotify push update via SSE
-buat editor yang lagi buka. Hand-edit nulis ciphertext langsung
-(`wick_enc_...`) tetep valid — UI ga overwrite saat reveal/save kalau
-value ga berubah.
+```
+Schema:  workflow body env: block  →  body_draft / body_published
+                                       (versioned, ikut snapshot)
+
+Values:  Settings form / MCP        →  workflows.env_values (JSON blob)
+                                       (current-only, NOT versioned)
+
+Runtime: env_values + schema        →  env.ResolveSecrets
+                                       →  {{.Env.X}} / {{.Secret.X}}
+```
+
+### File-era migration
+
+Sebelum DB, values disimpan di file `<id>/env.json` (lihat git history
+[`env.UnmarshalFile`](../../agents/workflow/env/env.go)). One-shot
+migration saat boot: kalau file ada, baca → tulis kolom `env_values` →
+hapus file. Idempotent — file absent setelah boot pertama.
 
 ### MCP ops
 
 ```
 workflow_get_env_schema(id)
-  → [{name, type, default, description, required}]
+  → [{name, type, default, description, required}]   # dari body env: block
 
 workflow_get_env_values(id, reveal_secrets=false)
-  → {SLACK_CHANNEL: "#support", GITHUB_PAT: "wick_enc_..."}
+  → {slack_channel: "#support", github_pat: "wick_enc_..."}
     reveal_secrets=true → require admin token
 
 workflow_set_env_values(id, values)
-  → atomic write env.yaml, secret auto-encrypt
+  → write kolom env_values, secret auto-encrypt server-side
 ```
 
 AI bisa edit env values lewat MCP — secret encrypt server-side, AI ga
@@ -208,9 +260,8 @@ audit-able dgn timestamp (ga decrypt-able lagi setelah rotation).
 
 ### Default workflows (zero-config)
 
-Workflow tanpa `env:` field = ga butuh config. UI Settings tab kosong
+Workflow tanpa `env:` field = ga butuh config. Tab Settings kosong
 (atau tampilin "No config required for this workflow"). Build workflow
 sederhana ga dipaksa setup env.
 
 ---
-

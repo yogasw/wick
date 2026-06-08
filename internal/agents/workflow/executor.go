@@ -144,7 +144,7 @@ func (e *ExecError) Unwrap() error { return e.Wrapped }
 //	{{.Event.X}}        — trigger event payload
 //	{{.Node.<id>.X}}    — output of completed node X
 //	{{.Env.X}}          — non-secret workflow env value
-//	{{.Secret.X}}       — encrypted secret, decrypted on lookup
+//	{{.Env.X}}          — all env vars incl. secrets (decrypted at run time)
 //	{{.Workflow.X}}     — workflow metadata
 //	{{.Run.X}}          — runtime metadata
 //	{{.DataTable.<alias>}} — data table binding from data_tables: list

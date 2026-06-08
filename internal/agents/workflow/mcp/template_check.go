@@ -31,6 +31,7 @@ import (
 // SampleEvent alone for the easy cases, or mix it with a hand-built
 // .Node context for richer scenarios.
 type TemplateTestInput struct {
+	WorkflowID  string `json:"workflow_id,omitempty"`
 	Template    string `json:"template"`
 	Context     string `json:"context,omitempty"`
 	SampleEvent string `json:"sample_event,omitempty"`
@@ -49,6 +50,11 @@ type TemplateTestResult struct {
 	At            string   `json:"at,omitempty"`
 	AvailableKeys []string `json:"available_keys,omitempty"`
 	Hint          string   `json:"hint,omitempty"`
+	// EnvKeys is the list of non-secret env var names configured for
+	// this workflow. The FE uses this to populate .Env.* autocomplete
+	// without a separate API call.
+	EnvKeys    []string `json:"env_keys,omitempty"`
+	SecretKeys []string `json:"secret_keys,omitempty"`
 }
 
 // TemplateTest renders `in.Template` against the resolved context and
@@ -61,18 +67,61 @@ func (m *Ops) TemplateTest(in TemplateTestInput) (TemplateTestResult, error) {
 	if err != nil {
 		return TemplateTestResult{}, err
 	}
-	rendered, rerr := wftemplate.Render(in.Template, rctx)
+	// Replace secret values with masked placeholders before rendering so
+	// plaintext never appears in the preview. Secrets are stored as
+	// wick_enc_ tokens — substitute the token with the masked sentinel so
+	// Secret values render as "••••••••" in the preview UI.
+	maskedSecret := map[string]string{}
+	for k := range rctx.Secret {
+		maskedSecret[k] = "••••••••"
+	}
+	previewRctx := rctx
+	previewRctx.Secret = maskedSecret
+
+	// Collect env/secret key lists for FE autocomplete.
+	// Secret keys appear in rctx.Env (as ••••••••) AND rctx.Secret.
+	// Exclude from envKeys so FE autocomplete only lists them once (as secret_keys).
+	secretKeySet := map[string]bool{}
+	for k := range rctx.Secret {
+		secretKeySet[k] = true
+	}
+	envKeys := make([]string, 0, len(rctx.Env))
+	for k := range rctx.Env {
+		if !secretKeySet[k] {
+			envKeys = append(envKeys, k)
+		}
+	}
+	sort.Strings(envKeys)
+	secretKeys := make([]string, 0, len(rctx.Secret))
+	for k := range rctx.Secret {
+		secretKeys = append(secretKeys, k)
+	}
+	sort.Strings(secretKeys)
+
+	rendered, rerr := wftemplate.Render(in.Template, previewRctx)
 	if rerr == nil {
-		return TemplateTestResult{OK: true, Rendered: rendered}, nil
+		// Warn when rendered output looks like a Go map dump (e.g. {{.Env}} without a key).
+		hint := ""
+		if strings.HasPrefix(rendered, "map[") {
+			hint = "Looks like you used {{.Env}} without a key — use {{.Env.KEY_NAME}} instead."
+		}
+		return TemplateTestResult{OK: true, Rendered: rendered, Hint: hint, EnvKeys: envKeys, SecretKeys: secretKeys}, nil
 	}
 	res := TemplateTestResult{
-		OK:    false,
-		Error: rerr.Error(),
+		OK:         false,
+		Error:      rerr.Error(),
+		EnvKeys:    envKeys,
+		SecretKeys: secretKeys,
 	}
 	// missingkey=error fires "map has no entry for key \"X\"" — when we
 	// can locate it inside the template, introspect ctxRaw and dump
 	// sibling keys so the caller knows what's actually available.
 	if path, missingKey, ok := locateMissingKey(in.Template, rerr.Error()); ok {
+		// If the missing key exists in secrets (not env), suggest the correct namespace.
+		if _, isSecret := rctx.Secret[missingKey]; isSecret {
+			res.Hint = fmt.Sprintf("%q is a secret env var — use {{.Env.%s}}", missingKey, missingKey)
+			return res, nil
+		}
 		res.At = path
 		keys := availableKeysAt(ctxRaw, path)
 		sort.Strings(keys)
@@ -106,6 +155,51 @@ func (m *Ops) resolveTemplateContext(in TemplateTestInput) (workflow.RenderCtx, 
 		raw["Event"] = sample
 	}
 	rctx := workflow.RenderCtx{Node: map[string]any{}, Env: map[string]string{}, Secret: map[string]string{}, DataTable: map[string]any{}}
+
+	// Seed Env + Secret from the workflow's stored env values so
+	// {{.Env.KEY}} resolves in the live template tester without the user
+	// having to paste the full context JSON manually.
+	if in.WorkflowID != "" {
+		if envVals, err := m.Service.LoadEnvValues(in.WorkflowID); err == nil {
+			// Load schema to know which keys are secrets.
+			w, werr := m.Service.LoadDraft(in.WorkflowID)
+			secretKeys := map[string]bool{}
+			if werr == nil {
+				for _, f := range w.Env {
+					if f.IsSecret() {
+						secretKeys[f.Name] = true
+					}
+				}
+			}
+			// Use engine's ExtractSecrets to decrypt wick_cenc_ tokens.
+			// Schema secrets → .Secret (masked in preview).
+			// Free-form tokens → decrypt → .Env as plaintext.
+			decrypted := m.Engine.ExtractSecrets(w.Env, envVals)
+			rawEnv := map[string]any{}
+			rawSecret := map[string]any{}
+			// All keys go to .Env — secrets are decrypted so {{.Env.X}} works for all.
+			// Secrets also kept in .Secret for backward compat + masking.
+			for k, v := range envVals {
+				if plain, isSecret := decrypted[k]; isSecret {
+					rctx.Env[k] = "••••••••" // masked in preview
+					rctx.Secret[k] = plain
+					rawEnv[k] = "••••••••"
+					rawSecret[k] = "••••••••"
+				} else {
+					rctx.Env[k] = v
+					rawEnv[k] = v
+				}
+			}
+			// Mirror into raw so available_keys introspection on .Env.X
+			// and .Env.X suggests the actual configured keys.
+			if len(rawEnv) > 0 {
+				raw["Env"] = rawEnv
+			}
+			if len(rawSecret) > 0 {
+				raw["Secret"] = rawSecret
+			}
+		}
+	}
 	if ev, ok := raw["Event"].(map[string]any); ok {
 		rctx.Event = buildEventFromMap(ev)
 		// Also expose the trigger-as-node shape that real runs publish:

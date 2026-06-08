@@ -303,7 +303,8 @@ func (s *FileService) SaveState(id string, st workflow.WorkflowState) error {
 	return storage.WriteJSON(s.Layout.WorkflowStateFile(id), st)
 }
 
-// LoadEnvValues reads `<id>/env.yaml`.
+// LoadEnvValues reads `<id>/env.json`. File-based fallback for the
+// no-DB CLI path; the running app uses DBService (env_values column).
 func (s *FileService) LoadEnvValues(id string) (map[string]string, error) {
 	out := map[string]string{}
 	data, err := os.ReadFile(s.Layout.WorkflowEnvFile(id))
@@ -319,7 +320,8 @@ func (s *FileService) LoadEnvValues(id string) (map[string]string, error) {
 	return out, nil
 }
 
-// SaveEnvValues writes `<id>/env.yaml` atomically.
+// SaveEnvValues writes `<id>/env.json` atomically. File-based fallback
+// for the no-DB CLI path; the running app uses DBService.
 func (s *FileService) SaveEnvValues(id string, values map[string]string) error {
 	data, err := env.MarshalFile(values)
 	if err != nil {

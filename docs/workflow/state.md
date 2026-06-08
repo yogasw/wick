@@ -15,7 +15,7 @@ The workflow body and test fixtures live in the database. Per-run artefacts (sta
 | Test fixtures | DB table `workflow_test_cases` | Name-addressable, no file paths |
 | Run state | Disk `runs/<run-id>/state.json` | Engine writes per run |
 | Run events | Disk `runs/<run-id>/events.jsonl` | One line per `node_started` / `node_completed` / `node_failed` / `edge_traversed` |
-| Env values | Disk `env.json` | Sensitive secrets, OS-perm protected |
+| Env values | DB column `workflows.env_values` | Plain and secret vars; secrets stored as `wick_cenc_` tokens, decrypted at run time |
 
 Folder layout under `<BaseDir>/workflows/<workflow-id>/`:
 
@@ -24,7 +24,6 @@ runs/
 └── <run-id>/
     ├── state.json     ← run summary + per-node outputs
     └── events.jsonl   ← full event stream
-env.json               ← per-workflow env values (when set)
 ```
 
 `workflow_get_run` reads `state.json`. `workflow_get_run_events` reads `events.jsonl` — reach for it when `state.json` doesn't carry enough detail (e.g. you have a failed run ID and need to see what fired last).

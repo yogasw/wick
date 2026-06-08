@@ -20,6 +20,14 @@ type Workflow struct {
 	// when there is no draft (cleared on publish + discard).
 	BodyDraft string `gorm:"type:text;not null;default:''"`
 	HasDraft  bool   `gorm:"not null;default:false"`
+	// EnvValues is the runtime config blob: a JSON object of
+	// {key: value} where secrets are stored as wick_enc_ ciphertext and
+	// kvlist/picker values as JSON strings — same shape as configs.value.
+	// Current-only: NOT snapshotted into workflow_versions, so changing a
+	// channel target or rotating a secret never bloats the history. The
+	// env SCHEMA (which fields exist, their widgets) lives in the body;
+	// only the VALUES live here. See internal/docs/workflow/11-env-secrets.md.
+	EnvValues string `gorm:"type:text;not null;default:''"`
 	CreatedBy string `gorm:"type:varchar(128);default:''"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
