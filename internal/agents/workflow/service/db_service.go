@@ -35,7 +35,7 @@ type DBService struct {
 
 // NewDB constructs a DBService with the shared Repo and Layout. The
 // Layout is still required because the embedded FileService owns the
-// state.json + env.yaml + runs/<id>/ paths.
+// state.json + runs/<id>/ paths.
 func NewDB(layout config.Layout, repo *repository.Repo) *DBService {
 	return &DBService{
 		FileService: New(layout),

@@ -313,7 +313,7 @@ func (h *handlers) publish(c *connector.Ctx) (any, error) {
 		"ok":      true,
 		"id":      w.ID,
 		"enabled": w.Enabled,
-		"message": "Draft promoted to live workflow.json.",
+		"message": "Draft promoted to published.",
 	}, nil
 }
 

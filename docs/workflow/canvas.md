@@ -14,18 +14,18 @@ The canvas at `/tools/agents/workflows/<id>` is the visual editor. Built on Draw
 | **Canvas** (center) | The graph. Pan + zoom; marquee select; fit-to-view; auto top-down layout. Connections are typed — `branch` / `classify` / `switch` nodes get one outgoing port per `case:`. |
 | **Inspector** (right) | Per-node form reflected from the executor's `Descriptor().Schema` — same source the MCP catalog reads. Every field has a label, widget, and help text without doc duplication. |
 | **Run timeline** (bottom) | Pick a run, replay it step by step, see input / output per node, error trace per failure. |
-| **Toolbar** (top) | Save (writes to `workflow.draft.yaml`), Publish, Test, Doctor, Run. |
+| **Toolbar** (top) | Save (writes to `workflow.draft.json`), Publish, Test, Doctor, Run. |
 
 ## Editing flow
 
 1. Drag a node from the palette → it lands with default field values.
 2. Double-click to focus the inspector. Fill required fields (red asterisk).
 3. Drag from a node's output port to another node's input port to add an edge. `case:` labels appear on outgoing ports of branching nodes.
-4. **Save** writes the current state to `workflow.draft.yaml`.
-5. **Publish** validates the canvas state, runs the same `workflow_diagnose` checks the MCP surface uses, and only writes `workflow.yaml` if every check passes. Failed checks land inline next to the offending node. One class of check is a **publish-blocker**: any field whose `arg_modes` entry is `fixed` but whose value contains a Go template (`{{...}}`) is reported as an Error — the template would never evaluate at runtime. Draft Save is not affected; only the Publish step is gated.
+4. **Save** writes the current state to `workflow.draft.json`.
+5. **Publish** validates the canvas state, runs the same `workflow_diagnose` checks the MCP surface uses, and only writes `workflow.json` if every check passes. Failed checks land inline next to the offending node. One class of check is a **publish-blocker**: any field whose `arg_modes` entry is `fixed` but whose value contains a Go template (`{{...}}`) is reported as an Error — the template would never evaluate at runtime. Draft Save is not affected; only the Publish step is gated.
 
-::: info Two ways to edit the same file
-The canvas + MCP `workflow_*` ops mutate the same `workflow.yaml`. An LLM can scaffold the graph over MCP, you tighten it in the canvas, and version control sees a single file. There is no separate "AI mode" / "canvas mode" — both write through the same engine validator.
+::: info Two ways to edit the same workflow
+The canvas + MCP `workflow_*` ops mutate the same `workflow.json`. An LLM can scaffold the graph over MCP, you tighten it in the canvas, and the DB record stays consistent. There is no separate "AI mode" / "canvas mode" — both write through the same engine validator.
 :::
 
 ## Keyboard shortcuts

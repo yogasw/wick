@@ -423,9 +423,9 @@ func (m *Ops) RunNow(ctx context.Context, id string, evt workflow.Event) error {
 
 // RunNowWith fires a single run with an explicit Workflow override.
 // The UI uses this so Run Now executes the freshly-saved DRAFT
-// (workflow.draft.yaml) without waiting for Publish — router's
-// registered copy stays on the published version so cron / channel
-// / webhook triggers keep firing live.
+// without waiting for Publish — router's registered copy stays on
+// the published version so cron / channel / webhook triggers keep
+// firing live.
 func (m *Ops) RunNowWith(ctx context.Context, id string, w *workflow.Workflow, evt workflow.Event) error {
 	if m.Router == nil {
 		return fmt.Errorf("router not configured")
