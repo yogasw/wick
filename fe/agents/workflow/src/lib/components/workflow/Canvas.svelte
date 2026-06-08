@@ -277,7 +277,17 @@
       const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
       draftWorkflow.update((wf) => {
         if (!wf) return wf;
-        wf.triggers = [...(wf.triggers ?? []), { id, type: drag.trigger_type as any }];
+        const entry: any = { id, type: drag.trigger_type };
+        // Webhook: default path = /{slug} where slug = the random suffix
+        // of the trigger ID. Keeps paths short and export-import stable
+        // (no wf_id embedded — user can customise freely after drop).
+        if (drag.trigger_type === "webhook") {
+          // Store slug only — no leading slash, no wf_id prefix.
+          // Router constructs /{wf_id}/{slug} at runtime.
+          entry.path = id.replace(/^trigger-/, "");
+          entry.method = "POST";
+        }
+        wf.triggers = [...(wf.triggers ?? []), entry];
         const canvas = ((wf as any)._canvas ?? {}) as any;
         if (!canvas.positions) canvas.positions = {};
         canvas.positions[id] = { x, y };
@@ -1346,6 +1356,7 @@
         >
           <TriggerNode
             trigger={trig}
+            wfID={$draftWorkflow?.id ?? ""}
             selected={(trig.id ? $selectedNodeIDs.has(trig.id) : false) || $selectedNodeID === trig.id}
             onselect={() => selectedNodeID.set(trig.id ?? null)}
           />

@@ -562,7 +562,7 @@ func TriggerTypesCatalog() []TriggerTypeInfo {
 	return []TriggerTypeInfo{
 		{Type: "cron", Description: "Run on a cron schedule.", Example: `{type: cron, schedule: "0 8 * * *", timezone: UTC}`},
 		{Type: "channel", Description: "Inbound channel event (message, action, submission, ...).", Example: `{type: channel, channel: slack, event: message, target: "#inbox"}`},
-		{Type: "webhook", Description: "External HTTP POST to /hooks/<path>. HMAC SHA-256 verifiable.", Example: `{type: webhook, path: /hooks/orders/{id}, secret_ref: wick_enc_...}`},
+		{Type: "webhook", Description: "External HTTP POST to /webhook/{wf_id}/{slug}. Draft: /webhook-test/{wf_id}/{slug}. Store slug only (no leading slash, no wf_id). HMAC SHA-256 verifiable via X-Wick-Sig.", Example: `{type: webhook, path: orders, secret_ref: wick_enc_...}`},
 		{Type: "manual", Description: "Admin UI button or MCP workflow_run_now.", Example: `{type: manual, label: "Run digest now"}`},
 		{Type: "schedule_at", Description: "One-shot fire at a future timestamp.", Example: `{type: schedule_at, at: 2026-06-01T08:00:00Z}`},
 		{Type: "error", Description: "Fire on failure of another workflow. Filters by source_workflow/severity/node_types.", Example: `{type: error, source_workflow: "*", severity: [high, critical]}`},

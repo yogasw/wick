@@ -36,6 +36,11 @@ var LabelRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // path templates must match.
 var IDRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+// webhookSlugRe validates the user-supplied webhook path slug.
+// Allows lowercase letters, digits, dashes, and forward slashes
+// so multi-segment slugs like "orders/shipped" are legal.
+var webhookSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9\-/]*$`)
+
 // NodeIDRe accepts id charset plus underscore. Underscore is allowed
 // because palette node-type names (e.g. `session_init`, `datatable_query`)
 // are reused as the seeded ID on drop — rejecting `_` here would force
@@ -165,7 +170,7 @@ func Validate(w workflow.Workflow) *Result {
 		r.Errors = append(r.Errors, Error{Path: "triggers", Message: "at least one trigger required"})
 	}
 	for i, tr := range w.Triggers {
-		validateTrigger(r, fmt.Sprintf("triggers[%d]", i), tr)
+		validateTrigger(r, fmt.Sprintf("triggers[%d]", i), tr, w.ID)
 	}
 	// Start/end (entry) nodes are NOT mandatory. A workflow may publish
 	// with just a trigger and no entry wired up — the only hard publish
@@ -335,7 +340,7 @@ func Validate(w workflow.Workflow) *Result {
 	return r
 }
 
-func validateTrigger(r *Result, path string, tr workflow.Trigger) {
+func validateTrigger(r *Result, path string, tr workflow.Trigger, wfID string) {
 	// Trigger IDs follow the same loose rule as node IDs: UUIDs +
 	// dash-style legacy ids both pass. The user-facing handle lives
 	// in tr.Label (validated separately below).
@@ -358,6 +363,17 @@ func validateTrigger(r *Result, path string, tr workflow.Trigger) {
 	case workflow.TriggerWebhook:
 		if tr.Path == "" {
 			r.Errors = append(r.Errors, Error{Path: path + ".path", Message: "is required for webhook trigger"})
+		} else {
+			// Path stores only the user-supplied slug (no leading slash,
+			// no workflow-ID prefix). The router constructs the full
+			// request path as /{wf_id}/{slug} at runtime so the stored
+			// value stays portable across export/import.
+			slug := strings.TrimPrefix(tr.Path, "/")
+			if slug == "" {
+				r.Errors = append(r.Errors, Error{Path: path + ".path", Message: "slug must not be empty"})
+			} else if !webhookSlugRe.MatchString(slug) {
+				r.Errors = append(r.Errors, Error{Path: path + ".path", Message: fmt.Sprintf("slug %q must be lowercase letters, digits, dashes, or forward slashes (e.g. my-hook or orders/shipped)", slug)})
+			}
 		}
 	case workflow.TriggerManual:
 		// label optional

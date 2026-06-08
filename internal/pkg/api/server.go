@@ -1166,12 +1166,14 @@ func NewServer() *Server {
 		r.Handle(path, h)
 	}
 
-	// Workflow webhook triggers — public path /hooks/<...>. The handler
-	// inspects path + body, dispatches matching workflow triggers via
-	// the router. Each trigger spec can carry HMAC `secret_ref` for
-	// integrity check; otherwise plain POST.
+	// Workflow webhook triggers.
+	// /webhook/  — dispatches against the published workflow copy.
+	// /webhook-test/ — dispatches against the draft copy so operators
+	// can test changes without publishing. Both accept optional HMAC
+	// via X-Wick-Sig; path format: /{wf_id}/{slug}.
 	if wfMgr != nil && wfMgr.Router != nil {
-		r.Handle("/hooks/", wftrigger.NewWebhookHandler(wfMgr.Router))
+		r.Handle("/webhook/", wftrigger.NewWebhookHandler(wfMgr.Router))
+		r.Handle("/webhook-test/", wftrigger.NewDraftWebhookHandler(wfMgr.Router, wfMgr.Service))
 	}
 
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,

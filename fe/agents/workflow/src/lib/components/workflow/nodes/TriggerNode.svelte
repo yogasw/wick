@@ -9,10 +9,11 @@
 
   type Props = {
     trigger: Trigger;
+    wfID?: string;
     selected?: boolean;
     onselect?: () => void;
   };
-  let { trigger, selected, onselect }: Props = $props();
+  let { trigger, wfID = "", selected, onselect }: Props = $props();
 
   const sub = $derived.by(() => {
     switch (trigger.type) {
@@ -20,8 +21,12 @@
         return trigger.expr ?? trigger.schedule ?? "—";
       case "channel":
         return [trigger.channel, trigger.event].filter(Boolean).join(" · ") || "—";
-      case "webhook":
-        return trigger.path ? `${trigger.method ?? "POST"} ${trigger.path}` : "—";
+      case "webhook": {
+        if (!trigger.path) return "—";
+        const slug = trigger.path.replace(/^\/+/, "");
+        const path = wfID ? `/${wfID}/${slug}` : `/${slug}`;
+        return `${trigger.method ?? "POST"} ${path}`;
+      }
       case "schedule_at":
         return trigger.at ?? "—";
       default:

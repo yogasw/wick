@@ -55,7 +55,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	case "incident-response":
 		base.Name = "Incident response"
 		base.Description = "Webhook-triggered incident response with parallel data gathering."
-		base.Triggers = []workflow.Trigger{{ID: "trigger-webhook", Type: workflow.TriggerWebhook, Path: "/hooks/alerts", EntryNode: "gather", Label: "Webhook"}}
+		base.Triggers = []workflow.Trigger{{ID: "trigger-webhook", Type: workflow.TriggerWebhook, Path: "alerts", EntryNode: "gather", Label: "Webhook"}}
 		base.Graph = workflow.Graph{
 			Entry: "gather",
 			Nodes: []workflow.Node{

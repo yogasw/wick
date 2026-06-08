@@ -52,13 +52,46 @@ The full event payload (user, text, thread_ts, …) lands in `.Event.Payload` �
 ```yaml
 triggers:
   - type: webhook
+    slug: my-hook          # URL-safe slug, no slashes — becomes the last path segment
     method: POST
-    auth:
-      kind: bearer       # bearer | hmac | none
-      secret_ref: WEBHOOK_TOKEN
+    secret_ref: WEBHOOK_TOKEN   # optional HMAC secret (env var name in workflow secrets)
 ```
 
-Wick exposes `/webhook/<workflow-id>` and verifies auth before queueing the run. Body is parsed (JSON / form / raw) and lands in `.Event.Payload`.
+Wick exposes **two** endpoints for each webhook trigger:
+
+| Endpoint | Target | Use |
+|---|---|---|
+| `POST /webhook/{wf_id}/{slug}` | Published workflow | Production inbound traffic |
+| `POST /webhook-test/{wf_id}/{slug}` | Draft workflow | Testing before publish |
+
+The **Test URL** fires the current draft so you can iterate without publishing. The **Live URL** only works after the workflow is published. Both URLs are shown in the trigger inspector's tabbed preview inside the canvas editor, with one-click copy buttons.
+
+### Path storage
+
+The `slug` field stores only the URL-safe suffix — no leading slash, no `wf_id` prefix. The engine constructs the full `/{wf_id}/{slug}` path at runtime. A slug can contain path segments (e.g. `orders/new`) but cannot begin with `/`.
+
+If `slug` is omitted the trigger accepts any path for that workflow.
+
+### HMAC verification
+
+When `secret_ref` is set, every inbound request must include an `X-Wick-Sig` header containing `sha256=<hex-hmac>` of the raw request body, signed with the resolved secret. Requests without a valid signature are rejected with `401 Unauthorized`. The secret value is looked up from the workflow's env/secrets store (see [Workflow settings](./canvas#workflow-settings-env--secrets)).
+
+### Payload
+
+Body is parsed (JSON / form / raw) and lands in `.Event.Payload`:
+
+```
+.Event.Payload.path      # stripped path, e.g. /wf_id/my-hook
+.Event.Payload.method    # HTTP method
+.Event.Payload.headers   # flattened header map
+.Event.Payload.query     # flattened query params
+.Event.Payload.body      # parsed JSON body (when Content-Type is application/json)
+.Event.Payload.raw       # raw body bytes (always present)
+```
+
+### Multi-trigger routing
+
+A single workflow can carry multiple webhook triggers with different slugs. Each slug routes to its own entry node — the engine resolves `TriggerID` on the event and starts execution from the matching entry node.
 
 ## manual
 

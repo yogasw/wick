@@ -438,12 +438,23 @@ func workflowRegistryAPI(c *tool.Ctx) {
 			})
 		}
 	}
+	// Expose the server's public base URL so the webhook trigger
+	// inspector can build a full, clickable URL for the user.
+	// Falls back to empty string — the UI shows relative paths in that case.
+	hooksBaseURL := ""
+	if globalConfigs != nil {
+		base := strings.TrimRight(globalConfigs.AppURL(), "/")
+		if base != "" {
+			hooksBaseURL = base + "/hooks"
+		}
+	}
 	c.JSON(http.StatusOK, map[string]any{
-		"channels":      channels,
-		"connectors":    connectors,
-		"providers":     providers,
-		"node_types":    nodeTypes,
-		"trigger_types": triggerTypes,
+		"channels":       channels,
+		"connectors":     connectors,
+		"providers":      providers,
+		"node_types":     nodeTypes,
+		"trigger_types":  triggerTypes,
+		"hooks_base_url": hooksBaseURL,
 	})
 }
 

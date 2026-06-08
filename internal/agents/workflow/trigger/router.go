@@ -196,10 +196,21 @@ func (r *Router) RunNowWith(ctx context.Context, id string, w *workflow.Workflow
 // Returns the number of workflows that accepted the event.
 func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 	r.mu.RLock()
-	candidates := map[string]workflow.Trigger{}
+	// Key = "wfID:triggerIdx" so a workflow with multiple triggers of the
+	// same type (e.g. two webhook triggers) each get a candidate slot.
+	type candidateKey struct {
+		id  string
+		idx int
+	}
+	type candidate struct {
+		wfID string
+		tr   workflow.Trigger
+	}
+	candidates := map[candidateKey]candidate{}
 	for _, key := range eventRouteKeys(evt) {
 		for _, ref := range r.index[key] {
-			if _, seen := candidates[ref.ID]; seen {
+			ck := candidateKey{id: ref.ID, idx: ref.TriggerIdx}
+			if _, seen := candidates[ck]; seen {
 				continue
 			}
 			w, ok := r.defs[ref.ID]
@@ -209,21 +220,21 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 			if ref.TriggerIdx >= len(w.Triggers) {
 				continue
 			}
-			candidates[ref.ID] = w.Triggers[ref.TriggerIdx]
+			candidates[ck] = candidate{wfID: ref.ID, tr: w.Triggers[ref.TriggerIdx]}
 		}
 	}
 	r.mu.RUnlock()
 
 	matched := 0
-	for id, tr := range candidates {
-		if !triggerPassesRouterChecks(tr, evt) {
+	for _, c := range candidates {
+		if !triggerPassesRouterChecks(c.wfID, c.tr, evt) {
 			continue
 		}
-		if !r.passesDedup(id, evt) {
+		if !r.passesDedup(c.wfID, evt) {
 			continue
 		}
 		r.mu.RLock()
-		q := r.queues[id]
+		q := r.queues[c.wfID]
 		r.mu.RUnlock()
 		if q == nil {
 			continue
@@ -234,8 +245,8 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 		// matters because a single inbound payload may fan out to
 		// multiple triggers across workflows.
 		perTrig := evt
-		perTrig.TriggerID = tr.ID
-		_ = q.Enqueue(WorkItem{ID: id, Event: perTrig})
+		perTrig.TriggerID = c.tr.ID
+		_ = q.Enqueue(WorkItem{ID: c.wfID, Event: perTrig})
 		matched++
 	}
 	return matched
@@ -257,7 +268,7 @@ func MatchTrigger(tr workflow.Trigger, evt workflow.Event) bool {
 			return false
 		}
 	}
-	return triggerPassesRouterChecks(tr, evt)
+	return triggerPassesRouterChecks("", tr, evt)
 }
 
 // triggerPassesRouterChecks runs the small, payload-light checks the
@@ -266,7 +277,7 @@ func MatchTrigger(tr workflow.Trigger, evt workflow.Event) bool {
 // filter map. Filter eval uses generic key-equality with picker
 // (JSON array of {id,name}) membership; events that need fancier
 // semantics fall back to dump-all and filter inside the graph.
-func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
+func triggerPassesRouterChecks(wfID string, tr workflow.Trigger, evt workflow.Event) bool {
 	switch tr.Type {
 	case workflow.TriggerChannel:
 		if tr.Target != "" {
@@ -285,7 +296,7 @@ func triggerPassesRouterChecks(tr workflow.Trigger, evt workflow.Event) bool {
 	case workflow.TriggerWebhook:
 		if tr.Path != "" {
 			gotPath := payloadString(evt, "path")
-			if !PathMatches(tr.Path, gotPath) {
+			if !PathMatches(webhookFullPath(wfID, tr.Path), gotPath) {
 				return false
 			}
 		}
@@ -487,6 +498,30 @@ func eventRouteKeys(evt workflow.Event) []string {
 	return nil
 }
 
+// webhookFullPath constructs the canonical /hooks request path for a
+// webhook trigger. Path is the user-supplied slug (e.g. "my-hook");
+// wfID namespaces it so paths are unique across workflows without the
+// user having to embed the workflow ID manually. The stored JSON only
+// carries the slug — the router adds the prefix at match time.
+//
+// Example: wfID="abc-123", slug="orders" → "/abc-123/orders"
+// Empty slug → "/{wfID}" (bare workflow namespace, allows all sub-paths).
+// Empty wfID (test helpers) → use slug as-is, with a leading /.
+func webhookFullPath(wfID, slug string) string {
+	if wfID == "" {
+		// test helper path — no namespace prefix available
+		if strings.HasPrefix(slug, "/") {
+			return slug
+		}
+		return "/" + slug
+	}
+	if slug == "" {
+		return "/" + wfID
+	}
+	clean := strings.TrimPrefix(slug, "/")
+	return "/" + wfID + "/" + clean
+}
+
 // reindexLocked rebuilds the index entries for one workflow. Caller
 // must hold r.mu.
 func (r *Router) reindexLocked(w workflow.Workflow) {
@@ -496,11 +531,16 @@ func (r *Router) reindexLocked(w workflow.Workflow) {
 			r.index[key] = append(r.index[key], triggerRef{ID: w.ID, TriggerIdx: i})
 		}
 		if tr.Type == workflow.TriggerWebhook && tr.SecretRef != "" {
-			path := tr.Path
-			if path == "" {
-				path = "*"
+			// Index by full path so WebhookSecretFor can match against
+			// the incoming r.URL.Path without knowing the workflow ID.
+			// Empty slug → wildcard "*" (matches any path).
+			var key string
+			if tr.Path == "" {
+				key = "*"
+			} else {
+				key = webhookFullPath(w.ID, tr.Path)
 			}
-			r.webhookIndex[path] = webhookEntry{workflowID: w.ID, secretRef: tr.SecretRef}
+			r.webhookIndex[key] = webhookEntry{workflowID: w.ID, secretRef: tr.SecretRef}
 		}
 	}
 }
