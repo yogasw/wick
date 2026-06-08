@@ -54,6 +54,42 @@ The **Copy to editor** button on a run loads the run state, saves the current pu
 
 Connector and channel op authors can lock the toggle for a field in code via the `wick:"mode=fixed"` / `wick:"mode=expression"` [config tag](../reference/config-tags#modifiers-any-widget), preventing users from accidentally setting the wrong mode on fields that must always be literal or always be templated.
 
+## Workflow settings (env & secrets)
+
+Open the **Settings** modal from the **⋮ more** menu in the toolbar. It contains a key-value table where you can define environment variables that are available to every node in the workflow at run time via `{{.Env.KEY}}`.
+
+### Adding variables
+
+1. Click **+ Add row** — a new row appears with empty key and value fields.
+2. Type the key (e.g. `API_TOKEN`, `BASE_URL`).
+3. Type the value.
+4. Toggle **Secret** if the value is sensitive (API keys, passwords, tokens).
+
+### Secrets
+
+When **Secret** is on for a row:
+
+- The value is encrypted with the master key (`WICK_ENC_KEY`) before being stored in the `workflows.env_values` DB column. The stored form is a `wick_cenc_` token.
+- In template preview (`workflow_template_test`) and in execute-step output, secret values are masked as `••••••••`. The same masking applies to SSE events and the stored run state — plaintext only lives in engine memory during an active run.
+- All secret and non-secret vars share the same `{{.Env.KEY}}` namespace. There is no `.Secret.KEY` — the engine handles decryption transparently.
+
+::: warning Masking is best-effort
+Masking catches values that appear verbatim in output strings. If a node transforms or fragments the secret value the masked form may not cover every occurrence. Avoid logging or returning raw secret values from nodes.
+:::
+
+### Using env vars in templates
+
+```
+{{.Env.API_TOKEN}}
+{{.Env.BASE_URL}}/path
+```
+
+The render context injects all env vars (decrypted) before template evaluation. Missing keys produce a template error surfaced in the Validation panel and `workflow_template_test` output.
+
+### Saving
+
+Settings are saved when you click **Save** in the modal. Changes take effect on the next workflow run — no publish required for env/secret edits, since they are stored independently of the workflow graph.
+
 ## See also
 
 - [Nodes](./nodes) — the node catalog the palette draws from.

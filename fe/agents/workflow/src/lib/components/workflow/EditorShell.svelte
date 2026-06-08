@@ -6,11 +6,14 @@
   import TriggerDetailModal from "./TriggerDetailModal.svelte";
   import BottomTabs from "./BottomTabs.svelte";
   import ExecutionsPanel from "./ExecutionsPanel.svelte";
+  import SettingsModal from "./SettingsModal.svelte";
   import ToastHost from "$lib/components/shared/ToastHost.svelte";
   import { writable } from "svelte/store";
 
-  // Top-level tab toggle between Editor + Executions panel.
+  // Top-level tab toggle between Editor / Executions.
   const topTab = writable<"editor" | "executions">("editor");
+
+  let settingsOpen = $state(false);
   import {
     loadWorkflow,
     draftWorkflow,
@@ -183,7 +186,7 @@
       <span>Run {$lastRunSummary.status} in {$lastRunSummary.durationMs}ms</span>
     </div>
   {/if}
-  <Toolbar topTab={topTab} />
+  <Toolbar topTab={topTab} onSettings={() => (settingsOpen = true)} />
 
   {#if $topTab === "editor"}
     <div class="flex flex-1 min-h-0 min-w-0 relative overflow-hidden">
@@ -198,6 +201,13 @@
   {:else}
     <ExecutionsPanel workflowID={workflowID} onReplay={onReplay} />
   {/if}
+
+  <SettingsModal
+    open={settingsOpen}
+    {workflowID}
+    workflowName={$draftWorkflow?.name ?? ""}
+    onClose={() => (settingsOpen = false)}
+  />
 </div>
 
 <ToastHost />

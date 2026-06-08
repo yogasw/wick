@@ -58,7 +58,7 @@ Every node's templated fields render against the run's render context. Top-level
 |---|---|
 | `.Event` | Trigger payload — `.Event.Payload`, `.Event.User`, `.Event.Channel`, etc. Per-trigger shape; see [Triggers](./triggers). |
 | `.Node.<id>` | Output of an upstream node. Object keys are merged so `.Node.classify.verdict`, `.Node.classify.confidence` work directly. |
-| `.Env` | Workflow env block. Resolves `env:` references with secret-leak guard. |
+| `.Env` | Per-workflow env variables (including secrets). Set via **⋮ → Settings** in the canvas editor. Secrets are stored encrypted and decrypted at run time — use `{{.Env.KEY}}` for both plain and secret vars. Secret values are masked in output and stored run state. See [Canvas editor ▶ Workflow settings](./canvas#workflow-settings-env-secrets). |
 | `.Run` | Run-scoped metadata: `.Run.id`, `.Run.workflow_id`, `.Run.started_at`, `.Run.final_result`. |
 | `.Workflow` | Workflow metadata: `.Workflow.id`, `.Workflow.name`, `.Workflow.version`. |
 

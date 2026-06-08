@@ -8,6 +8,9 @@ All notable changes to Wick are documented here.
 
 ### Added
 - **Spawned-agent tool pre-approval widened to the whole wick MCP server**: agents now spawn with `--allowedTools mcp__wick` (server-level) instead of a static five-tool list, so `wick_manager_*` (and `wick_info`, `ask_user`, `wick_skill_*`, `wick_encrypt`/`wick_decrypt`) no longer hit the command gate's "always ask" prompt on the gated path. Not a security change — wick still enforces per-op access server-side; see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
+- **Workflow env & secrets**: per-workflow key-value environment variables, configurable via **⋮ → Settings** in the canvas editor. Values are accessible in every node template as `{{.Env.KEY}}`. Marking a var as **Secret** encrypts it at rest (`wick_cenc_` token in `workflows.env_values` DB column); the engine decrypts with a per-run cache so plaintext only lives in memory during execution.
+- **Secret masking**: secret values are automatically masked as `••••••••` in template preview (`workflow_template_test`), execute-step output, SSE events, and stored run state. The mask is applied with the existing single-pass algorithm, with overlapping-secret protection.
+- **Themed UI components**: `<Select>` dropdown and toolbar ⋮ more menu are now fully theme-aware with click-outside close. The ⋮ menu exposes the new Settings action alongside existing workflow actions.
 
 ---
 
