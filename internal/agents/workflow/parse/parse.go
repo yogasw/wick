@@ -49,7 +49,7 @@ var webhookSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9\-/]*$`)
 var NodeIDRe = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // Error is returned by Parse with a path-style locator for the
-// offending field so callers (UI, MCP) can surface "yaml: graph.edges[2]: ...".
+// offending field so callers (UI, MCP) can surface path-prefixed errors like "graph.edges[2]: ...".
 type Error struct {
 	Path    string
 	Message string
