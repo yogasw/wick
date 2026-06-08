@@ -20,33 +20,38 @@ func newTestRouter() *Router {
 	}
 }
 
-func wfWithWebhook(id, path, secretRef string) workflow.Workflow {
+// wfWithWebhook builds a workflow whose trigger Path is a slug (no
+// leading slash, no wf_id prefix) — the new storage contract. The
+// router constructs the full /{wf_id}/{slug} path at reindex time.
+func wfWithWebhook(id, slug, secretRef string) workflow.Workflow {
 	return workflow.Workflow{
 		ID:      id,
 		Enabled: true,
 		Triggers: []workflow.Trigger{
-			{Type: workflow.TriggerWebhook, Path: path, SecretRef: secretRef},
+			{Type: workflow.TriggerWebhook, Path: slug, SecretRef: secretRef},
 		},
 	}
 }
 
-// TestWebhookIndex_ExactMatch verifies a registered path is found O(1).
+// TestWebhookIndex_ExactMatch verifies a registered slug is found O(1).
+// WebhookSecretFor receives the stripped path (/{wf_id}/{slug}).
 func TestWebhookIndex_ExactMatch(t *testing.T) {
 	r := newTestRouter()
 	r.mu.Lock()
-	r.reindexLocked(wfWithWebhook("wf1", "/hooks/pay", "sec-pay"))
+	r.reindexLocked(wfWithWebhook("wf1", "pay", "sec-pay"))
 	r.mu.Unlock()
 
-	secret, found := r.WebhookSecretFor("/hooks/pay")
+	// Incoming request path after stripping /hooks: /wf1/pay
+	secret, found := r.WebhookSecretFor("/wf1/pay")
 	if !found {
-		t.Fatal("expected to find secret for /hooks/pay")
+		t.Fatal("expected to find secret for /wf1/pay")
 	}
 	if secret != "sec-pay" {
 		t.Errorf("expected sec-pay, got %s", secret)
 	}
 }
 
-// TestWebhookIndex_WildcardFallback verifies empty path registers as "*"
+// TestWebhookIndex_WildcardFallback verifies empty slug registers as "*"
 // and matches any incoming path.
 func TestWebhookIndex_WildcardFallback(t *testing.T) {
 	r := newTestRouter()
@@ -67,11 +72,11 @@ func TestWebhookIndex_WildcardFallback(t *testing.T) {
 func TestWebhookIndex_ExactBeforeWildcard(t *testing.T) {
 	r := newTestRouter()
 	r.mu.Lock()
-	r.reindexLocked(wfWithWebhook("wf-specific", "/hooks/pay", "sec-specific"))
+	r.reindexLocked(wfWithWebhook("wf-specific", "pay", "sec-specific"))
 	r.reindexLocked(wfWithWebhook("wf-wild", "", "sec-wildcard"))
 	r.mu.Unlock()
 
-	secret, found := r.WebhookSecretFor("/hooks/pay")
+	secret, found := r.WebhookSecretFor("/wf-specific/pay")
 	if !found {
 		t.Fatal("expected to find secret")
 	}
@@ -84,10 +89,10 @@ func TestWebhookIndex_ExactBeforeWildcard(t *testing.T) {
 func TestWebhookIndex_MissingPath(t *testing.T) {
 	r := newTestRouter()
 	r.mu.Lock()
-	r.reindexLocked(wfWithWebhook("wf1", "/hooks/pay", "sec-pay"))
+	r.reindexLocked(wfWithWebhook("wf1", "pay", "sec-pay"))
 	r.mu.Unlock()
 
-	_, found := r.WebhookSecretFor("/hooks/other")
+	_, found := r.WebhookSecretFor("/wf1/other")
 	if found {
 		t.Fatal("expected not found for unregistered path")
 	}
@@ -98,10 +103,10 @@ func TestWebhookIndex_MissingPath(t *testing.T) {
 func TestWebhookIndex_NoSecretRefSkipped(t *testing.T) {
 	r := newTestRouter()
 	r.mu.Lock()
-	r.reindexLocked(wfWithWebhook("wf1", "/hooks/pay", ""))
+	r.reindexLocked(wfWithWebhook("wf1", "pay", ""))
 	r.mu.Unlock()
 
-	_, found := r.WebhookSecretFor("/hooks/pay")
+	_, found := r.WebhookSecretFor("/wf1/pay")
 	if found {
 		t.Fatal("trigger without SecretRef should not appear in index")
 	}
@@ -112,30 +117,30 @@ func TestWebhookIndex_NoSecretRefSkipped(t *testing.T) {
 func TestWebhookIndex_UnregisterCleansUp(t *testing.T) {
 	r := newTestRouter()
 	r.mu.Lock()
-	r.reindexLocked(wfWithWebhook("wf1", "/hooks/pay", "sec-pay"))
+	r.reindexLocked(wfWithWebhook("wf1", "pay", "sec-pay"))
 	r.mu.Unlock()
 
 	r.mu.Lock()
 	r.removeFromIndexLocked("wf1")
 	r.mu.Unlock()
 
-	_, found := r.WebhookSecretFor("/hooks/pay")
+	_, found := r.WebhookSecretFor("/wf1/pay")
 	if found {
 		t.Fatal("secret should be gone after unregister")
 	}
 }
 
-// TestWebhookIndex_MultipleWorkflows verifies each path maps to its own secret.
+// TestWebhookIndex_MultipleWorkflows verifies each slug maps to its own secret.
 func TestWebhookIndex_MultipleWorkflows(t *testing.T) {
 	r := newTestRouter()
 	r.mu.Lock()
-	r.reindexLocked(wfWithWebhook("wf1", "/hooks/pay", "sec-pay"))
-	r.reindexLocked(wfWithWebhook("wf2", "/hooks/ship", "sec-ship"))
+	r.reindexLocked(wfWithWebhook("wf1", "pay", "sec-pay"))
+	r.reindexLocked(wfWithWebhook("wf2", "ship", "sec-ship"))
 	r.mu.Unlock()
 
 	cases := []struct{ path, want string }{
-		{"/hooks/pay", "sec-pay"},
-		{"/hooks/ship", "sec-ship"},
+		{"/wf1/pay", "sec-pay"},
+		{"/wf2/ship", "sec-ship"},
 	}
 	for _, c := range cases {
 		secret, found := r.WebhookSecretFor(c.path)

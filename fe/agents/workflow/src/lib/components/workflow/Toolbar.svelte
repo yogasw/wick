@@ -271,14 +271,9 @@
   {#if $draftWorkflow}
     {@const blocked = !$draftWorkflow.enabled && !$canActivate}
     <button
-      class="shrink-0 inline-flex items-center gap-2 px-2.5 md:px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-      class:bg-emerald-500={$draftWorkflow.enabled}
-      class:border-emerald-500={$draftWorkflow.enabled}
-      class:text-white-100={$draftWorkflow.enabled}
-      class:hover:bg-emerald-600={$draftWorkflow.enabled}
-      class:bg-white-200={!$draftWorkflow.enabled}
-      class:border-white-400={!$draftWorkflow.enabled}
-      class:text-black-700={!$draftWorkflow.enabled}
+      class={`shrink-0 inline-flex items-center gap-2 px-2.5 md:px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${$draftWorkflow.enabled
+        ? "bg-emerald-500 border-emerald-500 text-white-100 hover:bg-emerald-600"
+        : "bg-slate-100 dark:bg-navy-700 border-slate-300 dark:border-navy-500 text-black-700 dark:text-black-400 hover:bg-slate-200 dark:hover:bg-navy-600"}`}
       onclick={onToggle}
       disabled={blocked}
       title={blocked
@@ -287,9 +282,7 @@
           ? "Click to deactivate"
           : "Click to activate"}
     >
-      <span class="h-1.5 w-1.5 rounded-full"
-            class:bg-white-100={$draftWorkflow.enabled}
-            class:bg-white-200={!$draftWorkflow.enabled}></span>
+      <span class={`h-1.5 w-1.5 rounded-full ${$draftWorkflow.enabled ? "bg-white-100" : "bg-slate-400 dark:bg-black-500"}`}></span>
       {$draftWorkflow.enabled ? "Active" : "Inactive"}
     </button>
   {/if}
@@ -297,7 +290,7 @@
   <!-- Save draft. Hidden on mobile (folds into the ⋮ menu) — auto-save
        already covers most cases; the manual button stays on md+. -->
   <button
-    class="hidden md:inline-block shrink-0 px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-navy-600 hover:bg-slate-200 dark:hover:bg-white-400 dark:bg-navy-500 disabled:opacity-50"
+    class="hidden md:inline-block shrink-0 px-3 py-1.5 rounded text-xs font-medium bg-slate-100 dark:bg-navy-700 hover:bg-slate-200 dark:hover:bg-navy-600 text-black-800 dark:text-black-300 disabled:opacity-50"
     onclick={onSave}
     disabled={saving || !$dirty}
   >{saving ? "Saving…" : "Save"}</button>

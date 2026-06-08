@@ -94,10 +94,19 @@ export function runKind(r: { source?: string; trigger_type?: string }): RunKind 
     case "spa": return "manual";
     case "test":
     case "wftest":
+    case "webhook-test":
       return "test";
   }
   if (r.trigger_type === "manual") return "manual";
   return "automation";
+}
+
+// triggerTag returns a short secondary tag when the run has extra
+// provenance worth surfacing (e.g. "webhook-test" for draft webhook runs).
+// Returns null when there's nothing extra to show.
+export function triggerTag(r: { source?: string; trigger_type?: string }): string | null {
+  if (r.source === "webhook-test") return "webhook·test";
+  return null;
 }
 
 export function kindBadgeClass(kind: RunKind): string {

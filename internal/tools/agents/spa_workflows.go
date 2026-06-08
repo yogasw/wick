@@ -515,7 +515,7 @@ func runKind(r mcp.RunSummary) string {
 	switch r.Source {
 	case "spa":
 		return "manual"
-	case "test", "wftest":
+	case "test", "wftest", "webhook-test":
 		return "test"
 	}
 	// Manual is sometimes fired by MCP / external API without setting

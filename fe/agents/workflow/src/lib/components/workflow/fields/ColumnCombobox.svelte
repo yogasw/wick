@@ -87,7 +87,7 @@
       {#each filtered as name, i}
         <button
           type="button"
-          class="block w-full px-3 py-1.5 text-left font-mono text-[12px] hover:bg-emerald-50 dark:hover:bg-white-200 dark:bg-navy-700"
+          class="block w-full px-3 py-1.5 text-left font-mono text-[12px] hover:bg-emerald-50 dark:hover:bg-navy-600 dark:bg-navy-700"
           class:bg-emerald-50={highlight === i}
           class:bg-navy-700={highlight === i}
           onmousedown={(e) => { e.preventDefault(); commit(name); }}

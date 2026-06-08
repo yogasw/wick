@@ -900,6 +900,33 @@ func copyNodeOutputs(in map[string]workflow.NodeOutput) map[string]workflow.Node
 	return out
 }
 
+// webhookPathMatches checks whether a stored webhook slug matches the
+// incoming event path. Mirrors the router's webhookFullPath + PathMatches
+// logic without importing the trigger package (avoids import cycle).
+func webhookPathMatches(wfID, slug, gotPath string) bool {
+	clean := strings.TrimPrefix(slug, "/")
+	var full string
+	if wfID == "" {
+		full = "/" + clean
+	} else {
+		full = "/" + wfID + "/" + clean
+	}
+	tParts := strings.Split(strings.Trim(full, "/"), "/")
+	gParts := strings.Split(strings.Trim(gotPath, "/"), "/")
+	if len(tParts) != len(gParts) {
+		return false
+	}
+	for i, tp := range tParts {
+		if strings.HasPrefix(tp, "{") && strings.HasSuffix(tp, "}") {
+			continue
+		}
+		if tp != gParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // pickEntry resolves the entry node for a run and returns the trigger
 // that fired (when one can be identified). A nil second return means
 // the run fell back to graph.entry — no matching trigger row was
@@ -928,6 +955,15 @@ func pickEntry(w workflow.Workflow, evt workflow.Event) (string, *workflow.Trigg
 		}
 		if tr.Event != "" && evt.Subtype != "" && tr.Event != evt.Subtype {
 			continue
+		}
+		// For webhook triggers, also match path so multi-webhook workflows
+		// route to the correct entry node instead of always picking the
+		// first webhook trigger in the list.
+		if tr.Type == workflow.TriggerWebhook && tr.Path != "" {
+			gotPath, _ := evt.Payload["path"].(string)
+			if gotPath != "" && !webhookPathMatches(w.ID, tr.Path, gotPath) {
+				continue
+			}
 		}
 		return tr.EntryNode, tr
 	}

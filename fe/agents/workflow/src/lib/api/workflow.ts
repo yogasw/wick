@@ -153,6 +153,10 @@ export type CatalogResponse = {
   channels: ChannelDescriptor[];
   connectors: ConnectorDescriptor[];
   providers: { name: string; is_default: boolean }[];
+  // Base URL for webhook triggers: "<origin>/hooks". Empty when PublicURL
+  // is not configured in Settings → Agents; the UI falls back to a
+  // relative path display in that case.
+  hooks_base_url?: string;
 };
 
 // Mirror of internal/tools/agents/spa_palette.go. The backend is the

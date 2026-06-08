@@ -422,6 +422,13 @@ func (s *FileService) Publish(id, actorID string) (workflow.Workflow, error) {
 	if err != nil {
 		return workflow.Workflow{}, fmt.Errorf("draft parse: %w", err)
 	}
+	// Preserve the live enabled flag from the published copy — the draft
+	// editor never touches it (Active/Inactive writes directly to the
+	// published file via Toggle). Promoting a draft must not accidentally
+	// deactivate a running workflow.
+	if prev, perr := s.Load(id); perr == nil {
+		w.Enabled = prev.Enabled
+	}
 	// Semantic validation (trigger ids, node ids, label, etc.) runs
 	// here so every caller — UI Publish form, MCP workflow_publish op,
 	// internal helpers — gets the same guarantees. Without it the MCP
