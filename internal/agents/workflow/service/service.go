@@ -95,7 +95,7 @@ func (s *FileService) List() ([]string, error) {
 	return storage.ScanDirNames(s.Layout.WorkflowsDir())
 }
 
-// Load reads + parses a workflow.yaml.
+// Load reads + parses the workflow body.
 func (s *FileService) Load(id string) (workflow.Workflow, error) {
 	if err := parse.ValidateID(id); err != nil {
 		return workflow.Workflow{}, err
@@ -340,7 +340,7 @@ func (s *FileService) writeWorkflowBody(id string, w workflow.Workflow) error {
 
 // ── Draft / Publish lifecycle ────────────────────────────────────────
 
-// HasDraft reports whether a workflow.draft.yaml file exists.
+// HasDraft reports whether an unpublished draft exists.
 func (s *FileService) HasDraft(id string) bool {
 	if err := parse.ValidateID(id); err != nil {
 		return false
@@ -403,7 +403,7 @@ func (s *FileService) SaveDraft(id string, w workflow.Workflow) error {
 	return WriteAtomic(s.Layout.WorkflowDraftFile(id), data)
 }
 
-// Publish promotes the draft to workflow.yaml and removes the draft.
+// Publish promotes the draft to the published slot and removes it.
 // Returns the published workflow. No-op (returns current published)
 // when no draft exists.
 func (s *FileService) Publish(id, actorID string) (workflow.Workflow, error) {

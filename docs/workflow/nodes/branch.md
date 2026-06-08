@@ -29,18 +29,22 @@ Single Go-template expression → verdict. The engine routes to the outgoing edg
 
 Route by upstream classify:
 
-```yaml
-- id: route
-  type: branch
-  expr: '{{.Node.triage.verdict}}'
+```json
+{
+  "id": "route",
+  "type": "branch",
+  "expr": "{{.Node.triage.verdict}}"
+}
 ```
 
 Boolean check:
 
-```yaml
-- id: vip_check
-  type: branch
-  expr: '{{.Node.user_lookup.profile.is_admin}} == true'
+```json
+{
+  "id": "vip_check",
+  "type": "branch",
+  "expr": "{{.Node.user_lookup.profile.is_admin}} == true"
+}
 ```
 
 ## Operator behavior

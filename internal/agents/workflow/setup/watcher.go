@@ -13,10 +13,11 @@ import (
 
 const watchInterval = 3 * time.Second
 
-// WatchWorkflows polls <workflowsDir>/*/workflow.yaml every 3 seconds
+// WatchWorkflows polls workflow files under workflowsDir every 3 seconds
 // and calls HotReload on any id whose mtime changed since the last
 // poll. New files trigger a load; removed files trigger an unregister.
 // Blocks until ctx is cancelled — run in a goroutine.
+// Used by the file-based (non-DB) mode.
 func WatchWorkflows(ctx context.Context, workflowsDir string, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler) {
 	mtimes := map[string]time.Time{}
 

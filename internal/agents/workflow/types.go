@@ -80,11 +80,11 @@ const (
 	TriggerError      TriggerType = "error"
 )
 
-// Workflow is the root document parsed from `workflow.yaml`. Field tags
-// carry both yaml + json so the same struct serialises identically for
-// the file store and the SPA JSON API. Keep the two in sync — drift
-// silently produces JSON keys with capitalised field names because Go
-// defaults to that without a json tag.
+// Workflow is the root document for a workflow definition. Field tags
+// carry json so the struct serialises correctly for the DB store and
+// the SPA JSON API. Keep the two in sync — drift silently produces
+// JSON keys with capitalised field names because Go defaults to that
+// without a json tag.
 //
 // ID is the stable folder name (UUID for canvas-created workflows,
 // arbitrary id for legacy hand-edited ones). Display title lives in
@@ -330,7 +330,8 @@ type DataTableOrder struct {
 	Direction string `yaml:"direction,omitempty" json:"direction,omitempty"`
 }
 
-// DataTableCondYAML is one condition row declared in workflow.yaml.
+// DataTableCondYAML is one condition row declared in a workflow.
+// Name kept for backward compatibility; storage is JSON.
 type DataTableCondYAML struct {
 	Column string `yaml:"column"          json:"column"`
 	Op     string `yaml:"op"              json:"op"`
@@ -438,9 +439,8 @@ type Trigger struct {
 }
 
 // MarshalYAML normalizes Match before serialization — picker values stored as
-// JSON strings (`[{"id":"C1","name":"#ch"}]`) are expanded to native YAML
-// slices so the workflow.yaml is human-readable and AI-writable without
-// JSON escaping.
+// JSON strings (`[{"id":"C1","name":"#ch"}]`) are expanded to native slices
+// so the output is AI-writable without JSON escaping.
 func (tr Trigger) MarshalYAML() (any, error) {
 	type plain Trigger
 	p := plain(tr)

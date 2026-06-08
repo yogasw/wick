@@ -102,7 +102,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	// the new workflow stacked vertically on first open — regardless
 	// of whether the create came from the UI form, MCP, or CLI. UI
 	// callers historically re-applied this after Create; centralising
-	// it here means the workflow.yaml landing on disk already carries
+	// it here means the saved workflow already carries
 	// _canvas.positions.
 	return ApplyTopDownLayout(base)
 }
