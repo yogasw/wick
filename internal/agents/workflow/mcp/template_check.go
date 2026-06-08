@@ -204,7 +204,7 @@ func (m *Ops) resolveTemplateContext(in TemplateTestInput) (workflow.RenderCtx, 
 		rctx.Event = buildEventFromMap(ev)
 		// Also expose the trigger-as-node shape that real runs publish:
 		// .Node.<trigger-label>.payload.* so users can paste the same
-		// template they would in a workflow yaml without rewriting.
+		// template they would in a workflow definition without rewriting.
 		// We pick a generic label "trigger" so examples carry over.
 		if _, exists := rctx.Node["trigger"]; !exists {
 			triggerShape := map[string]any{

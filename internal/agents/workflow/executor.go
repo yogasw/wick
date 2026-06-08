@@ -34,7 +34,7 @@ type RunContext struct {
 	RunID       string
 	NodeOutputs map[string]NodeOutput
 
-	// TriggerNodeID is the canvas/yaml node id under which the run's
+	// TriggerNodeID is the canvas node id under which the run's
 	// firing trigger surfaces in {{.Node.<id>.…}}. Set by the engine
 	// when pickEntry resolves a trigger row (uses Trigger.ID when set,
 	// else falls back to the entry node id). Empty for legacy runs

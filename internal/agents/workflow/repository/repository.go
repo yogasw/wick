@@ -64,14 +64,14 @@ func (r *Repo) LoadWorkflow(id string) (wf.Workflow, error) {
 	if err != nil {
 		return wf.Workflow{}, err
 	}
-	yamlText := row.BodyPublished
-	if yamlText == "" {
-		yamlText = row.BodyDraft
+	body := row.BodyPublished
+	if body == "" {
+		body = row.BodyDraft
 	}
-	if yamlText == "" {
-		return wf.Workflow{}, errors.New("workflow has no yaml")
+	if body == "" {
+		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(yamlText))
+	return parse.Parse(id, []byte(body))
 }
 
 // LoadDraft returns the parsed draft when one exists, otherwise the
@@ -81,14 +81,14 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 	if err != nil {
 		return wf.Workflow{}, err
 	}
-	yamlText := row.BodyDraft
-	if yamlText == "" {
-		yamlText = row.BodyPublished
+	body := row.BodyDraft
+	if body == "" {
+		body = row.BodyPublished
 	}
-	if yamlText == "" {
-		return wf.Workflow{}, errors.New("workflow has no yaml")
+	if body == "" {
+		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(yamlText))
+	return parse.Parse(id, []byte(body))
 }
 
 // SaveDraft persists the workflow as the active draft and appends a
@@ -157,7 +157,7 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 	return version, err
 }
 
-// Publish promotes the current draft to published. The published yaml
+// Publish promotes the current draft to published. The published body
 // becomes the new BodyPublished column and a snapshot is appended to
 // workflow_versions with Kind=published. The draft column is cleared
 // and HasDraft flipped to false so the next save creates a fresh
