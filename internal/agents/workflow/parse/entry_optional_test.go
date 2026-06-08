@@ -64,7 +64,8 @@ func TestValidate_DanglingEntryNode_WarnsNotBlocks(t *testing.T) {
 	}
 }
 
-// A dangling graph.entry likewise warns rather than blocks.
+// A dangling graph.entry is silently ignored — triggers with entry_node
+// supersede it, so a stale graph.entry is harmless and not worth surfacing.
 func TestValidate_DanglingGraphEntry_WarnsNotBlocks(t *testing.T) {
 	w := workflow.Workflow{
 		ID:       "wf-dangling-entry",
@@ -79,8 +80,9 @@ func TestValidate_DanglingGraphEntry_WarnsNotBlocks(t *testing.T) {
 	if !r.Ok() {
 		t.Fatalf("dangling graph.entry should not block publish, got: %s", r.Error())
 	}
-	if !hasWarningAt(r, "graph.entry") {
-		t.Fatal("expected a warning for the dangling graph.entry")
+	// No warning expected — silently ignored since triggers own entry routing.
+	if hasWarningAt(r, "graph.entry") {
+		t.Fatal("dangling graph.entry should be silent, not a warning")
 	}
 }
 

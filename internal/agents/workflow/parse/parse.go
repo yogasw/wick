@@ -171,6 +171,14 @@ func Validate(w workflow.Workflow) *Result {
 	}
 	for i, tr := range w.Triggers {
 		validateTrigger(r, fmt.Sprintf("triggers[%d]", i), tr, w.ID)
+		if tr.Type == workflow.TriggerWebhook && tr.RespondMode == workflow.RespondModeRespondNode {
+			if !triggerReachesRespondNode(w.Graph, tr.EntryNode) {
+				r.Warnings = append(r.Warnings, Error{
+					Path:    fmt.Sprintf("triggers[%d].respond_mode", i),
+					Message: `respond_mode "respond_node" set but no webhook_respond node is reachable from this trigger's entry_node — caller will receive 502 at runtime`,
+				})
+			}
+		}
 	}
 	// Start/end (entry) nodes are NOT mandatory. A workflow may publish
 	// with just a trigger and no entry wired up — the only hard publish
@@ -225,11 +233,9 @@ func Validate(w workflow.Workflow) *Result {
 	// node the user later deleted) must NOT block publish — start/end
 	// nodes aren't mandatory. Surface it as a warning instead; the engine
 	// treats an unresolved entry as a no-op run.
-	if w.Graph.Entry != "" {
-		if _, ok := nodesByID[w.Graph.Entry]; !ok {
-			r.Warnings = append(r.Warnings, Error{Path: "graph.entry", Message: fmt.Sprintf("references unknown node %q (ignored)", w.Graph.Entry)})
-		}
-	}
+	// graph.entry is a legacy fallback — when all triggers have entry_node
+	// set, this field is never consulted. A dangling reference is silently
+	// ignored by the engine so we drop the warning here too.
 	for i, tr := range w.Triggers {
 		if tr.EntryNode != "" {
 			if _, ok := nodesByID[tr.EntryNode]; !ok {
@@ -578,6 +584,8 @@ func validateNodeBody(r *Result, path string, n workflow.Node) {
 		}
 	case workflow.NodeEnd, workflow.NodePython:
 		// no required fields
+	case workflow.NodeWebhookRespond:
+		// no required fields — respond_status/body/headers all optional
 	case workflow.NodeSessionInit:
 		// session_init has no required fields: both `preset` and
 		// `session_id` are optional — empty preset falls back to
@@ -774,4 +782,24 @@ func BfsReachable(g workflow.Graph, roots map[string]bool) map[string]bool {
 		}
 	}
 	return reachable
+}
+
+// triggerReachesRespondNode reports whether a webhook_respond node is
+// reachable from entryNodeID by following graph edges (BFS).
+// Returns false when entryNodeID is empty or not in the graph.
+func triggerReachesRespondNode(g workflow.Graph, entryNodeID string) bool {
+	if entryNodeID == "" {
+		return false
+	}
+	reachable := BfsReachable(g, map[string]bool{entryNodeID: true})
+	nodesByID := map[string]workflow.Node{}
+	for _, n := range g.Nodes {
+		nodesByID[n.ID] = n
+	}
+	for id := range reachable {
+		if n, ok := nodesByID[id]; ok && n.Type == workflow.NodeWebhookRespond {
+			return true
+		}
+	}
+	return false
 }

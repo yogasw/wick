@@ -182,6 +182,84 @@ func (r *Router) RunNowWith(ctx context.Context, id string, w *workflow.Workflow
 	return q.Enqueue(WorkItem{ID: id, Event: evt, Workflow: w})
 }
 
+// RunNowWithDone enqueues like RunNowWith but returns a channel that
+// receives the RunResult when the run completes. The caller is
+// responsible for reading from the channel exactly once; not reading
+// blocks the worker goroutine.
+func (r *Router) RunNowWithDone(ctx context.Context, id string, w *workflow.Workflow, evt workflow.Event) (<-chan RunResult, error) {
+	r.mu.RLock()
+	_, registered := r.defs[id]
+	q := r.queues[id]
+	r.mu.RUnlock()
+	if q == nil {
+		return nil, fmt.Errorf("workflow %q has no router queue — register it first", id)
+	}
+	if w == nil && !registered {
+		return nil, fmt.Errorf("workflow %q not registered with router", id)
+	}
+	done := make(chan RunResult, 1)
+	if err := q.Enqueue(WorkItem{ID: id, Event: evt, Workflow: w, Done: done}); err != nil {
+		return nil, err
+	}
+	return done, nil
+}
+
+// DispatchWithDone routes an event like Dispatch but returns a channel
+// per matched workflow that delivers the RunResult on completion.
+// Callers waiting on a specific run should use this instead of Dispatch.
+func (r *Router) DispatchWithDone(ctx context.Context, evt workflow.Event) []<-chan RunResult {
+	r.mu.RLock()
+	type candidateKey struct {
+		id  string
+		idx int
+	}
+	type candidate struct {
+		wfID string
+		tr   workflow.Trigger
+	}
+	candidates := map[candidateKey]candidate{}
+	for _, key := range eventRouteKeys(evt) {
+		for _, ref := range r.index[key] {
+			ck := candidateKey{id: ref.ID, idx: ref.TriggerIdx}
+			if _, seen := candidates[ck]; seen {
+				continue
+			}
+			w, ok := r.defs[ref.ID]
+			if !ok || !w.Enabled {
+				continue
+			}
+			if ref.TriggerIdx >= len(w.Triggers) {
+				continue
+			}
+			candidates[ck] = candidate{wfID: ref.ID, tr: w.Triggers[ref.TriggerIdx]}
+		}
+	}
+	r.mu.RUnlock()
+
+	var results []<-chan RunResult
+	for _, c := range candidates {
+		if !triggerPassesRouterChecks(c.wfID, c.tr, evt) {
+			continue
+		}
+		if !r.passesDedup(c.wfID, evt) {
+			continue
+		}
+		r.mu.RLock()
+		q := r.queues[c.wfID]
+		r.mu.RUnlock()
+		if q == nil {
+			continue
+		}
+		done := make(chan RunResult, 1)
+		perTrig := evt
+		perTrig.TriggerID = c.tr.ID
+		if err := q.Enqueue(WorkItem{ID: c.wfID, Event: perTrig, Done: done}); err == nil {
+			results = append(results, done)
+		}
+	}
+	return results
+}
+
 // Dispatch routes an event to every subscribed workflow.
 //
 // Pipeline:
@@ -714,6 +792,26 @@ func (r *Router) Stop() {
 	case <-time.After(StopTimeout):
 		log.Warn().Dur("timeout", StopTimeout).Msg("router stop: timed out waiting for in-flight workers to drain")
 	}
+}
+
+// respondModeFor returns the RespondMode of the first webhook trigger
+// whose path matches reqPath. Empty string means no match / default
+// (immediately).
+func (r *Router) respondModeFor(reqPath string, evt workflow.Event) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, w := range r.defs {
+		for _, tr := range w.Triggers {
+			if tr.Type != workflow.TriggerWebhook {
+				continue
+			}
+			full := webhookFullPath(w.ID, tr.Path)
+			if PathMatches(full, reqPath) {
+				return tr.RespondMode
+			}
+		}
+	}
+	return ""
 }
 
 // WebhookSecretFor returns the SecretRef for the incoming reqPath.

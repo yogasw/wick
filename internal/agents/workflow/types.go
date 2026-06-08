@@ -43,6 +43,7 @@ const (
 	NodeDataTableDelete NodeType = "datatable_delete"
 	NodeDataTableCount  NodeType = "datatable_count"
 	NodeSessionInit     NodeType = "session_init"
+	NodeWebhookRespond  NodeType = "webhook_respond"
 )
 
 // IsDataTableNode reports whether t is one of the datatable_* variants.
@@ -253,6 +254,12 @@ type Node struct {
 
 	// end
 	Result string `yaml:"result,omitempty" json:"result,omitempty"`
+
+	// webhook_respond — sends a custom HTTP response back to the webhook caller.
+	// Requires the trigger's respond_mode = "respond_node".
+	RespondStatus  int               `yaml:"respond_status,omitempty"  json:"respond_status,omitempty"`
+	RespondBody    string            `yaml:"respond_body,omitempty"    json:"respond_body,omitempty"`
+	RespondHeaders map[string]string `yaml:"respond_headers,omitempty" json:"respond_headers,omitempty"`
 }
 
 // OnFailure values.
@@ -382,11 +389,38 @@ type Trigger struct {
 	ReplySource  *bool             `yaml:"reply_source,omitempty"   json:"reply_source,omitempty"`
 
 	// webhook
-	Path      string `yaml:"path,omitempty"       json:"path,omitempty"`
-	Method    string `yaml:"method,omitempty"     json:"method,omitempty"`
-	SecretRef string `yaml:"secret_ref,omitempty" json:"secret_ref,omitempty"`
-	ParseBody string `yaml:"parse_body,omitempty" json:"parse_body,omitempty"`
-	BodyToVar string `yaml:"body_to_var,omitempty" json:"body_to_var,omitempty"`
+	Path        string `yaml:"path,omitempty"         json:"path,omitempty"`
+	Method      string `yaml:"method,omitempty"       json:"method,omitempty"`
+	SecretRef   string `yaml:"secret_ref,omitempty"   json:"secret_ref,omitempty"`
+	ParseBody   string `yaml:"parse_body,omitempty"   json:"parse_body,omitempty"`
+	BodyToVar   string `yaml:"body_to_var,omitempty"  json:"body_to_var,omitempty"`
+	// RespondMode controls when and how the HTTP response is sent back to
+	// the webhook caller. Three values are supported:
+	//
+	//   "immediately" (default)
+	//       202 Accepted is returned as soon as the run is enqueued.
+	//       The workflow executes asynchronously; the caller gets no
+	//       output. Use for fire-and-forget integrations.
+	//
+	//   "last_node"
+	//       The handler blocks until the workflow completes (or the
+	//       30-second timeout expires → 504). On success, the last
+	//       completed node's output is serialised as JSON and returned
+	//       with HTTP 200. On workflow failure, HTTP 500 is returned.
+	//       Use when the caller needs the result synchronously and the
+	//       workflow is expected to finish quickly (< 30s).
+	//
+	//   "respond_node"
+	//       The handler blocks like "last_node" but the response body,
+	//       status code, and headers are taken from the first
+	//       webhook_respond node that completes. If no webhook_respond
+	//       node runs within 30s, HTTP 504 is returned.
+	//       Use when you need full control over the HTTP response shape.
+	//
+	// Timeout for both blocking modes: 30s (see trigger.respondTimeout).
+	// For workflows that take longer, use "immediately" and poll via the
+	// run-status API.
+	RespondMode string `yaml:"respond_mode,omitempty" json:"respond_mode,omitempty"`
 
 	// manual
 	Label       string `yaml:"label,omitempty"        json:"label,omitempty"`
@@ -459,6 +493,13 @@ type Event struct {
 }
 
 // RunStatus values.
+// RespondMode values for Trigger.RespondMode.
+const (
+	RespondModeImmediately = "immediately"  // 202 at enqueue, fire-and-forget (default)
+	RespondModeLastNode    = "last_node"    // block until workflow finishes, return last output
+	RespondModeRespondNode = "respond_node" // block until webhook_respond node fires
+)
+
 const (
 	StatusQueued  = "queued"
 	StatusRunning = "running"

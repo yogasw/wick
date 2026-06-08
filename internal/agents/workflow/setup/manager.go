@@ -97,6 +97,7 @@ func New(layout config.Layout) *Manager {
 	eng.Register(workflow.NodeClassify, nodes.NewClassifyExecutor(provReg))
 	eng.Register(workflow.NodeAgent, nodes.NewAgentExecutor(provReg, nil, nil))
 	eng.Register(workflow.NodeSessionInit, nodes.NewSessionInitExecutor(nil))
+	eng.Register(workflow.NodeWebhookRespond, nodes.NewWebhookRespondExecutor())
 	eng.Register(workflow.NodeChannel, nodes.NewChannelExecutor(intReg))
 	eng.Register(workflow.NodeConnector, nodes.NewConnectorExecutor(conReg))
 	eng.Register(workflow.NodeDBQuery, nodes.NewDBQueryExecutor())
