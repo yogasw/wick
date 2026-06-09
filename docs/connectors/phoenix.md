@@ -29,7 +29,7 @@ All traffic goes through the single GraphQL endpoint (`BaseURL` + `/graphql`).
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `list_spans_by_room` | no | `room_id`, `time_range`, `llm_only` | List LLM spans for a Qiscus room (Phoenix session). Returns per-span model, status, tokens, latency, and previews of system prompt / last user input / output. |
+| `list_spans_by_room` | no | `room_id`, `time_range`, `llm_only` | List LLM spans for a room (Phoenix session). Returns per-span model, status, tokens, latency, and previews of system prompt / last user input / output. |
 | `list_spans_by_app` | no | `app_id`, `time_range`, `max_spans`, `root_only` | List root spans by `metadata['app_id']`, paged server-side. Previews come from raw input/output. |
 | `get_span` | no | `span_node_id` | Full detail of one span: every message (system, user, tool), output, `tool_calls`, token usage, latency, cost. |
 
@@ -37,7 +37,7 @@ All three are read-only — there are no destructive ops on this connector.
 
 ## Typical debugging flow
 
-1. **Find the span.** Call `list_spans_by_room` with the room id (matched against the Phoenix *session id*). Scan the previews to spot the span that answered wrong.
+1. **Find the span.** Call `list_spans_by_room` with the room id (matched against the Phoenix *session id* for that conversation). Scan the previews to spot the span that answered wrong.
 2. **Drill in.** Take that span's `span_node_id` and call `get_span` — read the system prompt, the user turn, and any `tool_calls` the model fired.
 3. **Widen if needed.** No room id, only an app? Start from `list_spans_by_app` and drill into a `span_node_id` the same way.
 
@@ -47,7 +47,7 @@ list_spans_by_room(room_id) → pick span_node_id → get_span(span_node_id)
 
 ## Quirks worth knowing
 
-- `room_id` is matched against the Phoenix **session id**, not a metadata filter — a numeric room id cannot be filtered any other way.
+- `room_id` is matched against the Phoenix **session id**, not a metadata filter — the room id value cannot be filtered any other way.
 - `list_spans_by_room` walks sessions → traces → spans, so a busy room costs several GraphQL round-trips.
 - `llm_only` defaults to **true**. Set it false to also see chain / agent / tool spans.
 - `list_spans_by_app` filters on `metadata['app_id']` — only **string** metadata is filterable in Phoenix; `root_only` defaults to true.
@@ -58,4 +58,4 @@ list_spans_by_room(room_id) → pick span_node_id → get_span(span_node_id)
 ## See also
 
 - [Connector Module](/guide/connector-module) — module contract.
-- [Loki](./loki) — server-log side of an investigation; pairs with Phoenix spans for full-stack debugging.
+- Loki connector (`loki`) — server-log side of an investigation; pairs with Phoenix spans for full-stack debugging.
