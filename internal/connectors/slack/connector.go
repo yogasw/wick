@@ -32,8 +32,8 @@ const defaultBaseURL = "https://slack.com/api"
 // instance; they enable the "Connect Account" button on the detail page.
 type Configs struct {
 	AuthMode     string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface; user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
-	BotToken     string `wick:"secret;visible_when=auth_mode:bot_token;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, canvases:read, canvases:write."`
-	UserToken    string `wick:"secret;visible_when=auth_mode:user_token;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect Account button when ClientID is configured. Or paste manually."`
+	BotToken     string `wick:"secret;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, canvases:read, canvases:write."`
+	UserToken    string `wick:"secret;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect Account button when ClientID is configured. Or paste manually."`
 	ClientID     string `wick:"desc=Slack OAuth App Client ID. Required to use the Connect Account button for user-token OAuth flow."`
 	ClientSecret string `wick:"secret;desc=Slack OAuth App Client Secret. Required for the OAuth token exchange when using Connect Account."`
 }
