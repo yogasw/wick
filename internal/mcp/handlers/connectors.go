@@ -18,6 +18,11 @@ type connectorSummary struct {
 	Description string `json:"description"`
 	TotalTools  int    `json:"total_tools"`
 	Status      string `json:"status"`
+	// Kind is "connector" for a standard instance or "account" for a
+	// connected OAuth account entry. Use kind to distinguish bot vs personal.
+	Kind     string `json:"kind"`
+	// ParentID is the connector row ID when Kind == "account".
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 type ListResult struct {
@@ -96,13 +101,32 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			continue
 		}
 		totalTools += count
+		// Always add the connector entry itself.
 		summaries = append(summaries, connectorSummary{
 			ID:          row.ID,
 			Connector:   row.Label,
 			Description: mod.Meta.Description,
 			TotalTools:  count,
 			Status:      status,
+			Kind:        "connector",
 		})
+		// For OAuth connectors, also add one entry per connected account.
+		if mod.OAuth != nil {
+			if accs, err2 := svc.ListAccounts(r.Context(), row.ID); err2 == nil {
+				for _, acc := range accs {
+					summaries = append(summaries, connectorSummary{
+						ID:        row.ID + "/" + acc.ID,
+						Connector: row.Label + " – @" + acc.DisplayName,
+						Description: mod.Meta.Description +
+							" (running as @" + acc.DisplayName + ")",
+						TotalTools: count,
+						Status:     status,
+						Kind:       "account",
+						ParentID:   row.ID,
+					})
+				}
+			}
+		}
 	}
 	rsp.ToolJSON(w, req.ID, ListResult{
 		Connectors:      summaries,
@@ -147,10 +171,14 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 			if !strings.Contains(hay, needle) {
 				continue
 			}
+			searchDesc := op.Description
+			if op.Destructive {
+				searchDesc += " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."
+			}
 			matched = append(matched, searchTool{
 				ToolID:      FormatToolID(row.ID, op.Key),
 				Name:        op.Name,
-				Description: op.Description,
+				Description: searchDesc,
 				Destructive: op.Destructive,
 			})
 		}
@@ -174,8 +202,10 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 }
 
 func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, tagIDs []string, isAdmin bool) {
-	connectorID, _ := args["id"].(string)
-	connectorID = strings.TrimSpace(connectorID)
+	rawID, _ := args["id"].(string)
+	rawID = strings.TrimSpace(rawID)
+	// id may be composite "connectorID/accountID" from wick_list account entries.
+	connectorID, scopedAccountID, _ := strings.Cut(rawID, "/")
 	if connectorID == "" {
 		rsp.ToolError(w, req.ID, "id is required", "")
 		return
@@ -205,10 +235,18 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		if !states[op.Key] {
 			continue
 		}
+		desc := op.Description
+		if op.Destructive {
+			desc += " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."
+		}
+		toolID := FormatToolID(row.ID, op.Key)
+		if scopedAccountID != "" {
+			toolID = FormatToolIDWithAccount(row.ID, op.Key, scopedAccountID)
+		}
 		tools = append(tools, toolDetail{
-			ToolID:      FormatToolID(row.ID, op.Key),
+			ToolID:      toolID,
 			Name:        op.Name,
-			Description: op.Description,
+			Description: desc,
 			Destructive: op.Destructive,
 			InputSchema: ConfigsToJSONSchema(op.Input),
 		})
@@ -228,7 +266,7 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, "tool_id is required", toolID)
 		return
 	}
-	connectorID, opKey, err := ParseToolID(toolID)
+	connectorID, opKey, accountID, err := ParseToolIDFull(toolID)
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
@@ -249,6 +287,7 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		IsAdmin:      user.IsAdmin(),
 		IPAddress:    ClientIP(r),
 		UserAgent:    r.Header.Get("User-Agent"),
+		AccountID:    accountID,
 	})
 	if execErr != nil {
 		body := execErr.Error()
@@ -269,17 +308,38 @@ func FormatToolID(connectorID, opKey string) string {
 	return "conn:" + connectorID + "/" + opKey
 }
 
-// ParseToolID inverts FormatToolID.
+// FormatToolIDWithAccount produces a tool identifier scoped to a specific
+// connected OAuth account. Format: conn:{rowID}/{opKey}@{accountID}
+func FormatToolIDWithAccount(connectorID, opKey, accountID string) string {
+	return "conn:" + connectorID + "/" + opKey + "@" + accountID
+}
+
+// ParseToolID inverts FormatToolID and FormatToolIDWithAccount.
+// Returns connectorID, opKey, accountID (empty when no account suffix).
 func ParseToolID(id string) (connectorID, opKey string, err error) {
 	const prefix = "conn:"
 	if !strings.HasPrefix(id, prefix) {
 		return "", "", errors.New("tool_id must start with 'conn:'")
 	}
-	connectorID, opKey, ok := strings.Cut(id[len(prefix):], "/")
-	if !ok || connectorID == "" || opKey == "" {
+	connectorID, rest, ok := strings.Cut(id[len(prefix):], "/")
+	if !ok || connectorID == "" || rest == "" {
 		return "", "", errors.New("tool_id must be of the form 'conn:{connector_id}/{op_key}'")
 	}
+	opKey = rest
 	return connectorID, opKey, nil
+}
+
+// ParseToolIDFull parses tool_id including optional @accountID suffix.
+func ParseToolIDFull(id string) (connectorID, opKey, accountID string, err error) {
+	connectorID, opKey, err = ParseToolID(id)
+	if err != nil {
+		return
+	}
+	// opKey may carry "@{accountID}" suffix.
+	if opKey, accountID, _ = strings.Cut(opKey, "@"); opKey == "" {
+		err = errors.New("op_key is empty after stripping account suffix")
+	}
+	return
 }
 
 // StringifyArgs flattens JSON params into string map.

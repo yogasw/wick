@@ -57,6 +57,29 @@ type Connector struct {
 	// in-process via a sliding-window counter — not distributed.
 	RateLimitRPM int    `gorm:"default:0"`
 	CreatedBy    string `gorm:"type:varchar(36)"`
+	// AllowOthersConfigure controls whether non-admin users who have tag
+	// access to this instance can edit its credentials and settings.
+	// Default false — only admins can configure. When true, any user
+	// whose tags grant access to this row can also edit it.
+	AllowOthersConfigure bool `gorm:"default:false"`
+	// AllowOthersConnectSSO controls whether non-admin users who have tag
+	// access to this instance can connect their own OAuth account.
+	// Only meaningful when the connector's OAuthMeta is non-nil.
+	// Default false — only admins can initiate the OAuth flow.
+	AllowOthersConnectSSO bool `gorm:"default:false"`
+	// EnableSSO controls whether this instance participates in the OAuth
+	// flow at all. When false (default) the instance uses manually-entered
+	// credentials (bot token, API key, service account). When true the
+	// "Connect Account" button is shown and the OAuth flow is active.
+	// Only meaningful when the connector's OAuthMeta is non-nil.
+	EnableSSO bool `gorm:"default:false"`
+	// MultiAccount controls whether each OAuth connect creates a new
+	// instance row (true) or replaces the token on this row (false).
+	// Only meaningful when EnableSSO=true.
+	// false (default) — one row, one identity; reconnect replaces token.
+	// true — each user that connects gets their own auto-created row
+	// labelled "{Connector} – @{displayName}".
+	MultiAccount bool `gorm:"default:false"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -148,6 +171,38 @@ type ConnectorRun struct {
 	StartedAt    time.Time `gorm:"not null;index;index:idx_run_connector_started,priority:2,sort:desc;index:idx_run_user_started,priority:2,sort:desc;index:idx_run_status_started,priority:2,sort:desc;index:idx_run_ip_started,priority:2,sort:desc"`
 	EndedAt      *time.Time
 	CreatedAt    time.Time
+}
+
+// ConnectorAccount stores one OAuth-connected user account per connector
+// instance. Many accounts can live under one instance (when MultiAccount=true);
+// at most one when MultiAccount=false (upsert by ConnectorID).
+//
+// AccessToken is stored as-is — the configs encryption layer handles masking
+// in the admin UI via the connector's Configs.UserToken secret field. The
+// token here is the source of truth for execution; the connector reads it
+// via c.Cfg("user_token") which resolves from this table at call time.
+//
+// WickUserID is the wick platform user who initiated the OAuth flow (may be
+// empty for tokens connected before this table existed). Used for ownership
+// checks and the "connected as" display in the UI.
+type ConnectorAccount struct {
+	ID          string    `gorm:"type:varchar(36);primaryKey"`
+	ConnectorID string    `gorm:"type:varchar(36);not null;index"`
+	WickUserID  string    `gorm:"type:varchar(36);index"`
+	DisplayName string    `gorm:"type:varchar(255);not null"`
+	AccessToken string    `gorm:"type:text;not null"`
+	// DisabledOps is a JSON array of operation keys disabled for this
+	// account. Empty = all ops allowed. Example: ["send_message","delete_message"]
+	DisabledOps string    `gorm:"type:text;default:''"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (a *ConnectorAccount) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == "" {
+		a.ID = uuid.NewString()
+	}
+	return nil
 }
 
 func (r *ConnectorRun) BeforeCreate(tx *gorm.DB) error {

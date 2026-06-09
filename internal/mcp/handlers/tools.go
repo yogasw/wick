@@ -41,11 +41,14 @@ func MetaToolDescriptors() []ToolDescriptor {
 	return []ToolDescriptor{
 		{
 			Name: "wick_list",
-			Description: "List available connectors grouped by instance. " +
-				"Returns each connector's id, label, description, total_tools count, and status. " +
+			Description: "List available connectors and connected accounts. " +
+				"Each entry has: id, connector (label), description, total_tools, status, kind, parent_id. " +
+				"kind='connector' = standard instance (bot/API key); kind='account' = personal OAuth account connected to the parent connector. " +
+				"parent_id is the connector id when kind='account'. " +
+				"Use kind to decide which identity to run as: kind='connector' for shared/bot credentials, kind='account' for personal identity. " +
 				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
-				"WORKFLOW: (1) wick_list to see what connectors exist, " +
-				"(2) wick_get with the connector id to see its tools + input_schemas, " +
+				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
+				"(2) wick_get with the id (connector id or connector_id/account_id for account entries) to see its tools + input_schemas, " +
 				"(3) wick_execute with tool_id + params. Takes no arguments.",
 			InputSchema: map[string]any{
 				"type":       "object",
