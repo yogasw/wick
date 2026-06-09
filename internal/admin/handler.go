@@ -35,6 +35,7 @@ type Handler struct {
 	connectors *connectors.Service
 	tokens     *accesstoken.Service
 	oauth      *oauth.Service
+	auth       *login.Service
 }
 
 func NewHandler(
@@ -46,6 +47,7 @@ func NewHandler(
 	connectorsSvc *connectors.Service,
 	tokensSvc *accesstoken.Service,
 	oauthSvc *oauth.Service,
+	authSvc *login.Service,
 ) *Handler {
 	return &Handler{
 		repo:       newRepo(db),
@@ -56,6 +58,7 @@ func NewHandler(
 		connectors: connectorsSvc,
 		tokens:     tokensSvc,
 		oauth:      oauthSvc,
+		auth:       authSvc,
 	}
 }
 
@@ -105,6 +108,7 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/variables/lan-ips", admin(h.lanIPs))
 
 	// User actions
+	mux.Handle("POST /admin/users/create", admin(h.createUser))
 	mux.Handle("POST /admin/users/{id}/approve", admin(h.approveUser))
 	mux.Handle("POST /admin/users/{id}/unapprove", admin(h.unapproveUser))
 	mux.Handle("POST /admin/users/{id}/role", admin(h.setRole))
@@ -293,6 +297,14 @@ func (h *Handler) regenerateVariable(w http.ResponseWriter, r *http.Request) {
 // ── Page handlers ──────────────────────────────────────────────
 
 func (h *Handler) usersPage(w http.ResponseWriter, r *http.Request) {
+	h.renderUsers(w, r, view.UserCreateResult{})
+}
+
+// renderUsers renders the admin users page. created carries the one-time
+// outcome of an "Add user" submit (generated password or error) so the
+// create handler can render the result inline — a POST→GET redirect
+// would drop the plaintext password, which we surface only once.
+func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, created view.UserCreateResult) {
 	currentUser := login.GetUser(r.Context())
 	users, err := h.repo.ListUsers(r.Context())
 	if err != nil {
@@ -316,7 +328,18 @@ func (h *Handler) usersPage(w http.ResponseWriter, r *http.Request) {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
 		items[i] = view.UserRow{User: u, TagIDs: ids}
 	}
-	view.UsersPage(items, pickerTags, currentUser, int(adminCount)).Render(r.Context(), w)
+	view.UsersPage(items, pickerTags, currentUser, int(adminCount), created).Render(r.Context(), w)
+}
+
+// createUser provisions a new user with an auto-generated password and
+// re-renders the users page with that password shown once in a banner.
+func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
+	user, password, err := h.auth.AdminCreateUser(r.Context(), r.FormValue("email"), r.FormValue("name"))
+	if err != nil {
+		h.renderUsers(w, r, view.UserCreateResult{ErrMsg: err.Error()})
+		return
+	}
+	h.renderUsers(w, r, view.UserCreateResult{Email: user.Email, Password: password})
 }
 
 func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
