@@ -7,12 +7,7 @@ import (
 	"github.com/yogasw/wick/pkg/connector"
 )
 
-// ConnectorListPage shows every row that backs a single connector
-// definition. One Meta.Key can have many rows (e.g. Loki Prod / Staging /
-// Dev), each carrying its own credentials and tag set. Rows are listed
-// here with quick actions; clicking a row opens the detail page where
-// configs are edited and operations are tested.
-templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow map[string][]string, user *entity.User, oauthAppCfg ConnectorOAuthAppConfig) {
+templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow map[string][]string, accountsByRow map[string][]entity.ConnectorAccount, oauthURLByRow map[string]string, oauthSuccess bool, oauthUser string, user *entity.User) {
 	@Layout("Manager · "+mod.Meta.Name, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -20,6 +15,15 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 				<span>/</span>
 				<span class="text-black-900 dark:text-white-100">{ mod.Meta.Name }</span>
 			</div>
+			if oauthSuccess {
+				<div class="mt-4 rounded-xl border border-pos-300 bg-pos-100 px-4 py-3 text-sm text-pos-400">
+					if oauthUser != "" {
+						<strong>{ "@" + oauthUser }</strong> { "connected successfully." }
+					} else {
+						Account connected successfully.
+					}
+				</div>
+			}
 			<div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 				<div class="flex items-center gap-3">
 					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
@@ -44,10 +48,6 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 				}
 			</div>
 
-			if oauthAppCfg.Enabled {
-				@connectorOAuthAppSection(mod, oauthAppCfg)
-			}
-
 			<section class="mt-8">
 				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Instances</h2>
 				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
@@ -60,7 +60,7 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 				} else {
 					<div class="mt-4 flex flex-col gap-2">
 						for _, row := range rows {
-							@connectorListCard(mod, row, tagsByRow[row.ID])
+							@connectorListCard(mod, row, tagsByRow[row.ID], accountsByRow[row.ID], oauthURLByRow[row.ID])
 						}
 					</div>
 				}
@@ -69,109 +69,75 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 	}
 }
 
-// connectorOAuthAppSection renders the OAuth App configuration card for admins.
-// Shown on the list page before the rows list so connector-level credentials
-// (client_id / client_secret) are managed in one place, not per-row.
-templ connectorOAuthAppSection(mod connector.Module, cfg ConnectorOAuthAppConfig) {
-	<section class="mt-6 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
-		<div class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-			<div>
-				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">OAuth App</h2>
-				<p class="mt-0.5 text-sm text-black-800 dark:text-black-600">
-					Connector-level credentials for the { cfg.DisplayName } OAuth flow. Set these once here
-					— they are shared across all rows and take effect immediately.
-				</p>
+templ connectorListCard(mod connector.Module, row entity.Connector, tagNames []string, accounts []entity.ConnectorAccount, oauthURL string) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">
+		<!-- Main row -->
+		<div class="group relative flex items-center gap-4 px-4 py-3">
+			<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID) } class="absolute inset-0 z-0 rounded-xl" aria-label="Open"></a>
+			<div class="pointer-events-none relative min-w-0 flex-1">
+				<p class="truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{ row.Label }</p>
+				<p class="mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600">{ row.ID }</p>
 			</div>
-			if cfg.OAuthURL != "" {
-				<a
-					href={ templ.SafeURL(cfg.OAuthURL) }
-					class="mt-3 sm:mt-0 inline-flex items-center gap-2 rounded-lg border border-green-500 px-4 py-2 text-sm font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20"
-				>
-					Connect with { cfg.DisplayName }
-				</a>
-			}
-		</div>
-		<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/oauth-app") } class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-			<div class="flex flex-col gap-1.5">
-				<label class="text-xs font-medium text-black-800 dark:text-black-600" for="oauth_client_id">Client ID</label>
-				<input
-					id="oauth_client_id"
-					type="text"
-					name="client_id"
-					value={ cfg.ClientID }
-					placeholder=""
-					autocomplete="off"
-					class={ cfgInputClass }
-				/>
-				<p class="text-[11px] text-black-700 dark:text-black-600">OAuth App Client ID from your { cfg.DisplayName } developer settings.</p>
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<label class="text-xs font-medium text-black-800 dark:text-black-600" for="oauth_client_secret">Client Secret</label>
-				<input
-					id="oauth_client_secret"
-					type="password"
-					name="client_secret"
-					value=""
-					if cfg.ClientSecret != "" {
-						placeholder={ cfg.ClientSecret }
-					} else {
-						placeholder="Leave blank to keep unchanged"
+			<div class="pointer-events-none relative flex flex-shrink-0 items-center gap-2">
+				if len(tagNames) == 0 {
+					<span class="hidden rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600 sm:inline">Everyone</span>
+				} else {
+					for _, n := range tagNames {
+						<span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
+							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+							{ n }
+						</span>
 					}
-					autocomplete="new-password"
-					class={ cfgInputClass }
-				/>
-				<p class="text-[11px] text-black-700 dark:text-black-600">Required for the OAuth token exchange.</p>
-			</div>
-			<div class="sm:col-span-2 flex justify-end">
-				<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
-					Save OAuth App
-				</button>
-			</div>
-		</form>
-	</section>
-}
-
-// connectorListCard renders one row in the n8n-style stacked list:
-// label + meta on the left, access tags + status in the middle, kebab
-// menu on the right. The card itself is clickable; the kebab keeps
-// destructive actions one click away without crowding the row.
-templ connectorListCard(mod connector.Module, row entity.Connector, tagNames []string) {
-	<div class="group relative flex items-center gap-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-3 hover:border-green-400">
-		<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID) } class="absolute inset-0 z-0" aria-label="Open"></a>
-		<div class="pointer-events-none relative min-w-0 flex-1">
-			<p class="truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{ row.Label }</p>
-			<p class="mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600">{ row.ID }</p>
-		</div>
-		<div class="pointer-events-none relative flex flex-shrink-0 items-center gap-2">
-			if len(tagNames) == 0 {
-				<span class="hidden rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600 sm:inline">Everyone</span>
-			} else {
-				for _, n := range tagNames {
-					<span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
-						<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-						{ n }
+				}
+				if row.Disabled {
+					<span class="inline-flex items-center gap-1.5 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">
+						<span class="h-1.5 w-1.5 rounded-full bg-black-700"></span>Disabled
+					</span>
+				} else {
+					<span class="inline-flex items-center gap-1.5 rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">
+						<span class="h-1.5 w-1.5 rounded-full bg-pos-400"></span>Published
 					</span>
 				}
-			}
-			if row.Disabled {
-				<span class="inline-flex items-center gap-1.5 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">
-					<span class="h-1.5 w-1.5 rounded-full bg-black-700"></span>Disabled
-				</span>
-			} else {
-				<span class="inline-flex items-center gap-1.5 rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">
-					<span class="h-1.5 w-1.5 rounded-full bg-pos-400"></span>Published
-				</span>
-			}
-			@kebabMenu(mod, row)
+				if oauthURL != "" {
+					<a
+						href={ templ.SafeURL(oauthURL) }
+						class="pointer-events-auto relative z-10 inline-flex items-center gap-1.5 rounded-lg border border-green-500 px-3 py-1.5 text-xs font-medium text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20"
+					>
+						<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><path d="M20 8v6m3-3h-6"/></svg>
+						Connect
+					</a>
+				}
+				@kebabMenu(mod, row)
+			</div>
 		</div>
+		<!-- Sub-accounts -->
+		if len(accounts) > 0 {
+			<div class="border-t border-white-300 dark:border-navy-600 px-4 py-2 flex flex-col gap-1">
+				for _, acc := range accounts {
+					@accountRow(mod, row, acc)
+				}
+			</div>
+		}
 	</div>
 }
 
-// kebabMenu is a near-zero-JS dropdown built on <details>/<summary>.
-// The shared name="connector-kebab" makes browsers auto-close any
-// other open kebab when one opens (exclusive accordion). The inline
-// blur handler closes the menu when focus leaves the row entirely,
-// so clicking elsewhere on the page also collapses it.
+// accountRow renders one connected account as a simple row with a link to
+// the dedicated account ops page.
+templ accountRow(mod connector.Module, row entity.Connector, acc entity.ConnectorAccount) {
+	<div class="relative flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-white-200 dark:hover:bg-navy-800">
+		<a
+			href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/accounts/" + acc.ID) }
+			class="flex items-center gap-2 min-w-0 flex-1"
+		>
+			<svg class="h-3.5 w-3.5 flex-shrink-0 text-black-600 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+			<span class="truncate text-xs font-medium text-black-900 dark:text-white-100 hover:text-green-600">{ "@" + acc.DisplayName }</span>
+		</a>
+		<form method="POST" action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/accounts/" + acc.ID + "/disconnect") }>
+			<button type="submit" class="text-[11px] text-neg-400 hover:underline">Disconnect</button>
+		</form>
+	</div>
+}
+
 templ kebabMenu(mod connector.Module, row entity.Connector) {
 	<details
 		name="connector-kebab"

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
@@ -21,13 +22,16 @@ import (
 // connectorRoutes wires the /manager/connectors/* surface. Called from
 // Handler.Register so all manager routes live under one mux registration.
 func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware) {
+	// One-shot boot migration: copy legacy shared OAuth App credentials into
+	// per-instance rows for any connector that has not yet been configured.
+	go h.migrateOAuthAppToInstances(context.Background())
+
 	auth := func(next http.HandlerFunc) http.Handler {
 		return authMidd.RequireAuth(next)
 	}
 
 	mux.Handle("GET /manager/connectors", auth(h.connectorsIndexPage))
 	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
-	mux.Handle("POST /manager/connectors/{key}/oauth-app", auth(h.saveConnectorOAuthApp))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
 	mux.Handle("GET /manager/connectors/{key}/{id}", auth(h.connectorDetailPage))
 	mux.Handle("POST /manager/connectors/{key}/{id}/label", auth(h.setConnectorLabel))
@@ -36,6 +40,12 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/rate-limit", auth(h.setConnectorRateLimit))
 	mux.Handle("POST /manager/connectors/{key}/{id}/duplicate", auth(h.duplicateConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
+	mux.Handle("POST /manager/connectors/{key}/{id}/access-policy", auth(h.setConnectorAccessPolicy))
+	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(h.accountOpsPage))
+	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.disconnectAccount))
+	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.setAccountDisabledOps))
+	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops/{opKey}", auth(h.toggleAccountOp))
+	mux.Handle("POST /manager/connectors/{key}/{id}/operations/bulk", auth(h.bulkToggleOperations))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}", auth(h.toggleConnectorOperation))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.toggleOperationAdminOnly))
 	mux.Handle("POST /manager/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
@@ -65,21 +75,33 @@ func (h *Handler) connectorListPage(w http.ResponseWriter, r *http.Request) {
 
 	tagsByRow := h.resolveRowTags(ctx, rows)
 
-	var oauthCfg view.ConnectorOAuthAppConfig
-	if mod.OAuth != nil && user != nil && user.IsAdmin() {
-		oauthCfg.Enabled = true
-		oauthCfg.DisplayName = mod.OAuth.DisplayName
-		oauthCfg.ClientID = h.configs.GetOwned("connector_oauth:"+key, "client_id")
-		secret := h.configs.GetOwned("connector_oauth:"+key, "client_secret")
-		if secret != "" {
-			oauthCfg.ClientSecret = "••••••••"
-		}
-		if oauthCfg.ClientID != "" {
-			oauthCfg.OAuthURL = "/manager/connectors/" + key + "/oauth/start"
+	// Load connected accounts per row for the sub-account list.
+	accountsByRow := make(map[string][]entity.ConnectorAccount, len(rows))
+	for _, row := range rows {
+		accs, err := h.connectors.ListAccounts(ctx, row.ID)
+		if err == nil {
+			accountsByRow[row.ID] = accs
 		}
 	}
 
-	view.ConnectorListPage(mod, rows, tagsByRow, user, oauthCfg).Render(ctx, w)
+	// Compute oauthURL per row for the Connect button on the list page.
+	oauthURLByRow := make(map[string]string, len(rows))
+	if mod.OAuth != nil {
+		for _, row := range rows {
+			if !row.EnableSSO {
+				continue
+			}
+			cfgs := h.connectors.LoadConfigs(row)
+			if strings.TrimSpace(cfgs["client_id"]) != "" {
+				oauthURLByRow[row.ID] = "/manager/connectors/" + key + "/oauth/start?connector_id=" + row.ID
+			}
+		}
+	}
+
+	oauthSuccess := r.URL.Query().Get("oauth") == "success"
+	oauthUser := r.URL.Query().Get("user")
+
+	view.ConnectorListPage(mod, rows, tagsByRow, accountsByRow, oauthURLByRow, oauthSuccess, oauthUser, user).Render(ctx, w)
 }
 
 // ── Index page ───────────────────────────────────────────────────────
@@ -207,37 +229,6 @@ func hasDefaultTag(list []tool.DefaultTag, name string) bool {
 	return false
 }
 
-// saveConnectorOAuthApp persists the OAuth app credentials (client_id /
-// client_secret) for a connector module at the connector_oauth owner level.
-// Admin only — non-admins receive 403.
-func (h *Handler) saveConnectorOAuthApp(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	if user == nil || !user.IsAdmin() {
-		http.Error(w, "admin only", http.StatusForbidden)
-		return
-	}
-	key := r.PathValue("key")
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	clientID := strings.TrimSpace(r.FormValue("client_id"))
-	clientSecret := strings.TrimSpace(r.FormValue("client_secret"))
-
-	if err := h.configs.SetOwned(ctx, "connector_oauth:"+key, "client_id", clientID); err != nil {
-		http.Error(w, "save client_id: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// client_secret: empty value means "leave unchanged" (handled inside setOwned
-	// for IsSecret rows), so no special case needed here.
-	if err := h.configs.SetOwned(ctx, "connector_oauth:"+key, "client_secret", clientSecret); err != nil {
-		http.Error(w, "save client_secret: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	http.Redirect(w, r, "/manager/connectors/"+key, http.StatusSeeOther)
-}
-
 // resolveRowTags returns a map from connector row ID to the tag names
 // linked to it. Used by the list view to render access chips.
 func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) map[string][]string {
@@ -315,18 +306,8 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
-	// Compute oauthURL for connectors supporting OAuth: non-empty when
-	// Module.OAuth is set and client_id is configured, enabling the
-	// "Connect" button on the detail page.
-	oauthURL := ""
-	if mod.OAuth != nil {
-		clientID := h.configs.GetOwned("connector_oauth:"+key, "client_id")
-		if clientID != "" {
-			oauthURL = "/manager/connectors/" + key + "/oauth/start?connector_id=" + id
-		}
-	}
-
-	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, oauthURL).Render(ctx, w)
+	isAdmin := user != nil && user.IsAdmin()
+	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, isAdmin).Render(ctx, w)
 }
 
 // connectorTestPage renders the standalone Postman-style test surface
@@ -375,7 +356,8 @@ func (h *Handler) connectorTestPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	view.ConnectorTestPage(mod, row, activeOp, prefill, user).Render(ctx, w)
+	accounts, _ := h.connectors.ListAccounts(ctx, row.ID)
+	view.ConnectorTestPage(mod, row, activeOp, prefill, accounts, user).Render(ctx, w)
 }
 
 // connectorHistoryPage renders the standalone runs audit surface with
@@ -475,6 +457,12 @@ func (h *Handler) createConnectorRow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Assign ownership tag to the creating user (non-admin creates only).
+	if h.tags != nil && user != nil && !user.IsAdmin() {
+		if err := h.tags.CreateOwnerTag(ctx, row.ID, user.ID); err != nil {
+			log.Warn().Err(err).Str("row_id", row.ID).Msg("manager: create owner tag failed")
+		}
+	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
 
@@ -487,6 +475,10 @@ func (h *Handler) setConnectorLabel(w http.ResponseWriter, r *http.Request) {
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "not allowed", http.StatusForbidden)
 		return
 	}
 	label := strings.TrimSpace(r.FormValue("label"))
@@ -512,6 +504,10 @@ func (h *Handler) setConnectorConfig(w http.ResponseWriter, r *http.Request) {
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "not allowed", http.StatusForbidden)
 		return
 	}
 	stored := h.connectors.LoadConfigs(*row)
@@ -552,11 +548,179 @@ func (h *Handler) setConnectorRateLimit(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "not allowed", http.StatusForbidden)
+		return
+	}
 	rpm, _ := strconv.Atoi(r.FormValue("rpm"))
 	if rpm < 0 {
 		rpm = 0
 	}
 	if err := h.connectors.SetRateLimit(ctx, row.ID, rpm); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
+
+func (h *Handler) accountOpsPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+	accountID := r.PathValue("accountID")
+
+	mod, ok := h.connectors.Module(key)
+	if !ok {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	acc, err := h.connectors.GetAccount(ctx, accountID)
+	if err != nil || acc.ConnectorID != row.ID {
+		ui.RenderNotFound(w, r, user, http.StatusNotFound)
+		return
+	}
+	disabled := connectors.AccountDisabledOps(acc)
+	opStates := make(map[string]connectors.OpState, len(mod.Operations))
+	for _, op := range mod.Operations {
+		opStates[op.Key] = connectors.OpState{Enabled: !disabled[op.Key]}
+	}
+	view.ConnectorAccountOpsPage(mod, row, acc, opStates, user).Render(ctx, w)
+}
+
+func (h *Handler) toggleAccountOp(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+	accountID := r.PathValue("accountID")
+	opKey := r.PathValue("opKey")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	acc, err := h.connectors.GetAccount(ctx, accountID)
+	if err != nil || acc.ConnectorID != row.ID {
+		http.Error(w, "account not found", http.StatusNotFound)
+		return
+	}
+
+	// Parse current disabled ops, toggle the target op.
+	disabled := connectors.AccountDisabledOps(acc)
+	if disabled == nil {
+		disabled = map[string]bool{}
+	}
+	enabled := boolParam(r, "enabled")
+	if enabled {
+		delete(disabled, opKey)
+	} else {
+		disabled[opKey] = true
+	}
+	keys := make([]string, 0, len(disabled))
+	for k := range disabled {
+		keys = append(keys, k)
+	}
+	if err := h.connectors.SetAccountDisabledOps(ctx, accountID, keys); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+id+"/accounts/"+accountID, http.StatusSeeOther)
+}
+
+func (h *Handler) setAccountDisabledOps(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+	accountID := r.PathValue("accountID")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	acc, err := h.connectors.GetAccount(ctx, accountID)
+	if err != nil || acc.ConnectorID != row.ID {
+		http.Error(w, "account not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) && (user == nil || acc.WickUserID != user.ID) {
+		http.Error(w, "not allowed", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	// Collect checked op keys from form (checkbox name="ops", value=opKey).
+	ops := r.Form["ops"]
+	if ops == nil {
+		ops = []string{}
+	}
+	if err := h.connectors.SetAccountDisabledOps(ctx, accountID, ops); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key, http.StatusSeeOther)
+}
+
+func (h *Handler) disconnectAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+	accountID := r.PathValue("accountID")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	acc, err := h.connectors.GetAccount(ctx, accountID)
+	if err != nil || acc.ConnectorID != row.ID {
+		http.Error(w, "account not found", http.StatusNotFound)
+		return
+	}
+	// Only admin or owner can disconnect.
+	if !h.canConfigureRow(user, row) && (user == nil || acc.WickUserID != user.ID) {
+		http.Error(w, "not allowed", http.StatusForbidden)
+		return
+	}
+	if err := h.connectors.DeleteAccount(ctx, accountID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key, http.StatusSeeOther)
+}
+
+func (h *Handler) setConnectorAccessPolicy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// Only admins can change the access policy.
+	if user == nil || !user.IsAdmin() {
+		http.Error(w, "admin only", http.StatusForbidden)
+		return
+	}
+	allowConfigure := boolParam(r, "allow_others_configure")
+	allowSSO := boolParam(r, "allow_others_connect_sso")
+	enableSSO := boolParam(r, "enable_sso")
+	multiAccount := boolParam(r, "multi_account")
+	if err := h.connectors.SetAccessPolicy(ctx, row.ID, allowConfigure, allowSSO, enableSSO, multiAccount); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -579,6 +743,12 @@ func (h *Handler) duplicateConnector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// User who duplicates becomes owner of the new row.
+	if h.tags != nil && user != nil && !user.IsAdmin() {
+		if err := h.tags.CreateOwnerTag(ctx, dup.ID, user.ID); err != nil {
+			log.Warn().Err(err).Str("row_id", dup.ID).Msg("manager: create owner tag on duplicate failed")
+		}
+	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+dup.ID, http.StatusFound)
 }
 
@@ -597,10 +767,42 @@ func (h *Handler) deleteConnector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Clean up owner tag + all its UserTag/ToolTag associations.
+	if h.tags != nil {
+		if err := h.tags.DeleteOwnerTag(ctx, row.ID); err != nil {
+			log.Warn().Err(err).Str("row_id", row.ID).Msg("manager: delete owner tag failed")
+		}
+	}
 	http.Redirect(w, r, "/manager/connectors/"+key, http.StatusFound)
 }
 
 // ── Operation toggles ────────────────────────────────────────────────
+
+func (h *Handler) bulkToggleOperations(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	mod, ok := h.connectors.Module(key)
+	if !ok {
+		http.Error(w, "unknown connector", http.StatusNotFound)
+		return
+	}
+	enabled := boolParam(r, "enabled")
+	for _, op := range mod.Operations {
+		if err := h.connectors.SetOperationEnabled(ctx, row.ID, op.Key, enabled); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
 
 func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -618,6 +820,11 @@ func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Reques
 	if err := h.connectors.SetOperationEnabled(ctx, row.ID, opKey, enabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	// Admin explicitly enabling an op clears any system_disabled flag —
+	// treating it as an intentional override of the health-check warning.
+	if enabled {
+		_ = h.connectors.ClearSystemDisabled(ctx, row.ID, opKey)
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
@@ -706,6 +913,7 @@ func (h *Handler) testConnectorOperation(w http.ResponseWriter, r *http.Request)
 	var body struct {
 		Operation string            `json:"operation"`
 		Input     map[string]string `json:"input"`
+		AccountID string            `json:"account_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
@@ -723,6 +931,7 @@ func (h *Handler) testConnectorOperation(w http.ResponseWriter, r *http.Request)
 		UserID:       userID(user),
 		IPAddress:    clientIP(r),
 		UserAgent:    r.UserAgent(),
+		AccountID:    body.AccountID,
 	})
 
 	out := map[string]any{
@@ -745,6 +954,44 @@ func (h *Handler) testConnectorOperation(w http.ResponseWriter, r *http.Request)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// canConfigureRow reports whether the user may edit credentials/settings on
+// the given connector row.
+// Allow order: admin → owner tag → AllowOthersConfigure.
+func (h *Handler) canConfigureRow(user *entity.User, row *entity.Connector) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAdmin() {
+		return true
+	}
+	if h.tags != nil {
+		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
+		if owns {
+			return true
+		}
+	}
+	return row.AllowOthersConfigure
+}
+
+// canConnectSSO reports whether the user may initiate an OAuth connect on the
+// given connector row.
+// Allow order: admin → owner tag → AllowOthersConnectSSO.
+func (h *Handler) canConnectSSO(user *entity.User, row *entity.Connector) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAdmin() {
+		return true
+	}
+	if h.tags != nil {
+		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
+		if owns {
+			return true
+		}
+	}
+	return row.AllowOthersConnectSSO
+}
 
 func (h *Handler) visibleRowsForKey(r *http.Request, user *entity.User, key string) ([]entity.Connector, error) {
 	ctx := r.Context()

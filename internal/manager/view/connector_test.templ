@@ -9,7 +9,7 @@ import (
 // connector row. The operation dropdown is URL-synced (?op=) so that
 // switching ops never costs a page back-and-forth, and links from the
 // detail page can preselect a specific op.
-templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp string, prefill map[string]string, user *entity.User) {
+templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp string, prefill map[string]string, accounts []entity.ConnectorAccount, user *entity.User) {
 	@Layout("Test · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -62,6 +62,20 @@ templ ConnectorTestPage(mod connector.Module, row *entity.Connector, activeOp st
 								}
 							</select>
 						</div>
+						if len(accounts) > 0 {
+							<div class="sm:w-48">
+								<label class="block text-xs font-medium text-black-800 dark:text-black-600">Run as</label>
+								<select
+									data-test-account
+									class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"
+								>
+									<option value="">Default credentials</option>
+									for _, acc := range accounts {
+										<option value={ acc.ID }>{ "@" + acc.DisplayName }</option>
+									}
+								</select>
+							</div>
+						}
 						<button type="button" data-test-run class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">
 							Run
 						</button>

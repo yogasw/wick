@@ -186,8 +186,9 @@ type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 // resolve who the token belongs to.
 //
 // Set Module.OAuth to a non-nil pointer to opt in. The manager UI will
-// render an "OAuth App" section on the connector list page and a "Connect"
-// button on user-token rows automatically.
+// render a "Connect" button on each instance row automatically. Client ID
+// and Client Secret are configured per-instance (in the row's Configs),
+// not at the connector level.
 type OAuthMeta struct {
 	// AuthorizeURL is the OAuth consent redirect URL
 	// (e.g. https://slack.com/oauth/v2/authorize).

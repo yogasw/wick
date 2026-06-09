@@ -245,17 +245,100 @@ func (r *Repo) SetRateLimit(ctx context.Context, id string, rpm int) error {
 		}).Error
 }
 
-// Delete hard-deletes a connector row plus its operation toggles. Run
-// history is intentionally preserved — deleting a connector should not
-// retroactively erase the audit trail. The retention job purges old
-// runs on its own cadence.
+// SetAccessPolicy updates the access policy fields for a connector instance.
+func (r *Repo) SetAccessPolicy(ctx context.Context, id string, allowConfigure, allowSSO, enableSSO, multiAccount bool) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"allow_others_configure":   allowConfigure,
+			"allow_others_connect_sso": allowSSO,
+			"enable_sso":               enableSSO,
+			"multi_account":            multiAccount,
+			"updated_at":               time.Now(),
+		}).Error
+}
+
+// Delete hard-deletes a connector row plus its operation toggles and
+// connected accounts. Run history is intentionally preserved.
 func (r *Repo) Delete(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorOperation{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("connector_id = ?", id).Delete(&entity.ConnectorAccount{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", id).Delete(&entity.Connector{}).Error
 	})
+}
+
+// ── ConnectorAccount ─────────────────────────────────────────────────
+
+// ListAccounts returns all connected accounts for a connector instance.
+func (r *Repo) ListAccounts(ctx context.Context, connectorID string) ([]entity.ConnectorAccount, error) {
+	var rows []entity.ConnectorAccount
+	err := r.db.WithContext(ctx).
+		Where("connector_id = ?", connectorID).
+		Order("created_at asc").
+		Find(&rows).Error
+	return rows, err
+}
+
+// UpsertAccount saves a connected account.
+//
+//   - MultiAccount=false: replace any existing account for this connector (1 slot).
+//   - MultiAccount=true: update existing account if same wick_user_id exists,
+//     otherwise insert new (prevents duplicate rows for the same user).
+func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, multiAccount bool) error {
+	if !multiAccount {
+		// Single-account: replace whatever is there.
+		return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("connector_id = ?", acc.ConnectorID).Delete(&entity.ConnectorAccount{}).Error; err != nil {
+				return err
+			}
+			return tx.Create(acc).Error
+		})
+	}
+	// Multi-account: upsert by (connector_id, wick_user_id) to avoid duplicates.
+	if acc.WickUserID != "" {
+		var existing entity.ConnectorAccount
+		err := r.db.WithContext(ctx).
+			Where("connector_id = ? AND wick_user_id = ?", acc.ConnectorID, acc.WickUserID).
+			First(&existing).Error
+		if err == nil {
+			// Update token + display name on existing row.
+			return r.db.WithContext(ctx).Model(&existing).Updates(map[string]any{
+				"access_token": acc.AccessToken,
+				"display_name": acc.DisplayName,
+				"updated_at":   acc.UpdatedAt,
+			}).Error
+		}
+	}
+	return r.db.WithContext(ctx).Create(acc).Error
+}
+
+// DeleteAccount removes one connected account by ID.
+func (r *Repo) DeleteAccount(ctx context.Context, accountID string) error {
+	return r.db.WithContext(ctx).Where("id = ?", accountID).Delete(&entity.ConnectorAccount{}).Error
+}
+
+// SetAccountDisabledOps persists the JSON-encoded disabled ops list for an account.
+func (r *Repo) SetAccountDisabledOps(ctx context.Context, accountID, disabledOpsJSON string) error {
+	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
+		Where("id = ?", accountID).
+		Updates(map[string]any{
+			"disabled_ops": disabledOpsJSON,
+			"updated_at":   time.Now(),
+		}).Error
+}
+
+// GetAccountByID returns one ConnectorAccount or gorm.ErrRecordNotFound.
+func (r *Repo) GetAccountByID(ctx context.Context, accountID string) (*entity.ConnectorAccount, error) {
+	var acc entity.ConnectorAccount
+	err := r.db.WithContext(ctx).Where("id = ?", accountID).First(&acc).Error
+	if err != nil {
+		return nil, err
+	}
+	return &acc, nil
 }
 
 // ── ConnectorOperation toggles ──────────────────────────────────────

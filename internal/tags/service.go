@@ -111,6 +111,58 @@ func (s *Service) SyncSystemTagsForAllAdmins(ctx context.Context) error {
 	return s.repo.SyncSystemTagsForAllAdmins(ctx)
 }
 
+// CreateOwnerTag creates a tag named "owner:{connectorID}" (IsFilter=true),
+// links it to the connector row path, and links it to the given userID.
+// Idempotent — if the tag already exists the existing tag is reused.
+// Call this whenever a new connector instance row is created by a user.
+func (s *Service) CreateOwnerTag(ctx context.Context, connectorID, userID string) error {
+	name := "owner:" + connectorID
+	toolPath := "/connectors/" + connectorID
+
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		// Not found — create it.
+		t = &entity.Tag{
+			Name:     name,
+			IsFilter: true,
+		}
+		if err := s.repo.CreateTag(ctx, t); err != nil {
+			return err
+		}
+	}
+	// Link tag → connector row (so the row is visible to whoever carries the tag).
+	if err := s.repo.LinkToolTag(ctx, toolPath, t.ID); err != nil {
+		return err
+	}
+	// Link tag → user (owner carries the tag).
+	if userID == "" {
+		return nil
+	}
+	return s.repo.LinkUserTag(ctx, userID, t.ID)
+}
+
+// DeleteOwnerTag removes the "owner:{connectorID}" tag and all its
+// ToolTag + UserTag associations. Call this when a connector instance is deleted.
+func (s *Service) DeleteOwnerTag(ctx context.Context, connectorID string) error {
+	name := "owner:" + connectorID
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		return nil // tag doesn't exist — nothing to clean up
+	}
+	return s.repo.DeleteTag(ctx, t.ID)
+}
+
+// UserOwnsConnector reports whether the user carries the owner tag for the
+// given connector instance. Used by canConfigureRow / canConnectSSO.
+func (s *Service) UserOwnsConnector(ctx context.Context, userID, connectorID string) (bool, error) {
+	name := "owner:" + connectorID
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		return false, nil // no owner tag = not owned
+	}
+	return s.repo.UserCarriesTag(ctx, userID, t.ID)
+}
+
 // ToolTagIDs returns a map from tool_path to the list of tag ids it has.
 func (s *Service) ToolTagIDs(ctx context.Context, toolPaths []string) (map[string][]string, error) {
 	out := make(map[string][]string)

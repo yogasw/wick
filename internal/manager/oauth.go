@@ -8,15 +8,18 @@
 // Caller:   Handler.connectorRoutes() (public, not behind auth middleware)
 // Dependencies: connector.OAuthMeta, configs.Service, connectors.Service
 // Main Functions:
-//   - oauthRoutes()      — registers start + callback routes (public)
-//   - oauthStart()       — builds state, redirects to provider consent page
-//   - oauthCallback()    — validates state, exchanges code, saves token
-//   - oauthSaveToken()   — persists xoxp/access token to connector row
+//   - oauthRoutes()                   — registers start + callback routes (public)
+//   - oauthStart()                    — builds state, redirects to provider consent page
+//   - oauthCallback()                 — validates state, exchanges code, saves token
+//   - oauthSaveToken()                — persists xoxp/access token to connector row
+//   - migrateOAuthAppToInstances()    — one-shot boot migration: copies shared
+//                                       connector_oauth:{key} credentials into every
+//                                       instance row that has not yet been configured.
 //
 // Storage:
-//   - OAuth App credentials: configs owner "connector_oauth:{key}"
-//     keys: "client_id", "client_secret"
-//   - Pending states:       Handler.oauthPending (sync.Map, 10-min TTL)
+//   - Per-instance OAuth credentials: connector row configs (client_id, client_secret)
+//   - Legacy shared credentials:      configs owner "connector_oauth:{key}" (migrated away)
+//   - Pending states:                 Handler.oauthPending (sync.Map, 10-min TTL)
 //
 // Side Effects: writes access token to connector row via connectors.Service.
 package manager
@@ -33,6 +36,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/login"
+
 	"github.com/rs/zerolog/log"
 	slackgo "github.com/slack-go/slack"
 	"github.com/yogasw/wick/pkg/connector"
@@ -44,6 +49,7 @@ type oauthStateEntry struct {
 	key            string    // connector key (e.g. "slack")
 	expiresAt      time.Time
 	connectorRowID string // non-empty = update this specific row
+	wickUserID     string // wick user who initiated the flow (for owner tag)
 }
 
 // oauthRoutes registers the public (no-auth) OAuth 2.0 routes for all connectors.
@@ -59,8 +65,8 @@ func (h *Handler) oauthRoutes(mux *http.ServeMux) {
 }
 
 // oauthStart redirects the browser to the connector provider's OAuth consent page.
-// A cryptographically-signed state token is generated, stored with a 10-minute
-// TTL, and sent to the provider so the callback can verify the round-trip.
+// client_id is read from the connector row's per-instance configs (field "client_id").
+// connector_id query param is required — the row must already exist.
 func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
@@ -70,13 +76,35 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := h.configs.GetOwned("connector_oauth:"+key, "client_id")
-	if clientID == "" {
-		http.Error(w, "OAuth not configured — set Client ID in Manager → Connectors → "+mod.OAuth.DisplayName, http.StatusServiceUnavailable)
+	connectorRowID := r.URL.Query().Get("connector_id")
+	if connectorRowID == "" {
+		http.Error(w, "connector_id is required", http.StatusBadRequest)
 		return
 	}
 
-	connectorRowID := r.URL.Query().Get("connector_id")
+	row, err := h.connectors.Get(r.Context(), connectorRowID)
+	if err != nil || row.Key != key {
+		http.Error(w, "connector row not found", http.StatusNotFound)
+		return
+	}
+
+	// Gate: instance must have EnableSSO=true.
+	if !row.EnableSSO {
+		http.Error(w, "SSO not enabled on this instance", http.StatusForbidden)
+		return
+	}
+	// Gate: only admin or rows with AllowOthersConnectSSO=true.
+	if !h.canConnectSSO(login.GetUser(r.Context()), row) {
+		http.Error(w, "SSO connect not allowed on this instance", http.StatusForbidden)
+		return
+	}
+
+	cfgs := h.connectors.LoadConfigs(*row)
+	clientID := strings.TrimSpace(cfgs["client_id"])
+	if clientID == "" {
+		http.Error(w, "OAuth not configured — set Client ID in the connector's Credentials section first", http.StatusServiceUnavailable)
+		return
+	}
 
 	state, err := h.generateOAuthState(key)
 	if err != nil {
@@ -85,10 +113,16 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	caller := login.GetUser(r.Context())
+	var callerWickID string
+	if caller != nil {
+		callerWickID = caller.ID
+	}
 	h.oauthPending.Store(state, oauthStateEntry{
 		key:            key,
 		expiresAt:      time.Now().Add(10 * time.Minute),
 		connectorRowID: connectorRowID,
+		wickUserID:     callerWickID,
 	})
 
 	redirectURI := h.oauthRedirectURI(r, key)
@@ -108,7 +142,8 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 //  1. Validates the state token against the pending map.
 //  2. Exchanges the authorization code for an access token via oauth.v2.access (Slack).
 //  3. Calls GetUserIdentity to resolve the user's display name.
-//  4. Persists the token to the connector row.
+//  4. Persists the token: MultiAccount=true creates a new row; false updates the
+//     existing row identified by connectorRowID in the state entry.
 //  5. Shows a success page (or error page on failure).
 func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
@@ -153,8 +188,15 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := h.configs.GetOwned("connector_oauth:"+key, "client_id")
-	clientSecret := h.configs.GetOwned("connector_oauth:"+key, "client_secret")
+	// Read client credentials from the originating row.
+	row, err := h.connectors.Get(r.Context(), entry.connectorRowID)
+	if err != nil {
+		http.Error(w, "connector row not found", http.StatusNotFound)
+		return
+	}
+	cfgs := h.connectors.LoadConfigs(*row)
+	clientID := strings.TrimSpace(cfgs["client_id"])
+	clientSecret := strings.TrimSpace(cfgs["client_secret"])
 	if clientID == "" || clientSecret == "" {
 		http.Error(w, "OAuth not configured", http.StatusServiceUnavailable)
 		return
@@ -174,45 +216,32 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	userID, displayName, err := mod.OAuth.GetUserIdentity(r.Context(), accessToken)
 	if err != nil {
 		log.Warn().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed; using token user ID as display name")
-		// Use the slack user ID from token exchange as fallback
 		userID = slackUserID
 		displayName = slackUserID
 	}
 
 	// Persist token to connector row.
-	if saveErr := h.oauthSaveToken(r.Context(), key, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth); saveErr != nil {
+	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth, row.MultiAccount)
+	if saveErr != nil {
 		log.Error().Err(saveErr).Str("connector", key).Str("user_id", userID).Msg("manager oauth: oauthSaveToken failed")
 		http.Error(w, "failed to save token: "+saveErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	log.Info().Str("connector", key).Str("user_id", userID).Str("display_name", displayName).
-		Str("connector_row_id", entry.connectorRowID).
+		Str("connector_row_id", savedRowID).
 		Msg("manager oauth: user token saved successfully")
 
-	// Redirect to connector detail page or show success page.
-	if entry.connectorRowID != "" {
-		http.Redirect(w, r,
-			"/manager/connectors/"+key+"/"+entry.connectorRowID+"?oauth=success&user="+url.QueryEscape(displayName),
-			http.StatusSeeOther)
-		return
+	// Assign owner tag when a new row was created (MultiAccount flow).
+	if h.tags != nil && row.MultiAccount && entry.wickUserID != "" {
+		if err := h.tags.CreateOwnerTag(r.Context(), savedRowID, entry.wickUserID); err != nil {
+			log.Warn().Err(err).Str("row_id", savedRowID).Msg("manager oauth: create owner tag failed")
+		}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>%s Connected</title></head>
-<body style="font-family:sans-serif;max-width:480px;margin:60px auto;text-align:center">
-  <h2>&#x2713; %s connected</h2>
-  <p>Your account (<strong>@%s</strong>) has been connected to wick.</p>
-  <p><a href="/manager/connectors/%s">Back to %s connectors</a></p>
-</body>
-</html>`,
-		mod.OAuth.DisplayName,
-		mod.OAuth.DisplayName,
-		strings.ReplaceAll(displayName, "<", "&lt;"),
-		key,
-		mod.OAuth.DisplayName,
-	)
+
+	http.Redirect(w, r,
+		"/manager/connectors/"+key+"?oauth=success&user="+url.QueryEscape(displayName),
+		http.StatusSeeOther)
 }
 
 // exchangeSlackCode exchanges a Slack authorization code for an xoxp user token
@@ -228,68 +257,64 @@ func (h *Handler) exchangeSlackCode(ctx context.Context, clientID, clientSecret,
 	return resp.AuthedUser.AccessToken, resp.AuthedUser.ID, nil
 }
 
-// oauthSaveToken persists an access token to the correct connector row.
-// When connectorRowID is non-empty, updates that row directly.
-// Otherwise scans for an existing user_token row for the same user, updates it,
-// or creates a new row if none found.
-func (h *Handler) oauthSaveToken(ctx context.Context, key, userID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta) error {
-	rows, err := h.connectors.ListByKey(ctx, key)
-	if err != nil {
-		return fmt.Errorf("oauth save: list connectors for key %q: %w", key, err)
+// oauthSaveToken persists an access token as a ConnectorAccount under the
+// originating connector row. MultiAccount behaviour is handled by the repo
+// upsert: false = replace existing account, true = add new account.
+func (h *Handler) oauthSaveToken(ctx context.Context, key, userID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta, multiAccount bool) (savedRowID string, err error) {
+	if connectorRowID == "" {
+		return "", fmt.Errorf("oauth save: connector_id is required")
 	}
+	if err := h.connectors.SaveAccount(ctx, connectorRowID, userID, displayName, accessToken); err != nil {
+		return "", fmt.Errorf("oauth save: %w", err)
+	}
+	log.Info().Str("connector", key).Str("user_id", userID).Str("connector_id", connectorRowID).
+		Str("display_name", displayName).Msg("manager oauth: account saved")
+	return connectorRowID, nil
+}
 
-	// Fast path: connector_id known — update that row directly.
-	if connectorRowID != "" {
+// migrateOAuthAppToInstances copies the legacy shared OAuth App credentials
+// stored under owner="connector_oauth:{key}" into every instance row of that
+// connector that does not yet have client_id configured. Called once at boot
+// from connectorRoutes so admins do not need to re-enter credentials.
+//
+// The migration is idempotent: rows that already have a client_id are skipped.
+// After all rows are migrated the legacy keys are left in place but are no
+// longer read by the active code path.
+func (h *Handler) migrateOAuthAppToInstances(ctx context.Context) {
+	mods := h.connectors.Modules()
+	for _, mod := range mods {
+		if mod.OAuth == nil {
+			continue
+		}
+		key := mod.Meta.Key
+		legacyClientID := h.configs.GetOwned("connector_oauth:"+key, "client_id")
+		legacySecret := h.configs.GetOwned("connector_oauth:"+key, "client_secret")
+		if legacyClientID == "" {
+			continue
+		}
+		rows, err := h.connectors.ListByKey(ctx, key)
+		if err != nil {
+			log.Warn().Err(err).Str("connector", key).Msg("oauth migrate: list rows failed")
+			continue
+		}
 		for _, row := range rows {
-			if row.ID == connectorRowID {
-				if err := h.connectors.Update(ctx, row.ID, row.Label, map[string]string{
-					"auth_mode":  "user_token",
-					"user_token": accessToken,
-				}, row.Disabled); err != nil {
-					return fmt.Errorf("oauth save: update row %s: %w", row.ID, err)
-				}
-				log.Info().Str("connector", key).Str("user_id", userID).Str("connector_id", row.ID).
-					Msg("manager oauth: updated connector row (from detail page button)")
-				return nil
+			cfgs := h.connectors.LoadConfigs(row)
+			if strings.TrimSpace(cfgs["client_id"]) != "" {
+				continue // already configured
 			}
-		}
-	}
-
-	// Slow path: scan for existing user_token row for this user.
-	for _, row := range rows {
-		cfgs := h.connectors.LoadConfigs(row)
-		if strings.TrimSpace(cfgs["auth_mode"]) != "user_token" {
-			continue
-		}
-		// Use GetUserIdentity to check if the existing token belongs to the same user.
-		existingToken := strings.TrimSpace(cfgs["user_token"])
-		if existingToken == "" {
-			continue
-		}
-		if meta.GetUserIdentity != nil {
-			existingUID, _, identErr := meta.GetUserIdentity(ctx, existingToken)
-			if identErr == nil && existingUID == userID {
-				if err := h.connectors.Update(ctx, row.ID, row.Label, map[string]string{"user_token": accessToken}, row.Disabled); err != nil {
-					return fmt.Errorf("oauth save: update row %s: %w", row.ID, err)
-				}
-				log.Info().Str("connector", key).Str("user_id", userID).Str("connector_id", row.ID).
-					Msg("manager oauth: updated existing connector row")
-				return nil
+			updates := map[string]string{"client_id": legacyClientID}
+			if legacySecret != "" {
+				updates["client_secret"] = legacySecret
 			}
+			if err := h.connectors.Update(ctx, row.ID, row.Label, updates, row.Disabled); err != nil {
+				log.Warn().Err(err).Str("connector", key).Str("row_id", row.ID).
+					Msg("oauth migrate: update row failed")
+				continue
+			}
+			log.Info().Str("connector", key).Str("row_id", row.ID).
+				Msg("oauth migrate: copied legacy OAuth App credentials to instance row")
 		}
 	}
-
-	// No existing row — create new.
-	newRow, err := h.connectors.Create(ctx, key, meta.DisplayName+" – @"+displayName, map[string]string{
-		"auth_mode":  "user_token",
-		"user_token": accessToken,
-	}, "oauth")
-	if err != nil {
-		return fmt.Errorf("oauth save: create connector row: %w", err)
-	}
-	log.Info().Str("connector", key).Str("user_id", userID).Str("connector_id", newRow.ID).
-		Msg("manager oauth: created new connector row")
-	return nil
 }
 
 // generateOAuthState generates a cryptographically-signed state token of the
@@ -324,4 +349,3 @@ func (h *Handler) oauthRedirectURI(r *http.Request, key string) string {
 	}
 	return base + "/manager/connectors/" + key + "/oauth/callback"
 }
-

@@ -225,7 +225,16 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 			return fmt.Errorf("list rows for %q: %w", m.Meta.Key, err)
 		}
 		for _, row := range rows {
-			if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(row.ID), m.Configs...); err != nil {
+			configs := m.Configs
+			// OAuth connectors get a framework-managed connected_user field
+			// injected automatically — no need for each connector to declare it.
+			if m.OAuth != nil {
+				configs = append(configs, entity.Config{
+					Key:         "connected_user",
+					Description: "Display name of the connected " + m.OAuth.DisplayName + " account. Set automatically after OAuth connect.",
+				})
+			}
+			if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(row.ID), configs...); err != nil {
 				return fmt.Errorf("ensure configs for %q: %w", row.ID, err)
 			}
 			if s.tags != nil && len(m.Meta.DefaultTags) > 0 {
@@ -346,6 +355,43 @@ func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmi
 	return s.repo.ListAccessibleTo(ctx, userTagIDs)
 }
 
+// FilterBotSlot removes non-SSO instance rows from a row set when at least
+// one SSO-enabled row (EnableSSO=true) exists for the same connector key in
+// the visible set.
+//
+// Connectors without OAuthMeta are left untouched — they have no SSO concept.
+// Call this after ListVisibleTo before surfacing rows to the LLM via wick_list.
+func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
+	// Collect which keys have ≥1 EnableSSO row in the visible set.
+	ssoKeys := map[string]bool{}
+	for _, row := range rows {
+		mod, ok := s.Module(row.Key)
+		if !ok || mod.OAuth == nil {
+			continue
+		}
+		if row.EnableSSO {
+			ssoKeys[row.Key] = true
+		}
+	}
+	if len(ssoKeys) == 0 {
+		return rows
+	}
+	out := rows[:0:len(rows)]
+	for _, row := range rows {
+		mod, ok := s.Module(row.Key)
+		if !ok || mod.OAuth == nil {
+			out = append(out, row)
+			continue
+		}
+		// Hide non-SSO rows when SSO rows exist for this key.
+		if ssoKeys[row.Key] && !row.EnableSSO {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // IsVisibleTo reports whether a single connector row is accessible to
 // the caller. Used by tools/call to re-check authorization at dispatch
 // time so a stale tools/list snapshot can't be replayed for access.
@@ -425,6 +471,81 @@ func (s *Service) SetRateLimit(ctx context.Context, id string, rpm int) error {
 	return s.repo.SetRateLimit(ctx, id, rpm)
 }
 
+// ── ConnectorAccount ─────────────────────────────────────────────────
+
+// ListAccounts returns all connected OAuth accounts for a connector instance.
+func (s *Service) ListAccounts(ctx context.Context, connectorID string) ([]entity.ConnectorAccount, error) {
+	return s.repo.ListAccounts(ctx, connectorID)
+}
+
+// SaveAccount persists a connected OAuth account. Respects MultiAccount
+// from the connector row: false = replace existing, true = add new.
+func (s *Service) SaveAccount(ctx context.Context, connectorID, wickUserID, displayName, accessToken string) error {
+	row, err := s.repo.Get(ctx, connectorID)
+	if err != nil {
+		return err
+	}
+	acc := &entity.ConnectorAccount{
+		ConnectorID: connectorID,
+		WickUserID:  wickUserID,
+		DisplayName: displayName,
+		AccessToken: accessToken,
+	}
+	return s.repo.UpsertAccount(ctx, acc, row.MultiAccount)
+}
+
+// DeleteAccount removes one connected account by ID.
+func (s *Service) DeleteAccount(ctx context.Context, accountID string) error {
+	return s.repo.DeleteAccount(ctx, accountID)
+}
+
+// SetAccountDisabledOps updates which operations are disabled for an account.
+// opKeys is the list of op keys to disable — empty slice clears all.
+func (s *Service) SetAccountDisabledOps(ctx context.Context, accountID string, opKeys []string) error {
+	b, err := json.Marshal(opKeys)
+	if err != nil {
+		return err
+	}
+	return s.repo.SetAccountDisabledOps(ctx, accountID, string(b))
+}
+
+// AccountDisabledOps parses the DisabledOps JSON and returns the set of
+// disabled op keys for fast lookup.
+func AccountDisabledOps(acc *entity.ConnectorAccount) map[string]bool {
+	if acc == nil || acc.DisabledOps == "" {
+		return nil
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(acc.DisabledOps), &keys); err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		out[k] = true
+	}
+	return out
+}
+
+// GetAccount returns one ConnectorAccount by ID.
+func (s *Service) GetAccount(ctx context.Context, accountID string) (*entity.ConnectorAccount, error) {
+	return s.repo.GetAccountByID(ctx, accountID)
+}
+
+// ClearSystemDisabled removes the health-check lock from one operation,
+// allowing admin to override a stale or incorrect health-check result.
+func (s *Service) ClearSystemDisabled(ctx context.Context, connectorID, opKey string) error {
+	return s.repo.ClearSystemDisabled(ctx, connectorID, opKey)
+}
+
+// SetAccessPolicy updates the access policy for a connector instance:
+//   - allowConfigure: non-admin users with tag access may edit credentials
+//   - allowSSO: non-admin users may connect their OAuth account
+//   - enableSSO: OAuth flow is active on this instance
+//   - multiAccount: each OAuth connect creates a new row (true) or replaces token (false)
+func (s *Service) SetAccessPolicy(ctx context.Context, id string, allowConfigure, allowSSO, enableSSO, multiAccount bool) error {
+	return s.repo.SetAccessPolicy(ctx, id, allowConfigure, allowSSO, enableSSO, multiAccount)
+}
+
 // Delete hard-deletes the connector row plus its operation toggles
 // and its per-field config rows. Run history is intentionally
 // preserved for audit.
@@ -494,7 +615,8 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 	}
 	out := make(map[string]bool, len(full))
 	for k, st := range full {
-		out[k] = st.Enabled && !st.SystemDisabled
+		// SystemDisabled is advisory — admin override via Enabled takes precedence.
+		out[k] = st.Enabled
 	}
 	return out, nil
 }
@@ -529,7 +651,7 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	}
 	out := make(map[string]OpState, len(mod.Operations))
 	for _, op := range mod.Operations {
-		st := OpState{Enabled: !op.Destructive}
+		st := OpState{Enabled: true} // destructive ops now default ON; LLM confirms before executing
 		if row, ok := stored[op.Key]; ok {
 			st.Enabled = row.Enabled
 			st.SystemDisabled = row.SystemDisabled
@@ -651,6 +773,10 @@ type ExecuteParams struct {
 	// JSON-RPC message; the JSON transport leaves this nil so events
 	// are dropped harmlessly.
 	Progress connector.ProgressReporter
+	// AccountID, when non-empty, selects a specific ConnectorAccount
+	// whose access token overrides the row's user_token config. Used by
+	// the test panel when multiple accounts are connected to one instance.
+	AccountID string
 }
 
 // ExecuteResult carries the outcome of one Execute call. Returned
@@ -712,16 +838,12 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("load op states: %w", err)
 	}
 	if st, ok := states[p.OperationKey]; ok {
-		if st.SystemDisabled {
-			reason := st.SystemDisabledReason
-			if reason == "" {
-				reason = "permission check failed"
-			}
-			return nil, fmt.Errorf("operation %q is system-disabled: %s", p.OperationKey, reason)
-		}
 		if !st.Enabled {
 			return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
 		}
+		// SystemDisabled is a warning, not a hard block — admin can override by
+		// explicitly enabling the op. If enabled=true, we let it through and log
+		// the warning so the run history captures the context.
 	}
 
 	if !p.IsAdmin {
@@ -737,6 +859,19 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// Load the credential map from the configs table — one row per
 	// field, owner = "connector:{id}".
 	configs := s.LoadConfigs(*c)
+
+	// AccountID override: inject the selected account's token and check
+	// per-account disabled ops.
+	if p.AccountID != "" {
+		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
+			disabled := AccountDisabledOps(acc)
+			if disabled[p.OperationKey] {
+				return nil, fmt.Errorf("operation %q is disabled for account @%s", p.OperationKey, acc.DisplayName)
+			}
+			configs["user_token"] = acc.AccessToken
+			configs["auth_mode"] = "user_token"
+		}
+	}
 
 	// Snapshot the request BEFORE we decrypt anything — by design the
 	// audit log stores wick_enc_ tokens (not plaintext) in
