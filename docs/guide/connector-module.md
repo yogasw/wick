@@ -158,9 +158,9 @@ func Operations() []connector.Operation {
 | Constructor | When to use |
 |-------------|-------------|
 | `connector.Op(...)` | Read-only or idempotent writes that can be safely retried |
-| `connector.OpDestructive(...)` | Actions you do not want the LLM to fire by mistake — DELETE, send-message, post-comment, force-push |
+| `connector.OpDestructive(...)` | Actions that mutate state in a hard-to-undo way — DELETE, send-message, post-comment, force-push |
 
-A destructive op is **disabled by default** on every new row. Admins opt in per (row, operation) at `/manager/connectors/{key}/{id}`.
+Destructive ops are **enabled by default** on every new row. The MCP layer appends a `⚠ DESTRUCTIVE: Always confirm with the user before executing this operation.` warning to the op description in every `wick_list` / `wick_search` / `wick_get` response, so the LLM (and user) is aware before calling. Admins can still disable individual ops per row at `/manager/connectors/{key}/{id}`.
 
 ### Description discipline
 
@@ -289,10 +289,10 @@ Behavior:
 | OpHealth field | Effect on the row |
 |---|---|
 | `OK = true` | Clears `system_disabled` if previously set; admin's manual Enable/Disable preserved |
-| `OK = false` | Sets `system_disabled = true` with `Reason` shown next to the op (e.g. *"needs scope: chat:write"*); admin cannot enable until permission is granted upstream and a re-check passes |
+| `OK = false` | Sets `system_disabled = true` with `Reason` shown next to the op (e.g. *"needs scope: chat:write"*). The flag is **advisory** — if the admin has explicitly set `Enabled=true`, the call still proceeds and the warning is recorded in run history. |
 | Op omitted from report | Untouched — neither locked nor cleared |
 
-Returning an error (auth invalid, network) aborts the entire reconcile — no partial flips. Effective availability is `Enabled AND NOT SystemDisabled`; both flags surface in the operations table.
+Returning an error (auth invalid, network) aborts the entire reconcile — no partial flips. `SystemDisabled` is surfaced in the operations table as a warning badge but no longer acts as a hard gate; admin `Enabled` takes precedence.
 
 ### Row-level disable (whole connector off)
 
@@ -312,16 +312,22 @@ Implementation: `Service.SetDisabled` (`internal/connectors/service.go`) writes 
 
 *`/manager/connectors/{key}/{id}` detail page — identity, action bar, label form, credentials, operations table.*
 
-`/manager/connectors/{key}/{id}` is the per-row settings page. Five sections:
+`/manager/connectors/{key}/{id}` is the per-row settings page. Six sections:
 
 1. **Identity** — label, status badge, opaque row ID.
 2. **Top actions** — History, Duplicate, Disable/Enable, Delete.
 3. **Label form** — rename without redeploying.
-4. **Credentials** — auto-rendered from your `Configs` struct via `entity.StructToConfigs`.
-5. **Operations** table — one row per operation. Each row carries:
+4. **Credentials** — auto-rendered from your `Configs` struct via `entity.StructToConfigs`. For OAuth connectors, also shows the Connect Account button and any connected accounts.
+5. **Access Policy** — four flags controlling who can configure or connect OAuth accounts:
+   - `Enable SSO` — turns on the OAuth Connect Account flow for this instance.
+   - `Multi-account` — each user connect creates a new account entry (vs replacing the single token).
+   - `Allow others to configure` — non-admin users with tag access may edit credentials.
+   - `Allow others to connect SSO` — non-admin users with tag access may initiate the OAuth flow.
+6. **Operations** table — searchable, paginated list. Each row carries:
    - `[Test]` link → opens the test panel (`/test?op=<key>`)
    - `[History]` link → opens the audit log filtered to that op
-   - `Enable / Disable` toggle — admins explicitly opt in to destructive ops here.
+   - `Enable / Disable` toggle — toggle individual ops. Destructive ops ship enabled; disable here if you want to restrict them.
+   - `SystemDisabled` badge (advisory) — shown when the health check flagged a missing permission, but the op can still be called if `Enabled=true`.
 
 ### Test panel (Postman-style)
 

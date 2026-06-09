@@ -4,6 +4,32 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased] — Per-instance OAuth accounts & MCP multi-identity
+
+### Added
+- **Per-instance OAuth app credentials**: `ClientID` and `ClientSecret` moved from a shared server-wide setting to each connector instance's `Configs`. Every instance now carries its own OAuth app registration, so different instances can use different OAuth apps.
+- **`ConnectorAccount` table**: connected OAuth accounts are stored as sub-records of a connector instance, not as duplicate rows. Each account stores `DisplayName`, `AccessToken`, and a `DisabledOps` JSON list of per-account op overrides.
+- **Access policy flags on connector instances**: four new boolean fields control per-instance sharing:
+  - `EnableSSO` — activates the "Connect Account" OAuth flow on this instance.
+  - `MultiAccount` — when true, each user connect adds a new account entry; when false, reconnect replaces the existing token.
+  - `AllowOthersConfigure` — non-admin users with tag access may edit credentials and settings.
+  - `AllowOthersConnectSSO` — non-admin users with tag access may initiate the OAuth flow.
+- **Owner tag**: every connector instance records an `owner:{rowID}` tag so the creating user retains access even when filter tags change.
+- **Access Policy section** in the connector detail UI — surface for the four flags above.
+- **Operations section redesign** — paginated op list with search, checkbox multi-select, and bulk enable/disable. Shared `OpsSection` component is reused across the detail page and per-account op views.
+- **Per-account operation disable list** — each `ConnectorAccount` can carry a JSON list of op keys to disable. `wick_execute` with an account-scoped `tool_id` rejects those ops before reaching `ExecuteFunc`.
+- **MCP `wick_list` — `kind` and `parent_id` fields**: every entry now includes `kind` (`"connector"` for a standard instance, `"account"` for a connected OAuth account) and `parent_id` (the connector row ID when `kind="account"`).
+- **MCP `wick_get` — composite id**: accepts a `connectorID/accountID` composite id returned by `wick_list` account entries; tool IDs are scoped with an `@accountID` suffix when a specific account is targeted.
+- **MCP `wick_execute` — account token injection**: `AccountID` is extracted from the composite `tool_id`; the selected account's `AccessToken` is injected as `user_token` / `auth_mode=user_token` before `ExecuteFunc` runs. Per-account disabled ops are enforced before execution.
+- **Destructive op warning in MCP responses**: ops marked `OpDestructive` now append `⚠ DESTRUCTIVE: Always confirm with the user before executing this operation.` to their description in `wick_list`, `wick_search`, and `wick_get` results.
+- **Slack connector**: `BotToken` and `UserToken` are now always visible in the admin form (removed `visible_when` conditional display). `ClientID` and `ClientSecret` are new per-instance fields for OAuth app setup used by the Connect Account button.
+
+### Changed
+- **Destructive ops default ON**: `connector.OpDestructive` ops now default to `Enabled=true` on every new row (previously defaulted `false`). The LLM is responsible for confirming destructive intent with the user; the system-level default-off gate is removed.
+- **`SystemDisabled` is advisory-only**: a health-check lock (`system_disabled=true`) no longer hard-blocks execution. If the admin has explicitly set `Enabled=true`, the call proceeds; the advisory is recorded in run history. Previously `SystemDisabled` was an irresistible gate.
+
+---
+
 ## [Unreleased]
 
 ### Added
