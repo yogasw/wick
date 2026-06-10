@@ -272,7 +272,11 @@ jobs:
             echo "::warning::Gemini output missing HEADLINE sentinel — proceeding with empty headline."
           fi
 
-          echo "title=$VERSION" >> $GITHUB_OUTPUT
+          if [ -n "$HEADLINE" ]; then
+            echo "title=${VERSION} — ${HEADLINE}" >> $GITHUB_OUTPUT
+          else
+            echo "title=${VERSION}" >> $GITHUB_OUTPUT
+          fi
           echo "headline=$HEADLINE" >> $GITHUB_OUTPUT
           echo "summary<<EOF_SUMMARY" >> $GITHUB_OUTPUT
           echo "$SUMMARY" >> $GITHUB_OUTPUT
