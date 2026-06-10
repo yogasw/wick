@@ -167,7 +167,7 @@
           <span class="chip chip-muted">git +</span>
           <span class="chip chip-muted">slack +</span>
         </div>
-        <p class="helper">Sub-agent only sees tools/connectors that pass these tags (least-privilege per role).</p>
+        <p class="helper">Optional. Leave empty = sub-agent inherits the triggering user's tags. Pick a subset to narrow this role (least-privilege). Never grants more than the user has.</p>
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Default max turns</label><input class="input" value="12"><p class="helper">Wick-enforced (Done-count + Kill), provider-agnostic.</p></div>

@@ -145,7 +145,7 @@ AgentProfile (role reusable)
 ├─ Provider     — "claude" | "codex" | "gemini"
 ├─ Model        — provider-specific model id
 ├─ SystemPrompt — role instruction
-├─ AllowedTagIDs — tools/connectors yang boleh dipakai sub-agent (via tag)
+├─ AllowedTagIDs — OPSIONAL penyempit (subset tag user). Kosong=warisi tag user pemicu (§10.1)
 ├─ DefaultMaxTurns — budget turn default tiap delegasi ke role ini
 ├─ DefaultMode      — "sync" | "async"  (Fase 2; researcher→async, coder→sync)
 ├─ DefaultWorkspace — "shared" | "worktree" (Fase 3; coder→worktree)
@@ -220,7 +220,7 @@ agent_profiles (
   provider          text not null,               -- "claude" | "codex" | "gemini"
   model             text,                        -- provider model id; null = provider default
   system_prompt     text not null,               -- role instruction
-  allowed_tag_ids   jsonb not null default '[]', -- tag IDs → tools/connectors sub-agent boleh pakai
+  allowed_tag_ids   jsonb not null default '[]', -- OPSIONAL penyempit. []=warisi penuh tag user pemicu; isi=persempit ke subset (∩ tag user). Tak pernah menambah akses (§10.1)
   default_max_turns int  not null default 12,    -- budget turn default per delegasi
   default_mode      text not null default 'sync',     -- 'sync' | 'async' (Fase 2)
   default_workspace text not null default 'shared',   -- 'shared' | 'worktree' (Fase 3)
@@ -650,9 +650,10 @@ Pola **sama persis** dengan connector (`internal/connectors/service.go`
   AKSES TOOLS sub-agent; visibilitas profil ke leader pakai tag filter terpisah
   (auto-create `agent:<profile_key>` filter tag saat save, sama pola
   custom-connector §9). Default admin-only sampai admin assign tag ke user/group.
-- **Sub-agent tools** = sub-agent hanya lihat tools/connectors yang lolos
-  `allowed_tag_ids` profil — jadi role "researcher" bisa dibatasi cuma ke web/loki,
-  "reviewer" cuma ke git/repo, dst. Ini sekaligus **least-privilege** per role.
+- **Sub-agent tools** = default **warisi tag user pemicu**; `allowed_tag_ids`
+  profil **opsional mempersempit** (mis. role "researcher" dibatasi web/loki saja
+  walau user punya lebih). Least-privilege per role, tanpa pernah melampaui user
+  (detail rumus di §10.1).
 - **Monitor** = non-admin lihat delegasi yang `triggered_by` = dirinya / dalam
   scope tag; admin lihat semua.
 
@@ -661,10 +662,15 @@ Pola **sama persis** dengan connector (`internal/connectors/service.go`
 Dua aturan ini menentukan apakah `allowed_tag_ids` benar-benar menggigit atau
 cuma kosmetik:
 
-1. **Sub-agent ≤ user pemicu.** Tag efektif sub-agent =
-   `profile.allowed_tag_ids` **di-INTERSECT** dengan tag user yang memicu root
-   (bukan union). Sub-agent **tidak boleh** punya akses lebih besar dari manusia
-   yang memulai percakapan. Cegah eskalasi via role ber-tag luas.
+1. **Akses melekat ke user; profil hanya menyempit (per klarifikasi dev).** Tag
+   tool **fundamentalnya milik user** (user carry tag → itu izinnya). Maka:
+   - **Default:** sub-agent **mewarisi tag user pemicu root** → otomatis bekerja
+     dalam batas izin manusia yang memulai percakapan. Ini plafon keamanannya.
+   - `profile.allowed_tag_ids` = **penyempit OPSIONAL** (subset), **bukan grant
+     terpisah**. **Kosong = warisi penuh tag user**; diisi = persempit role ke
+     least-privilege. Rumus: `efektif = user_tags ∩ (allowed_tag_ids ? : user_tags)`.
+   - Profil **tidak pernah bisa menambah** akses di luar tag user → tak ada
+     eskalasi via role ber-tag luas.
 
 2. **Identitas MCP ber-scope, BUKAN `MCPToken` admin.** ⚠️ Ganjalan penting:
    agent yang di-spawn wick **sekarang** autentikasi ke loopback MCP pakai
