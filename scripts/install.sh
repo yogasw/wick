@@ -26,7 +26,33 @@ esac
 
 # curl_auth wraps curl with an Authorization header when TOKEN is set.
 # Using a function avoids word-splitting pitfalls with inline $AUTH strings.
-curl_auth() { curl ${TOKEN:+--location-trusted -H "Authorization: Bearer $TOKEN"} "$@"; }
+# curl_auth: adds Bearer token when TOKEN is set.
+curl_auth() { curl ${TOKEN:+-H "Authorization: Bearer $TOKEN"} "$@"; }
+
+# gh_download: download a GitHub release asset by filename.
+# For private repos, resolves the asset ID via API then downloads with
+# Accept: application/octet-stream — the only reliable method for private assets.
+# For public repos (no TOKEN), falls back to direct browser_download_url.
+gh_download() {
+  asset_name="$1"; dest="$2"
+  if [ -n "$TOKEN" ]; then
+    release_json=$(curl_auth -fsSL "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+    # Extract asset id for the matching name — grep the block after the name match
+    asset_id=$(printf '%s' "$release_json" \
+      | grep -A5 '"name": *"'"$asset_name"'"' \
+      | grep '"id":' | head -1 \
+      | tr -cd '0-9')
+    if [ -n "$asset_id" ]; then
+      curl_auth -fL --progress-bar \
+        -H "Accept: application/octet-stream" \
+        "https://api.github.com/repos/$REPO/releases/assets/$asset_id" \
+        -o "$dest"
+      return $?
+    fi
+  fi
+  # public repo or asset_id not found — direct URL
+  curl_auth -fL --progress-bar "$BASE/$asset_name" -o "$dest"
+}
 
 # Privileged writes run plain — if the user lacks perms on the target
 # dir (e.g. /usr/local/bin) the curl/mv/chmod call surfaces a clear
@@ -140,7 +166,7 @@ install_gate() {
   dest_dir="$1"
   gate_url="$BASE/${APP}-gate-linux-${ARCH}"
   echo "→ gate: $gate_url"
-  if curl_auth -fL --progress-bar "$gate_url" -o "$dest_dir/$APP-gate"; then
+  if gh_download "${APP}-gate-linux-${ARCH}" "$dest_dir/$APP-gate"; then
     chmod +x "$dest_dir/$APP-gate"
     echo "✓ $APP-gate installed at $dest_dir/$APP-gate"
   else
@@ -232,7 +258,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     URL="$BASE/${APP}-linux-${ARCH}"
     echo "→ termux: $URL"
     stop_running "$PREFIX/bin/$APP"
-    curl_auth -fL --progress-bar "$URL" -o "$PREFIX/bin/$APP"
+    gh_download "${APP}-linux-${ARCH}" "$PREFIX/bin/$APP"
     chmod +x "$PREFIX/bin/$APP"
     echo "✓ $APP installed at $PREFIX/bin/$APP"
   fi
@@ -298,7 +324,7 @@ case "$OS" in
       URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
       TMP=$(mktemp -d)
       echo "→ macOS: $URL"
-      curl_auth -fL --progress-bar "$URL" -o "$TMP/$APP.dmg"
+      gh_download "${APP}-${VER}-darwin-${ARCH}.dmg" "$TMP/$APP.dmg"
       hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
       MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
       cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
@@ -319,7 +345,7 @@ case "$OS" in
         URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
         TMP=$(mktemp)
         echo "→ linux: $URL"
-        curl_auth -fL --progress-bar "$URL" -o "$TMP"
+        gh_download "${APP}-${VER}-linux-${ARCH}.deb" "$TMP"
         dpkg -i "$TMP"
         rm -f "$TMP"
         echo "✓ $APP installed"
@@ -331,7 +357,7 @@ case "$OS" in
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
         stop_running "/usr/local/bin/$APP"
-        curl_auth -fL --progress-bar "$URL" -o /usr/local/bin/$APP
+        gh_download "${APP}-linux-${ARCH}" "/usr/local/bin/$APP"
         chmod +x /usr/local/bin/$APP
         echo "✓ $APP installed"
       fi
@@ -343,7 +369,7 @@ case "$OS" in
         # install.sh with root privileges (or via `sudo sh`).
         gate_url="$BASE/${APP}-gate-linux-${ARCH}"
         echo "→ gate: $gate_url"
-        if curl_auth -fL --progress-bar "$gate_url" -o /usr/local/bin/$APP-gate; then
+        if gh_download "${APP}-gate-linux-${ARCH}" "/usr/local/bin/$APP-gate"; then
           chmod +x /usr/local/bin/$APP-gate
           echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
         else
