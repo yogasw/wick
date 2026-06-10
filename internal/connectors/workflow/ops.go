@@ -922,3 +922,38 @@ func (h *handlers) execNode(c *connector.Ctx) (any, error) {
 	}
 	return h.ops.ExecNode(ctxFrom(c), c.Input("id"), body)
 }
+
+// ── Env ────────────────────────────────────────────────────────────────
+
+func (h *handlers) envGet(c *connector.Ctx) (any, error) {
+	return h.ops.EnvGet(c.Input("id"))
+}
+
+func (h *handlers) envSet(c *connector.Ctx) (any, error) {
+	var values map[string]string
+	if err := parseJSON(c.Input("values"), &values); err != nil {
+		return nil, fmt.Errorf("values: %w", err)
+	}
+	if err := h.ops.EnvSet(c.Input("id"), values); err != nil {
+		return nil, err
+	}
+	return ok("env values updated"), nil
+}
+
+func (h *handlers) envDelete(c *connector.Ctx) (any, error) {
+	raw := c.Input("keys")
+	var keys []string
+	for _, k := range strings.Split(raw, ",") {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("keys: at least one key required")
+	}
+	if err := h.ops.EnvDelete(c.Input("id"), keys); err != nil {
+		return nil, err
+	}
+	return ok(fmt.Sprintf("deleted %d key(s)", len(keys))), nil
+}

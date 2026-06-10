@@ -235,6 +235,17 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 				// ── Input structs ──────────────────────────────────────────────────────
 			}),
 
+		// ── Env (workflow_env_*) ─────────────────────────────────────
+		connector.Op("workflow_env_get", "Get Workflow Env",
+			"Return the env schema (declared fields) and current stored values for a workflow. Secret values are masked as ••••••••. Use before workflow_env_set to see what keys exist and which are declared secrets.",
+			idInput{}, h.envGet, wickdocs.Docs{}),
+		connector.Op("workflow_env_set", "Set Workflow Env Values",
+			"Merge one or more key/value pairs into the workflow's env values. Existing keys not included in values are preserved. For secret fields, pass a wick_enc_ token — plaintext secrets must be encrypted via wick_encrypt first.",
+			envSetInput{}, h.envSet, wickdocs.Docs{}),
+		connector.OpDestructive("workflow_env_delete", "Delete Workflow Env Keys",
+			"Remove one or more env keys from the stored values. Keys not present are silently ignored. Returns {ok}.",
+			envDeleteInput{}, h.envDelete, wickdocs.Docs{}),
+
 		// ── Lock / Guard / Versions / Execute step ───────────────────
 		connector.Op("workflow_lock", "Toggle Canvas Lock",
 			"Freeze or unfreeze the canvas. Locked workflows still run — the engine ignores the flag — but every edit endpoint (save / publish / patch nodes / set triggers) rejects writes with 423 Locked. Use to protect production workflows from accidental edits.",
@@ -519,6 +530,16 @@ type diffVersionsInput struct {
 	ID   string `wick:"required;desc=Workflow ID."`
 	From int    `wick:"required;number;desc=Older snapshot ID."`
 	To   int    `wick:"required;number;desc=Newer snapshot ID."`
+}
+
+type envSetInput struct {
+	ID     string `wick:"required;desc=Workflow ID."`
+	Values string `wick:"textarea;required;desc=Key/value pairs as JSON object: {\"SLACK_CHANNEL\":\"#support\",\"TIMEOUT\":\"30\"}. For secret fields pass a wick_enc_ token — encrypt plaintext first via wick_encrypt."`
+}
+
+type envDeleteInput struct {
+	ID   string `wick:"required;desc=Workflow ID."`
+	Keys string `wick:"required;desc=Comma-separated list of env keys to remove, e.g. SLACK_CHANNEL,OLD_TOKEN."`
 }
 
 type execNodeInput struct {
