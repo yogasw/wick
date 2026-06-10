@@ -11,7 +11,7 @@ import (
 
 const (
 	// wickManagerKey is the connector definition slug whose ops surface as
-	// top-level MCP tools (see internal/docs/plan_wickmanager.md).
+	// top-level MCP tools (see internal/planning/archive/plan_wickmanager.md).
 	wickManagerKey = "wickmanager"
 	// WickManagerPrefix marks a tools/call name that targets a wickmanager op.
 	WickManagerPrefix = "wick_manager_"

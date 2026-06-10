@@ -225,6 +225,9 @@ export async function loadWorkflow(id: string) {
   // First subscriber call fires immediately with the just-set value;
   // skip that and only react to genuine post-load edits.
   autosaveArmed = false;
+  // Validate on load so canvas badges appear immediately without
+  // requiring the user to save first.
+  workflowAPI.validate(id).then((r) => validationReport.set(decorateReport(r))).catch(() => {});
 }
 
 // Auto-save plumbing — mirrors v1 editor.js's 800 ms post-edit

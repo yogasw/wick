@@ -22,6 +22,25 @@ export default withMermaid(defineConfig({
   markdown: {
     config(md) {
       md.use(copyOrDownloadAsMarkdownButtons)
+
+      // Inline code may legitimately contain `{{...}}` (Go template syntax in
+      // our docs + the auto-generated changelog). Vue/VitePress otherwise
+      // parses those braces as a template interpolation and the build dies with
+      // "Error parsing JavaScript expression". Wrap every inline-code span in
+      // v-pre so Vue treats its contents verbatim. Applies to ALL pages, so
+      // any future page (or a Gemini-generated changelog entry) is safe by
+      // default — no per-file escaping needed.
+      const defaultCodeInline =
+        md.renderer.rules.code_inline ||
+        ((tokens, idx, options, _env, self) =>
+          `<code${self.renderAttrs(tokens[idx])}>${md.utils.escapeHtml(
+            tokens[idx].content,
+          )}</code>`)
+      md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
+        const rendered = defaultCodeInline(tokens, idx, options, env, self)
+        if (!tokens[idx].content.includes('{{')) return rendered
+        return rendered.replace(/^<code/, '<code v-pre')
+      }
     },
   },
 
@@ -77,6 +96,7 @@ export default withMermaid(defineConfig({
           { text: 'GitHub', link: '/connectors/github' },
           { text: 'Bitbucket', link: '/connectors/bitbucket' },
           { text: 'Slack', link: '/connectors/slack' },
+          { text: 'Phoenix', link: '/connectors/phoenix' },
           { text: 'Wick Manager', link: '/connectors/wickmanager' },
           { text: 'Workflow', link: '/connectors/workflow' },
           { text: 'Notifications', link: '/connectors/notifications' },

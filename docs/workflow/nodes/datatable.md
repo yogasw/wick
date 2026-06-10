@@ -19,7 +19,7 @@ Data tables are wick's shared key/value store. One data table = one named rowset
 | | |
 |---|---|
 | **Source** | [`internal/agents/workflow/nodes/datatable.go`](https://github.com/yogasw/wick/blob/master/internal/agents/workflow/nodes/datatable.go) |
-| **Engine** | In-memory by default — see the [data tables design doc](https://github.com/yogasw/wick/blob/master/internal/docs/workflow/12-data-tables.md) for the Postgres-backed roadmap. |
+| **Engine** | In-memory by default — see the [data tables design doc](https://github.com/yogasw/wick/blob/master/internal/planning/archive/workflow/12-data-tables.md) for the Postgres-backed roadmap. |
 
 ## Schema (per type)
 
@@ -76,41 +76,40 @@ Data tables are wick's shared key/value store. One data table = one named rowset
 
 ## Example: idempotency by primary key
 
-```yaml
-data_tables:
-  - name: processed_events
-    ref: processed_events
-    mode: read_write
-
-graph:
-  entry: check_seen
-  nodes:
-    check_seen:
-      type: datatable_exists
-      table: processed_events
-      where:
-        event_id: '{{index .Event.Payload "id"}}'
-
-    skip:
-      type: end
-      result: already_processed
-
-    handle:
-      type: agent
-      prompt_file: nodes/handle.md
-
-    mark_done:
-      type: datatable_insert
-      table: processed_events
-      key: '{{index .Event.Payload "id"}}'
-      row_values:
-        event_id: '{{index .Event.Payload "id"}}'
-        processed_at: '{{now}}'
-
-  edges:
-    - {from: check_seen, to: skip,    case: "true"}
-    - {from: check_seen, to: handle,  case: "false"}
-    - {from: handle,    to: mark_done}
+```json
+{
+  "data_tables": [
+    {"name": "processed_events", "ref": "processed_events", "mode": "read_write"}
+  ],
+  "graph": {
+    "entry": "check_seen",
+    "nodes": [
+      {
+        "id": "check_seen",
+        "type": "datatable_exists",
+        "table": "processed_events",
+        "where": {"event_id": "{{index .Event.Payload \"id\"}}"}
+      },
+      {"id": "skip", "type": "end", "result": "already_processed"},
+      {"id": "handle", "type": "agent", "prompt_file": "nodes/handle.md"},
+      {
+        "id": "mark_done",
+        "type": "datatable_insert",
+        "table": "processed_events",
+        "key": "{{index .Event.Payload \"id\"}}",
+        "row": {
+          "event_id": "{{index .Event.Payload \"id\"}}",
+          "processed_at": "{{now}}"
+        }
+      }
+    ],
+    "edges": [
+      {"from": "check_seen", "to": "skip",      "case": "true"},
+      {"from": "check_seen", "to": "handle",    "case": "false"},
+      {"from": "handle",     "to": "mark_done"}
+    ]
+  }
+}
 ```
 
 ## Pair with

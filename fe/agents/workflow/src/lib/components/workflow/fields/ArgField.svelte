@@ -79,7 +79,7 @@
   let fixedWithTemplate = $derived(mode === "fixed" && value.includes("{{"));
 
   // ── Autocomplete ───────────────────────────────────────────────────
-  const CTX_ROOTS   = [".Event.", ".Node.", ".Env.", ".Secret.", ".Run.", ".Workflow."];
+  const CTX_ROOTS   = [".Event.", ".Node.", ".Env.", ".Run.", ".Workflow."];
   const EVENT_PATHS = [".Event.Type", ".Event.Subtype", ".Event.Channel", ".Event.At", ".Event.Payload."];
   const PAYLOAD_KEYS= ["text","user","channel_id","ts","thread","trigger_id","action_id",
                        "value","callback_id","schedule"].map(k => `.Event.Payload.${k}`);
@@ -90,6 +90,9 @@
   let acSelected     = $state(0);
   let inputEl        = $state<HTMLTextAreaElement | HTMLInputElement | null>(null);
   let dropdownStyle  = $state("");
+  // Backend-provided env/secret keys — updated from template_test response.
+  let acEnvKeys    = $state<string[]>([]);
+  let acSecretKeys = $state<string[]>([]);
 
   function detectPartial(val: string, cursor: number): string | null {
     const before  = val.slice(0, cursor);
@@ -106,6 +109,9 @@
     if (partial === ".Node.") {
       return [...new Set([...labels, "trigger"])].map(l => `.Node.${l}.`);
     }
+    if (partial === ".Env.") {
+      return acEnvKeys.length > 0 ? acEnvKeys.map(k => `.Env.${k}`) : [".Env."];
+    }
 
     // ".Node.<label>." → suggest actual output keys from run results.
     const nodeFieldMatch = partial.match(/^\.Node\.([^.]+)\.$/);
@@ -117,16 +123,18 @@
       }
     }
 
+    const envSuggs = acEnvKeys.map(k => `.Env.${k}`);
     const pool = [
       ...CTX_ROOTS,
       ...EVENT_PATHS,
       ...PAYLOAD_KEYS,
       ...[...new Set([...labels, "trigger"])].map(l => `.Node.${l}.`),
       ...Object.entries(outputs).flatMap(([l, vals]) => Object.keys(vals).map(k => `.Node.${l}.${k}`)),
+      ...envSuggs,
       ...FUNCS,
     ];
     const lo = partial.toLowerCase();
-    return pool.filter(s => s.toLowerCase().startsWith(lo)).slice(0, 12);
+    return pool.filter(s => s.toLowerCase().startsWith(lo)).slice(0, 16);
   }
 
   function positionDropdown() {
@@ -231,7 +239,11 @@
         sample_event: sampleEvent,
         context: ctx,
       }, signal);
-      if (!signal.aborted) preview = result;
+      if (!signal.aborted) {
+        preview = result;
+        if (result.env_keys) acEnvKeys = result.env_keys;
+        if (result.secret_keys) acSecretKeys = result.secret_keys;
+      }
     } catch (e: any) {
       // 429 = rate limited — silently skip, keep previous result.
       if (!signal.aborted && e?.status !== 429) {
@@ -241,6 +253,18 @@
       if (!signal.aborted) previewing = false;
     }
   }
+
+  // Seed env/secret keys as soon as workflowId is known — no need to
+  // wait for a preview request. Re-runs whenever workflowId changes.
+  $effect(() => {
+    const wid = workflowId;
+    if (!wid) return;
+    workflowAPI.envGet(wid).then((res) => {
+      // All keys (plain + secret) accessible via {{.Env.X}} — suggest them all.
+      acEnvKeys    = Object.keys(res.values ?? {});
+      acSecretKeys = []; // .Secret namespace no longer user-facing
+    }).catch(() => {});
+  });
 
   // Trigger preview on value/mode/workflowId change.
   // Early-exit (outside untrack) registers mode+workflowId as deps.
@@ -342,14 +366,14 @@
       {#each acSuggestions as sugg, i}
         <button
           type="button"
-          class="w-full text-left px-3 py-1.5 transition-colors border-b border-white-300 dark:border-navy-600/60 last:border-0 flex items-center gap-2"
+          class="w-full text-left px-3 py-1.5 transition-colors border-b border-white-300 dark:border-navy-600/60 last:border-0 flex items-center gap-2 text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700"
           class:bg-white-300={i === acSelected}
-          class:hover:bg-white-200={(i !== acSelected)}
+          class:dark:bg-navy-600={i === acSelected}
           onmousedown={(e) => { e.preventDefault(); applySuggestion(sugg); }}
         >
           {#if sugg.trim().startsWith(".")}
             <span class="text-black-700 dark:text-black-600 text-[10px]">ctx</span>
-            <span class="text-emerald-400">{sugg.trim()}</span>
+            <span class="text-green-500">{sugg.trim()}</span>
           {:else}
             <span class="text-black-700 dark:text-black-600 text-[10px]">fn</span>
             <span class="text-amber-400">{sugg.trim()}</span>

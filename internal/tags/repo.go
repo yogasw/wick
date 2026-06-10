@@ -89,6 +89,45 @@ func (r *repo) LinkToolTag(ctx context.Context, toolPath, tagID string) error {
 		FirstOrCreate(&link).Error
 }
 
+// DeleteTag hard-deletes a tag row plus all ToolTag and UserTag rows that
+// reference it. Used for owner tag cleanup when a connector instance is deleted.
+func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
+	if err := r.db.WithContext(ctx).Where("tag_id = ?", tagID).Delete(&entity.ToolTag{}).Error; err != nil {
+		return err
+	}
+	if err := r.db.WithContext(ctx).Where("tag_id = ?", tagID).Delete(&entity.UserTag{}).Error; err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Where("id = ?", tagID).Delete(&entity.Tag{}).Error
+}
+
+// LinkUserTag creates a user_tag row, ignoring duplicates.
+func (r *repo) LinkUserTag(ctx context.Context, userID, tagID string) error {
+	link := entity.UserTag{UserID: userID, TagID: tagID}
+	return r.db.WithContext(ctx).
+		Where("user_id = ? AND tag_id = ?", userID, tagID).
+		FirstOrCreate(&link).Error
+}
+
+// GetTagByNameLike returns the first tag whose name equals name, or nil when not found.
+func (r *repo) GetTagByNameExact(ctx context.Context, name string) (*entity.Tag, error) {
+	var t entity.Tag
+	err := r.db.WithContext(ctx).Where("name = ?", name).First(&t).Error
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// UserCarriesTag reports whether the user has the given tag linked via UserTag.
+func (r *repo) UserCarriesTag(ctx context.Context, userID, tagID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&entity.UserTag{}).
+		Where("user_id = ? AND tag_id = ?", userID, tagID).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // SyncSystemTagsForAllAdmins ensures every admin user carries every
 // IsSystem tag. Idempotent — duplicate (user, tag) pairs are skipped
 // via FirstOrCreate. Called from boot to backfill admins that pre-date

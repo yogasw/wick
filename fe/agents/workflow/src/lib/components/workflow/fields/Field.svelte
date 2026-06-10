@@ -17,6 +17,7 @@
   // template-aware text/textarea fields. Caller manages where
   // mode lives (typically node.arg_modes[key]).
   import ArgField from "./ArgField.svelte";
+  import Select from "$lib/components/shared/Select.svelte";
 
   type Mode = "fixed" | "expression";
   type SelectOption = string | { label: string; value: string };
@@ -76,7 +77,7 @@
   );
 
   const baseInput =
-    "rounded border bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm";
+    "rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 transition-colors";
   // Error wins the colour, then required-empty (amber), else slate.
   function borderClass(hasError: boolean): string {
     if (hasError) {
@@ -202,20 +203,12 @@
         }}
       />
     {:else if kind === "select"}
-      <select
-        class="{baseInput} w-full {borderClass(!!error)}"
-        {disabled}
+      <Select
         value={typeof value === "string" ? value : String(value ?? "")}
-        onchange={(e) => onChange((e.target as HTMLSelectElement).value)}
-      >
-        {#each options as o}
-          {#if isObjOption(o)}
-            <option value={o.value}>{o.label}</option>
-          {:else}
-            <option value={o}>{o}</option>
-          {/if}
-        {/each}
-      </select>
+        options={options}
+        {disabled}
+        onChange={(v) => onChange(v)}
+      />
     {:else if kind === "list"}
       <textarea
         class="{baseInput} w-full font-mono {borderClass(!!error)}"

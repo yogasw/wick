@@ -47,7 +47,7 @@ func (r *Repo) ImportFromFiles(svc FileLister) (int, error) {
 
 		w, err := svc.Load(id)
 		if err != nil {
-			// Could be a folder with no workflow.yaml — log + skip.
+			// Could be a folder with no valid workflow — log + skip.
 			continue
 		}
 		bodyBytes, err := parse.Marshal(w)

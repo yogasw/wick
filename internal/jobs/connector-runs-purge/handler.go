@@ -57,7 +57,7 @@ func Register(db *gorm.DB) {
 
 // defaultRetentionDays is the in-code fallback used when the Config
 // row is missing or carries a non-positive value. Matches the design
-// note in internal/docs/connectors-design.md sec. 5.3.
+// note in internal/planning/archive/connectors-design.md sec. 5.3.
 const defaultRetentionDays = 7
 
 // NewRun returns a job.RunFunc bound to the given DB handle. The

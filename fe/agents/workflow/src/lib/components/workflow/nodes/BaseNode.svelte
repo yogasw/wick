@@ -57,24 +57,26 @@
 <div
   data-node-id={id}
   data-node-type={type}
-  class="relative rounded-md overflow-hidden shadow-md
+  class="relative rounded-md shadow-md
          transition-all duration-150 ease-out cursor-pointer
          w-[220px] select-none
          bg-white-100 dark:bg-navy-700 text-black-800 dark:text-white-100
-         border {color}"
+         border-2 {color}"
   class:ring-2={selected}
   class:ring-emerald-400={selected && !errored}
   class:ring-rose-500={errored}
+  class:border-emerald-400={selected && !errored && !running}
+  class:border-rose-500={errored}
   class:border-amber-400={running}
-  class:border-white-400={!running && !errored}
-  class:dark:border-navy-500={!running && !errored}
+  class:border-white-400={!selected && !running && !errored}
+  class:dark:border-navy-500={!selected && !running && !errored}
   onclick={onselect}
   role="button"
   tabindex="0"
   onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onselect?.()}
 >
   <header
-    class="px-3 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-white-100 flex items-center gap-1.5"
+    class="px-3 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-white-100 flex items-center gap-1.5 rounded-t-md overflow-hidden"
     style:background-color={headBg ?? "#475569"}
   >
     {#if icon}<span class="text-[11px] leading-none">{icon}</span>{/if}

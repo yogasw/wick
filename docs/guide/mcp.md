@@ -34,10 +34,10 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 
 | Tool | Annotation | Purpose |
 |------|------------|---------|
-| `wick_list` | `readOnlyHint` | List every (row × op) visible to the caller — without `input_schema` |
+| `wick_list` | `readOnlyHint` | List every connector instance and connected OAuth account visible to the caller. Each entry has `id`, `connector` (label), `description`, `total_tools`, `status`, `kind`, and `parent_id`. |
 | `wick_search` | `readOnlyHint` | Substring search over label, name, description |
-| `wick_get` | `readOnlyHint` | Fetch full detail for one `tool_id`, including `input_schema` |
-| `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params` |
+| `wick_get` | `readOnlyHint` | Fetch full detail for one `id` (connector or composite `connectorID/accountID`), including `input_schema` and account-scoped `tool_id` values |
+| `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params`. Composite tool IDs (`conn:…/op@accountID`) inject the account token automatically. |
 | `wick_info` | `readOnlyHint` | Return server version and build info |
 | `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
 | `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
@@ -67,11 +67,17 @@ The `wick_manager_*` tools work over both the stdio transport and the Streamable
 
 ### Tool ID format
 
+Standard (connector-level):
 ```
 conn:{connector_id}/{op_key}
 ```
 
-UUID-based, opaque, stable across admin label renames. The `conn:` prefix is reserved for future module classes (e.g. `prompt:` for prompt templates).
+Account-scoped (personal OAuth identity):
+```
+conn:{connector_id}/{op_key}@{account_id}
+```
+
+UUID-based, opaque, stable across admin label renames. The `conn:` prefix is reserved for future module classes (e.g. `prompt:` for prompt templates). When `wick_get` is called with a composite `connectorID/accountID` id (from a `kind="account"` entry in `wick_list`), the returned `tool_id` values carry the `@accountID` suffix. Passing such a `tool_id` to `wick_execute` automatically injects that account's OAuth token and enforces its per-account disabled-op list.
 
 ### Typical LLM flow
 
@@ -113,6 +119,17 @@ Or shortcut when the LLM already knows the schema from a prior turn:
 wick_search({query: "loki query"})        → matched tool_id
 wick_execute({tool_id, params: {...}})    → result
 ```
+
+### Multi-identity: connector vs account
+
+`wick_list` returns two kinds of entries:
+
+| `kind` | `id` format | What it represents |
+|--------|-------------|-------------------|
+| `"connector"` | `{connectorID}` | The shared instance — bot token, API key, or service account |
+| `"account"` | `{connectorID}/{accountID}` | A personal OAuth account connected to that instance |
+
+When multiple users have connected personal accounts to one instance, the LLM sees one `"connector"` entry (shared identity) plus one `"account"` entry per user. Use `kind` to decide which identity to run as: `"connector"` for shared/bot credentials, `"account"` for personal identity. Pass the composite id to `wick_get` to get account-scoped `tool_id` values, then call `wick_execute` as usual — the server injects the right token automatically.
 
 ### Auth check on every call
 

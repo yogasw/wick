@@ -10,6 +10,104 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.16.0](https://github.com/yogasw/wick/compare/v0.15.8...v0.16.0)
+
+_Released on 2026-06-10_
+
+### Added
+- **VSCode-style diff editor**: The Source Control panel (`full` mode) now features an inline Monaco diff editor as the primary surface, with a file list on the left and the diff filling the remainder.
+- **Auto-select first file**: Opening the SCM panel automatically loads the first changed file into the diff editor.
+- **Unified diff by default**: Diffs now render in unified (inline) mode by default, with a toggle for side-by-side view in the diff header.
+- **Hidden unchanged regions**: Unchanged lines are collapsed with an "N hidden lines" expand bar, matching VSCode behavior (3-line context).
+- **Inline Stage / Unstage / Discard buttons**: Diff headers now include per-file Stage, Unstage, and Discard actions directly, removing the need to hover file rows.
+- **Auto-show Save button**: When editing directly in the diff editor (without needing an "Edit" button), a Save button automatically appears when content changes, applied to both full-mode inline diff and the sidebar DiffModal.
+- **Per-session active repository persistence**: The selected repository is saved to `localStorage` keyed by session ID and restored on subsequent opens.
+- **Visible whitespace diff**: Trailing newline and whitespace differences are now shown in the diff (`ignoreTrimWhitespace: false`).
+- **Wick MCP server pre-approval**: The entire Wick MCP server is now pre-approved for spawned agents using `--allowedTools mcp__wick`, eliminating the need for a static per-tool allowlist.
+- **Workflow environment variables and secrets**: A new system for managing workflow environment variables and secrets via a dedicated Settings modal. Secrets are encrypted, decrypted at runtime, accessible via `{{.Env.KEY}}`, and masked in previews and outputs.
+- **Workflow webhook trigger**: Implemented a webhook trigger with dual endpoints (`/webhook/` for published, `/webhook-test/` for draft), path-based routing, and a dedicated inspector in the UI.
+- **`webhook_respond` node and `RespondMode`**: Added a `webhook_respond` node for custom HTTP responses (status, body, headers) from workflows and introduced `Trigger.RespondMode` (immediately/last_node/respond_node) to control webhook response behavior.
+- **Phoenix connector**: A new read-only Phoenix connector for LLM span debugging, supporting listing spans by room/app and retrieving full span details.
+- **Per-instance OAuth accounts for connectors**: OAuth app credentials are now configured per-instance, enabling multiple sub-accounts for a single connector. New access policy flags (MultiAccount, EnableSSO, AllowOthersConfigure, AllowOthersConnectSSO) and an owner tag system are introduced.
+- **Admin user creation**: Admins can now create new user accounts directly from the Admin panel by entering an email, with a system-generated 5-word passphrase shown once for copy.
+
+### Fixed
+- **Repository without commits**: `git show HEAD:<path>` on a repository without any commits no longer returns a 400 error; an "invalid object name 'HEAD'" is now treated as an empty original side.
+- **4xx request logging level**: HTTP middleware now logs 4xx responses at the `warn` level instead of `error`, reducing noise for expected client errors.
+- **GORM `record not found` log noise**: GORM logger is set to `Silent`, preventing `record not found` queries from printing to stdout.
+- **Diff not updating after save**: After saving a file, the diff editor now correctly shows the updated content.
+- **Diff race condition on file select**: The Monaco diff editor is now mounted only after diff data is loaded, preventing empty-content rendering on first file selection.
+- **Mobile autofocus**: Skipped autofocus on inputs for touch devices (mobile, tablet) to prevent the on-screen keyboard from popping up unexpectedly on page load. On desktop, the "Ask anything…" composer is now preferred over the search box when both are present.
+- **Workflow publishing with deleted nodes**: Workflows with deleted scaffolded start/end nodes can now publish successfully, requiring only at least one trigger. Dangling graph entry references are now treated as warnings instead of publish-blocking errors.
+- **UI theme issues**: Various UI theme fixes for dark mode hover states, status/kind chip selection, and toolbar buttons were implemented.
+- **Multi-trigger dispatch**: Fixed a bug where only the first webhook trigger per workflow was dispatched correctly.
+- **Slack connector token visibility**: The `bot_token` and `user_token` fields in Slack connector configuration are now always visible.
+
+### Improved
+- **Internal documentation structure**: Reorganized internal design documentation into status-based folders (`archive`, `todo`, `in-progress`) and updated all references.
+- **Workflow documentation clarity**: Cleaned up internal comments and documentation, replacing `yaml` and file-based references with format-neutral descriptions to reflect DB-primary JSON storage for workflows.
+- **Workflow data storage optimization**: Removed unused `yaml:"..."` struct tags and `MarshalYAML` methods from workflow types, as workflow storage is now DB-primary JSON.
+- **Canvas experience**: Enhanced the workflow canvas with trigger validation badges, edge hover highlighting, and an "Open inspector" context menu option for nodes and triggers.
+- **Connector operations management**: The operations section in connector detail pages now includes pagination, search, multi-select, and bulk Enable/Disable actions.
+- **MCP connector/account listing**: The MCP `wick_list` command now supports filtering by `kind=connector|account` with composite IDs for account entries.
+
+---
+*This summary was automatically generated by Gemini AI*
+
+---
+
+
+## [Unreleased] — Per-instance OAuth accounts & MCP multi-identity
+
+### Added
+- **Per-instance OAuth app credentials**: `ClientID` and `ClientSecret` moved from a shared server-wide setting to each connector instance's `Configs`. Every instance now carries its own OAuth app registration, so different instances can use different OAuth apps.
+- **`ConnectorAccount` table**: connected OAuth accounts are stored as sub-records of a connector instance, not as duplicate rows. Each account stores `DisplayName`, `AccessToken`, and a `DisabledOps` JSON list of per-account op overrides.
+- **Access policy flags on connector instances**: four new boolean fields control per-instance sharing:
+  - `EnableSSO` — activates the "Connect Account" OAuth flow on this instance.
+  - `MultiAccount` — when true, each user connect adds a new account entry; when false, reconnect replaces the existing token.
+  - `AllowOthersConfigure` — non-admin users with tag access may edit credentials and settings.
+  - `AllowOthersConnectSSO` — non-admin users with tag access may initiate the OAuth flow.
+- **Owner tag**: every connector instance records an `owner:{rowID}` tag so the creating user retains access even when filter tags change.
+- **Access Policy section** in the connector detail UI — surface for the four flags above.
+- **Operations section redesign** — paginated op list with search, checkbox multi-select, and bulk enable/disable. Shared `OpsSection` component is reused across the detail page and per-account op views.
+- **Per-account operation disable list** — each `ConnectorAccount` can carry a JSON list of op keys to disable. `wick_execute` with an account-scoped `tool_id` rejects those ops before reaching `ExecuteFunc`.
+- **MCP `wick_list` — `kind` and `parent_id` fields**: every entry now includes `kind` (`"connector"` for a standard instance, `"account"` for a connected OAuth account) and `parent_id` (the connector row ID when `kind="account"`).
+- **MCP `wick_get` — composite id**: accepts a `connectorID/accountID` composite id returned by `wick_list` account entries; tool IDs are scoped with an `@accountID` suffix when a specific account is targeted.
+- **MCP `wick_execute` — account token injection**: `AccountID` is extracted from the composite `tool_id`; the selected account's `AccessToken` is injected as `user_token` / `auth_mode=user_token` before `ExecuteFunc` runs. Per-account disabled ops are enforced before execution.
+- **Destructive op warning in MCP responses**: ops marked `OpDestructive` now append `⚠ DESTRUCTIVE: Always confirm with the user before executing this operation.` to their description in `wick_list`, `wick_search`, and `wick_get` results.
+- **Slack connector**: `BotToken` and `UserToken` are now always visible in the admin form (removed `visible_when` conditional display). `ClientID` and `ClientSecret` are new per-instance fields for OAuth app setup used by the Connect Account button.
+
+### Changed
+- **Destructive ops default ON**: `connector.OpDestructive` ops now default to `Enabled=true` on every new row (previously defaulted `false`). The LLM is responsible for confirming destructive intent with the user; the system-level default-off gate is removed.
+- **`SystemDisabled` is advisory-only**: a health-check lock (`system_disabled=true`) no longer hard-blocks execution. If the admin has explicitly set `Enabled=true`, the call proceeds; the advisory is recorded in run history. Previously `SystemDisabled` was an irresistible gate.
+
+---
+
+## [Unreleased]
+
+### Added
+- **Phoenix connector** (`phoenix`): built-in read-only connector for [Arize Phoenix](https://phoenix.arize.com/) LLM observability. Three operations — `list_spans_by_room` (list LLM spans for a conversation session), `list_spans_by_app` (list root spans by `metadata['app_id']`), and `get_span` (full detail: messages, tool calls, token usage, cost). Registered under the `Observability` tag. See [Phoenix connector](/connectors/phoenix).
+- **Spawned-agent tool pre-approval widened to the whole wick MCP server**: agents now spawn with `--allowedTools mcp__wick` (server-level) instead of a static five-tool list, so `wick_manager_*` (and `wick_info`, `ask_user`, `wick_skill_*`, `wick_encrypt`/`wick_decrypt`) no longer hit the command gate's "always ask" prompt on the gated path. Not a security change — wick still enforces per-op access server-side; see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
+- **Workflow env & secrets**: per-workflow key-value environment variables, configurable via **⋮ → Settings** in the canvas editor. Values are accessible in every node template as `{{.Env.KEY}}`. Marking a var as **Secret** encrypts it at rest (`wick_cenc_` token in `workflows.env_values` DB column); the engine decrypts with a per-run cache so plaintext only lives in memory during execution.
+- **Secret masking**: secret values are automatically masked as `••••••••` in template preview (`workflow_template_test`), execute-step output, SSE events, and stored run state. The mask is applied with the existing single-pass algorithm, with overlapping-secret protection.
+- **Themed UI components**: `<Select>` dropdown and toolbar ⋮ more menu are now fully theme-aware with click-outside close. The ⋮ menu exposes the new Settings action alongside existing workflow actions.
+- **Webhook trigger — dual endpoints**: every webhook trigger now gets two distinct HTTP endpoints. `POST /webhook/{wf_id}/{slug}` targets the **published** workflow (production traffic). `POST /webhook-test/{wf_id}/{slug}` targets the **draft** workflow for testing without publishing. Both URLs are shown side-by-side in the trigger inspector with copy buttons and a tabbed Test / Live preview.
+- **Webhook trigger — slug-based path storage**: the trigger's `path` field now stores only the URL-safe slug (no leading slash, no `wf_id` prefix). The engine constructs the full request path at runtime, keeping trigger JSON portable across workflow IDs.
+- **Webhook trigger — `respond_mode`**: new field controlling when and what the HTTP endpoint returns to the caller. `immediately` (default) returns `202 Accepted` at enqueue and runs async. `last_node` blocks until the workflow finishes (≤ 30 s) and returns the last node's JSON output with `200`. `respond_node` blocks until a `webhook_respond` node fires, then returns that node's custom status, body, and headers. Both blocking modes time out with `504` after 30 seconds.
+- **`webhook_respond` node**: new node type (`type: webhook_respond`) that sends a custom HTTP response back to the webhook caller. Fields: `respond_status` (int, default 200), `respond_body` (Go template string), `respond_headers` (map, values are template-rendered). Active only when the firing trigger has `respond_mode: respond_node`; acts as a no-op pass-through in all other modes so the workflow still validates cleanly. The first node to complete in a run wins; subsequent ones are ignored.
+- **Publish-time respond_node validation**: publishing a workflow with `respond_mode: respond_node` on a webhook trigger but no reachable `webhook_respond` node from the trigger's `entry_node` now raises a Warning in the Validation panel. The publish still proceeds; at runtime the caller receives `502 Bad Gateway` if no respond node runs.
+- **Canvas validation badges on trigger cards**: trigger cards now show inline warning badges when a trigger has a configuration issue detectable at validation time (e.g. `respond_mode: respond_node` with no reachable respond node). Validation also runs on canvas load.
+- **Canvas edge hover highlight**: hovering an edge in the canvas highlights it for easier graph tracing.
+- **Canvas context menu — "Open inspector"**: right-clicking a node now includes an "Open inspector" option alongside delete, opening the inspector panel directly.
+
+### Fixed
+- **Webhook multi-trigger dispatch**: workflows with more than one webhook trigger (different slugs) now correctly dispatch each inbound call to its matching trigger and entry node. Previously, the dispatch loop keyed candidates on workflow ID alone, causing all but one trigger to be silently dropped.
+- **Webhook entry-node routing**: each webhook trigger routes to its own entry node; prior to this fix every inbound webhook always started at the first entry node regardless of which trigger matched.
+- **Publish enabled-flag preservation**: publishing a workflow no longer resets the enabled/disabled flag set before the publish action.
+- **Theme / dark-mode fixes**: executions panel, toolbar, and history tab now render correctly in all themes including dark mode.
+
+---
+
 ## [v0.15.8](https://github.com/yogasw/wick/compare/v0.15.7...v0.15.8)
 
 _Released on 2026-06-07_
@@ -1675,7 +1773,7 @@ Plus: a generic HTTP connector, a GitHub connector, per-connector rate-limiting 
 - **Provider rename** from "backend" — `session.AgentEntry.Provider`, `pool.FactoryOptions.ProviderType/Name`, `userconfig.ProvidersConfig`. Single package `internal/agents/provider/` consolidating driver + spawner + per-instance config + spawn logger.
 - **Registry split.** `RegisterBuiltins` (default-on agents tools) vs `RegisterLabSamples` (lab-only); `cmd/lab/` renamed to `cmd/wick-lab/`.
 - **Multi-turn + multi-session integration tests** via simulated spawners; 91 tests across 21 packages green at release.
-- **Design docs synced** to implementation for agent phases 1–7 (foundation, pool, gate, UI, providers, Slack, mid-session approval). Stage 9 follow-ups (env vars dropped, single shared spec/socket, installer-shipped sidecar) captured in [command-gate-architecture.md](https://github.com/yogasw/wick/blob/master/internal/docs/command-gate-architecture.md).
+- **Design docs synced** to implementation for agent phases 1–7 (foundation, pool, gate, UI, providers, Slack, mid-session approval). Stage 9 follow-ups (env vars dropped, single shared spec/socket, installer-shipped sidecar) captured in [command-gate-architecture.md](https://github.com/yogasw/wick/blob/master/internal/planning/archive/command-gate-architecture.md).
 
 ### Migration
 

@@ -78,11 +78,10 @@ func TestDiagnoseSecretLeak(t *testing.T) {
 	if d.ErrorClass != "secret_leak_guard" {
 		t.Fatalf("ErrorClass=%q", d.ErrorClass)
 	}
-	if d.SuggestedFix == nil || d.SuggestedFix.Suggested != "{{.Secret.API_TOKEN}}" {
-		t.Fatalf("SuggestedFix=%+v", d.SuggestedFix)
-	}
-	if d.SuggestedFix.Confidence != "high" {
-		t.Fatalf("confidence=%q want high", d.SuggestedFix.Confidence)
+	// Since all env vars (including secrets) are accessible via {{.Env.X}},
+	// no SuggestedFix is needed — the existing template already works.
+	if d.SuggestedFix != nil {
+		t.Fatalf("SuggestedFix should be nil (secrets accessible via .Env.X), got %+v", d.SuggestedFix)
 	}
 }
 

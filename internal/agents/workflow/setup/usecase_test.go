@@ -127,7 +127,7 @@ func TestUseCase_MultiTrigger_RouterRegistersAll(t *testing.T) {
 		Triggers: []workflow.Trigger{
 			{Type: workflow.TriggerCron, Schedule: "0 8 * * *"},
 			{Type: workflow.TriggerManual, Label: "run_now"},
-			{Type: workflow.TriggerWebhook, Path: "/hooks/uc-multi"},
+			{Type: workflow.TriggerWebhook, Path: "uc-multi"},
 		},
 		Graph: workflow.Graph{
 			Entry: "end",
@@ -155,7 +155,7 @@ func TestUseCase_MultiTrigger_RouterRegistersAll(t *testing.T) {
 		Type: string(workflow.TriggerWebhook),
 		At:   time.Now(),
 		Payload: map[string]any{
-			"path":   "/hooks/uc-multi",
+			"path":   "/uc-multi-trigger/uc-multi",
 			"method": "POST",
 		},
 	}

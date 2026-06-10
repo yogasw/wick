@@ -515,7 +515,7 @@ Outbound headers example:
 ```
 POST /v1
 X-API-Key: <decrypted>
-X-Tenant-Id: qiscus-prod
+X-Tenant-Id: prod
 Content-Type: application/json
 ```
 
@@ -925,11 +925,11 @@ custom connector identik dengan built-in.
 
 ### 12.6 Docs
 
-- `internal/docs/connectors-design.md` — section baru "Custom
+- `internal/planning/archive/connectors-design.md` — section baru "Custom
   connectors" yang point ke file ini.
-- `internal/docs/custom-connector/design.md` (file ini) — keep
+- `internal/planning/todo/custom-connector/design.md` (file ini) — keep
   authoritative.
-- `internal/docs/custom-connector/mockup.html` — paired mockup.
+- `internal/planning/todo/custom-connector/mockup.html` — paired mockup.
 - `docs/guide/custom-connectors.md` (user-facing) — how-to: paste
   cURL, register MCP, manual form. Add to vitepress sidebar.
 

@@ -119,7 +119,7 @@ type Operation struct {
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
 	// quirks, templateable fields, pair-with, common pitfalls).
 	// Zero-value Docs = current behaviour; populate per op when worth
-	// it. See pkg/wickdocs + internal/docs/workflow/24-describe-contract.md.
+	// it. See pkg/wickdocs + internal/planning/archive/workflow/24-describe-contract.md.
 	wickdocs.Docs
 }
 
@@ -186,8 +186,9 @@ type HealthCheckFunc func(c *Ctx) ([]OpHealth, error)
 // resolve who the token belongs to.
 //
 // Set Module.OAuth to a non-nil pointer to opt in. The manager UI will
-// render an "OAuth App" section on the connector list page and a "Connect"
-// button on user-token rows automatically.
+// render a "Connect" button on each instance row automatically. Client ID
+// and Client Secret are configured per-instance (in the row's Configs),
+// not at the connector level.
 type OAuthMeta struct {
 	// AuthorizeURL is the OAuth consent redirect URL
 	// (e.g. https://slack.com/oauth/v2/authorize).

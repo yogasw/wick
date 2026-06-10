@@ -19,8 +19,8 @@ Invoke a registered connector operation. Same code path as MCP `wick_execute`, w
 | `module` | string | ✅ | Connector module key (e.g. `slack`, `github`, `httprest`, `wickmanager`). |
 | `op` | string | ✅ | Operation key within the module (e.g. `send_message`, `create_issue`). |
 | `instance_id` | string | | Connector row UUID. Optional — defaults to the only enabled row when there's exactly one. |
-| `args` | YAML map (templated) | | Per-op input. Field set comes from the connector's `Input` struct — see [Connector Module ▶ Per-op Input](/guide/connector-module#per-operation-input-structs). |
-| `arg_modes` | YAML map | | Per-arg `fixed` / `expression`. Defaults to `fixed`; mark as `expression` to render the value as a Go template. |
+| `args` | map (templated) | | Per-op input. Field set comes from the connector's `Input` struct — see [Connector Module ▶ Per-op Input](/guide/connector-module#per-operation-input-structs). |
+| `arg_modes` | map | | Per-arg `fixed` / `expression`. Defaults to `fixed`; mark as `expression` to render the value as a Go template. |
 
 ## Output
 
@@ -30,23 +30,24 @@ Whatever the connector op returns — typically a typed Go struct serialised as 
 
 File a GitHub issue from a Slack thread:
 
-```yaml
-- id: file_bug
-  type: connector
-  module: github
-  op: create_issue
-  arg_modes:
-    title: expression
-    body: expression
-  args:
-    owner: abc
-    repo: web
-    title: "{{.Node.classify.parsed.summary}}"
-    body: |
-      Reported in Slack by <@{{.Node.trigger.payload.user}}>:
-
-      {{.Node.trigger.payload.text}}
-    labels: bug,from-slack
+```json
+{
+  "id": "file_bug",
+  "type": "connector",
+  "module": "github",
+  "op": "create_issue",
+  "arg_modes": {
+    "title": "expression",
+    "body": "expression"
+  },
+  "args": {
+    "owner": "abc",
+    "repo": "web",
+    "title": "{{.Node.classify.parsed.summary}}",
+    "body": "Reported in Slack by <@{{.Node.trigger.payload.user}}>:\n\n{{.Node.trigger.payload.text}}",
+    "labels": "bug,from-slack"
+  }
+}
 ```
 
 ## Tag visibility

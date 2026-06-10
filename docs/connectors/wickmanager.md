@@ -33,13 +33,24 @@ Intentionally empty (`type Configs struct{}`). Wick Manager talks to in-process 
 
 ## Access control
 
-Single source of truth for **who-can-call-what** is the "Akses control — full per-op rule" table in `internal/docs/plan_wickmanager.md`. The handlers mirror it through dedicated gate helpers in [`access.go`](https://github.com/yogasw/wick/blob/master/internal/connectors/wickmanager/access.go):
+Single source of truth for **who-can-call-what** is the "Akses control — full per-op rule" table in `internal/planning/archive/plan_wickmanager.md`. The handlers mirror it through dedicated gate helpers in [`access.go`](https://github.com/yogasw/wick/blob/master/internal/connectors/wickmanager/access.go):
 
 - `requireAdmin` — every `app_*` op + every `system_*` op.
 - `requireJobAccess` / `requireToolAccess` / `requireConnectorAccess` — `*_get`, `*_set_config`, `*_list_runs`, `*_run_now` operate per-resource. Admin sees all; non-admin sees only the resources their tags grant access to.
 - `requireTray` — every `system_*` op also gates on "wick was launched via the system tray" because those ops manipulate the local process lifecycle.
 
 Adding a new op without the matching gate helper is a security hole — the table is the contract.
+
+## Command gate & management ops
+
+Spawned agents pre-approve **every** wick MCP tool via `--allowedTools mcp__wick` (see `internal/agents/provider/claude/mcp_config.go`), so `wick_manager_*` calls do **not** trigger the [command gate](/guide/command-gate)'s "always ask" prompt for MCP tools. This is intentional: the client gate can't scope MCP tools, whereas wick enforces every op **server-side** through the `access.go` gates above. Those server-side gates — not the client allowlist — are the real security boundary: an unauthorized caller is rejected even though the tool was auto-approved client-side.
+
+If a deployment wants an extra human-in-the-loop review **at the command gate** for management ops specifically, note there is no per-tool toggle today — the pre-approval is all-or-nothing for the wick MCP server (consistent with `wick_execute`, which has always been pre-approved despite being able to mutate). The recommended control is to keep the server-side gates tight:
+
+- restrict who holds the **admin** role and the resource **tags** that `requireJobAccess` / `requireToolAccess` / `requireConnectorAccess` check;
+- run `system_*` ops only from the **tray** (`requireTray`), so a non-tray daemon can't drive process lifecycle even as admin.
+
+Selective client-gate review of individual `wick_manager_*` ops is a possible future enhancement (e.g. a setting that drops mutating ops from the pre-approval so they fall through to the gate).
 
 ## Operations
 

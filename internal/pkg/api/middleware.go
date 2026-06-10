@@ -74,7 +74,7 @@ func logSeverity(statusCode int) zerolog.Level {
 	case statusCode >= 500:
 		return zerolog.ErrorLevel
 	case statusCode >= 400:
-		return zerolog.ErrorLevel
+		return zerolog.WarnLevel
 	case statusCode >= 300:
 		return zerolog.WarnLevel
 	case statusCode >= 200:
