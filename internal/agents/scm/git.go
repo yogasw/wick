@@ -215,11 +215,13 @@ func FileAtRef(ctx context.Context, dir, ref, path string) (string, error) {
 		// `git show HEAD:missing` exits non-zero — treat as empty original
 		// rather than an error so a newly-added file diffs against "".
 		var ge *GitError
-		if errors.As(err, &ge) && strings.Contains(ge.Stderr, "does not exist") {
-			return "", nil
-		}
-		if errors.As(err, &ge) && strings.Contains(ge.Stderr, "exists on disk, but not in") {
-			return "", nil
+		if errors.As(err, &ge) {
+			s := ge.Stderr
+			if strings.Contains(s, "does not exist") ||
+				strings.Contains(s, "exists on disk, but not in") ||
+				strings.Contains(s, "invalid object name") {
+				return "", nil
+			}
 		}
 		return "", err
 	}

@@ -7,11 +7,13 @@
 
   type Props = {
     mode: "diff" | "edit";
-    original?: string; // diff mode: left side
-    modified: string; // diff mode: right side / edit mode: content
+    original?: string;
+    modified: string;
     language?: string;
     readOnly?: boolean;
+    sideBySide?: boolean;
     onChange?: (v: string) => void;
+    onDirty?: (value: string) => void; // diff mode: fires when user edits modified side
   };
   let {
     mode,
@@ -19,7 +21,9 @@
     modified,
     language = "plaintext",
     readOnly = false,
+    sideBySide = false,
     onChange,
+    onDirty,
   }: Props = $props();
 
   let host: HTMLDivElement;
@@ -32,14 +36,13 @@
     return document.documentElement.classList.contains("dark") ? "wick-dark" : "wick-light";
   }
 
-  // Slim Monaco scrollbar to echo the app's global scrollbar (thin,
-  // 8px). Monaco draws its own scrollbar (CSS can't reach it), so colors
-  // come from the theme tokens below and size from these options.
   const scrollbarOpts = {
     verticalScrollbarSize: 8,
     horizontalScrollbarSize: 8,
     useShadows: false,
   } as const;
+
+  let containerWidth = $state(0);
 
   // Match the global scrollbar slider colors (layout.templ): dark
   // #2c3a5a, light #cfc9b8, transparent track.
@@ -53,6 +56,14 @@
         "scrollbarSlider.background": "#2c3a5a99",
         "scrollbarSlider.hoverBackground": "#3d4f74cc",
         "scrollbarSlider.activeBackground": "#3d4f74",
+        "editorGutter.background": "#14263a",
+        "editor.background": "#14263a",
+        "diffEditor.insertedLineBackground": "#1a3a2a40",
+        "diffEditor.removedLineBackground": "#3a1a1a40",
+        "diffEditor.insertedTextBorder": "#00000000",
+        "diffEditor.removedTextBorder": "#00000000",
+        "focusBorder": "#00000000",
+        "contrastBorder": "#00000000",
       },
     });
     m.editor.defineTheme("wick-light", {
@@ -64,6 +75,14 @@
         "scrollbarSlider.background": "#cfc9b899",
         "scrollbarSlider.hoverBackground": "#b9b29dcc",
         "scrollbarSlider.activeBackground": "#b9b29d",
+        "editorGutter.background": "#ffffff",
+        "editor.background": "#ffffff",
+        "diffEditor.insertedLineBackground": "#d4edda40",
+        "diffEditor.removedLineBackground": "#f8d7da40",
+        "diffEditor.insertedTextBorder": "#00000000",
+        "diffEditor.removedTextBorder": "#00000000",
+        "focusBorder": "#00000000",
+        "contrastBorder": "#00000000",
       },
     });
   }
@@ -83,6 +102,42 @@
     return monaco;
   }
 
+  const sharedEditorOpts = {
+    fontSize: 12,
+    fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace",
+    lineHeight: 18,
+    minimap: { enabled: true },
+    scrollbar: scrollbarOpts,
+    renderOverviewRuler: false,
+    overviewRulerLanes: 0,
+    overviewRulerBorder: false,
+    folding: true,
+    showFoldingControls: "always" as const,
+    lineNumbers: "on" as const,
+    lineNumbersMinChars: 3,
+    lineDecorationsWidth: 0,
+    glyphMargin: false,
+    renderLineHighlight: "all" as const,
+    smoothScrolling: true,
+    cursorBlinking: "smooth" as const,
+  } as const;
+
+  // Options applied to each inner editor of the diff editor (original + modified).
+  // createDiffEditor opts don't propagate fully to inner editors.
+  const innerEditorOpts = {
+    fontSize: 12,
+    fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace",
+    lineHeight: 18,
+    minimap: { enabled: false },
+    lineNumbers: "on" as const,
+    lineNumbersMinChars: 3,
+    lineDecorationsWidth: 0,
+    glyphMargin: false,
+    renderLineHighlight: "all" as const,
+    folding: true,
+    showFoldingControls: "always" as const,
+  } as const;
+
   async function build() {
     const m = await ensureMonaco();
     if (!host) return;
@@ -90,20 +145,24 @@
     if (mode === "diff") {
       diffEditor = m.editor.createDiffEditor(host, {
         theme: theme(),
-        readOnly: true,
+        readOnly: false,
         automaticLayout: true,
-        renderSideBySide: true,
-        fontSize: 12,
-        minimap: { enabled: false },
-        scrollbar: scrollbarOpts,
-        // Drop the wide change-overview ruler — wasteful in a narrow panel.
-        renderOverviewRuler: false,
-        overviewRulerLanes: 0,
+        renderSideBySide: sideBySide,
+        hideUnchangedRegions: { enabled: true, minimumLineCount: 3, contextLineCount: 3 },
+        renderGutterMenu: true,
+        ignoreTrimWhitespace: false,
+        ...sharedEditorOpts,
+      });
+      const modModel = m.editor.createModel(modified, language);
+      modModel.onDidChangeContent(() => {
+        onDirty?.(modModel.getValue());
       });
       diffEditor.setModel({
         original: m.editor.createModel(original, language),
-        modified: m.editor.createModel(modified, language),
+        modified: modModel,
       });
+      diffEditor.getOriginalEditor().updateOptions(innerEditorOpts);
+      diffEditor.getModifiedEditor().updateOptions(innerEditorOpts);
     } else {
       editor = m.editor.create(host, {
         value: modified,
@@ -111,11 +170,7 @@
         theme: theme(),
         readOnly,
         automaticLayout: true,
-        fontSize: 12,
-        minimap: { enabled: false },
-        scrollbar: scrollbarOpts,
-        overviewRulerLanes: 0,
-        overviewRulerBorder: false,
+        ...sharedEditorOpts,
       });
       editor.onDidChangeModelContent(() => {
         onChange?.(editor!.getValue());
@@ -139,14 +194,11 @@
     }
   }
 
-  // Rebuild ONLY when the editor's identity changes (mode/language) — NOT
-  // on content change. Rebuilding on every `modified` change would tear
-  // down the editor on each keystroke (onChange → modified → rebuild),
-  // stealing focus + cursor. Content is synced by the separate effect
-  // below via setValue, which preserves the editing session.
+  // Rebuild when identity changes (mode/language/sideBySide) — NOT on content.
   $effect(() => {
     void mode;
     void language;
+    void sideBySide;
     if (host) build();
   });
 
@@ -182,9 +234,21 @@
   });
 
   onDestroy(dispose);
+
+  function resizeWatch(el: HTMLElement) {
+    const ro = new ResizeObserver((entries) => {
+      containerWidth = entries[0]?.contentRect.width ?? el.offsetWidth;
+    });
+    ro.observe(el);
+    containerWidth = el.offsetWidth;
+    return { destroy: () => ro.disconnect() };
+  }
 </script>
 
-<div class="relative h-full w-full">
+<div
+  class="relative h-full w-full"
+  use:resizeWatch
+>
   <div bind:this={host} class="h-full w-full"></div>
   {#if !ready}
     <div class="absolute inset-0 flex items-center justify-center text-xs text-black-700 dark:text-black-600">

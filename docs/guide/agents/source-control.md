@@ -30,82 +30,88 @@ The panel opens as a slide-over overlay by default. To dock it, click the **pin*
 
 Pin state and panel width are persisted in `localStorage`. The panel is resizable: drag the left handle to any width between 240 px and 640 px (default 260 px).
 
+## Layout (full mode)
+
+In full mode the panel uses a two-column layout:
+
+- **Left column (220 px)** — file list grouped into Staged and Changes sections, commit message input, and branch bar at the bottom.
+- **Right column (flex)** — Monaco diff editor as the primary surface. The first changed file is selected automatically on load.
+
+The active repo selection is persisted per session in `localStorage` and restored on next open.
+
 ## Multi-repo support
 
-On open, the panel recursively scans the session cwd for git repositories. The scan skips heavy directories (`node_modules`, `vendor`, `dist`, `.cache`, etc.) and caps at a fixed depth. If more than one repository is found, a collapsible **Repositories** section appears at the top of the panel (collapsed by default). Each repo entry shows:
+On open, the panel recursively scans the session cwd for git repositories. The scan skips heavy directories (`node_modules`, `vendor`, `dist`, `.cache`, etc.) and caps at a fixed depth. If more than one repository is found, a dropdown appears in the left column header. Select a repo from the dropdown to switch; all sections apply to the active repo.
 
-- repo path (relative to cwd)
-- current branch name
-- ahead / behind count vs the upstream
-- number of changed files
+## File list
 
-Click a repo row to switch the active repository. All other panel sections (Changes, Commit, Branches, History) apply to the active repo.
+The left column shows two flat sections:
 
-## Changes view
-
-The Changes section shows two collapsible groups:
-
-| Group | What it contains |
+| Section | What it contains |
 |---|---|
-| **Staged** | Files added to the index (`git add`). |
-| **Unstaged** | Modified tracked files and untracked new files. |
+| **Staged (N)** | Files added to the index (`git add`). |
+| **Changes (N)** | Modified tracked files and untracked new files. |
 
-Each group has a file count badge. Inside each group, files are displayed in either **Tree** view or **List** view — toggle with the icon in the panel header. The view mode is persisted in `localStorage`.
+Click a file row to open it in the diff editor. The active file is highlighted.
 
-Tree view collapses single-child folders (compact mode, same as VSCode). Click a folder to expand or collapse it.
+Each file row shows a status badge (`M`, `A`, `D`, `?`) on the right edge.
 
-### Per-file actions
+## Diff editor
 
-Hover over a file or folder row to reveal action icons:
-
-| Icon | Action | Scope |
-|---|---|---|
-| **+** | Stage | File, folder, or the entire Unstaged section header |
-| **−** | Unstage | File, folder, or the entire Staged section header |
-| **↺** | Discard | File or folder (see below) |
-
-::: danger Discard is destructive
-**Discard** cannot be undone. For tracked files it runs `git restore <file>`; for untracked files it runs `git clean -f <file>`. A confirmation dialog appears before the operation runs. Files discarded this way are permanently gone from the working tree.
-:::
-
-Clicking a file name (in either group) opens the diff viewer (see [Diff viewer](#diff-viewer)).
-
-## Commit
-
-Below the Changes section is a one-line commit message input. Type a message and press **Enter** (or click the Commit button) to commit all staged files. The Commit button is disabled when there are no staged files or the message is empty.
-
-After a successful commit, the Changes section refreshes and the branch ahead/behind counts update.
-
-## Branches
-
-The panel header bar shows the current branch name. Clicking it opens a **Branches** dropdown with:
-
-- a filter input to search local and remote branches
-- a list of local branches (current branch highlighted)
-- a list of remote branches (prefixed with the remote name)
-
-From the dropdown:
-
-| Action | How |
-|---|---|
-| **Checkout** | Click a local branch name. |
-| **Create + checkout** | Type a new branch name in the filter input and press Enter (or click **Create**). |
-
-The header also shows **Pull** and **Push** buttons. The ahead/behind count (e.g. `↑2 ↓1`) appears next to the branch name when the local branch tracks a remote.
-
-## Diff viewer
-
-Clicking a changed file opens a **Monaco diff editor** in a modal. The diff is git-correct:
+Clicking a file opens it inline in the right-column Monaco diff editor — no modal. The diff is git-correct:
 
 | File state | What is diffed |
 |---|---|
-| Staged | HEAD (original) ↔ index (staged content) |
+| Staged | HEAD ↔ index (staged content) |
 | Unstaged (tracked) | Index ↔ working tree |
-| Untracked (new file) | Empty file ↔ working tree |
+| Untracked (new file) | Empty ↔ working tree |
 
-Monaco computes and colors the diff. The modal header shows the file path and its state (staged / unstaged / untracked).
+Unchanged regions are collapsed by default with a "N hidden lines" expand bar (3-line context, same as VSCode). Click the bar to expand.
 
-You can **edit the file** directly in the right-hand pane of the diff editor. Click **Save** in the modal header to write the changes to disk. The Changes section updates after saving.
+The diff renders in **unified (inline) mode** by default. Click the split-view icon in the diff header to toggle side-by-side mode.
+
+### Editing files
+
+The diff editor is directly editable — no "Edit" button required. Start typing in the modified (right) side and a **Save** button appears automatically in the diff header. Click **Save** to write the file to disk. Click **Revert edit** to abandon unsaved changes without touching the file.
+
+### Per-file actions (diff header)
+
+| Button | Action |
+|---|---|
+| **Stage** | Stage the current file (`git add`). |
+| **Unstage** | Unstage the current file (`git restore --staged`). |
+| **Discard** | Discard working-tree changes (see warning below). |
+| **Save** | Write in-editor edits to disk (visible only when there are unsaved edits). |
+| **Revert edit** | Abandon in-editor edits without touching the file (visible only when there are unsaved edits). |
+| Split-view icon | Toggle unified ↔ side-by-side diff layout. |
+
+::: danger Discard is destructive
+**Discard** cannot be undone. For tracked files it runs `git restore <file>`; for untracked files it runs `git clean -f <file>`. A confirmation dialog appears before the operation runs.
+:::
+
+## Sidebar mode (mobile / overlay)
+
+On mobile or when the panel is opened as a slide-over overlay, a compact **sidebar mode** is used instead. The file list, commit box, and branch bar stack vertically. Clicking a file opens a **full-screen diff modal** (Monaco diff editor, same editing and save behavior as full mode).
+
+## Commit
+
+The commit message input is at the bottom of the left column. Type a message and press **Enter** (or click **Commit (N)**) to commit all staged files. The button shows the staged file count and is disabled when staging is empty or the message is blank.
+
+## Branches
+
+The branch bar at the bottom of the left column shows the current branch name and the ahead/behind count (`↑N ↓N`). Click the branch name to open a dropdown with:
+
+- a filter input to search local and remote branches
+- local branches (current highlighted)
+- remote branches
+
+| Action | How |
+|---|---|
+| **Checkout local** | Click a local branch name. |
+| **Checkout remote** | Click a remote branch — creates a local tracking branch automatically. |
+| **Create + checkout** | Type a new name in the bottom input and click **+**. |
+
+**Pull** and **Push** buttons are below the branch picker.
 
 ## History
 
