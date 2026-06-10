@@ -4,26 +4,58 @@ All notable changes to Wick are documented here.
 
 ---
 
-## [Unreleased] — SCM diff UI overhaul
+## [Unreleased]
 
-### Added
-- **VSCode-style diff editor**: Source Control panel (`full` mode) now shows an inline Monaco diff editor as the primary surface — no modal, no placeholder. File list on the left (220px), diff fills the rest.
-- **Auto-select first file**: opening the SCM panel automatically loads the first changed file into the diff editor.
-- **Unified diff by default**: diff renders in unified (inline) mode. Toggle to side-by-side via the split-view button in the diff header.
-- **Hidden unchanged regions**: unchanged lines are collapsed with a "N hidden lines" expand bar, matching VSCode behavior (`hideUnchangedRegions`, 3-line context).
-- **Inline Stage / Unstage / Discard buttons**: diff header shows per-file Stage, Unstage, and Discard (rollback) actions — no need to hover file rows.
-- **Auto-show Save button**: editing directly in the diff editor (no "Edit" button required) causes a Save button to appear automatically when content changes. Applied to both full-mode inline diff and sidebar DiffModal.
-- **Per-session active repo persistence**: the selected repo is saved to `localStorage` keyed by session ID and restored on next open.
-- **Whitespace diff visible**: `ignoreTrimWhitespace: false` — trailing newline and whitespace differences are shown in the diff.
-
-### Fixed
-- **Repo with no commits**: `git show HEAD:<path>` on a repo without any commit no longer returns 400 — `"invalid object name 'HEAD'"` is now treated as an empty original side (same as a new file).
-- **4xx requests logged as warn not error**: HTTP middleware now logs 4xx responses at `warn` level instead of `error`, reducing noise for expected client errors.
-- **GORM `record not found` log noise**: GORM logger set to `Silent` — `record not found` queries no longer print to stdout on every request.
-- **Diff not updating after save**: after saving a file, the diff editor now shows the updated content correctly instead of reverting to the pre-edit state.
-- **Race condition on file select**: Monaco diff editor is only mounted after diff data is loaded, preventing empty-content render on first file selection.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.16.0](https://github.com/yogasw/wick/compare/v0.15.8...v0.16.0)
+
+_Released on 2026-06-10_
+
+### Added
+- **VSCode-style diff editor**: The Source Control panel (`full` mode) now features an inline Monaco diff editor as the primary surface, with a file list on the left and the diff filling the remainder.
+- **Auto-select first file**: Opening the SCM panel automatically loads the first changed file into the diff editor.
+- **Unified diff by default**: Diffs now render in unified (inline) mode by default, with a toggle for side-by-side view in the diff header.
+- **Hidden unchanged regions**: Unchanged lines are collapsed with an "N hidden lines" expand bar, matching VSCode behavior (3-line context).
+- **Inline Stage / Unstage / Discard buttons**: Diff headers now include per-file Stage, Unstage, and Discard actions directly, removing the need to hover file rows.
+- **Auto-show Save button**: When editing directly in the diff editor (without needing an "Edit" button), a Save button automatically appears when content changes, applied to both full-mode inline diff and the sidebar DiffModal.
+- **Per-session active repository persistence**: The selected repository is saved to `localStorage` keyed by session ID and restored on subsequent opens.
+- **Visible whitespace diff**: Trailing newline and whitespace differences are now shown in the diff (`ignoreTrimWhitespace: false`).
+- **Wick MCP server pre-approval**: The entire Wick MCP server is now pre-approved for spawned agents using `--allowedTools mcp__wick`, eliminating the need for a static per-tool allowlist.
+- **Workflow environment variables and secrets**: A new system for managing workflow environment variables and secrets via a dedicated Settings modal. Secrets are encrypted, decrypted at runtime, accessible via `{{.Env.KEY}}`, and masked in previews and outputs.
+- **Workflow webhook trigger**: Implemented a webhook trigger with dual endpoints (`/webhook/` for published, `/webhook-test/` for draft), path-based routing, and a dedicated inspector in the UI.
+- **`webhook_respond` node and `RespondMode`**: Added a `webhook_respond` node for custom HTTP responses (status, body, headers) from workflows and introduced `Trigger.RespondMode` (immediately/last_node/respond_node) to control webhook response behavior.
+- **Phoenix connector**: A new read-only Phoenix connector for LLM span debugging, supporting listing spans by room/app and retrieving full span details.
+- **Per-instance OAuth accounts for connectors**: OAuth app credentials are now configured per-instance, enabling multiple sub-accounts for a single connector. New access policy flags (MultiAccount, EnableSSO, AllowOthersConfigure, AllowOthersConnectSSO) and an owner tag system are introduced.
+- **Admin user creation**: Admins can now create new user accounts directly from the Admin panel by entering an email, with a system-generated 5-word passphrase shown once for copy.
+
+### Fixed
+- **Repository without commits**: `git show HEAD:<path>` on a repository without any commits no longer returns a 400 error; an "invalid object name 'HEAD'" is now treated as an empty original side.
+- **4xx request logging level**: HTTP middleware now logs 4xx responses at the `warn` level instead of `error`, reducing noise for expected client errors.
+- **GORM `record not found` log noise**: GORM logger is set to `Silent`, preventing `record not found` queries from printing to stdout.
+- **Diff not updating after save**: After saving a file, the diff editor now correctly shows the updated content.
+- **Diff race condition on file select**: The Monaco diff editor is now mounted only after diff data is loaded, preventing empty-content rendering on first file selection.
+- **Mobile autofocus**: Skipped autofocus on inputs for touch devices (mobile, tablet) to prevent the on-screen keyboard from popping up unexpectedly on page load. On desktop, the "Ask anything…" composer is now preferred over the search box when both are present.
+- **Workflow publishing with deleted nodes**: Workflows with deleted scaffolded start/end nodes can now publish successfully, requiring only at least one trigger. Dangling graph entry references are now treated as warnings instead of publish-blocking errors.
+- **UI theme issues**: Various UI theme fixes for dark mode hover states, status/kind chip selection, and toolbar buttons were implemented.
+- **Multi-trigger dispatch**: Fixed a bug where only the first webhook trigger per workflow was dispatched correctly.
+- **Slack connector token visibility**: The `bot_token` and `user_token` fields in Slack connector configuration are now always visible.
+
+### Improved
+- **Internal documentation structure**: Reorganized internal design documentation into status-based folders (`archive`, `todo`, `in-progress`) and updated all references.
+- **Workflow documentation clarity**: Cleaned up internal comments and documentation, replacing `yaml` and file-based references with format-neutral descriptions to reflect DB-primary JSON storage for workflows.
+- **Workflow data storage optimization**: Removed unused `yaml:"..."` struct tags and `MarshalYAML` methods from workflow types, as workflow storage is now DB-primary JSON.
+- **Canvas experience**: Enhanced the workflow canvas with trigger validation badges, edge hover highlighting, and an "Open inspector" context menu option for nodes and triggers.
+- **Connector operations management**: The operations section in connector detail pages now includes pagination, search, multi-select, and bulk Enable/Disable actions.
+- **MCP connector/account listing**: The MCP `wick_list` command now supports filtering by `kind=connector|account` with composite IDs for account entries.
+
+---
+*This summary was automatically generated by Gemini AI*
+
+---
+
 
 ## [Unreleased] — Per-instance OAuth accounts & MCP multi-identity
 
