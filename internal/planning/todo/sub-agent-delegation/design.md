@@ -146,6 +146,8 @@ AgentProfile (role reusable)
 ├─ Model        — provider-specific model id
 ├─ SystemPrompt — role instruction
 ├─ AllowedTagIDs — OPSIONAL penyempit (subset tag user). Kosong=warisi tag user pemicu (§10.1)
+├─ AllowedNativeTools — OPSIONAL allowlist tool native provider (Bash/Read/Write/WebFetch…) → spawn --allowedTools (§10.2)
+├─ StrictMCP     — bool, default true: spawn --strict-mcp-config (abaikan MCP eksternal host) (§10.2)
 ├─ DefaultMaxTurns — budget turn default tiap delegasi ke role ini
 ├─ DefaultMode      — "sync" | "async"  (Fase 2; researcher→async, coder→sync)
 ├─ DefaultWorkspace — "shared" | "worktree" (Fase 3; coder→worktree)
@@ -220,7 +222,9 @@ agent_profiles (
   provider          text not null,               -- "claude" | "codex" | "gemini"
   model             text,                        -- provider model id; null = provider default
   system_prompt     text not null,               -- role instruction
-  allowed_tag_ids   jsonb not null default '[]', -- OPSIONAL penyempit. []=warisi penuh tag user pemicu; isi=persempit ke subset (∩ tag user). Tak pernah menambah akses (§10.1)
+  allowed_tag_ids     jsonb not null default '[]', -- OPSIONAL penyempit. []=warisi penuh tag user pemicu; isi=persempit ke subset (∩ tag user). Tak pernah menambah akses (§10.1)
+  allowed_native_tools jsonb not null default '[]', -- OPSIONAL allowlist tool native provider → spawn --allowedTools/--disallowedTools (§10.2)
+  strict_mcp          boolean not null default true, -- spawn --strict-mcp-config: hanya MCP loopback wick, abaikan MCP eksternal host (§10.2)
   default_max_turns int  not null default 12,    -- budget turn default per delegasi
   default_mode      text not null default 'sync',     -- 'sync' | 'async' (Fase 2)
   default_workspace text not null default 'shared',   -- 'shared' | 'worktree' (Fase 3)
@@ -689,6 +693,34 @@ connector Flow B) **semua sudah ikut sistem tag yang sama**. **Tidak ada sync
 khusus**: tag yang menggerbangi connector untuk user biasa = tag yang sama
 dipakai di sini.
 
+### 10.2 Tools di luar connector wick (provider-native + MCP eksternal)
+
+Tag ACL (§10/§10.1) hanya menggerbangi tools yang **lewat MCP wick** (connector +
+MCP internal). Sub-agent = CLI spawned yang juga punya: **tools native provider**
+(Bash, Read, Write, Edit, WebFetch, WebSearch…) dan **MCP server eksternal** di
+config CLI host (`~/.claude.json`), mis. Slack MCP. Tag tak berlaku untuk dua ini
+— **tapi bukan berarti cuma bisa dibatasi prompt.** Lever di spawn:
+
+| Sumber tool | Lever | Sifat |
+|---|---|---|
+| Connector / MCP internal wick | tag ACL server-side (`IsVisibleTo`) | **hard** |
+| Tools native provider | per-profil `allowed_native_tools` → `--allowedTools`/`--disallowedTools` + **command-gate** wick | CLI-enforced (model tak bisa panggil yg di-disallow) + gate server-side |
+| MCP eksternal di `~/.claude.json` host | `strict_mcp=true` → `--strict-mcp-config` → sub-agent **hanya** lihat MCP loopback wick, abaikan config host | **hard** (arg spawn; sub-agent tak bisa nambah server runtime) |
+| strict OFF + tanpa allowlist | prompt saja | **lemah** — hindari untuk sub-agent |
+
+**Default sub-agent:** `strict_mcp=true` + `allowed_native_tools` per-profil.
+Konsekuensi: hal seperti **Slack** hanya terjangkau sub-agent kalau (a) di-ekspos
+sebagai **connector wick** (tag-gated) — bukan via MCP Slack eksternal — atau (b)
+diizinkan eksplisit. Jadi "Slack dibatasi prompt" hanya terjadi kalau non-strict;
+default kita strict → **bukan** prompt.
+
+**Catatan kejujuran:** boundary yang benar-benar server-side = (a) connector wick
+(tag) + (b) command-gate. `--allowedTools` & `--strict-mcp-config` di-enforce
+CLI/arg spawn — `strict-mcp` efektif **hard** (sub-agent tak bisa ubah saat
+runtime), `allowedTools` mencegah model memanggil (client-side tapi nyata). Untuk
+provider tanpa flag allowlist tool (codex/gemini — verifikasi §14), batasan native
+tool jatuh ke **command-gate + prompt**.
+
 ---
 
 ## 11. Backward compat
@@ -816,6 +848,10 @@ dipakai di sini.
 10. **Workspace non-git** — kalau project bukan git, `worktree` fallback ke
     `shared`+warning (usulan) atau salin direktori? Dan default worktree =
     auto-merge ke parent atau cuma kembalikan diff untuk leader putuskan?
+11. **Allowlist tool native per-provider** — verifikasi semantik `--allowedTools`/
+    `--disallowedTools` & `--strict-mcp-config` di tiap provider (claude pasti;
+    codex/gemini?). Untuk yang tak punya → native-tool restriction jatuh ke
+    command-gate + prompt; tegaskan di matrix §7 saat detailing.
 
 ---
 
