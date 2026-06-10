@@ -357,41 +357,47 @@ case "$OS" in
         echo "✓ $APP installed"
       fi
     else
+      LOCAL_BIN="$HOME/.local/bin"
+      mkdir -p "$LOCAL_BIN"
+      # migrate old system-wide install if present
+      for old in "/usr/local/bin/$APP" "/usr/local/bin/$APP-gate"; do
+        if [ -f "$old" ]; then
+          echo "→ removing old system install at $old"
+          if [ "$(id -u)" = "0" ]; then rm -f "$old"
+          elif command -v sudo >/dev/null 2>&1; then sudo rm -f "$old"
+          fi
+        fi
+      done
       if [ "$SKIP_APP" = "1" ]; then
         echo "✓ $APP already at $TAG — skipping raw binary"
       else
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
-        stop_running "/usr/local/bin/$APP"
-        if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
-          tmp_bin=$(mktemp)
-          gh_download "${APP}-linux-${ARCH}" "$tmp_bin"
-          chmod +x "$tmp_bin"
-          sudo mv "$tmp_bin" "/usr/local/bin/$APP"
-        else
-          gh_download "${APP}-linux-${ARCH}" "/usr/local/bin/$APP"
-          chmod +x /usr/local/bin/$APP
-        fi
-        echo "✓ $APP installed"
+        stop_running "$LOCAL_BIN/$APP"
+        gh_download "${APP}-linux-${ARCH}" "$LOCAL_BIN/$APP"
+        chmod +x "$LOCAL_BIN/$APP"
+        echo "✓ $APP installed at $LOCAL_BIN/$APP"
       fi
       if [ "$SKIP_GATE" = "1" ]; then
         echo "✓ $APP-gate already at $TAG — skipping"
       else
-        # Gate sidecar — same idea as the Termux path. /usr/local/bin
-        # is root-owned on most distros, so the caller must run
-        # install.sh with root privileges (or via `sudo sh`).
         gate_url="$BASE/${APP}-gate-linux-${ARCH}"
         echo "→ gate: $gate_url"
-        if gh_download "${APP}-gate-linux-${ARCH}" "/usr/local/bin/$APP-gate"; then
-          chmod +x /usr/local/bin/$APP-gate
-          echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
+        if gh_download "${APP}-gate-linux-${ARCH}" "$LOCAL_BIN/$APP-gate"; then
+          chmod +x "$LOCAL_BIN/$APP-gate"
+          echo "✓ $APP-gate installed at $LOCAL_BIN/$APP-gate"
         else
-          echo "! gate sidecar not found at $gate_url — skipping (agent has an embedded fallback)"
+          echo "! gate sidecar not found — skipping (agent has embedded fallback)"
         fi
       fi
+      # warn if ~/.local/bin not in PATH
+      case ":$PATH:" in
+        *":$LOCAL_BIN:"*) ;;
+        *) echo "⚠ $LOCAL_BIN is not in PATH — add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+      esac
     fi
-    install_gotty "/usr/local/bin" "linux"
-    start_agent "$(command -v "$APP" 2>/dev/null || echo "/usr/local/bin/$APP")"
+    install_gotty "$HOME/.local/bin" "linux"
+    start_agent "$(command -v "$APP" 2>/dev/null || echo "$HOME/.local/bin/$APP")"
     ;;
   *)
     echo "unsupported OS: $OS (use install.ps1 for Windows)" >&2
