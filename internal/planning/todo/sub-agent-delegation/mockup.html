@@ -192,7 +192,7 @@
 <!-- ============================================================ -->
 <section>
   <h2 class="text-xl font-bold mb-1">③ Pohon delegasi (in session) — <code>agents/session/{id}</code></h2>
-  <p class="text-sm mb-4" style="color:var(--black-800)">Inside the leader's transcript: a delegate card (spinner → result). Nested indent per depth, with a turns/budget chip. Click to expand the sub-agent's read-only transcript.</p>
+  <p class="text-sm mb-4" style="color:var(--black-800)"><b>This view is the MAIN/leader agent — it owns the conversation.</b> The sub-agents it delegates appear <b>nested inside</b> its transcript (each runs in an isolated child context, linked back via <code>agent_delegations</code>). Cards show mode (sync/async) + workspace (shared/worktree) badges; expand to read the sub-agent's transcript.</p>
   <div class="card p-5 space-y-3">
     <!-- leader turn -->
     <div class="card-sub p-3">
@@ -207,6 +207,7 @@
           <span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> running · turn 3/8</span>
         </div>
         <p class="text-xs mt-1" style="color:var(--black-800)">Task: Cari changelog breaking lib X v3→v4, ringkas + sitasi.</p>
+        <div class="flex gap-1 mt-2"><span class="badge badge-model">async · →channel</span><span class="badge badge-model">workspace: shared</span></div>
         <div class="mt-2 text-xs" style="color:var(--green-600); cursor:pointer">▸ expand sub-agent transcript</div>
       </div>
       <div class="card-sub p-3">
@@ -215,6 +216,7 @@
           <span class="chip chip-run" style="background:var(--pos-100);color:var(--pos-400);border-color:var(--pos-400)">done · 5 turns</span>
         </div>
         <p class="text-xs mt-1" style="color:var(--black-800)">Task: Review diff PR #621 untuk bug.</p>
+        <div class="flex gap-1 mt-2"><span class="badge badge-model">sync</span><span class="badge badge-prov">workspace: worktree</span></div>
         <div class="card-sub p-2 mt-2" style="background:var(--white-100)">
           <div class="text-xs section-h mb-1">result</div>
           <pre class="text-xs whitespace-pre-wrap">2 findings: (1) nil-deref di parser.go:88; (2) goroutine leak — http.NewRequest tanpa ctx.</pre>

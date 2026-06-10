@@ -44,7 +44,7 @@ Paired mockup: [`mockup.html`](mockup.html). Update keduanya barengan.
 
 ## TODO
 
-**v1 locked decisions:**
+**Fase 1 (v1) — locked decisions:**
 
 - ✓ **Delegasi SINKRON** — leader panggil `wick_delegate(profile, task)`,
   blocks, terima hasil akhir sub-agent sebagai tool result. Bukan task-board
@@ -70,20 +70,41 @@ Paired mockup: [`mockup.html`](mockup.html). Update keduanya barengan.
 - ✓ **Audit seragam** — tiap delegasi tulis row `agent_delegations` (task,
   status, turns_used, result, depth, root_id).
 
-**Deferred (out of v1 scope):**
+**Fase berikutnya (ringkas — detail di §Roadmap):**
 
-- ⏸ **Token-budget** — event ter-normalisasi tidak bawa usage tokens
-  (`types.go:76-86`). Butuh parse raw CLI usage di luar event path. v1 =
-  turn-count only. Token cap menyusul.
-- ⏸ **Squad eksplisit** — grup profil bernama dengan leader + member tetap.
-  v1: leader boleh delegasi ke profil enabled mana pun yang lolos tag. Squad
-  grouping (routing "leader yang pilih siapa") fase-2.
-- ⏸ **Task-board asinkron** — enqueue/claim/start/complete ala multica. Beda
-  paradigma (lihat §15). Bisa jadi fase-3 di atas `agent_delegations`.
-- ⏸ **Streaming hasil parsial ke leader** — v1 leader terima hasil AKHIR saja
-  (blocking). Progress sub-agent terlihat di monitor, bukan di-inject ke leader.
+- → **Fase 2 — Async fire-and-forget** (`mode`, `default_mode`, `delivery_sink`).
+- → **Fase 3 — Workspace isolation** (`workspace=worktree` untuk paralel coding).
+- → **Fase 4 — Async collect** (callback ke session leader + `wick_delegate_collect`).
+- → **Fase 5 — Squad eksplisit** (leader + member tetap, leader-routing).
+- → **Fase 6 — Token budget** (parse usage raw CLI; saat ini turn-count only —
+  event ter-normalisasi tak bawa usage `types.go:76-86`).
+- → **Fase 7 — Async task-board** (multica-style; opsional, arah produk).
 - ⏸ **Human-in-the-loop pada sub-agent** — approval gate per sub-agent. v1
   sub-agent warisi gate config parent.
+
+---
+
+## Roadmap — fase implementasi
+
+Tiap fase shippable sendiri dan menumpuk di atas sebelumnya. Fase 2 & 3 saling
+independen (dua-duanya hanya butuh Fase 1).
+
+| Fase | Fitur | Bergantung | Effort |
+|---|---|---|---|
+| **1 — Core sync delegation (MVP)** | Profiles + `agent_delegations`; `wick_delegate` (sync) + `wick_agents`; isolated sub-session; channel in-process pipe+MCP (§5.1); max-turns provider-agnostik (Done+Kill); governor (max_depth, budget/root, cycle-guard, max_parallel); ACL via tag; **fleet monitor read-only**. Workspace default **shared** (cwd sama parent). | pool, event, SSE, tags (existing) | Sedang |
+| **2 — Async fire-and-forget** | `default_mode` per-profil + `mode` override per-call; `delivery_sink = channel \| none`; dispatch non-blocking → balik `delegation_id`; hasil di-post ke channel asal / tercatat di monitor; sub-agent **detached** (tetap jalan walau leader idle-kill). | Fase 1 | Kecil–sedang |
+| **3 — Workspace isolation (worktree)** | `workspace = shared \| worktree`; tiap sub-agent **penulis** dapat git worktree sendiri → paralel coding tanpa tabrakan file; on-done diff/merge balik + cleanup. | Fase 1 (+ pool spawn-with-cwd) | Sedang |
+| **4 — Async collect (futures/callback)** | `delivery_sink = session` → callback re-prompt session leader saat sub-agent selesai (korelasi `id`+task); + tool `wick_delegate_collect(id)`. Orchestrator fire banyak async lalu mengompilasi. | Fase 2 | Sedang |
+| **5 — Squad eksplisit** | Squad bernama = leader profile + member tetap; leader-routing ("leader pilih siapa") ala multica; monitor scoped per-squad. | Fase 1 | Sedang |
+| **6 — Token budget** | Capture usage dari raw CLI output; token cap berdampingan dgn turn cap. | Fase 1 | Kecil–sedang |
+| **7 — Async task-board (multica-style)** | Opsional: enqueue/claim/start/complete board di atas `agent_delegations`; assignment UI; profil yang post comment/issue. Arah "agent workforce". | Fase 2/4 | Besar |
+| **Boundary (future) — distributed sub-agents** | Multi-host: ganti pipe lokal dgn message bus (WebSocket/queue) + auth antar-node; `agent_delegations` sbg fondasi. Proposal terpisah. | Fase 1 | Besar |
+
+**Catatan mode per use-case** (kenapa async perlu): role **analisis / cari report**
+yang hasilnya untuk manusia → async fire-forget (Fase 2). Orchestrator yang
+**mengumpulkan** banyak hasil → sync (Fase 1) atau async-collect (Fase 4).
+**Agentic-code dengan task berisian/dependen** → sync + (kalau paralel menulis)
+workspace `worktree` (Fase 3).
 
 ---
 
@@ -104,7 +125,9 @@ Paired mockup: [`mockup.html`](mockup.html). Update keduanya barengan.
 
 **Non-goal:**
 
-- Bukan **task-board asinkron** (multica penuh) — v1 sinkron, leader nunggu.
+- **Fase 1 sinkron** (leader nunggu); async delegation masuk **Fase 2+**
+  (fire-forget) / **Fase 4** (collect). **Task-board penuh** (enqueue/claim/
+  assign ala multica) tetap di luar scope inti → Fase 7 opsional.
 - Bukan **chatroom multi-agent** (stoa) — sub-agent tidak saling ngobrol bebas;
   komunikasi cuma lewat hasil delegasi.
 - Bukan **runtime plugin / provider baru** — sub-agent = provider existing
@@ -124,18 +147,35 @@ AgentProfile (role reusable)
 ├─ SystemPrompt — role instruction
 ├─ AllowedTagIDs — tools/connectors yang boleh dipakai sub-agent (via tag)
 ├─ DefaultMaxTurns — budget turn default tiap delegasi ke role ini
+├─ DefaultMode      — "sync" | "async"  (Fase 2; researcher→async, coder→sync)
+├─ DefaultWorkspace — "shared" | "worktree" (Fase 3; coder→worktree)
 └─ CanDelegate  — bool: role ini boleh jadi leader (panggil wick_delegate)?
 
 Delegation (satu pemanggilan wick_delegate, runtime)
 ├─ RootID            — id delegasi paling atas (akar pohon)
-├─ ParentSessionID   — session leader yang memanggil
+├─ ParentSessionID   — session leader/MAIN yang memanggil (pemilik percakapan)
 ├─ ProfileKey        — role yang di-spawn
-├─ ChildSessionID    — session terisolasi sub-agent
+├─ ChildSessionID    — execution context terisolasi sub-agent (linked ke parent)
 ├─ Task              — prompt tugas
 ├─ Depth             — 0=leader langsung, 1, 2, …
+├─ Mode              — "sync" | "async"            (Fase 2)
+├─ DeliverySink      — "channel" | "session" | "none" (async; Fase 2/4)
+├─ Workspace         — "shared" | "worktree"       (Fase 3)
 ├─ Status            — running | done | failed | stopped_max_turns | stopped_budget
 ├─ TurnsUsed         — count event.Done sub-agent ini
 └─ Result            — teks hasil akhir (atau error / partial)
+```
+
+**Kepemilikan (ownership):** session `agents/session/{id}` adalah **MAIN/leader
+agent** = pemilik percakapan. Sub-agent yang dia delegasikan **bernaung di bawah
+session itu** dan ditampilkan **nested di dalamnya** (pohon delegasi, §9③).
+Secara runtime tiap sub-agent punya `ChildSessionID` terisolasi (konteks bersih
+— transcript leader tidak terkotori), tapi **di-link** ke parent via
+`agent_delegations.parent_session_id` + `root_id`, jadi UI menyatukannya kembali
+di dalam percakapan main agent. Isolasi = pemisahan **konteks**, bukan pemisahan
+**kepemilikan**.
+
+```
 ```
 
 | Term | Arti | Catatan |
@@ -182,6 +222,8 @@ agent_profiles (
   system_prompt     text not null,               -- role instruction
   allowed_tag_ids   jsonb not null default '[]', -- tag IDs → tools/connectors sub-agent boleh pakai
   default_max_turns int  not null default 12,    -- budget turn default per delegasi
+  default_mode      text not null default 'sync',     -- 'sync' | 'async' (Fase 2)
+  default_workspace text not null default 'shared',   -- 'shared' | 'worktree' (Fase 3)
   can_delegate      boolean not null default false, -- boleh jadi leader (nested)?
   created_by        uuid not null,
   created_at        timestamptz,
@@ -199,6 +241,10 @@ agent_delegations (
   child_session_id   text not null,              -- session terisolasi sub-agent
   task               text not null,              -- prompt tugas (truncatable untuk display)
   depth              int  not null default 0,
+  mode               text not null default 'sync',  -- 'sync' | 'async' (Fase 2)
+  delivery_sink      text,                          -- async: 'channel'|'session'|'none' (Fase 2/4)
+  workspace          text not null default 'shared',-- 'shared' | 'worktree' (Fase 3)
+  workspace_path     text,                          -- worktree path bila workspace='worktree'
   status             text not null,              -- running|done|failed|stopped_max_turns|stopped_budget
   turns_used         int  not null default 0,
   result             text,                       -- hasil akhir / error / partial
@@ -268,7 +314,10 @@ bisa dipanggil tanpa harus call tool dulu.
   "profile": "researcher",          // required — key AgentProfile
   "task": "Cari changelog breaking di lib X versi 3→4, ringkas + sitasi.", // required
   "context": "Repo pakai X v3.2.",  // optional — konteks tambahan, bukan history penuh leader
-  "max_turns": 8                    // optional — override default profil (≤ cap global)
+  "max_turns": 8,                   // optional — override default profil (≤ cap global)
+  "mode": "async",                  // optional (Fase 2) — "sync"(default)|"async"; default ikut profil
+  "delivery_sink": "channel",       // optional (Fase 2/4) — async: "channel"|"session"|"none"
+  "workspace": "worktree"           // optional (Fase 3) — "shared"(default)|"worktree"
 }
 
 // output (sukses):
@@ -295,6 +344,28 @@ Tiap call balik hasil sendiri. Tidak ada tool batch khusus — paralelisme alami
 dari multiple tool_use (sama seperti tool lain di MCP). *(Opsi sugar
 `wick_delegate_many(tasks[])` dipertimbangkan, di-defer — redundan jika paralel
 alami sudah jalan.)*
+
+**Mode `async` (Fase 2+):** kalau `mode="async"`, tool **tidak blocking** —
+balik segera dengan handle, leader lanjut tanpa hasil:
+
+```jsonc
+// output (async dispatch):
+{
+  "profile": "report-builder",
+  "status": "running",
+  "delegation_id": "del_7Ka…",
+  "mode": "async",
+  "delivery_sink": "channel",
+  "note": "Berjalan di background. Hasil akan dikirim ke channel asal saat selesai."
+}
+```
+
+Hasil **tidak** masuk balik ke konteks leader pada turn itu (leader CLI tak bisa
+'menunggu nanti' di turn sama). Pengirimannya lewat `delivery_sink`:
+`channel` (post ke thread asal — Fase 2), `none` (cuma tercatat di monitor —
+Fase 2), `session` (callback re-prompt session leader saat selesai — Fase 4,
+plus `wick_delegate_collect(delegation_id)` untuk poll eksplisit). Sub-agent
+async **detached**: tetap jalan walau session leader idle-kill (§6.6).
 
 ---
 
@@ -371,6 +442,40 @@ File/tabel adalah **state & audit, bukan bus pesan**:
 `agent_delegations.result` hanya **copy** hasil untuk history — exchange aslinya
 sudah jalan via pipe+MCP. **Tidak ada file IPC khusus** di v1.
 
+### 5.2 Mode sync vs async (Fase 2+)
+
+| Mode | Leader dapat hasil? | Dikirim ke | Cocok untuk |
+|---|---|---|---|
+| **sync** (Fase 1, default) | ya, blocking → tool result | — | coding/task dependen, leader yang mengompilasi |
+| **async · fire-forget** (Fase 2) | tidak | `delivery_sink=channel` (thread asal) / `none` (monitor saja) | analisis lepas, "buatkan report lalu kirim ke user" |
+| **async · collect** (Fase 4) | nanti | `delivery_sink=session` (callback turn) atau `wick_delegate_collect(id)` | orchestrator fire banyak → kompilasi |
+
+**Lifecycle async (detached):** sub-agent async **melewati turn leader**.
+Karena tiap sub-agent = subprocess terpisah yang di-track `agent_delegations` +
+pool secara independen, dia **tidak terikat** ke umur proses leader — kalau
+session leader idle-kill, sub-agent async tetap lanjut sampai selesai/budget.
+Race: kalau `delivery_sink=session` tapi session leader sudah tutup → fallback
+ke `channel`/record. Hasil async **wajib** bawa `delegation_id`+ringkasan task
+karena urutannya out-of-order.
+
+### 5.3 Workspace — shared vs worktree (Fase 3)
+
+Default sub-agent kerja di **cwd/project yang sama** dengan parent (`shared`) —
+pas untuk role **read-only** (analisis, riset, baca log). Tapi beberapa sub-agent
+yang **menulis** secara paralel di folder sama akan **tabrakan**. Solusi:
+
+| `workspace` | Mekanisme | Cocok |
+|---|---|---|
+| **shared** (default) | cwd sama parent; tak ada isolasi file | role read-only / non-writing |
+| **worktree** (Fase 3) | tiap delegasi penulis dapat `git worktree` sendiri (cabang dari HEAD parent), spawn sub-agent dengan cwd = path worktree itu | paralel coding tanpa tabrakan |
+
+Alur worktree: `git worktree add <tmp> -b wick/del-<id>` → spawn sub-agent
+cwd=`<tmp>` → on-done: kembalikan **diff** ke leader (atau auto-merge bila
+diminta) → `git worktree remove <tmp>` (cleanup, idempotent). Untuk project
+**non-git**, worktree tak tersedia → fallback `shared` + warning (atau salinan
+direktori, di-defer). Sejalan dengan skill `using-git-worktrees`. Implementasi
+butuh pool spawn-with-cwd (verifikasi, §14).
+
 ---
 
 ## 6. Governor
@@ -417,6 +522,14 @@ dari `root_id` + `parent_session_id` kalau perlu).
 Cap jumlah sub-agent konkuren per-root (default mis. 4). Selaras dengan cap
 konkurensi pool yang sudah ada. Lewat → call ke-(N+1) antre atau ditolak (default:
 antre singkat lalu jalan saat slot bebas).
+
+### 6.6 Async/detached (Fase 2+)
+
+Mode async menaikkan risiko konkurensi: "fire banyak async" bisa meledakkan
+jumlah sub-agent. Maka di mode async, **`max_parallel` + budget per-root jadi rem
+utama** (bukan blocking alami seperti sync). Sub-agent async detached tetap
+dihitung ke budget root meski leader sudah lanjut/idle. Worktree (§5.3) juga
+dibatasi `max_parallel` karena tiap worktree = disk + proses.
 
 **Settings disimpan** di tabel settings existing (global) + override per-profil
 (`default_max_turns`). UI di §9.
@@ -501,7 +614,7 @@ Detail visual: [`mockup.html`](mockup.html).
 |---|---|---|
 | ① Profil list | `/manager/agents/profiles` | Card per role: icon, provider/model badge, # tools (tag), enabled toggle, "+ New profile" |
 | ② Profil editor | `/manager/agents/profiles/new` & `/{key}/edit` | Form: Meta + provider dropdown + model + system_prompt textarea + tag picker (akses tools) + default_max_turns + can_delegate toggle (auto-off kalau provider tak dukung leader) |
-| ③ Pohon delegasi (in session) | `agents/session/{id}` | Di transcript leader: kartu `wick_delegate` (spinner → hasil), expand → transcript sub-agent read-only. Nested indent per depth + chip turns_used/budget |
+| ③ Pohon delegasi (in session) | `agents/session/{id}` | **Ini view MAIN/leader agent — pemilik percakapan.** Sub-agent yang ia delegasikan tampil **nested di dalam** transcript-nya: kartu `wick_delegate` (spinner → hasil), expand → transcript sub-agent read-only. Indent per depth + chip turns_used/budget + badge mode (sync/async) + workspace (shared/worktree) |
 | ④ Fleet monitor | `/agents/monitor` | Grid kartu agent: status chip (running/idle/dead), profil, task sekarang (truncate), depth, parent, turns_used, elapsed. Group by root atau by profil. Live via SSE |
 | ⑤ Monitor detail | `/agents/monitor/{child_session_id}` | Transcript read-only sub-agent + meta delegasi + riwayat task profil itu |
 | ⑥ Settings governor | `/manager/agents/settings` | max_depth, budget per-root, max_parallel, global cap max_turns |
@@ -661,7 +774,15 @@ Pola **sama persis** dengan connector (`internal/connectors/service.go`
    system prompt per session, atau perlu helper baru di pool? (impl detail,
    verifikasi saat coding).
 7. **Default angka governor** — max_depth=3, budget_per_root=40 turn,
-   max_parallel=4, default_max_turns=12 — angka awal masuk akal? 
+   max_parallel=4, default_max_turns=12 — angka awal masuk akal?
+8. **Default mode per profil** — researcher/reporter `async`, coder/reviewer
+   `sync` sebagai default bawaan — setuju? (tetap bisa di-override per-call).
+9. **Pengiriman hasil async** — Fase 2 sink = `channel` (post ke thread asal).
+   Untuk session-callback (`sink=session`, Fase 4): re-prompt leader sebagai
+   turn baru atau cukup `wick_delegate_collect` poll? 
+10. **Workspace non-git** — kalau project bukan git, `worktree` fallback ke
+    `shared`+warning (usulan) atau salin direktori? Dan default worktree =
+    auto-merge ke parent atau cuma kembalikan diff untuk leader putuskan?
 
 ---
 
