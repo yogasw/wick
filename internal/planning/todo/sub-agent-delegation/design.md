@@ -808,7 +808,7 @@ tool jatuh ke **command-gate + prompt**.
 
 | Zona | File / pkg | Catatan |
 |---|---|---|
-| `internal/tags` | auto-create `agent:<key>` filter tag saat save profil (pola custom-connector §9.6) |
+| `internal/tags` | extend `service.go` | auto-create `agent:<key>` filter tag saat save profil — tiru `CreateOwnerTag`/`UserOwnsConnector` v0.16.0 (`tags/service.go:114-164`, §10.1b) |
 
 ### 12.6 Tests
 
