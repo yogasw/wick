@@ -37,10 +37,10 @@ gh_download() {
   asset_name="$1"; dest="$2"
   if [ -n "$TOKEN" ]; then
     release_json=$(curl_auth -fsSL "https://api.github.com/repos/$REPO/releases/tags/$TAG")
-    # Extract asset id for the matching name — grep the block after the name match
+    # Extract asset id — "id" appears before "name" in GitHub asset JSON blocks
     asset_id=$(printf '%s' "$release_json" \
-      | grep -A5 '"name": *"'"$asset_name"'"' \
-      | grep '"id":' | head -1 \
+      | grep -B5 '"name": *"'"$asset_name"'"' \
+      | grep '"id":' | tail -1 \
       | tr -cd '0-9')
     if [ -n "$asset_id" ]; then
       curl_auth -fL --progress-bar \
