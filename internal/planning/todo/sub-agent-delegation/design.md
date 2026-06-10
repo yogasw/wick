@@ -693,6 +693,32 @@ connector Flow B) **semua sudah ikut sistem tag yang sama**. **Tidak ada sync
 khusus**: tag yang menggerbangi connector untuk user biasa = tag yang sama
 dipakai di sini.
 
+### 10.1b Alignment v0.16.0 (diverifikasi di kode)
+
+Sync ke v0.16.0 mengonfirmasi & menyesuaikan beberapa hal:
+
+- **Owner-tag SUDAH ADA** sebagai precedent: `internal/tags/service.go:114-164`
+  (`CreateOwnerTag` bikin `owner:{id}` `IsFilter=true`; `UserOwnsConnector` cek;
+  dipakai gate `canConfigureRow`/`canConnectSSO`). Ini "tags owner / non-owner ngak
+  bisa edit config" yang dimaksud dev. Auto-create filter-tag per-profil
+  (`agent:<key>`) tinggal **meniru pola ini**, bukan bikin baru.
+- **Multi-identity SUDAH ADA** (`ConnectorAccount`, `internal/entity/connector.go:176-206`):
+  satu connector → N akun OAuth (per `WickUserID`, masing-masing token + `DisabledOps`).
+  `wick_list` ekspos akun (`Kind="account"`, id `connectorID/accountID`),
+  `wick_execute` resolve token akun saat eksekusi (`mcp/handlers/connectors.go`,
+  `service.go:863-874`). Sub-agent bisa pakai ini untuk "act as user".
+- ⚠️ **Caveat §10.1 #2 KONFIRMASI masih gap:** agent spawned tetap pakai `MCPToken`
+  global → `internalSystemUser()` admin (tag `nil`) → filter di-BYPASS
+  (`mcp/auth.go:61-62,85-89`; spawn `spawn.go:63-124`). Multi-identity **belum**
+  menyalurkan identitas user/akun ke jalur spawn. `ConnectorAccount` = **fondasi**
+  untuk membangun token MCP ber-scope, bukan solusi jadi.
+- **Limitasi:** tag filter masih **row-level**, bukan account-aware. Pilih akun =
+  **tukar kredensial**, bukan access boundary → least-privilege sub-agent tetap
+  wajib di level tag row/identity (§10.1 #1/#2 berlaku).
+- **Destructive ops** kini default `Enabled=true` (LLM konfirmasi sebelum eksekusi),
+  bukan admin-pre-approve-off (`service.go:654`), plus per-akun `DisabledOps`.
+  Sub-agent ikut model ini — koreksi atas asumsi lama "destructive default-off".
+
 ### 10.2 Tools di luar connector wick (provider-native + MCP eksternal)
 
 Tag ACL (§10/§10.1) hanya menggerbangi tools yang **lewat MCP wick** (connector +
