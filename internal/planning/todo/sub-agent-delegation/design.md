@@ -535,8 +535,18 @@ utama** (bukan blocking alami seperti sync). Sub-agent async detached tetap
 dihitung ke budget root meski leader sudah lanjut/idle. Worktree (§5.3) juga
 dibatasi `max_parallel` karena tiap worktree = disk + proses.
 
-**Settings disimpan** di tabel settings existing (global) + override per-profil
-(`default_max_turns`). UI di §9.
+**Dua tingkat setelan (penting — jangan dicampur):**
+
+- **Governor = GLOBAL / system-wide** (`max_depth`, `budget/root`, `max_parallel`,
+  `cap max_turns`, kill-switch). Plafon **keras** untuk SEMUA delegasi & profil —
+  rem keamanan tingkat-sistem. Disimpan di tabel settings existing. UI:
+  `/manager/agents/settings` (halaman terpisah, **bukan** di profile editor).
+- **Per-profil** (`default_mode`, `default_workspace`, `default_max_turns`,
+  `can_delegate`, tag akses). Setelan default per-role. UI: profile editor.
+
+Profil **tak boleh melampaui** plafon global (mis. `default_max_turns` di-clamp ke
+`cap max_turns`). Itu sebabnya Governor sengaja **tidak menempel** di profile
+editor: scope-nya beda (sistem vs role). UI detail di §9.
 
 ---
 
@@ -621,7 +631,7 @@ Detail visual: [`mockup.html`](mockup.html).
 | ③ Pohon delegasi (in session) | `agents/session/{id}` | **Ini view MAIN/leader agent — pemilik percakapan.** Sub-agent yang ia delegasikan tampil **nested di dalam** transcript-nya: kartu `wick_delegate` (spinner → hasil), expand → transcript sub-agent read-only. Indent per depth + chip turns_used/budget + badge mode (sync/async) + workspace (shared/worktree) |
 | ④ Fleet monitor | `/agents/monitor` | Grid kartu agent: status chip (running/idle/dead), profil, task sekarang (truncate), depth, parent, turns_used, elapsed. Group by root atau by profil. Live via SSE |
 | ⑤ Monitor detail | `/agents/monitor/{child_session_id}` | Transcript read-only sub-agent + meta delegasi + riwayat task profil itu |
-| ⑥ Settings governor | `/manager/agents/settings` | max_depth, budget per-root, max_parallel, global cap max_turns |
+| ⑥ Settings governor **(GLOBAL)** | `/manager/agents/settings` | Halaman terpisah (bukan di profile editor). Plafon sistem: max_depth, budget per-root, max_parallel, global cap max_turns |
 
 ### 9.1 Design-system rules (dipakai di mockup)
 
@@ -763,6 +773,14 @@ tool jatuh ke **command-gate + prompt**.
   drop/alter tabel existing.
 - MCP: tambah 2 meta-tool (`wick_delegate`, `wick_agents`). Tool lain tak
   tersentuh. Leader tanpa profil/tanpa tool = tak terdampak.
+- **Relasi ke fitur existing:** hari ini **belum ada** "agent profile" reusable.
+  Analog terdekat = **Presets** (`presets/<name>/agent.md` — persona/system-prompt
+  saja, reusable) + **Project Defaults** (preset+provider per-project,
+  `project/project.go:28-32`). `agent_profiles` = **generalisasi Preset**
+  (Preset hanya system-prompt; Profile menambah provider+model+tag akses+
+  max_turns+mode+workspace+can_delegate) — **bukan duplikat**. Opsi implementasi:
+  Profile bisa **mereferensikan** Preset sebagai system-prompt-nya (reuse), atau
+  membawa system-prompt sendiri (verifikasi saat detailing, §14).
 
 ---
 
