@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sub-Agent Delegation — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Tokens mirror wick design-system: green (accent), navy (dark surface),
+     black ramp (text), white ramp (light surface), status pos/cau/neg/prog. */
+  :root {
+    --green-200:#D1ECE5; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-100:#E3F3EF; --pos-400:#288C7A; --cau-100:#FBF1DD; --cau-400:#D78E08;
+    --neg-100:#FCE7E2; --neg-400:#EB5757; --prog-100:#EEFAFE; --prog-400:#56CCF2;
+  }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--white-200); color: var(--black-900); }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+  .card        { background: var(--white-100); border: 1px solid var(--white-300); border-radius: 12px; }
+  .card-sub    { background: var(--white-200); border: 1px solid var(--white-300); border-radius: 8px; }
+  .panel-dark  { background: var(--navy-700); color: var(--white-100); border-radius: 12px; }
+
+  .chip        { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .chip-run    { background: var(--pos-100); color: var(--pos-400); border:1px solid var(--pos-400); }
+  .chip-idle   { background: var(--cau-100); color: var(--cau-400); border:1px solid var(--cau-400); }
+  .chip-spawn  { background: var(--prog-100); color: var(--prog-400); border:1px solid var(--prog-400); }
+  .chip-dead   { background: var(--neg-100); color: var(--neg-400); border:1px solid var(--neg-400); }
+  .chip-muted  { background: var(--white-300); color: var(--black-800); border:1px solid var(--white-400); }
+  .dot         { width:8px; height:8px; border-radius:999px; display:inline-block; }
+  .badge       { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }
+  .badge-prov  { background: var(--green-200); color: var(--green-700); }
+  .badge-model { background: var(--white-300); color: var(--black-800); }
+
+  .btn         { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; }
+  .btn-primary { background: var(--green-500); color: var(--white-100); }
+  .btn-primary:hover { background: var(--green-600); }
+  .btn-ghost   { background: var(--white-100); color: var(--black-900); border:1px solid var(--white-400); }
+  .btn-ghost:hover { border-color: var(--green-500); color: var(--green-600); }
+  .btn-danger  { background: var(--neg-100); color: var(--neg-400); border:1px solid var(--neg-400); }
+
+  .input       { width:100%; padding:8px 12px; border:1px solid var(--white-400); border-radius:8px; font-size:13px; background:var(--white-100); color:var(--black-900); }
+  .input:focus { outline:none; border-color: var(--green-500); box-shadow: 0 0 0 3px rgba(39,177,153,0.15); }
+  .label       { font-size:12px; font-weight:600; color: var(--black-800); margin-bottom:4px; display:block; }
+  .helper      { font-size:11px; color: var(--black-800); margin-top:4px; }
+  .section-h   { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--black-800); }
+
+  .tree-line   { border-left:2px solid var(--white-400); }
+</style>
+</head>
+<body>
+
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-4">
+  <div class="text-xs font-semibold tracking-widest uppercase" style="color:var(--green-600)">Wick · Sub-Agent Delegation</div>
+  <h1 class="text-3xl font-bold mt-1" style="color:var(--black-900)">Sub-Agents — Squad · Synchronous Delegate · Fleet Monitor</h1>
+  <p class="mt-2 max-w-3xl" style="color:var(--black-800)">
+    A leader agent calls <code>wick_delegate(profile, task)</code>, waits, and gets the sub-agent's final result back —
+    Task-tool style. Reusable role profiles, a provider-agnostic turn governor, and a read-only fleet monitor that shows
+    which agents are running, idle, or dead.
+  </p>
+  <p class="mt-2 text-xs" style="color:var(--black-800)">Paired with <code>design.md</code>. Update keduanya barengan kalau layout / kontrak berubah.</p>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 pb-20 space-y-12">
+
+<!-- ============================================================ -->
+<!-- STATE 1: PROFILE LIST -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">① Profil list — <code>/manager/agents/profiles</code></h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">Reusable roles. Each card = one role; provider/model badge, tool-access count (via tag), enabled toggle.</p>
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-5">
+      <div class="flex items-center gap-3">
+        <input class="input" style="width:240px" placeholder="Search profiles…">
+        <span class="chip chip-muted">12 tools tagged</span>
+      </div>
+      <button class="btn btn-primary">+ New profile</button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <!-- profile card -->
+      <div class="card-sub p-4">
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2">
+            <div class="text-2xl">🔎</div>
+            <div>
+              <div class="font-semibold">Researcher</div>
+              <div class="text-xs" style="color:var(--black-800)">researcher</div>
+            </div>
+          </div>
+          <span class="chip chip-run" style="padding:2px 8px">enabled</span>
+        </div>
+        <p class="text-xs mt-3" style="color:var(--black-800)">Web + docs research. Returns a cited summary.</p>
+        <div class="flex flex-wrap gap-1 mt-3">
+          <span class="badge badge-prov">claude</span>
+          <span class="badge badge-model">opus-4.8</span>
+          <span class="chip chip-muted" style="padding:2px 8px">web · loki</span>
+        </div>
+        <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)">
+          <span>max turns: 12</span><span>leader: no</span>
+        </div>
+      </div>
+      <!-- profile card -->
+      <div class="card-sub p-4">
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2">
+            <div class="text-2xl">🧑‍⚖️</div>
+            <div><div class="font-semibold">Code Reviewer</div><div class="text-xs" style="color:var(--black-800)">code-reviewer</div></div>
+          </div>
+          <span class="chip chip-run" style="padding:2px 8px">enabled</span>
+        </div>
+        <p class="text-xs mt-3" style="color:var(--black-800)">Reviews a diff for bugs. Returns findings list.</p>
+        <div class="flex flex-wrap gap-1 mt-3">
+          <span class="badge badge-prov">codex</span>
+          <span class="badge badge-model">default</span>
+          <span class="chip chip-muted" style="padding:2px 8px">git · repo</span>
+        </div>
+        <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>max turns: 10</span><span>leader: no</span></div>
+      </div>
+      <!-- profile card: leader -->
+      <div class="card-sub p-4" style="border-color:var(--green-500)">
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2">
+            <div class="text-2xl">🧭</div>
+            <div><div class="font-semibold">Orchestrator</div><div class="text-xs" style="color:var(--black-800)">orchestrator</div></div>
+          </div>
+          <span class="chip chip-run" style="padding:2px 8px">enabled</span>
+        </div>
+        <p class="text-xs mt-3" style="color:var(--black-800)">Breaks work down + delegates to other roles.</p>
+        <div class="flex flex-wrap gap-1 mt-3">
+          <span class="badge badge-prov">claude</span>
+          <span class="badge badge-model">opus-4.8</span>
+          <span class="chip chip-run" style="padding:2px 8px">leader ✓</span>
+        </div>
+        <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>max turns: 20</span><span>can delegate</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 2: PROFILE EDITOR -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">② Profil editor — <code>/manager/agents/profiles/new</code></h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">Define a role once. <code>can_delegate</code> auto-disables for providers without MCP tool-use.</p>
+  <div class="card p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="space-y-4">
+      <div><label class="label">Name</label><input class="input" value="Researcher"></div>
+      <div><label class="label">Key (slug)</label><input class="input" value="researcher"><p class="helper">Unique. Used in wick_delegate(profile=…).</p></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Provider</label>
+          <select class="input"><option>claude</option><option>codex</option><option>gemini</option></select></div>
+        <div><label class="label">Model</label><input class="input" value="opus-4.8" placeholder="provider default"></div>
+      </div>
+      <div><label class="label">System prompt (role instruction)</label>
+        <textarea class="input" rows="4">You are a focused research sub-agent. Investigate the task, then return a concise, cited summary. Do not ask follow-up questions.</textarea></div>
+    </div>
+    <div class="space-y-4">
+      <div>
+        <label class="label">Tool access (tags)</label>
+        <div class="card-sub p-3 flex flex-wrap gap-2">
+          <span class="chip chip-active" style="background:var(--green-200);color:var(--green-700);border:1px solid var(--green-500)">web ✓</span>
+          <span class="chip chip-active" style="background:var(--green-200);color:var(--green-700);border:1px solid var(--green-500)">loki ✓</span>
+          <span class="chip chip-muted">git +</span>
+          <span class="chip chip-muted">slack +</span>
+        </div>
+        <p class="helper">Sub-agent only sees tools/connectors that pass these tags (least-privilege per role).</p>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Default max turns</label><input class="input" value="12"><p class="helper">Wick-enforced (Done-count + Kill), provider-agnostic.</p></div>
+        <div>
+          <label class="label">Can delegate (leader)</label>
+          <div class="card-sub p-3 flex items-center justify-between">
+            <span class="text-sm">Allow calling wick_delegate</span>
+            <span class="chip chip-muted">off · claude only</span>
+          </div>
+          <p class="helper">Needs MCP tool-use. Auto-off for providers that don't support it.</p>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button class="btn btn-ghost">Cancel</button><button class="btn btn-primary">Save profile</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 3: DELEGATION TREE IN SESSION -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">③ Pohon delegasi (in session) — <code>agents/session/{id}</code></h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">Inside the leader's transcript: a delegate card (spinner → result). Nested indent per depth, with a turns/budget chip. Click to expand the sub-agent's read-only transcript.</p>
+  <div class="card p-5 space-y-3">
+    <!-- leader turn -->
+    <div class="card-sub p-3">
+      <div class="text-xs section-h mb-1">🧭 orchestrator · leader</div>
+      <p class="text-sm">Saya pecah jadi dua: riset breaking-changes + review patch. Mendelegasikan paralel…</p>
+    </div>
+    <!-- delegate cards nested -->
+    <div class="pl-4 tree-line space-y-3">
+      <div class="card-sub p-3">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-semibold">🔎 wick_delegate → researcher</div>
+          <span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> running · turn 3/8</span>
+        </div>
+        <p class="text-xs mt-1" style="color:var(--black-800)">Task: Cari changelog breaking lib X v3→v4, ringkas + sitasi.</p>
+        <div class="mt-2 text-xs" style="color:var(--green-600); cursor:pointer">▸ expand sub-agent transcript</div>
+      </div>
+      <div class="card-sub p-3">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-semibold">🧑‍⚖️ wick_delegate → code-reviewer</div>
+          <span class="chip chip-run" style="background:var(--pos-100);color:var(--pos-400);border-color:var(--pos-400)">done · 5 turns</span>
+        </div>
+        <p class="text-xs mt-1" style="color:var(--black-800)">Task: Review diff PR #621 untuk bug.</p>
+        <div class="card-sub p-2 mt-2" style="background:var(--white-100)">
+          <div class="text-xs section-h mb-1">result</div>
+          <pre class="text-xs whitespace-pre-wrap">2 findings: (1) nil-deref di parser.go:88; (2) goroutine leak — http.NewRequest tanpa ctx.</pre>
+        </div>
+      </div>
+    </div>
+    <p class="text-xs" style="color:var(--black-800)">Budget root: <b>8/40</b> turns used · depth 1/3 · parallel 2/4</p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 4: FLEET MONITOR -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">④ Fleet monitor (read-only) — <code>/agents/monitor</code></h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">Live via existing SSE <code>/stream</code> + <code>pool.ActiveSnapshot()</code>. Status derived: running / idle / spawning / dead. Observe-only.</p>
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex gap-2">
+        <span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> 3 running</span>
+        <span class="chip chip-idle"><span class="dot" style="background:var(--cau-400)"></span> 1 idle</span>
+        <span class="chip chip-dead"><span class="dot" style="background:var(--neg-400)"></span> 2 done/dead</span>
+      </div>
+      <div class="flex gap-2">
+        <button class="btn btn-ghost">Group: by root ▾</button>
+        <span class="chip chip-muted">live · SSE</span>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <!-- agent card running -->
+      <div class="card-sub p-4">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold text-sm">🔎 researcher</div>
+          <span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> running</span>
+        </div>
+        <p class="text-xs mt-2" style="color:var(--black-800)">▸ now: searching changelog v3→v4…</p>
+        <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)">
+          <span>parent: orchestrator</span><span>depth 1</span>
+        </div>
+        <div class="flex items-center justify-between mt-1 text-xs" style="color:var(--black-800)">
+          <span>turns 3/8</span><span>23s · PID 4821</span>
+        </div>
+      </div>
+      <!-- leader idle -->
+      <div class="card-sub p-4">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold text-sm">🧭 orchestrator</div>
+          <span class="chip chip-idle"><span class="dot" style="background:var(--cau-400)"></span> idle</span>
+        </div>
+        <p class="text-xs mt-2" style="color:var(--black-800)">▸ waiting on 1 sub-agent</p>
+        <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>root · leader</span><span>depth 0</span></div>
+        <div class="flex items-center justify-between mt-1 text-xs" style="color:var(--black-800)"><span>budget 8/40</span><span>PID 4790</span></div>
+      </div>
+      <!-- done -->
+      <div class="card-sub p-4" style="opacity:0.85">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold text-sm">🧑‍⚖️ code-reviewer</div>
+          <span class="chip chip-dead">done</span>
+        </div>
+        <p class="text-xs mt-2" style="color:var(--black-800)">✓ 2 findings returned</p>
+        <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>parent: orchestrator</span><span>depth 1</span></div>
+        <div class="flex items-center justify-between mt-1 text-xs" style="color:var(--black-800)"><span>5 turns · 31s</span><span>exited</span></div>
+      </div>
+    </div>
+    <p class="helper mt-4">Click a card → <code>/agents/monitor/{child_session_id}</code>: read-only transcript + task history for that profile.</p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STATE 6: GOVERNOR SETTINGS -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⑥ Governor settings — <code>/manager/agents/settings</code></h2>
+  <div class="card p-5 grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div><label class="label">Max depth</label><input class="input" value="3"></div>
+    <div><label class="label">Budget / root (turns)</label><input class="input" value="40"></div>
+    <div><label class="label">Max parallel</label><input class="input" value="4"></div>
+    <div><label class="label">Cap max turns</label><input class="input" value="20"></div>
+    <p class="helper col-span-full">Turn budgets enforced wick-side by counting <code>event.Done</code> + <code>pool.Kill</code> — works on providers without a native <code>--max-turns</code> flag. Token budget is deferred (normalized events carry no usage).</p>
+  </div>
+</section>
+
+</main>
+</body>
+</html>
