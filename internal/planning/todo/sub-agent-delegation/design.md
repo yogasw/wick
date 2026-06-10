@@ -656,6 +656,33 @@ Pola **sama persis** dengan connector (`internal/connectors/service.go`
 - **Monitor** = non-admin lihat delegasi yang `triggered_by` = dirinya / dalam
   scope tag; admin lihat semua.
 
+### 10.1 Pewarisan hak + scoped MCP identity (WAJIB, enforcement-critical)
+
+Dua aturan ini menentukan apakah `allowed_tag_ids` benar-benar menggigit atau
+cuma kosmetik:
+
+1. **Sub-agent ≤ user pemicu.** Tag efektif sub-agent =
+   `profile.allowed_tag_ids` **di-INTERSECT** dengan tag user yang memicu root
+   (bukan union). Sub-agent **tidak boleh** punya akses lebih besar dari manusia
+   yang memulai percakapan. Cegah eskalasi via role ber-tag luas.
+
+2. **Identitas MCP ber-scope, BUKAN `MCPToken` admin.** ⚠️ Ganjalan penting:
+   agent yang di-spawn wick **sekarang** autentikasi ke loopback MCP pakai
+   `MCPToken` global → dipetakan ke **principal admin sintetis**
+   (`internal/mcp/auth.go:85-88`) → `isAdmin=true` → **lihat semua connector/tool,
+   filter tag di-BYPASS**. Kalau sub-agent diberi `MCPToken` apa adanya, kolom
+   "Tool access (tags)" tak berefek. Maka sub-agent **wajib** dapat
+   token/identitas MCP yang membawa tag ber-scope (hasil intersect di poin 1),
+   sehingga `wick_list`/`wick_execute` memfilter via `IsVisibleTo` seperti user
+   biasa. Ini item implementasi nyata — bukan sekadar UI.
+
+**Catatan "Tool access (tags)":** kolom ini di-set **admin** dan **memilih dari
+tag yang sudah ada** — connector (`tool_tags` `ToolPath=/connectors/{id}`), tool
+built-in, dan MCP server eksternal (yang diimpor jadi connector via custom-
+connector Flow B) **semua sudah ikut sistem tag yang sama**. **Tidak ada sync
+khusus**: tag yang menggerbangi connector untuk user biasa = tag yang sama
+dipakai di sini.
+
 ---
 
 ## 11. Backward compat
@@ -820,3 +847,48 @@ pipe lokal tak lagi memadai → butuh **message bus** (WebSocket/queue) +
 identitas/auth antar-node. Itu **di luar scope v1** dan akan jadi proposal
 terpisah; `agent_delegations` sudah menyediakan record durable yang bisa jadi
 fondasi bus terdistribusi nanti.
+
+---
+
+## 16. Guardrails & improvement backlog
+
+Catatan arsitektur untuk dipertimbangkan sebelum/selama implementasi. #1 & #2
+paling mahal kalau ketahuan telat.
+
+1. **Batas vs workflow engine — kapan pakai yang mana.** wick sudah punya
+   workflow DAG (*agent node* + *classify node*) = orkestrasi **deterministik**.
+   Sub-agent delegation = orkestrasi **dinamis (LLM yang putuskan)**. Tanpa garis
+   tegas keduanya bisa tumpang-tindih. Rule of thumb: **alur tetap & bercabang
+   jelas → workflow**; **pembagian kerja ad-hoc oleh leader saat runtime →
+   delegation**. (Perlu satu paragraf eksplisit + contoh saat detailing.)
+
+2. **Threat-model + pewarisan hak.** Lihat **§10.1**: sub-agent ≤ akses user
+   pemicu (tag di-intersect), dan identitas MCP sub-agent **ber-scope, bukan
+   `MCPToken` admin**. Vektor yang harus diuji: prompt-injection bikin leader
+   spawn banyak sub-agent / role ber-tag luas jadi jalur exfil. Nyambung ke
+   pelajaran isu identitas Slack send-proxy.
+
+3. **De-risk Fase 1 dengan spike kecil dulu.** Buktikan 3 unknown §14 sebelum
+   nulis implementation plan penuh: (a) inject `system_prompt` per child di pool,
+   (b) spawn-with-cwd untuk worktree, (c) gemini sebagai leader (MCP tool-use).
+   Spike throwaway 1–2 jam menghemat salah-arah.
+
+4. **Mulai dari satu vertical slice konkret.** Pilih satu use-case nyata sebagai
+   acceptance Fase 1 (mis. "orchestrator delegasi code-reviewer di thread
+   Slack") supaya tidak over-build; sisanya nyusul per fase.
+
+5. **Cost/observability ringan walau token-budget di-defer.** Di fleet monitor
+   (§8) tampilkan per-root: total turns, wall-clock, jumlah sub-agent. Murah,
+   tapi langsung kelihatan kalau ada yang "meledak" (apalagi async+paralel).
+
+6. **Kontrak kegagalan + retry.** Definisikan apa yang leader terima saat
+   sub-agent `failed`/`stopped_*` dan boleh apa (retry/lanjut/abort) + policy
+   retry per-delegasi. Sekarang status sudah ada (§2), kontrak ke leader belum
+   tegas.
+
+7. **Global kill-switch untuk rollout.** Toggle env/setting untuk mematikan
+   delegation total (mirip `WICK_DISABLE_SHARED_MCP`) — aman untuk rilis
+   bertahap + emergency stop.
+
+**Tambahan:** `agent_delegations` bisa tumbuh cepat (async/paralel) → siapkan
+retensi/cleanup (cron prune by `ended_at`, atau cap row per-root).
