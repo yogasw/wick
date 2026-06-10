@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -17,8 +18,17 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/pkg/tool"
 )
+
+// globalEncSvc is wired from server.go via SetWorkflowEncService so
+// the env save handler can encrypt secret fields without importing enc
+// directly from server bootstrap. Nil when encryption is unconfigured.
+var globalEncSvc *enc.Service
+
+// SetWorkflowEncService wires the cipher used by the env save handler.
+func SetWorkflowEncService(s *enc.Service) { globalEncSvc = s }
 
 // readBodyAll captures the request body so handlers can sniff or
 // validate before unmarshalling.
@@ -52,7 +62,7 @@ func normaliseWorkflowBody(id string, raw []byte) ([]byte, error) {
 // JSON-only API wrappers consumed by the Svelte SPA under
 // /tools/agents-v2/. Mounted at /api/workflows/* to keep the surface
 // separate from the legacy templ + HTMX routes. Both stay live during
-// the migration (see internal/docs/workflow/svelte-migration.md).
+// the migration (see internal/planning/archive/workflow/svelte-migration.md).
 
 // registerSPAWorkflows wires the JSON workflow endpoints. Call from
 // handler.Register after the legacy routes — the dual-mount works
@@ -78,6 +88,8 @@ func registerSPAWorkflows(r tool.Router) {
 	r.GET("/api/workflows/canvas/{id}", spaCanvasView)
 	r.POST("/api/workflows/move-nodes/{id}", spaMoveNodes)
 	r.POST("/api/workflows/auto-layout/{id}", spaAutoLayout)
+	r.GET("/api/workflows/env/{id}", spaEnvGet)
+	r.POST("/api/workflows/env/{id}", spaEnvSave)
 }
 
 type spaWorkflowSummary struct {
@@ -503,7 +515,7 @@ func runKind(r mcp.RunSummary) string {
 	switch r.Source {
 	case "spa":
 		return "manual"
-	case "test", "wftest":
+	case "test", "wftest", "webhook-test":
 		return "test"
 	}
 	// Manual is sometimes fired by MCP / external API without setting
@@ -691,6 +703,7 @@ func spaTemplateTest(c *tool.Ctx) {
 		return
 	}
 	result, err := globalWorkflowMgr.MCP.TemplateTest(mcp.TemplateTestInput{
+		WorkflowID:  c.PathValue("id"),
 		Template:    body.Template,
 		SampleEvent: body.SampleEvent,
 		Context:     body.Context,
@@ -799,6 +812,12 @@ func spaExecNode(c *tool.Ctx) {
 		w = wf.Workflow{ID: id}
 	}
 	envVals, _ := globalWorkflowMgr.Service.LoadEnvValues(id)
+	// Decrypt secrets into envVals — all keys accessible via {{.Env.X}}.
+	// Secrets map kept for output masking.
+	secrets := globalWorkflowMgr.Engine.ExtractSecrets(w.Env, envVals)
+	for k, v := range secrets {
+		envVals[k] = v
+	}
 	outputs := map[string]any{}
 	nodeOutputs := map[string]wf.NodeOutput{}
 	// Hydrate every upstream output the FE knows about. Each entry
@@ -829,23 +848,231 @@ func spaExecNode(c *tool.Ctx) {
 		Event:       eventFromExecBody(body.Event, body.Input),
 		Outputs:     outputs,
 		EnvValues:   envVals,
+		Secrets:     secrets,
 		RunID:       "step-" + time.Now().UTC().Format("20060102T150405.000000000"),
 		NodeOutputs: nodeOutputs,
 	}
 	node, prerr := wfengine.PreRenderNode(body.Node, rc.RenderCtx())
 	if prerr != nil {
-		c.JSON(http.StatusBadRequest, map[string]any{"error": "pre-render: " + prerr.Error()})
+		errMsg := "pre-render: " + prerr.Error()
+		// Detect .Env.<KEY> where KEY is actually a secret → helpful hint.
+		if msg := errMsg; strings.Contains(msg, "map has no entry for key") {
+			for k := range secrets {
+				if strings.Contains(msg, `"`+k+`"`) {
+					errMsg = fmt.Sprintf("%s — %q is a secret env var, use {{.Env.%s}}", errMsg, k, k)
+					break
+				}
+			}
+		}
+		c.JSON(http.StatusBadRequest, map[string]any{"error": errMsg})
 		return
 	}
 	startedAt := time.Now()
 	out, runErr := exec.Execute(c.Context(), node, rc)
+	outJSON := maskSecretsInJSON(nodeOutputToJSON(out), secrets)
 	resp := map[string]any{
 		"ok":         runErr == nil,
 		"latency_ms": time.Since(startedAt).Milliseconds(),
-		"output":     nodeOutputToJSON(out),
+		"output":     outJSON,
 	}
 	if runErr != nil {
-		resp["error"] = runErr.Error()
+		resp["error"] = maskSecretsInString(runErr.Error(), secrets)
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// maskSecretsInString replaces every known plaintext secret value with
+// "••••••••" in s. Short or empty values are skipped to avoid false
+// positives on common strings like "true" or "1".
+func maskSecretsInString(s string, secrets map[string]string) string {
+	for _, v := range secrets {
+		if len(v) < 4 {
+			continue
+		}
+		s = strings.ReplaceAll(s, v, "••••••••")
+	}
+	return s
+}
+
+// maskSecretsInJSON recursively walks an arbitrary JSON-decoded value
+// and replaces secret plaintext in every string leaf.
+func maskSecretsInJSON(v any, secrets map[string]string) any {
+	if len(secrets) == 0 {
+		return v
+	}
+	switch t := v.(type) {
+	case string:
+		return maskSecretsInString(t, secrets)
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			out[k] = maskSecretsInJSON(val, secrets)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = maskSecretsInJSON(val, secrets)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// ── Env / Settings handlers ──────────────────────────────────────────
+
+// spaEnvGet returns the workflow's env schema (from the draft body) and
+// current values (from the env_values column). Secret values are masked
+// as "wick_enc_..." so plaintext never leaves the server.
+//
+// Response shape:
+//
+//	{
+//	  "schema": [...workflow.EnvField],
+//	  "values": {"SLACK_CHANNEL": "#support", "GITHUB_PAT": "wick_enc_..."}
+//	}
+func spaEnvGet(c *tool.Ctx) {
+	id := c.PathValue("id")
+	w, err := globalWorkflowMgr.Service.LoadDraft(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]any{"error": "workflow not found"})
+		return
+	}
+	values, err := globalWorkflowMgr.Service.LoadEnvValues(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	// Build secret key set from schema + free-form wick_enc_ values.
+	secretKeys := map[string]bool{}
+	for _, f := range w.Env {
+		if f.IsSecret() {
+			secretKeys[f.Name] = true
+		}
+	}
+	// Free-form rows stored as wick_cenc_ (master) or wick_enc_ (per-user) tokens.
+	for k, v := range values {
+		if enc.IsToken(v) || enc.IsMasterToken(v) {
+			secretKeys[k] = true
+		}
+	}
+
+	// Apply schema defaults; mask secret values before sending to FE.
+	for _, f := range w.Env {
+		if _, ok := values[f.Name]; !ok && f.Default != "" {
+			values[f.Name] = f.Default
+		}
+	}
+	masked := make(map[string]string, len(values))
+	secretKeysList := make([]string, 0)
+	for k, v := range values {
+		if secretKeys[k] {
+			masked[k] = "••••••••"
+			secretKeysList = append(secretKeysList, k)
+		} else {
+			masked[k] = v
+		}
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"schema":      w.Env,
+		"values":      masked,
+		"secret_keys": secretKeysList,
+	})
+}
+
+// spaEnvSave writes the env values blob. Secret fields whose incoming
+// value is a plaintext (not already wick_enc_) are encrypted before
+// persisting. Existing wick_enc_ tokens are stored verbatim.
+//
+// Request body: {"values": {"SLACK_CHANNEL": "#support", "GITHUB_PAT": "mytoken"}}
+func spaEnvSave(c *tool.Ctx) {
+	id := c.PathValue("id")
+	var body struct {
+		Values     map[string]string `json:"values"`
+		SecretKeys []string          `json:"secret_keys"`
+	}
+	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil || body.Values == nil {
+		c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid body: expected {values: {...}}"})
+		return
+	}
+	// Validate + normalise free-form keys: A-Z 0-9 _ only, uppercase,
+	// no duplicates. Schema keys (from env: block) are pre-validated by
+	// the workflow author and bypass this check.
+	{
+		w0, werr := globalWorkflowMgr.Service.LoadDraft(id)
+		schemaKeySet := map[string]bool{}
+		if werr == nil {
+			for _, f := range w0.Env {
+				schemaKeySet[f.Name] = true
+			}
+		}
+		seen := map[string]bool{}
+		for k := range body.Values {
+			if schemaKeySet[k] {
+				continue
+			}
+			upper := strings.ToUpper(k)
+			if upper != k {
+				c.JSON(http.StatusBadRequest, map[string]any{"error": "env key must be uppercase: " + k})
+				return
+			}
+			for _, r := range k {
+				if !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+					c.JSON(http.StatusBadRequest, map[string]any{"error": "env key must contain only A-Z 0-9 _: " + k})
+					return
+				}
+			}
+			if seen[k] {
+				c.JSON(http.StatusBadRequest, map[string]any{"error": "duplicate env key: " + k})
+				return
+			}
+			seen[k] = true
+		}
+	}
+	// Load schema to know which fields are secrets (schema-declared).
+	w, err := globalWorkflowMgr.Service.LoadDraft(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]any{"error": "workflow not found"})
+		return
+	}
+	secretFields := map[string]bool{}
+	for _, f := range w.Env {
+		if f.IsSecret() {
+			secretFields[f.Name] = true
+		}
+	}
+	// Also mark free-form keys declared secret by the FE.
+	for _, k := range body.SecretKeys {
+		secretFields[k] = true
+	}
+
+	// Encrypt plain-text secret values using the master key (not per-user)
+	// so the engine can decrypt them at run time without a user context.
+	if globalEncSvc != nil && !globalEncSvc.Disabled() {
+		for k, v := range body.Values {
+			if secretFields[k] && v != "" && !enc.IsToken(v) && !enc.IsMasterToken(v) {
+				token, err := globalEncSvc.EncryptMaster(v)
+				if err == nil {
+					body.Values[k] = token
+				}
+			}
+		}
+	}
+
+	// Merge: load existing values and overlay with incoming body.Values.
+	// Keys not present in body.Values are kept as-is (e.g. stored secrets
+	// the FE skipped because the user didn't retype them).
+	existing, _ := globalWorkflowMgr.Service.LoadEnvValues(id)
+	if existing == nil {
+		existing = map[string]string{}
+	}
+	for k, v := range body.Values {
+		existing[k] = v
+	}
+	if err := globalWorkflowMgr.Service.SaveEnvValues(id, existing); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
 }

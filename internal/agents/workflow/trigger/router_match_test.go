@@ -158,10 +158,10 @@ func TestTriggerPassesRouterChecks_SlackPickerFilter(t *testing.T) {
 		Subtype: "message",
 		Payload: map[string]any{"channel_id": "COTHER", "text": "hello"},
 	}
-	if !triggerPassesRouterChecks(tr, pass) {
+	if !triggerPassesRouterChecks("", tr,pass) {
 		t.Errorf("CHLPKQE7M in whitelist should pass (was broken by mode key)")
 	}
-	if triggerPassesRouterChecks(tr, fail) {
+	if triggerPassesRouterChecks("", tr,fail) {
 		t.Errorf("COTHER not in whitelist should fail")
 	}
 
@@ -171,7 +171,7 @@ func TestTriggerPassesRouterChecks_SlackPickerFilter(t *testing.T) {
 		"mode":       "all",
 		"channel_id": `[{"id":"CHLPKQE7M","name":"#random"}]`,
 	}
-	if !triggerPassesRouterChecks(trAll, fail) {
+	if !triggerPassesRouterChecks("", trAll, fail) {
 		t.Errorf("mode=all should pass even non-whitelisted channel")
 	}
 }
@@ -194,7 +194,7 @@ func TestTriggerPassesRouterChecks_MatchDisabled(t *testing.T) {
 		Subtype: "message",
 		Payload: map[string]any{"mode": "all"},
 	}
-	if !triggerPassesRouterChecks(tr, evt) {
+	if !triggerPassesRouterChecks("", tr,evt) {
 		t.Errorf("disabled match should let event through")
 	}
 }
@@ -223,10 +223,10 @@ func TestTriggerPassesRouterChecks_MatchEnabledFilters(t *testing.T) {
 		Subtype: "message",
 		Payload: map[string]any{"channel_id": "C999"},
 	}
-	if !triggerPassesRouterChecks(tr, pass) {
+	if !triggerPassesRouterChecks("", tr,pass) {
 		t.Errorf("C123 in whitelist should pass")
 	}
-	if triggerPassesRouterChecks(tr, fail) {
+	if triggerPassesRouterChecks("", tr,fail) {
 		t.Errorf("C999 not in whitelist should fail")
 	}
 }

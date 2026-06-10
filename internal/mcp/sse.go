@@ -300,7 +300,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		return
 	}
 
-	connectorID, opKey, err := handlers.ParseToolID(toolID)
+	connectorID, opKey, accountID, err := handlers.ParseToolIDFull(toolID)
 	if err != nil {
 		sseWriteToolError(sess, req, err.Error(), toolID)
 		return
@@ -351,6 +351,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			IPAddress:    handlers.ClientIP(r),
 			UserAgent:    r.Header.Get("User-Agent"),
 			Progress:     reporter,
+			AccountID:    accountID,
 		})
 		resCh <- execOut{res: res, err: err}
 	}()

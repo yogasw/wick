@@ -13,6 +13,17 @@ type UserRow struct {
 	TagIDs []string
 }
 
+// UserCreateResult carries the one-time outcome of an admin "Add user"
+// submit. Password is the freshly generated plaintext, surfaced once in
+// a banner on the synchronous POST response and never stored or shown
+// again. ErrMsg holds a creation error (e.g. duplicate email) to render
+// instead. All fields are zero on a normal page load.
+type UserCreateResult struct {
+	Email    string
+	Password string
+	ErrMsg   string
+}
+
 // ToolRow is the view model for a single tool row in the admin table.
 type ToolRow struct {
 	Tool        tool.Tool

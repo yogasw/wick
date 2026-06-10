@@ -57,7 +57,7 @@
       {/each}
     {:else}
       {#each items as c (c.path)}
-        <div class="group flex items-center gap-2 py-1 pr-2 pl-6 hover:bg-white-200 dark:hover:bg-navy-800">
+        <div class="group flex items-center gap-2 py-1 pr-2 pl-3 hover:bg-white-200 dark:hover:bg-navy-800">
           <button type="button" onclick={() => onOpen(c.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{c.path}</button>
           <div class="hidden shrink-0 items-center gap-1 group-hover:flex">
             <button type="button" title="Discard" onclick={() => onDiscard([c.path], c.untracked ? [c.path] : [])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">

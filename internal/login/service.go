@@ -193,6 +193,39 @@ func (s *Service) BootstrapAdmin(ctx context.Context, defaultPassword string, al
 	return generated
 }
 
+// AdminCreateUser provisions a new, already-approved user from the
+// admin panel and returns the generated password in plaintext. The
+// password is a server-side 5-word passphrase (same generator as the
+// first-boot admin seed); only its bcrypt hash is stored, so this return
+// value is the single time the plaintext is recoverable. The caller is
+// responsible for surfacing it to the admin exactly once.
+//
+// Returns ErrEmailExists when the email already belongs to a user.
+func (s *Service) AdminCreateUser(ctx context.Context, email, name string) (*entity.User, string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || !strings.Contains(email, "@") {
+		return nil, "", errors.New("a valid email is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		// Fall back to the local-part of the email as a display name.
+		name = email
+		if i := strings.Index(email, "@"); i > 0 {
+			name = email[:i]
+		}
+	}
+	password := GeneratePassphrase()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, "", err
+	}
+	u, err := s.repo.CreateUserWithPassword(ctx, email, name, string(hash), s.adminEmails)
+	if err != nil {
+		return nil, "", err
+	}
+	return u, password, nil
+}
+
 // SetEmail updates the user's email address. Used by the first-login
 // setup flow so admins can rename the seed account (admin@admin.com)
 // to a real address. Returns ErrEmailTaken when the new email already

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { selectedNode, updateNode } from "$lib/stores/editor";
   import BaseInspectorPanel from "./nodes/BaseInspectorPanel.svelte";
+  import Select from "$lib/components/shared/Select.svelte";
   import type { Node } from "$lib/types/workflow";
 
   function patch(field: keyof Node, value: unknown) {
@@ -61,11 +62,7 @@
       {#if n.type === "http"}
         <label class="flex flex-col gap-1">
           <span>Method</span>
-          <select class="rounded border px-2 py-1" value={n.method ?? "GET"} onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}>
-            {#each ["GET", "POST", "PUT", "PATCH", "DELETE"] as m}
-              <option value={m}>{m}</option>
-            {/each}
-          </select>
+          <Select value={n.method ?? "GET"} options={["GET","POST","PUT","PATCH","DELETE"]} size="sm" onChange={(v) => patch("method", v)} />
         </label>
         <label class="flex flex-col gap-1">
           <span>URL</span>
@@ -158,11 +155,7 @@
       </label>
       <label class="flex flex-col gap-1">
         <span>On failure</span>
-        <select class="rounded border px-2 py-1" value={n.on_failure ?? "stop"} onchange={(e) => patch("on_failure", (e.target as HTMLSelectElement).value)}>
-          {#each ["stop", "continue", "fallback"] as opt}
-            <option value={opt}>{opt}</option>
-          {/each}
-        </select>
+        <Select value={n.on_failure ?? "stop"} options={["stop","continue","fallback"]} size="sm" onChange={(v) => patch("on_failure", v)} />
       </label>
       <label class="flex flex-col gap-1">
         <span>Fallback node</span>

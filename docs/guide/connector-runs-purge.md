@@ -84,6 +84,6 @@ CREATE INDEX IF NOT EXISTS idx_connector_runs_started_at
 ## Reference
 
 - Implementation: [`internal/jobs/connector-runs-purge/`](https://github.com/yogasw/wick/tree/master/internal/jobs/connector-runs-purge)
-- Related table schema: [`internal/docs/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/docs/connectors-design.md) section 5.3
-- System tag mechanics: [`internal/docs/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/docs/connectors-design.md) section 9.8
+- Related table schema: [`internal/planning/archive/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/planning/archive/connectors-design.md) section 5.3
+- System tag mechanics: [`internal/planning/archive/connectors-design.md`](https://github.com/yogasw/wick/blob/master/internal/planning/archive/connectors-design.md) section 9.8
 - Run history surface: [`/manager/connectors/{key}/{id}/history`](./connector-module#history-page) for connector audit; `/manager/jobs/connector-runs-purge` for the job's own runs

@@ -12,6 +12,7 @@
   const url = panel.dataset.testUrl;
   const baseUrl = panel.dataset.baseUrl || url;
   const select = panel.querySelector("[data-test-op]");
+  const accountSelect = panel.querySelector("[data-test-account]");
   const runBtn = panel.querySelector("[data-test-run]");
   const result = panel.querySelector("[data-test-result]");
   const statusEl = panel.querySelector("[data-test-status]");
@@ -77,10 +78,11 @@
     runBtn.textContent = "Running…";
 
     try {
+      const accountId = accountSelect ? accountSelect.value : "";
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operation, input }),
+        body: JSON.stringify({ operation, input, account_id: accountId }),
       });
       const data = await resp.json();
       const status = data.status || (data.error ? "error" : "success");

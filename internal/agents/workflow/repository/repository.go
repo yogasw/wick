@@ -10,6 +10,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -63,14 +64,14 @@ func (r *Repo) LoadWorkflow(id string) (wf.Workflow, error) {
 	if err != nil {
 		return wf.Workflow{}, err
 	}
-	yamlText := row.BodyPublished
-	if yamlText == "" {
-		yamlText = row.BodyDraft
+	body := row.BodyPublished
+	if body == "" {
+		body = row.BodyDraft
 	}
-	if yamlText == "" {
-		return wf.Workflow{}, errors.New("workflow has no yaml")
+	if body == "" {
+		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(yamlText))
+	return parse.Parse(id, []byte(body))
 }
 
 // LoadDraft returns the parsed draft when one exists, otherwise the
@@ -80,14 +81,14 @@ func (r *Repo) LoadDraft(id string) (wf.Workflow, error) {
 	if err != nil {
 		return wf.Workflow{}, err
 	}
-	yamlText := row.BodyDraft
-	if yamlText == "" {
-		yamlText = row.BodyPublished
+	body := row.BodyDraft
+	if body == "" {
+		body = row.BodyPublished
 	}
-	if yamlText == "" {
-		return wf.Workflow{}, errors.New("workflow has no yaml")
+	if body == "" {
+		return wf.Workflow{}, errors.New("workflow has no body")
 	}
-	return parse.Parse(id, []byte(yamlText))
+	return parse.Parse(id, []byte(body))
 }
 
 // SaveDraft persists the workflow as the active draft and appends a
@@ -156,7 +157,7 @@ func (r *Repo) SaveDraft(id string, w wf.Workflow, createdBy, message string) (u
 	return version, err
 }
 
-// Publish promotes the current draft to published. The published yaml
+// Publish promotes the current draft to published. The published body
 // becomes the new BodyPublished column and a snapshot is appended to
 // workflow_versions with Kind=published. The draft column is cleared
 // and HasDraft flipped to false so the next save creates a fresh
@@ -295,6 +296,48 @@ func (r *Repo) Delete(id string) error {
 		}
 		return tx.Where("id = ?", id).Delete(&entity.Workflow{}).Error
 	})
+}
+
+// ── Env values ───────────────────────────────────────────────────────
+//
+// Runtime config lives in the workflows.env_values column as a JSON
+// blob, separate from the body so it never rides the version history.
+// Secrets are wick_enc_ ciphertext; the engine decrypts at run time.
+
+// LoadEnvValues decodes the env_values JSON blob into a flat map. A
+// blank column (zero-config workflow) returns an empty map, not an
+// error.
+func (r *Repo) LoadEnvValues(id string) (map[string]string, error) {
+	row, err := r.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	if row.EnvValues == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(row.EnvValues), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveEnvValues serializes the map to JSON and writes only the
+// env_values column — body, draft, and version history are untouched.
+func (r *Repo) SaveEnvValues(id string, values map[string]string) error {
+	if values == nil {
+		values = map[string]string{}
+	}
+	blob, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	return r.db.Model(&entity.Workflow{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"env_values": string(blob),
+			"updated_at": time.Now(),
+		}).Error
 }
 
 // ── Test cases ───────────────────────────────────────────────────────

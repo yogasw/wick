@@ -34,7 +34,7 @@ type RunContext struct {
 	RunID       string
 	NodeOutputs map[string]NodeOutput
 
-	// TriggerNodeID is the canvas/yaml node id under which the run's
+	// TriggerNodeID is the canvas node id under which the run's
 	// firing trigger surfaces in {{.Node.<id>.…}}. Set by the engine
 	// when pickEntry resolves a trigger row (uses Trigger.ID when set,
 	// else falls back to the entry node id). Empty for legacy runs
@@ -144,7 +144,7 @@ func (e *ExecError) Unwrap() error { return e.Wrapped }
 //	{{.Event.X}}        — trigger event payload
 //	{{.Node.<id>.X}}    — output of completed node X
 //	{{.Env.X}}          — non-secret workflow env value
-//	{{.Secret.X}}       — encrypted secret, decrypted on lookup
+//	{{.Env.X}}          — all env vars incl. secrets (decrypted at run time)
 //	{{.Workflow.X}}     — workflow metadata
 //	{{.Run.X}}          — runtime metadata
 //	{{.DataTable.<alias>}} — data table binding from data_tables: list

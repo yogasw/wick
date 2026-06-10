@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func NewGORM(c config.Database) *gorm.DB {
@@ -30,7 +31,7 @@ func NewGORM(c config.Database) *gorm.DB {
 	}
 
 	db, err := gorm.Open(dialector, &gorm.Config{
-		// Logger: NewLogLevel("debug"),
+		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		log.Fatal().Msgf("failed to opening db conn: %s", err.Error())

@@ -27,11 +27,13 @@ Pure data shaping. No I/O — reshape between nodes via gotemplate / jsonpath / 
 
 ## Example
 
-```yaml
-- id: build
-  type: transform
-  engine: gotemplate
-  expression: '{{index .Event.Payload "text" | upper}}'
+```json
+{
+  "id": "build",
+  "type": "transform",
+  "engine": "gotemplate",
+  "expression": "{{index .Event.Payload \"text\" | upper}}"
+}
 ```
 
 ## Engines
@@ -48,20 +50,24 @@ For anything beyond a one-line reshape, reach for [`go_script`](./go-script) ins
 
 Set `engine: jq` and put a jq program in `expression`. The program runs against the JSON parsed from `input` — or, when `input` is blank, against the full render context marshalled to JSON.
 
-```yaml
-- id: shape
-  type: transform
-  engine: jq
-  input: '{{.Node.fetch.body}}'
-  expression: '{items: [.data[] | {id, name}]}'
+```json
+{
+  "id": "shape",
+  "type": "transform",
+  "engine": "jq",
+  "input": "{{.Node.fetch.body}}",
+  "expression": "{items: [.data[] | {id, name}]}"
+}
 ```
 
-```yaml
-- id: active_only
-  type: transform
-  engine: jq
-  input: '{{.Node.list.body}}'
-  expression: '.[] | select(.status == "active") | {id, name}'
+```json
+{
+  "id": "active_only",
+  "type": "transform",
+  "engine": "jq",
+  "input": "{{.Node.list.body}}",
+  "expression": ".[] | select(.status == \"active\") | {id, name}"
+}
 ```
 
 Output rules:

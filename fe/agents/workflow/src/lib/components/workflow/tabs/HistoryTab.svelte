@@ -99,7 +99,7 @@
         onclick={openCompare}
       >Compare</button>
       <button
-        class="text-xs px-2 py-0.5 rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-40"
+        class="text-xs px-2 py-0.5 rounded border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40"
         disabled={versions.length === 0}
         onclick={confirmClear}
       >Clear all</button>
@@ -114,18 +114,13 @@
           checked={selected.includes(v.id)}
           onchange={() => toggleSelect(v.id)}
         />
-        <span class="px-1.5 py-0.5 rounded text-[10px] uppercase"
-              class:bg-emerald-100={v.kind === "published"}
-              class:text-emerald-700={v.kind === "published"}
-              class:bg-amber-100={v.kind === "draft"}
-              class:text-amber-700={v.kind === "draft"}
-        >{v.kind}</span>
+        <span class={`px-1.5 py-0.5 rounded text-[10px] uppercase ${v.kind === "published" ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400" : "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"}`}>{v.kind}</span>
         <span class="text-black-500 dark:text-white-100-700 tabular-nums">v{v.id}</span>
         <span class="flex-1 truncate">{v.message ?? "—"}</span>
         <span class="text-black-500 dark:text-white-100-700">{v.created_at}</span>
         <button class="text-emerald-600" onclick={() => (viewing = v)}>view</button>
         <button class="text-emerald-600" onclick={() => onrestore?.(v.id)}>restore</button>
-        <button class="text-red-600" title="Delete this snapshot" onclick={() => confirmDelete(v.id)}>🗑</button>
+        <button class="text-red-600 dark:text-red-400" title="Delete this snapshot" onclick={() => confirmDelete(v.id)}>🗑</button>
       </li>
     {/each}
   </ul>
@@ -152,7 +147,7 @@
       {#if compareLoading}
         <div class="flex-1 flex items-center justify-center text-xs">Loading…</div>
       {:else if compareError}
-        <div class="flex-1 p-3 text-xs text-red-600">{compareError}</div>
+        <div class="flex-1 p-3 text-xs text-red-600 dark:text-red-400">{compareError}</div>
       {:else}
         <div class="flex-1 min-h-0">
           <JsonDiff

@@ -18,7 +18,7 @@ Run a local shell command. Captures stdout / stderr / exit_code.
 |---|---|---|---|
 | `command` | template | ✅ | The command line. Rendered as Go template. |
 | `cwd` | path (template) | | Working directory. Default: workflow folder. |
-| `env` | kvlist (template) | | Extra environment variables. Each value is rendered. |
+| `env` | map (template) | | Extra environment variables. Each value is rendered. |
 | `parse_output` | dropdown | | `raw` (default) / `json` / `lines`. |
 | `timeout_sec` | int | | Per-call timeout in seconds. |
 
@@ -34,11 +34,13 @@ When `parse_output: json` and stdout is valid JSON, the parsed value is also mer
 
 ## Example
 
-```yaml
-- id: count_files
-  type: shell
-  command: 'find {{.Env.PROJECT_DIR}} -name "*.go" | wc -l'
-  parse_output: raw
+```json
+{
+  "id": "count_files",
+  "type": "shell",
+  "command": "find {{.Env.PROJECT_DIR}} -name \"*.go\" | wc -l",
+  "parse_output": "raw"
+}
 ```
 
 ## Pair with

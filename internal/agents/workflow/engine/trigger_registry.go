@@ -186,8 +186,8 @@ func DefaultTriggerDescriptors() []TriggerDescriptor {
 		},
 		{
 			Type:        workflow.TriggerWebhook,
-			Description: "External HTTP POST to /hooks/<path>. HMAC SHA-256 verifiable.",
-			Example:     `{type: webhook, path: /hooks/orders/{id}, secret_ref: wick_enc_...}`,
+			Description: "External HTTP POST to /webhook/{wf_id}/{slug}. Draft endpoint: /webhook-test/{wf_id}/{slug}. HMAC SHA-256 verifiable.",
+			Example:     `{type: webhook, path: orders, secret_ref: wick_enc_...}`,
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -18,8 +18,8 @@ Invoke a channel action — Slack `send_message`, `open_modal`, `add_reaction`, 
 |---|---|---|---|
 | `channel` | string | ✅ | Channel adapter key (`slack`, `telegram`, …). |
 | `op` | string | ✅ | Action key registered by the adapter. |
-| `args` | YAML map (templated) | | Per-action input. Field set comes from the action's `input_schema`. |
-| `arg_modes` | YAML map | | Per-arg `fixed` / `expression`. |
+| `args` | map (templated) | | Per-action input. Field set comes from the action's `input_schema`. |
+| `arg_modes` | map | | Per-arg `fixed` / `expression`. |
 
 ## Output
 
@@ -49,18 +49,22 @@ See [Channels ▶ Slack](/guide/agents/channels#slack) for the transport details
 
 ## Example
 
-```yaml
-- id: send_reply
-  type: channel
-  channel: slack
-  op: send_message
-  arg_modes:
-    channel: expression
-    text: expression
-  args:
-    channel: '{{index .Event.Payload "channel_id"}}'
-    text: 'Got it, looking into {{.Node.classify.verdict}}.'
-    thread_ts: '{{index .Event.Payload "thread_ts"}}'
+```json
+{
+  "id": "send_reply",
+  "type": "channel",
+  "channel": "slack",
+  "op": "send_message",
+  "arg_modes": {
+    "channel": "expression",
+    "text": "expression"
+  },
+  "args": {
+    "channel": "{{index .Event.Payload \"channel_id\"}}",
+    "text": "Got it, looking into {{.Node.classify.verdict}}.",
+    "thread_ts": "{{index .Event.Payload \"thread_ts\"}}"
+  }
+}
 ```
 
 ## Pair with

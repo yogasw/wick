@@ -17,16 +17,17 @@ import (
 )
 
 // DBService is the database-primary implementation of Service. The
-// workflow definition (body + draft + version history + supporting
-// files + test fixtures) lives in SQL via repository.Repo; runtime
-// concerns the engine needs from the filesystem (state.json, env.yaml,
-// runs/<id>/) still go through the embedded FileService.
+// workflow definition (body + draft + version history + test fixtures)
+// and the runtime env values all live in SQL via repository.Repo; the
+// only filesystem concern left is per-run state (state.json,
+// runs/<id>/), which still goes through the embedded FileService.
 //
 // Composition over inheritance: FileService is embedded so methods we
-// don't override (LoadState/SaveState, LoadEnvValues/SaveEnvValues,
-// BaseDir) keep their on-disk semantics. The runtime side of wick
-// continues to write state + events as JSON/JSONL files so the engine
-// stays cheap and crash-friendly.
+// don't override (LoadState/SaveState, BaseDir) keep their on-disk
+// semantics. The runtime side of wick continues to write state + events
+// as JSON/JSONL files so the engine stays cheap and crash-friendly.
+// Env values are NOT among those — LoadEnvValues/SaveEnvValues are
+// overridden below to read/write the workflows.env_values column.
 type DBService struct {
 	*FileService
 	repo *repository.Repo
@@ -34,7 +35,7 @@ type DBService struct {
 
 // NewDB constructs a DBService with the shared Repo and Layout. The
 // Layout is still required because the embedded FileService owns the
-// state.json + env.yaml + runs/<id>/ paths.
+// state.json + runs/<id>/ paths.
 func NewDB(layout config.Layout, repo *repository.Repo) *DBService {
 	return &DBService{
 		FileService: New(layout),
@@ -297,6 +298,36 @@ func (s *DBService) DiscardDraft(id string) error {
 		return err
 	}
 	return s.repo.DiscardDraft(id)
+}
+
+// ── Env values ───────────────────────────────────────────────────────
+//
+// DB-primary: env values live in the workflows.env_values column, not
+// on disk. Overrides the embedded FileService's file-based methods so
+// the running app never touches `<id>/env.json`.
+
+// LoadEnvValues reads the env_values JSON blob from the workflow row.
+func (s *DBService) LoadEnvValues(id string) (map[string]string, error) {
+	if err := parse.ValidateID(id); err != nil {
+		return nil, err
+	}
+	out, err := s.repo.LoadEnvValues(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveEnvValues writes the env_values column without touching the body
+// or version history.
+func (s *DBService) SaveEnvValues(id string, values map[string]string) error {
+	if err := parse.ValidateID(id); err != nil {
+		return err
+	}
+	return s.repo.SaveEnvValues(id, values)
 }
 
 // ── Test fixtures ────────────────────────────────────────────────────

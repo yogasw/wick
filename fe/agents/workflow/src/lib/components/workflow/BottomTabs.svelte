@@ -144,7 +144,7 @@
   class="flex flex-col border-t border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 transition-[height] duration-150"
   style:height={collapsed ? "auto" : "260px"}
 >
-  <nav class="flex items-center border-b border-white-300 dark:border-navy-600 text-xs overflow-x-auto">
+  <nav class="flex items-center text-xs overflow-x-auto" class:border-b={!collapsed} class:border-white-300={!collapsed} class:dark:border-navy-600={!collapsed}>
     {#each tabs as t}
       <button
         class="shrink-0 whitespace-nowrap px-3 py-1.5 border-b-2 transition-colors flex items-center gap-1.5"

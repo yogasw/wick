@@ -590,7 +590,7 @@ func NewServer() *Server {
 	// tools/agents.Broadcaster events into the slim AgentEvent the
 	// workflow executor consumes. Pool-routed agent nodes go through
 	// the FIFO queue + session reuse machinery — see
-	// internal/docs/workflow/pool.md.
+	// internal/planning/archive/workflow/pool.md.
 	wfMgr.WithAgentRuntime(agentsPool, func(sessionID string) (<-chan wfnodes.AgentEvent, func()) {
 		raw, unsub := agentsBcast.Subscribe(sessionID)
 		out := make(chan wfnodes.AgentEvent, 256)
@@ -615,6 +615,10 @@ func NewServer() *Server {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
 	agentstool.SetWorkflowManager(wfMgr)
+	agentstool.SetWorkflowEncService(encSvc)
+	// Wire master-key decryptor into the engine so wick_enc_ workflow
+	// secrets are decrypted at run time without a user context.
+	wfMgr.Engine.Decryptor = encDecryptorFunc(encSvc.DecryptMaster)
 	agentstool.SetDataTables(wfMgr.DataTables)
 	providerstoragetool.SetSyncManager(syncMgr)
 	provider.AppName = appname.Resolve()
@@ -1048,7 +1052,7 @@ func NewServer() *Server {
 	}
 
 	// ── Admin ────────────────────────────────────────────────────
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc)
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc)
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
@@ -1162,12 +1166,14 @@ func NewServer() *Server {
 		r.Handle(path, h)
 	}
 
-	// Workflow webhook triggers — public path /hooks/<...>. The handler
-	// inspects path + body, dispatches matching workflow triggers via
-	// the router. Each trigger spec can carry HMAC `secret_ref` for
-	// integrity check; otherwise plain POST.
+	// Workflow webhook triggers.
+	// /webhook/  — dispatches against the published workflow copy.
+	// /webhook-test/ — dispatches against the draft copy so operators
+	// can test changes without publishing. Both accept optional HMAC
+	// via X-Wick-Sig; path format: /{wf_id}/{slug}.
 	if wfMgr != nil && wfMgr.Router != nil {
-		r.Handle("/hooks/", wftrigger.NewWebhookHandler(wfMgr.Router))
+		r.Handle("/webhook/", wftrigger.NewWebhookHandler(wfMgr.Router))
+		r.Handle("/webhook-test/", wftrigger.NewDraftWebhookHandler(wfMgr.Router, wfMgr.Service))
 	}
 
 	// OAuth 2.1 surface — .well-known metadata + /oauth/{register,
@@ -1668,3 +1674,10 @@ func parseGateRules(raw string) []gate.CommandRule {
 	}
 	return rules
 }
+
+// encDecryptorFunc adapts a func(string)(string,error) to the
+// engine.SecretDecryptor interface so enc.Service.DecryptMaster can
+// be wired into the engine without a new concrete type in enc/.
+type encDecryptorFunc func(string) (string, error)
+
+func (f encDecryptorFunc) Decrypt(token string) (string, error) { return f(token) }

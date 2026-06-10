@@ -176,12 +176,7 @@
         { key: "running", label: "●" },
       ] as t}
         <button
-          class="px-2 py-0.5 rounded transition-colors"
-          class:bg-white-200={filter === t.key}
-          class:bg-navy-600={filter === t.key}
-          class:text-slate-900={filter === t.key}
-          class:text-white-100={filter === t.key}
-          class:text-black-700={filter !== t.key}
+          class={`px-2 py-0.5 rounded transition-colors text-[11px] ${filter === t.key ? "bg-slate-200 dark:bg-navy-600 text-slate-900 dark:text-white-100 font-medium" : "text-black-700 dark:text-black-500 hover:bg-slate-100 dark:hover:bg-navy-700"}`}
           onclick={() => (filter = t.key as typeof filter)}
         >
           {t.label}
@@ -210,12 +205,7 @@
         { key: "test", label: "Test" },
       ] as t}
         <button
-          class="px-2 py-0.5 rounded transition-colors"
-          class:bg-white-200={kindFilter === t.key}
-          class:bg-navy-600={kindFilter === t.key}
-          class:text-slate-900={kindFilter === t.key}
-          class:text-white-100={kindFilter === t.key}
-          class:text-black-700={kindFilter !== t.key}
+          class={`px-2 py-0.5 rounded transition-colors text-[11px] ${kindFilter === t.key ? "bg-slate-200 dark:bg-navy-600 text-slate-900 dark:text-white-100 font-medium" : "text-black-700 dark:text-black-500 hover:bg-slate-100 dark:hover:bg-navy-700"}`}
           onclick={() => (kindFilter = t.key as typeof kindFilter)}
         >
           {t.label}

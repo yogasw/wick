@@ -96,6 +96,21 @@ export type CatalogConfigField = {
   mode?: "fixed" | "expression";
 };
 
+// Mirror of workflow.EnvField — one entry in the workflow env schema.
+// `widget` maps directly to the config-tags vocab (text/secret/number/
+// checkbox/dropdown/textarea/email/url/kvlist/picker).
+export type EnvField = {
+  name: string;
+  widget?: string;
+  desc?: string;
+  default?: string;
+  required?: boolean;
+  locked?: boolean;
+  hidden?: boolean;
+  options?: { id: string; name: string }[];
+  visible_when?: Record<string, string>;
+};
+
 export type ChannelEventDescriptor = {
   id: string;
   name: string;
@@ -138,6 +153,10 @@ export type CatalogResponse = {
   channels: ChannelDescriptor[];
   connectors: ConnectorDescriptor[];
   providers: { name: string; is_default: boolean }[];
+  // Base URL for webhook triggers: "<origin>/hooks". Empty when PublicURL
+  // is not configured in Settings → Agents; the UI falls back to a
+  // relative path display in that case.
+  hooks_base_url?: string;
 };
 
 // Mirror of internal/tools/agents/spa_palette.go. The backend is the
@@ -333,7 +352,7 @@ export const workflowAPI = {
     id: string,
     body: { template: string; sample_event?: string; context?: string },
     signal?: AbortSignal,
-  ): Promise<{ ok: boolean; rendered?: string; error?: string; available_keys?: string[]; hint?: string }> =>
+  ): Promise<{ ok: boolean; rendered?: string; error?: string; available_keys?: string[]; hint?: string; env_keys?: string[]; secret_keys?: string[] }> =>
     apiPost(`${BASE}/api/workflows/template-test/${encodeURIComponent(id)}`, body, signal),
 
   // Bottom-panel content endpoints (Validation / Guard / Tests).
@@ -416,6 +435,14 @@ export const workflowAPI = {
     apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
   projectOptions: (): Promise<{ id: string; name: string; path: string }[]> =>
     apiGet(`${BASE}/projects/options`),
+
+  // Workflow env (Settings tab) — schema from draft body, values from
+  // env_values column. Secret fields come back as wick_enc_ tokens.
+  envGet: (id: string): Promise<{ schema: EnvField[]; values: Record<string, string>; secret_keys?: string[] }> =>
+    apiGet(`${BASE}/api/workflows/env/${encodeURIComponent(id)}`),
+
+  envSave: (id: string, values: Record<string, string>, secretKeys?: string[]): Promise<{ ok: boolean }> =>
+    apiPost(`${BASE}/api/workflows/env/${encodeURIComponent(id)}`, { values, secret_keys: secretKeys ?? [] }),
 
   // n8n-style "Execute step" — run a single node in isolation against
   // an optional parent input + event envelope. Server runs the

@@ -46,7 +46,7 @@ description: Generate boilerplate for a new wick workflow node — Go module (me
 # wick workflow node-builder
 
 Skill ini bantu user bikin node baru di wick workflow editor. Pattern
-follows `internal/docs/workflow/plugin-arch.md` — per-node folder
+follows `internal/planning/archive/workflow/plugin-arch.md` — per-node folder
 with meta.go, inspector.templ, inspector.js.
 
 ## Trigger phrases
@@ -244,18 +244,18 @@ Lalu refresh editor browser, drop node dari palette.
 - **Fixed vs Expression toggle**: honor `n.ArgModes[<key>] == "fixed"` di executor — skip `template.Render`, pass value verbatim. Pattern di [`nodes/http.go::renderHTTPField`](../../agents/workflow/nodes/http.go)
 - **Conditional inspector fields**: pakai `visible_when=field:value` (single) atau `visible_when=field:a|b|c` (pipe-separated OR) di tag schema — UI hide row sampai dependency match
 - **Map-shaped fields (headers, query)**: tag `kvlist=name|value` → row editor table. Inspector glue convert kvlist JSON ↔ `map[string]string`. Per-value selalu di-template-render (no per-row toggle)
-- **Secret field**: kalau field perlu encryption, refer `internal/docs/encrypted-fields.md`
+- **Secret field**: kalau field perlu encryption, refer `internal/planning/archive/encrypted-fields.md`
 - **Branching**: if node outputs verdict for case-based routing, implement `IsBranchSource()` di NodeType + return `Verdict` di NodeOutput
 - **Long-running**: use `ctx` cascade; engine wraps with `MaxDurationSec` (see [pool.md](pool.md) timeout strategy)
 
 ## Reference
 
-- Plugin arch full reference: `internal/docs/workflow/plugin-arch.md`
+- Plugin arch full reference: `internal/planning/archive/workflow/plugin-arch.md`
 - Working example: `internal/tools/agents/workflow/nodes/session_init/`
-- Engine concepts: `internal/docs/workflow/06-graph-engine.md`
+- Engine concepts: `internal/planning/archive/workflow/06-graph-engine.md`
 - Validator: `internal/agents/workflow/parse/parse.go`
 - Conventions:
-  - Generic naming — `internal/docs/workflow/02-principles.md`
+  - Generic naming — `internal/planning/archive/workflow/02-principles.md`
   - No AI attribution in commits (per CLAUDE.md memory)
   - Use Bash tool first, PowerShell fallback (per CLAUDE.md memory)
 

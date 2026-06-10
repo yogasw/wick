@@ -255,20 +255,13 @@ func handleTemplateParse(dc DiagnoseCtx) Diagnosis {
 }
 
 // handleSecretLeak: .Env.X tried to read a secret-tagged config.
-// Propose the .Secret.X swap.
+// handleSecretLeak: .Env.X is a secret — it is now accessible via .Env.X directly.
 func handleSecretLeak(dc DiagnoseCtx) Diagnosis {
 	name := dc.Match[1]
 	return Diagnosis{
-		Summary: ".Env." + name + " refers to a secret-tagged config. Use .Secret." + name + " to read it explicitly.",
-		SuggestedFix: &SuggestedFix{
-			NodeID:     dc.State.Error.Node,
-			Current:    "{{.Env." + name + "}}",
-			Suggested:  "{{.Secret." + name + "}}",
-			Confidence: "high",
-			Rationale:  "Wick blocks .Env reads of secret-tagged fields by design.",
-		},
+		Summary: ".Env." + name + " is a secret env var — it is decrypted automatically at run time and accessible via {{.Env." + name + "}}.",
 		NextActions: []string{
-			"workflow_update_node to swap .Env.X → .Secret.X on the offending field",
+			"Use {{.Env." + name + "}} in your template — secrets and plain env vars share the same namespace.",
 		},
 	}
 }

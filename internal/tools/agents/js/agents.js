@@ -437,7 +437,16 @@
 
       if (searchInput) {
         searchInput.addEventListener("input", function () { page = 1; render(); });
-        searchInput.focus();
+        // Auto-focus search only on desktop AND only when the page has no
+        // compose box. On a project landing the "Ask anything…" composer is
+        // the primary action (focused separately below), so search must not
+        // steal focus; on the all-chats list there's no composer, so search
+        // is the natural landing focus. Skip on touch devices entirely —
+        // force-focusing there just pops the on-screen keyboard.
+        var hasComposer = document.querySelector("[data-ns-form] [data-ns-textarea]");
+        if (!hasComposer && !window.matchMedia("(pointer: coarse)").matches) {
+          searchInput.focus();
+        }
       }
       if (prevBtn) prevBtn.addEventListener("click", function () { if (page > 1) { page--; render(); } });
       if (nextBtn) nextBtn.addEventListener("click", function () { page++; render(); });
@@ -1714,6 +1723,20 @@
         }
       });
     });
+
+    // ── Auto-focus the "Ask anything…" compose box (desktop only) ─────
+    // On the new-session landing and the project landing, drop the cursor
+    // into the composer so the user can type immediately (ChatGPT-style).
+    // Skip on touch devices: auto-focusing there just pops the on-screen
+    // keyboard over the page before the user has tapped anything. Cursor
+    // goes to the end so a pre-filled draft stays editable.
+    (function () {
+      var nsTA = document.querySelector("[data-ns-form] [data-ns-textarea]");
+      if (!nsTA || window.matchMedia("(pointer: coarse)").matches) return;
+      nsTA.focus();
+      var end = nsTA.value.length;
+      try { nsTA.setSelectionRange(end, end); } catch (e) {}
+    })();
 
     // ── Remember <details open> across reloads (e.g. Recent Spawns) ───
     // Server-rendered pagination reloads the page, which resets <details>

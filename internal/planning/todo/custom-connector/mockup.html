@@ -325,14 +325,14 @@
             <span class="text-xs font-semibold" style="color:var(--black-900)">axios call</span>
             <span class="chip chip-muted" style="font-size:10px">code from SDK doc</span>
           </div>
-<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">axios.post('https://api.qiscus.com/api/v3/messages', {
+<pre class="mono text-xs" style="color:var(--black-800); line-height:1.5; white-space:pre-wrap">axios.post('https://api.example.com/api/v3/messages', {
   room_id: 12345,
   message: 'hello',
   type: 'text'
 }, {
   headers: {
-    'QISCUS-SDK-APP-ID': 'my-app',
-    'QISCUS-SDK-SECRET': 'sk_xxx'
+    'ID': 'my-app',
+    'Key': 'sk_xxx'
   }
 })</pre>
         </div>
@@ -715,7 +715,7 @@ wajib.</pre>
           </div>
           <div class="grid grid-cols-12 gap-2 items-center">
             <input class="input col-span-5 mono" value="X-Tenant-Id" style="font-size:11px">
-            <input class="input col-span-5" value="qiscus-prod" style="font-size:11px">
+            <input class="input col-span-5" value="example-tenant" style="font-size:11px">
             <div class="col-span-2 flex justify-end">
               <label class="text-xs flex items-center gap-1" style="color:var(--black-800)"><input type="checkbox"> Sec</label>
             </div>
@@ -726,7 +726,7 @@ wajib.</pre>
           <div class="text-xs mono" style="color:var(--black-800); line-height:1.6">
             <span style="color:var(--prog-400); font-weight:600">POST</span> /v1<br>
             <span style="color:var(--cau-400)">X-API-Key: ••••••••</span><br>
-            X-Tenant-Id: qiscus-prod
+            X-Tenant-Id: example-tenant<br>
           </div>
         </div>
         <p class="helper mt-2">Use for APIs that don't fit Bearer (e.g. Azure AAD <code>Ocp-Apim-Subscription-Key</code>, AWS sigv4 isn't covered here, providers with paired ID + secret headers).</p>
@@ -749,7 +749,7 @@ wajib.</pre>
           <div><span class="json-key">"name"</span>: <span class="json-str">"user.display_name"</span>,</div>
           <div><span class="json-key">"groups"</span>: <span class="json-str">"user.tag_ids[]"</span>,</div>
           <div><span class="json-key">"aud"</span>: <span class="json-str">"mcp.internal.example.com"</span>,</div>
-          <div><span class="json-key">"iss"</span>: <span class="json-str">"https://wick.qiscus.com"</span>,</div>
+          <div><span class="json-key">"iss"</span>: <span class="json-str">"https://wick.example.com"</span>,</div>
           <div><span class="json-key">"iat"</span>: <span class="json-num">1717564800</span>,</div>
           <div><span class="json-key">"exp"</span>: <span class="json-num">1717565100</span></div>
         </div>
@@ -994,7 +994,7 @@ wajib.</pre>
             <span class="badge badge-custom">Custom · cURL</span>
             <a href="#" class="text-xs" style="color:var(--green-600)">Edit definition →</a>
           </div>
-          <p class="text-sm mt-1" style="color:var(--black-800)">Payments — imported from cURL on 2026-06-05 by riska@qiscus.com.</p>
+          <p class="text-sm mt-1" style="color:var(--black-800)">Payments — imported from cURL on 2026-06-05 by yoga@example.com.</p>
         </div>
       </div>
 

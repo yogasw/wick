@@ -124,11 +124,12 @@ func TestExecute_BlockedBySystemDisabled(t *testing.T) {
 	_, err := svc.RunHealthCheck(context.Background(), id)
 	require.NoError(t, err)
 
-	// "a" is system-disabled now — Execute must refuse before dispatch.
-	_, err = svc.Execute(context.Background(), params(id, "a", true))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "system-disabled")
-	assert.Contains(t, err.Error(), "chat:write")
+	// SystemDisabled is now advisory — admin can override by keeping Enabled=true.
+	// Execute should NOT block; the warning appears in OpState.SystemDisabledReason
+	// but execution proceeds if Enabled=true.
+	res, err := svc.Execute(context.Background(), params(id, "a", true))
+	require.NoError(t, err)
+	assert.NotNil(t, res)
 }
 
 func TestOperationStates_FoldsSystemDisabled(t *testing.T) {
@@ -137,9 +138,15 @@ func TestOperationStates_FoldsSystemDisabled(t *testing.T) {
 	_, err := svc.RunHealthCheck(context.Background(), id)
 	require.NoError(t, err)
 
-	// Legacy bool-map view must report effective=false even though the
-	// admin Enabled flag is still true (default for non-destructive).
+	// SystemDisabled is advisory — effective state = Enabled flag only.
+	// Op "a" is enabled by default (non-destructive), so effective=true even
+	// when system-disabled. The SystemDisabled flag is still surfaced in
+	// OperationStatesFull for UI warning display.
 	states, err := svc.OperationStates(context.Background(), id, "health-stub")
 	require.NoError(t, err)
-	assert.False(t, states["a"], "system-disabled op should be effective=false")
+	assert.True(t, states["a"], "system-disabled op should still be effective=true when admin Enabled=true")
+
+	full, err := svc.OperationStatesFull(context.Background(), id, "health-stub")
+	require.NoError(t, err)
+	assert.True(t, full["a"].SystemDisabled, "SystemDisabled flag should still be set for UI warning")
 }

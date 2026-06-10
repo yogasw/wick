@@ -9,7 +9,7 @@ import (
 
 // normalizeTriggerEntryNodes fills EntryNode on any trigger where it is
 // empty, falling back to Graph.Entry. Prevents the trigger→graph
-// disconnect that occurs when AI writes workflow.yaml without entry_node.
+// disconnect that occurs when AI creates a workflow without entry_node.
 func normalizeTriggerEntryNodes(w *wf.Workflow) {
 	if w.Graph.Entry == "" {
 		return

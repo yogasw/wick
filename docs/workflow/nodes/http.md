@@ -35,29 +35,28 @@ Outbound HTTP request. URL / headers / query / body rendered as Go templates. Re
 
 ## Example
 
-```yaml
-- id: file_ticket
-  type: http
-  method: POST
-  url: https://api.example.com/tickets
-  headers:
-    Content-Type: application/json
-    Authorization: Bearer {{.Env.TICKETS_TOKEN}}
-  body: |
-    {
-      "title": "{{jsonEscape (index .Event.Payload "text")}}",
-      "user":  "{{jsonEscape (index .Event.Payload "user")}}"
-    }
-  parse_response: json
+```json
+{
+  "id": "file_ticket",
+  "type": "http",
+  "method": "POST",
+  "url": "https://api.example.com/tickets",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer {{.Env.TICKETS_TOKEN}}"
+  },
+  "body": "{\n  \"title\": \"{{jsonEscape (index .Event.Payload \\\"text\\\")}}\",\n  \"user\":  \"{{jsonEscape (index .Event.Payload \\\"user\\\")}}\"\n}",
+  "parse_response": "json"
+}
 ```
 
 ## Templates: escape your strings
 
 The most common mistake is putting raw user text into a JSON body without escaping:
 
-```yaml
-body: '{"text": "{{.Event.Payload.text}}"}'    # ❌ quotes in text break JSON
-body: '{"text": "{{jsonEscape .Event.Payload.text}}"}'   # ✅
+```
+body: '{"text": "{{.Event.Payload.text}}"}'    // ❌ quotes in text break JSON
+body: '{"text": "{{jsonEscape .Event.Payload.text}}"}'   // ✅
 ```
 
 The `jsonEscape` helper escapes `"`, `\`, and control characters. For multiline payloads use the YAML block scalar `|` so newlines render predictably.

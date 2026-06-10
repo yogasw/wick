@@ -14,7 +14,12 @@ export const sessionID = writable<string>(readSessionID());
 // HTTP on first load, then is replaced wholesale by each git_status SSE
 // event — so there is no per-change fetch (zero polling).
 export const snapshot = writable<GitStatusSnapshot>({ repos: [], statuses: {}, total_changed: 0 });
-export const activeRepo = writable<string>(""); // RepoSummary.rel
+function repoKey(): string { return `wick.scm.activeRepo.${readSessionID()}`; }
+function readStoredRepo(): string {
+  try { return localStorage.getItem(repoKey()) ?? ""; } catch { return ""; }
+}
+export const activeRepo = writable<string>(readStoredRepo());
+activeRepo.subscribe((v) => { try { localStorage.setItem(repoKey(), v); } catch { /* ignore */ } });
 export const loading = writable<boolean>(false);
 
 // Derived views the components bind to.

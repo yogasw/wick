@@ -55,7 +55,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	case "incident-response":
 		base.Name = "Incident response"
 		base.Description = "Webhook-triggered incident response with parallel data gathering."
-		base.Triggers = []workflow.Trigger{{ID: "trigger-webhook", Type: workflow.TriggerWebhook, Path: "/hooks/alerts", EntryNode: "gather", Label: "Webhook"}}
+		base.Triggers = []workflow.Trigger{{ID: "trigger-webhook", Type: workflow.TriggerWebhook, Path: "alerts", EntryNode: "gather", Label: "Webhook"}}
 		base.Graph = workflow.Graph{
 			Entry: "gather",
 			Nodes: []workflow.Node{
@@ -102,7 +102,7 @@ func Workflow(id, name, template string) workflow.Workflow {
 	// the new workflow stacked vertically on first open — regardless
 	// of whether the create came from the UI form, MCP, or CLI. UI
 	// callers historically re-applied this after Create; centralising
-	// it here means the workflow.yaml landing on disk already carries
+	// it here means the saved workflow already carries
 	// _canvas.positions.
 	return ApplyTopDownLayout(base)
 }

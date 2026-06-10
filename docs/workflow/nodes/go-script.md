@@ -27,20 +27,12 @@ Run a Go program under the [yaegi](https://github.com/traefik/yaegi) interpreter
 
 ## Example
 
-```yaml
-- id: shape_payload
-  type: go_script
-  code: |
-    package main
-    import ("encoding/json"; "os")
-    func main() {
-      var ctx map[string]any
-      json.NewDecoder(os.Stdin).Decode(&ctx)
-      ev := ctx["Event"].(map[string]any)["Payload"].(map[string]any)
-      json.NewEncoder(os.Stdout).Encode(map[string]any{
-        "upper": ev["text"],
-      })
-    }
+```json
+{
+  "id": "shape_payload",
+  "type": "go_script",
+  "code": "package main\nimport (\"encoding/json\"; \"os\")\nfunc main() {\n  var ctx map[string]any\n  json.NewDecoder(os.Stdin).Decode(&ctx)\n  ev := ctx[\"Event\"].(map[string]any)[\"Payload\"].(map[string]any)\n  json.NewEncoder(os.Stdout).Encode(map[string]any{\n    \"upper\": ev[\"text\"],\n  })\n}"
+}
 ```
 
 Downstream nodes can then reach <code v-pre>{{.Node.shape_payload.upper}}</code>.

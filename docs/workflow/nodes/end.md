@@ -23,10 +23,12 @@ Terminator. Captures a final result template so <code v-pre>{{.Run.final_result}
 
 ## Example
 
-```yaml
-- id: done
-  type: end
-  result: 'Resolved {{.Node.triage.verdict}} for {{.Event.User.Name}}'
+```json
+{
+  "id": "done",
+  "type": "end",
+  "result": "Resolved {{.Node.triage.verdict}} for {{.Event.User.Name}}"
+}
 ```
 
 ## Implicit end

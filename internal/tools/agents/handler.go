@@ -119,10 +119,9 @@ func actorID(c *tool.Ctx) string {
 // SetDB wires the shared GORM DB so channel handlers can read/write
 // agent_channels rows. Without this, channel config endpoints 503.
 //
-// Workflow data is DB-primary as of the JSON migration — legacy
-// folders on disk (workflow.yaml era) are not imported automatically.
-// Users who have legacy workflows must hand-port them once into the
-// new SPA / MCP flow, then delete the old folder.
+// Workflow data is DB-primary. Folders left on disk from before the
+// DB migration are not imported automatically — use the SPA or MCP
+// to recreate them, then remove the old folders.
 func SetDB(db *gorm.DB) {
 	globalDB = db
 }

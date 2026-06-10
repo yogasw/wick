@@ -3,7 +3,7 @@
 // app.RegisterConnector; the MCP and admin-UI layers walk All() at boot
 // to validate definitions and seed default instances.
 //
-// Shape of a connector module (see internal/docs/connectors-design.md
+// Shape of a connector module (see internal/planning/archive/connectors-design.md
 // for the full design):
 //
 //  1. Package under internal/connectors/<name>/ exposing a Meta builder,
@@ -25,6 +25,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors/github"
 	"github.com/yogasw/wick/internal/connectors/httprest"
 	"github.com/yogasw/wick/internal/connectors/loki"
+	"github.com/yogasw/wick/internal/connectors/phoenix"
 	"github.com/yogasw/wick/internal/connectors/slack"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
@@ -141,6 +142,11 @@ func RegisterBuiltins() {
 		Meta:       withConnectorTag(loki.Meta(), tags.Observability),
 		Configs:    entity.StructToConfigs(loki.Configs{}),
 		Operations: loki.Operations(),
+	})
+	registerOnce(connector.Module{
+		Meta:       withConnectorTag(phoenix.Meta(), tags.Observability),
+		Configs:    entity.StructToConfigs(phoenix.Configs{}),
+		Operations: phoenix.Operations(),
 	})
 }
 

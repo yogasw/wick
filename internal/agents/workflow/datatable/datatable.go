@@ -5,7 +5,7 @@
 //
 // Schema is owned by the Data Tables tool (`internal/tools/data-tables/`)
 // and consumed here for row validation, indexed-column hints, and
-// access enforcement. See `internal/docs/workflow/12-data-tables.md`.
+// access enforcement. See `internal/planning/archive/workflow/12-data-tables.md`.
 package datatable
 
 import (

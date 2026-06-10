@@ -24,7 +24,8 @@ export type NodeType =
   | "datatable_upsert"
   | "datatable_delete"
   | "datatable_count"
-  | "session_init";
+  | "session_init"
+  | "webhook_respond";
 
 export type TriggerType =
   | "cron"
@@ -166,6 +167,11 @@ export type Node = {
   // end
   result?: string;
 
+  // webhook_respond
+  respond_status?: number;
+  respond_body?: string;
+  respond_headers?: Record<string, string>;
+
   // editor-only: mock input JSON used when Execute step has no parent
   // output yet. Not consumed by the engine — purely a UX scratchpad.
   mock_input?: string;
@@ -216,6 +222,7 @@ export type Trigger = {
   secret_ref?: string;
   parse_body?: string;
   body_to_var?: string;
+  respond_mode?: "immediately" | "last_node" | "respond_node";
 
   // manual
   label?: string;

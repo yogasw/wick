@@ -1,7 +1,8 @@
 // Package template renders Go text/template strings against a
 // workflow.RenderCtx. Strict missing-key handling so typos surface as
 // errors instead of `<no value>`. Used by every executor that needs to
-// interpolate {{.Event.X}} / {{.Node.X.Y}} / {{.Env.X}} / {{.Secret.X}}.
+// interpolate {{.Event.X}} / {{.Node.X.Y}} / {{.Env.X}}.
+// All env vars — plain and secret — are accessible via {{.Env.X}}.
 package template
 
 import (
@@ -15,11 +16,9 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 )
 
-// Render parses + executes a Go template with strict missing-key
-// handling.
-//
-// Secret leak guard: `{{.Env.X}}` looks up a secret-tagged key →
-// error. Use `{{.Secret.X}}` explicitly.
+// Render parses + executes a Go template with strict missing-key handling.
+// All env vars (plain + encrypted secrets) are decrypted before rendering
+// and available via {{.Env.X}}.
 func Render(tmpl string, ctx workflow.RenderCtx) (string, error) {
 	if tmpl == "" {
 		return "", nil

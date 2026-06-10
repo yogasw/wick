@@ -6,7 +6,7 @@ outline: deep
 
 `slack` wraps the Slack Web API. One instance carries one set of Slack credentials (bot token + optional user OAuth) and exposes read + write ops over channels, threads, users, messages, and reactions.
 
-This is the **outbound** Slack surface — what a workflow or LLM calls to *do* something on Slack. The **inbound** surface (events arriving in real time) is the [Slack channel](/guide/agents/channels#slack); the two are separate modules but normally configured together. The connector row also stores the OAuth app credentials when you wire up the [Connect with Slack](/guide/agents/channels#slack) user-token flow.
+This is the **outbound** Slack surface — what a workflow or LLM calls to *do* something on Slack. The **inbound** surface (events arriving in real time) is the [Slack channel](/guide/agents/channels#slack); the two are separate modules but normally configured together. The connector row also stores per-instance OAuth app credentials for the Connect Account user-token flow.
 
 | | |
 |---|---|
@@ -19,13 +19,17 @@ This is the **outbound** Slack surface — what a workflow or LLM calls to *do* 
 
 ## Configs
 
-The Slack row holds credentials for both the connector ops and the [Slack channel](/guide/agents/channels#slack). The exact field set is form-rendered from the `Configs` struct — common fields:
+The Slack row holds credentials for both the connector ops and the [Slack channel](/guide/agents/channels#slack). The exact field set is form-rendered from the `Configs` struct — all fields are always visible in the admin form:
 
 | Field | Type | Purpose |
 |---|---|---|
-| `BotToken` | secret | `xoxb-…` token used by every connector op. |
-| `UserToken` | secret | `xoxp-…` user OAuth token, set after the operator clicks **Connect with Slack**. Lets the connector act as a real user (used by `open_dm`, signed DM footers, …) rather than the bot identity. |
-| `ClientID` / `ClientSecret` / `SigningSecret` | secret | Slack app credentials. Required when the channel runs in `http` mode or when user-token OAuth is enabled. |
+| `AuthMode` | dropdown | `bot_token` (default) or `user_token` — selects which token the runtime reads when making API calls. |
+| `BotToken` | secret | `xoxb-…` token used by every connector op when `AuthMode=bot_token`. |
+| `UserToken` | secret | `xoxp-…` user OAuth token, used when `AuthMode=user_token`. Set after the operator clicks **Connect Account** when `ClientID` is configured, or paste manually. |
+| `ClientID` | string | Slack OAuth App Client ID. Required to activate the **Connect Account** button for the user-token OAuth flow. Lives on this instance row, not in a shared server setting. |
+| `ClientSecret` | secret | Slack OAuth App Client Secret. Required for the token exchange step of the Connect Account flow. Lives on this instance row. |
+
+OAuth app credentials (`ClientID` / `ClientSecret`) are now per-instance — different Slack connector rows can use different Slack apps. Enable the Connect Account flow by setting both fields and enabling `EnableSSO` in the Access Policy section.
 
 The `Test Integration` button at the top of the row runs each API the connector needs in parallel (~5s budget) and reports only failures — `auth.test`, `users.list`, `conversations.list`, `chat.postMessage` dry-run, etc. See [Channels ▶ Integration health check](/guide/agents/channels#integration-health-check) for the equivalent on the channel side.
 
@@ -56,7 +60,7 @@ All read ops are `connector.Op` (non-destructive).
 | `add_reaction` | `channel`, `ts`, `name` | Emoji reaction (name without colons). |
 | `remove_reaction` | `channel`, `ts`, `name` | Remove a reaction. |
 
-Every write op is `connector.OpDestructive` — disabled on every new row, opt-in per (row, op) at `/manager/connectors/slack/{id}`.
+Every write op is `connector.OpDestructive` — enabled by default on every new row. Admins can disable individual ops per (row, op) at `/manager/connectors/slack/{id}`. The MCP layer appends a destructive warning to these ops' descriptions so the LLM confirms before calling.
 
 ## Quirks worth knowing
 

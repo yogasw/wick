@@ -22,6 +22,15 @@
     return null;
   }
 
+  // Extract trigger index from paths like "triggers[1].respond_mode"
+  // and resolve to the trigger's id so badges can be keyed by id.
+  function issueTriggerKey(path: string | undefined): string | null {
+    const p = (path ?? "").match(/^triggers\[(\d+)\]/);
+    if (!p) return null;
+    const idx = parseInt(p[1], 10);
+    return ($draftWorkflow?.triggers ?? [])[idx]?.id ?? null;
+  }
+
   // Map identifier (id OR label, since the validator returns whichever
   // the user typed) → first error / warning message. Errors take a red
   // pin; warnings take an amber pin and only show when there's no
@@ -43,6 +52,28 @@
     }
     return out;
   });
+  const triggerErrors = $derived.by<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const e of $validationReport?.errors ?? []) {
+      const k = issueTriggerKey(e.Path);
+      if (k && !out[k]) out[k] = e.Message ?? "Invalid";
+    }
+    return out;
+  });
+  const triggerWarnings = $derived.by<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const w of $validationReport?.warnings ?? []) {
+      const k = issueTriggerKey(w.Path);
+      if (k && !out[k]) out[k] = w.Message ?? "Warning";
+    }
+    return out;
+  });
+  function triggerIssue(id: string | undefined): { kind: "error" | "warning"; msg: string } | null {
+    if (!id) return null;
+    if (triggerErrors[id]) return { kind: "error", msg: triggerErrors[id] };
+    if (triggerWarnings[id]) return { kind: "warning", msg: triggerWarnings[id] };
+    return null;
+  }
 
   // Validator references nodes by label when set, else id. Look both
   // up so a badge can hit whichever one matched.
@@ -277,7 +308,17 @@
       const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
       draftWorkflow.update((wf) => {
         if (!wf) return wf;
-        wf.triggers = [...(wf.triggers ?? []), { id, type: drag.trigger_type as any }];
+        const entry: any = { id, type: drag.trigger_type };
+        // Webhook: default path = /{slug} where slug = the random suffix
+        // of the trigger ID. Keeps paths short and export-import stable
+        // (no wf_id embedded — user can customise freely after drop).
+        if (drag.trigger_type === "webhook") {
+          // Store slug only — no leading slash, no wf_id prefix.
+          // Router constructs /{wf_id}/{slug} at runtime.
+          entry.path = id.replace(/^trigger-/, "");
+          entry.method = "POST";
+        }
+        wf.triggers = [...(wf.triggers ?? []), entry];
         const canvas = ((wf as any)._canvas ?? {}) as any;
         if (!canvas.positions) canvas.positions = {};
         canvas.positions[id] = { x, y };
@@ -343,6 +384,15 @@
   // output port to another card's input port. Trigger output → node
   // input writes back to `trigger.entry_node`; node output → node input
   // appends a new edge to `graph.edges`.
+  // Edge hover state — key is "from:to" for graph edges, "trigger:<id>" for trigger edges.
+  // Stays set while the context menu is open so the line stays highlighted.
+  let hoveredEdge = $state<string | null>(null);
+  const activeEdge = $derived(
+    hoveredEdge ??
+    (ctxMenu?.target.kind === "edge" ? `${ctxMenu.target.from}:${ctxMenu.target.to}` :
+     ctxMenu?.target.kind === "trigger-edge" ? `trigger:${ctxMenu.target.triggerID}` : null)
+  );
+
   let connecting = $state<{
     fromID: string;
     fromKind: "node" | "trigger" | "node-input";
@@ -1173,9 +1223,13 @@
             {@const pts = triggerEdgePoints(trig.id, trig.entry_node)}
             {#if pts}
               {@const mid = midPoint(pts)}
-              <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-black-700 dark:text-black-600" />
-              <!-- Wide invisible hit path widens right-click target — bare
-                   stroke-width=2 is too thin to land on reliably. -->
+              {@const trigEdgeKey = `trigger:${trig.id}`}
+              <path d={bezier(pts)} fill="none" stroke-width="2" marker-end="url(#wf-arrowhead)"
+                stroke={activeEdge === trigEdgeKey ? "#34d399" : "currentColor"}
+                class={activeEdge === trigEdgeKey ? "" : "text-black-700 dark:text-black-600"}
+                style="transition: stroke 0.1s"
+              />
+              <!-- Wide invisible hit path for hover + right-click. -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <path
                 d={bezier(pts)}
@@ -1184,6 +1238,8 @@
                 stroke-width="14"
                 role="presentation"
                 style="pointer-events: stroke; cursor: context-menu;"
+                onmouseenter={() => hoveredEdge = trigEdgeKey}
+                onmouseleave={() => hoveredEdge = null}
                 oncontextmenu={(e) => openCtxMenu(e, { kind: "trigger-edge", triggerID: trig.id! })}
               />
               <circle cx={mid.x} cy={mid.y} r="4" fill="#facc15" />
@@ -1194,7 +1250,12 @@
           {@const pts = nodeEdgePoints(e.from, e.to)}
           {#if pts}
             {@const mid = midPoint(pts)}
-            <path d={bezier(pts)} fill="none" stroke="currentColor" stroke-width="2" marker-end="url(#wf-arrowhead)" class="text-black-700 dark:text-black-600" />
+            {@const edgeKey = `${e.from}:${e.to}`}
+            <path d={bezier(pts)} fill="none" stroke-width="2" marker-end="url(#wf-arrowhead)"
+              stroke={activeEdge === edgeKey ? "#34d399" : "currentColor"}
+              class={activeEdge === edgeKey ? "" : "text-black-700 dark:text-black-600"}
+              style="transition: stroke 0.1s"
+            />
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <path
               d={bezier(pts)}
@@ -1203,6 +1264,8 @@
               stroke-width="14"
               role="presentation"
               style="pointer-events: stroke; cursor: context-menu;"
+              onmouseenter={() => hoveredEdge = edgeKey}
+              onmouseleave={() => hoveredEdge = null}
               oncontextmenu={(ev) => openCtxMenu(ev, { kind: "edge", from: e.from, to: e.to, caseKey: e.case })}
             />
             <circle cx={mid.x} cy={mid.y} r="4" fill="#facc15" />
@@ -1335,6 +1398,7 @@
       {#each $draftWorkflow.triggers ?? [] as trig (trig.id ?? trig.type)}
         {@const pos = ($draftWorkflow as any)._canvas?.positions?.[trig.id ?? ""] ?? { x: 60, y: 60 }}
         {@const trigStatus = trig.id ? $triggerRunStatus[trig.id] : undefined}
+        {@const trigIssue = triggerIssue(trig.id)}
         <div
           class="absolute"
           style="left: {pos.x}px; top: {pos.y}px;"
@@ -1346,9 +1410,23 @@
         >
           <TriggerNode
             trigger={trig}
+            wfID={$draftWorkflow?.id ?? ""}
             selected={(trig.id ? $selectedNodeIDs.has(trig.id) : false) || $selectedNodeID === trig.id}
             onselect={() => selectedNodeID.set(trig.id ?? null)}
           />
+          {#if trigIssue}
+            <button
+              type="button"
+              class="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full text-white-100 text-[11px] font-bold flex items-center justify-center shadow-md ring-2 ring-white dark:ring-navy-500"
+              class:bg-rose-500={trigIssue.kind === "error"}
+              class:hover:bg-rose-600={trigIssue.kind === "error"}
+              class:bg-amber-500={trigIssue.kind === "warning"}
+              class:hover:bg-amber-600={trigIssue.kind === "warning"}
+              title={trigIssue.msg}
+              onclick={(e) => { e.stopPropagation(); trig.id && detailTriggerID.set(trig.id); }}
+              aria-label={trigIssue.kind === "error" ? "Validation error — click to open inspector" : "Validation warning — click to open inspector"}
+            >{trigIssue.kind === "error" ? "!" : "△"}</button>
+          {/if}
           <!-- Run status badge — mirrors the per-node overlay so
                operators see when their manual fire actually kicked off
                + how it ended. Auto-clears 5s after completion. -->
@@ -1571,6 +1649,36 @@
     onclick={(e) => e.stopPropagation()}
     oncontextmenu={(e) => e.preventDefault()}
   >
+    {#if ctxMenu.target.kind === "trigger"}
+      <button
+        type="button"
+        class="w-full text-left px-3 py-1.5 flex items-center gap-2 text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600"
+        onclick={() => { detailTriggerID.set(ctxMenu!.target.kind === "trigger" ? ctxMenu!.target.id : null); closeCtxMenu(); }}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+        </svg>
+        <span>Open inspector</span>
+      </button>
+    {/if}
+    {#if ctxMenu.target.kind === "node"}
+      <button
+        type="button"
+        class="w-full text-left px-3 py-1.5 flex items-center gap-2 text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600"
+        onclick={() => { detailNodeID.set(ctxMenu!.target.kind === "node" ? ctxMenu!.target.id : null); closeCtxMenu(); }}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+        </svg>
+        <span>Open inspector</span>
+      </button>
+    {/if}
     {#if ctxMenu.target.kind === "edge" && edgeSourceIsCaseNode(ctxMenu.target)}
       <button
         type="button"

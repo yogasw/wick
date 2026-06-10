@@ -1,0 +1,181 @@
+package view
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
+)
+
+// OpsSection renders the shared Operations table used by both the connector
+// detail page and the per-account ops page.
+//
+// rowBaseURL  — base URL for per-op toggle + test/history, e.g.
+//               /manager/connectors/slack/{rowID}
+//               For account mode: /manager/connectors/slack/{rowID}/accounts/{accID}
+// bulkURL     — POST target for Enable all / Disable all; empty = hide bulk buttons
+// opStates    — current enabled state per op key
+// showActions — show Test / History links (false in account mode)
+templ OpsSection(mod connector.Module, opStates map[string]connectors.OpState, rowBaseURL string, bulkURL string, showActions bool) {
+	<section class="mt-8">
+		if len(mod.Operations) == 0 {
+			<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Operations</h2>
+			<p class="mt-1 text-sm text-black-700 dark:text-black-600">This connector exposes no operations.</p>
+		} else {
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+				<!-- Toolbar -->
+				<div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-white-300 dark:border-navy-600">
+					<h2 class="text-base font-semibold text-black-900 dark:text-white-100 mr-1">Operations</h2>
+					<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", len(mod.Operations)) }</span>
+					<input
+						id="ops-search"
+						type="search"
+						placeholder="Search…"
+						class="ml-2 w-40 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-900 dark:text-white-100 outline-none focus:border-green-500"
+					/>
+					<div id="ops-sel-bar" class="hidden ml-auto flex items-center gap-2">
+						<span id="ops-sel-count" class="text-xs text-black-700 dark:text-black-600"></span>
+						<button id="ops-sel-enable" type="button" class="rounded-lg border border-pos-300 px-3 py-1.5 text-xs font-medium text-pos-400 hover:bg-pos-100">Enable selected</button>
+						<button id="ops-sel-disable" type="button" class="rounded-lg border border-neg-300 px-3 py-1.5 text-xs font-medium text-neg-400 hover:bg-neg-100">Disable selected</button>
+					</div>
+					if bulkURL != "" {
+						<div id="ops-bulk-btns" class="ml-auto flex items-center gap-2">
+							<form method="POST" action={ templ.SafeURL(bulkURL) }>
+								<input type="hidden" name="enabled" value="true"/>
+								<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">Enable all</button>
+							</form>
+							<form method="POST" action={ templ.SafeURL(bulkURL) }>
+								<input type="hidden" name="enabled" value="false"/>
+								<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-neg-400 hover:text-neg-400">Disable all</button>
+							</form>
+						</div>
+					}
+				</div>
+				@opsTable(mod, opStates, rowBaseURL, showActions)
+				<div id="ops-pagination" class="flex items-center justify-between gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2 text-xs text-black-700 dark:text-black-600">
+					<span id="ops-page-info"></span>
+					<div class="flex gap-1">
+						<button id="ops-prev" type="button" class="rounded px-2 py-1 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-40">← Prev</button>
+						<button id="ops-next" type="button" class="rounded px-2 py-1 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-40">Next →</button>
+					</div>
+				</div>
+			</div>
+		}
+	</section>
+}
+
+templ opsTable(mod connector.Module, opStates map[string]connectors.OpState, rowBaseURL string, showActions bool) {
+	<div class="overflow-hidden resp-table-wrap">
+		<table class="w-full text-sm resp-table">
+			<thead>
+				<tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+					<th class="w-8 px-4 py-3">
+						<input id="ops-check-all" type="checkbox" class="h-3.5 w-3.5 rounded accent-green-500"/>
+					</th>
+					<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>
+					<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Description</th>
+					if showActions {
+						<th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Actions</th>
+					}
+					<th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Enabled</th>
+				</tr>
+			</thead>
+			<tbody id="ops-tbody">
+				for _, op := range mod.Operations {
+					@opsRow(op, opStates[op.Key], rowBaseURL, showActions)
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ opsRow(op connector.Operation, st connectors.OpState, rowBaseURL string, showActions bool) {
+	<tr
+		class="ops-row border-b border-white-300 dark:border-navy-600 last:border-0 align-top"
+		data-op-name={ op.Name }
+		data-op-desc={ op.Description }
+	>
+		<td class="w-8 px-4 py-3">
+			<input
+				type="checkbox"
+				class="ops-row-cb h-3.5 w-3.5 rounded accent-green-500"
+				data-op-key={ op.Key }
+				data-op-toggle-url={ rowBaseURL + "/operations/" + op.Key }
+			/>
+		</td>
+		<td class="px-4 py-3">
+			<div class="flex items-center gap-2">
+				<span class="font-medium text-black-900 dark:text-white-100">{ op.Name }</span>
+				if op.Destructive {
+					<span class="rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">destructive</span>
+				}
+			</div>
+			<p class="mt-0.5 font-mono text-[10px] text-black-700 dark:text-black-600">{ op.Key }</p>
+		</td>
+		<td class="px-4 py-3 text-sm text-black-800 dark:text-black-600">{ op.Description }</td>
+		if showActions {
+			<td class="px-4 py-3">
+				<div class="flex items-center gap-2">
+					<a href={ templ.SafeURL(rowBaseURL + "/test?op=" + op.Key) } class="rounded-lg border border-green-400 px-3 py-1.5 text-xs font-medium text-green-600 hover:bg-green-100 dark:hover:bg-green-800">Test</a>
+					<a href={ templ.SafeURL(rowBaseURL + "/history?op=" + op.Key) } class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">History</a>
+				</div>
+			</td>
+		}
+		<td
+			class="px-4 py-3 text-right"
+			data-op-cell={ op.Key }
+			data-form-action={ rowBaseURL + "/operations/" + op.Key }
+		>
+			<div class="inline-flex flex-col items-end gap-1.5">
+				if st.SystemDisabled {
+					<span
+						class="inline-flex items-center gap-1 rounded-md border border-prog-300 bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400"
+						title={ "Health check warning: " + st.SystemDisabledReason + ". Toggle on to override." }
+					>
+						⚠ { st.SystemDisabledReason }
+					</span>
+				}
+				if showActions {
+					<form method="POST" action={ templ.SafeURL(rowBaseURL + "/operations/" + op.Key) } class="op-toggle-form">
+						<label class="relative flex cursor-pointer items-center">
+							if st.Enabled {
+								<input type="hidden" name="enabled" value="false"/>
+								<input type="checkbox" checked class="peer sr-only op-toggle-cb"/>
+							} else {
+								<input type="hidden" name="enabled" value="true"/>
+								<input type="checkbox" class="peer sr-only op-toggle-cb"/>
+							}
+							<div class="h-5 w-9 rounded-full bg-white-400 dark:bg-navy-600 peer-checked:bg-green-500 transition-colors"></div>
+							<div class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white-100 shadow transition-transform peer-checked:translate-x-4"></div>
+						</label>
+					</form>
+				} else {
+					<!-- Account mode: checkbox toggle, submitted via parent form -->
+					<label class="relative flex cursor-pointer items-center">
+						<input
+							type="checkbox"
+							name="acc-op-enabled"
+							value={ op.Key }
+							class="peer sr-only acc-op-cb"
+							if st.Enabled {
+								checked
+							}
+						/>
+						<div class="h-5 w-9 rounded-full bg-white-400 dark:bg-navy-600 peer-checked:bg-green-500 transition-colors"></div>
+						<div class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white-100 shadow transition-transform peer-checked:translate-x-4"></div>
+					</label>
+				}
+			</div>
+		</td>
+	</tr>
+}
+
+// accountOpDisabled reports whether an op key is in the account's DisabledOps JSON.
+func accountOpDisabled(acc entity.ConnectorAccount, opKey string) bool {
+	if acc.DisabledOps == "" {
+		return false
+	}
+	return strings.Contains(acc.DisabledOps, `"`+opKey+`"`)
+}

@@ -48,6 +48,43 @@ func (r *repo) UpsertUser(ctx context.Context, email, name, avatar string, admin
 }
 
 
+// ErrEmailExists is returned by CreateUserWithPassword when a user with
+// the requested email already exists. Admin-initiated creation must fail
+// loudly on a duplicate rather than silently overwrite the existing row
+// (which is what UpsertUser does for the SSO/OAuth login path).
+var ErrEmailExists = errors.New("a user with that email already exists")
+
+// CreateUserWithPassword inserts a brand-new user with a pre-hashed
+// password. Unlike UpsertUser it refuses to touch an existing row,
+// returning ErrEmailExists instead. Role follows the same adminEmails
+// rule as UpsertUser, but the account is always created Approved — an
+// admin explicitly provisioned it, so it needs no second approval step.
+func (r *repo) CreateUserWithPassword(ctx context.Context, email, name, passwordHash string, adminEmails map[string]bool) (*entity.User, error) {
+	var existing entity.User
+	err := r.db.WithContext(ctx).Where("email = ?", email).First(&existing).Error
+	if err == nil {
+		return nil, ErrEmailExists
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	role := entity.RoleUser
+	if adminEmails[email] {
+		role = entity.RoleAdmin
+	}
+	u := entity.User{
+		Email:        email,
+		Name:         name,
+		Role:         role,
+		Approved:     true,
+		PasswordHash: passwordHash,
+	}
+	if err := r.db.WithContext(ctx).Create(&u).Error; err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 func (r *repo) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {
 	var u entity.User
 	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&u).Error; err != nil {

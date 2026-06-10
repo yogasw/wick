@@ -1,6 +1,6 @@
 // Package env validates and resolves the workflow's env schema +
 // values. The Env namespace ({{.Env.X}}) carries non-secret config;
-// the Secret namespace ({{.Secret.X}}) decrypts wick_enc_ tokens at
+// env vars. All keys (plain + encrypted) accessible via {{.Env.X}} —
 // run time. Plain helpers + leak guard, no filesystem.
 package env
 
@@ -172,7 +172,7 @@ func LeakGuard(rendered string, secrets map[string]string) error {
 			continue
 		}
 		if strings.Contains(rendered, v) {
-			return fmt.Errorf("rendered output contains secret %q value verbatim — use {{.Secret.%s}} instead", k, k)
+			return fmt.Errorf("rendered output contains secret %q value verbatim", k)
 		}
 	}
 	return nil

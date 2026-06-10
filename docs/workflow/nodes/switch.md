@@ -16,7 +16,7 @@ Multi-case branching. First rule whose `when` is true wins; emits `verdict = cas
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `cases` | list of `{when, case}` | ✅ | First rule whose `when` is true wins. UI uses a rows builder; YAML accepts the list directly. |
+| `cases` | list of `{when, case}` | ✅ | First rule whose `when` is true wins. UI uses a rows builder; JSON accepts the list directly. |
 | `default_case` | string | | Verdict to emit when no rule matches. Leave blank to **fail closed** — the run errors. |
 
 ## Output
@@ -27,15 +27,16 @@ Multi-case branching. First rule whose `when` is true wins; emits `verdict = cas
 
 ## Example
 
-```yaml
-- id: route
-  type: switch
-  cases:
-    - when: '{{index .Event.Payload "status"}} == "approved"'
-      case: approve
-    - when: '{{index .Event.Payload "status"}} == "rejected"'
-      case: reject
-  default_case: review
+```json
+{
+  "id": "route",
+  "type": "switch",
+  "cases": [
+    {"when": "{{index .Event.Payload \"status\"}} == \"approved\"", "case": "approve"},
+    {"when": "{{index .Event.Payload \"status\"}} == \"rejected\"", "case": "reject"}
+  ],
+  "default_case": "review"
+}
 ```
 
 ## Matching semantics

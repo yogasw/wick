@@ -180,7 +180,7 @@ No breaking change to the SSE wire format; just stop emitting HTML fragments any
 
 ## Prompt envelope migration (Phase 5)
 
-The `<user_input>` tag referenced in `internal/docs/workflow/20-security.md` and the mockup is a prompt-injection mitigation: channel-driven workflows wrap external user text with the tag before handing to the LLM, so the LLM treats it as data not instructions.
+The `<user_input>` tag referenced in `internal/planning/archive/workflow/20-security.md` and the mockup is a prompt-injection mitigation: channel-driven workflows wrap external user text with the tag before handing to the LLM, so the LLM treats it as data not instructions.
 
 Migration target: replace the tag with a JSON envelope so MCP consumers and skill prompts get structured input:
 

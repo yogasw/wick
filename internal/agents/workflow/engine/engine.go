@@ -6,10 +6,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,7 +40,7 @@ import (
 // examples, templateable fields, pair-with, common pitfalls) projected
 // by the MCP `workflow_node_detail` op. Zero-value Docs = current
 // behaviour; populate per executor when worth it. See
-// internal/agents/workflow/docs and internal/docs/workflow/24-describe-contract.md.
+// internal/agents/workflow/docs and internal/planning/archive/workflow/24-describe-contract.md.
 // PaletteCategory is the typed bucket label each descriptor declares.
 // Defined as a named string type (not a bare string field) so callers
 // can't typo "LOIGIC" — the compiler catches it at the descriptor site.
@@ -80,12 +80,22 @@ type Describer interface {
 	Descriptor() NodeDescriptor
 }
 
+// SecretDecryptor unwraps wick_enc_ tokens at run time. Engine uses
+// this to decrypt free-form secret env vars before injecting them into
+// the RunContext. Nil = no decryption (tokens passed through as-is).
+type SecretDecryptor interface {
+	Decrypt(token string) (string, error)
+}
+
 type Engine struct {
 	Layout      config.Layout
 	Service     service.Service
 	StateStore  state.Store
 	Executors   map[workflow.NodeType]workflow.Executor
 	Descriptors map[workflow.NodeType]NodeDescriptor
+	// Decryptor unwraps wick_enc_ tokens for secret env vars. Wired
+	// from server.go via engine.SetDecryptor after enc.New.
+	Decryptor SecretDecryptor
 	// Triggers carries the per-trigger-type descriptors (schema + docs).
 	// MCP `workflow_node_detail` resolves `trigger:<type>` against this
 	// registry. Seeded by setup; zero value = no triggers discoverable.
@@ -256,8 +266,18 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 		StartedAt:  e.Now(),
 		UpdatedAt:  e.Now(),
 	}
-	if st.Entry == "" {
-		return st, errors.New("no entry node (graph.entry + no trigger entry_node)")
+	// Start/end nodes aren't mandatory, so a published workflow may have
+	// an empty or dangling entry (e.g. just a trigger and no graph). Such
+	// a run is a clean no-op: emit started/completed and finish success
+	// rather than erroring. entryRunnable gates the walk below.
+	entryRunnable := false
+	if st.Entry != "" {
+		for _, n := range w.Graph.Nodes {
+			if n.ID == st.Entry {
+				entryRunnable = true
+				break
+			}
+		}
 	}
 	envVals, _ := e.Service.LoadEnvValues(w.ID)
 	triggerNodeID := ""
@@ -268,12 +288,18 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 			triggerNodeID = firedTrigger.EntryNode
 		}
 	}
+	// Decrypt all secrets into envVals — everything accessible via {{.Env.X}}.
+	// Secrets map stays populated so maskAny can redact them from emitted events.
+	secrets := e.ExtractSecrets(w.Env, envVals)
+	for k, v := range secrets {
+		envVals[k] = v // plaintext in EnvValues for template rendering
+	}
 	rc := &workflow.RunContext{
 		Workflow:      w,
 		Event:         evt,
 		Outputs:       st.Outputs,
 		EnvValues:     envVals,
-		Secrets:       extractSecrets(w.Env, envVals),
+		Secrets:       secrets, // kept for maskAny in recordSuccess
 		RunID:         runID,
 		NodeOutputs:   map[string]workflow.NodeOutput{},
 		TriggerNodeID: triggerNodeID,
@@ -329,7 +355,10 @@ func (e *Engine) Run(ctx context.Context, w workflow.Workflow, evt workflow.Even
 	cctx, cancel := context.WithTimeout(ctx, maxDuration)
 	defer cancel()
 
-	err := e.walk(cctx, w, st.Entry, rc, &st)
+	var err error
+	if entryRunnable {
+		err = e.walk(cctx, w, st.Entry, rc, &st)
+	}
 	end := e.Now()
 	if err != nil {
 		st.Status = workflow.StatusFailed
@@ -537,6 +566,9 @@ func (e *Engine) recordSuccess(ctx context.Context, id string, st *workflow.RunS
 	st.Outputs = rc.Outputs
 	st.UpdatedAt = e.Now()
 	outTrunc := truncateForEvent(nodeOutputAsMap(out))
+	// Mask secrets before emitting to SSE / state so plaintext never
+	// leaves the engine memory. rc.Secrets holds per-run plaintext cache.
+	outTrunc = maskAny(outTrunc, rc.Secrets)
 	data := map[string]any{
 		"type":       string(n.Type),
 		"verdict":    out.Verdict,
@@ -547,7 +579,7 @@ func (e *Engine) recordSuccess(ctx context.Context, id string, st *workflow.RunS
 		data["label"] = n.Label
 	}
 	if tu, ok := out.Fields["tools_used"]; ok {
-		data["tools_used"] = tu
+		data["tools_used"] = maskAny(tu, rc.Secrets)
 	}
 	if m, ok := outTrunc.(map[string]any); ok {
 		if _, truncated := m["_truncated"]; truncated {
@@ -868,6 +900,33 @@ func copyNodeOutputs(in map[string]workflow.NodeOutput) map[string]workflow.Node
 	return out
 }
 
+// webhookPathMatches checks whether a stored webhook slug matches the
+// incoming event path. Mirrors the router's webhookFullPath + PathMatches
+// logic without importing the trigger package (avoids import cycle).
+func webhookPathMatches(wfID, slug, gotPath string) bool {
+	clean := strings.TrimPrefix(slug, "/")
+	var full string
+	if wfID == "" {
+		full = "/" + clean
+	} else {
+		full = "/" + wfID + "/" + clean
+	}
+	tParts := strings.Split(strings.Trim(full, "/"), "/")
+	gParts := strings.Split(strings.Trim(gotPath, "/"), "/")
+	if len(tParts) != len(gParts) {
+		return false
+	}
+	for i, tp := range tParts {
+		if strings.HasPrefix(tp, "{") && strings.HasSuffix(tp, "}") {
+			continue
+		}
+		if tp != gParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // pickEntry resolves the entry node for a run and returns the trigger
 // that fired (when one can be identified). A nil second return means
 // the run fell back to graph.entry — no matching trigger row was
@@ -897,24 +956,104 @@ func pickEntry(w workflow.Workflow, evt workflow.Event) (string, *workflow.Trigg
 		if tr.Event != "" && evt.Subtype != "" && tr.Event != evt.Subtype {
 			continue
 		}
+		// For webhook triggers, also match path so multi-webhook workflows
+		// route to the correct entry node instead of always picking the
+		// first webhook trigger in the list.
+		if tr.Type == workflow.TriggerWebhook && tr.Path != "" {
+			gotPath, _ := evt.Payload["path"].(string)
+			if gotPath != "" && !webhookPathMatches(w.ID, tr.Path, gotPath) {
+				continue
+			}
+		}
 		return tr.EntryNode, tr
 	}
 	return w.Graph.Entry, nil
 }
 
-// extractSecrets returns the subset of envVals declared as `widget:
-// secret` in the schema.
-func extractSecrets(schema []workflow.EnvField, vals map[string]string) map[string]string {
-	out := map[string]string{}
+// extractSecrets returns the secret subset of envVals. A key is a
+// secret when: (a) the workflow schema declares it as widget:secret, or
+// (b) its stored value is a wick_enc_ token (free-form secret). Tokens
+// are decrypted using the engine's Decryptor when available; if
+// decryption fails or no decryptor is wired the token is passed through
+// so the run still proceeds (and the error surfaces in output).
+func (e *Engine) ExtractSecrets(schema []workflow.EnvField, vals map[string]string) map[string]string {
+	secretKeys := map[string]bool{}
 	for _, f := range schema {
-		if !f.IsSecret() {
-			continue
-		}
-		if v, ok := vals[f.Name]; ok {
-			out[f.Name] = v
+		if f.IsSecret() {
+			secretKeys[f.Name] = true
 		}
 	}
+	// Free-form keys stored as wick_cenc_ tokens (master-encrypted) are
+	// also secrets. wick_enc_ = per-user key (legacy path, not used for
+	// workflow env); wick_cenc_ = master key (current path via EncryptMaster).
+	for k, v := range vals {
+		if strings.HasPrefix(v, "wick_cenc_") || strings.HasPrefix(v, "wick_enc_") {
+			secretKeys[k] = true
+		}
+	}
+	// decryptCache deduplicates Decrypt calls within one run-start
+	// invocation — same token (e.g. two keys sharing a value) is only
+	// unwrapped once. Cache lives on the stack; GC'd when this call returns.
+	decryptCache := map[string]string{}
+	decrypt := func(token string) string {
+		isEnc := strings.HasPrefix(token, "wick_enc_") || strings.HasPrefix(token, "wick_cenc_")
+		if e.Decryptor == nil || !isEnc {
+			return token
+		}
+		if cached, ok := decryptCache[token]; ok {
+			return cached
+		}
+		plain, err := e.Decryptor.Decrypt(token)
+		if err != nil {
+			plain = token // pass token through on error; don't crash the run
+		}
+		decryptCache[token] = plain
+		return plain
+	}
+
+	out := map[string]string{}
+	for k := range secretKeys {
+		v, ok := vals[k]
+		if !ok {
+			continue
+		}
+		out[k] = decrypt(v)
+	}
 	return out
+}
+
+// maskAny recursively walks v and replaces every plaintext secret value
+// (from secrets map) with "••••••••". Values shorter than 4 chars are
+// skipped to avoid false positives on common strings like "ok" or "1".
+// Plaintext stays live in rc.Outputs for downstream node inputs —
+// only the emitted events (SSE + state) are masked.
+func maskAny(v any, secrets map[string]string) any {
+	if len(secrets) == 0 {
+		return v
+	}
+	switch t := v.(type) {
+	case string:
+		for _, s := range secrets {
+			if len(s) >= 4 && strings.Contains(t, s) {
+				t = strings.ReplaceAll(t, s, "••••••••")
+			}
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			out[k] = maskAny(val, secrets)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = maskAny(val, secrets)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // truncateForEvent caps any payload bound for an SSE/event-store

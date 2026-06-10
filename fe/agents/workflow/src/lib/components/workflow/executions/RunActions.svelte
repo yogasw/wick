@@ -75,7 +75,7 @@
   </button>
   <button
     type="button"
-    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"
+    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:bg-slate-100 dark:hover:bg-navy-600 text-black-700 dark:text-black-300"
     onclick={copyID}
     title="Copy run id to clipboard"
   >
@@ -92,7 +92,7 @@
   </button>
   <button
     type="button"
-    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"
+    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:bg-slate-100 dark:hover:bg-navy-600 text-black-700 dark:text-black-300"
     onclick={exportJSON}
     disabled={!runDetail}
     title="Download the full run state as run-<id>.json"
@@ -101,7 +101,7 @@
   </button>
   <button
     type="button"
-    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 hover:bg-white-200 dark:hover:bg-white-200 dark:bg-navy-700 text-black-500 dark:text-white-100"
+    class="px-2 py-1 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:bg-slate-100 dark:hover:bg-navy-600 text-black-700 dark:text-black-300"
     onclick={() => (showPreview = true)}
     disabled={!runDetail}
     title="Preview the full run JSON without downloading"

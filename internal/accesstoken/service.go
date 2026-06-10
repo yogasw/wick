@@ -13,7 +13,7 @@
 //	wick_pat_<32 hex chars>
 //
 // The "wick_pat_" prefix is the routing hint auth middleware uses to
-// distinguish static bearers from OAuth JWTs (see internal/docs/
+// distinguish static bearers from OAuth JWTs (see internal/planning/archive/
 // connectors-design.md §8.3).
 package accesstoken
 

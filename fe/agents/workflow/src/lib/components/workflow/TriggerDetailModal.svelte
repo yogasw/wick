@@ -50,6 +50,7 @@
   });
 
   let activeTab = $state<"params" | "settings">("params");
+  let webhookURLTab = $state<"test" | "live">("test");
 
   // Mobile pane switcher — same pattern as NodeDetailModal: the 3
   // columns stack on phones and this picks which is shown. Ignored on
@@ -286,28 +287,121 @@
 
               <!-- Webhook-specific fields. -->
               {#if trigger.type === "webhook"}
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs font-medium">Path</span>
-                  <input
-                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 font-mono"
-                    placeholder="/hooks/my-hook"
-                    value={trigger.path ?? ""}
-                    oninput={(e) => patch("path", (e.target as HTMLInputElement).value)}
-                  />
-                </label>
+                {@const wfID = $draftWorkflow?.id ?? ""}
+                {@const slug = (trigger.path ?? "").replace(/^\/+/, "")}
+                {@const hooksBase = ($catalog?.hooks_base_url ?? "").replace(/\/hooks$/, "").replace(/\/$/, "")}
+                {@const urlBase = hooksBase}
+                <!-- Slug input -->
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Path slug</span>
+                  <div class="flex items-stretch rounded border border-slate-200 dark:border-navy-600 overflow-hidden font-mono text-sm">
+                    <span class="flex items-center px-2 py-1.5 bg-slate-100 dark:bg-navy-800 text-black-500 dark:text-black-600 text-[11px] shrink-0 select-none border-r border-slate-200 dark:border-navy-600 whitespace-nowrap">
+                      /{wfID}/
+                    </span>
+                    <input
+                      class="flex-1 min-w-0 bg-white-100 dark:bg-navy-700 px-2 py-1.5 outline-none text-sm"
+                      placeholder="my-hook"
+                      value={slug}
+                      oninput={(e) => {
+                        const v = (e.target as HTMLInputElement).value.replace(/^\/+/, "");
+                        patch("path", v);
+                      }}
+                    />
+                  </div>
+                  <span class="text-[11px] text-black-700 dark:text-black-500">
+                    Slug only — no leading slash, no workflow ID. Portable across export/import.
+                  </span>
+                </div>
+
+                <!-- Tabbed URL preview: Test | Live -->
+                <div class="flex flex-col rounded border border-slate-200 dark:border-navy-600 overflow-hidden">
+                  <!-- Tab bar -->
+                  <div class="flex border-b border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-800">
+                    <button
+                      type="button"
+                      class={`flex-1 py-1.5 text-[11px] font-semibold transition-colors border-b-2 ${webhookURLTab === "test" ? "border-amber-500 text-amber-600 dark:text-amber-400" : "border-transparent text-slate-500 dark:text-black-500 hover:text-black-700 dark:hover:text-black-400"}`}
+                      onclick={() => webhookURLTab = "test"}
+                    >Test (draft)</button>
+                    <button
+                      type="button"
+                      class={`flex-1 py-1.5 text-[11px] font-semibold transition-colors border-b-2 ${webhookURLTab === "live" ? "border-emerald-500 text-emerald-600 dark:text-emerald-400" : "border-transparent text-slate-500 dark:text-black-500 hover:text-black-700 dark:hover:text-black-400"}`}
+                      onclick={() => webhookURLTab = "live"}
+                    >Live (published)</button>
+                  </div>
+                  <!-- Tab content -->
+                  <div class="p-2.5 flex flex-col gap-1.5 bg-slate-50 dark:bg-navy-800">
+                    {#if webhookURLTab === "test"}
+                      {@const testURL = urlBase ? `${urlBase}/webhook-test/${wfID}/${slug}` : `/webhook-test/${wfID}/${slug}`}
+                      <div class="flex items-center gap-1.5 rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5">
+                        <span class="flex-1 font-mono text-[11px] text-black-700 dark:text-black-400 break-all">{testURL}</span>
+                        {#if urlBase}
+                          <button type="button"
+                            class="shrink-0 px-2 py-0.5 rounded text-[10px] bg-slate-200 dark:bg-navy-600 hover:bg-slate-300 dark:hover:bg-navy-500 transition-colors font-medium text-black-700 dark:text-black-300"
+                            onclick={() => navigator.clipboard.writeText(testURL).catch(()=>{})}>Copy</button>
+                        {/if}
+                      </div>
+                      <p class="text-[10px] text-slate-500 dark:text-black-500">Fires the <strong>draft</strong> copy. Test changes before publishing — runs appear in the canvas history.</p>
+                    {:else}
+                      {@const liveURL = urlBase ? `${urlBase}/webhook/${wfID}/${slug}` : `/webhook/${wfID}/${slug}`}
+                      <div class="flex items-center gap-1.5 rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1.5">
+                        <span class="flex-1 font-mono text-[11px] text-black-700 dark:text-black-400 break-all">{liveURL}</span>
+                        {#if urlBase}
+                          <button type="button"
+                            class="shrink-0 px-2 py-0.5 rounded text-[10px] bg-slate-200 dark:bg-navy-600 hover:bg-slate-300 dark:hover:bg-navy-500 transition-colors font-medium text-black-700 dark:text-black-300"
+                            onclick={() => navigator.clipboard.writeText(liveURL).catch(()=>{})}>Copy</button>
+                        {/if}
+                      </div>
+                      <p class="text-[10px] text-slate-500 dark:text-black-500">Fires the <strong>published</strong> workflow. Active only after you publish.</p>
+                    {/if}
+                    {#if !urlBase}
+                      <p class="text-[10px] text-amber-600 dark:text-amber-400">Set <strong>PublicURL</strong> in Settings → Agents to see full URLs.</p>
+                    {/if}
+                  </div>
+                </div>
+
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Method</span>
                   <select
                     class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
-                    value={trigger.method ?? ""}
+                    value={trigger.method ?? "POST"}
                     onchange={(e) => patch("method", (e.target as HTMLSelectElement).value)}
                   >
-                    <option value="">(any)</option>
                     {#each ["GET", "POST", "PUT", "DELETE", "PATCH"] as m}
                       <option value={m}>{m}</option>
                     {/each}
                   </select>
                 </label>
+
+                <!-- Respond mode — mirrors n8n's 3-option picker. -->
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Respond</span>
+                  <div class="flex flex-col gap-1 rounded border border-slate-200 dark:border-navy-600 overflow-hidden">
+                    {#each [
+                      { value: "immediately",   label: "Immediately",                  desc: "202 Accepted at enqueue — fire and forget (default)." },
+                      { value: "last_node",      label: "When Last Node Finishes",      desc: "Block until the workflow completes, return last node output as JSON." },
+                      { value: "respond_node",   label: "Using 'Respond to Webhook' Node", desc: "Block until a webhook_respond node sets the status, body, and headers." },
+                    ] as opt}
+                      {@const active = (trigger.respond_mode ?? "immediately") === opt.value}
+                      <button
+                        type="button"
+                        class={`flex items-start gap-3 px-3 py-2.5 text-left transition-colors border-b border-slate-100 dark:border-navy-700 last:border-0 ${active ? "bg-emerald-50 dark:bg-emerald-950/30" : "hover:bg-slate-50 dark:hover:bg-navy-700"}`}
+                        onclick={() => patch("respond_mode", opt.value)}
+                      >
+                        <span class={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${active ? "border-emerald-500 bg-emerald-500" : "border-slate-400 dark:border-navy-500"}`}></span>
+                        <span class="flex flex-col gap-0.5">
+                          <span class={`text-xs font-medium ${active ? "text-emerald-700 dark:text-emerald-300" : "text-black-800 dark:text-black-300"}`}>{opt.label}</span>
+                          <span class="text-[11px] text-slate-500 dark:text-black-500">{opt.desc}</span>
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                  {#if (trigger.respond_mode ?? "immediately") !== "immediately"}
+                    <p class="text-[11px] text-amber-600 dark:text-amber-400">
+                      ⚠ Blocking mode — the webhook caller waits up to 30s for the workflow to finish.
+                    </p>
+                  {/if}
+                </div>
+
                 <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Secret ref (optional)</span>
                   <input
@@ -316,6 +410,7 @@
                     value={trigger.secret_ref ?? ""}
                     oninput={(e) => patch("secret_ref", (e.target as HTMLInputElement).value)}
                   />
+                  <span class="text-[11px] text-black-700 dark:text-black-500">HMAC-SHA256 verified via <code class="font-mono">X-Wick-Sig</code> header.</span>
                 </label>
               {/if}
 

@@ -20,6 +20,7 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 | [GitHub](./github) | `github` | List repos / issues / PRs, read file contents, create issues, post comments. | builtin |
 | [Bitbucket](./bitbucket) | `bitbucket` | Search repos, read commits / diffs, list and create pull requests, post PR comments (top-level or inline). | builtin |
 | [Slack](./slack) | `slack` | Read channels, threads, users; send / edit / delete messages; manage reactions. OAuth credentials supported on the row. | builtin |
+| [Phoenix](./phoenix) | `phoenix` | Debug LLM behaviour in Arize Phoenix — list spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only. | builtin |
 | [Wick Manager](./wickmanager) | `wickmanager` | Read and edit wick's own apps / jobs / tools / connectors / tray lifecycle. For asking the LLM to inspect or tweak wick itself, not third-party APIs. | runtime |
 | [Workflow](./workflow) | `workflow` | Create, edit, test, simulate, and run workflows over MCP — the LLM-facing surface for the [Workflows](/workflow/) feature. | runtime |
 | [Notifications](./notifications) | `notifications` | Send a browser push notification to a subscribed user by opaque PN ID. Pairs with the per-session subscribe bell on the agents UI. | runtime |

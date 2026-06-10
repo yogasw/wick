@@ -18,7 +18,7 @@ Parameterized SQL query against a configured DSN.
 |---|---|---|---|
 | `database` | string | ✅ | Env key whose value is the DSN. Stored in the workflow's `env:` block. |
 | `query` | textarea (template) | ✅ | SQL with `$1` / `$2` / … placeholders (Postgres style — sqlite driver normalises). |
-| `params` | YAML list (templated) | | Positional params for the placeholders. Each value rendered as a Go template. |
+| `params` | list (templated) | | Positional params for the placeholders. Each value rendered as a Go template. |
 | `timeout_sec` | int | | Per-call timeout. |
 
 ## Output
@@ -31,23 +31,23 @@ Parameterized SQL query against a configured DSN.
 
 ## Example
 
-```yaml
-env:
-  - key: USERS_DB
-    desc: Read-only DSN to the users database
-    secret: true
-
-graph:
-  nodes:
-    lookup_user:
-      type: db_query
-      database: USERS_DB
-      query: |
-        SELECT id, email, plan, created_at
-        FROM users
-        WHERE id = $1
-      params:
-        - '{{index .Event.Payload "user_id"}}'
+```json
+{
+  "env": [
+    {"key": "USERS_DB", "desc": "Read-only DSN to the users database", "secret": true}
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "lookup_user",
+        "type": "db_query",
+        "database": "USERS_DB",
+        "query": "SELECT id, email, plan, created_at\nFROM users\nWHERE id = $1",
+        "params": ["{{index .Event.Payload \"user_id\"}}"]
+      }
+    ]
+  }
+}
 ```
 
 Downstream nodes reach <code v-pre>{{index (index .Node.lookup_user.rows 0) "plan"}}</code> (or <code v-pre>{{.Node.lookup_user.row_count}}</code> for a quick existence check).

@@ -29,9 +29,13 @@ func helpHasMCPConfig(help string) bool {
 	return strings.Contains(help, "--mcp-config")
 }
 
-// wickMCPAllowedTools pre-approves wick's own MCP meta tools so the
-// headless agent isn't blocked on a permission prompt nobody can answer.
-const wickMCPAllowedTools = "mcp__wick__wick_list,mcp__wick__wick_search,mcp__wick__wick_get,mcp__wick__wick_execute,mcp__wick__wick_list_providers"
+// wickMCPAllowedTools pre-approves every tool from wick's own MCP server
+// so the headless agent isn't blocked on a permission prompt nobody can
+// answer. Server-level form ("mcp__<server>") covers the meta-tools AND
+// the dynamic wick_manager_* surface without a static per-tool list.
+// Not a security boundary — wick enforces per-op access server-side
+// (e.g. wickmanager's requireAdmin/requireTray gates).
+const wickMCPAllowedTools = "mcp__wick"
 
 // mcpConfigArgs builds the claude argv for the wick MCP HTTP server.
 // strict=true isolates to only wick; always pre-approves wick's tools.
