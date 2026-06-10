@@ -6,7 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+- **Provider Storage Sync is now opt-in**: the job ships disabled by default on fresh installs. Enable it from **Tools → Jobs → Provider Storage Sync → Settings → Enabled**.
+
+### Added
+- **`WICK_PROVIDERSYNC_DISABLE` env var**: set to `true` to disable sync, boot restore, and the realtime watcher for a specific instance without touching the DB. Useful when multiple servers share one database. See [Provider Storage → Per-instance kill switch](./guide/provider-storage#per-instance-kill-switch) and [Environment Variables](./reference/env-vars#wick_providersync_disable).
+
+### Fixed
+- **Bounded boot restore memory**: `restoreAll` now iterates files in batches of 50 instead of loading the full set into memory, preventing OOM on large credential trees. Progress is logged at each percentage point.
 
 ---
 
