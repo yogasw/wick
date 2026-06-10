@@ -26,7 +26,7 @@ esac
 
 # curl_auth wraps curl with an Authorization header when TOKEN is set.
 # Using a function avoids word-splitting pitfalls with inline $AUTH strings.
-curl_auth() { curl ${TOKEN:+-H "Authorization: Bearer $TOKEN"} "$@"; }
+curl_auth() { curl ${TOKEN:+--location-trusted -H "Authorization: Bearer $TOKEN"} "$@"; }
 
 # Privileged writes run plain — if the user lacks perms on the target
 # dir (e.g. /usr/local/bin) the curl/mv/chmod call surfaces a clear
