@@ -4,6 +4,27 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [Unreleased] — SCM diff UI overhaul
+
+### Added
+- **VSCode-style diff editor**: Source Control panel (`full` mode) now shows an inline Monaco diff editor as the primary surface — no modal, no placeholder. File list on the left (220px), diff fills the rest.
+- **Auto-select first file**: opening the SCM panel automatically loads the first changed file into the diff editor.
+- **Unified diff by default**: diff renders in unified (inline) mode. Toggle to side-by-side via the split-view button in the diff header.
+- **Hidden unchanged regions**: unchanged lines are collapsed with a "N hidden lines" expand bar, matching VSCode behavior (`hideUnchangedRegions`, 3-line context).
+- **Inline Stage / Unstage / Discard buttons**: diff header shows per-file Stage, Unstage, and Discard (rollback) actions — no need to hover file rows.
+- **Auto-show Save button**: editing directly in the diff editor (no "Edit" button required) causes a Save button to appear automatically when content changes. Applied to both full-mode inline diff and sidebar DiffModal.
+- **Per-session active repo persistence**: the selected repo is saved to `localStorage` keyed by session ID and restored on next open.
+- **Whitespace diff visible**: `ignoreTrimWhitespace: false` — trailing newline and whitespace differences are shown in the diff.
+
+### Fixed
+- **Repo with no commits**: `git show HEAD:<path>` on a repo without any commit no longer returns 400 — `"invalid object name 'HEAD'"` is now treated as an empty original side (same as a new file).
+- **4xx requests logged as warn not error**: HTTP middleware now logs 4xx responses at `warn` level instead of `error`, reducing noise for expected client errors.
+- **GORM `record not found` log noise**: GORM logger set to `Silent` — `record not found` queries no longer print to stdout on every request.
+- **Diff not updating after save**: after saving a file, the diff editor now shows the updated content correctly instead of reverting to the pre-edit state.
+- **Race condition on file select**: Monaco diff editor is only mounted after diff data is loaded, preventing empty-content render on first file selection.
+
+---
+
 ## [Unreleased] — Per-instance OAuth accounts & MCP multi-identity
 
 ### Added
