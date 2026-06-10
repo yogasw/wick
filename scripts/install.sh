@@ -26,7 +26,33 @@ esac
 
 # curl_auth wraps curl with an Authorization header when TOKEN is set.
 # Using a function avoids word-splitting pitfalls with inline $AUTH strings.
+# curl_auth: adds Bearer token when TOKEN is set.
 curl_auth() { curl ${TOKEN:+-H "Authorization: Bearer $TOKEN"} "$@"; }
+
+# gh_download: download a GitHub release asset by filename.
+# For private repos, resolves the asset ID via API then downloads with
+# Accept: application/octet-stream — the only reliable method for private assets.
+# For public repos (no TOKEN), falls back to direct browser_download_url.
+gh_download() {
+  asset_name="$1"; dest="$2"
+  if [ -n "$TOKEN" ]; then
+    release_json=$(curl_auth -fsSL "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+    # Extract asset id — "id" appears before "name" in GitHub asset JSON blocks
+    asset_id=$(printf '%s' "$release_json" \
+      | grep -B5 '"name": *"'"$asset_name"'"' \
+      | grep '"id":' | tail -1 \
+      | tr -cd '0-9')
+    if [ -n "$asset_id" ]; then
+      curl_auth -fL --progress-bar \
+        -H "Accept: application/octet-stream" \
+        "https://api.github.com/repos/$REPO/releases/assets/$asset_id" \
+        -o "$dest"
+      return $?
+    fi
+  fi
+  # public repo or asset_id not found — direct URL
+  curl_auth -fL --progress-bar "$BASE/$asset_name" -o "$dest"
+}
 
 # Privileged writes run plain — if the user lacks perms on the target
 # dir (e.g. /usr/local/bin) the curl/mv/chmod call surfaces a clear
@@ -140,7 +166,7 @@ install_gate() {
   dest_dir="$1"
   gate_url="$BASE/${APP}-gate-linux-${ARCH}"
   echo "→ gate: $gate_url"
-  if curl_auth -fL --progress-bar "$gate_url" -o "$dest_dir/$APP-gate"; then
+  if gh_download "${APP}-gate-linux-${ARCH}" "$dest_dir/$APP-gate"; then
     chmod +x "$dest_dir/$APP-gate"
     echo "✓ $APP-gate installed at $dest_dir/$APP-gate"
   else
@@ -232,7 +258,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     URL="$BASE/${APP}-linux-${ARCH}"
     echo "→ termux: $URL"
     stop_running "$PREFIX/bin/$APP"
-    curl_auth -fL --progress-bar "$URL" -o "$PREFIX/bin/$APP"
+    gh_download "${APP}-linux-${ARCH}" "$PREFIX/bin/$APP"
     chmod +x "$PREFIX/bin/$APP"
     echo "✓ $APP installed at $PREFIX/bin/$APP"
   fi
@@ -298,7 +324,7 @@ case "$OS" in
       URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
       TMP=$(mktemp -d)
       echo "→ macOS: $URL"
-      curl_auth -fL --progress-bar "$URL" -o "$TMP/$APP.dmg"
+      gh_download "${APP}-${VER}-darwin-${ARCH}.dmg" "$TMP/$APP.dmg"
       hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
       MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
       cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
@@ -319,40 +345,59 @@ case "$OS" in
         URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
         TMP=$(mktemp)
         echo "→ linux: $URL"
-        curl_auth -fL --progress-bar "$URL" -o "$TMP"
-        dpkg -i "$TMP"
+        gh_download "${APP}-${VER}-linux-${ARCH}.deb" "$TMP"
+        if [ "$(id -u)" = "0" ]; then
+          dpkg -i "$TMP"
+        elif command -v sudo >/dev/null 2>&1; then
+          sudo dpkg -i "$TMP"
+        else
+          echo "! dpkg requires root — re-run with: sudo sh install.sh" >&2; exit 1
+        fi
         rm -f "$TMP"
         echo "✓ $APP installed"
       fi
     else
+      LOCAL_BIN="$HOME/.local/bin"
+      mkdir -p "$LOCAL_BIN"
+      # migrate old system-wide install if present
+      for old in "/usr/local/bin/$APP" "/usr/local/bin/$APP-gate"; do
+        if [ -f "$old" ]; then
+          echo "→ removing old system install at $old"
+          if [ "$(id -u)" = "0" ]; then rm -f "$old"
+          elif command -v sudo >/dev/null 2>&1; then sudo rm -f "$old"
+          fi
+        fi
+      done
       if [ "$SKIP_APP" = "1" ]; then
         echo "✓ $APP already at $TAG — skipping raw binary"
       else
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
-        stop_running "/usr/local/bin/$APP"
-        curl_auth -fL --progress-bar "$URL" -o /usr/local/bin/$APP
-        chmod +x /usr/local/bin/$APP
-        echo "✓ $APP installed"
+        stop_running "$LOCAL_BIN/$APP"
+        gh_download "${APP}-linux-${ARCH}" "$LOCAL_BIN/$APP"
+        chmod +x "$LOCAL_BIN/$APP"
+        echo "✓ $APP installed at $LOCAL_BIN/$APP"
       fi
       if [ "$SKIP_GATE" = "1" ]; then
         echo "✓ $APP-gate already at $TAG — skipping"
       else
-        # Gate sidecar — same idea as the Termux path. /usr/local/bin
-        # is root-owned on most distros, so the caller must run
-        # install.sh with root privileges (or via `sudo sh`).
         gate_url="$BASE/${APP}-gate-linux-${ARCH}"
         echo "→ gate: $gate_url"
-        if curl_auth -fL --progress-bar "$gate_url" -o /usr/local/bin/$APP-gate; then
-          chmod +x /usr/local/bin/$APP-gate
-          echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
+        if gh_download "${APP}-gate-linux-${ARCH}" "$LOCAL_BIN/$APP-gate"; then
+          chmod +x "$LOCAL_BIN/$APP-gate"
+          echo "✓ $APP-gate installed at $LOCAL_BIN/$APP-gate"
         else
-          echo "! gate sidecar not found at $gate_url — skipping (agent has an embedded fallback)"
+          echo "! gate sidecar not found — skipping (agent has embedded fallback)"
         fi
       fi
+      # warn if ~/.local/bin not in PATH
+      case ":$PATH:" in
+        *":$LOCAL_BIN:"*) ;;
+        *) echo "⚠ $LOCAL_BIN is not in PATH — add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+      esac
     fi
-    install_gotty "/usr/local/bin" "linux"
-    start_agent "$(command -v "$APP" 2>/dev/null || echo "/usr/local/bin/$APP")"
+    install_gotty "$HOME/.local/bin" "linux"
+    start_agent "$(command -v "$APP" 2>/dev/null || echo "$HOME/.local/bin/$APP")"
     ;;
   *)
     echo "unsupported OS: $OS (use install.ps1 for Windows)" >&2
