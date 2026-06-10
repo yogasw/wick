@@ -7,12 +7,13 @@
 #   macOS   → /Applications/<app>.app     (mounts .dmg)
 #   Windows → use install.ps1 instead
 #
-# Public repo:   curl -fsSL <url>/install.sh | sh
-# Private repo:  TOKEN=ghp_xxx sh -c "$(curl -fsSL -H \"Authorization: Bearer $TOKEN\" <url>/install.sh)"
+# Public repo:   curl -fsSL https://yogasw.github.io/wick/install.sh | sh
+# Private repo:  TOKEN=ghp_xxx sh -c "$(curl -fsSL https://yogasw.github.io/wick/install.sh)"
+# Override app:  APP=myapp REPO=org/myapp sh -c "$(curl -fsSL https://yogasw.github.io/wick/install.sh)"
 set -eu
 
-APP="wick-agent"                 # auto-rewritten by `wick init`
-REPO="yogasw/wick"               # auto-rewritten by `wick init` — EDIT after init
+APP="${APP:-wick-agent}"          # override: APP=myapp curl ... | sh
+REPO="${REPO:-yogasw/wick}"      # override: REPO=owner/myapp curl ... | sh
 TOKEN="${TOKEN:-}"               # private repo → TOKEN=ghp_... at runtime
 
 OS=$(uname -s)

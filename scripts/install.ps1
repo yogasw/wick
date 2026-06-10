@@ -2,13 +2,14 @@
 # release and installs silently (per-user, no UAC). Detects arch from
 # PROCESSOR_ARCHITECTURE.
 #
-# Public repo:   iwr -useb <url>/install.ps1 | iex
-# Private repo:  $env:TOKEN='ghp_xxx'; iwr -useb -Headers @{Authorization="Bearer $env:TOKEN"} <url>/install.ps1 | iex
+# Public repo:   iwr -useb https://yogasw.github.io/wick/install.ps1 | iex
+# Private repo:  $env:TOKEN='ghp_xxx'; iwr -useb -Headers @{Authorization="Bearer $env:TOKEN"} https://yogasw.github.io/wick/install.ps1 | iex
+# Override app:  $env:APP='myapp'; $env:REPO='org/myapp'; iwr -useb https://yogasw.github.io/wick/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
-$App   = 'wick-agent'            # auto-rewritten by `wick init`
-$Repo  = 'yogasw/wick'           # auto-rewritten by `wick init` — EDIT after init
+$App   = if ($env:APP)   { $env:APP }   else { 'wick-agent' }   # override: $env:APP='myapp'
+$Repo  = if ($env:REPO)  { $env:REPO }  else { 'yogasw/wick' }  # override: $env:REPO='owner/myapp'
 $Token = if ($env:TOKEN) { $env:TOKEN } else { '' }
 
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
