@@ -247,6 +247,34 @@ func (s *store) listAll(ctx context.Context) ([]entity.ProviderStorage, error) {
 	return rows, err
 }
 
+// countAll returns the total number of file rows (excluding dirs).
+func (s *store) countAll(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&entity.ProviderStorage{}).Where("is_dir = ?", false).Count(&n).Error
+	return n, err
+}
+
+// iterAll calls fn for each row in batches of batchSize, keeping only one
+// batch in memory at a time. Stops early and returns the first non-nil error
+// from fn. batchSize <= 0 defaults to 100.
+func (s *store) iterAll(ctx context.Context, batchSize int, fn func(entity.ProviderStorage) error) error {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	var batch []entity.ProviderStorage
+	result := s.db.WithContext(ctx).
+		Order("provider_type, instance_name, rel_path").
+		FindInBatches(&batch, batchSize, func(tx *gorm.DB, _ int) error {
+			for _, row := range batch {
+				if err := fn(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	return result.Error
+}
+
 // getByID fetches one row by primary key.
 func (s *store) getByID(ctx context.Context, id uint) (entity.ProviderStorage, error) {
 	var row entity.ProviderStorage
