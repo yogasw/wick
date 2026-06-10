@@ -112,7 +112,7 @@ func rewrite(p string, data []byte, name string) []byte {
 // Scaffolded projects generate thin wrappers that delegate to these URLs,
 // so any logic improvements in wick automatically apply to all projects
 // without requiring a re-scaffold.
-const wickInstallBase = "https://raw.githubusercontent.com/yogasw/wick/main/scripts"
+const wickInstallBase = "https://yogasw.github.io/wick"
 
 // copyInstallScripts generates thin wrapper scripts in the new project root.
 // Each wrapper sets APP and REPO for the project, then delegates to wick's
