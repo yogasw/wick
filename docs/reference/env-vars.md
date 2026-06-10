@@ -158,6 +158,17 @@ to **only** the wick MCP server.
 WICK_STRICT_MCP=1
 ```
 
+### `WICK_PROVIDERSYNC_DISABLE`
+**Default:** unset (sync enabled when the job is enabled)
+
+Set to `true` to disable the Provider Storage Sync subsystem for this instance. When set, the cron job exits immediately on every tick, boot restore is skipped, and the realtime watcher is never started. Useful when multiple server instances share one database and only one should perform sync.
+
+```env
+WICK_PROVIDERSYNC_DISABLE=true
+```
+
+See [Provider Storage → Per-instance kill switch](../guide/provider-storage#per-instance-kill-switch).
+
 ---
 
 ## Build-time

@@ -42,6 +42,10 @@ type App struct {
 	// = "WICK" on T9 keypad — picked to avoid collisions with common
 	// dev tools (3000, 5173) and well-known services.
 	Port int `env:"PORT" envDefault:"9425"`
+	// Set WICK_PROVIDERSYNC_DISABLE=true to skip boot restore and watcher
+	// startup on this instance, overriding the job-enabled flag in DB.
+	// Useful when multiple servers share one DB but only one should sync.
+	ProviderSyncDisable bool `env:"WICK_PROVIDERSYNC_DISABLE" envDefault:"false"`
 }
 
 type Database struct {

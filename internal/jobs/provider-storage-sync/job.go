@@ -6,6 +6,7 @@ package providerstoragesync
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/providersync"
@@ -39,6 +40,9 @@ func Register(mgr *providersync.Manager) {
 
 func newRun(mgr *providersync.Manager) job.RunFunc {
 	return func(ctx context.Context) (string, error) {
+		if os.Getenv("WICK_PROVIDERSYNC_DISABLE") == "true" {
+			return "skipped (WICK_PROVIDERSYNC_DISABLE=true)", nil
+		}
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 

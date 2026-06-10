@@ -98,6 +98,29 @@ Edit retention on a source via the **Retention** column in Configured Sources (p
 - **Upload File** — push a file directly into DB without disk sync (seeding).
 - **Preview** — view file content (>1 MB and binary files shown as size only).
 
+## Enabling and disabling sync
+
+### Default-off on fresh installs
+
+Provider Storage Sync is **disabled by default** on a fresh install. Enable it from **Tools → Jobs → Provider Storage Sync → Settings → Enabled**.
+
+Once enabled the job runs every minute and the boot restore + realtime watcher both activate automatically.
+
+### Per-instance kill switch
+
+Set `WICK_PROVIDERSYNC_DISABLE=true` to disable the entire sync subsystem for one instance without touching the DB:
+
+```env
+WICK_PROVIDERSYNC_DISABLE=true
+```
+
+When this variable is set:
+- The cron job exits immediately on each tick without doing any work.
+- Boot restore is skipped entirely.
+- The realtime watcher is never started.
+
+This is the recommended approach when multiple server instances share the same database and you want only one of them to perform sync and restore.
+
 ## Background jobs
 
 | Job | Schedule | What it does |
