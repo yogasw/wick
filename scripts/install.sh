@@ -346,7 +346,13 @@ case "$OS" in
         TMP=$(mktemp)
         echo "→ linux: $URL"
         gh_download "${APP}-${VER}-linux-${ARCH}.deb" "$TMP"
-        dpkg -i "$TMP"
+        if [ "$(id -u)" = "0" ]; then
+          dpkg -i "$TMP"
+        elif command -v sudo >/dev/null 2>&1; then
+          sudo dpkg -i "$TMP"
+        else
+          echo "! dpkg requires root — re-run with: sudo sh install.sh" >&2; exit 1
+        fi
         rm -f "$TMP"
         echo "✓ $APP installed"
       fi
@@ -357,8 +363,15 @@ case "$OS" in
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
         stop_running "/usr/local/bin/$APP"
-        gh_download "${APP}-linux-${ARCH}" "/usr/local/bin/$APP"
-        chmod +x /usr/local/bin/$APP
+        if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1; then
+          tmp_bin=$(mktemp)
+          gh_download "${APP}-linux-${ARCH}" "$tmp_bin"
+          chmod +x "$tmp_bin"
+          sudo mv "$tmp_bin" "/usr/local/bin/$APP"
+        else
+          gh_download "${APP}-linux-${ARCH}" "/usr/local/bin/$APP"
+          chmod +x /usr/local/bin/$APP
+        fi
         echo "✓ $APP installed"
       fi
       if [ "$SKIP_GATE" = "1" ]; then
