@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sub-Agent Delegation — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Tokens mirror wick design-system: green (accent), navy (dark surface),
+     black ramp (text), white ramp (light surface), status pos/cau/neg/prog. */
+  :root {
+    --green-200:#D1ECE5; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-100:#E3F3EF; --pos-400:#288C7A; --cau-100:#FBF1DD; --cau-400:#D78E08;
+    --neg-100:#FCE7E2; --neg-400:#EB5757; --prog-100:#EEFAFE; --prog-400:#56CCF2;
+  }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--white-200); color: var(--black-900); }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+  .card        { background: var(--white-100); border: 1px solid var(--white-300); border-radius: 12px; }
+  .card-sub    { background: var(--white-200); border: 1px solid var(--white-300); border-radius: 8px; }
+
+  .chip        { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .chip-run    { background: var(--pos-100); color: var(--pos-400); border:1px solid var(--pos-400); }
+  .chip-idle   { background: var(--cau-100); color: var(--cau-400); border:1px solid var(--cau-400); }
+  .chip-dead   { background: var(--neg-100); color: var(--neg-400); border:1px solid var(--neg-400); }
+  .chip-muted  { background: var(--white-300); color: var(--black-800); border:1px solid var(--white-400); }
+  .dot         { width:8px; height:8px; border-radius:999px; display:inline-block; }
+  .badge       { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }
+  .badge-prov  { background: var(--green-200); color: var(--green-700); }
+  .badge-model { background: var(--white-300); color: var(--black-800); }
+
+  .btn         { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+  .btn-primary { background: var(--green-500); color: var(--white-100); }
+  .btn-ghost   { background: var(--white-100); color: var(--black-900); border:1px solid var(--white-400); }
+
+  .input       { width:100%; padding:8px 12px; border:1px solid var(--white-400); border-radius:8px; font-size:13px; background:var(--white-100); color:var(--black-900); }
+  .label       { font-size:12px; font-weight:600; color: var(--black-800); margin-bottom:4px; display:block; }
+  .helper      { font-size:11px; color: var(--black-800); margin-top:4px; }
+  .section-h   { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--black-800); }
+  .tree-line   { border-left:2px solid var(--white-400); }
+
+  .tab-btn  { background:var(--white-100); color:var(--black-800); border:1px solid var(--white-400); padding:6px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+  .tab-on   { background:var(--green-200); color:var(--green-700); border-color:var(--green-500); }
+  /* big feature tab bar */
+  .ftab     { background:transparent; color:var(--black-800); border:none; border-bottom:3px solid transparent; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+  .ftab-on  { color:var(--green-600); border-bottom-color:var(--green-500); }
+
+  .msg-user { background:var(--prog-100); border:1px solid var(--prog-400); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .msg-bot  { background:var(--white-200); border:1px solid var(--white-300); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .tool-call{ background:var(--navy-700); color:var(--white-100); border-radius:8px; padding:6px 10px; font-size:12px; }
+  .nav-item { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; font-size:13px; color:var(--black-900); border:1px solid var(--white-300); }
+  .nav-new  { background:var(--green-200); color:var(--green-700); font-weight:600; border-color:var(--green-500); }
+</style>
+</head>
+<body>
+
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-4">
+  <div class="text-xs font-semibold tracking-widest uppercase" style="color:var(--green-600)">Wick · Sub-Agent Delegation</div>
+  <h1 class="text-3xl font-bold mt-1" style="color:var(--black-900)">Sub-Agents — Squad · Synchronous Delegate · Fleet Monitor</h1>
+  <p class="mt-2 max-w-3xl" style="color:var(--black-800)">
+    A leader agent calls <code>wick_delegate(profile, task)</code>, waits, and gets the sub-agent's final result back —
+    Task-tool style. Reusable role profiles, a provider-agnostic turn governor, and a read-only fleet monitor.
+  </p>
+  <p class="mt-2 text-xs" style="color:var(--black-800)">Paired with <code>design.md</code>. Update keduanya barengan kalau layout / kontrak berubah.</p>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 pb-20 space-y-12">
+
+<!-- ============================================================ -->
+<!-- BEFORE / AFTER -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">Before / After — apa yang berubah</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">"Sekarang" = sebelum sub-agent diimplement · "Dengan Sub-Agent / Baru" = sesudah.</p>
+
+  <!-- Conversation tabs -->
+  <div class="card p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-semibold">Conversation — <code>agents/session/{id}</code></div>
+      <div class="flex gap-2">
+        <button class="tab-btn tab-on" data-tabfor="conv" onclick="pick('conv','conv-now',this)">Sekarang</button>
+        <button class="tab-btn" data-tabfor="conv" onclick="pick('conv','conv-new',this)">Dengan Sub-Agent</button>
+      </div>
+    </div>
+    <div id="conv-now" data-group="conv">
+      <div class="card-sub p-3 mb-2 flex items-center justify-between">
+        <span class="text-xs section-h">🧭 default agent · single</span><span class="chip chip-muted" style="padding:2px 8px">1 agent</span>
+      </div>
+      <div class="space-y-2">
+        <div class="msg-user">@user: review PR #621 + cari changelog breaking lib X v3→v4</div>
+        <div class="msg-bot">default: oke, saya kerjakan…
+          <div class="tool-call mono mt-2">🔧 Bash · git diff origin/master</div>
+          <div class="tool-call mono mt-1">🔧 WebFetch · changelog lib X</div>
+          <div class="mt-2">Selesai: 2 bug + ringkasan changelog…</div>
+        </div>
+      </div>
+      <p class="helper mt-3">Satu agent mengerjakan semua secara linear di satu konteks.</p>
+    </div>
+    <div id="conv-new" data-group="conv" style="display:none">
+      <div class="card-sub p-3 mb-2 flex items-center justify-between">
+        <span class="text-xs section-h">🧭 orchestrator · leader (pemilik percakapan)</span><span class="chip chip-run" style="padding:2px 8px">leader + 2 sub</span>
+      </div>
+      <div class="space-y-2">
+        <div class="msg-user">@user: review PR #621 + cari changelog breaking lib X v3→v4</div>
+        <div class="msg-bot">orchestrator: saya pecah & delegasikan paralel…</div>
+        <div class="pl-4 tree-line space-y-2">
+          <div class="card-sub p-3">
+            <div class="flex items-center justify-between"><span class="text-sm font-semibold">🔎 → researcher</span><span class="chip chip-run">running</span></div>
+            <div class="flex gap-1 mt-2"><span class="badge badge-model">async · →channel</span><span class="badge badge-model">shared</span></div>
+          </div>
+          <div class="card-sub p-3">
+            <div class="flex items-center justify-between"><span class="text-sm font-semibold">🧑‍⚖️ → code-reviewer</span><span class="chip chip-dead">done · 5 turns</span></div>
+            <div class="flex gap-1 mt-2"><span class="badge badge-model">sync</span><span class="badge badge-prov">worktree</span></div>
+            <div class="card-sub p-2 mt-2" style="background:var(--white-100)"><pre class="text-xs whitespace-pre-wrap">2 findings: nil-deref parser.go:88; goroutine leak http.NewRequest tanpa ctx.</pre></div>
+          </div>
+        </div>
+        <div class="msg-bot">orchestrator: menggabungkan hasil reviewer (research dikirim async ke channel)…</div>
+      </div>
+      <p class="helper mt-3">Leader memiliki percakapan; sub-agent <b>nested di dalamnya</b> (konteks terisolasi, di-link via <code>agent_delegations</code>).</p>
+    </div>
+  </div>
+
+  <!-- Settings tabs -->
+  <div class="card p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-semibold">Settings / Nav — <code>/manager</code> + <code>/tools/agents</code></div>
+      <div class="flex gap-2">
+        <button class="tab-btn tab-on" data-tabfor="set" onclick="pick('set','set-now',this)">Sekarang</button>
+        <button class="tab-btn" data-tabfor="set" onclick="pick('set','set-new',this)">Baru</button>
+      </div>
+    </div>
+    <div id="set-now" data-group="set" class="grid grid-cols-2 lg:grid-cols-3 gap-2">
+      <div class="nav-item">🔌 Connectors</div><div class="nav-item">🧰 Tools</div><div class="nav-item">⏱ Jobs</div>
+      <div class="nav-item">🛰 MCP servers</div><div class="nav-item">🏷 Tags (admin)</div><div class="nav-item">💬 Sessions</div>
+      <div class="nav-item">🎭 Presets</div><div class="nav-item">📁 Projects</div><div class="nav-item">⚙️ Agents settings</div>
+    </div>
+    <div id="set-new" data-group="set" class="grid grid-cols-2 lg:grid-cols-3 gap-2" style="display:none">
+      <div class="nav-item">🔌 Connectors</div><div class="nav-item">🧰 Tools</div><div class="nav-item">⏱ Jobs</div>
+      <div class="nav-item">🛰 MCP servers</div><div class="nav-item">🏷 Tags (admin)</div><div class="nav-item">💬 Sessions</div>
+      <div class="nav-item">🎭 Presets</div><div class="nav-item">📁 Projects</div><div class="nav-item">⚙️ Agents settings</div>
+      <div class="nav-item nav-new">🤖 Sub-agents · Profiles ✦</div>
+      <div class="nav-item nav-new">📡 Fleet monitor ✦</div>
+      <div class="nav-item nav-new">🛡 Governor (global) ✦</div>
+    </div>
+  </div>
+
+  <!-- existing-feature note -->
+  <div class="card-sub p-4 mb-4" style="border-color:var(--prog-400)">
+    <div class="text-xs section-h mb-1" style="color:var(--prog-400)">Hari ini belum ada "agent profile" reusable</div>
+    <p class="text-sm" style="color:var(--black-800)">Analog terdekat = <b>Presets</b> (persona/system-prompt saja, reusable) + <b>Projects</b> (defaults: preset+provider). Tidak ada paket <b>{provider+model+system_prompt+tools+max_turns}</b> reusable. <b>Profiles</b> baru = generalisasi Presets — bukan duplikat.</p>
+  </div>
+
+  <!-- Tool access scope callout -->
+  <div class="card-sub p-4 mb-6" style="border-color:var(--cau-400)">
+    <div class="text-xs section-h mb-1" style="color:var(--cau-400)">"Tool access (tags)" ≠ hanya connector</div>
+    <p class="text-sm" style="color:var(--black-800)">Tag menggerbangi <b>seluruh permukaan tag wick</b>: <b>connector + tools built-in + jobs</b> (lewat <code>tool_tags</code>/<code>ToolPath</code> + <code>IsVisibleTo</code>). <b>Tidak</b> mencakup provider-native (Bash/Read/Write) & MCP eksternal → jalur terpisah (allowlist + strict-mcp).</p>
+  </div>
+
+  <!-- Other affected views -->
+  <div>
+    <div class="text-xs section-h mb-2">Tampilan lain yang ikut berubah</div>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div class="card-sub p-3"><div class="font-semibold text-sm">Sessions list</div><p class="text-xs mt-1" style="color:var(--black-800)">+ badge "N sub-agents" per baris.</p></div>
+      <div class="card-sub p-3"><div class="font-semibold text-sm">Approvals (gate)</div><p class="text-xs mt-1" style="color:var(--black-800)">Asal: "dari sub-agent code-reviewer (via orchestrator)".</p></div>
+      <div class="card-sub p-3"><div class="font-semibold text-sm">Channel / Slack</div><p class="text-xs mt-1" style="color:var(--black-800)">Hasil async (Fase 2) dikirim sebagai pesan.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- FEATURE SCREENS — single big tab bar -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">Layar fitur Sub-Agents</h2>
+  <p class="text-sm mb-3" style="color:var(--black-800)">Satu tab bar untuk semua layar baru. Klik untuk berpindah.</p>
+
+  <div class="card p-0 overflow-hidden">
+    <!-- big tab bar -->
+    <div class="flex flex-wrap border-b" style="border-color:var(--white-300); padding:0 8px">
+      <button class="ftab ftab-on" data-tabfor="feat" onclick="pick('feat','feat-profiles',this)">🤖 Profiles</button>
+      <button class="ftab" data-tabfor="feat" onclick="pick('feat','feat-editor',this)">✎ Profile editor</button>
+      <button class="ftab" data-tabfor="feat" onclick="pick('feat','feat-tree',this)">🌳 Delegation (in session)</button>
+      <button class="ftab" data-tabfor="feat" onclick="pick('feat','feat-monitor',this)">📡 Fleet monitor</button>
+      <button class="ftab" data-tabfor="feat" onclick="pick('feat','feat-governor',this)">🛡 Governor (global)</button>
+    </div>
+
+    <!-- PANEL: Profiles list -->
+    <div id="feat-profiles" data-group="feat" class="p-5">
+      <div class="flex items-center justify-between mb-1"><div class="font-semibold">Profil list</div><code class="text-xs">/manager/agents/profiles</code></div>
+      <p class="text-sm mb-4" style="color:var(--black-800)">Reusable roles. Card = satu role; badge provider/model, akses tag, enabled.</p>
+      <div class="flex items-center justify-between mb-4">
+        <input class="input" style="width:240px" placeholder="Search profiles…">
+        <button class="btn btn-primary">+ New profile</button>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="card-sub p-4">
+          <div class="flex items-start justify-between">
+            <div class="flex items-center gap-2"><div class="text-2xl">🔎</div><div><div class="font-semibold">Researcher</div><div class="text-xs" style="color:var(--black-800)">researcher</div></div></div>
+            <span class="chip chip-run" style="padding:2px 8px">enabled</span>
+          </div>
+          <p class="text-xs mt-3" style="color:var(--black-800)">Web + docs research. Returns a cited summary.</p>
+          <div class="flex flex-wrap gap-1 mt-3"><span class="badge badge-prov">claude</span><span class="badge badge-model">opus-4.8</span><span class="chip chip-muted" style="padding:2px 8px">web · loki</span></div>
+          <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>max turns: 12</span><span>leader: no</span></div>
+        </div>
+        <div class="card-sub p-4">
+          <div class="flex items-start justify-between">
+            <div class="flex items-center gap-2"><div class="text-2xl">🧑‍⚖️</div><div><div class="font-semibold">Code Reviewer</div><div class="text-xs" style="color:var(--black-800)">code-reviewer</div></div></div>
+            <span class="chip chip-run" style="padding:2px 8px">enabled</span>
+          </div>
+          <p class="text-xs mt-3" style="color:var(--black-800)">Reviews a diff for bugs. Returns findings list.</p>
+          <div class="flex flex-wrap gap-1 mt-3"><span class="badge badge-prov">codex</span><span class="badge badge-model">default</span><span class="chip chip-muted" style="padding:2px 8px">git · repo</span></div>
+          <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>max turns: 10</span><span>leader: no</span></div>
+        </div>
+        <div class="card-sub p-4" style="border-color:var(--green-500)">
+          <div class="flex items-start justify-between">
+            <div class="flex items-center gap-2"><div class="text-2xl">🧭</div><div><div class="font-semibold">Orchestrator</div><div class="text-xs" style="color:var(--black-800)">orchestrator</div></div></div>
+            <span class="chip chip-run" style="padding:2px 8px">enabled</span>
+          </div>
+          <p class="text-xs mt-3" style="color:var(--black-800)">Breaks work down + delegates to other roles.</p>
+          <div class="flex flex-wrap gap-1 mt-3"><span class="badge badge-prov">claude</span><span class="badge badge-model">opus-4.8</span><span class="chip chip-run" style="padding:2px 8px">leader ✓</span></div>
+          <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>max turns: 20</span><span>can delegate</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANEL: Profile editor -->
+    <div id="feat-editor" data-group="feat" class="p-5" style="display:none">
+      <div class="flex items-center justify-between mb-1"><div class="font-semibold">Profil editor</div><code class="text-xs">/manager/agents/profiles/new</code></div>
+      <p class="text-sm mb-4" style="color:var(--black-800)">Setelan <b>per-role</b>. Plafon keras global ada di tab Governor.</p>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="space-y-4">
+          <div><label class="label">Name</label><input class="input" value="Researcher"></div>
+          <div><label class="label">Key (slug)</label><input class="input" value="researcher"><p class="helper">Dipakai di wick_delegate(profile=…).</p></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="label">Provider</label><select class="input"><option>claude</option><option>codex</option><option>gemini</option></select></div>
+            <div><label class="label">Model</label><input class="input" value="opus-4.8" placeholder="provider default"></div>
+          </div>
+          <div><label class="label">System prompt (role instruction)</label>
+            <textarea class="input" rows="3">You are a focused research sub-agent. Return a concise, cited summary.</textarea></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="label">Default mode</label><select class="input"><option>async</option><option>sync</option></select><p class="helper">Per-role default (override per-call).</p></div>
+            <div><label class="label">Default workspace</label><select class="input"><option>shared</option><option>worktree</option></select></div>
+          </div>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label class="label">Tool access (tags) — opsional</label>
+            <div class="card-sub p-3 flex flex-wrap gap-2">
+              <span class="chip" style="background:var(--green-200);color:var(--green-700);border:1px solid var(--green-500)">web ✓</span>
+              <span class="chip" style="background:var(--green-200);color:var(--green-700);border:1px solid var(--green-500)">loki ✓</span>
+              <span class="chip chip-muted">git +</span><span class="chip chip-muted">slack +</span>
+            </div>
+            <p class="helper">Kosong = warisi tag user pemicu. Pilih subset untuk persempit (least-privilege). Tak pernah menambah akses. Mencakup connector + tools + jobs (bukan native/eksternal-MCP).</p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="label">Default max turns</label><input class="input" value="12"><p class="helper">Per-profil · ≤ <b>cap max turns</b> global (Governor).</p></div>
+            <div><label class="label">Can delegate (leader)</label>
+              <div class="card-sub p-3 flex items-center justify-between"><span class="text-sm">Allow wick_delegate</span><span class="chip chip-muted">off · claude only</span></div>
+              <p class="helper">Butuh MCP tool-use. Auto-off utk provider tak dukung.</p></div>
+          </div>
+          <div class="flex justify-end gap-2 pt-2"><button class="btn btn-ghost">Cancel</button><button class="btn btn-primary">Save profile</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANEL: Delegation tree -->
+    <div id="feat-tree" data-group="feat" class="p-5" style="display:none">
+      <div class="flex items-center justify-between mb-1"><div class="font-semibold">Pohon delegasi (in session)</div><code class="text-xs">agents/session/{id}</code></div>
+      <p class="text-sm mb-4" style="color:var(--black-800)"><b>View MAIN/leader agent — pemilik percakapan.</b> Sub-agent tampil <b>nested di dalamnya</b> (konteks terisolasi, di-link via <code>agent_delegations</code>). Badge mode + workspace.</p>
+      <div class="space-y-3">
+        <div class="card-sub p-3"><div class="text-xs section-h mb-1">🧭 orchestrator · leader</div><p class="text-sm">Pecah jadi dua: riset breaking-changes + review patch. Delegasi paralel…</p></div>
+        <div class="pl-4 tree-line space-y-3">
+          <div class="card-sub p-3">
+            <div class="flex items-center justify-between"><div class="text-sm font-semibold">🔎 wick_delegate → researcher</div><span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> running · turn 3/8</span></div>
+            <p class="text-xs mt-1" style="color:var(--black-800)">Task: Cari changelog breaking lib X v3→v4, ringkas + sitasi.</p>
+            <div class="flex gap-1 mt-2"><span class="badge badge-model">async · →channel</span><span class="badge badge-model">workspace: shared</span></div>
+            <div class="mt-2 text-xs" style="color:var(--green-600); cursor:pointer">▸ expand sub-agent transcript</div>
+          </div>
+          <div class="card-sub p-3">
+            <div class="flex items-center justify-between"><div class="text-sm font-semibold">🧑‍⚖️ wick_delegate → code-reviewer</div><span class="chip chip-run" style="background:var(--pos-100);color:var(--pos-400);border-color:var(--pos-400)">done · 5 turns</span></div>
+            <p class="text-xs mt-1" style="color:var(--black-800)">Task: Review diff PR #621 untuk bug.</p>
+            <div class="flex gap-1 mt-2"><span class="badge badge-model">sync</span><span class="badge badge-prov">workspace: worktree</span></div>
+            <div class="card-sub p-2 mt-2" style="background:var(--white-100)"><div class="text-xs section-h mb-1">result</div><pre class="text-xs whitespace-pre-wrap">2 findings: (1) nil-deref parser.go:88; (2) goroutine leak — http.NewRequest tanpa ctx.</pre></div>
+          </div>
+        </div>
+        <p class="text-xs" style="color:var(--black-800)">Budget root: <b>8/40</b> turns · depth 1/3 · parallel 2/4</p>
+      </div>
+    </div>
+
+    <!-- PANEL: Fleet monitor -->
+    <div id="feat-monitor" data-group="feat" class="p-5" style="display:none">
+      <div class="flex items-center justify-between mb-1"><div class="font-semibold">Fleet monitor (read-only)</div><code class="text-xs">/agents/monitor</code></div>
+      <p class="text-sm mb-4" style="color:var(--black-800)">Live via SSE <code>/stream</code> + <code>pool.ActiveSnapshot()</code>. Status: running / idle / spawning / dead. Observe-only.</p>
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex gap-2">
+          <span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> 3 running</span>
+          <span class="chip chip-idle"><span class="dot" style="background:var(--cau-400)"></span> 1 idle</span>
+          <span class="chip chip-dead"><span class="dot" style="background:var(--neg-400)"></span> 2 done/dead</span>
+        </div>
+        <div class="flex gap-2"><button class="btn btn-ghost">Group: by root ▾</button><span class="chip chip-muted">live · SSE</span></div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="card-sub p-4">
+          <div class="flex items-center justify-between"><div class="font-semibold text-sm">🔎 researcher</div><span class="chip chip-run"><span class="dot" style="background:var(--pos-400)"></span> running</span></div>
+          <p class="text-xs mt-2" style="color:var(--black-800)">▸ now: searching changelog v3→v4…</p>
+          <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>parent: orchestrator</span><span>depth 1</span></div>
+          <div class="flex items-center justify-between mt-1 text-xs" style="color:var(--black-800)"><span>turns 3/8</span><span>23s · PID 4821</span></div>
+        </div>
+        <div class="card-sub p-4">
+          <div class="flex items-center justify-between"><div class="font-semibold text-sm">🧭 orchestrator</div><span class="chip chip-idle"><span class="dot" style="background:var(--cau-400)"></span> idle</span></div>
+          <p class="text-xs mt-2" style="color:var(--black-800)">▸ waiting on 1 sub-agent</p>
+          <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>root · leader</span><span>depth 0</span></div>
+          <div class="flex items-center justify-between mt-1 text-xs" style="color:var(--black-800)"><span>budget 8/40</span><span>PID 4790</span></div>
+        </div>
+        <div class="card-sub p-4" style="opacity:0.85">
+          <div class="flex items-center justify-between"><div class="font-semibold text-sm">🧑‍⚖️ code-reviewer</div><span class="chip chip-dead">done</span></div>
+          <p class="text-xs mt-2" style="color:var(--black-800)">✓ 2 findings returned</p>
+          <div class="flex items-center justify-between mt-3 text-xs" style="color:var(--black-800)"><span>parent: orchestrator</span><span>depth 1</span></div>
+          <div class="flex items-center justify-between mt-1 text-xs" style="color:var(--black-800)"><span>5 turns · 31s</span><span>exited</span></div>
+        </div>
+      </div>
+      <p class="helper mt-4">Click kartu → <code>/agents/monitor/{child_session_id}</code>: transcript read-only + riwayat task profil.</p>
+    </div>
+
+    <!-- PANEL: Governor (global) -->
+    <div id="feat-governor" data-group="feat" class="p-5" style="display:none">
+      <div class="flex items-center justify-between mb-1"><div class="font-semibold">Governor settings — <span style="color:var(--green-600)">GLOBAL / system-wide</span></div><code class="text-xs">/manager/agents/settings</code></div>
+      <div class="card-sub p-3 my-3" style="border-color:var(--green-500)">
+        <p class="text-sm" style="color:var(--black-800)"><b>Kenapa terpisah dari Profile editor?</b> Ini <b>plafon keras untuk SEMUA delegasi & profil</b> — rem keamanan tingkat-sistem, bukan setelan per-role. Profil <b>tak bisa melampaui</b> nilai di sini (mis. <code>default_max_turns</code> profil dibatasi <b>cap max turns</b>). Setelan per-role (mode/workspace/max_turns/can_delegate) ada di tab <b>Profile editor</b>.</p>
+      </div>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div><label class="label">Max depth</label><input class="input" value="3"></div>
+        <div><label class="label">Budget / root (turns)</label><input class="input" value="40"></div>
+        <div><label class="label">Max parallel</label><input class="input" value="4"></div>
+        <div><label class="label">Cap max turns</label><input class="input" value="20"></div>
+        <div class="col-span-full"><label class="label">Kill-switch</label>
+          <div class="card-sub p-3 flex items-center justify-between"><span class="text-sm">Disable semua delegasi (emergency)</span><span class="chip chip-muted">off</span></div></div>
+      </div>
+      <p class="helper mt-3">Turn budget di-enforce wick-side (hitung <code>event.Done</code> + <code>pool.Kill</code>) → jalan di provider tanpa <code>--max-turns</code> native. Token budget di-defer.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+<script>
+  function pick(group, id, btn) {
+    document.querySelectorAll('[data-group="' + group + '"]').forEach(function (p) { p.style.display = 'none'; });
+    document.getElementById(id).style.display = 'block';
+    document.querySelectorAll('[data-tabfor="' + group + '"]').forEach(function (b) { b.classList.remove('tab-on', 'ftab-on'); });
+    btn.classList.add(btn.classList.contains('ftab') ? 'ftab-on' : 'tab-on');
+  }
+</script>
+</body>
+</html>
