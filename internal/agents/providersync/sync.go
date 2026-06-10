@@ -310,24 +310,36 @@ func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) erro
 		return nil
 	}
 
-	rows, err := m.store.listAll(ctx)
-	if err != nil {
-		return err
-	}
+	total, _ := m.store.countAll(ctx)
+	l.Info().Int64("total_files", total).Msg("providersync: restore started — do not interrupt")
 
 	count := 0
 	skippedExist := 0
 	skippedDiverged := 0
-	for _, row := range rows {
+	processed := 0
+	lastPct := int64(-1)
+	_ = m.store.iterAll(ctx, 50, func(row entity.ProviderStorage) error {
+		processed++
+		if total > 0 {
+			pct := int64(processed) * 100 / total
+			if pct != lastPct {
+				lastPct = pct
+				l.Info().
+					Int64("pct", pct).
+					Int("processed", processed).
+					Int64("total", total).
+					Msg("providersync: restoring")
+			}
+		}
 		if row.IsDir {
-			continue
+			return nil
 		}
 		if !sourceCovers(row.RelPath, enabled) {
-			continue
+			return nil
 		}
 		dst := absToOS(row.RelPath)
 		if dst == "" {
-			continue
+			return nil
 		}
 		// force = boot path: DB is source of truth, overwrite always.
 		// guard path: missing → write, same hash → skip, diverged → keep disk.
@@ -342,20 +354,20 @@ func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) erro
 							Int("size_bytes", len(row.Content)).
 							Msg("providersync: restore skip (hash match)")
 					}
-					continue
+					return nil
 				}
 				skippedDiverged++
 				l.Warn().Str("file", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
-				continue
+				return nil
 			}
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			l.Warn().Err(err).Str("file", dst).Msg("providersync: restore mkdir failed")
-			continue
+			return nil
 		}
 		if err := os.WriteFile(dst, row.Content, 0o600); err != nil {
 			l.Warn().Err(err).Str("file", dst).Msg("providersync: restore write failed")
-			continue
+			return nil
 		}
 		if verbose {
 			l.Info().
@@ -365,7 +377,8 @@ func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) erro
 				Msg("providersync: restore written")
 		}
 		count++
-	}
+		return nil
+	})
 	l.Info().
 		Int("restored", count).
 		Int("skipped_match", skippedExist).
