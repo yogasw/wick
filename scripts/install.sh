@@ -24,8 +24,9 @@ case "$ARCH" in
   *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
 
-AUTH=""
-[ -n "$TOKEN" ] && AUTH="-H Authorization:Bearer $TOKEN"
+# curl_auth wraps curl with an Authorization header when TOKEN is set.
+# Using a function avoids word-splitting pitfalls with inline $AUTH strings.
+curl_auth() { curl ${TOKEN:+-H "Authorization: Bearer $TOKEN"} "$@"; }
 
 # Privileged writes run plain — if the user lacks perms on the target
 # dir (e.g. /usr/local/bin) the curl/mv/chmod call surfaces a clear
@@ -36,7 +37,7 @@ AUTH=""
 
 if [ "${VERSION:-latest}" = "latest" ]; then
   echo "→ resolving latest tag for $REPO..."
-  TAG=$(curl -fsSL --max-time 15 $AUTH "https://api.github.com/repos/$REPO/releases/latest" \
+  TAG=$(curl_auth -fsSL --max-time 15 "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 else
   TAG="$VERSION"
@@ -139,7 +140,7 @@ install_gate() {
   dest_dir="$1"
   gate_url="$BASE/${APP}-gate-linux-${ARCH}"
   echo "→ gate: $gate_url"
-  if curl -fL --progress-bar $AUTH "$gate_url" -o "$dest_dir/$APP-gate"; then
+  if curl_auth -fL --progress-bar "$gate_url" -o "$dest_dir/$APP-gate"; then
     chmod +x "$dest_dir/$APP-gate"
     echo "✓ $APP-gate installed at $dest_dir/$APP-gate"
   else
@@ -231,7 +232,7 @@ if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q 'com.termux'; then
     URL="$BASE/${APP}-linux-${ARCH}"
     echo "→ termux: $URL"
     stop_running "$PREFIX/bin/$APP"
-    curl -fL --progress-bar $AUTH "$URL" -o "$PREFIX/bin/$APP"
+    curl_auth -fL --progress-bar "$URL" -o "$PREFIX/bin/$APP"
     chmod +x "$PREFIX/bin/$APP"
     echo "✓ $APP installed at $PREFIX/bin/$APP"
   fi
@@ -297,7 +298,7 @@ case "$OS" in
       URL="$BASE/${APP}-${VER}-darwin-${ARCH}.dmg"
       TMP=$(mktemp -d)
       echo "→ macOS: $URL"
-      curl -fL --progress-bar $AUTH "$URL" -o "$TMP/$APP.dmg"
+      curl_auth -fL --progress-bar "$URL" -o "$TMP/$APP.dmg"
       hdiutil attach "$TMP/$APP.dmg" -nobrowse -quiet
       MOUNT=$(ls /Volumes | grep -i "$APP" | head -1)
       cp -R "/Volumes/$MOUNT/$APP.app" /Applications/
@@ -318,7 +319,7 @@ case "$OS" in
         URL="$BASE/${APP}-${VER}-linux-${ARCH}.deb"
         TMP=$(mktemp)
         echo "→ linux: $URL"
-        curl -fL --progress-bar $AUTH "$URL" -o "$TMP"
+        curl_auth -fL --progress-bar "$URL" -o "$TMP"
         dpkg -i "$TMP"
         rm -f "$TMP"
         echo "✓ $APP installed"
@@ -330,7 +331,7 @@ case "$OS" in
         URL="$BASE/${APP}-linux-${ARCH}"
         echo "→ linux: $URL (raw, no dpkg)"
         stop_running "/usr/local/bin/$APP"
-        curl -fL --progress-bar $AUTH "$URL" -o /usr/local/bin/$APP
+        curl_auth -fL --progress-bar "$URL" -o /usr/local/bin/$APP
         chmod +x /usr/local/bin/$APP
         echo "✓ $APP installed"
       fi
@@ -342,7 +343,7 @@ case "$OS" in
         # install.sh with root privileges (or via `sudo sh`).
         gate_url="$BASE/${APP}-gate-linux-${ARCH}"
         echo "→ gate: $gate_url"
-        if curl -fL --progress-bar $AUTH "$gate_url" -o /usr/local/bin/$APP-gate; then
+        if curl_auth -fL --progress-bar "$gate_url" -o /usr/local/bin/$APP-gate; then
           chmod +x /usr/local/bin/$APP-gate
           echo "✓ $APP-gate installed at /usr/local/bin/$APP-gate"
         else
