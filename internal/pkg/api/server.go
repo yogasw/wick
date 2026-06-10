@@ -168,25 +168,6 @@ func NewServer() *Server {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
 	}
 
-	// Boot force-restore: DB is source of truth on first start after a
-	// container restart (no-volume env). Runs after Bootstrap so the
-	// verbose_logs config row is already seeded and readable.
-	//
-	// The realtime watcher is started AFTER restore completes so it
-	// doesn't race the restore writes and trigger spurious "disk
-	// changed" syncs back into the DB.
-	{
-		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
-		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
-			log.Warn().Err(err).Msg("providersync: startup restore failed")
-		}
-		if configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true" {
-			debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
-			if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
-				log.Warn().Err(err).Msg("providersync: watcher start failed")
-			}
-		}
-	}
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
 	// The manager reads/writes these at owner="connector_oauth:slack" so they
 	// are namespaced per-connector and don't collide with other connectors.
@@ -277,6 +258,24 @@ func NewServer() *Server {
 	jobsSvc.SetConfigReader(configsSvc)
 	if err := jobsSvc.Bootstrap(context.Background(), jobs.All()); err != nil {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
+	}
+
+	// Boot force-restore: DB is source of truth on first start after a
+	// container restart (no-volume env). Skipped when the
+	// provider-storage-sync job is disabled. The realtime watcher is
+	// started after restore completes so it doesn't race the restore
+	// writes and trigger spurious "disk changed" syncs back into DB.
+	if syncJob, err := jobsSvc.GetJob(context.Background(), providerstoragesync.Key); err == nil && syncJob.Enabled {
+		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
+		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
+			log.Warn().Err(err).Msg("providersync: startup restore failed")
+		}
+		if configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true" {
+			debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
+			if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
+				log.Warn().Err(err).Msg("providersync: watcher start failed")
+			}
+		}
 	}
 
 	// ── Encrypted-fields layer (encrypted-fields.md) ───────────────

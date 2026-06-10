@@ -27,7 +27,7 @@ func Register(mgr *providersync.Manager) {
 			Icon:        "💾",
 			DefaultCron: "*/1 * * * *",
 			DefaultTags: []tool.DefaultTag{tags.System},
-			AutoEnable:  true,
+			AutoEnable:  false,
 		},
 		Configs: []entity.Config{
 			WatcherStatus,
