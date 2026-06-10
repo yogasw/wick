@@ -65,6 +65,109 @@
 
 <main class="max-w-7xl mx-auto px-6 pb-20 space-y-12">
 
+<style>
+  .tab-btn { background:var(--white-100); color:var(--black-800); border:1px solid var(--white-400); padding:6px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+  .tab-on  { background:var(--green-200); color:var(--green-700); border-color:var(--green-500); }
+  .msg-user { background:var(--prog-100); border:1px solid var(--prog-400); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .msg-bot  { background:var(--white-200); border:1px solid var(--white-300); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .tool-call{ background:var(--navy-700); color:var(--white-100); border-radius:8px; padding:6px 10px; font-size:12px; }
+  .nav-item { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; font-size:13px; color:var(--black-900); border:1px solid var(--white-300); }
+  .nav-new  { background:var(--green-200); color:var(--green-700); font-weight:600; border-color:var(--green-500); }
+</style>
+
+<!-- ============================================================ -->
+<!-- STATE 0: BEFORE / AFTER (tabbed) -->
+<!-- ============================================================ -->
+<section>
+  <h2 class="text-xl font-bold mb-1">⓪ Before / After — apa yang berubah</h2>
+  <p class="text-sm mb-4" style="color:var(--black-800)">Bandingkan <b>Sekarang</b> vs <b>Dengan Sub-Agent</b> agar mudah dilihat bedanya.</p>
+
+  <!-- Conversation tabs -->
+  <div class="card p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-semibold">Conversation — <code>agents/session/{id}</code></div>
+      <div class="flex gap-2">
+        <button class="tab-btn tab-on" data-tabfor="conv" onclick="pick('conv','conv-now',this)">Sekarang</button>
+        <button class="tab-btn" data-tabfor="conv" onclick="pick('conv','conv-new',this)">Dengan Sub-Agent</button>
+      </div>
+    </div>
+    <div id="conv-now" data-group="conv">
+      <div class="card-sub p-3 mb-2 flex items-center justify-between">
+        <span class="text-xs section-h">🧭 default agent · single</span><span class="chip chip-muted" style="padding:2px 8px">1 agent</span>
+      </div>
+      <div class="space-y-2">
+        <div class="msg-user">@user: review PR #621 + cari changelog breaking lib X v3→v4</div>
+        <div class="msg-bot">default: oke, saya kerjakan…
+          <div class="tool-call mono mt-2">🔧 Bash · git diff origin/master</div>
+          <div class="tool-call mono mt-1">🔧 WebFetch · changelog lib X</div>
+          <div class="mt-2">Selesai: 2 bug + ringkasan changelog…</div>
+        </div>
+      </div>
+      <p class="helper mt-3">Satu agent mengerjakan semua secara linear di satu konteks.</p>
+    </div>
+    <div id="conv-new" data-group="conv" style="display:none">
+      <div class="card-sub p-3 mb-2 flex items-center justify-between">
+        <span class="text-xs section-h">🧭 orchestrator · leader (pemilik percakapan)</span><span class="chip chip-run" style="padding:2px 8px">leader + 2 sub</span>
+      </div>
+      <div class="space-y-2">
+        <div class="msg-user">@user: review PR #621 + cari changelog breaking lib X v3→v4</div>
+        <div class="msg-bot">orchestrator: saya pecah & delegasikan paralel…</div>
+        <div class="pl-4 tree-line space-y-2">
+          <div class="card-sub p-3">
+            <div class="flex items-center justify-between"><span class="text-sm font-semibold">🔎 → researcher</span><span class="chip chip-run">running</span></div>
+            <div class="flex gap-1 mt-2"><span class="badge badge-model">async · →channel</span><span class="badge badge-model">shared</span></div>
+          </div>
+          <div class="card-sub p-3">
+            <div class="flex items-center justify-between"><span class="text-sm font-semibold">🧑‍⚖️ → code-reviewer</span><span class="chip chip-dead">done · 5 turns</span></div>
+            <div class="flex gap-1 mt-2"><span class="badge badge-model">sync</span><span class="badge badge-prov">worktree</span></div>
+            <div class="card-sub p-2 mt-2" style="background:var(--white-100)"><pre class="text-xs whitespace-pre-wrap">2 findings: nil-deref parser.go:88; goroutine leak http.NewRequest tanpa ctx.</pre></div>
+          </div>
+        </div>
+        <div class="msg-bot">orchestrator: menggabungkan hasil reviewer (research dikirim async ke channel)…</div>
+      </div>
+      <p class="helper mt-3">Leader memiliki percakapan; sub-agent <b>nested di dalamnya</b> (konteks terisolasi, di-link via <code>agent_delegations</code>). Badge: mode (sync/async) + workspace (shared/worktree).</p>
+    </div>
+  </div>
+
+  <!-- Settings tabs -->
+  <div class="card p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-semibold">Settings / Nav — <code>/manager</code></div>
+      <div class="flex gap-2">
+        <button class="tab-btn tab-on" data-tabfor="set" onclick="pick('set','set-now',this)">Sekarang</button>
+        <button class="tab-btn" data-tabfor="set" onclick="pick('set','set-new',this)">Baru</button>
+      </div>
+    </div>
+    <div id="set-now" data-group="set" class="grid grid-cols-2 lg:grid-cols-3 gap-2">
+      <div class="nav-item">🔌 Connectors</div><div class="nav-item">🧰 Tools</div><div class="nav-item">⏱ Jobs</div>
+      <div class="nav-item">📊 Runs</div><div class="nav-item">🛰 MCP servers</div><div class="nav-item">🏷 Tags (admin)</div>
+    </div>
+    <div id="set-new" data-group="set" class="grid grid-cols-2 lg:grid-cols-3 gap-2" style="display:none">
+      <div class="nav-item">🔌 Connectors</div><div class="nav-item">🧰 Tools</div><div class="nav-item">⏱ Jobs</div>
+      <div class="nav-item">📊 Runs</div><div class="nav-item">🛰 MCP servers</div><div class="nav-item">🏷 Tags (admin)</div>
+      <div class="nav-item nav-new">🤖 Sub-agents · Profiles ✦</div>
+      <div class="nav-item nav-new">📡 Fleet monitor ✦</div>
+      <div class="nav-item nav-new">⚙️ Governor settings ✦</div>
+    </div>
+  </div>
+
+  <!-- Tool access scope callout -->
+  <div class="card-sub p-4 mb-6" style="border-color:var(--cau-400)">
+    <div class="text-xs section-h mb-1" style="color:var(--cau-400)">"Tool access (tags)" ≠ hanya connector</div>
+    <p class="text-sm" style="color:var(--black-800)">Tag di profil menggerbangi <b>seluruh permukaan tag wick</b>: <b>connector</b> + <b>tools built-in</b> + <b>jobs</b> (lewat <code>tool_tags</code>/<code>ToolPath</code> + <code>IsVisibleTo</code>). Connector cuma salah satu kategori. <b>Tidak</b> mencakup provider-native (Bash/Read/Write/WebFetch) & MCP eksternal → jalur terpisah (allowlist + strict-mcp).</p>
+  </div>
+
+  <!-- Other affected views -->
+  <div>
+    <div class="text-xs section-h mb-2">Tampilan lain yang ikut berubah</div>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div class="card-sub p-3"><div class="font-semibold text-sm">Sessions list</div><p class="text-xs mt-1" style="color:var(--black-800)">+ badge "N sub-agents" per baris session.</p></div>
+      <div class="card-sub p-3"><div class="font-semibold text-sm">Approvals (command-gate)</div><p class="text-xs mt-1" style="color:var(--black-800)">Kartu approval tampilkan asal: "dari sub-agent code-reviewer (via orchestrator)".</p></div>
+      <div class="card-sub p-3"><div class="font-semibold text-sm">Channel / Slack</div><p class="text-xs mt-1" style="color:var(--black-800)">Hasil async (Fase 2) dikirim sebagai pesan: "📊 report-builder selesai: …".</p></div>
+    </div>
+  </div>
+</section>
+
 <!-- ============================================================ -->
 <!-- STATE 1: PROFILE LIST -->
 <!-- ============================================================ -->
@@ -300,5 +403,13 @@
 </section>
 
 </main>
+<script>
+  function pick(group, id, btn) {
+    document.querySelectorAll('[data-group="' + group + '"]').forEach(function (p) { p.style.display = 'none'; });
+    document.getElementById(id).style.display = 'block';
+    document.querySelectorAll('[data-tabfor="' + group + '"]').forEach(function (b) { b.classList.remove('tab-on'); });
+    btn.classList.add('tab-on');
+  }
+</script>
 </body>
 </html>

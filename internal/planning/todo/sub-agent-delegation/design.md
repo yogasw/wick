@@ -686,12 +686,16 @@ cuma kosmetik:
    sehingga `wick_list`/`wick_execute` memfilter via `IsVisibleTo` seperti user
    biasa. Ini item implementasi nyata — bukan sekadar UI.
 
-**Catatan "Tool access (tags)":** kolom ini di-set **admin** dan **memilih dari
-tag yang sudah ada** — connector (`tool_tags` `ToolPath=/connectors/{id}`), tool
-built-in, dan MCP server eksternal (yang diimpor jadi connector via custom-
-connector Flow B) **semua sudah ikut sistem tag yang sama**. **Tidak ada sync
-khusus**: tag yang menggerbangi connector untuk user biasa = tag yang sama
-dipakai di sini.
+**Catatan "Tool access (tags)" — apakah sama dengan tools connector?** **Bukan
+hanya connector.** Tag ini menggerbangi **seluruh permukaan tag wick**:
+**connector** + **tools built-in** (`internal/tools/*`) + **jobs** — semuanya
+lewat satu sistem `tool_tags`/`ToolPath` + `IsVisibleTo` (connector pakai
+`ToolPath=/connectors/{id}`, tools/jobs pakai path-nya sendiri). Connector cuma
+**salah satu kategori**. MCP server eksternal yang diimpor via custom-connector
+Flow B juga jadi connector → ikut tag yang sama. Di-set **admin**, **pilih dari
+tag yang sudah ada**, **tanpa sync khusus**. Yang **TIDAK** tercakup: tools
+native provider (Bash/Read/Write/WebFetch) & MCP eksternal host — itu jalur
+terpisah (§10.2).
 
 ### 10.1b Alignment v0.16.0 (diverifikasi di kode)
 
@@ -793,7 +797,11 @@ tool jatuh ke **command-gate + prompt**.
 | Routes | `internal/manager/agents.go` (baru) atau extend agents handler | `/manager/agents/profiles*`, `/manager/agents/settings` |
 | Monitor | `internal/tools/agents/` | `/agents/monitor*` — reuse SSE `Broadcaster` + `ActiveSnapshot` |
 | Views | `internal/manager/view/agent_profiles*.templ`, monitor templ | design-system compliant |
-| Session view | `internal/tools/agents/...session templ` | render kartu delegasi + pohon nested di transcript |
+| Session view | `internal/tools/agents/...session templ` | render kartu delegasi + pohon nested di transcript (leader = pemilik) |
+| Nav manager | sidebar/nav | + entri "Sub-agents · Profiles", "Fleet monitor", "Governor settings" |
+| Sessions list | `internal/tools/agents/view/sessions.templ` | + badge "N sub-agents" per baris |
+| Approvals (gate) | `internal/tools/agents/view/approvals.templ` | tampilkan asal: "dari sub-agent X (via leader Y)" |
+| Channel / Slack | channel send | kiriman hasil async (Fase 2, `delivery_sink=channel`) |
 | JS | delegasi tree expander, monitor live (SSE consumer) | reuse `/stream` |
 
 ### 12.5 Tags
