@@ -23,6 +23,7 @@ type ProviderStorage struct {
 	Name          string    `gorm:"type:varchar(512)"`                                         // basename only
 	IsDir         bool      `gorm:"default:false"`
 	Content       []byte
+	Size          int       `gorm:"default:0"`                 // byte length of Content; lets listings skip loading the blob
 	ContentHash   string    `gorm:"type:varchar(64);not null"` // SHA-256 hex; "" for dirs
 	SyncedAt      time.Time `gorm:"not null"`
 	RetentionDays int       `gorm:"not null;default:0"` // 0 = never purge

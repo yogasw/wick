@@ -81,6 +81,10 @@ The `webhook_respond` node fields:
 
 **First node wins:** if multiple `webhook_respond` nodes can complete in the same run, only the first one's output is sent back.
 
+### Request body limit
+
+Inbound webhook request bodies are capped at **10 MiB**. Requests that exceed this size are rejected with `413 Request Entity Too Large` before the workflow run is enqueued. If you need to deliver larger payloads, upload the data to an external store and pass a reference URL in the webhook body instead.
+
 ### HMAC verification
 
 When `secret_ref` is set, every inbound request must include an `X-Wick-Sig` header containing `sha256=<hex-hmac>` of the raw request body, signed with the resolved secret. Requests without a valid signature are rejected with `401 Unauthorized`. The secret value is looked up from the workflow's env/secrets store (see [Workflow settings](./canvas#workflow-settings-env--secrets)).
