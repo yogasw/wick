@@ -6,8 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **Agent node `max_turns` not cleared on reuse**: When a workflow reused an existing session and the agent node had `max_turns: 0` (unlimited), the previously-persisted cap from an earlier run was silently kept. The node now always writes the value — including `0` — so switching back to unlimited works correctly.
 ### Added
-
 - **Bitbucket connector — PR review actions**: three new destructive operations for acting on pull requests:
   - `approve_pull_request` — approve a PR as the authenticated user (idempotent).
   - `request_changes_pull_request` — flag a PR as needing changes (mutually exclusive with approve).
