@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+- **Agent node `max_turns` not cleared on reuse**: When a workflow reused an existing session and the agent node had `max_turns: 0` (unlimited), the previously-persisted cap from an earlier run was silently kept. The node now always writes the value — including `0` — so switching back to unlimited works correctly.
 
 ---
 
