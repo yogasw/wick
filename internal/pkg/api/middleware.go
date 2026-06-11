@@ -123,9 +123,17 @@ func loggerHandler(filter func(w http.ResponseWriter, r *http.Request) bool) fun
 			// Start timer
 			start := time.Now()
 
-			// Read request body
+			// Read request body for logging — but only small, non-streaming
+			// bodies. Large uploads / multipart / octet-stream are skipped so
+			// the logger never buffers a multi-MB payload into memory; the
+			// downstream handler then reads the untouched r.Body directly.
 			var buf []byte
-			if r.Body != nil {
+			const maxLogBody = 64 << 10 // 64 KiB
+			ct := r.Header.Get("Content-Type")
+			streaming := strings.Contains(ct, "multipart/form-data") ||
+				strings.Contains(ct, "application/octet-stream") ||
+				strings.Contains(ct, "text/event-stream")
+			if r.Body != nil && !streaming && r.ContentLength >= 0 && r.ContentLength <= maxLogBody {
 				buf, _ = io.ReadAll(r.Body)
 
 				// Restore the io.ReadCloser to its original state

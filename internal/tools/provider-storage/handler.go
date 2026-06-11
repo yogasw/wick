@@ -103,7 +103,7 @@ func listFiles(c *tool.Ctx) {
 			ProviderType:  r.ProviderType,
 			InstanceName:  r.InstanceName,
 			RelPath:       r.RelPath,
-			Size:          len(r.Content),
+			Size:          r.Size,
 			SyncedAt:      r.SyncedAt.Format("2006-01-02 15:04:05"),
 			RetentionDays: r.RetentionDays,
 		})
@@ -277,12 +277,20 @@ func downloadEntry(c *tool.Ctx) {
 			continue
 		}
 		rel := path.Join(rootName, strings.TrimPrefix(abs, prefix))
+		// ListAll omits Content to keep listings cheap; fetch each file's
+		// bytes by ID so the zip streams one file at a time instead of
+		// holding the whole subtree in memory.
+		full, err := globalSyncMgr.GetByID(c.Context(), r.ID)
+		if err != nil {
+			log.Warn().Err(err).Uint("id", r.ID).Msg("provider-storage: zip fetch")
+			continue
+		}
 		fw, err := zw.Create(rel)
 		if err != nil {
 			log.Warn().Err(err).Str("entry", rel).Msg("provider-storage: zip create")
 			return
 		}
-		if _, err := fw.Write(r.Content); err != nil {
+		if _, err := fw.Write(full.Content); err != nil {
 			log.Warn().Err(err).Str("entry", rel).Msg("provider-storage: zip write")
 			return
 		}

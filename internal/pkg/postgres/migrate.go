@@ -84,6 +84,12 @@ func Migrate(db *gorm.DB) {
 	// Backfill name for rows predating adjacency-list migration.
 	db.Exec(`UPDATE provider_storage SET name = REPLACE(rel_path, RTRIM(rel_path, REPLACE(rel_path, '/', '')), '') WHERE name = '' AND rel_path != ''`)
 
+	// Backfill size from content for rows predating the size column so
+	// listings can read Size without loading the Content blob. Idempotent:
+	// once populated, size != 0; empty files re-run as a no-op. length()
+	// returns byte count on both SQLite and Postgres.
+	db.Exec(`UPDATE provider_storage SET size = LENGTH(content) WHERE size = 0 AND is_dir = 0 AND content IS NOT NULL`)
+
 	// One-shot data migration to the absolute-path scheme: drop rows with
 	// pre-fix relative rel_path so the sync ticker re-captures from disk
 	// using absolute keys. Idempotent: matches no rows after first boot.

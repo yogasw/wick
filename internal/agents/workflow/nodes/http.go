@@ -213,9 +213,13 @@ func (e *HTTPExecutor) Execute(ctx context.Context, n workflow.Node, rc *workflo
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	const maxHTTPBody = 64 << 20 // 64 MiB — bound response buffering
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("http read body: %w", err)
+	}
+	if len(raw) > maxHTTPBody {
+		return workflow.NodeOutput{}, fmt.Errorf("http read body: response exceeds 64MiB limit")
 	}
 	out := workflow.NodeOutput{
 		Fields: map[string]any{

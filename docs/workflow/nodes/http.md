@@ -61,6 +61,10 @@ body: '{"text": "{{jsonEscape .Event.Payload.text}}"}'   // ✅
 
 The `jsonEscape` helper escapes `"`, `\`, and control characters. For multiline payloads use the YAML block scalar `|` so newlines render predictably.
 
+## Response size limit
+
+The node buffers the full response body into memory before passing it downstream. Responses larger than **64 MiB** are rejected with an error — the run fails and no output is produced. This limit exists to prevent runaway memory use; design workflows to avoid fetching large binary blobs through this node (use a [connector](/guide/connector-module) with streaming support instead).
+
 ## Pair with
 
 - [`connector`](./connector) — typed alternative once you call the same API repeatedly.

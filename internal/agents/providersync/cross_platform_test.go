@@ -163,8 +163,11 @@ func TestSync_PathWithSpaces_OnDisk(t *testing.T) {
 	want := filepath.ToSlash(filepath.Join(dir, "config a.json"))
 	found := false
 	for _, r := range rows {
-		if !r.IsDir && r.RelPath == want && string(r.Content) == "spaced" {
-			found = true
+		if !r.IsDir && r.RelPath == want {
+			full, _ := mgr.GetByID(ctx, r.ID)
+			if string(full.Content) == "spaced" {
+				found = true
+			}
 		}
 	}
 	if !found {
@@ -209,8 +212,9 @@ func TestSync_EmptyFile(t *testing.T) {
 	rows, _ := mgr.ListAll(context.Background())
 	for _, r := range rows {
 		if !r.IsDir && filepath.Base(r.RelPath) == "empty.yml" {
-			if len(r.Content) != 0 {
-				t.Errorf("empty file got %d bytes", len(r.Content))
+			full, _ := mgr.GetByID(context.Background(), r.ID)
+			if len(full.Content) != 0 {
+				t.Errorf("empty file got %d bytes", len(full.Content))
 			}
 			return
 		}
@@ -238,7 +242,8 @@ func TestSync_BinaryFile(t *testing.T) {
 	rows, _ := mgr.ListAll(context.Background())
 	for _, r := range rows {
 		if !r.IsDir && filepath.Base(r.RelPath) == "image.bin" {
-			if string(r.Content) != string(binary) {
+			full, _ := mgr.GetByID(context.Background(), r.ID)
+			if string(full.Content) != string(binary) {
 				t.Errorf("binary content corrupted")
 			}
 			return

@@ -78,12 +78,19 @@ func (c *Client) Call(ctx context.Context, method, url string, body io.Reader, h
 	defer resp.Body.Close()
 	latency := time.Since(start)
 
-	responseBody, err := io.ReadAll(resp.Body)
+	const maxRespBody = 64 << 20 // 64 MiB — bound response buffering
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBody+1))
 	if err != nil {
 		return &Error{
 			Message:    fmt.Sprintf("unable to read response body: %s", err.Error()),
 			StatusCode: resp.StatusCode,
 			RawError:   err,
+		}
+	}
+	if len(responseBody) > maxRespBody {
+		return &Error{
+			Message:    "response body exceeds 64MiB limit",
+			StatusCode: resp.StatusCode,
 		}
 	}
 

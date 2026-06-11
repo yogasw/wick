@@ -1187,8 +1187,11 @@ func TestSyncAll_RebuildsAfterLegacyWipe(t *testing.T) {
 	wantAbs := filepath.ToSlash(file)
 	found := false
 	for _, r := range rows {
-		if !r.IsDir && r.RelPath == wantAbs && string(r.Content) == "real-content" {
-			found = true
+		if !r.IsDir && r.RelPath == wantAbs {
+			full, _ := mgr.GetByID(ctx, r.ID)
+			if string(full.Content) == "real-content" {
+				found = true
+			}
 		}
 	}
 	if !found {
