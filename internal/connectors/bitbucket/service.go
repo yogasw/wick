@@ -263,6 +263,47 @@ func validateCreatePullRequestComment(c *connector.Ctx) (requestParams, map[stri
 	return requestParams{Method: http.MethodPost, URL: u}, payload, nil
 }
 
+func validatePullRequestAction(c *connector.Ctx, action string) (requestParams, error) {
+	workspace, repo, err := workspaceAndRepo(c)
+	if err != nil {
+		return requestParams{}, err
+	}
+	prID := c.InputInt("pull_request_id")
+	if prID <= 0 {
+		return requestParams{}, errors.New("pull_request_id is required")
+	}
+	u, err := resourceURL(c, "repositories", workspace, repo, "pullrequests", strconv.Itoa(prID), action)
+	if err != nil {
+		return requestParams{}, err
+	}
+	return requestParams{Method: http.MethodPost, URL: u}, nil
+}
+
+func validateMergePullRequest(c *connector.Ctx) (requestParams, map[string]any, error) {
+	workspace, repo, err := workspaceAndRepo(c)
+	if err != nil {
+		return requestParams{}, nil, err
+	}
+	prID := c.InputInt("pull_request_id")
+	if prID <= 0 {
+		return requestParams{}, nil, errors.New("pull_request_id is required")
+	}
+	u, err := resourceURL(c, "repositories", workspace, repo, "pullrequests", strconv.Itoa(prID), "merge")
+	if err != nil {
+		return requestParams{}, nil, err
+	}
+	body := map[string]any{
+		"close_source_branch": c.InputBool("close_source_branch"),
+	}
+	if strategy := strings.TrimSpace(c.Input("merge_strategy")); strategy != "" {
+		body["merge_strategy"] = strategy
+	}
+	if msg := strings.TrimSpace(c.Input("message")); msg != "" {
+		body["message"] = msg
+	}
+	return requestParams{Method: http.MethodPost, URL: u}, body, nil
+}
+
 func workspaceAndRepo(c *connector.Ctx) (string, string, error) {
 	workspace, err := workspace(c)
 	if err != nil {

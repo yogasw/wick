@@ -222,12 +222,10 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
 
-	// Persist the turn cap before the send (re)spawns the agent.
-	// 0 = unlimited, so only write when set.
-	if n.MaxTurns > 0 {
-		if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
-			return workflow.NodeOutput{}, fmt.Errorf("set max turns: %w", err)
-		}
+	// Always persist the cap (including 0) so switching a reused session
+	// back to 0 clears a previously-persisted cap. 0 = unlimited.
+	if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
+		return workflow.NodeOutput{}, fmt.Errorf("set max turns: %w", err)
 	}
 
 	// n.Workspace carries the project id binding for this agent node

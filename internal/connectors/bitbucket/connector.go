@@ -97,6 +97,15 @@ type CreatePullRequestCommentInput struct {
 	InlineFrom    int    `wick:"key=inline_from;number;desc=Optional. Line number in the OLD (pre-diff) version; use instead of inline_to to comment on a removed/old line. Needs inline_path."`
 }
 
+type MergePullRequestInput struct {
+	Workspace         string `wick:"desc=Bitbucket workspace slug. If empty, uses default_workspace config."`
+	RepoSlug          string `wick:"required;desc=Repository slug."`
+	PullRequestID     int    `wick:"required;desc=Pull request ID."`
+	MergeStrategy     string `wick:"key=merge_strategy;dropdown=merge_commit|squash|fast_forward;default=merge_commit;desc=Merge strategy. If omitted, Bitbucket repository default applies."`
+	Message           string `wick:"textarea;desc=Optional merge commit message. Defaults to Bitbucket's generated message."`
+	CloseSourceBranch bool   `wick:"key=close_source_branch;default=false;desc=Close the source branch after a successful merge."`
+}
+
 func Meta() connector.Meta {
 	return connector.Meta{
 		Key:         Key,
@@ -204,6 +213,30 @@ func Operations() []connector.Operation {
 			createPullRequestComment,
 			wickdocs.Docs{},
 		),
+		connector.OpDestructive(
+			"approve_pull_request",
+			"Approve Pull Request",
+			"Approve a pull request as the authenticated user. Returns the participant approval state. Idempotent — approving an already-approved PR is a no-op.",
+			PullRequestInput{},
+			approvePullRequest,
+			wickdocs.Docs{},
+		),
+		connector.OpDestructive(
+			"request_changes_pull_request",
+			"Request Changes on Pull Request",
+			"Flag a pull request as needing changes (request-changes) as the authenticated user. Returns the participant state. Mutually exclusive with approve.",
+			PullRequestInput{},
+			requestChangesPullRequest,
+			wickdocs.Docs{},
+		),
+		connector.OpDestructive(
+			"merge_pull_request",
+			"Merge Pull Request",
+			"Merge a pull request into its destination branch. Optional merge_strategy (merge_commit, squash, fast_forward), commit message, and close_source_branch. Returns the merged pull request. Irreversible.",
+			MergePullRequestInput{},
+			mergePullRequest,
+			wickdocs.Docs{},
+		),
 	}
 }
 
@@ -297,6 +330,30 @@ func createPullRequest(c *connector.Ctx) (any, error) {
 
 func createPullRequestComment(c *connector.Ctx) (any, error) {
 	p, body, err := validateCreatePullRequestComment(c)
+	if err != nil {
+		return nil, err
+	}
+	return sendJSON(c, p, body)
+}
+
+func approvePullRequest(c *connector.Ctx) (any, error) {
+	p, err := validatePullRequestAction(c, "approve")
+	if err != nil {
+		return nil, err
+	}
+	return sendJSON(c, p, map[string]any{})
+}
+
+func requestChangesPullRequest(c *connector.Ctx) (any, error) {
+	p, err := validatePullRequestAction(c, "request-changes")
+	if err != nil {
+		return nil, err
+	}
+	return sendJSON(c, p, map[string]any{})
+}
+
+func mergePullRequest(c *connector.Ctx) (any, error) {
+	p, body, err := validateMergePullRequest(c)
 	if err != nil {
 		return nil, err
 	}
