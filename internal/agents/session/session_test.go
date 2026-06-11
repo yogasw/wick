@@ -166,6 +166,16 @@ func TestSetMaxTurns(t *testing.T) {
 	if len(s.Agents) != 1 || s.Agents[0].MaxTurns != 9 {
 		t.Fatalf("after update want 1 agent maxTurns=9, got %+v", s.Agents)
 	}
+
+	// Setting back to 0 clears the prior cap (0 = unlimited) instead of
+	// keeping the old value.
+	if err := SetMaxTurns(layout, "S1", "main", 0); err != nil {
+		t.Fatalf("set (clear): %v", err)
+	}
+	s, _ = Load(layout, "S1")
+	if len(s.Agents) != 1 || s.Agents[0].MaxTurns != 0 {
+		t.Fatalf("after clear want 1 agent maxTurns=0, got %+v", s.Agents)
+	}
 }
 
 func TestSetCLISessionID(t *testing.T) {
