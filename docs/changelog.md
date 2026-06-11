@@ -6,7 +6,12 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+- **Bitbucket connector — PR review actions**: three new destructive operations for acting on pull requests:
+  - `approve_pull_request` — approve a PR as the authenticated user (idempotent).
+  - `request_changes_pull_request` — flag a PR as needing changes (mutually exclusive with approve).
+  - `merge_pull_request` — merge a PR into its destination branch, with optional `merge_strategy` (`merge_commit`, `squash`, `fast_forward`), `message`, and `close_source_branch`. Irreversible.
 
 ---
 
