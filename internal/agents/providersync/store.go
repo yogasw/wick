@@ -211,25 +211,35 @@ func (s *store) countAll(ctx context.Context) (int64, error) {
 	return n, err
 }
 
-// iterAll calls fn for each row in batches of batchSize, keeping only one
-// batch in memory at a time. Stops early and returns the first non-nil error
-// from fn. batchSize <= 0 defaults to 100.
-func (s *store) iterAll(ctx context.Context, batchSize int, fn func(entity.ProviderStorage) error) error {
-	if batchSize <= 0 {
-		batchSize = 100
+// iterAll calls fn for each row, streaming via a single cursor so only one
+// row is materialised at a time. Stops early and returns the first non-nil
+// error from fn. batchSize is retained for API compatibility but unused now.
+//
+// Uses a plain Rows() iterator rather than GORM FindInBatches: FindInBatches
+// paginates with a primary-key cursor (WHERE id > last_max_id) that is only
+// correct when the result is ordered by id. Our custom Order (provider_type,
+// instance_name, rel_path) misaligns that cursor, so FindInBatches silently
+// stops early and skips most rows — see gorm issue #5027. The boot restore hit
+// this: it processed ~729 of 8440 rows and dropped every wick session file.
+func (s *store) iterAll(ctx context.Context, _ int, fn func(entity.ProviderStorage) error) error {
+	rows, err := s.db.WithContext(ctx).
+		Model(&entity.ProviderStorage{}).
+		Order("provider_type, instance_name, rel_path, id").
+		Rows()
+	if err != nil {
+		return err
 	}
-	var batch []entity.ProviderStorage
-	result := s.db.WithContext(ctx).
-		Order("provider_type, instance_name, rel_path").
-		FindInBatches(&batch, batchSize, func(tx *gorm.DB, _ int) error {
-			for _, row := range batch {
-				if err := fn(row); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	return result.Error
+	defer rows.Close()
+	for rows.Next() {
+		var row entity.ProviderStorage
+		if err := s.db.WithContext(ctx).ScanRows(rows, &row); err != nil {
+			return err
+		}
+		if err := fn(row); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // getByID fetches one row by primary key.
