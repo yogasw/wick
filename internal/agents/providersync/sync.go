@@ -316,9 +316,10 @@ func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) erro
 	count := 0
 	skippedExist := 0
 	skippedDiverged := 0
+	skippedUncovered := 0
 	processed := 0
 	lastPct := int64(-1)
-	_ = m.store.iterAll(ctx, 50, func(row entity.ProviderStorage) error {
+	if err := m.store.iterAll(ctx, 50, func(row entity.ProviderStorage) error {
 		processed++
 		if total > 0 {
 			pct := int64(processed) * 100 / total
@@ -335,27 +336,29 @@ func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) erro
 			return nil
 		}
 		if !sourceCovers(row.RelPath, enabled) {
+			skippedUncovered++
 			return nil
 		}
 		dst := absToOS(row.RelPath)
 		if dst == "" {
 			return nil
 		}
-		// force = boot path: DB is source of truth, overwrite always.
+		// force = DB wins for diverged files, but identical files still
+		// skip to keep wide restores fast and avoid noisy rewrites.
 		// guard path: missing → write, same hash → skip, diverged → keep disk.
-		if !force {
-			if existing, err := os.ReadFile(dst); err == nil {
-				if hashBytes(existing) == row.ContentHash {
-					skippedExist++
-					if verbose {
-						l.Info().
-							Str("file", dst).
-							Str("hash", row.ContentHash[:8]).
-							Int("size_bytes", len(row.Content)).
-							Msg("providersync: restore skip (hash match)")
-					}
-					return nil
+		if existing, err := os.ReadFile(dst); err == nil {
+			if hashBytes(existing) == row.ContentHash {
+				skippedExist++
+				if verbose {
+					l.Info().
+						Str("file", dst).
+						Str("hash", row.ContentHash[:8]).
+						Int("size_bytes", len(row.Content)).
+						Msg("providersync: restore skip (hash match)")
 				}
+				return nil
+			}
+			if !force {
 				skippedDiverged++
 				l.Warn().Str("file", dst).Msg("providersync: disk diverged from DB — keeping disk copy")
 				return nil
@@ -378,11 +381,16 @@ func (m *Manager) restoreAll(ctx context.Context, force bool, verbose bool) erro
 		}
 		count++
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	l.Info().
 		Int("restored", count).
 		Int("skipped_match", skippedExist).
 		Int("skipped_diverged", skippedDiverged).
+		Int("skipped_uncovered", skippedUncovered).
+		Int("processed", processed).
+		Int64("total_files", total).
 		Msg("providersync: RestoreAll done")
 	return nil
 }
