@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -589,6 +590,127 @@ func TestRestoreAll_SkipsRowsWithoutEnabledSource(t *testing.T) {
 // RestoreAll no longer wipes legacy rows — that moved to postgres.Migrate
 // as a one-shot DB migration. wipeLegacyRelPathRows is still exercised
 // directly by TestWipeLegacyRelPathRows.
+
+// ─── iterAll must yield every row (regression for gorm #5027) ──────────
+
+// TestIterAll_YieldsAllRowsAcrossProviders guards the boot-restore bug where
+// iterAll used FindInBatches + a custom Order. FindInBatches paginates with a
+// primary-key cursor; when the rows are ordered by something other than id,
+// the cursor misaligns and the iteration silently stops early, dropping most
+// rows. Production hit this: ~729 of 8440 rows processed, every wick session
+// file skipped on restore.
+//
+// We reproduce the trigger condition exactly: insert rows so primary-key order
+// is the REVERSE of the custom (provider_type, instance_name, rel_path) order,
+// and span more than one batch. iterAll must still yield all of them.
+func TestIterAll_YieldsAllRowsAcrossProviders(t *testing.T) {
+	db := newDB(t)
+	s := newStore(db)
+	ctx := context.Background()
+
+	// Insert "wick" rows FIRST so they get the low primary keys, then "claude"
+	// rows so they get the high keys. The custom Order sorts claude (alpha)
+	// before wick, i.e. high-PK rows come first — exactly the layout that
+	// breaks a PK-cursor batcher.
+	const perProvider = 80 // > old batchSize of 50 → forces multi-batch
+	want := map[string]bool{}
+	insert := func(provider string, n int) {
+		for i := 0; i < n; i++ {
+			rel := "/home/app/." + provider + "/f" + itoa(i) + ".json"
+			row := entity.ProviderStorage{
+				ProviderType: provider,
+				InstanceName: provider,
+				RelPath:      rel,
+				Name:         "f" + itoa(i) + ".json",
+				Content:      []byte("x"),
+				Size:         1,
+				ContentHash:  "h",
+			}
+			if err := db.WithContext(ctx).Create(&row).Error; err != nil {
+				t.Fatalf("seed %s: %v", rel, err)
+			}
+			want[rel] = true
+		}
+	}
+	insert("wick", perProvider)   // low PKs
+	insert("claude", perProvider) // high PKs
+
+	got := map[string]bool{}
+	count := 0
+	if err := s.iterAll(ctx, 50, func(row entity.ProviderStorage) error {
+		count++
+		got[row.RelPath] = true
+		return nil
+	}); err != nil {
+		t.Fatalf("iterAll: %v", err)
+	}
+
+	if count != len(want) {
+		t.Errorf("iterAll yielded %d rows, want %d (early-stop regression)", count, len(want))
+	}
+	for rel := range want {
+		if !got[rel] {
+			t.Errorf("iterAll skipped row %q", rel)
+		}
+	}
+}
+
+// TestRestoreAll_RestoresAllRowsAcrossProviders is the end-to-end version:
+// two enabled sources whose rows interleave with reversed PK order, all files
+// missing on disk. RestoreAll must write every one. This is the exact shape of
+// the production failure (claude rows at high PK restored, wick rows at low PK
+// dropped).
+func TestRestoreAll_RestoresAllRowsAcrossProviders(t *testing.T) {
+	db := newDB(t)
+	mgr := New(db)
+	ctx := context.Background()
+
+	base := t.TempDir()
+	wickDir := filepath.Join(base, "wick")
+	claudeDir := filepath.Join(base, "claude")
+
+	const perProvider = 80
+	// Seed disk + sync into DB. Sync "wick" first (low PKs), "claude" after.
+	seed := func(provider, dir string) {
+		for i := 0; i < perProvider; i++ {
+			writeFile(t, filepath.Join(dir, "f"+itoa(i)+".json"), provider+itoa(i))
+		}
+		src := entity.ProviderStorageSource{
+			ProviderType: provider, InstanceName: provider,
+			SyncPath: dir, Mode: "folder", Enabled: true,
+		}
+		if _, err := mgr.SaveSource(ctx, src); err != nil {
+			t.Fatalf("save %s: %v", provider, err)
+		}
+	}
+	seed("wick", wickDir)
+	seed("claude", claudeDir)
+
+	// Wipe both dirs so restore must recreate every file.
+	if err := os.RemoveAll(wickDir); err != nil {
+		t.Fatalf("rm wick: %v", err)
+	}
+	if err := os.RemoveAll(claudeDir); err != nil {
+		t.Fatalf("rm claude: %v", err)
+	}
+
+	if err := mgr.RestoreAll(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	for i := 0; i < perProvider; i++ {
+		wf := filepath.Join(wickDir, "f"+itoa(i)+".json")
+		if got := readFile(t, wf); got != "wick"+itoa(i) {
+			t.Errorf("wick f%d = %q, want wick%d", i, got, i)
+		}
+		cf := filepath.Join(claudeDir, "f"+itoa(i)+".json")
+		if got := readFile(t, cf); got != "claude"+itoa(i) {
+			t.Errorf("claude f%d = %q, want claude%d", i, got, i)
+		}
+	}
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // ─── RestoreSelected force-overwrites ─────────────────────────────────
 
