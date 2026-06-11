@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+- **Provider storage boot restore drops most rows**: `iterAll` used GORM `FindInBatches` with a custom `ORDER BY (provider_type, instance_name, rel_path)`. `FindInBatches` paginates with a primary-key cursor (`WHERE id > last_max_id`), which is only correct when rows are ordered by `id`. The custom order misaligns that cursor, causing iteration to stop silently after the first batch — on one production instance ~729 of 8440 rows were processed and every wick session file was skipped on restore. Fixed by replacing `FindInBatches` with a plain `Rows()` cursor iterator that streams every row in a single query pass.
 
 ---
 
