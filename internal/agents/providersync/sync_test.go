@@ -524,6 +524,86 @@ func TestRestoreAll_FillsMissingFiles(t *testing.T) {
 	}
 }
 
+// TestRestoreAll_RestoresEveryRow guards against the FindInBatches cursor
+// bug: a custom Order paired with PK-based batch pagination made restore
+// stop after the first batch (725 of 8438 rows in production). Seed more
+// rows than one batch (batchSize=50), wipe the disk, and assert every file
+// comes back.
+func TestRestoreAll_RestoresEveryRow(t *testing.T) {
+	db := newDB(t)
+	mgr := New(db)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	const n = 130 // > 2 batches at batchSize 50
+	for i := 0; i < n; i++ {
+		writeFile(t, filepath.Join(dir, "sub", strings.Repeat("a", i%5+1), filepath.Base(filepathJoinIdx(i))), "v")
+	}
+	// Flat fallback: also write n plain files so the count is deterministic.
+	for i := 0; i < n; i++ {
+		writeFile(t, filepath.Join(dir, filepathJoinIdx(i)), "content")
+	}
+
+	src := entity.ProviderStorageSource{
+		ProviderType: "p", InstanceName: "i",
+		SyncPath: dir, Mode: "folder", Enabled: true,
+	}
+	if _, err := mgr.SaveSource(ctx, src); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Count file rows captured, then wipe the whole tree from disk.
+	rows, _ := mgr.ListAll(ctx)
+	wantFiles := 0
+	for _, r := range rows {
+		if !r.IsDir {
+			wantFiles++
+		}
+	}
+	if wantFiles < n {
+		t.Fatalf("expected at least %d file rows captured, got %d", n, wantFiles)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("wipe: %v", err)
+	}
+
+	if err := mgr.RestoreAllForce(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	// Every non-dir row must exist on disk again.
+	restored := 0
+	for _, r := range rows {
+		if r.IsDir {
+			continue
+		}
+		if _, err := os.Stat(filepath.FromSlash(r.RelPath)); err != nil {
+			t.Errorf("file not restored: %s (%v)", r.RelPath, err)
+			continue
+		}
+		restored++
+	}
+	if restored != wantFiles {
+		t.Errorf("restored %d files, want %d", restored, wantFiles)
+	}
+}
+
+func filepathJoinIdx(i int) string {
+	return "file_" + strings.Repeat("0", 3-len(itoa(i))) + itoa(i) + ".txt"
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}
+
 func TestRestoreAll_PreservesNewerDiskEdits(t *testing.T) {
 	db := newDB(t)
 	mgr := New(db)
@@ -900,18 +980,18 @@ func TestGlobMatch(t *testing.T) {
 		pattern, path string
 		want          bool
 	}{
-		{"*.log", "/home/app/foo.log", true},                                       // basename glob
-		{"*.log", "/home/app/foo.txt", false},                                      //
-		{"**/files/**", "/home/.wick/workspaces/abc/files/x.json", true},           // doublestar
-		{"**/files/**", "/home/.wick/workspaces/abc/sources/y.json", false},        // sibling untouched
+		{"*.log", "/home/app/foo.log", true},                                // basename glob
+		{"*.log", "/home/app/foo.txt", false},                               //
+		{"**/files/**", "/home/.wick/workspaces/abc/files/x.json", true},    // doublestar
+		{"**/files/**", "/home/.wick/workspaces/abc/sources/y.json", false}, // sibling untouched
 		{"/home/.wick/workspaces/*/files/**", "/home/.wick/workspaces/a/files/b", true},
 		{"/home/.wick/workspaces/*/files/**", "/home/.wick/workspaces/a/b/c", false},
-		{"node_modules", "/x/y/node_modules/z", true},                              // basename anywhere
-		{"node_modules", "/x/y/node_modules", true},                                // basename exact
-		{"node_modules", "/x/y/other", false},                                      //
-		{"/abs/only", "/abs/only", true},                                           // exact abs
-		{"/abs/only", "/abs/only/sub", true},                                       // literal abs = dir + descendants
-		{"/abs/only", "/abs/onlyish", false},                                       // prefix without slash boundary should not match
+		{"node_modules", "/x/y/node_modules/z", true}, // basename anywhere
+		{"node_modules", "/x/y/node_modules", true},   // basename exact
+		{"node_modules", "/x/y/other", false},         //
+		{"/abs/only", "/abs/only", true},              // exact abs
+		{"/abs/only", "/abs/only/sub", true},          // literal abs = dir + descendants
+		{"/abs/only", "/abs/onlyish", false},          // prefix without slash boundary should not match
 	}
 	for _, c := range cases {
 		got := globMatch(c.pattern, c.path)
@@ -1342,7 +1422,6 @@ func TestUserScenario_MultipleSourcesAtDifferentDrives(t *testing.T) {
 		}
 	}
 }
-
 
 // Simulates the exact pre-fix scenario: two overlapping sources with the same
 // instance ran through a sync → restore → sync cycle. With the old

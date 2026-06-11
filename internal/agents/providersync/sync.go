@@ -519,9 +519,25 @@ func (m *Manager) SetRetention(ctx context.Context, id uint, days int) error {
 	return m.store.setRetention(ctx, id, days)
 }
 
-// ListAll returns all stored file rows.
+// ListAll returns all stored file rows (including content blobs). Use
+// ListAllMeta for listing/UI paths that don't need the bytes.
 func (m *Manager) ListAll(ctx context.Context) ([]entity.ProviderStorage, error) {
 	return m.store.listAll(ctx)
+}
+
+// ListAllMeta returns all rows without content blobs — for file-list and
+// explorer views that only render metadata. Avoids pulling every file's
+// bytes into memory on page load.
+func (m *Manager) ListAllMeta(ctx context.Context) ([]entity.ProviderStorage, error) {
+	return m.store.listAllMeta(ctx)
+}
+
+// ListFilesMeta returns one instance's rows without content blobs. The
+// folder-download path uses this to enumerate entries, then fetches each
+// file's bytes individually via GetByID so the zip streams one file at a
+// time rather than loading the whole instance into memory.
+func (m *Manager) ListFilesMeta(ctx context.Context, providerType, instanceName string) ([]entity.ProviderStorage, error) {
+	return m.store.listFilesMeta(ctx, providerType, instanceName)
 }
 
 // ListChildren returns direct children (files + folders) under parentID for an instance.
