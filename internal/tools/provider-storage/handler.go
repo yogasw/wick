@@ -68,7 +68,7 @@ func listFiles(c *tool.Ctx) {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
 		return
 	}
-	rows, err := globalSyncMgr.ListAll(c.Context())
+	rows, err := globalSyncMgr.ListAllMeta(c.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -252,7 +252,11 @@ func downloadEntry(c *tool.Ctx) {
 		return
 	}
 
-	all, err := globalSyncMgr.ListAll(c.Context())
+	// Enumerate this instance's entries WITHOUT their bytes, then fetch
+	// each file's content one at a time as we stream it into the zip. This
+	// keeps memory bounded to a single file rather than loading the whole
+	// instance (potentially hundreds of MB) at once.
+	metas, err := globalSyncMgr.ListFilesMeta(c.Context(), row.ProviderType, row.InstanceName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -268,12 +272,18 @@ func downloadEntry(c *tool.Ctx) {
 
 	zw := zip.NewWriter(c.W)
 	defer zw.Close()
-	for _, r := range all {
-		if r.IsDir || r.ProviderType != row.ProviderType || r.InstanceName != row.InstanceName {
+	for _, meta := range metas {
+		if meta.IsDir {
 			continue
 		}
-		abs := filepath.ToSlash(r.RelPath)
+		abs := filepath.ToSlash(meta.RelPath)
 		if !strings.HasPrefix(abs, prefix) {
+			continue
+		}
+		// Load this one file's bytes only now, right before writing it.
+		full, err := globalSyncMgr.GetByID(c.Context(), meta.ID)
+		if err != nil {
+			log.Warn().Err(err).Uint("id", meta.ID).Msg("provider-storage: zip fetch content")
 			continue
 		}
 		rel := path.Join(rootName, strings.TrimPrefix(abs, prefix))
@@ -282,7 +292,7 @@ func downloadEntry(c *tool.Ctx) {
 			log.Warn().Err(err).Str("entry", rel).Msg("provider-storage: zip create")
 			return
 		}
-		if _, err := fw.Write(r.Content); err != nil {
+		if _, err := fw.Write(full.Content); err != nil {
 			log.Warn().Err(err).Str("entry", rel).Msg("provider-storage: zip write")
 			return
 		}

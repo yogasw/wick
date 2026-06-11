@@ -45,7 +45,7 @@ func storagePage(c *tool.Ctx) {
 	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 	defer cancel()
 
-	files, err := globalSyncMgr.ListAll(ctx)
+	files, err := globalSyncMgr.ListAllMeta(ctx)
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
