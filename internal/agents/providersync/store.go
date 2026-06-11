@@ -111,7 +111,7 @@ func (s *store) repairOrphans(ctx context.Context) (int, error) {
 	byKey := make(map[string]uint)
 
 	var firstBatch []entity.ProviderStorage
-	if err := s.db.WithContext(ctx).FindInBatches(&firstBatch, 500,
+	if err := s.db.WithContext(ctx).Omit("Content").FindInBatches(&firstBatch, 500,
 		func(tx *gorm.DB, batch int) error {
 			for _, r := range firstBatch {
 				byKey[r.ProviderType+sep+r.InstanceName+sep+r.RelPath] = r.ID
@@ -123,7 +123,7 @@ func (s *store) repairOrphans(ctx context.Context) (int, error) {
 
 	fixed := 0
 	var secondBatch []entity.ProviderStorage
-	err := s.db.WithContext(ctx).FindInBatches(&secondBatch, 500,
+	err := s.db.WithContext(ctx).Omit("Content").FindInBatches(&secondBatch, 500,
 		func(tx *gorm.DB, batch int) error {
 			for _, r := range secondBatch {
 				norm := filepath.ToSlash(r.RelPath)

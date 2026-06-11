@@ -13,6 +13,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -1419,6 +1420,34 @@ func hostMatches(got, expected string) bool {
 // ListenAndServe / Shutdown otherwise. CLI callers wrap with
 // signal.NotifyContext; in-process callers (system tray) cancel from
 // the UI.
+// parseMemoryLimit parses a GOMEMLIMIT-style size string ("1200MiB",
+// "2GiB", "500MB", or raw bytes) into a byte count for debug.SetMemoryLimit.
+func parseMemoryLimit(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	mult := int64(1)
+	switch {
+	case strings.HasSuffix(s, "GiB"):
+		mult, s = 1<<30, strings.TrimSuffix(s, "GiB")
+	case strings.HasSuffix(s, "MiB"):
+		mult, s = 1<<20, strings.TrimSuffix(s, "MiB")
+	case strings.HasSuffix(s, "KiB"):
+		mult, s = 1<<10, strings.TrimSuffix(s, "KiB")
+	case strings.HasSuffix(s, "GB"):
+		mult, s = 1_000_000_000, strings.TrimSuffix(s, "GB")
+	case strings.HasSuffix(s, "MB"):
+		mult, s = 1_000_000, strings.TrimSuffix(s, "MB")
+	case strings.HasSuffix(s, "KB"):
+		mult, s = 1_000, strings.TrimSuffix(s, "KB")
+	case strings.HasSuffix(s, "B"):
+		s = strings.TrimSuffix(s, "B")
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0, err
+	}
+	return int64(n * float64(mult)), nil
+}
+
 func (s *Server) Run(ctx context.Context, port int) error {
 	// Tray injects serverLogger (file sink) via processctl before calling Run.
 	// Lab/CLI pass a plain context — inject global logger with component=server
@@ -1437,6 +1466,19 @@ func (s *Server) Run(ctx context.Context, port int) error {
 				logger.Warn().Err(err).Msg("pprof: listener closed")
 			}
 		}()
+	}
+	// Soft memory limit (GOMEMLIMIT) so GC stays aggressive and returns
+	// memory to the OS on constrained hosts — helps boot restore not pin
+	// RSS at its high-water mark. Opt-in via WICK_MEMORY_LIMIT
+	// ("1200MiB", "2GiB", or raw bytes); the standard GOMEMLIMIT env still
+	// works independently. Off by default — no cap is imposed unless set.
+	if v := strings.TrimSpace(os.Getenv("WICK_MEMORY_LIMIT")); v != "" {
+		if n, err := parseMemoryLimit(v); err == nil && n > 0 {
+			debug.SetMemoryLimit(n)
+			logger.Info().Str("limit", v).Int64("bytes", n).Msg("memory: soft limit applied (WICK_MEMORY_LIMIT)")
+		} else {
+			logger.Warn().Str("value", v).Msg("memory: invalid WICK_MEMORY_LIMIT, ignored")
+		}
 	}
 	// WICK_HOST pins the listen interface — empty (default) binds all
 	// interfaces so Docker and remote-VPS deploys keep working as-is.
