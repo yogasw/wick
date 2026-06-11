@@ -13,6 +13,8 @@ All notable changes to Wick are documented here.
 - **Webhook body cap**: inbound webhook trigger requests are now rejected with `413` if the body exceeds **10 MiB**.
 - **Access-log middleware**: large or streaming request bodies (`multipart/form-data`, `application/octet-stream`, `text/event-stream`, or `Content-Length > 64 KiB`) are no longer buffered by the logger — the downstream handler reads them directly.
 - **Opt-in pprof** (`WICK_PPROF=1`): set this env var to expose Go pprof endpoints on `127.0.0.1:6060` for heap/CPU profiling. Loopback-only; never exposed on the public listener.
+- **Opt-in soft memory limit** (`WICK_MEMORY_LIMIT`): set to a size string (e.g. `1200MiB`, `2GiB`) to tell the Go GC to return memory to the OS aggressively on constrained hosts. Helps boot-time provider-storage restore not pin RSS at its high-water mark on small VMs. Off by default; independent of `GOMEMLIMIT`. See [Environment Variables ▶ WICK_MEMORY_LIMIT](./reference/env-vars#wick_memory_limit).
+- **`repairOrphans` no longer loads file content**: the two `FindInBatches` passes in the provider-storage tree-repair path now omit the `Content` column, cutting peak memory during orphan repair for large corpora.
 
 ---
 

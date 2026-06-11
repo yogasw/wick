@@ -241,6 +241,26 @@ WICK_PPROF=1
 
 Access profiles with `go tool pprof http://127.0.0.1:6060/debug/pprof/heap` or `curl http://127.0.0.1:6060/debug/pprof/goroutine?debug=1`. Do not set this in production unless actively profiling — the endpoint has no authentication.
 
+### `WICK_MEMORY_LIMIT`
+**Default:** unset (no soft limit — Go runtime default behavior)
+
+Sets a soft memory limit for the wick process via `runtime/debug.SetMemoryLimit`. When the live heap approaches this value, the GC becomes more aggressive and returns memory to the OS rather than holding it at the high-water mark. Useful on small VMs or containers where the boot-time provider-storage restore would otherwise pin RSS until the next major GC.
+
+Accepted formats match the GOMEMLIMIT convention:
+
+| Format | Example | Meaning |
+|--------|---------|---------|
+| Binary suffixes | `1200MiB`, `2GiB`, `512KiB` | 1 MiB = 1 048 576 bytes |
+| Decimal suffixes | `500MB`, `1GB` | 1 MB = 1 000 000 bytes |
+| Raw bytes | `1258291200` | exact byte count |
+
+```env
+WICK_MEMORY_LIMIT=1200MiB
+WICK_MEMORY_LIMIT=2GiB
+```
+
+This is independent of the standard `GOMEMLIMIT` environment variable — both can coexist, with `WICK_MEMORY_LIMIT` applied at server startup. If the value cannot be parsed, a warning is logged and no limit is set. Off by default; do not set it lower than your expected working-set size or GC pressure will spike.
+
 ---
 
 ## Network
