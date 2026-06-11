@@ -217,6 +217,21 @@ Tailwind classes live in `.templ` files only. Never edit `*_templ.go` by hand â€
 
 ---
 
+## Diagnostics
+
+### `WICK_PPROF`
+**Default:** unset (profiling disabled)
+
+Set to any non-empty value to start a Go pprof HTTP server on `127.0.0.1:6060`. Exposes the standard `/debug/pprof/` endpoints (heap, goroutine, CPU profile) for diagnosing memory or CPU issues. The listener is bound to loopback only and is never reachable through the public HTTP port.
+
+```env
+WICK_PPROF=1
+```
+
+Access profiles with `go tool pprof http://127.0.0.1:6060/debug/pprof/heap` or `curl http://127.0.0.1:6060/debug/pprof/goroutine?debug=1`. Do not set this in production unless actively profiling â€” the endpoint has no authentication.
+
+---
+
 ## Network
 
 ### `WICK_DNS_SERVERS`
