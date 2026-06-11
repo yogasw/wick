@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof" // opt-in profiling endpoints, served on loopback only (see WICK_PPROF in Run)
 	neturl "net/url"
 	"os"
 	"path/filepath"
@@ -1401,6 +1402,17 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 	}
 	logger := zerolog.Ctx(ctx)
+	// Opt-in profiling on loopback only. Set WICK_PPROF=1 to expose
+	// /debug/pprof on 127.0.0.1:6060 (heap, goroutine, profile) for
+	// diagnosing memory/CPU. Never bound to the public listener.
+	if os.Getenv("WICK_PPROF") != "" {
+		go func() {
+			logger.Info().Msg("pprof: serving on 127.0.0.1:6060")
+			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+				logger.Warn().Err(err).Msg("pprof: listener closed")
+			}
+		}()
+	}
 	// WICK_HOST pins the listen interface — empty (default) binds all
 	// interfaces so Docker and remote-VPS deploys keep working as-is.
 	// Set WICK_HOST=127.0.0.1 (or use --localhost on `server` / `start`)

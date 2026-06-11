@@ -227,7 +227,7 @@ func (s *store) upsertFile(ctx context.Context, row entity.ProviderStorage) erro
 	return s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "provider_type"}, {Name: "instance_name"}, {Name: "rel_path"}},
-			DoUpdates: clause.AssignmentColumns([]string{"content", "content_hash", "synced_at", "parent_id", "name", "retention_days"}),
+			DoUpdates: clause.AssignmentColumns([]string{"content", "size", "content_hash", "synced_at", "parent_id", "name", "retention_days"}),
 		}).Create(&row).Error
 }
 
@@ -235,15 +235,17 @@ func (s *store) upsertFile(ctx context.Context, row entity.ProviderStorage) erro
 func (s *store) listFiles(ctx context.Context, providerType, instanceName string) ([]entity.ProviderStorage, error) {
 	var rows []entity.ProviderStorage
 	err := s.db.WithContext(ctx).
+		Omit("Content").
 		Where("provider_type = ? AND instance_name = ?", providerType, instanceName).
 		Find(&rows).Error
 	return rows, err
 }
 
-// listAll returns all rows across all providers.
+// listAll returns all rows across all providers. Content is omitted — callers
+// that need a file's bytes fetch it by ID (getByID); listings use Size.
 func (s *store) listAll(ctx context.Context) ([]entity.ProviderStorage, error) {
 	var rows []entity.ProviderStorage
-	err := s.db.WithContext(ctx).Order("provider_type, instance_name, rel_path").Find(&rows).Error
+	err := s.db.WithContext(ctx).Omit("Content").Order("provider_type, instance_name, rel_path").Find(&rows).Error
 	return rows, err
 }
 
@@ -370,7 +372,7 @@ func (s *store) upsertFileContent(ctx context.Context, row entity.ProviderStorag
 	return s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "provider_type"}, {Name: "instance_name"}, {Name: "rel_path"}},
-			DoUpdates: clause.AssignmentColumns([]string{"content", "content_hash", "synced_at", "parent_id", "name"}),
+			DoUpdates: clause.AssignmentColumns([]string{"content", "size", "content_hash", "synced_at", "parent_id", "name"}),
 		}).Create(&row).Error
 }
 
@@ -379,6 +381,7 @@ func (s *store) upsertFileContent(ctx context.Context, row entity.ProviderStorag
 func (s *store) listChildren(ctx context.Context, providerType, instanceName string, parentID uint) ([]entity.ProviderStorage, error) {
 	var rows []entity.ProviderStorage
 	err := s.db.WithContext(ctx).
+		Omit("Content").
 		Where("provider_type = ? AND instance_name = ? AND parent_id = ?", providerType, instanceName, parentID).
 		Order("is_dir DESC, name ASC").
 		Find(&rows).Error
@@ -390,6 +393,7 @@ func (s *store) listChildren(ctx context.Context, providerType, instanceName str
 func (s *store) listRoots(ctx context.Context) ([]entity.ProviderStorage, error) {
 	var rows []entity.ProviderStorage
 	err := s.db.WithContext(ctx).
+		Omit("Content").
 		Where("parent_id = ?", entity.RootParentID).
 		Order("is_dir DESC, name ASC").
 		Find(&rows).Error

@@ -280,9 +280,14 @@ func parseWebhookRequest(w http.ResponseWriter, r *http.Request, mountPrefix str
 		return
 	}
 	var err error
-	body, err = io.ReadAll(r.Body)
+	const maxWebhookBody = 10 << 20 // 10 MiB — guard against unbounded external payloads
+	body, err = io.ReadAll(io.LimitReader(r.Body, maxWebhookBody+1))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxWebhookBody {
+		http.Error(w, "request body exceeds 10MiB limit", http.StatusRequestEntityTooLarge)
 		return
 	}
 	_ = r.Body.Close()
