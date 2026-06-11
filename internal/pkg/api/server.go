@@ -43,7 +43,6 @@ import (
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/internal/appname"
-	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
@@ -69,6 +68,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
@@ -262,20 +262,45 @@ func NewServer() *Server {
 
 	// Boot force-restore: DB is source of truth on first start after a
 	// container restart (no-volume env). Skipped when the
-	// provider-storage-sync job is disabled. The realtime watcher is
-	// started after restore completes so it doesn't race the restore
-	// writes and trigger spurious "disk changed" syncs back into DB.
-	if syncJob, err := jobsSvc.GetJob(context.Background(), providerstoragesync.Key); !cfg.App.ProviderSyncDisable && err == nil && syncJob.Enabled {
+	// provider-storage-sync job is disabled — multi-server setups run
+	// only one syncing instance; the others must not restore over a
+	// file system they don't own.
+	//
+	// Runs in a goroutine so a large source set (thousands of files)
+	// doesn't block server startup. The HTTP layer comes up immediately;
+	// restore progress is visible in logs (percentage ticks) and the
+	// realtime watcher is armed only after restore completes so it
+	// doesn't race the restore writes back into the DB.
+	// Decide whether to restore, and always log WHY — so a "files not
+	// restored" report can be diagnosed from logs alone without guessing
+	// which gate tripped (env kill switch, missing job row, or disabled job).
+	syncJob, jobErr := jobsSvc.GetJob(context.Background(), providerstoragesync.Key)
+	switch {
+	case cfg.App.ProviderSyncDisable:
+		log.Info().Bool("env_disable", true).
+			Msg("providersync: boot restore skipped — WICK_PROVIDERSYNC_DISABLE=true on this instance")
+	case jobErr != nil:
+		log.Warn().Err(jobErr).Str("job", providerstoragesync.Key).
+			Msg("providersync: boot restore skipped — could not read sync job row")
+	case !syncJob.Enabled:
+		log.Info().Str("job", providerstoragesync.Key).Bool("job_enabled", false).
+			Msg("providersync: boot restore skipped — sync job is disabled (enable it in Jobs UI to restore on boot)")
+	default:
 		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
-		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
-			log.Warn().Err(err).Msg("providersync: startup restore failed")
-		}
-		if configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true" {
-			debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
-			if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
-				log.Warn().Err(err).Msg("providersync: watcher start failed")
+		watcherOn := configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true"
+		debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
+		go func() {
+			log.Info().Bool("job_enabled", true).Bool("watcher", watcherOn).
+				Msg("providersync: starting boot restore in background — server is up, restore continues")
+			if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
+				log.Warn().Err(err).Msg("providersync: startup restore failed")
 			}
-		}
+			if watcherOn {
+				if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
+					log.Warn().Err(err).Msg("providersync: watcher start failed")
+				}
+			}
+		}()
 	}
 
 	// ── Encrypted-fields layer (encrypted-fields.md) ───────────────
