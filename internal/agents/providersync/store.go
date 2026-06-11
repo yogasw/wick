@@ -350,12 +350,14 @@ func (s *store) deleteByInstance(ctx context.Context, providerType, instanceName
 // purgeExpired deletes file rows where retention_days > 0 and synced_at is older than retention.
 func (s *store) purgeExpired(ctx context.Context) (int64, error) {
 	now := time.Now().UTC()
-	res := s.db.WithContext(ctx).
-		Where("retention_days > 0 AND synced_at < ?", now.Add(-24*time.Hour)).
-		// dynamically: synced_at < now - retention_days * 24h
-		// SQLite/Postgres compatible via raw:
-		Where("datetime(synced_at, '+' || retention_days || ' days') < datetime(?)", now.Format(time.RFC3339)).
-		Delete(&entity.ProviderStorage{})
+	q := s.db.WithContext(ctx).
+		Where("retention_days > 0 AND synced_at < ?", now.Add(-24*time.Hour))
+	if s.db.Dialector.Name() == "postgres" {
+		q = q.Where("synced_at + (retention_days * interval '1 day') < ?", now)
+	} else {
+		q = q.Where("datetime(synced_at, '+' || retention_days || ' days') < datetime(?)", now.Format(time.RFC3339))
+	}
+	res := q.Delete(&entity.ProviderStorage{})
 	return res.RowsAffected, res.Error
 }
 

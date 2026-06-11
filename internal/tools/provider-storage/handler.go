@@ -737,7 +737,7 @@ func restoreNow(c *tool.Ctx) {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not initialised"})
 		return
 	}
-	if err := globalSyncMgr.RestoreAll(c.Context(), c.CfgBool("verbose_logs")); err != nil {
+	if err := globalSyncMgr.RestoreAllForce(c.Context(), c.CfgBool("verbose_logs")); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
