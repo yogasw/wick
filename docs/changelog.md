@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+- **Memory hardening — provider storage**: listing, explorer, retention, and purge queries no longer load file content blobs into memory. A new `size` column is persisted on write and backfilled on migrate, so the file-list endpoint reports sizes without fetching content. Folder-zip downloads fetch blobs individually by ID. Fixes an ~800 MiB memory peak on deployments with large backup corpora.
+- **Bounded HTTP reads**: the `http` workflow node and the generic internal HTTP client now cap response buffering at **64 MiB** and return an error for larger responses. Previously these were unbounded `io.ReadAll` calls.
+- **Webhook body cap**: inbound webhook trigger requests are now rejected with `413` if the body exceeds **10 MiB**.
+- **Access-log middleware**: large or streaming request bodies (`multipart/form-data`, `application/octet-stream`, `text/event-stream`, or `Content-Length > 64 KiB`) are no longer buffered by the logger — the downstream handler reads them directly.
+- **Opt-in pprof** (`WICK_PPROF=1`): set this env var to expose Go pprof endpoints on `127.0.0.1:6060` for heap/CPU profiling. Loopback-only; never exposed on the public listener.
 
 ---
 
