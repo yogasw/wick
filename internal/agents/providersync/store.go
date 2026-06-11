@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/postgres"
 )
 
 // store wraps DB ops for provider_storage + provider_storage_sources.
@@ -105,57 +106,11 @@ func (s *store) ensureFolderChain(ctx context.Context, providerType, instanceNam
 // row was deleted but its descendants still reference the dead ID, which is
 // what causes `listChildren(parent)` to return empty even though the rows
 // are physically in the table. Cheap in-place repair; safe to run on every
-// boot.
+// boot. Delegates to the single canonical implementation in postgres so the
+// boot path and the manual "Repair Tree" button share one code path (and one
+// blob-free SELECT — see postgres.RepairProviderStorageTree).
 func (s *store) repairOrphans(ctx context.Context) (int, error) {
-	const sep = "\x00"
-	byKey := make(map[string]uint)
-
-	var firstBatch []entity.ProviderStorage
-	if err := s.db.WithContext(ctx).Omit("Content").FindInBatches(&firstBatch, 500,
-		func(tx *gorm.DB, batch int) error {
-			for _, r := range firstBatch {
-				byKey[r.ProviderType+sep+r.InstanceName+sep+r.RelPath] = r.ID
-			}
-			return nil
-		}).Error; err != nil {
-		return 0, err
-	}
-
-	fixed := 0
-	var secondBatch []entity.ProviderStorage
-	err := s.db.WithContext(ctx).Omit("Content").FindInBatches(&secondBatch, 500,
-		func(tx *gorm.DB, batch int) error {
-			for _, r := range secondBatch {
-				norm := filepath.ToSlash(r.RelPath)
-				leadingSlash := strings.HasPrefix(norm, "/")
-				trimmed := strings.TrimPrefix(norm, "/")
-				parts := strings.Split(trimmed, "/")
-				var wantParent uint
-				if len(parts) <= 1 {
-					wantParent = entity.RootParentID
-				} else {
-					parentRel := strings.Join(parts[:len(parts)-1], "/")
-					if leadingSlash {
-						parentRel = "/" + parentRel
-					}
-					wantParent = byKey[r.ProviderType+sep+r.InstanceName+sep+parentRel]
-					// parent missing → treat as root so the row remains reachable
-					// via listRoots (better than an unreachable orphan).
-				}
-				if r.ParentID == wantParent {
-					continue
-				}
-				if err := s.db.WithContext(ctx).
-					Model(&entity.ProviderStorage{}).
-					Where("id = ?", r.ID).
-					Update("parent_id", wantParent).Error; err != nil {
-					return err
-				}
-				fixed++
-			}
-			return nil
-		}).Error
-	return fixed, err
+	return postgres.RepairProviderStorageTree(s.db.WithContext(ctx))
 }
 
 // pruneEmptyFolders removes folder rows under (providerType, instanceName)

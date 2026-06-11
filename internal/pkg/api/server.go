@@ -294,6 +294,16 @@ func NewServer() *Server {
 		go func() {
 			log.Info().Bool("job_enabled", true).Bool("watcher", watcherOn).
 				Msg("providersync: starting boot restore in background — server is up, restore continues")
+
+			// Re-parent orphan rows: rewires parent_id from rel_path so that
+			// listChildren works even when an ancestor row was previously deleted
+			// (drive-letter row rotation, etc.). Idempotent.
+			if n, err := postgres.RepairProviderStorageTree(db); err != nil {
+				log.Warn().Err(err).Msg("providersync: repair provider_storage tree failed")
+			} else if n > 0 {
+				log.Info().Int("rows", n).Msg("providersync: repaired orphan provider_storage parent_id")
+			}
+
 			if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
 				log.Warn().Err(err).Msg("providersync: startup restore failed")
 			}
