@@ -265,7 +265,7 @@ func NewServer() *Server {
 	// provider-storage-sync job is disabled. The realtime watcher is
 	// started after restore completes so it doesn't race the restore
 	// writes and trigger spurious "disk changed" syncs back into DB.
-	if syncJob, err := jobsSvc.GetJob(context.Background(), providerstoragesync.Key); err == nil && syncJob.Enabled {
+	if syncJob, err := jobsSvc.GetJob(context.Background(), providerstoragesync.Key); !cfg.App.ProviderSyncDisable && err == nil && syncJob.Enabled {
 		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
 		if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
 			log.Warn().Err(err).Msg("providersync: startup restore failed")

@@ -6,7 +6,7 @@ outline: deep
 
 `bitbucket` wraps the Bitbucket Cloud REST API (v2.0). One instance = one Bitbucket account (account email + API token, optional default workspace).
 
-Operations cover the common review flows: searching repos, reading commits and diffs, listing and creating pull requests, and posting PR comments — including **inline** comments anchored to a specific file and line. Anything wick doesn't type yet is one [`httprest`](./httprest) call away.
+Operations cover the common review flows: searching repos, reading commits and diffs, listing and creating pull requests, posting PR comments — including **inline** comments anchored to a specific file and line — and taking review actions (approve, request changes, merge). Anything wick doesn't type yet is one [`httprest`](./httprest) call away.
 
 | | |
 |---|---|
@@ -41,6 +41,9 @@ Operations cover the common review flows: searching repos, reading commits and d
 | `create_file_commit` | yes | `workspace`, `repo_slug`, `branch`, `path`, `content`, `message` | Create/update a file via a commit. |
 | `create_pull_request` | yes | `workspace`, `repo_slug`, `title`, `source`, `destination`, `description` | Open a PR. |
 | `create_pull_request_comment` | yes | see below | Comment on a PR — top-level or inline. |
+| `approve_pull_request` | yes | `workspace`, `repo_slug`, `pull_request_id` | Approve a PR as the authenticated user. Idempotent. |
+| `request_changes_pull_request` | yes | `workspace`, `repo_slug`, `pull_request_id` | Flag a PR as needing changes. Mutually exclusive with approve. |
+| `merge_pull_request` | yes | see below | Merge a PR into its destination branch. Irreversible. |
 
 Destructive ops are opt-in per row at `/manager/connectors/bitbucket/{id}`.
 
@@ -70,6 +73,29 @@ Set `inline_to` **or** `inline_from`, not both; `inline_to` wins if both are giv
     body: "{{.Node.review.result}}"
     inline_path: src/handler.go
     inline_to: 88
+```
+
+## Merging a pull request
+
+`merge_pull_request` accepts optional fields in addition to the required `workspace`, `repo_slug`, and `pull_request_id`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `merge_strategy` | string | One of `merge_commit` (default), `squash`, or `fast_forward`. Omit to use the repository's default setting. |
+| `message` | string | Optional merge commit message. Defaults to Bitbucket's auto-generated message. |
+| `close_source_branch` | bool | Close the source branch after a successful merge. Default `false`. |
+
+```yaml
+- id: merge_pr
+  type: connector
+  module: bitbucket
+  op: merge_pull_request
+  args:
+    workspace: my-team
+    repo_slug: web
+    pull_request_id: "42"
+    merge_strategy: squash
+    close_source_branch: true
 ```
 
 ## See also
