@@ -34,7 +34,7 @@ const sampleAttrs = `{
       {"message": {"role": "assistant", "content": "Maaf atas kendalanya, refund sudah diproses."}}
     ]
   },
-  "metadata": {"request_id": "req-abc-123", "room_id": 439258020, "node": "responder"}
+  "metadata": {"request_id": "req-abc-123", "room_id": 123456789, "node": "responder"}
 }`
 
 func sampleSpan() wireSpan {
@@ -171,11 +171,11 @@ func TestParseAttrsMalformed(t *testing.T) {
 }
 
 func TestAppIDFilter(t *testing.T) {
-	got, err := appIDFilter("bibgs-tho4nvlkboaezdf")
+	got, err := appIDFilter("myapp-a1b2c3d4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if want := "metadata['app_id'] == 'bibgs-tho4nvlkboaezdf'"; got != want {
+	if want := "metadata['app_id'] == 'myapp-a1b2c3d4'"; got != want {
 		t.Errorf("filter = %q, want %q", got, want)
 	}
 

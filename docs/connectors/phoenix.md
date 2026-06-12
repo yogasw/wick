@@ -21,7 +21,7 @@ Operations are **read-only**: they list LLM spans for a room or an app and drill
 |---|---|---|---|
 | `BaseURL` | URL | ✅ | Phoenix base URL — scheme + host only, no `/graphql` path. |
 | `APIToken` | secret | ✅ | Phoenix API token (JWT). Sent as a `Bearer` token on every request. |
-| `ProjectID` | text | ✅ | Phoenix project global id in base64 form, e.g. `UHJvamVjdDoyOA==` (decodes to `Project:28`). Copy it from the project URL or the GraphQL API. |
+| `ProjectID` | text | ✅ | Phoenix project global id in base64 form, e.g. `YWJjZA==` (decodes to `abcd`). Copy it from the project URL or the GraphQL API. |
 
 All traffic goes through the single GraphQL endpoint (`BaseURL` + `/graphql`).
 
