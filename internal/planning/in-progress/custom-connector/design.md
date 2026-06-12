@@ -1,6 +1,7 @@
 # Custom Connector — Add From cURL / MCP / Form (design)
 
-Status: **in progress — backend + manager UI lengkap 2026-06-12**
+Status: **in progress — backend + manager UI lengkap 2026-06-12**,
+menunggu review di [PR #699](https://github.com/yogasw/wick/pull/699)
 (branch `feat/custom-connectors`; semua flow A/B/C, OAuth per-instance,
 ownership contract, management connector `custom-connector` shipped —
 lihat checklist §13 dan update notes di bawah). Update terakhir:
