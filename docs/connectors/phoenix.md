@@ -31,14 +31,25 @@ All traffic goes through the single GraphQL endpoint (`BaseURL` + `/graphql`).
 |---|---|---|---|
 | `list_spans_by_room` | no | `room_id`, `time_range`, `llm_only` | List LLM spans for a room (Phoenix session). Returns per-span model, status, tokens, latency, and previews of system prompt / last user input / output. |
 | `list_spans_by_app` | no | `app_id`, `time_range`, `max_spans`, `root_only` | List root spans by `metadata['app_id']`, paged server-side. Previews come from raw input/output. |
-| `get_span` | no | `span_node_id` | Full detail of one span: every message (system, user, tool), output, `tool_calls`, token usage, latency, cost. |
+| `get_span` | no | `span_node_id` | Full detail of one span: every message (system, user, tool), the **tool catalog** the model could choose from, output, `tool_calls`, token usage, `invocation_parameters`, span `metadata`, latency, cost. |
 
 All three are read-only — there are no destructive ops on this connector.
+
+### What `get_span` returns
+
+Beyond the message list and usage, `get_span` surfaces the rest of the span's `attributes` blob so the full "what was sent to the model" picture is visible:
+
+| Field | What it carries |
+|---|---|
+| `tools` | The **catalog** of tools the model could choose from — each with `name`, `description` (which holds the selection preconditions), and `parameters` (raw JSON schema). Absent when the model was bound no tools. This is *distinct* from a message's `tool_calls` (what the model actually invoked) — compare the two to see whether it picked the right tool. |
+| `invocation_parameters` | Model call settings (`temperature`, `reasoning_effort`, `tool_choice`, …). The redundant `tools` array is stripped — read the `tools` field instead. |
+| `metadata` | Arbitrary span metadata emitted by the application that produced the span — e.g. `request_id`, `room_id`, `user_id`, `app_id`, the producing node. Keys vary by producer; the handles for cross-referencing logs / DB. |
+| `tokens.cache_read`, `tokens.reasoning` | Prompt-cache and reasoning token breakdown, when the provider reports them. |
 
 ## Typical debugging flow
 
 1. **Find the span.** Call `list_spans_by_room` with the room id (matched against the Phoenix *session id* for that conversation). Scan the previews to spot the span that answered wrong.
-2. **Drill in.** Take that span's `span_node_id` and call `get_span` — read the system prompt, the user turn, and any `tool_calls` the model fired.
+2. **Drill in.** Take that span's `span_node_id` and call `get_span` — read the system prompt, the user turn, the `tools` catalog the model was given, and which `tool_calls` it actually fired. Comparing the catalog against the call is how you tell *why* the model picked (or ignored) a tool.
 3. **Widen if needed.** No room id, only an app? Start from `list_spans_by_app` and drill into a `span_node_id` the same way.
 
 ```
