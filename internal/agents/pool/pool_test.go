@@ -514,3 +514,80 @@ func TestStopShutsDownActives(t *testing.T) {
 	p.Stop()
 	waitFor(t, func() bool { return p.Active() == 0 }, 2*time.Second)
 }
+
+func TestPreemptIdleSlotTrackedByWaitGroup(t *testing.T) {
+	sp := &scriptedSpawner{Lines: [][]string{
+		{
+			`{"type":"system","subtype":"init","session_id":"a"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"done"}`,
+		},
+		{
+			`{"type":"system","subtype":"init","session_id":"b"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+		},
+	}}
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+	p := New(PoolConfig{
+		MaxConcurrent: 1,
+		IdleTimeout:   5 * time.Second,
+		PreemptIdle:   true,
+		Layout:        layout,
+		Factory:       factory,
+	})
+	factory.OnExit = p.HandleExit
+
+	setupSession(t, layout, "A")
+	setupSession(t, layout, "B")
+
+	if err := p.Send(context.Background(), "A", "default", "ui", "user", "go"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, e := range p.active {
+			if e.sessID == "A" && e.state != nil && e.state.Lifecycle().String() == "idle" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+
+	if err := p.Send(context.Background(), "B", "default", "ui", "user", "hi"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.Stop()
+
+	if got := p.Active(); got != 0 {
+		t.Fatalf("Active after Stop: got %d, want 0", got)
+	}
+}
+
+func TestBufferCleanedAfterAgentExit(t *testing.T) {
+	sp := &scriptedSpawner{Lines: [][]string{{
+		`{"type":"system","subtype":"init","session_id":"abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"hi"}`,
+	}}}
+	p, layout := newPool(t, 2, sp)
+	setupSession(t, layout, "S1")
+
+	if err := p.Send(context.Background(), "S1", "default", "ui", "user", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return p.Active() == 0 }, 2*time.Second)
+
+	p.mu.Lock()
+	bufLen := len(p.buffers)
+	p.mu.Unlock()
+	if bufLen != 0 {
+		t.Fatalf("buffers not cleaned after exit: got %d entries, want 0", bufLen)
+	}
+}

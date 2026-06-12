@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
@@ -181,6 +182,8 @@ var (
 	instanceCache   map[string][]Instance // keyed by AppName; nil = uncached
 )
 
+var rescanGroup singleflight.Group
+
 // reloadInstanceCache pulls a fresh snapshot from userconfig under the
 // caller-supplied lock contract. Called by FindCached on a miss and
 // by mutating ops (Save/Delete/SetHookEnabled) after writing.
@@ -287,10 +290,15 @@ func Save(ins Instance) error {
 	InvalidateProbeCache(ins.Type, ins.Name)
 	// Persist a fresh probe in the background — user just changed
 	// Binary/ExtraArgs, the previous cached Status is now stale.
+	// singleflight deduplicates concurrent Update calls for the same instance.
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = RescanOne(ctx, ins.Type, ins.Name)
+		key := string(ins.Type) + "/" + ins.Name
+		rescanGroup.Do(key, func() (any, error) { //nolint:unparam
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			RescanOne(ctx, ins.Type, ins.Name)
+			return nil, nil
+		})
 	}()
 	return nil
 }
