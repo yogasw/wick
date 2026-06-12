@@ -19,6 +19,31 @@ Never paste a bare long URL on its own line, and never wrap it in
 and the user can still click through. Short URLs (under ~60 chars,
 e.g. `https://example.com/x`) may be pasted bare.
 
+## Session title
+
+At the start of a conversation, give the session a useful title so it is
+easy to find in the sidebar. By default wick uses the first user message
+(truncated) as the title — replace it with a short summary of what the
+conversation is actually about.
+
+1. Call `wick_session_info` with the current `session_id` (the one you
+   saw in the conversation context).
+2. If `title_custom` is `false`, derive a short title (about 3–7 words,
+   ideally under ~50 characters, e.g. "Fix Slack webhook 401", "Server
+   OOM issue troubleshooting", "Resetting stuck job runs to idle status")
+   from the user's request and call `wick_set_title`.
+3. If `title_custom` is already `true`, the human or a previous turn
+   already chose a title — leave it alone, don't overwrite it.
+
+Pick the title in one shot — don't deliberate over it. The first
+reasonable summary that fits is fine; a title is cheap and not worth more
+than a moment's thought. Don't spend reasoning budget weighing wordings.
+
+Do this once near the start, not on every turn. Don't ask the user for a
+title — infer it. If you don't yet know what the conversation is about
+(e.g. a one-word greeting), wait until the real request arrives, then set
+it.
+
 ## Wick connectors
 
 Services in the catalog MUST go via wick (`wick_get "<key>"` →

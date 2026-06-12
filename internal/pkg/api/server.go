@@ -999,7 +999,8 @@ func NewServer() *Server {
 			}
 			return true, ""
 		}).
-		WithPool(agentsPool, agentsLayout)
+		WithPool(agentsPool, agentsLayout).
+		WithRefreshSession(agentsMgr.RefreshSession)
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
