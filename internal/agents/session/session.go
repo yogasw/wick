@@ -62,9 +62,18 @@ type Meta struct {
 	CreatedAt    time.Time `json:"created_at"`
 	LastActive   time.Time `json:"last_active"`
 	PendingInput []string  `json:"pending_input,omitempty"`
-	// Label is the first user message truncated to 60 runes, cached here
-	// so sidebar rendering never needs to open conversation.jsonl.
+	// Label is the session title shown in the sidebar. By default it is
+	// the first user message truncated to 60 runes (see
+	// pool.setLabelIfEmpty), cached here so sidebar rendering never needs
+	// to open conversation.jsonl. Once a human or the agent sets an
+	// explicit title (TitleCustom=true) the auto-derived label no longer
+	// overwrites it.
 	Label string `json:"label,omitempty"`
+	// TitleCustom marks Label as an explicit title set by a human or the
+	// agent (via the wick_set_title MCP tool), as opposed to the
+	// auto-derived first-message label. When true, the first-user-message
+	// auto-label is skipped so it never clobbers the chosen title.
+	TitleCustom bool `json:"title_custom,omitempty"`
 	// Preset is the name of the preset active for this session.
 	// Factory reads the preset content from presets/<name>/agent.md on
 	// every spawn so edits to the preset take effect on next respawn.

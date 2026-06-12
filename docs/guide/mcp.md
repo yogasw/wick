@@ -41,6 +41,8 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_info` | `readOnlyHint` | Return server version and build info |
 | `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
 | `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
+| `wick_session_info` | `readOnlyHint` | Read the active session's metadata: `session_id`, `title`, `title_custom`, `origin`, `status`, `project_id`. Used by the agent to decide whether to set a title. |
+| `wick_set_title` | `idempotentHint` | Set the session's sidebar title and mark it as custom so the auto-derived first-message label never overwrites it. Title is truncated to 60 characters. |
 
 Why not a static list?
 
@@ -465,6 +467,44 @@ Response:
 | `server_commit` | Short git commit hash of the server binary at build time |
 
 `wick_version` is injected automatically by `wick mcp serve` — no ldflags needed in downstream projects. When wick is imported as a library (`require github.com/yogasw/wick v1.x.x`), the version is read from Go's embedded module build info at startup.
+
+## Session title tools
+
+The wick-agent server exposes two tools that let the agent manage the session's sidebar title without touching the admin UI.
+
+### `wick_session_info`
+
+Read-only. Returns the active session's metadata.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | string | Session identifier |
+| `title` | string | Current sidebar title (empty string until first message arrives) |
+| `title_custom` | bool | `true` when the title was set explicitly (by a human or by `wick_set_title`); `false` when it is still the auto-derived first-message label |
+| `origin` | string | Channel origin, e.g. `slack`, `web`, `rest` |
+| `status` | string | Session status, e.g. `idle`, `busy` |
+| `project_id` | string | Project the session belongs to, if any |
+
+### `wick_set_title`
+
+Writes an explicit title to `session.meta.label` and sets `title_custom = true`. Once set, the auto-derived first-message label is permanently skipped for this session — even after a restart.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `session_id` | yes | ID of the active wick agent session |
+| `title` | yes | Short human-readable title. Truncated to 60 characters. |
+
+Returns the written `session_id`, `title`, and `title_custom: true`.
+
+### Auto-title behavior
+
+When the agent system prompt is active (wick-agent server), the immutable system prompt instructs the agent to:
+
+1. Call `wick_session_info` near the start of a conversation.
+2. If `title_custom` is `false`, derive a short title (3–7 words, ≤ 50 characters) from the user's request and call `wick_set_title`.
+3. If `title_custom` is already `true`, leave the title alone.
+
+This means sessions get a descriptive label automatically without prompting the user, while a title set manually by the user or by a previous agent turn is never clobbered.
 
 ## Reference
 
