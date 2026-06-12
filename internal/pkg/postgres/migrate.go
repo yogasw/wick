@@ -27,6 +27,8 @@ func Migrate(db *gorm.DB) {
 		&entity.ConnectorOperation{},
 		&entity.ConnectorRun{},
 		&entity.ConnectorAccount{},
+		&entity.CustomConnector{},
+		&entity.CustomConnectorMCPServer{},
 		&entity.PersonalAccessToken{},
 		&entity.PushSubscription{},
 		&entity.OAuthClient{},

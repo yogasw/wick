@@ -105,8 +105,9 @@ func (g *BootGate) PhaseLabel() string {
 // bootPhaseMessages maps a phase key to the message shown on the gate page.
 // Unknown / empty keys fall back to the generic starting message.
 var bootPhaseMessages = map[string]string{
-	"starting":  "Starting services…",
-	"restoring": "Restoring sessions and files…",
+	"starting":       "Starting services…",
+	"restoring":      "Restoring sessions and files…",
+	"connecting-mcp": "Connecting MCP connectors…",
 }
 
 func bootPhaseMessage(phase string) string {
