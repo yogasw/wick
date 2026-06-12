@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+- **Gate auto-approves wick read-only / info MCP tools**: The `PreToolUse` gate binary now has a built-in always-allow list for wick's non-mutating tools — `wick_list`, `wick_search`, `wick_get`, `wick_info`, `wick_list_providers`, `wick_skill_list`, `wick_session_info`, and `wick_set_title`. These no longer trigger the per-tool approval prompt. `wick_execute` and `wick_skill_sync` remain gated. See [Command Gate → What gets intercepted](/guide/command-gate#what-gets-intercepted-claude).
+- **Title state in agent system prompt**: The "This session" identity block injected into every agent's system prompt now includes the session's current `title` and `title_custom` flag. The agent reads these from the prompt at spawn time instead of making a `wick_session_info` round-trip on every first turn.
 
 ---
 
