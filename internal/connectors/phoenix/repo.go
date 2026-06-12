@@ -225,7 +225,7 @@ const spanDetailQuery = `query($spanId: ID!) {
 
 // ── Fetchers ─────────────────────────────────────────────────────────────
 
-// fetchSessions resolves the Phoenix sessions for a Qiscus room. The room id
+// fetchSessions resolves the Phoenix sessions for a conversation room. The room id
 // is matched against ProjectSession.sessionId — room_id itself is numeric and
 // unindexed, so it can only be reached through the sessionId argument here,
 // never a metadata filterCondition.

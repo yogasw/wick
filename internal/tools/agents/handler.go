@@ -1235,11 +1235,13 @@ func sessionProcesses(c *tool.Ctx) {
 		// externally killed without the reader seeing EOF). Releases the
 		// slot + drains the queue so a zombie idle entry can't wedge it.
 		globalPool.ReconcileDead()
-		// Cross-session view: list every active spawn in the pool, not just
-		// this session's. With a high concurrency cap + multi-agent, the
-		// operator wants the whole picture from any session's panel.
-		_ = id
+		// Per-session view: this slide-over belongs to one session, so list
+		// only that session's spawns. The global picture lives on the admin
+		// Providers page; here the operator wants just their own session.
 		for _, e := range globalPool.ActiveSnapshot() {
+			if e.SessionID != id {
+				continue
+			}
 			// PID alive AND identity matches (recycled PID owned by another
 			// process reads as not-alive). 0 = test fake / pre-PID spawn.
 			//
@@ -1262,6 +1264,25 @@ func sessionProcesses(c *tool.Ctx) {
 				Lifecycle: e.Lifecycle,
 				Substate:  e.Substate,
 				Alive:     alive,
+			})
+		}
+		// Same session filter, applied to the FIFO queue: a request still
+		// waiting for a slot has no PID yet, so it never appears in the
+		// active snapshot. Surface it as a "queued" row (pid 0 → "—") so the
+		// operator sees their request is accepted but not yet running.
+		for _, q := range globalPool.QueueSnapshot() {
+			if q.SessionID != id {
+				continue
+			}
+			out = append(out, procEntry{
+				SessionID: q.SessionID,
+				AgentName: q.AgentName,
+				PID:       0,
+				Lifecycle: "queued",
+				// Pending, not a dead zombie: there's no process yet, so the
+				// "alive" probe doesn't apply. Mark alive so the UI renders
+				// the "queued" status instead of flipping it to "dead".
+				Alive: true,
 			})
 		}
 	}

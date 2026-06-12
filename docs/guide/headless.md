@@ -128,7 +128,7 @@ If you don't want to hand-roll a systemd unit:
 ./wick service uninstall
 ```
 
-User-scoped (no `sudo` needed). On a Linux server you usually want `loginctl enable-linger <user>` afterwards so the unit keeps running after logout. Details: [App CLI — Auto-start service](/reference/app-cli#auto-start-service).
+User-scoped (no `sudo` needed). On a Linux server, `service install` automatically tries to enable systemd lingering for the current user so the daemon survives logout and starts at boot. On most modern distros this succeeds silently. If the host denies it, run `wick service status` — the note field prints the exact `sudo loginctl enable-linger <user>` command for your user. Details: [App CLI — Auto-start service](/reference/app-cli#auto-start-service).
 
 ## See also
 
