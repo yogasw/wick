@@ -6,14 +6,22 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-
-- **Boot gate — "Booting…" holding page during restore**: While the provider-storage boot restore is running, every HTTP request (except `/health` and `/boot-status`) receives an HTTP 503 page with a spinner and live phase label instead of an empty sidebar or a broken session list. The page auto-polls `GET /boot-status` every 1.5 s and reloads as soon as the server reports ready. `/health` stays exempt so load-balancer and k8s readiness probes succeed throughout the restore window.
-- **`GET /boot-status`**: New JSON endpoint (`{"ready":bool,"message":string}`) that reports whether the async boot restore has finished. Used by the boot gate page; also consumable by external health checks that need a deeper "app is ready" signal beyond the liveness `/health` check.
-- **Agents registry auto-reload after restore**: After the boot restore completes, the agents registry is rescanned from disk so sessions and projects appear in the sidebar immediately — previously the sidebar stayed empty until the next restart. Manual restores from the Provider Storage UI (**Restore Now**, **Restore Selected**) now also trigger an immediate registry reload.
 _Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.16.12](https://github.com/yogasw/wick/compare/v0.16.11...v0.16.12) — Boot Gate
+
+_Released on 2026-06-12_
+
+### Added
+
+-   **Boot gate — "Booting…" holding page during restore**: To prevent an empty sidebar or broken session list and 404 errors during the asynchronous provider-storage boot restore, all HTTP requests (except `/health` and `/boot-status`) now receive an HTTP 503 page. This holding page displays a spinner and live phase label, auto-polls `GET /boot-status` every 1.5 seconds, and reloads automatically once the server reports readiness. The `/health` endpoint remains exempt, ensuring load balancer and Kubernetes readiness probes continue to succeed throughout the restore window. This robust gating mechanism ensures a consistent user experience during the boot process.
+-   **`GET /boot-status`**: A new JSON endpoint (`{"ready":bool,"message":string}`) has been added to report whether the asynchronous boot restore has finished. This endpoint is used by the boot gate page and can also be consumed by external health checks that require a deeper "application ready" signal beyond the basic liveness `/health` check.
+-   **Agents registry auto-reload after restore**: Upon completion of the boot restore process, the agents registry is now immediately rescanned from disk. This ensures that sessions and projects appear in the sidebar without delay, addressing a previous issue where the sidebar remained empty until the next restart due to the registry being scanned before restore had written data. Manual restores initiated from the Provider Storage UI (**Restore Now**, **Restore Selected**) also now trigger an immediate registry reload, preventing stale in-memory registry data.
+
+---
+
 
 ## [v0.16.11](https://github.com/yogasw/wick/compare/v0.16.10...v0.16.11)
 
