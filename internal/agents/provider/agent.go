@@ -318,9 +318,11 @@ func (a *Agent) Send(text string) error {
 		return a.respawnWithMessage(text)
 	}
 	// SendAppend: write to the persistent subprocess stdin.
+	// Release a.mu before I/O so callers of drainPending (which also
+	// acquires a.mu) cannot deadlock if the stdin pipe blocks.
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if !a.running || a.proc == nil {
+		a.mu.Unlock()
 		return errors.New("agent not running")
 	}
 	var payload string
@@ -332,8 +334,10 @@ func (a *Agent) Send(text string) error {
 			jsonString(text),
 		)
 	}
+	proc := a.proc
+	a.mu.Unlock()
 	log.Debug().Str("payload", payload).Msg("agent.send: writing to stdin")
-	_, err := a.proc.Stdin().Write([]byte(payload + "\n"))
+	_, err := proc.Stdin().Write([]byte(payload + "\n"))
 	return err
 }
 
@@ -470,9 +474,11 @@ func terminateProc(proc Process, done <-chan struct{}) {
 	if done == nil {
 		return
 	}
+	t := time.NewTimer(5 * time.Second)
+	defer t.Stop()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-t.C:
 		log.Warn().Int("pid", pid).Msg("agent.terminate: reader did not exit within 5s after kill; proceeding")
 	}
 }

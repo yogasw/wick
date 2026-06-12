@@ -82,6 +82,9 @@ func (b *Broadcaster) Subscribe(sessionID string) (<-chan Event, func()) {
 				break
 			}
 		}
+		if len(b.subs[sessionID]) == 0 {
+			delete(b.subs, sessionID)
+		}
 		close(ch)
 	}
 	return ch, unsub

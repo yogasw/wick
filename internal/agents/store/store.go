@@ -243,7 +243,9 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		return false, nil
 
 	case event.TextDelta:
+		s.mu.Lock()
 		s.turnBuf.WriteString(ev.Text)
+		s.mu.Unlock()
 		_ = s.appendInflight(InflightEntry{
 			Type: "text_delta",
 			Text: ev.Text,
