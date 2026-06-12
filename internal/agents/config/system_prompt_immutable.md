@@ -26,8 +26,8 @@ easy to find in the sidebar. By default wick uses the first user message
 (truncated) as the title — replace it with a short summary of what the
 conversation is actually about.
 
-1. Call `wick_session_info` with the current `session_id` (the one you
-   saw in the conversation context).
+1. Call `wick_session_info` with the current `session_id` (see the
+   "This session" block at the end of this prompt).
 2. If `title_custom` is `false`, derive a short title (about 3–7 words,
    ideally under ~50 characters, e.g. "Fix Slack webhook 401", "Server
    OOM issue troubleshooting", "Resetting stuck job runs to idle status")

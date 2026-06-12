@@ -182,6 +182,14 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			presetContent += "\n\n" + extra
 		}
 	}
+	// Per-session identity block, appended last so it is the "This
+	// session" block at the very end of the assembled prompt (the
+	// immutable rules reference it by that name). The agent needs the
+	// session_id for wick_session_info / wick_set_title / ask_user, and
+	// having it in the system prompt means it is always available — not
+	// only on the first turn where channels inject a one-time context
+	// message.
+	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin)
 
 	bypassPerms := false
 	if f.PermissionModeLoader != nil {
@@ -346,6 +354,26 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 // "spawn") wins; otherwise it falls back to the provider type's default:
 // codex is one-shot per turn (respawn + queue mid-turn sends); claude /
 // gemini keep a persistent stdin and append.
+// sessionIdentityBlock renders the per-session identity appended to the
+// system prompt so the agent always knows its session_id (needed by
+// wick_session_info / wick_set_title / ask_user) and which channel it is
+// talking on. channel falls back to "ui" when origin is unset.
+func sessionIdentityBlock(sessionID, channel string) string {
+	if strings.TrimSpace(channel) == "" {
+		channel = "ui"
+	}
+	var b strings.Builder
+	b.WriteString("## This session\n\n")
+	b.WriteString("These identify the conversation you are in. Pass session_id")
+	b.WriteString(" to any wick tool that needs it (wick_session_info,")
+	b.WriteString(" wick_set_title, ask_user) instead of guessing.\n\n")
+	b.WriteString("session_id: ")
+	b.WriteString(sessionID)
+	b.WriteString("\nchannel: ")
+	b.WriteString(channel)
+	return b.String()
+}
+
 func sendModeFor(pType provider.Type, override string) provider.SendMode {
 	if m, ok := provider.ParseSendMode(override); ok {
 		return m
