@@ -211,6 +211,15 @@ var ErrAlreadyRunning = errors.New("daemon already running")
 // ErrNotRunning signals Stop was called with no live daemon recorded.
 var ErrNotRunning = errors.New("daemon not running")
 
+// ReadPID returns the PID recorded in p.PIDFile plus the file mtime
+// (best-effort start time). Exported for the systemd jalur in `status`,
+// where Check() can't be used — the systemd-spawned process self-writes
+// run.pid but no `start` parent verified it. os.ErrNotExist is returned
+// verbatim when the file is absent.
+func ReadPID(p Paths) (int, time.Time, error) {
+	return readPID(p.PIDFile)
+}
+
 // readPID parses the PID file and returns the stored pid + mtime.
 // Whitespace + trailing newline are tolerated.
 func readPID(path string) (int, time.Time, error) {
