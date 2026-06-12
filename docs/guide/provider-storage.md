@@ -5,12 +5,21 @@ Provider Storage backs up local credential and config files from disk to the dat
 - **No persistent volume** — credentials written by Claude, Codex, Gemini, or Wick after login survive container restarts.
 - **OAuth re-login** — on boot the saved snapshot is restored to the original paths before agents start, so CLIs find their credentials without prompting.
 
+## Boot gate
+
+While the boot restore is running, wick serves a lightweight **"Booting…"** holding page (HTTP 503) for every request except `/health` and `/boot-status`. The page auto-polls `GET /boot-status` every 1.5 s and reloads automatically once the restore finishes — users see a spinner with a progress label instead of an empty sidebar or a broken session list.
+
+`/health` stays exempt throughout so load-balancer and k8s readiness probes keep succeeding. If you need a deeper "app is ready" signal you can probe `GET /boot-status` — it returns `{"ready":true,"message":"..."}` once the gate lifts.
+
+When boot restore is skipped (sync job disabled, `WICK_PROVIDERSYNC_DISABLE=true`, or a DB read error), the gate lifts immediately and the holding page is never shown.
+
 ## How it works
 
 ```
 Boot
   DB → filesystem      (RestoreAllForce — DB is source of truth)
   ── restore complete ──
+  agents registry rescanned from disk (sidebar reflects new sessions/projects)
   fsnotify watcher on  (if watcher_status = true)
 
 Realtime (kernel event)
@@ -91,9 +100,9 @@ Edit retention on a source via the **Retention** column in Configured Sources (p
 ## Files tab actions
 
 - **Sync Now** — manual backup pass for every enabled source.
-- **Restore Now** — disk-wins guard restore for every covered file.
+- **Restore Now** — disk-wins guard restore for every covered file. Triggers an immediate agents-registry rescan so new sessions and projects appear in the sidebar without a restart.
 - **Repair Tree** — re-parent orphan rows from their `rel_path` (rarely needed; migration runs the same logic on every boot).
-- **Restore Selected** — force-overwrite selected file rows back to disk.
+- **Restore Selected** — force-overwrite selected file rows back to disk. Also triggers an agents-registry rescan.
 - **Delete Selected** — drop selected rows. Selecting a folder cascades to descendants.
 - **Upload File** — push a file directly into DB without disk sync (seeding).
 - **Preview** — view file content (>1 MB and binary files shown as size only).

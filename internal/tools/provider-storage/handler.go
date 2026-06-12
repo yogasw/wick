@@ -30,6 +30,30 @@ var globalSyncMgr *providersync.Manager
 // SetSyncManager injects the shared Manager instance.
 func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
 
+// reloadRegistryHook, when set, triggers a full disk rescan of the agents
+// registry. Restore writes session/project files straight to disk, bypassing
+// the registry's in-memory cache — so after a restore the sidebar stays empty
+// and session URLs 404 until the next boot. Wiring this hook (see
+// SetReloadRegistryHook) lets restore refresh the cache immediately.
+var reloadRegistryHook func() error
+
+// SetReloadRegistryHook injects the agents-registry reload callback. The
+// agents package owns the registry; this avoids an import cycle by passing
+// the reload as a function rather than importing the Manager here.
+func SetReloadRegistryHook(fn func() error) { reloadRegistryHook = fn }
+
+// reloadRegistry triggers the rescan if a hook is wired. Logs but never
+// fails the caller — a stale cache is recoverable and the restore already
+// succeeded.
+func reloadRegistry() {
+	if reloadRegistryHook == nil {
+		return
+	}
+	if err := reloadRegistryHook(); err != nil {
+		log.Error().Err(err).Msg("provider-storage: registry reload after restore failed")
+	}
+}
+
 // Register wires provider-storage routes on the scoped Router.
 func Register(r tool.Router) {
 	r.GET("/", storagePage)
@@ -153,6 +177,7 @@ func restoreSelected(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	reloadRegistry()
 	c.JSON(http.StatusOK, map[string]int{"restored": count})
 }
 
@@ -749,5 +774,6 @@ func restoreNow(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	reloadRegistry()
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
