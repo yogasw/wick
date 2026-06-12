@@ -57,6 +57,135 @@ func (h handlers) mutableDef(ctx context.Context, user *entity.User, key string)
 
 // ── definitions ──────────────────────────────────────────────────────
 
+// defSchema returns the static draft contract — everything an LLM
+// needs to build a correct draft and explain it to the user before
+// def_create: widgets, template syntax, validation rules, icon rules,
+// categories, a worked example, and the confirm-first workflow.
+func (h handlers) defSchema(c *connector.Ctx) (any, error) {
+	if _, err := requireUser(c.Context()); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"workflow": []string{
+			"1. Gather the API contract from the user (endpoint, auth, sample request/response).",
+			"2. Build the draft JSON following this contract, picking sensible defaults for the decision points below.",
+			"3. Call def_validate to dry-run it.",
+			"4. PRESENT THE PLAN to the user before creating anything: name, key, icon, description, every config field (key, widget, secret, required, purpose), every operation (key, description, inputs, request recipe or mcp_source) — AND the decision points with the default you picked, so the user can override. Wait for explicit confirmation.",
+			"5. Only after the user confirms, call def_create.",
+		},
+		"decisions": map[string]string{
+			"single":           "Multi-instance (default) lets admins add rows per account/environment, each with its own credentials; single locks the def to one auto-seeded row. Ask when the API clearly has per-team/per-env credentials; otherwise default to multi and mention it.",
+			"destructive_ops":  "Mark every op that mutates user-visible state, sends messages, or spends money as destructive:true — it ships disabled per instance until an admin enables it. State which ops you flagged and why.",
+			"secret_fields":    "Every credential-ish config (tokens, keys, passwords) must be secret:true — encrypted at rest, masked from LLMs. List which fields you marked secret.",
+			"category":         "Visual grouping only. Pick the closest from `categories` or leave empty; mention your pick.",
+			"icon":             "Cosmetic. Default 🔌 — offer the user a custom emoji/SVG if they care.",
+			"access":           "Not part of the draft: the connector starts admin-only behind the auto-created custom:<key> tag. Tell the user that opening it to others happens at /admin/tags afterwards.",
+			"required_configs": "required:true makes the instance show needs_setup until filled. Mark base URL + credentials required; optional tuning knobs not.",
+		},
+		"draft_shape": map[string]any{
+			"key":         "Lowercase slug (a-z0-9_-), unique across built-in and custom connectors, IMMUTABLE after create. 'custom' is reserved.",
+			"name":        "Display name.",
+			"description": "What the connector does — shown to admins and (via the module) to the LLM in wick_list. Write it action-oriented.",
+			"icon":        "Optional. An emoji, an inline <svg>…</svg>, or a data:image/...;base64 payload. Max 32KB; plain-text icons max 32 bytes. Default 🔌.",
+			"category":    "Optional visual group on the connectors index.",
+			"single":      "Optional bool. true locks the def to one instance row (auto-seeded). Default false: multi-instance like built-ins, rows created via instance_create / + New row.",
+			"configs":     "Array of fields shared by every operation of an instance (base URL, credentials). Each instance row gets its own values.",
+			"ops":         "Array of operations. Each has exactly one of `request` (templated HTTP) or `mcp_source` (proxy to a registered MCP server — normally produced by mcp_register, not by hand).",
+		},
+		"field_shape": map[string]any{
+			"key":      "snake_case (a-z0-9_, must start with a letter), unique within its list.",
+			"label":    "Optional display label.",
+			"widget":   "One of the supported widgets below. Default text.",
+			"options":  "Pipe-separated values, only for widget=dropdown. Example: \"low|medium|high\".",
+			"secret":   "bool. true stores the value encrypted and auto-masks it in responses (wick_enc_ tokens). Use for every credential.",
+			"required": "bool. Instance shows needs_setup until required configs are filled; required inputs are enforced per call.",
+			"default":  "Optional seed value.",
+			"desc":     "Help text — for inputs this is what the LLM reads to fill the field, so describe format and give an example.",
+		},
+		"widgets": map[string]string{
+			"text":     "Single-line string (default).",
+			"textarea": "Multi-line string. For MCP-style object/array params, JSON pasted here passes through as structured data.",
+			"dropdown": "Fixed choice list — set `options`.",
+			"number":   "Numeric input; value still travels as string, templates receive it verbatim.",
+			"checkbox": "Boolean (also `bool` for a toggle style).",
+			"secret":   "Password-style input, implies secret=true.",
+			"email":    "Email input.",
+			"url":      "URL input.",
+			"date":     "Date picker (YYYY-MM-DD).",
+			"datetime": "Date-time picker.",
+		},
+		"request_shape": map[string]any{
+			"method":        "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS",
+			"url_template":  "Go text/template. Rendered result must be http(s)://. Example: {{.cfg.base_url}}/v1/items/{{.in.item_id}}",
+			"headers":       "Map of header name → value template. Example: {\"Authorization\": \"Bearer {{.cfg.api_key}}\"}",
+			"body_template": "Optional body template (JSON, form-encoded, anything).",
+			"content_type":  "Optional Content-Type for the body.",
+		},
+		"templating": map[string]any{
+			"namespaces": "{{.cfg.<key>}} = instance config value (secrets arrive decrypted); {{.in.<key>}} = per-call input value.",
+			"functions":  "default, lower, upper, b64 (Basic-auth recipes), urlquery (ALWAYS use for query params: {{urlquery .in.q}}), js, printf. Nothing else — no exec, no file access.",
+			"strictness": "missingkey=error: referencing an undeclared key fails the call with a clear error. Rendered output capped at 1MB.",
+		},
+		"validation": []string{
+			"key must match ^[a-z][a-z0-9_-]*$ and be unique (def_validate checks availability).",
+			"at least one operation; op keys snake_case, unique; op name + description required.",
+			"each op needs exactly one of request / mcp_source.",
+			"field keys snake_case, unique per list; widget must be from the supported set.",
+		},
+		"categories": custom.CategoryNames(),
+		"example_draft": map[string]any{
+			"key":         "acme_billing",
+			"name":        "Acme Billing",
+			"description": "Create and inspect invoices on the Acme billing API.",
+			"icon":        "🧾",
+			"category":    "API",
+			"configs": []map[string]any{
+				{"key": "base_url", "widget": "url", "required": true, "default": "https://api.acme.test", "desc": "API base URL."},
+				{"key": "api_key", "widget": "secret", "secret": true, "required": true, "desc": "Acme API key, sent as Bearer."},
+			},
+			"ops": []map[string]any{{
+				"key":         "create_invoice",
+				"name":        "Create Invoice",
+				"description": "Create an invoice for {customer_id}. Returns the upstream JSON invoice object.",
+				"destructive": false,
+				"inputs": []map[string]any{
+					{"key": "customer_id", "widget": "text", "required": true, "desc": "Customer ID. Example: cus_123"},
+					{"key": "amount", "widget": "number", "required": true, "desc": "Amount in cents. Example: 2000"},
+				},
+				"request": map[string]any{
+					"method":        "POST",
+					"url_template":  "{{.cfg.base_url}}/v1/invoices",
+					"headers":       map[string]string{"Authorization": "Bearer {{.cfg.api_key}}"},
+					"body_template": "{\"customer\":\"{{js .in.customer_id}}\",\"amount\":{{.in.amount}}}",
+					"content_type":  "application/json",
+				},
+			}},
+		},
+	}, nil
+}
+
+// defValidate dry-runs a draft: same structural validation as
+// def_create plus a key-availability check. Persists nothing.
+func (h handlers) defValidate(c *connector.Ctx) (any, error) {
+	if _, err := requireUser(c.Context()); err != nil {
+		return nil, err
+	}
+	var d custom.Draft
+	if err := json.Unmarshal([]byte(c.Input("draft")), &d); err != nil {
+		return map[string]any{"ok": false, "error": "draft is not valid JSON: " + err.Error()}, nil
+	}
+	if d.Source == "" {
+		d.Source = "manual"
+	}
+	if err := custom.ValidateDraft(&d); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}, nil
+	}
+	if _, taken := h.deps.Connectors.Module(d.Key); taken {
+		return map[string]any{"ok": false, "error": "key '" + d.Key + "' is already in use by a registered connector — pick another"}, nil
+	}
+	return map[string]any{"ok": true, "key": d.Key, "operations": len(d.Ops), "configs": len(d.Configs)}, nil
+}
+
 func (h handlers) defList(c *connector.Ctx) (any, error) {
 	user, err := requireUser(c.Context())
 	if err != nil {

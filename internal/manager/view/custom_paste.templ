@@ -4,11 +4,13 @@ import "github.com/yogasw/wick/internal/entity"
 
 // CustomPastePage is the entry of the paste flow: one big paste box
 // behind two parser tabs. The cURL tab is the deterministic default;
-// the AI tab renders only when an LLM provider is configured. Parse
-// posts the box to /manager/connectors/custom/parse and, on success,
-// the JS stores the returned draft in sessionStorage and navigates to
-// the review page.
-templ CustomPastePage(hasAI bool, user *entity.User) {
+// the AI tab renders only when at least one structured-output provider
+// exists — aiProviders carries the selectable instance names (resolved
+// live, so newly configured providers appear on refresh). Parse posts
+// the box to /manager/connectors/custom/parse and, on success, the JS
+// stores the returned draft in sessionStorage and navigates to the
+// review page.
+templ CustomPastePage(aiProviders []string, user *entity.User) {
 	@Layout("Manager · New custom connector", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8" data-cc-paste data-parse-url="/manager/connectors/custom/parse" data-review-url="/manager/connectors/custom/new/review">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -32,7 +34,7 @@ templ CustomPastePage(hasAI bool, user *entity.User) {
 						data-cc-tab="curl"
 						class="rounded-lg px-3 py-1.5 text-sm font-medium text-black-800 dark:text-black-600 transition-colors"
 					>📋 cURL parser</button>
-					if hasAI {
+					if len(aiProviders) > 0 {
 						<button
 							type="button"
 							data-cc-tab="ai"
@@ -43,9 +45,17 @@ templ CustomPastePage(hasAI bool, user *entity.User) {
 				<div data-cc-tab-help="curl" class="mt-3 text-sm text-black-800 dark:text-black-600">
 					Deterministic, instant, no LLM call. Reads <code class="font-mono text-xs">-X</code>, <code class="font-mono text-xs">-H</code>, <code class="font-mono text-xs">-d</code>, <code class="font-mono text-xs">-u</code>, the URL, and the query string. Values that look like tokens are auto-flagged secret.
 				</div>
-				if hasAI {
+				if len(aiProviders) > 0 {
 					<div data-cc-tab-help="ai" class="mt-3 hidden text-sm text-black-800 dark:text-black-600">
 						One LLM call. Accepts anything the cURL parser rejects: <code class="font-mono text-xs">fetch()</code> snippets, axios calls, raw API doc paragraphs, plain English. The raw paste is never persisted.
+						<span class="mt-2 flex items-center gap-2">
+							<label class="text-xs font-medium text-black-800 dark:text-black-600" for="cc-ai-provider">Provider</label>
+							<select id="cc-ai-provider" class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-xs text-black-900 dark:text-white-100 outline-none focus:border-green-500">
+								for _, name := range aiProviders {
+									<option value={ name }>{ name }</option>
+								}
+							</select>
+						</span>
 					</div>
 				}
 				<label class="mt-4 block text-xs font-medium text-black-800 dark:text-black-600" for="cc-paste-box">
@@ -64,7 +74,7 @@ templ CustomPastePage(hasAI bool, user *entity.User) {
 					<p class="text-sm font-medium text-neg-400">✗ <span data-cc-error-text></span></p>
 					<p class="mt-1 text-xs text-black-800">
 						Common causes: paste too short or over 8 KB, multiple endpoints mixed in, non-HTTP content. Trim it down to a single endpoint
-						if hasAI {
+						if len(aiProviders) > 0 {
 							or switch parser tabs
 						}
 						and try again.

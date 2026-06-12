@@ -69,7 +69,7 @@ type defKeyInput struct {
 }
 
 type defCreateInput struct {
-	Draft string `wick:"textarea;required;desc=Full definition draft as JSON: {key, name, description, icon, category, single, configs: [{key,label,widget,secret,required,default,desc}], ops: [{key,name,description,destructive,inputs:[...],request:{method,url_template,headers,body_template,content_type}}]}. Templates use Go text/template over {{.cfg.<key>}} and {{.in.<key>}}. Convert cURL or API docs into this shape yourself."`
+	Draft string `wick:"textarea;required;desc=Full definition draft as JSON: {key, name, description, icon, category, single, configs: [{key,label,widget,secret,required,default,desc}], ops: [{key,name,description,destructive,inputs:[...],request:{method,url_template,headers,body_template,content_type}}]}. Read def_schema FIRST for the full contract (widgets, template syntax, validation rules, example), and show the user the plan before creating."`
 }
 
 type defUpdateInput struct {
@@ -118,12 +118,22 @@ type instanceSetDisabledInput struct {
 }
 
 // Operations builds the closure-bound op list. ACCESS: handlers scope
-// by caller (admin = every definition, others = only their own);
-// descriptions say so for the LLM's benefit.
+// by caller (admin = every definition, others = only their own).
+// CONTRACT: creation ops carry an explicit plan-then-confirm workflow
+// in their descriptions — the LLM must read def_schema, validate via
+// def_validate, and present the plan to the user before def_create /
+// mcp_register. Descriptions are the enforcement surface wick_get
+// shows the model.
 func Operations(deps Deps) []connector.Operation {
 	h := handlers{deps}
 	return []connector.Operation{
 		// ── definitions ──────────────────────────────────────────
+		connector.Op("def_schema", "Draft Contract & Usage",
+			"Read this BEFORE building a draft. Returns the full def_create/def_update contract: every supported config/input widget and its meaning, the request-template syntax ({{.cfg.*}}/{{.in.*}}, allowed functions, limits), operation shape, icon rules, validation rules, available categories, a worked example draft, and the required workflow (plan → confirm with the user → validate → create). Static reference, touches nothing. Access: any authenticated caller.",
+			emptyInput{}, h.defSchema, wickdocs.Docs{}),
+		connector.Op("def_validate", "Validate Draft (dry run)",
+			"Dry-run a draft against the same validation def_create uses, plus a key-availability check. Persists NOTHING. Returns {ok} or {ok:false, error}. WORKFLOW: build the draft, validate it here, present the validated plan to the user (name, key, icon, description, every config field with its widget, every operation with its description/inputs/request), and only call def_create after they confirm. Access: any authenticated caller.",
+			defCreateInput{}, h.defValidate, wickdocs.Docs{}),
 		connector.Op("def_list", "List Definitions",
 			"List all custom connector definitions. Returns array of {key, name, source (curl|mcp|manual), disabled, single_instance, operations, instances}. Access: scoped — admins manage every definition, other callers only the ones they created. UI: <app_url>/manager/connectors.",
 			emptyInput{}, h.defList, wickdocs.Docs{}),
@@ -131,10 +141,10 @@ func Operations(deps Deps) []connector.Operation {
 			"Get one definition's full editable shape: meta, config field schema, ops (curl/manual) or live tool catalog + excluded list + server info (mcp). Returns the same draft JSON def_create/def_update consume. Access: scoped — admins manage every definition, other callers only the ones they created.",
 			defKeyInput{}, h.defGet, wickdocs.Docs{}),
 		connector.Op("def_create", "Create Definition",
-			"Create a custom connector from a manual draft (convert cURL or API docs into the draft yourself). Validates, persists, registers the live module, and creates the access tag custom:<key> (admin-only until granted). No instance row is created — call instance_create next. Returns {key, name}. Access: scoped — admins manage every definition, other callers only the ones they created.",
+			"Create a custom connector from a manual draft (convert cURL or API docs into the draft yourself). PREREQUISITE — do NOT call this directly from a user request: (1) read def_schema for the contract, (2) build the draft, (3) def_validate it, (4) PRESENT THE PLAN to the user — name, key, icon, description, each config field with widget/secret/required, each operation with description + inputs + request recipe, plus the decision points from def_schema (single vs multi-instance, destructive flags, secret fields, category) with the defaults you picked — and wait for their explicit confirmation, (5) only then create. Persists the def, registers the live module, and creates the access tag custom:<key> (admin-only until granted). No instance row is created — call instance_create next. Returns {key, name}. Access: scoped — admins manage every definition, other callers only the ones they created.",
 			defCreateInput{}, h.defCreate, wickdocs.Docs{}),
 		connector.OpDestructive("def_update", "Update Definition",
-			"Replace a definition's stored draft wholesale and reload the live module. Key is immutable. Fetch def_get first, edit, send back. Returns {ok, key}. Access: scoped — admins manage every definition, other callers only the ones they created.",
+			"Replace a definition's stored draft wholesale and reload the live module. Key is immutable. WORKFLOW: fetch def_get first, edit, def_validate, show the user WHAT CHANGES (before/after of the affected fields/ops), and send back only after they confirm. Returns {ok, key}. Access: scoped — admins manage every definition, other callers only the ones they created.",
 			defUpdateInput{}, h.defUpdate, wickdocs.Docs{}),
 		connector.OpDestructive("def_set_disabled", "Disable/Enable Definition",
 			"Toggle a definition: disabled serves zero operations (instances and pages stay) until re-enabled; enabling an MCP def re-probes its tools. Returns {ok, key, disabled}. Access: scoped — admins manage every definition, other callers only the ones they created.",
@@ -148,7 +158,7 @@ func Operations(deps Deps) []connector.Operation {
 
 		// ── MCP servers ──────────────────────────────────────────
 		connector.Op("mcp_register", "Register MCP Server",
-			"Register an external MCP server as a connector: tests initialize + tools/list with the given auth (save is rejected when the test fails), then creates the connector — every listed tool becomes an operation minus the excluded names; tools added server-side appear after a re-sync. One server = one connector named after the label. The oauth scheme is not available here (browser login) — use the dashboard for that. Returns {key, name, tools}. Access: scoped — admins manage every definition, other callers only the ones they created.",
+			"Register an external MCP server as a connector. PREREQUISITE — confirm the plan with the user first: label (becomes the connector name + key), URL, auth scheme + where the credential comes from, icon, description, and any tools to exclude; only call this after they agree. Tests initialize + tools/list with the given auth (save is rejected when the test fails), then creates the connector — every listed tool becomes an operation minus the excluded names; tools added server-side appear after a re-sync. One server = one connector named after the label. The oauth scheme is not available here (browser login) — use the dashboard for that. Returns {key, name, tools}. Access: scoped — admins manage every definition, other callers only the ones they created.",
 			mcpRegisterInput{}, h.mcpRegister, wickdocs.Docs{}),
 		connector.OpDestructive("mcp_set_excluded", "Set Excluded Tools",
 			"Replace an MCP connector's excluded-tool list and re-sync the catalog. Returns {ok, key, excluded, operations}. Access: scoped — admins manage every definition, other callers only the ones they created.",

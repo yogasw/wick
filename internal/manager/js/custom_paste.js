@@ -62,7 +62,11 @@
       const resp = await fetch(parseURL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parser, paste }),
+        body: JSON.stringify({
+          parser,
+          paste,
+          provider: (document.getElementById("cc-ai-provider") || {}).value || "",
+        }),
       });
       const data = await resp.json();
       if (!resp.ok) {

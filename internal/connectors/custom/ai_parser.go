@@ -19,6 +19,13 @@ type AIParser interface {
 	Parse(ctx context.Context, paste string) (*ParsedRequest, error)
 }
 
+// AIProviderEntry is one selectable provider on the paste page's AI
+// tab — the instance name the admin recognizes plus its parser.
+type AIProviderEntry struct {
+	Name   string
+	Parser AIParser
+}
+
 //go:embed ai_parser.tmpl
 var aiPromptTemplate string
 

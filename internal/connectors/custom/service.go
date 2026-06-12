@@ -53,7 +53,10 @@ type Service struct {
 	sso   SSOSigner
 
 	tagsSvc TagEnsurer // late-bound
-	ai      AIParser   // late-bound; nil = AI tab hidden
+	// aiProviders resolves the paste parser's provider catalog per
+	// call (live — new/removed provider instances show up without a
+	// restart). nil or empty = AI tab hidden.
+	aiProviders func() []AIProviderEntry
 
 	logins oauthLogins // in-flight OAuth browser logins (oauth scheme)
 
@@ -87,12 +90,46 @@ func New(d Deps) *Service {
 // bootstrap in server.go).
 func (s *Service) SetTags(t TagEnsurer) { s.tagsSvc = t }
 
-// SetAIParser late-binds the LLM-backed paste parser. Leaving it nil
-// hides the AI tab in the paste UI.
-func (s *Service) SetAIParser(p AIParser) { s.ai = p }
+// SetAIProviders late-binds the live provider catalog the AI paste
+// tab offers. The resolver runs per page render / per parse.
+func (s *Service) SetAIProviders(resolve func() []AIProviderEntry) { s.aiProviders = resolve }
+
+// AIProviderNames lists the selectable providers for the paste page
+// dropdown. Empty slice = AI tab hidden.
+func (s *Service) AIProviderNames() []string {
+	if s.aiProviders == nil {
+		return nil
+	}
+	entries := s.aiProviders()
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name)
+	}
+	return out
+}
 
 // HasAIParser reports whether the AI paste tab should render.
-func (s *Service) HasAIParser() bool { return s.ai != nil }
+func (s *Service) HasAIParser() bool { return len(s.AIProviderNames()) > 0 }
+
+// aiParserFor picks a provider by name; "" falls back to the first.
+func (s *Service) aiParserFor(name string) AIParser {
+	if s.aiProviders == nil {
+		return nil
+	}
+	entries := s.aiProviders()
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, e := range entries {
+		if e.Name == name {
+			return e.Parser
+		}
+	}
+	if name != "" {
+		return nil // explicit pick that vanished — error beats silent fallback
+	}
+	return entries[0].Parser
+}
 
 // Store exposes read access for UI handlers (list/detail pages).
 func (s *Service) Store() *Store { return s.store }
@@ -632,7 +669,7 @@ func serverIDOf(d *Draft) string {
 // ParsePaste runs the requested parser over the paste box content and
 // returns the review-form draft. parser is "curl" (deterministic,
 // default) or "ai" (LLM extraction; requires a configured provider).
-func (s *Service) ParsePaste(ctx context.Context, parser, paste string) (*Draft, error) {
+func (s *Service) ParsePaste(ctx context.Context, parser, provider, paste string) (*Draft, error) {
 	if len(paste) > 8*1024 {
 		return nil, fmt.Errorf("paste is larger than 8 KB — trim it down to a single endpoint")
 	}
@@ -644,10 +681,11 @@ func (s *Service) ParsePaste(ctx context.Context, parser, paste string) (*Draft,
 		}
 		return Extract(parsed)
 	case "ai":
-		if s.ai == nil {
-			return nil, fmt.Errorf("no LLM provider configured — AI parser unavailable")
+		ai := s.aiParserFor(provider)
+		if ai == nil {
+			return nil, fmt.Errorf("AI parser provider unavailable — pick another provider or use the cURL tab")
 		}
-		parsed, err := s.ai.Parse(ctx, paste)
+		parsed, err := ai.Parse(ctx, paste)
 		if err != nil {
 			return nil, err
 		}

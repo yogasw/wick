@@ -168,6 +168,12 @@ Paired mockup: [`mockup.html`](mockup.html). Update keduanya barengan.
 > `instance_list/create/delete/set_disabled` (guard: cuma row milik
 > def custom — bukan side-door ke row built-in). **Tanpa op cURL** —
 > LLM konversi cURL/doc API ke draft manual sendiri lalu `def_create`.
+> **Plan-then-confirm contract**: `def_schema` (referensi statis —
+> widget, templating, aturan validasi, kategori, contoh draft) +
+> `def_validate` (dry-run + cek key); deskripsi `def_create`/
+> `def_update`/`mcp_register` mewajibkan LLM baca schema → validate →
+> tunjukkan rencana lengkap ke user (name/key/icon/desc/configs/ops) →
+> baru create setelah konfirmasi eksplisit.
 
 ---
 

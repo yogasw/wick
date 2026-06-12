@@ -162,7 +162,7 @@ func (h *Handler) customPastePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := login.GetUser(r.Context())
-	view.CustomPastePage(h.custom.HasAIParser(), user).Render(r.Context(), w)
+	view.CustomPastePage(h.custom.AIProviderNames(), user).Render(r.Context(), w)
 }
 
 func (h *Handler) customParse(w http.ResponseWriter, r *http.Request) {
@@ -170,14 +170,15 @@ func (h *Handler) customParse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Parser string `json:"parser"`
-		Paste  string `json:"paste"`
+		Parser   string `json:"parser"`
+		Provider string `json:"provider"`
+		Paste    string `json:"paste"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
-	d, err := h.custom.ParsePaste(r.Context(), body.Parser, body.Paste)
+	d, err := h.custom.ParsePaste(r.Context(), body.Parser, body.Provider, body.Paste)
 	if err != nil {
 		l := log.With().Str("component", "custom-connector").Logger()
 		l.Debug().Err(err).Str("parser", body.Parser).Msg("paste parse failed")
