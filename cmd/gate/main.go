@@ -381,7 +381,38 @@ func isAlwaysAllowedTool(name string) bool {
 	if name == "AskUserQuestion" {
 		return true
 	}
-	return strings.HasPrefix(name, "mcp__") && strings.HasSuffix(name, "__ask_user")
+	if !strings.HasPrefix(name, "mcp__") {
+		return false
+	}
+	// wick's own meta tools the agent runs autonomously: ask_user (its
+	// whole purpose is to prompt the user), the read-only discovery /
+	// info tools, and session housekeeping (info + title). None of these
+	// reach an external service or mutate anything outside wick's own
+	// session metadata, so routing them through the per-tool approval
+	// prompt is pure noise. wick_execute is deliberately NOT here — that
+	// is the one that runs a real connector op and must stay gated.
+	for _, suffix := range alwaysAllowedMCPSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// alwaysAllowedMCPSuffixes lists the wick MCP tool name suffixes that
+// bypass interactive gate approval. Matched against the full
+// "mcp__<server>__<tool>" name via HasSuffix so the server segment is
+// irrelevant. Keep wick_execute OFF this list.
+var alwaysAllowedMCPSuffixes = []string{
+	"__ask_user",
+	"__wick_list",
+	"__wick_search",
+	"__wick_get",
+	"__wick_info",
+	"__wick_list_providers",
+	"__wick_skill_list",
+	"__wick_session_info",
+	"__wick_set_title",
 }
 
 // runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob, MCP, etc.).
@@ -391,12 +422,11 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 	path := pathFromInput(in)
 	tool := in.ToolName
 
-	// Always-allow list: tools that themselves prompt the user (Claude's
-	// built-in AskUserQuestion + wick's MCP ask_user) must NOT route
-	// through the gate — that would force the user to approve a tool
-	// whose entire purpose is to ask the user. The MCP ask_user has its
-	// own gate-policy check on the daemon side (handleAskUser), so the
-	// per-tool prompt-approval is redundant.
+	// Always-allow list: AskUserQuestion / ask_user (whose entire purpose
+	// is to prompt the user — gating them is circular) plus wick's
+	// read-only and session-housekeeping meta tools (see
+	// isAlwaysAllowedTool). None mutate anything outside wick's own
+	// session metadata, so the per-tool approval prompt is pure noise.
 	if isAlwaysAllowedTool(tool) {
 		logTerminalEntry(requestID, tool, path, in.CWD, "allowed", "always_allow", "")
 		emitAllow("always_allow")

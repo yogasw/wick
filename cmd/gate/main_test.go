@@ -11,6 +11,40 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 )
 
+func TestIsAlwaysAllowedTool(t *testing.T) {
+	allowed := []string{
+		"AskUserQuestion",
+		"mcp__wick-agent__ask_user",
+		"mcp__wick-agent__wick_list",
+		"mcp__wick-agent__wick_search",
+		"mcp__wick-agent__wick_get",
+		"mcp__wick-agent__wick_info",
+		"mcp__wick-agent__wick_list_providers",
+		"mcp__wick-agent__wick_skill_list",
+		"mcp__wick-agent__wick_session_info",
+		"mcp__wick-agent__wick_set_title",
+	}
+	for _, name := range allowed {
+		if !isAlwaysAllowedTool(name) {
+			t.Errorf("expected %q to be always-allowed", name)
+		}
+	}
+
+	gated := []string{
+		"Bash",
+		"Read",
+		"Write",
+		"mcp__wick-agent__wick_execute", // real connector op — must stay gated
+		"mcp__wick-agent__wick_skill_sync",
+		"mcp__slack__send_message",
+	}
+	for _, name := range gated {
+		if isAlwaysAllowedTool(name) {
+			t.Errorf("expected %q to NOT be always-allowed", name)
+		}
+	}
+}
+
 func TestReadHookInputHappyPath(t *testing.T) {
 	in := strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"/tmp/x","session_id":"abc","tool_input":{"command":"ls -la"}}`)
 	got, err := readHookInput(in, time.Second)
