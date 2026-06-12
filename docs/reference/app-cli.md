@@ -168,6 +168,8 @@ All backends install into user scope — no `sudo` / admin required.
 #   path:    HKCU\Software\Microsoft\Windows\CurrentVersion\Run\myapp
 ```
 
+On headless Linux (`systemd-user` backend), `service install` also attempts to auto-enable systemd lingering for the current user so the daemon survives logout and starts at boot with no one logged in. If the host's polkit allows self-linger (most modern distros do), this happens silently. If it fails, `service status` reports the exact command to run manually (see below).
+
 Re-running over an existing install rewrites the unit / entry — handy after the binary moves.
 
 ### `<app> service uninstall`
@@ -187,8 +189,16 @@ Returns `service not installed` if nothing was registered.
 #   backend: systemd-user
 #   path:    ~/.config/systemd/user/myapp.service
 #   active:  true
-#   note:    enable `loginctl enable-linger` to keep the service running after logout
+#   note:    linger enabled — service survives logout and starts at boot
 ```
+
+When lingering is off (e.g. the host denied the auto-enable during install), the note reads:
+
+```
+note:    linger DISABLED — service stops at logout; run: sudo loginctl enable-linger <user>
+```
+
+The username shown is the real login name detected at runtime — never a hardcoded value.
 
 On GUI hosts, `status` also flags drift between the OS entry and `userconfig.AutoStartApp` so you can spot a tray checkbox that's out of sync with reality and re-run install / uninstall to re-align.
 
