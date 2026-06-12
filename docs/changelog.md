@@ -6,12 +6,31 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Improved
-
-- **Gate auto-approves wick read-only / info MCP tools**: The `PreToolUse` gate binary now has a built-in always-allow list for wick's non-mutating tools — `wick_list`, `wick_search`, `wick_get`, `wick_info`, `wick_list_providers`, `wick_skill_list`, `wick_session_info`, and `wick_set_title`. These no longer trigger the per-tool approval prompt. `wick_execute` and `wick_skill_sync` remain gated. See [Command Gate → What gets intercepted](/guide/command-gate#what-gets-intercepted-claude).
-- **Title state in agent system prompt**: The "This session" identity block injected into every agent's system prompt now includes the session's current `title` and `title_custom` flag. The agent reads these from the prompt at spawn time instead of making a `wick_session_info` round-trip on every first turn.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.16.14](https://github.com/yogasw/wick/compare/v0.16.13...v0.16.14) — Memory, Gate, Wick
+
+_Released on 2026-06-12_
+
+### Fixed
+
+*   Fixed memory leak in stream broadcaster by deleting stale keys when the last subscriber unsubscribes.
+*   Cleaned buffer map on slot release and tracked preempt goroutines to prevent resource leaks.
+*   Deduplicated background rescan goroutines in provider using singleflight to prevent excessive resource usage.
+*   Eliminated data race with `PartialText` by guarding `turnBuf` writes with a mutex.
+*   Propagated request context to `PublishAndReload` and `ToggleAndReload` in workflows to ensure proper cancellation and timeout.
+*   Prevented timer leak in `terminateProc` by replacing `time.After` with `NewTimer` and `Stop`.
+*   Resolved agent deadlock by releasing agent mutex before stdin write in `send()` to prevent conflict with `drainPending`.
+
+### Improved
+
+*   **Gate auto-approves wick read-only / info MCP tools**: The `PreToolUse` gate binary now has a built-in always-allow list for wick's non-mutating tools — `wick_list`, `wick_search`, `wick_get`, `wick_info`, `wick_list_providers`, `wick_skill_list`, `wick_session_info`, and `wick_set_title`. These no longer trigger the per-tool approval prompt. `wick_execute` and `wick_skill_sync` remain gated.
+*   **Title state in agent system prompt**: The "This session" identity block injected into every agent's system prompt now includes the session's current `title` and `title_custom` flag. The agent reads these from the prompt at spawn time instead of making a `wick_session_info` round-trip on every first turn.
+
+---
+
 
 ## [v0.16.13](https://github.com/yogasw/wick/compare/v0.16.12...v0.16.13) — Daemon & Session Titles
 
