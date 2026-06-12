@@ -301,5 +301,65 @@ func MetaToolDescriptors() []ToolDescriptor {
 				IdempotentHint:  PtrBool(true),
 			},
 		},
+		{
+			Name: "wick_session_info",
+			Description: "Read the current session's metadata. " +
+				"Returns: session_id, title (the sidebar title), title_custom " +
+				"(true when the title was explicitly set by a human or by you via " +
+				"wick_set_title; false when it is still the auto-derived first-message " +
+				"label), origin, status, project_id. " +
+				"Call this at the start of a conversation to decide whether to set a " +
+				"title: if title_custom is false, derive a short title from the user's " +
+				"request and call wick_set_title; if it is already true, leave it alone. " +
+				"session_id must match the active wick agent session — pass the value " +
+				"you saw in the conversation context.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "ID of the active wick agent session.",
+					},
+				},
+				"required": []string{"session_id"},
+			},
+			Annotations: &ToolAnnotation{
+				Title:        "Read session info",
+				ReadOnlyHint: PtrBool(true),
+			},
+		},
+		{
+			Name: "wick_set_title",
+			Description: "Set the session's title (the label shown in the sidebar). " +
+				"Writes the title and marks it as custom so the default " +
+				"first-user-message auto-label never overwrites it again. " +
+				"ALWAYS replaces whatever title is currently set — if you only want to " +
+				"fill an unset title, call wick_session_info first and skip this when " +
+				"title_custom is already true. " +
+				"Keep titles short (a few words, max 60 chars), summarising what the " +
+				"conversation is about (e.g. 'Fix Slack webhook 401', 'Weekly product sync'). " +
+				"session_id must match the active wick agent session — pass the value you " +
+				"saw in the conversation context.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "ID of the active wick agent session.",
+					},
+					"title": map[string]any{
+						"type":        "string",
+						"description": "Short human-readable title. Truncated to 60 runes.",
+					},
+				},
+				"required": []string{"session_id", "title"},
+			},
+			Annotations: &ToolAnnotation{
+				Title:           "Set session title",
+				ReadOnlyHint:    PtrBool(false),
+				DestructiveHint: PtrBool(false),
+				IdempotentHint:  PtrBool(true),
+			},
+		},
 	}
 }

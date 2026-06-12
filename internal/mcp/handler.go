@@ -49,6 +49,11 @@ type Handler struct {
 	// nil in stdio mode and tests.
 	pool   *agentpool.Pool
 	layout agentconfig.Layout
+	// refreshSession reloads one session into the in-memory registry
+	// after a handler mutates its meta on disk (wick_set_title). nil in
+	// stdio mode and tests — the disk write still lands; only the live
+	// dashboard cache misses the update until the next reload.
+	refreshSession func(id string) error
 	// db is passed to wick_info so it can surface DB status/type.
 	// May be nil (tests, smoke mode); handlers.WickInfo reports
 	// "disabled" in that case. DSN is never exposed.
@@ -87,6 +92,14 @@ func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handle
 
 func (h *Handler) WithDB(db *gorm.DB) *Handler {
 	h.db = db
+	return h
+}
+
+// WithRefreshSession wires the registry-refresh callback used by
+// wick_set_title to keep the dashboard's in-memory session cache in
+// sync after the title is written to disk.
+func (h *Handler) WithRefreshSession(fn func(id string) error) *Handler {
+	h.refreshSession = fn
 	return h
 }
 
@@ -327,6 +340,10 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		handlers.WickSkillList(w, hreq, rsp)
 	case "wick_skill_sync":
 		handlers.WickSkillSync(w, hreq, rsp)
+	case "wick_session_info":
+		handlers.WickSessionInfo(w, hreq, rsp, h.layout, p.Arguments)
+	case "wick_set_title":
+		handlers.WickSetTitle(w, hreq, rsp, h.layout, h.refreshSession, p.Arguments)
 	default:
 		if strings.HasPrefix(p.Name, handlers.WickManagerPrefix) {
 			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, p.Name, p.Arguments, user, tagIDs)
