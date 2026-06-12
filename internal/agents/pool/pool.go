@@ -194,6 +194,12 @@ type FactoryOptions struct {
 	// into the spawn log so Recent Spawns can show the channel without a
 	// registry lookup.
 	Origin string
+	// Title / TitleCustom are the session's current title state, surfaced
+	// in the "This session" system-prompt block so the agent knows
+	// whether it still needs to set a title without a wick_session_info
+	// round-trip. Snapshot at spawn time.
+	Title       string
+	TitleCustom bool
 	// MaxTurns caps agentic turns on the spawn (--max-turns). Pulled from
 	// the agent entry by the pool; 0 = no cap.
 	MaxTurns int
@@ -517,7 +523,11 @@ func (p *Pool) preemptIdleSlot() bool {
 	}
 	log.Debug().Str("session", victim.sessID).Str("agent", victim.agentNm).
 		Msg("pool: preempting idle slot for queued session")
-	go func() { _ = victim.agent.Stop() }()
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		_ = victim.agent.Stop()
+	}()
 	return true
 }
 
@@ -596,6 +606,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		KillAfterIdle: p.cfg.KillAfterIdle,
 		PresetName:    sess.Meta.Preset,
 		Origin:        string(sess.Meta.Origin),
+		Title:         sess.Meta.Label,
+		TitleCustom:   sess.Meta.TitleCustom,
 		MaxTurns:      maxTurns,
 	})
 	if err != nil {
@@ -770,6 +782,9 @@ func (p *Pool) notifyLifecycle(ctx context.Context, entry *runEntry, sessionID, 
 
 func (p *Pool) releaseSlot(key string) {
 	p.mu.Lock()
+	if e, ok := p.active[key]; ok {
+		delete(p.buffers, e.sessID)
+	}
 	delete(p.active, key)
 	p.mu.Unlock()
 }
