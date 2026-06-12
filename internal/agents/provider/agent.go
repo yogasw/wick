@@ -470,9 +470,11 @@ func terminateProc(proc Process, done <-chan struct{}) {
 	if done == nil {
 		return
 	}
+	t := time.NewTimer(5 * time.Second)
+	defer t.Stop()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-t.C:
 		log.Warn().Int("pid", pid).Msg("agent.terminate: reader did not exit within 5s after kill; proceeding")
 	}
 }
