@@ -6,14 +6,26 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-
-- **`wick_session_info` MCP tool**: Read-only tool that returns an active session's `session_id`, `title`, `title_custom`, `origin`, `status`, and `project_id`. Allows the agent to decide whether a session already has an explicit title before attempting to set one.
-- **`wick_set_title` MCP tool**: Sets the session's sidebar label and marks `title_custom = true` so the auto-derived first-message label never overwrites the chosen title again.
-- **`session.Meta.TitleCustom` flag**: New boolean on session metadata. When `true`, `setLabelIfEmpty` skips the auto-label step, preserving any title set by a human or by the agent via `wick_set_title`.
-- **Auto-title via system prompt**: The immutable agent system prompt now instructs the agent to call `wick_session_info` at conversation start and set a short descriptive title with `wick_set_title` when `title_custom` is `false`. Titles set by a previous turn or by the user are left untouched.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.16.13](https://github.com/yogasw/wick/compare/v0.16.12...v0.16.13) — Daemon & Session Titles
+
+_Released on 2026-06-12_
+
+### Added
+
+*   **Daemon Systemd Integration**: Daemon lifecycle commands (`start`, `stop`, `status`, `restart`) now delegate to `systemctl --user` when a systemd-user unit is installed and enabled (Linux/Termux only). This resolves conflicts between PID-file and systemd management, preventing double spawns and ensuring accurate status reporting. The daemon now self-registers its PID and spawn source (`systemd INVOCATION_ID`) on boot for an accurate PID file, reporting the origin (systemd / CLI). PID-file based management remains unchanged for Windows and macOS.
+*   **`wick_session_info` MCP tool**: A read-only tool that returns an active session's `session_id`, `title`, `title_custom`, `origin`, `status`, and `project_id`. This allows agents to determine if a session already has an explicit title before attempting to set one.
+*   **`wick_set_title` MCP tool**: Sets the session's sidebar label and marks `title_custom = true`. This prevents the auto-derived first-message label from overwriting a chosen title.
+*   **`session.Meta.TitleCustom` flag**: A new boolean on session metadata. When `true`, the `setLabelIfEmpty` process skips the auto-label step, preserving any title set by a human or by an agent via `wick_set_title`.
+*   **Auto-title via system prompt**: The immutable agent system prompt now instructs the agent to call `wick_session_info` at conversation start and set a short descriptive title using `wick_set_title` when `title_custom` is `false`. Titles set by a previous turn or by the user are left untouched.
+*   **Session ID and Channel in System Prompt**: The system prompt now includes a "This session" identity block (`session_id` + `channel`) on every agent spawn. This ensures agents always have the necessary session context to utilize tools like `wick_session_info` and `wick_set_title`.
+*   **Documentation**: Updated documentation for the new `wick_session_info` and `wick_set_title` MCP tools and the auto-title behavior.
+
+---
+
 
 ## [v0.16.12](https://github.com/yogasw/wick/compare/v0.16.11...v0.16.12) — Boot Gate
 
