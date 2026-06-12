@@ -72,18 +72,28 @@
     var btn = e.target.closest('[data-process-list] .kill-process-btn');
     if (!btn) return;
     var sid = btn.dataset.killSession;
-    if (!sid || !confirm('Kill this process?')) return;
+    var queued = btn.dataset.queued === '1';
+    if (!sid || !confirm(queued ? 'Cancel this queued request?' : 'Kill this process?')) return;
     btn.disabled = true;
-    btn.textContent = 'Killing…';
-    fetch(base + '/sessions/' + encodeURIComponent(sid) + '/kill', {
+    btn.textContent = queued ? 'Cancelling…' : 'Killing…';
+    // Queued requests have no process to signal — dequeue them instead of
+    // killing a PID that doesn't exist yet.
+    var path = queued ? '/dequeue' : '/kill';
+    fetch(base + '/sessions/' + encodeURIComponent(sid) + path, {
       method: 'POST', credentials: 'include'
     }).then(function () { fetchProcesses(); });
   });
 
   // ── render ───────────────────────────────────────────────────────────
   function renderStats(stats) {
-    // Cross-session: show every active spawn, not just this session's.
-    renderList(stats.live_processes || []);
+    // Per-session panel: the global pool_stats event carries every spawn
+    // (the admin Providers page needs the full picture), so filter down to
+    // this session here. Queued entries aren't in this payload — the 5s REST
+    // poll covers those; this path only keeps the active rows live.
+    var procs = (stats.live_processes || []).filter(function (p) {
+      return p.session_id === sessionID;
+    });
+    renderList(procs);
   }
 
   function renderList(procs) {
@@ -112,7 +122,9 @@
     list.innerHTML = procs.map(function (p) {
       var sid  = p.session_id || '';
       var pid  = p.pid > 0 ? p.pid : '—';
-      var dead = p.alive === false;
+      // A queued request has no process yet — never flip it to "dead" just
+      // because there's no live PID; the "queued" lifecycle is the truth.
+      var dead = p.alive === false && p.lifecycle !== 'queued';
       var lc   = dead ? 'dead' : (p.lifecycle || '—');
       var lcCls = dead
         ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
@@ -120,6 +132,7 @@
             working:  'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300',
             idle:     'bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300',
             spawning: 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300',
+            queued:   'bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600',
             killed:   'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300',
           })[lc] || 'bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600';
 
@@ -130,7 +143,7 @@
               '<span class="text-xs font-semibold text-black-900 dark:text-white-100 truncate">', esc(p.agent_name || '—'), '</span>',
               '<span class="rounded px-1.5 py-0.5 text-[10px] font-medium ', lcCls, '">', esc(lc), '</span>',
             '</div>',
-            '<button data-kill-session="', esc(sid), '" class="kill-process-btn shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800 transition-colors">Kill</button>',
+            '<button data-kill-session="', esc(sid), '"', (lc === 'queued' ? ' data-queued="1"' : ''), ' class="kill-process-btn shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800 transition-colors">', (lc === 'queued' ? 'Cancel' : 'Kill'), '</button>',
           '</div>',
           '<dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">',
             '<dt class="text-black-700 dark:text-black-600">Provider</dt>',

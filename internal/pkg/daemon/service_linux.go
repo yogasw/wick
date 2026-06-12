@@ -5,6 +5,7 @@ package daemon
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -112,6 +113,45 @@ func systemdUnitPath(appName string) (string, error) {
 	return filepath.Join(home, ".config", "systemd", "user", appName+".service"), nil
 }
 
+// currentUsername returns the login name of the user running this
+// process. Server-agnostic — never hardcode "ubuntu"; the daemon runs as
+// whatever user installed it (ec2-user, debian, deploy, …) and that is
+// the user whose home (~/.claude, ~/.codex, ~/.wick-agent) holds the
+// local data. Falls back to $USER, then "" when neither resolves.
+func currentUsername() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}
+
+// lingerEnabled reports whether systemd-logind keeps a persistent
+// session for username (so its user units survive logout / run at boot
+// without anyone logged in). Best-effort: a parse failure or missing
+// loginctl reads as "not enabled" so callers err toward offering to
+// enable it.
+func lingerEnabled(username string) bool {
+	if username == "" {
+		return false
+	}
+	out, err := safeexec.Command("loginctl", "show-user", username, "--property=Linger").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "Linger=yes"
+}
+
+// enableLinger turns on lingering for username. On modern systemd this
+// succeeds without sudo when a user enables it for themselves (polkit
+// allows self-linger); on locked-down hosts it needs root. Returns the
+// error so the caller can fall back to printing the manual command.
+func enableLinger(username string) error {
+	if username == "" {
+		return fmt.Errorf("could not determine current user")
+	}
+	return safeexec.Command("loginctl", "enable-linger", username).Run()
+}
+
 func installSystemd(p Paths, appName string) error {
 	target, err := systemdUnitPath(appName)
 	if err != nil {
@@ -144,6 +184,17 @@ WantedBy=default.target
 	// if the host's systemctl is unavailable.
 	_ = safeexec.Command("systemctl", "--user", "daemon-reload").Run()
 	_ = safeexec.Command("systemctl", "--user", "enable", appName+".service").Run()
+
+	// Lingering is what makes a user unit survive logout and start at
+	// boot with nobody logged in — exactly what a headless server needs.
+	// Without it the daemon (and every claude/codex child it spawns) dies
+	// the moment the install SSH session ends. Best-effort self-enable:
+	// modern systemd allows a user to enable their own linger without
+	// sudo; if the host refuses, systemdStatus surfaces the manual
+	// command in its Note so the operator isn't left guessing.
+	if u := currentUsername(); u != "" && !lingerEnabled(u) {
+		_ = enableLinger(u)
+	}
 	return nil
 }
 
@@ -172,7 +223,21 @@ func systemdStatus(appName string) (ServiceState, error) {
 	st := ServiceState{
 		Path:    target,
 		Backend: "systemd-user",
-		Note:    "enable `loginctl enable-linger` to keep the service running after logout",
+	}
+	// Linger state drives the headline hint: with it on, the unit
+	// survives logout and boots unattended; without it, the daemon dies
+	// when the login session ends. Report the live state (not a static
+	// reminder) and, when off, the exact command to fix it for THIS user
+	// — never a hardcoded "ubuntu".
+	user := currentUsername()
+	if lingerEnabled(user) {
+		st.Note = "linger enabled — service survives logout and starts at boot"
+	} else {
+		cmd := "loginctl enable-linger"
+		if user != "" {
+			cmd += " " + user
+		}
+		st.Note = "linger DISABLED — service stops at logout; run: sudo " + cmd
 	}
 	st.Installed = pathExists(target)
 	if st.Installed {
