@@ -246,6 +246,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	isWS := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	// Some reverse proxies (nginx/ingress) rewrite the Connection header to
+	// "keep-alive", stripping the "upgrade" token. gorilla's Upgrade() then
+	// rejects the handshake even though Upgrade: websocket is present. If this
+	// is clearly a WS handshake, restore the token so the upgrade can proceed.
+	if isWS && !headerHasToken(r.Header, "Connection", "upgrade") {
+		r.Header.Set("Connection", "Upgrade")
+	}
 	s.log.Debug().
 		Str("method", r.Method).
 		Str("path", r.URL.Path).
@@ -344,4 +351,17 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	<-done
 	s.log.Info().Str("remote", r.RemoteAddr).Msg("tty: ws session ended")
+}
+
+// headerHasToken reports whether the comma-separated header named key contains
+// token (case-insensitive), e.g. "Connection: keep-alive, Upgrade".
+func headerHasToken(h http.Header, key, token string) bool {
+	for _, v := range h[http.CanonicalHeaderKey(key)] {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return true
+			}
+		}
+	}
+	return false
 }

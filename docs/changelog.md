@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.16.16](https://github.com/yogasw/wick/compare/v0.16.15...v0.16.16) — TTY
+
+_Released on 2026-06-12_
+
+### Fixed
+*   Resolved an issue where WebSocket upgrades for the terminal (tty) could fail when reverse proxies stripped the `upgrade` token from the `Connection` header. The system now correctly re-injects the `upgrade` token if `Upgrade: websocket` is present, ensuring successful terminal connections.
+
+---
+
+
 ## [v0.16.15](https://github.com/yogasw/wick/compare/v0.16.14...v0.16.15) — Systemd & Phoenix
 
 _Released on 2026-06-12_
