@@ -189,7 +189,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// having it in the system prompt means it is always available — not
 	// only on the first turn where channels inject a one-time context
 	// message.
-	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin)
+	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom)
 
 	bypassPerms := false
 	if f.PermissionModeLoader != nil {
@@ -356,9 +356,14 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 // gemini keep a persistent stdin and append.
 // sessionIdentityBlock renders the per-session identity appended to the
 // system prompt so the agent always knows its session_id (needed by
-// wick_session_info / wick_set_title / ask_user) and which channel it is
-// talking on. channel falls back to "ui" when origin is unset.
-func sessionIdentityBlock(sessionID, channel string) string {
+// wick_session_info / wick_set_title / ask_user), which channel it is on,
+// and the current title state. title_custom lets the agent decide
+// whether to set a title without a wick_session_info round-trip — when
+// false it should derive one and call wick_set_title; when true the
+// title was already chosen and must be left alone. The values are a
+// snapshot at spawn time. channel falls back to "ui" when origin is
+// unset.
+func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool) string {
 	if strings.TrimSpace(channel) == "" {
 		channel = "ui"
 	}
@@ -371,6 +376,14 @@ func sessionIdentityBlock(sessionID, channel string) string {
 	b.WriteString(sessionID)
 	b.WriteString("\nchannel: ")
 	b.WriteString(channel)
+	b.WriteString("\ntitle: ")
+	b.WriteString(title)
+	b.WriteString("\ntitle_custom: ")
+	if titleCustom {
+		b.WriteString("true")
+	} else {
+		b.WriteString("false")
+	}
 	return b.String()
 }
 

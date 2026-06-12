@@ -194,6 +194,12 @@ type FactoryOptions struct {
 	// into the spawn log so Recent Spawns can show the channel without a
 	// registry lookup.
 	Origin string
+	// Title / TitleCustom are the session's current title state, surfaced
+	// in the "This session" system-prompt block so the agent knows
+	// whether it still needs to set a title without a wick_session_info
+	// round-trip. Snapshot at spawn time.
+	Title       string
+	TitleCustom bool
 	// MaxTurns caps agentic turns on the spawn (--max-turns). Pulled from
 	// the agent entry by the pool; 0 = no cap.
 	MaxTurns int
@@ -596,6 +602,8 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		KillAfterIdle: p.cfg.KillAfterIdle,
 		PresetName:    sess.Meta.Preset,
 		Origin:        string(sess.Meta.Origin),
+		Title:         sess.Meta.Label,
+		TitleCustom:   sess.Meta.TitleCustom,
 		MaxTurns:      maxTurns,
 	})
 	if err != nil {
