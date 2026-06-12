@@ -6,11 +6,29 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Improved
-
-*   **Phoenix `get_span` surfaces the tool catalog and span metadata**: `get_span` now returns four signals that were already on the wire but previously dropped during shaping — `tools` (the catalog of tools the model could choose from, with each tool's name, description, and parameter schema), `invocation_parameters` (temperature, reasoning_effort, tool_choice; the redundant tools array stripped), `metadata` (passthrough of the producing application's span metadata — request/room/user ids, the producing node), and a `cache_read` / `reasoning` token breakdown. The tool catalog is distinct from a message's `tool_calls`: comparing the two is how you tell why a model picked or ignored a tool.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.16.15](https://github.com/yogasw/wick/compare/v0.16.14...v0.16.15) — Systemd & Phoenix
+
+_Released on 2026-06-12_
+
+### Added
+
+*   **Daemon auto-enablement of systemd linger on headless installs**: The `service install` command now automatically enables systemd linger for the current user, ensuring the daemon and its child processes persist after SSH session logout on headless Linux servers. `systemdStatus` now reports the live linger state and provides the exact command if manual enablement is needed.
+*   **Active Processes panel scoped to current session**: The "Active Processes" slide-over panel now filters processes to the current session only. It also displays "queued" requests (pre-PID) with a dequeue action, providing better visibility for accepted-but-not-yet-running requests.
+
+### Improved
+
+*   **Phoenix `get_span` surfaces tool catalog and span metadata**: The `get_span` function now returns four previously unexposed signals that were already on the wire:
+    *   `tools`: The catalog of tools the model considered, including each tool's name, description (carrying selection preconditions), and raw parameter schema. This allows comparison with a message's `tool_calls` to understand why a model picked or ignored a tool.
+    *   `invocation_parameters`: Model parameters such as `temperature`, `reasoning_effort`, and `tool_choice` (the redundant tools array is stripped).
+    *   `metadata`: Passthrough of the producing application's span metadata, including `request_id`, `room_id`, `user_id`, `langgraph_node`, and `question_history_id`.
+    *   `token_count *_details`: A breakdown of `cache_read` and `reasoning` tokens.
+
+---
+
 
 ## [v0.16.14](https://github.com/yogasw/wick/compare/v0.16.13...v0.16.14) — Memory, Gate, Wick
 
