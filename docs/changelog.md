@@ -6,7 +6,12 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+- **`wick_session_info` MCP tool**: Read-only tool that returns an active session's `session_id`, `title`, `title_custom`, `origin`, `status`, and `project_id`. Allows the agent to decide whether a session already has an explicit title before attempting to set one.
+- **`wick_set_title` MCP tool**: Sets the session's sidebar label and marks `title_custom = true` so the auto-derived first-message label never overwrites the chosen title again.
+- **`session.Meta.TitleCustom` flag**: New boolean on session metadata. When `true`, `setLabelIfEmpty` skips the auto-label step, preserving any title set by a human or by the agent via `wick_set_title`.
+- **Auto-title via system prompt**: The immutable agent system prompt now instructs the agent to call `wick_session_info` at conversation start and set a short descriptive title with `wick_set_title` when `title_custom` is `false`. Titles set by a previous turn or by the user are left untouched.
 
 ---
 
