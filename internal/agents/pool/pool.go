@@ -985,10 +985,12 @@ func (p *Pool) resolveCwd(sess session.Session) (string, error) {
 }
 
 // setLabelIfEmpty writes the first user message as a sidebar label into
-// meta.Label. No-op when a label is already set.
+// meta.Label. No-op when a label is already set or when the title was
+// explicitly chosen by a human / the agent (TitleCustom) — a custom
+// title must never be clobbered by the auto-derived first message.
 func (p *Pool) setLabelIfEmpty(sessionID, text string) {
 	sess, err := session.Load(p.cfg.Layout, sessionID)
-	if err != nil || sess.Meta.Label != "" {
+	if err != nil || sess.Meta.Label != "" || sess.Meta.TitleCustom {
 		return
 	}
 	r := []rune(text)

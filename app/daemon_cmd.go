@@ -82,6 +82,22 @@ func daemonStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// systemd owns the lifecycle when a unit is installed+enabled.
+			// Delegate rather than spawn a second PID-file daemon — two
+			// instances would fight over the port. One jalur.
+			if daemon.ServiceManaged(BuildAppName) {
+				if daemon.ServiceActive(BuildAppName) {
+					fmt.Printf("%s already running (via systemd)\n  manage with: systemctl --user [start|stop|restart|status] %s\n",
+						BuildAppName, BuildAppName)
+					return nil
+				}
+				if err := daemon.ServiceCtl(BuildAppName, "start"); err != nil {
+					return fmt.Errorf("systemctl --user start: %w", err)
+				}
+				fmt.Printf("started %s (via systemd)\n  status: systemctl --user status %s\n", BuildAppName, BuildAppName)
+				printInitCredsBanner(BuildAppName)
+				return nil
+			}
 			mode := daemonArgs()
 			// Propagate --host / --localhost to the spawned child via env so
 			// the flag survives the detach across both `all` and `tray` modes
@@ -123,6 +139,16 @@ func daemonStopCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// systemd-managed: an intentional `systemctl stop` is the only
+			// way to halt without Restart=on-failure respawning behind us.
+			// Sending SIGTERM by PID would just trigger a respawn.
+			if daemon.ServiceManaged(BuildAppName) {
+				if err := daemon.ServiceCtl(BuildAppName, "stop"); err != nil {
+					return fmt.Errorf("systemctl --user stop: %w", err)
+				}
+				fmt.Printf("stopped %s (via systemd)\n", BuildAppName)
+				return nil
+			}
 			err = daemon.Stop(p, timeout)
 			if errors.Is(err, daemon.ErrNotRunning) {
 				fmt.Printf("%s is not running\n", BuildAppName)
@@ -152,6 +178,14 @@ func daemonRestartCmd() *cobra.Command {
 			p, err := daemon.ResolvePaths(BuildAppName)
 			if err != nil {
 				return err
+			}
+			if daemon.ServiceManaged(BuildAppName) {
+				if err := daemon.ServiceCtl(BuildAppName, "restart"); err != nil {
+					return fmt.Errorf("systemctl --user restart: %w", err)
+				}
+				fmt.Printf("restarted %s (via systemd)\n  status: systemctl --user status %s\n", BuildAppName, BuildAppName)
+				printInitCredsBanner(BuildAppName)
+				return nil
 			}
 			mode := daemonArgs()
 			if err := applyHostFlags(host, localhost); err != nil {
@@ -275,6 +309,27 @@ func daemonStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// systemd jalur: report from systemctl so the spawn source is
+			// honest even though no `start` wrote the PID file. The actual
+			// PID lives in run.pid (self-registered by `all` on boot).
+			if daemon.ServiceManaged(BuildAppName) {
+				active := daemon.ServiceActive(BuildAppName)
+				state := "stopped"
+				if active {
+					state = "running"
+				}
+				fmt.Printf("%s: %s (via systemd)\n  unit:    %s.service\n", BuildAppName, state, BuildAppName)
+				if pid, _, perr := daemon.ReadPID(p); perr == nil && pid != 0 {
+					fmt.Printf("  pid:     %d\n", pid)
+				}
+				fmt.Printf("  http:    %s\n  manage:  systemctl --user [start|stop|restart] %s\n",
+					httpStatus(BuildAppName), BuildAppName)
+				if tail > 0 {
+					fmt.Printf("\n--- last %d bytes of log ---\n", tail)
+					_ = daemon.TailLog(p, tail, os.Stdout)
+				}
+				return nil
+			}
 			st, err := daemon.Check(p)
 			if err != nil {
 				return err
@@ -288,8 +343,8 @@ func daemonStatusCmd() *cobra.Command {
 				return nil
 			}
 			uptime := time.Since(st.Started).Truncate(time.Second)
-			fmt.Printf("%s: running\n  pid:     %d\n  started: %s (%s ago)\n  log:     %s\n  pidfile: %s\n",
-				BuildAppName, st.PID, st.Started.Format(time.RFC3339), uptime, st.LogFile, st.PIDFile)
+			fmt.Printf("%s: running (via %s)\n  pid:     %d\n  started: %s (%s ago)\n  log:     %s\n  pidfile: %s\n",
+				BuildAppName, daemon.ReadSource(p), st.PID, st.Started.Format(time.RFC3339), uptime, st.LogFile, st.PIDFile)
 			fmt.Printf("  http:    %s\n", httpStatus(BuildAppName))
 			if tail > 0 {
 				fmt.Printf("\n--- last %d bytes of log ---\n", tail)

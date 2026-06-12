@@ -10,6 +10,36 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.16.13](https://github.com/yogasw/wick/compare/v0.16.12...v0.16.13) — Daemon & Session Titles
+
+_Released on 2026-06-12_
+
+### Added
+
+*   **Daemon Systemd Integration**: Daemon lifecycle commands (`start`, `stop`, `status`, `restart`) now delegate to `systemctl --user` when a systemd-user unit is installed and enabled (Linux/Termux only). This resolves conflicts between PID-file and systemd management, preventing double spawns and ensuring accurate status reporting. The daemon now self-registers its PID and spawn source (`systemd INVOCATION_ID`) on boot for an accurate PID file, reporting the origin (systemd / CLI). PID-file based management remains unchanged for Windows and macOS.
+*   **`wick_session_info` MCP tool**: A read-only tool that returns an active session's `session_id`, `title`, `title_custom`, `origin`, `status`, and `project_id`. This allows agents to determine if a session already has an explicit title before attempting to set one.
+*   **`wick_set_title` MCP tool**: Sets the session's sidebar label and marks `title_custom = true`. This prevents the auto-derived first-message label from overwriting a chosen title.
+*   **`session.Meta.TitleCustom` flag**: A new boolean on session metadata. When `true`, the `setLabelIfEmpty` process skips the auto-label step, preserving any title set by a human or by an agent via `wick_set_title`.
+*   **Auto-title via system prompt**: The immutable agent system prompt now instructs the agent to call `wick_session_info` at conversation start and set a short descriptive title using `wick_set_title` when `title_custom` is `false`. Titles set by a previous turn or by the user are left untouched.
+*   **Session ID and Channel in System Prompt**: The system prompt now includes a "This session" identity block (`session_id` + `channel`) on every agent spawn. This ensures agents always have the necessary session context to utilize tools like `wick_session_info` and `wick_set_title`.
+*   **Documentation**: Updated documentation for the new `wick_session_info` and `wick_set_title` MCP tools and the auto-title behavior.
+
+---
+
+
+## [v0.16.12](https://github.com/yogasw/wick/compare/v0.16.11...v0.16.12) — Boot Gate
+
+_Released on 2026-06-12_
+
+### Added
+
+-   **Boot gate — "Booting…" holding page during restore**: To prevent an empty sidebar or broken session list and 404 errors during the asynchronous provider-storage boot restore, all HTTP requests (except `/health` and `/boot-status`) now receive an HTTP 503 page. This holding page displays a spinner and live phase label, auto-polls `GET /boot-status` every 1.5 seconds, and reloads automatically once the server reports readiness. The `/health` endpoint remains exempt, ensuring load balancer and Kubernetes readiness probes continue to succeed throughout the restore window. This robust gating mechanism ensures a consistent user experience during the boot process.
+-   **`GET /boot-status`**: A new JSON endpoint (`{"ready":bool,"message":string}`) has been added to report whether the asynchronous boot restore has finished. This endpoint is used by the boot gate page and can also be consumed by external health checks that require a deeper "application ready" signal beyond the basic liveness `/health` check.
+-   **Agents registry auto-reload after restore**: Upon completion of the boot restore process, the agents registry is now immediately rescanned from disk. This ensures that sessions and projects appear in the sidebar without delay, addressing a previous issue where the sidebar remained empty until the next restart due to the registry being scanned before restore had written data. Manual restores initiated from the Provider Storage UI (**Restore Now**, **Restore Selected**) also now trigger an immediate registry reload, preventing stale in-memory registry data.
+
+---
+
+
 ## [v0.16.11](https://github.com/yogasw/wick/compare/v0.16.10...v0.16.11)
 
 _Released on 2026-06-11_

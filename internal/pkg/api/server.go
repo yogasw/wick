@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // opt-in profiling endpoints, served on loopback only (see WICK_PPROF in Run)
@@ -273,47 +274,17 @@ func NewServer() *Server {
 	// restore progress is visible in logs (percentage ticks) and the
 	// realtime watcher is armed only after restore completes so it
 	// doesn't race the restore writes back into the DB.
-	// Decide whether to restore, and always log WHY — so a "files not
-	// restored" report can be diagnosed from logs alone without guessing
-	// which gate tripped (env kill switch, missing job row, or disabled job).
-	syncJob, jobErr := jobsSvc.GetJob(context.Background(), providerstoragesync.Key)
-	switch {
-	case cfg.App.ProviderSyncDisable:
-		log.Info().Bool("env_disable", true).
-			Msg("providersync: boot restore skipped — WICK_PROVIDERSYNC_DISABLE=true on this instance")
-	case jobErr != nil:
-		log.Warn().Err(jobErr).Str("job", providerstoragesync.Key).
-			Msg("providersync: boot restore skipped — could not read sync job row")
-	case !syncJob.Enabled:
-		log.Info().Str("job", providerstoragesync.Key).Bool("job_enabled", false).
-			Msg("providersync: boot restore skipped — sync job is disabled (enable it in Jobs UI to restore on boot)")
-	default:
-		verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
-		watcherOn := configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true"
-		debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
-		go func() {
-			log.Info().Bool("job_enabled", true).Bool("watcher", watcherOn).
-				Msg("providersync: starting boot restore in background — server is up, restore continues")
-
-			// Re-parent orphan rows: rewires parent_id from rel_path so that
-			// listChildren works even when an ancestor row was previously deleted
-			// (drive-letter row rotation, etc.). Idempotent.
-			if n, err := postgres.RepairProviderStorageTree(db); err != nil {
-				log.Warn().Err(err).Msg("providersync: repair provider_storage tree failed")
-			} else if n > 0 {
-				log.Info().Int("rows", n).Msg("providersync: repaired orphan provider_storage parent_id")
-			}
-
-			if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
-				log.Warn().Err(err).Msg("providersync: startup restore failed")
-			}
-			if watcherOn {
-				if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
-					log.Warn().Err(err).Msg("providersync: watcher start failed")
-				}
-			}
-		}()
-	}
+	// bootReady gates the HTTP surface behind a "Booting…" page until the
+	// async restore + registry reload have finished (see bootGateHandler).
+	// Initialised false; the restore goroutine — spawned below, after the
+	// agents registry exists so it can reload it — flips it true. When the
+	// restore is skipped (env kill switch / disabled job) we flip it true
+	// immediately, since there is nothing to wait for.
+	// bootGate holds the HTTP surface behind a "Booting…" page until every
+	// registered async step finishes. Starts in the "starting" phase; the
+	// restore goroutine registers itself and advances the phase to
+	// "restoring" before the long file copy.
+	bootGate := NewBootGate("starting")
 
 	// ── Encrypted-fields layer (encrypted-fields.md) ───────────────
 	// Master key is bootstrapped by the configs service (auto-
@@ -358,6 +329,74 @@ func NewServer() *Server {
 	// Trim any backlog of spawn logs from before pruning existed so the
 	// dir is bounded immediately, not only after the next spawn.
 	_ = agentsSpawnLogger.Prune(provider.MaxSpawnLogs)
+
+	// Boot restore. Deferred to here (rather than the jobs-bootstrap block
+	// above) so the goroutine can capture agentsMgr and reload the registry
+	// from disk once files land — otherwise the registry, loaded synchronously
+	// at agentregistry.Bootstrap above, scans before restore has written the
+	// session/project folders and the sidebar comes up empty. We always log
+	// WHY a restore did or didn't run so a "files not restored" report can be
+	// diagnosed from logs alone (env kill switch, missing job row, disabled job).
+	{
+		syncJob, jobErr := jobsSvc.GetJob(context.Background(), providerstoragesync.Key)
+		switch {
+		case cfg.App.ProviderSyncDisable:
+			log.Info().Bool("env_disable", true).
+				Msg("providersync: boot restore skipped — WICK_PROVIDERSYNC_DISABLE=true on this instance")
+			bootGate.MarkReady("restore skipped: env disable")
+		case jobErr != nil:
+			log.Warn().Err(jobErr).Str("job", providerstoragesync.Key).
+				Msg("providersync: boot restore skipped — could not read sync job row")
+			bootGate.MarkReady("restore skipped: job row read error")
+		case !syncJob.Enabled:
+			log.Info().Str("job", providerstoragesync.Key).Bool("job_enabled", false).
+				Msg("providersync: boot restore skipped — sync job is disabled (enable it in Jobs UI to restore on boot)")
+			bootGate.MarkReady("restore skipped: job disabled")
+		default:
+			verboseRestore := configsSvc.GetOwned("provider-storage", "verbose_logs") == "true"
+			watcherOn := configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherStatus) == "true"
+			debounce, _ := strconv.Atoi(configsSvc.GetOwned(providerstoragesync.Key, providerstoragesync.CfgWatcherDebounceMs))
+			bootGate.Register("provider-restore")
+			go func() {
+				// Done on every exit path — a restore failure must not strand
+				// the server behind the gate forever.
+				defer bootGate.Done("provider-restore")
+
+				// Advance the gate label to the long-running phase.
+				bootGate.SetPhase("restoring")
+
+				log.Info().Bool("job_enabled", true).Bool("watcher", watcherOn).
+					Msg("providersync: starting boot restore in background — gate page is up, restore continues")
+
+				// Re-parent orphan rows: rewires parent_id from rel_path so that
+				// listChildren works even when an ancestor row was previously deleted
+				// (drive-letter row rotation, etc.). Idempotent.
+				if n, err := postgres.RepairProviderStorageTree(db); err != nil {
+					log.Warn().Err(err).Msg("providersync: repair provider_storage tree failed")
+				} else if n > 0 {
+					log.Info().Int("rows", n).Msg("providersync: repaired orphan provider_storage parent_id")
+				}
+
+				if err := syncMgr.RestoreAllForce(context.Background(), verboseRestore); err != nil {
+					log.Warn().Err(err).Msg("providersync: startup restore failed")
+				}
+
+				// Restore wrote session/project files straight to disk, bypassing
+				// the registry mutators — rescan so the sidebar reflects them.
+				if err := agentsMgr.Registry().Reload(); err != nil {
+					log.Warn().Err(err).Msg("providersync: registry reload after boot restore failed")
+				} else {
+					log.Info().Msg("providersync: boot restore complete, registry reloaded")
+				}
+
+				if watcherOn {
+					if err := syncMgr.EnsureWatcher(context.Background(), debounce); err != nil {
+						log.Warn().Err(err).Msg("providersync: watcher start failed")
+					}
+				}
+			}()
+		}
+	}
 
 	// One-shot migration: the deprecated agents.bypass_permissions checkbox
 	// folded into the new GateConfig.PermissionMode dropdown. When the
@@ -657,6 +696,10 @@ func NewServer() *Server {
 	wfMgr.Engine.Decryptor = encDecryptorFunc(encSvc.DecryptMaster)
 	agentstool.SetDataTables(wfMgr.DataTables)
 	providerstoragetool.SetSyncManager(syncMgr)
+	// Restore writes session/project files straight to disk, bypassing the
+	// registry's in-memory cache. Wire the reload hook so a restore refreshes
+	// the sidebar immediately instead of waiting for the next boot.
+	providerstoragetool.SetReloadRegistryHook(agentsMgr.Registry().Reload)
 	provider.AppName = appname.Resolve()
 	// Wire the auto-rescan toggle: provider package consults this
 	// before triggering background stale-version re-probes. Defaults
@@ -956,7 +999,8 @@ func NewServer() *Server {
 			}
 			return true, ""
 		}).
-		WithPool(agentsPool, agentsLayout)
+		WithPool(agentsPool, agentsLayout).
+		WithRefreshSession(agentsMgr.RefreshSession)
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -1145,6 +1189,13 @@ func NewServer() *Server {
 
 	// Health check endpoint — used by load balancers and uptime monitoring.
 	r.Handle("GET /health", http.HandlerFunc(healthHandler.Check))
+	// /boot-status reports readiness for the boot gate page. The gate
+	// middleware answers this with {"ready":false} while booting; once
+	// bootReady flips, requests fall through to here and get true.
+	r.HandleFunc("GET /boot-status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ready":true}`)
+	})
 
 	// PWA manifest is dynamic — bakes the configured app name into the
 	// installable identity so downstream "MyApp" doesn't install as
@@ -1242,7 +1293,7 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
 }
 
 type Server struct {
@@ -1256,6 +1307,14 @@ type Server struct {
 	gateBin      string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc      *manager.Service
 	wfMgr        *wfsetup.Manager
+	// bootGate tracks the async boot steps that must finish before the HTTP
+	// surface opens. Until it lifts, bootGateHandler serves a lightweight
+	// "Booting…" page (HTTP 503, auto refreshing) for every non-exempt
+	// request, so users see progress instead of an empty sidebar or a
+	// 502/503. /health stays exempt so load-balancer / k8s probes succeed
+	// during the restore window. The gate lifts only once EVERY registered
+	// step is Done — add a step by Register/Done, not by flipping a flag.
+	bootGate *BootGate
 }
 
 // JobsSvc returns the manager.Service the API server owns. Exposed so
@@ -1539,6 +1598,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		s.hostAllowlistHandler,
 		realIPHandler,
 		requestIDHandler,
+		// Outermost: short-circuit to the "Booting…" page until the async
+		// boot restore + registry reload finish. Sits above auth/host checks
+		// so the gate shows even before a session exists, but inside
+		// requestID/realIP so the gate's own requests are still logged.
+		s.bootGateHandler,
 	)
 
 	httpSrv := http.Server{

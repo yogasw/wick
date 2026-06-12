@@ -38,6 +38,7 @@ import (
 	"github.com/yogasw/wick/internal/mcpconfig"
 	"github.com/yogasw/wick/internal/pkg/api"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/daemon"
 	"github.com/yogasw/wick/internal/pkg/env"
 	"github.com/yogasw/wick/internal/pkg/logfiles"
 	"github.com/yogasw/wick/internal/pkg/worker"
@@ -449,6 +450,14 @@ func Run() {
 			}
 			userconfig.ResolveDBPath(BuildAppName, "")
 			userconfig.ResolvePort(0)
+			// Self-register the running PID + spawn source so `status` /
+			// `stop` report accurately no matter who launched us — systemd
+			// (INVOCATION_ID set), the `start` daemon parent, or a direct
+			// foreground run. Without this, a systemd-spawned `all` left no
+			// PID file and `status` wrongly said "not running".
+			if dp, err := daemon.ResolvePaths(BuildAppName); err == nil {
+				_ = daemon.SelfRegister(dp, daemon.DetectSource())
+			}
 			// Split component logs into app/server/worker/mcp dated files
 			// under ~/.<appName>/logs/, matching tray mode. Daemon parent
 			// still redirects child stdout/stderr to daemon.log as a
