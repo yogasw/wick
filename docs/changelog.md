@@ -6,6 +6,12 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Boot gate — "Booting…" holding page during restore**: While the provider-storage boot restore is running, every HTTP request (except `/health` and `/boot-status`) receives an HTTP 503 page with a spinner and live phase label instead of an empty sidebar or a broken session list. The page auto-polls `GET /boot-status` every 1.5 s and reloads as soon as the server reports ready. `/health` stays exempt so load-balancer and k8s readiness probes succeed throughout the restore window.
+- **`GET /boot-status`**: New JSON endpoint (`{"ready":bool,"message":string}`) that reports whether the async boot restore has finished. Used by the boot gate page; also consumable by external health checks that need a deeper "app is ready" signal beyond the liveness `/health` check.
+- **Agents registry auto-reload after restore**: After the boot restore completes, the agents registry is rescanned from disk so sessions and projects appear in the sidebar immediately — previously the sidebar stayed empty until the next restart. Manual restores from the Provider Storage UI (**Restore Now**, **Restore Selected**) now also trigger an immediate registry reload.
+
 ### Fixed
 
 - **Provider storage boot restore drops most rows**: `iterAll` used GORM `FindInBatches` with a custom `ORDER BY (provider_type, instance_name, rel_path)`. `FindInBatches` paginates with a primary-key cursor (`WHERE id > last_max_id`), which is only correct when rows are ordered by `id`. The custom order misaligns that cursor, causing iteration to stop silently after the first batch — on one production instance ~729 of 8440 rows were processed and every wick session file was skipped on restore. Fixed by replacing `FindInBatches` with a plain `Rows()` cursor iterator that streams every row in a single query pass.
