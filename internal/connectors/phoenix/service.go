@@ -34,11 +34,27 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
-// TokenCount is the per-span token accounting.
+// Tool is one function/tool definition the model was given to choose from on
+// this span — the catalog, not the calls it made (those live on Message.ToolCalls).
+// Parsed from attributes.llm.tools[].tool.json_schema. The Description carries
+// the load-bearing selection preconditions, so debugging "why did the model
+// pick / ignore tool X" is impossible without it. Parameters is the raw JSON
+// schema kept verbatim so the LLM reading the trace sees the exact contract.
+type Tool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// TokenCount is the per-span token accounting. CacheRead and Reasoning come
+// from the provider's nested prompt_details / completion_details breakdown and
+// are omitted when absent (not every provider/model reports them).
 type TokenCount struct {
 	Prompt     int `json:"prompt"`
 	Completion int `json:"completion"`
 	Total      int `json:"total"`
+	CacheRead  int `json:"cache_read,omitempty"`
+	Reasoning  int `json:"reasoning,omitempty"`
 }
 
 // SpanSummary is one row in a list result — enough to decide which span to
@@ -61,21 +77,26 @@ type SpanSummary struct {
 }
 
 // SpanDetail is the full drill-down for one span: the complete message list
-// (system prompt, user turns, tool calls), the model's output, and usage.
+// (system prompt, user turns, tool calls), the tool catalog the model could
+// choose from, the model's output, usage, the invocation parameters, and the
+// span metadata (which pipeline node, request/room/user ids, …).
 type SpanDetail struct {
-	SpanNodeID string     `json:"span_node_id"`
-	SpanID     string     `json:"span_id,omitempty"`
-	Name       string     `json:"name"`
-	SpanKind   string     `json:"span_kind,omitempty"`
-	Model      string     `json:"model,omitempty"`
-	Provider   string     `json:"provider,omitempty"`
-	TraceID    string     `json:"trace_id,omitempty"`
-	StartTime  string     `json:"start_time,omitempty"`
-	Messages   []Message  `json:"messages"`
-	Output     string     `json:"output,omitempty"`
-	Tokens     TokenCount `json:"tokens"`
-	LatencyMs  float64    `json:"latency_ms,omitempty"`
-	Cost       float64    `json:"cost,omitempty"`
+	SpanNodeID       string         `json:"span_node_id"`
+	SpanID           string         `json:"span_id,omitempty"`
+	Name             string         `json:"name"`
+	SpanKind         string         `json:"span_kind,omitempty"`
+	Model            string         `json:"model,omitempty"`
+	Provider         string         `json:"provider,omitempty"`
+	TraceID          string         `json:"trace_id,omitempty"`
+	StartTime        string         `json:"start_time,omitempty"`
+	Messages         []Message      `json:"messages"`
+	Tools            []Tool         `json:"tools,omitempty"`
+	Output           string         `json:"output,omitempty"`
+	Tokens           TokenCount     `json:"tokens"`
+	InvocationParams map[string]any `json:"invocation_parameters,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
+	LatencyMs        float64        `json:"latency_ms,omitempty"`
+	Cost             float64        `json:"cost,omitempty"`
 }
 
 // ── Validation & helpers ─────────────────────────────────────────────────
@@ -243,6 +264,86 @@ func parseMessages(list any) []Message {
 	return out
 }
 
+// parseTools extracts the tool catalog offered to the model from
+// attrs.llm.tools[]. Each element wraps a json_schema blob — stored as either a
+// nested map or a JSON-encoded string — in the OpenAI function shape
+// {type:"function", function:{name, description, parameters}}.
+func parseTools(list any) []Tool {
+	items := asSlice(list)
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]Tool, 0, len(items))
+	for _, it := range items {
+		fn := functionBlock(asMap(it)["json_schema"])
+		if fn == nil {
+			// Phoenix nests the schema under a "tool" envelope; fall back to it.
+			fn = functionBlock(asMap(asMap(it)["tool"])["json_schema"])
+		}
+		if fn == nil {
+			continue
+		}
+		t := Tool{
+			Name:        getString(fn, "name"),
+			Description: getString(fn, "description"),
+		}
+		if p, ok := fn["parameters"]; ok && p != nil {
+			if b, err := json.Marshal(p); err == nil {
+				t.Parameters = b
+			}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// functionBlock normalizes a tool json_schema (nested map OR JSON-encoded
+// string) into its inner `function` object {name, description, parameters}.
+// Providers that store name/description at the top level (no `function`
+// wrapper) are handled by returning the schema itself.
+func functionBlock(js any) map[string]any {
+	var schema map[string]any
+	switch v := js.(type) {
+	case map[string]any:
+		schema = v
+	case string:
+		if json.Unmarshal([]byte(v), &schema) != nil {
+			return nil
+		}
+	}
+	if schema == nil {
+		return nil
+	}
+	if fn := asMap(schema["function"]); fn != nil {
+		return fn
+	}
+	return schema
+}
+
+// stripKeys returns a shallow copy of m without the listed keys, or nil if the
+// result is empty. Used to drop the redundant `tools` array from the
+// invocation parameters (already surfaced, typed, on SpanDetail.Tools).
+func stripKeys(m map[string]any, keys ...string) map[string]any {
+	if len(m) == 0 {
+		return nil
+	}
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if _, skip := drop[k]; skip {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func modelName(llm, inv map[string]any) string {
 	if n := getString(llm, "model_name"); n != "" {
 		return n
@@ -345,6 +446,8 @@ func buildSpanDetail(s wireSpan) SpanDetail {
 		Prompt:     getInt(tc, "prompt"),
 		Completion: getInt(tc, "completion"),
 		Total:      s.TokenCountTotal,
+		CacheRead:  getInt(asMap(tc["prompt_details"]), "cache_read"),
+		Reasoning:  getInt(asMap(tc["completion_details"]), "reasoning"),
 	}
 	if tokens.Total == 0 {
 		tokens.Total = getInt(tc, "total")
@@ -360,10 +463,15 @@ func buildSpanDetail(s wireSpan) SpanDetail {
 		TraceID:    s.Trace.TraceID,
 		StartTime:  s.StartTime,
 		Messages:   inMsgs,
+		Tools:      parseTools(llm["tools"]),
 		Output:     firstOutputContent(outMsgs, s.Output.Value),
 		Tokens:     tokens,
-		LatencyMs:  s.LatencyMs,
-		Cost:       s.CostSummary.Total.Cost,
+		// `tools` is dropped from the invocation params — it duplicates the
+		// typed Tools catalog above and would otherwise bloat the payload.
+		InvocationParams: stripKeys(inv, "tools"),
+		Metadata:         asMap(attrs["metadata"]),
+		LatencyMs:        s.LatencyMs,
+		Cost:             s.CostSummary.Total.Cost,
 	}
 }
 

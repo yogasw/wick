@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+*   **Phoenix `get_span` surfaces the tool catalog and span metadata**: `get_span` now returns four signals that were already on the wire but previously dropped during shaping — `tools` (the catalog of tools the model could choose from, with each tool's name, description, and parameter schema), `invocation_parameters` (temperature, reasoning_effort, tool_choice; the redundant tools array stripped), `metadata` (passthrough of the producing application's span metadata — request/room/user ids, the producing node), and a `cache_read` / `reasoning` token breakdown. The tool catalog is distinct from a message's `tool_calls`: comparing the two is how you tell why a model picked or ignored a tool.
 
 ---
 
