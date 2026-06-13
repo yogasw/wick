@@ -364,12 +364,12 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, created vi
 		return
 	}
 	allTags, _ := h.repo.ListTags(r.Context())
-	// Strip System tags from the user picker — they're code-owned and
-	// rejected by SetUserTags. Other admin surfaces (tools, jobs,
-	// connectors) keep them so admins can still see them as labels.
+	h.repo.ResolveOwnerDisplayNames(r.Context(), allTags)
+	// Strip System tags and owner: tags from the user picker — System tags are
+	// code-owned and rejected by SetUserTags; owner: tags are managed automatically.
 	pickerTags := make([]*entity.Tag, 0, len(allTags))
 	for _, t := range allTags {
-		if t.IsSystem {
+		if t.IsSystem || strings.HasPrefix(t.Name, "owner:") {
 			continue
 		}
 		pickerTags = append(pickerTags, t)
@@ -410,6 +410,8 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	perms, _ := h.repo.ListToolPerms(r.Context(), paths)
 	allTags, _ := h.repo.ListTags(r.Context())
+	h.repo.ResolveOwnerDisplayNames(r.Context(), allTags)
+	allTags = filterOutOwnerTags(allTags)
 
 	items := make([]view.ToolRow, len(toolsOnly))
 	for i, t := range toolsOnly {
@@ -432,7 +434,7 @@ func (h *Handler) tagsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	editID := r.URL.Query().Get("edit")
-	view.TagsPage(tags, currentUser, editID).Render(r.Context(), w)
+	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID).Render(r.Context(), w)
 }
 
 // ── User action handlers ───────────────────────────────────────
@@ -505,6 +507,8 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	perms, _ := h.repo.ListToolPerms(ctx, paths)
 	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	allTags = filterOutOwnerTags(allTags)
 
 	systemTagIDs := make(map[string]bool)
 	for _, t := range allTags {
