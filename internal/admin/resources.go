@@ -19,7 +19,7 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 	allProjects := h.projects.Projects()
 	allTags, _ := h.repo.ListTags(ctx)
 	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
-	allTags = filterOutOwnerTags(allTags)
+
 
 	paths := make([]string, 0, len(allProjects))
 	for id := range allProjects {
@@ -75,7 +75,7 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 	}
 	allTags, _ := h.repo.ListTags(ctx)
 	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
-	allTags = filterOutOwnerTags(allTags)
+
 
 	paths := make([]string, len(ids))
 	for i, id := range ids {
@@ -130,7 +130,7 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 	}
 	allTags, _ := h.repo.ListTags(ctx)
 	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
-	allTags = filterOutOwnerTags(allTags)
+
 
 	paths := make([]string, len(skills))
 	for i, sk := range skills {
