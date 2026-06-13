@@ -112,7 +112,7 @@ func SetChannelConfigKey(db *gorm.DB, channelType, key, value string) error {
 	if _, hasEnabled := m["enabled"]; hasEnabled {
 		enabled = m["enabled"] == "true"
 	}
-	return db.Model(&ch).Updates(map[string]interface{}{
+	return db.Model(&ch).Updates(map[string]any{
 		"config":     string(data),
 		"enabled":    enabled,
 		"updated_at": time.Now(),
@@ -208,7 +208,7 @@ func SetChannelConfigKeyForUser(db *gorm.DB, channelType, userID, key, value str
 	if _, hasEnabled := m["enabled"]; hasEnabled {
 		enabled = m["enabled"] == "true"
 	}
-	return db.Model(&ch).Updates(map[string]interface{}{
+	return db.Model(&ch).Updates(map[string]any{
 		"config":     string(data),
 		"enabled":    enabled,
 		"updated_at": time.Now(),
