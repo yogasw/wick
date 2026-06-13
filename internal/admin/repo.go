@@ -329,6 +329,29 @@ func (r *repo) ResolveOwnerDisplayNames(ctx context.Context, tags []*entity.Tag)
 	for _, c := range connectors {
 		if t, ok := byID[c.ID]; ok {
 			t.DisplayName = c.Label
+			delete(byID, c.ID)
+		}
+	}
+
+	if len(byID) == 0 {
+		return
+	}
+	remaining2 := make([]string, 0, len(byID))
+	for id := range byID {
+		remaining2 = append(remaining2, id)
+	}
+	var customConnectors []struct {
+		ID   string
+		Name string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.CustomConnector{}).
+		Select("id, name").
+		Where("id IN ?", remaining2).
+		Find(&customConnectors)
+	for _, c := range customConnectors {
+		if t, ok := byID[c.ID]; ok {
+			t.DisplayName = c.Name
 		}
 	}
 }
