@@ -452,6 +452,7 @@ func createSessionQuick(c *tool.Ctx) {
 		ID:     id,
 		Origin: session.OriginUI,
 		Preset: "default",
+		UserID: actorID(c),
 	})
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
@@ -472,6 +473,20 @@ func notReady(c *tool.Ctx) bool {
 		return true
 	}
 	return false
+}
+
+// ownsSession reports whether the caller may access sess. App owners see
+// all sessions; regular users may only access sessions they own or legacy
+// sessions that have no recorded owner (UserID=="").
+func ownsSession(c *tool.Ctx, sess session.Session) bool {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return true
+	}
+	if u.CanSeeAllSessions() {
+		return true
+	}
+	return sess.Meta.UserID == "" || sess.Meta.UserID == u.ID
 }
 
 // newSessionCompose renders the compose page: provider/preset/workspace
@@ -531,6 +546,7 @@ func startNewSession(c *tool.Ctx) {
 		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
+		UserID:    actorID(c),
 	}); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose create session: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -706,11 +722,21 @@ func sessionsPage(c *tool.Ctx) {
 		}
 	}
 	ids := globalMgr.Registry().SessionIDs()
+	caller := login.GetUser(c.Context())
+	allSessions := globalMgr.Registry().Sessions()
 	if scoped != "" {
-		sessions := globalMgr.Registry().Sessions()
 		filtered := ids[:0:0]
 		for _, id := range ids {
-			if s, ok := sessions[id]; ok && s.Meta.ProjectID == scoped {
+			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scoped {
+				filtered = append(filtered, id)
+			}
+		}
+		ids = filtered
+	}
+	if caller != nil && !caller.CanSeeAllSessions() {
+		filtered := ids[:0:0]
+		for _, id := range ids {
+			if s, ok := allSessions[id]; ok && (s.Meta.UserID == "" || s.Meta.UserID == caller.ID) {
 				filtered = append(filtered, id)
 			}
 		}
@@ -771,7 +797,7 @@ func sessionsPage(c *tool.Ctx) {
 		Layout:          sidebarVMScoped(c, "sessions", "", scoped),
 		Base:            c.Base(),
 		IDs:             ids,
-		Sessions:        globalMgr.Registry().Sessions(),
+		Sessions:        allSessions,
 		Labels:          pageLabels,
 		Projects:        globalMgr.Registry().Projects(),
 		ProjectList:     globalMgr.Registry().ProjectIDs(),
@@ -805,6 +831,7 @@ func createSession(c *tool.Ctx) {
 		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
+		UserID:    actorID(c),
 	})
 	if err != nil {
 		log.Ctx(c.Context()).Error().Msgf("create session: %s", err.Error())
@@ -825,7 +852,7 @@ func sessionDetail(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.NotFound()
 		return
 	}
@@ -950,15 +977,21 @@ func switchProvider(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
+	}
+	u := login.GetUser(c.Context())
+	callerID := ""
+	if u != nil {
+		callerID = u.ID
 	}
 	newID := uuid.New().String()
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        newID,
 		ProjectID: sess.Meta.ProjectID,
 		Origin:    session.OriginUI,
+		UserID:    callerID,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -993,7 +1026,7 @@ func moveSessionToProject(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1053,7 +1086,7 @@ func sendMessage(c *tool.Ctx) {
 	// #<provider> prefix → switch provider before sending.
 	if r := agentchannels.ParseProviderTag(req.Text); r.HasTag {
 		sess, ok := globalMgr.Registry().Session(id)
-		if !ok {
+		if !ok || !ownsSession(c, sess) {
 			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 			return
 		}
@@ -1097,7 +1130,7 @@ func sendMessage(c *tool.Ctx) {
 	}
 
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1127,7 +1160,7 @@ func dequeueAgent(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1165,7 +1198,7 @@ func sessionSubscriptionStatus(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || (!u.CanSeeAllSessions() && sess.Meta.UserID != "" && sess.Meta.UserID != u.ID) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1189,6 +1222,10 @@ func sessionSubscribe(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sub, ok := globalMgr.Registry().Session(id); !ok || (!u.CanSeeAllSessions() && sub.Meta.UserID != "" && sub.Meta.UserID != u.ID) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	if _, err := globalMgr.SubscribeUser(id, u.ID); err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -1208,6 +1245,10 @@ func sessionUnsubscribe(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sub, ok := globalMgr.Registry().Session(id); !ok || (!u.CanSeeAllSessions() && sub.Meta.UserID != "" && sub.Meta.UserID != u.ID) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	if _, err := globalMgr.UnsubscribeUser(id, u.ID); err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -1218,6 +1259,12 @@ func sessionUnsubscribe(c *tool.Ctx) {
 // sessionProcesses returns active pool entries for the given session as JSON.
 func sessionProcesses(c *tool.Ctx) {
 	id := c.PathValue("id")
+	if globalMgr != nil {
+		if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+	}
 	type procEntry struct {
 		SessionID string `json:"session_id"`
 		AgentName string `json:"agent_name"`
@@ -1298,7 +1345,7 @@ func killAgent(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1319,6 +1366,11 @@ func deleteSession(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	if err := globalMgr.DeleteSession(c.Context(), id); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1334,6 +1386,10 @@ func sessionTurnEvent(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no payload"})
+		return
+	}
 	turnID := c.PathValue("turn_id")
 	eventID := c.PathValue("event_id")
 	data, err := os.ReadFile(globalLayout.SessionThinkingEvent(id, turnID, eventID))
@@ -1357,6 +1413,10 @@ func sessionTurnTrace(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no trace"})
+		return
+	}
 	turnID := c.PathValue("turn_id")
 	tracePath := globalLayout.SessionThinking(id, turnID)
 	data, err := os.ReadFile(tracePath)
