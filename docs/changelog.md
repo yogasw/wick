@@ -17,6 +17,10 @@ All notable changes to Wick are documented here.
 *   **Connection status & live catalog** — MCP definitions show a Connected/Disconnected chip, re-sync per instance (probes run under that instance's account), refresh their tool catalog lazily on `wick_get`, and connect in the background at startup behind the boot gate.
 *   **Connector icons** — pick an emoji (emoji-mart picker, fully vendored) or paste an inline SVG / base64 image (32KB cap, rendered safely via `<img>`).
 
+### Added
+
+*   **Per-user Slack channels** — each wick user can configure their own Slack bot credentials independently. Every non-owner user gets a separate `agent_channels` row (`user_id = <id>`); the App Owner row uses `user_id = NULL`. Saving a bot token hot-adds a new keyed registry instance immediately — no server restart required. Removing the token removes the instance. The Channels menu is now accessible to all logged-in users (admin gate removed).
+
 ### Changed
 
 *   Connectors no longer auto-create their first instance at boot (single-instance/Fixed modules excepted) — rows are created explicitly via **+ New row** and deleted rows stay deleted across restarts.
