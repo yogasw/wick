@@ -120,7 +120,7 @@
             <div class="flex h-9 w-9 items-center justify-center rounded-md text-lg" style="background:var(--green-200); color:var(--green-700)">🔌</div>
             <div>
               <div class="text-sm font-semibold" style="color:var(--black-900)">From MCP server</div>
-              <div class="text-xs" style="color:var(--black-800)">HTTP MCP — pick tools to import (auth header / SSO supported)</div>
+              <div class="text-xs" style="color:var(--black-800)">HTTP MCP — all tools exposed live, exclude what you don't want (auth header / SSO supported)</div>
             </div>
           </a>
           <a href="#flow-manual" class="flex items-start gap-3 p-3 rounded-lg hover:bg-[color:var(--white-200)]">
@@ -184,8 +184,9 @@
           <div class="flex items-center gap-2">
             <p class="font-semibold" style="color:var(--black-900)">Internal Tools MCP</p>
             <span class="badge badge-custom">Custom · MCP</span>
+            <span class="badge" style="background:var(--pos-100); color:var(--pos-400)">● Connected</span>
           </div>
-          <p class="text-xs mt-1" style="color:var(--black-800)">7 tools imported from <code class="text-xs">internal-tools mcp</code>.</p>
+          <p class="text-xs mt-1" style="color:var(--black-800)">Live proxy of <code class="text-xs">internal-tools mcp</code> — 7 tools (1 excluded).</p>
           <p class="text-xs mt-2" style="color:var(--black-800)">7 operations · 7 active</p>
         </div>
       </div>
@@ -417,7 +418,7 @@ wajib.</pre>
 <section>
   <h2 class="text-xl font-bold mb-1">② Flow A — review · Configs vs Inputs split</h2>
   <p class="text-sm mb-4" style="color:var(--black-800)">
-    Left: extracted fields with widget pickers and secret toggles. Right: live JSON preview of what gets written to <code>connector_defs</code>.
+    Left: extracted fields with widget pickers and secret toggles. Right: live JSON preview of what gets written to <code>custom_connectors</code> (one row — ops embedded in the <code>ops</code> JSON column).
     Admin sets Meta (Key / Name / Icon) at the top before saving.
   </p>
 
@@ -527,36 +528,37 @@ wajib.</pre>
       <!-- RIGHT: JSON preview -->
       <div class="col-span-5">
         <div class="panel-dark p-4 sticky top-4" style="font-size:12px">
-          <div class="section-h mb-2" style="color:var(--black-600)">connector_defs row preview</div>
-<pre class="mono leading-relaxed"><span class="json-cmt">// row in <code>connector_defs</code></span>
+          <div class="section-h mb-2" style="color:var(--black-600)">custom_connectors row preview</div>
+<pre class="mono leading-relaxed"><span class="json-cmt">// one row in <code>custom_connectors</code> — ops embedded as JSON array</span>
 {
   <span class="json-key">"key"</span>: <span class="json-str">"stripe"</span>,
   <span class="json-key">"name"</span>: <span class="json-str">"Stripe (custom)"</span>,
   <span class="json-key">"icon"</span>: <span class="json-str">"💳"</span>,
   <span class="json-key">"source"</span>: <span class="json-str">"curl"</span>,
+  <span class="json-key">"source_meta"</span>: { <span class="json-key">"category"</span>: <span class="json-str">"Development"</span> },
   <span class="json-key">"configs"</span>: [
     { <span class="json-key">"key"</span>: <span class="json-str">"base_url"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"url"</span>, <span class="json-key">"required"</span>: true },
     { <span class="json-key">"key"</span>: <span class="json-str">"auth_value"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"secret"</span>, <span class="json-key">"secret"</span>: true, <span class="json-key">"required"</span>: true }
-  ]
-}
-
-<span class="json-cmt">// row in <code>connector_def_ops</code></span>
-{
-  <span class="json-key">"key"</span>: <span class="json-str">"post_charges"</span>,
-  <span class="json-key">"name"</span>: <span class="json-str">"Create charge"</span>,
-  <span class="json-key">"destructive"</span>: true,
-  <span class="json-key">"inputs"</span>: [
-    { <span class="json-key">"key"</span>: <span class="json-str">"amount"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"number"</span>, <span class="json-key">"required"</span>: true },
-    { <span class="json-key">"key"</span>: <span class="json-str">"currency"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"default"</span>: <span class="json-str">"usd"</span> },
-    { <span class="json-key">"key"</span>: <span class="json-str">"customer"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"required"</span>: true }
   ],
-  <span class="json-key">"request"</span>: {
-    <span class="json-key">"method"</span>: <span class="json-str">"POST"</span>,
-    <span class="json-key">"url_template"</span>: <span class="json-str">"{{.cfg.base_url}}/charges"</span>,
-    <span class="json-key">"headers"</span>: { <span class="json-key">"Authorization"</span>: <span class="json-str">"Bearer {{.cfg.auth_value}}"</span> },
-    <span class="json-key">"body_template"</span>: <span class="json-str">"amount={{.in.amount}}&amp;…"</span>,
-    <span class="json-key">"content_type"</span>: <span class="json-str">"application/x-www-form-urlencoded"</span>
-  }
+  <span class="json-key">"ops"</span>: [
+    {
+      <span class="json-key">"key"</span>: <span class="json-str">"post_charges"</span>,
+      <span class="json-key">"name"</span>: <span class="json-str">"Create charge"</span>,
+      <span class="json-key">"destructive"</span>: true,
+      <span class="json-key">"inputs"</span>: [
+        { <span class="json-key">"key"</span>: <span class="json-str">"amount"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"number"</span>, <span class="json-key">"required"</span>: true },
+        { <span class="json-key">"key"</span>: <span class="json-str">"currency"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"default"</span>: <span class="json-str">"usd"</span> },
+        { <span class="json-key">"key"</span>: <span class="json-str">"customer"</span>, <span class="json-key">"widget"</span>: <span class="json-str">"text"</span>, <span class="json-key">"required"</span>: true }
+      ],
+      <span class="json-key">"request"</span>: {
+        <span class="json-key">"method"</span>: <span class="json-str">"POST"</span>,
+        <span class="json-key">"url_template"</span>: <span class="json-str">"{{.cfg.base_url}}/charges"</span>,
+        <span class="json-key">"headers"</span>: { <span class="json-key">"Authorization"</span>: <span class="json-str">"Bearer {{.cfg.auth_value}}"</span> },
+        <span class="json-key">"body_template"</span>: <span class="json-str">"amount={{.in.amount}}&amp;…"</span>,
+        <span class="json-key">"content_type"</span>: <span class="json-str">"application/x-www-form-urlencoded"</span>
+      }
+    }
+  ]
 }</pre>
         </div>
       </div>
@@ -624,7 +626,7 @@ wajib.</pre>
       <div class="col-span-5">
         <label class="label">Label</label>
         <input class="input" value="Internal Tools MCP">
-        <p class="helper">Display name. Imported tools will be grouped under one custom definition.</p>
+        <p class="helper">Display name — becomes the connector's name (and its key, slugified).</p>
       </div>
       <div class="col-span-7">
         <label class="label">MCP URL <span style="color:var(--neg-400)">*</span></label>
@@ -651,9 +653,16 @@ wajib.</pre>
         </label>
         <label class="flex items-center gap-2 card-sub px-3 py-2 cursor-pointer">
           <input type="radio" name="auth">
+          <span class="text-sm font-medium">OAuth (login on the server)</span>
+        </label>
+        <label class="flex items-center gap-2 card-sub px-3 py-2 cursor-pointer">
+          <input type="radio" name="auth">
           <span class="text-sm font-medium">SSO (forward caller's session)</span>
         </label>
       </div>
+      <p class="text-xs mt-2" style="color:var(--black-800)">
+        <strong>OAuth</strong> = standard MCP authorization (server replies <code>401 invalid_token</code>): discovery + dynamic client registration + PKCE popup login on Test now. Accounts are <strong>per instance</strong> — save attaches the signed-in account as the first instance; more accounts connect from each instance page ("Connect account →"). Tokens stored encrypted per instance, auto-refreshed.
+      </p>
       <p class="helper">Each scheme shows different inputs below. Switching schemes preserves any extra Headers row you've added.</p>
     </div>
 
@@ -841,7 +850,7 @@ wajib.</pre>
 
     <div class="mt-6 flex items-center justify-between">
       <a href="#" class="btn btn-ghost">← Cancel</a>
-      <button class="btn btn-primary">Continue → pick tools</button>
+      <button class="btn btn-primary">Save &amp; create connector →</button>
     </div>
   </div>
 </section>
@@ -850,9 +859,9 @@ wajib.</pre>
 <!-- FLOW B — tool import -->
 <!-- ============================================================ -->
 <section>
-  <h2 class="text-xl font-bold mb-1">④ Flow B — pick tools to import</h2>
+  <h2 class="text-xl font-bold mb-1">④ Flow B — tools exclude-list (part of the server form)</h2>
   <p class="text-sm mb-4" style="color:var(--black-800)">
-    After <code>tools/list</code>, admin reviews the catalog and selects which tools become Operations. JSON Schema is mapped to wick widgets; admin can override per-field.
+    After a successful test, the form shows the live <code>tools/list</code> catalog. <strong>Every tool is exposed automatically</strong> — ticking a row <strong>excludes</strong> it. Ops are never persisted: each module build (boot / re-sync / save) re-probes, so new server-side tools appear on their own. JSON Schema maps to wick widgets at build time.
   </p>
 
   <div class="card p-0 overflow-hidden">
@@ -861,13 +870,13 @@ wajib.</pre>
         <span class="font-semibold" style="color:var(--black-900)">Internal Tools MCP</span>
         <span class="chip chip-active">connected · 12 tools</span>
       </div>
-      <span class="text-xs" style="color:var(--black-800)">3 selected</span>
+      <span class="text-xs" style="color:var(--black-800)">1 excluded</span>
     </div>
 
     <table class="w-full text-sm">
       <thead style="background:var(--white-200); border-bottom:1px solid var(--white-300)">
         <tr>
-          <th class="w-8"></th>
+          <th class="w-8 text-left px-2 py-2 font-semibold" style="color:var(--black-800)">Excl.</th>
           <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Tool</th>
           <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Description</th>
           <th class="text-left px-4 py-2 font-semibold" style="color:var(--black-800)">Inputs</th>
@@ -876,28 +885,28 @@ wajib.</pre>
       </thead>
       <tbody>
         <tr class="border-b" style="border-color:var(--white-300)">
-          <td class="px-4 py-3"><input type="checkbox" checked></td>
+          <td class="px-4 py-3"><input type="checkbox"></td>
           <td class="px-4 py-3 mono" style="color:var(--black-900)">lookup_user</td>
           <td class="px-4 py-3" style="color:var(--black-800)">Find a user by email or id.</td>
           <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">email?, id?</td>
           <td class="px-4 py-3"><span class="text-xs" style="color:var(--black-800)">no</span></td>
         </tr>
         <tr class="border-b" style="border-color:var(--white-300)">
-          <td class="px-4 py-3"><input type="checkbox" checked></td>
+          <td class="px-4 py-3"><input type="checkbox"></td>
           <td class="px-4 py-3 mono" style="color:var(--black-900)">disable_user</td>
           <td class="px-4 py-3" style="color:var(--black-800)">Disable a user account.</td>
           <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">user_id</td>
           <td class="px-4 py-3"><span class="badge badge-destr">Destructive</span></td>
         </tr>
         <tr class="border-b" style="border-color:var(--white-300)">
-          <td class="px-4 py-3"><input type="checkbox" checked></td>
+          <td class="px-4 py-3"><input type="checkbox"></td>
           <td class="px-4 py-3 mono" style="color:var(--black-900)">audit_query</td>
           <td class="px-4 py-3" style="color:var(--black-800)">Query the audit log with time-range + filter.</td>
           <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">since, until, action?</td>
           <td class="px-4 py-3"><span class="text-xs" style="color:var(--black-800)">no</span></td>
         </tr>
         <tr class="border-b" style="border-color:var(--white-300); opacity:0.6">
-          <td class="px-4 py-3"><input type="checkbox"></td>
+          <td class="px-4 py-3"><input type="checkbox" checked></td>
           <td class="px-4 py-3 mono" style="color:var(--black-900)">delete_records</td>
           <td class="px-4 py-3" style="color:var(--black-800)">Delete N records matching a filter.</td>
           <td class="px-4 py-3 mono text-xs" style="color:var(--black-800)">filter, limit</td>
@@ -907,10 +916,10 @@ wajib.</pre>
     </table>
 
     <div class="px-6 py-3 flex items-center justify-between" style="background:var(--white-200); border-top:1px solid var(--white-300)">
-      <p class="text-xs" style="color:var(--black-800)">Imports create one connector def with N ops. You can split into multiple defs later via "Move to new connector".</p>
+      <p class="text-xs" style="color:var(--black-800)">One server = one connector. Saving creates it immediately; re-sync from the connector page picks up upstream tool changes.</p>
       <div class="flex items-center gap-2">
-        <button class="btn btn-ghost">← Back</button>
-        <button class="btn btn-primary">Import 3 tools →</button>
+        <button class="btn btn-ghost">← Cancel</button>
+        <button class="btn btn-primary">Save &amp; create connector →</button>
       </div>
     </div>
   </div>
@@ -971,7 +980,7 @@ wajib.</pre>
 <section>
   <h2 class="text-xl font-bold mb-1">⑥ Custom connector detail (same chrome as built-in + reload banner)</h2>
   <p class="text-sm mb-4" style="color:var(--black-800)">
-    Same page as <code>/manager/connectors/&lt;key&gt;/&lt;id&gt;</code> for built-in: instance Configs editor, per-op toggles, history. Differences: "Custom" badge in header, "Edit definition" link, and a "needs reload" banner when def is dirty.
+    Same pages as built-in — list page (<code>/manager/connectors/&lt;key&gt;</code>) and instance page (<code>…/&lt;id&gt;</code>): instance Configs editor, per-op toggles, history. <strong>Multi-instance by default</strong>: no row is auto-seeded at save — admins click <strong>+ New row</strong> (and Duplicate) like any connector, each row with its own credentials; "Single instance only" is an opt-in checkbox on the review form. Custom additions in the header: "Custom · &lt;source&gt;" badge, a <strong>status chip</strong> for MCP defs (● Connected / ● Disconnected from the last probe — stays until a re-sync, reconnect, or disable; ● Disabled wins for any source; cURL/manual defs show no connection chip), "Edit definition" link, "↻ Re-sync tools" (MCP), a "needs reload" banner when dirty, and a definition danger zone with <strong>Disable</strong> (zero ops served, pages stay) and <strong>Delete</strong>.
   </p>
 
   <div class="card p-0 overflow-hidden">
@@ -994,7 +1003,7 @@ wajib.</pre>
             <span class="badge badge-custom">Custom · cURL</span>
             <a href="#" class="text-xs" style="color:var(--green-600)">Edit definition →</a>
           </div>
-          <p class="text-sm mt-1" style="color:var(--black-800)">Payments — imported from cURL on 2026-06-05 by yoga@example.com.</p>
+          <p class="text-sm mt-1" style="color:var(--black-800)">Payments — imported from cURL on 2026-06-05 by yoga@example.com. (cURL source — no connection chip; MCP defs show ● Connected / ● Disconnected here.)</p>
         </div>
       </div>
 

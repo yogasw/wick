@@ -71,7 +71,18 @@ type Meta struct {
 	// service that can only have one configuration.
 	//
 	// Default false = many instances allowed (existing behaviour).
+	//
+	// Fixed is also the only case wick auto-seeds an instance row: the
+	// admin UI hides "+ New row" for fixed modules, so the single row
+	// must exist up front. Every other connector starts with zero rows
+	// — instances are created explicitly via "+ New row" and deleting
+	// the last one does not bring it back on restart.
 	Fixed bool
+	// LiveCatalog marks modules whose operation set mirrors an external
+	// live source (custom MCP connectors): zero operations may just
+	// mean "not synced yet", not "nothing to offer". wick_list runs the
+	// lazy catalog refresh before deciding to hide such a connector.
+	LiveCatalog bool
 	// DefaultTags is the list of tags wick auto-attaches to each newly
 	// seeded row for this connector at boot. Tags are reused across
 	// connectors via the central tags package; admins can add or remove

@@ -101,7 +101,11 @@ func (h *Handler) connectorListPage(w http.ResponseWriter, r *http.Request) {
 	oauthSuccess := r.URL.Query().Get("oauth") == "success"
 	oauthUser := r.URL.Query().Get("user")
 
-	view.ConnectorListPage(mod, rows, tagsByRow, accountsByRow, oauthURLByRow, oauthSuccess, oauthUser, user).Render(ctx, w)
+	// Definition-level controls render for whoever may mutate the def
+	// (admin ∨ creator) — customDefInfo gates internally.
+	customInfo := h.customDefInfo(ctx, key, user)
+
+	view.ConnectorListPage(mod, rows, tagsByRow, accountsByRow, oauthURLByRow, oauthSuccess, oauthUser, customInfo, user).Render(ctx, w)
 }
 
 // ── Index page ───────────────────────────────────────────────────────
@@ -170,7 +174,7 @@ func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
 			b = &bucket{sort: catSort, desc: catDesc}
 			buckets[cat] = b
 		}
-		b.cards = append(b.cards, view.ConnectorIndexCard{
+		card := view.ConnectorIndexCard{
 			Key:             m.Meta.Key,
 			Name:            m.Meta.Name,
 			Description:     m.Meta.Description,
@@ -181,7 +185,13 @@ func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
 			NeedsSetupCount: cnt.needsSetup,
 			DisabledCount:   cnt.disabled,
 			System:          system,
-		})
+		}
+		if info := h.customDefInfo(ctx, m.Meta.Key, user); info != nil {
+			card.Custom = true
+			card.CustomSource = info.SourceLabel
+			card.NeedsReload = info.Dirty
+		}
+		b.cards = append(b.cards, card)
 	}
 
 	groups := make([]view.ConnectorIndexGroup, 0, len(buckets))
@@ -197,7 +207,9 @@ func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
 		return groups[i].Name < groups[j].Name
 	})
 
-	view.ConnectorsIndexPage(groups, user).Render(ctx, w)
+	// + New connector is open to every approved user (ownership level
+	// 1: anyone creates, only admin/creator mutates).
+	view.ConnectorsIndexPage(groups, h.custom != nil, user).Render(ctx, w)
 }
 
 // connectorCategory picks the display category for a connector from its
@@ -303,11 +315,34 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	configs := h.connectors.RowConfigs(*row)
+	customInfo := h.customDefInfo(ctx, key, user)
+	// Hidden configs (machine-managed values like OAuth tokens) are
+	// seeded and readable at runtime but never hand-edited — skip them.
+	// The connected-account marker surfaces in the header instead.
+	visible := configs[:0]
+	for _, cfg := range configs {
+		if customInfo != nil {
+			switch cfg.Key {
+			case "oauth_account":
+				// Legacy labels were 'Connected <ts>' before identity
+				// resolution existed — not an identity, hide the chip.
+				if !strings.HasPrefix(cfg.Value, "Connected ") {
+					customInfo.OAuthAccount = cfg.Value
+				}
+			case "oauth_access_token":
+				customInfo.OAuthConnected = cfg.Value != ""
+			}
+		}
+		if !cfg.Hidden {
+			visible = append(visible, cfg)
+		}
+	}
+	configs = visible
 	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
 	isAdmin := user != nil && user.IsAdmin()
-	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, isAdmin).Render(ctx, w)
+	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, isAdmin, customInfo).Render(ctx, w)
 }
 
 // connectorTestPage renders the standalone Postman-style test surface
@@ -462,6 +497,11 @@ func (h *Handler) createConnectorRow(w http.ResponseWriter, r *http.Request) {
 		if err := h.tags.CreateOwnerTag(ctx, row.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", row.ID).Msg("manager: create owner tag failed")
 		}
+	}
+	// Custom defs link their access tags per instance — run it now so the
+	// fresh row is governed immediately instead of on the next boot.
+	if h.custom != nil {
+		h.custom.EnsureTagsForKey(ctx, key)
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }

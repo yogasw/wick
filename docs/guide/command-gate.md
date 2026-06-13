@@ -89,13 +89,28 @@ The gate uses a catch-all `.*` matcher, so **every tool call** routes through th
 |---|---|
 | **Bash** | Whitelist check → auto-approved check → ask user |
 | **Read / Write / Edit / Glob** | Scope check — if path is within the project `default_scope`, auto-allow; otherwise ask user |
-| **MCP tools** (e.g. `mcp__support-tools__wick_execute`) | Always ask user (no scope to check) |
+| **wick read-only / info MCP tools** | Always allow — gate's own built-in list (see tip below) |
+| **Other MCP tools** (e.g. `mcp__some-server__action`) | Always ask user (no scope to check) |
 | **Unknown / future tools** | Always ask user |
 
-File tools within the project scope are auto-allowed without a popup, so normal agent file operations stay fast. Only out-of-scope file access and all MCP/shell calls prompt you.
+File tools within the project scope are auto-allowed without a popup, so normal agent file operations stay fast. Only out-of-scope file access and non-wick MCP calls prompt you.
 
-::: tip wick's own MCP tools are pre-approved
-The "always ask" rule for MCP tools applies to **third-party** servers. wick spawns its agents with `--allowedTools mcp__wick`, so wick's own tools — `wick_list`/`wick_get`/`wick_execute`, `wick_info`, and the `wick_manager_*` management ops — skip the gate prompt and are guarded **server-side** instead (e.g. wickmanager's `requireAdmin`/`requireTray`). If you need management ops reviewed at the gate, see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
+::: tip wick's own read-only MCP tools are gate-exempt
+The gate binary has a built-in always-allow list for wick's read-only discovery and session-housekeeping tools. These never trigger the approval prompt, regardless of whitelist rules:
+
+| Tool | Purpose |
+|---|---|
+| `wick_list` | List connectors / accounts |
+| `wick_search` | Search connectors |
+| `wick_get` | Read a connector's schema |
+| `wick_info` | Server info |
+| `wick_list_providers` | List agent providers |
+| `wick_skill_list` | List available skills |
+| `wick_session_info` | Read session metadata |
+| `wick_set_title` | Update the session sidebar title |
+| `ask_user` / `AskUserQuestion` | Route a question to the web UI |
+
+`wick_execute` and `wick_skill_sync` are **not** on this list — they run real connector ops or write files and remain gated. The gate-exempt tools are also guarded server-side (access control, audit log), so the exemption at the gate is a UX shortcut, not a security gap. If you need management ops reviewed at the gate, see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
 :::
 
 ## Approval modes

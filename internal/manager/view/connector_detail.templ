@@ -16,7 +16,7 @@ import (
 // oauthURL is non-empty when the connector supports OAuth AND client_id is
 // configured — the handler computes this so the template stays free of
 // config-service access.
-templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner, isAdmin bool) {
+templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner, isAdmin bool, customInfo *CustomDefInfo) {
 	@Layout("Manager · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
@@ -26,25 +26,41 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 				<span>/</span>
 				<span class="text-black-900 dark:text-white-100">{ row.Label }</span>
 			</div>
+			if customInfo != nil && customInfo.Dirty && isAdmin {
+				@CustomReloadBanner(customInfo)
+			}
 
-			<div class="mt-4 flex items-center gap-3">
-				<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
-					{ mod.Meta.Icon }
-				</div>
-				<div>
-					<div class="flex items-center gap-2">
-						<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ row.Label }</h1>
-						if row.Disabled {
-							<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
-						} else {
-							<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
+			<div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+				<div class="flex items-center gap-3">
+					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
+						@ConnectorIcon(mod.Meta.Icon)
+					</div>
+					<div>
+						<div class="flex items-center gap-2">
+							<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ row.Label }</h1>
+							if row.Disabled {
+								<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
+							} else {
+								<span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
+							}
+							if customInfo != nil && isAdmin {
+								@CustomBadge(customInfo)
+							}
+						</div>
+						<p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{ row.ID }</p>
+						if mod.Meta.Description != "" {
+							<p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{ mod.Meta.Description }</p>
 						}
 					</div>
-					<p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{ row.ID }</p>
-					if mod.Meta.Description != "" {
-						<p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{ mod.Meta.Description }</p>
-					}
 				</div>
+				if customInfo != nil && isAdmin && customInfo.MCP {
+					<div class="flex flex-shrink-0 flex-wrap items-center gap-2">
+						@CustomResyncTools(customInfo, row.ID)
+						if customInfo.OAuth {
+							@CustomConnectAccount(row.ID, customInfo.OAuthAccount, customInfo.OAuthConnected)
+						}
+					</div>
+				}
 			</div>
 
 			<!-- Label rename -->
@@ -128,6 +144,7 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 				"/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/operations/bulk",
 				true,
 			)
+
 
 			if HasHealthCheck(mod) {
 				@healthCheckScript()

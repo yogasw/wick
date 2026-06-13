@@ -1,8 +1,11 @@
 # Custom Connector — Add From cURL / MCP / Form (design)
 
-Status: **proposal — not implemented**. Awaiting human sign-off on scope,
-storage shape, and security model before any code lands.
-Update terakhir: 2026-06-05.
+Status: **in progress — backend + manager UI lengkap 2026-06-12**,
+menunggu review di [PR #699](https://github.com/yogasw/wick/pull/699)
+(branch `feat/custom-connectors`; semua flow A/B/C, OAuth per-instance,
+ownership contract, management connector `custom-connector` shipped —
+lihat checklist §13 dan update notes di bawah). Update terakhir:
+2026-06-12.
 
 **Paradigm:** built-in connectors (Go code under `internal/connectors/*`)
 tetap canonical. Di atasnya, tambah jalur **custom connector** yang dibuat
@@ -18,21 +21,159 @@ dari DB (bukan dari `RegisterBuiltins`). Tiga jalur input definisi:
    (`Configs` + per-op `Input`).
 2. **From MCP server** — admin daftarin satu MCP server (URL streamable
    HTTP + headers). Wick = **forwarder/proxy**: simpan URL + auth
-   headers, no process spawn. Discover tools via JSON-RPC `tools/list`
-   → pilih tool mana yang mau di-import → tiap tool jadi satu Operation
-   dengan input schema dipetakan dari MCP `inputSchema`. Stdio
-   (npx/python spawn) **bukan v1** — wick gak jadi process supervisor.
+   headers, no process spawn. **1 server = 1 connector** — save form
+   langsung melahirkan connector; **semua** tool hasil `tools/list`
+   jadi Operation otomatis (ops tidak pernah dipersist — tiap module
+   build re-probe live, jadi tool baru di server muncul sendiri setelah
+   re-sync/reload). Kontrolnya **exclude list** (opt-out) di form
+   server, bukan pilih-import (opt-in). Input schema dipetakan dari MCP
+   `inputSchema`. Stdio (npx/python spawn) **bukan v1** — wick gak jadi
+   process supervisor.
 3. **Manual form builder** — admin bangun connector + op dari form
    kosong (rare path, tapi penting buat APIs tanpa cURL/MCP spec).
 
 Semua jalur ujungnya **rapat** dengan kontrak `connector-module` skill:
 Meta, Configs, Operations, per-op Input. Bedanya cuma sumber: built-in
-dari Go reflect, custom dari row di tabel `connector_defs` + JSON
-schema rows di `connector_def_ops`. Dari sudut MCP (`wick_list` / `wick_execute`)
+dari Go reflect, custom dari satu row `custom_connectors` (ops embedded
+di kolom JSON `ops`). Dari sudut MCP (`wick_list` / `wick_execute`)
 two paths look identical — same `tool_id` shape, same audit trail, same
 encrypted-fields layer.
 
 Paired mockup: [`mockup.html`](mockup.html). Update keduanya barengan.
+
+> **Update 2026-06-11 — keputusan final storage.** Implementasi pakai
+> **satu tabel** `custom_connectors`: ops embedded sebagai kolom JSON
+> `ops` (array of `custom.DefOp`), configs sebagai JSON `configs`
+> (array of `custom.DefField`), provenance di JSON `source_meta`
+> (`{category, server_id}`). **Tidak ada** tabel `connector_def_ops`,
+> dan **tidak ada** `tools_cache` — setiap module build re-hit
+> `tools/list` live. Entities: `entity.CustomConnector` +
+> `entity.CustomConnectorMCPServer` (tabel
+> `custom_connector_mcp_servers`). Package `internal/connectors/custom`;
+> registry `Meta.Key` = def key langsung (bukan `custom:<id>`); module
+> `Meta.Fixed=true` (1 def = 1 instance di v1). Migration via gorm
+> `AutoMigrate` di `internal/pkg/postgres/migrate.go` — no SQL migration
+> files. Sisa mention `connector_defs` / `connector_def_ops` /
+> `custom_mcp_servers` di bagian bawah dokumen dibaca sebagai: row
+> `custom_connectors` / elemen array `ops`-nya /
+> `custom_connector_mcp_servers`. Detail final di §3.
+
+> **Update 2026-06-12 — MCP flow disederhanakan: live ops + exclude
+> list.** Import picker dan list page MCP server **dihapus**. Model
+> baru: **1 server row = 1 connector**. Register form (label, URL,
+> auth, test) → save → connector langsung jadi (def `ops` kolom tetap
+> `"[]"` selamanya untuk source=mcp). `BuildModule` re-probe
+> `tools/list` live tiap build (boot / Reload / save server) dan map
+> **semua** tool minus `excluded_tools` (kolom baru di
+> `custom_connector_mcp_servers`, JSON array nama tool, dikelola via
+> exclude-checkbox di form server). Konsekuensi: tool baru di server
+> otomatis ke-expose setelah re-sync, tanpa edit wick. Edit definition
+> untuk def MCP redirect ke form server (nama connector sync dari
+> label); delete definition cascade hapus server row. Probe sso-scheme
+> saat boot pakai identity sintetis `system:wick` (per-call tetap
+> identity user asli). Sisa mention "import picker" / "tools snapshot"
+> di bawah dibaca sebagai model lama yang sudah diganti.
+
+> **Update 2026-06-12 (2) — instance model + status.**
+> - **Multi-instance by default** (`Meta.Fixed=false`): custom connector
+>   diperlakukan persis built-in — `+ New row`, Duplicate, tiap row
+>   credentials sendiri. Opt-out via checkbox "Single instance only" di
+>   review form (kolom `single_instance`).
+> - **No auto-seed — rule global, bukan flag**: `seedModuleRows` hanya
+>   auto-create row pertama untuk module `Fixed` (UI sembunyikan
+>   `+ New row` buat Fixed, jadi row tunggalnya wajib ada duluan).
+>   Semua connector non-fixed — built-in maupun custom — mulai 0 row;
+>   row dibuat eksplisit via `+ New row` dan setelah row terakhir
+>   dihapus tidak muncul lagi sendiri pas restart. Redirect save →
+>   halaman connector (list), bukan instance. Def custom
+>   "single instance only" = Fixed → row tunggalnya di-seed saat save.
+> - **Status MCP** di manager (list + instance header): chip
+>   ● Connected / ● Disconnected dari probe terakhir (`last_test_ok`,
+>   di-refresh tiap module build/re-sync), ● Never tested, ● Disabled.
+>   Def cURL/manual tidak punya chip koneksi.
+> - **Disable/Enable definition** (kolom `disabled` akhirnya di-wire):
+>   def disabled tetap teregister tapi module-nya 0 ops — card, page,
+>   instance rows tetap hidup, tidak ada yang listable/callable.
+>   Re-enable rebuild penuh (re-probe untuk MCP). Danger zone di list
+>   page memuat Disable/Enable + Delete.
+> - ~~Deferred: ownership~~ → **shipped 2026-06-12, lihat note (5).**
+>   Masih deferred: setting global `/admin/variables` "user boleh buat
+>   custom connector" (default true), per-def setting "user lain boleh
+>   nambah instance".
+
+> **Update 2026-06-12 (5) — ownership contract (generik, siap dicopy
+> ke jobs/tools).** Mekanisme: kolom `created_by` + tag — zero mesin
+> baru.
+> - **Level 1 — Definition** (server MCP row ikut, 1:1): create =
+>   semua approved user (builder routes `RequireAuth`, bukan admin);
+>   mutate (edit/save/reload/disable/delete) = **admin ∨ creator**
+>   (`custom.CanMutate`, guard `requireDefMutable` di manager +
+>   `mutableDef` di ops). Not-found dan not-yours sengaja sama (404).
+>   Kontrol def di UI (badge/banner/danger/actions) cuma render buat
+>   yang boleh mutate (`customDefInfo` gated per user).
+> - **Level 2 — Instance**: creator non-admin auto-tag
+>   `owner:<uuid>` di SEMUA jalur create (+ New row, instance pertama
+>   save OAuth, op `instance_create`); configure = mekanisme existing
+>   (owner/admin/"allow others"); Connect account dijaga
+>   `canConfigureRow`.
+> - **Level 3 — per-op**: enabled / destructive-default-off /
+>   admin-only per (row × op) — framework existing.
+> - **Level 4 — identitas downstream**: oauth = per instance, sso =
+>   per pemanggil (JWT per call), bearer/header = shared per def.
+> - **Ops `custom-connector` scoped, bukan admin-gated**: admin
+>   kelola semua; caller lain hanya def `created_by` miliknya
+>   (`def_list` terfilter; lookup def orang = not-found). Akses ke
+>   connector management-nya sendiri tetap cerita tag (System default).
+
+> **Update 2026-06-12 (3) — auth scheme `oauth` (MCP authorization
+> spec, per-instance accounts).** Buat server MCP yang gate pakai
+> `Authorization: Bearer` standar (401 `invalid_token`) — skema `sso`
+> bukan jawabannya (itu khusus server in-house yang validasi pubkey
+> wick).
+> - **Discovery**: 401 → `WWW-Authenticate resource_metadata`
+>   (RFC 9728) → AS metadata (RFC 8414 / OIDC fallback). **DCR**
+>   (RFC 7591) otomatis saat form tidak diisi client_id; override
+>   manual tersedia (client_id/secret/scopes).
+> - **Login** = PKCE authorization-code via browser. Register form:
+>   popup (Test now → login → probe pakai token → save). Session
+>   in-flight in-memory TTL 10 menit, tidak dipersist.
+> - **Token per-instance**: access/refresh/expiry disimpan sebagai
+>   config rows owner `connector:<id>` (secret, hidden di Settings).
+>   Refresh transparan saat expire (-30s skew). Client material
+>   (client_id, secret encrypted, endpoints) di `AuthExtra` server row.
+> - **Save (register)** = connector + instance pertama dengan akun
+>   yang barusan login. Akun tambahan: tombol **Connect account →** di
+>   instance page (full-page redirect, callback nempel token ke row +
+>   auto re-sync def).
+> - **Probe boot/re-sync** minjem token instance pertama yang punya
+>   akun (row disabled di-skip); belum ada akun → 0 ops sampai
+>   connect + re-sync.
+> - **Lazy refresh di `wick_get`**: katalog def MCP re-sync otomatis
+>   saat `wick_get` kalau module berumur > 30s (throttled per def,
+>   claim-before-probe anti stampede). Probe gagal → katalog lama
+>   tetap serve, ngak pernah ke-wipe. `wick_list` tetap snapshot
+>   (cepat, zero network). Hook: `connectors.SetCatalogRefresh` →
+>   `custom.RefreshIfStale`.
+> - Routes: `POST …/mcp-servers/oauth/start`,
+>   `GET …/mcp-servers/oauth/callback`, `POST …/mcp-servers/connect`.
+
+> **Update 2026-06-12 (4) — management connector `custom-connector`.**
+> Built-in connector (`internal/connectors/customconnector/`, Fixed,
+> tag System+Connector, semua op gate ADMIN runtime) yang expose
+> lifecycle UI sebagai MCP ops — LLM bisa bikin/kelola custom
+> connector tanpa dashboard:
+> `def_list/get/create/update/set_disabled/delete/resync`,
+> `mcp_register` (test-gate sama; skema oauth ditolak → butuh browser,
+> arahkan ke UI), `mcp_set_excluded`,
+> `instance_list/create/delete/set_disabled` (guard: cuma row milik
+> def custom — bukan side-door ke row built-in). **Tanpa op cURL** —
+> LLM konversi cURL/doc API ke draft manual sendiri lalu `def_create`.
+> **Plan-then-confirm contract**: `def_schema` (referensi statis —
+> widget, templating, aturan validasi, kategori, contoh draft) +
+> `def_validate` (dry-run + cek key); deskripsi `def_create`/
+> `def_update`/`mcp_register` mewajibkan LLM baca schema → validate →
+> tunjukkan rencana lengkap ke user (name/key/icon/desc/configs/ops) →
+> baru create setelah konfirmasi eksplisit.
 
 ---
 
@@ -191,75 +332,72 @@ bootstrapCustomDefs() (NEW, called dari registry.Register dengan keys "custom:<i
 
 ## 3. Storage layout
 
+**Final (as implemented 2026-06-11):** satu definisi = **satu row**.
+Ops tidak punya tabel sendiri — embedded sebagai JSON array di kolom
+`ops`. Dua gorm entities, ditambahkan ke `db.AutoMigrate(...)` di
+`internal/pkg/postgres/migrate.go` (no SQL migration files).
+
 ### 3.1 Tables
 
-```sql
--- one row per custom connector definition
-connector_defs (
-  id           uuid primary key,
-  key          text unique not null,          -- e.g. "stripe", "internal-billing"
-  name         text not null,                 -- "Stripe (custom)"
-  description  text,                          -- shown in index card
-  icon         text default '🔌',
-  source       text not null,                 -- "curl" | "mcp" | "manual"
-  source_meta  jsonb,                         -- raw parser input (cURL string / MCP server config)
-  configs      jsonb not null,                -- [{key, label, widget, secret, required, default, desc}]
-  created_by   uuid not null,                 -- user.id (admin)
-  created_at   timestamptz,
-  updated_at   timestamptz,
-  disabled     boolean default false
-)
+**`custom_connectors` ← `entity.CustomConnector`**
+(`internal/entity/custom_connector.go`)
 
--- one row per operation within a custom def
-connector_def_ops (
-  id            uuid primary key,
-  def_id        uuid references connector_defs(id) on delete cascade,
-  key           text not null,                -- snake_case
-  name          text not null,
-  description   text not null,
-  destructive   boolean default false,
-  inputs        jsonb not null,               -- per-input schema (same shape as configs)
-  request       jsonb not null,               -- {method, url_template, headers, body_template, content_type}
-  response      jsonb,                        -- {mode: "passthrough" | "typed", shape: ...} — v1: always passthrough
-  mcp_source    jsonb,                        -- {server_id, tool_name} if source=mcp
-  display_order int default 0,
-  created_at    timestamptz,
-  updated_at    timestamptz,
-  unique (def_id, key)
-)
+| Kolom | Go field | Catatan |
+|---|---|---|
+| `id` | `ID` | uuid (BeforeCreate) |
+| `key` | `Key` | unique slug, share namespace dengan built-in `Meta.Key`; **immutable** setelah create |
+| `name` | `Name` | display name |
+| `description` | `Description` | shown in index card |
+| `icon` | `Icon` | default `🔌` |
+| `source` | `Source` | `entity.CustomConnectorSource`: `curl` \| `mcp` \| `manual` — display-only |
+| `source_meta` | `SourceMeta` | JSON `custom.SourceMeta` `{category, server_id}` — provenance only, **raw paste tidak pernah disimpan** |
+| `configs` | `Configs` | JSON array of `custom.DefField` |
+| `ops` | `Ops` | JSON array of `custom.DefOp`; array order = display order |
+| `created_by` | `CreatedBy` | admin user.id |
+| `disabled` | `Disabled` | skip registrasi at boot |
+| `created_at` / `updated_at` | — | `UpdatedAt` vs in-memory `loadedAt` drives the dirty/Reload banner |
 
--- one row per MCP server registered as custom connector source
-custom_mcp_servers (
-  id            uuid primary key,
-  label         text not null,                -- "internal-tools mcp"
-  transport     text not null default 'http', -- 'http' (v1). 'stdio' reserved, deferred.
-  url           text not null,                -- streamable-HTTP endpoint
-  auth_scheme   text not null default 'none', -- 'none' | 'bearer' | 'custom_header' | 'sso'
-  auth_secret   text,                         -- bearer: token (wick_enc_). null for none/sso/custom_header
-  auth_headers  jsonb,                        -- custom_header: [{key, value(wick_enc_), secret}]
-  auth_extra    jsonb,                        -- sso: {audience, ttl_seconds}. Free-form per scheme
-  headers       jsonb,                        -- *extra* headers (any scheme) — KV array, independent of auth
-  tools_cache   jsonb,                        -- last tools/list snapshot
-  last_test_at  timestamptz,                  -- nullable; required non-null at save
-  last_test_ok  boolean,
-  created_at    timestamptz,
-  updated_at    timestamptz
-)
-```
+**`custom_connector_mcp_servers` ← `entity.CustomConnectorMCPServer`**
 
-**Reuse existing tables:**
+| Kolom | Go field | Catatan |
+|---|---|---|
+| `id` | `ID` | uuid |
+| `label` | `Label` | display name |
+| `transport` | `Transport` | `'http'` only di v1; kolom reserved buat future stdio |
+| `url` | `URL` | streamable-HTTP endpoint |
+| `auth_scheme` | `AuthScheme` | `none` \| `bearer` \| `custom_header` \| `sso` |
+| `auth_secret` | `AuthSecret` | bearer token, encrypted (`wick_enc_`) under master key via `configs.EncryptSecret` |
+| `auth_headers` | `AuthHeaders` | JSON `[]custom.HeaderRow` `{key, value, secret}` — scheme `custom_header`; secret values encrypted |
+| `auth_extra` | `AuthExtra` | JSON `custom.SSOExtra` `{audience, ttl_seconds}` — scheme `sso` |
+| `headers` | `Headers` | extra non-auth headers, sama shape `[]HeaderRow`, appended on top of scheme headers |
+| `last_test_at` / `last_test_ok` | `LastTestAt`/`LastTestOK` | save gate: row hanya tersimpan setelah ≥1 sukses `initialize` + `tools/list` |
 
-- `connectors` (instance rows) — untuk custom, satu instance per def
-  di v1, auto-seeded sama path Bootstrap.
-- `connector_operations` (per-op enabled state, tag ACL) — sama,
-  bootstrap saat def-op created.
-- `connector_runs` (audit) — sama, kolom `connector_id` resolve ke
-  custom instance, `op_key` resolve ke def-op key.
-- `configs` (per-instance config values) — sama, `owner="connector:<instance_id>"`.
+> ~~`tools_cache`~~ — **dihapus.** Tool catalog tidak pernah di-cache;
+> import picker re-hit `tools/list` live tiap load supaya admin selalu
+> lihat surface terkini.
+
+**Reuse existing tables (unchanged):**
+
+- `connectors` (instance rows) — satu instance per def di v1
+  (`Meta.Fixed=true`), auto-seeded via `connectors.Service.Bootstrap` /
+  `UpsertModule`.
+- `connector_operations` (per-op enabled state, admin-only) — sama.
+- `connector_runs` (audit) — sama; eksekusi flow lewat
+  `connectors.Service.Execute` persis seperti built-in.
+- `configs` (per-instance config values) — sama,
+  `owner="connector:<instance_id>"`. Plus satu row khusus:
+  `owner="custom_connector"`, `key="sso_signing_key"` — ED25519 seed
+  buat SSO signer, encrypted under master key.
 
 ### 3.2 JSON shapes
 
-**`connector_defs.configs`:**
+Semua shape didefinisikan di `internal/connectors/custom/schema.go` dan
+di-decode tanpa Go reflection (`ParseFields` / `ParseOps` /
+`ParseSourceMeta`).
+
+**`custom_connectors.configs`** — array of `custom.DefField`
+(`{key, label, widget, options, secret, required, default, desc}`,
+mirror subset `entity.Config` yang `entity.StructToConfigs` hasilkan):
 
 ```json
 [
@@ -268,46 +406,79 @@ custom_mcp_servers (
     "label": "Base URL",
     "widget": "url",
     "required": true,
-    "secret": false,
-    "desc": "API base URL. Example: https://api.stripe.com/v1"
+    "default": "https://api.example.com",
+    "desc": "API base URL. Example: https://api.example.com"
   },
   {
-    "key": "api_key",
-    "label": "API Key",
+    "key": "auth_value",
+    "label": "Authorization",
     "widget": "secret",
-    "required": true,
     "secret": true,
-    "desc": "Stripe secret API key (sk_…)"
+    "required": true,
+    "desc": "Value for the `Authorization` header. Stored encrypted."
   }
 ]
 ```
 
-Mirror dari shape `entity.StructToConfigs(Configs{})` — sehingga
-`Module.Configs` bisa dibangun langsung dari array ini tanpa Go
-reflection.
+Allowed widgets: `text`, `textarea`, `dropdown` (+`options` `"a|b|c"`),
+`number`, `checkbox`/`bool`, `secret`, `email`, `url`, `date`,
+`datetime`. Keys snake_case, no duplicates (`ValidateFields`).
 
-**`connector_def_ops.inputs`:** sama shape.
-
-**`connector_def_ops.request`:**
+**`custom_connectors.ops`** — array of `custom.DefOp`. Per op, exactly
+one of `request` (HTTP path) / `mcp_source` (proxy path) is set;
+`inputs` sama shape dengan `configs`:
 
 ```json
-{
-  "method": "POST",
-  "url_template": "{{.cfg.base_url}}/charges",
-  "headers": {
-    "Authorization": "Bearer {{.cfg.api_key}}",
-    "Content-Type": "application/json"
+[
+  {
+    "key": "post_charges",
+    "name": "Post Charges",
+    "description": "POST /v1/charges on api.example.com. Returns the upstream JSON response as-is.",
+    "destructive": false,
+    "inputs": [
+      { "key": "amount", "widget": "number", "required": true, "desc": "Body field `amount`. Example: 2000" },
+      { "key": "currency", "widget": "text", "required": true, "default": "usd", "desc": "Body field `currency`." }
+    ],
+    "request": {
+      "method": "POST",
+      "url_template": "{{.cfg.base_url}}/v1/charges",
+      "headers": { "Authorization": "Bearer {{.cfg.auth_value}}" },
+      "body_template": "amount={{urlquery .in.amount}}&currency={{urlquery .in.currency}}",
+      "content_type": "application/x-www-form-urlencoded"
+    }
   },
-  "body_template": "{ \"amount\": {{.in.amount}}, \"currency\": \"{{.in.currency}}\" }",
-  "content_type": "application/json"
-}
+  {
+    "key": "search_docs",
+    "name": "Search Docs",
+    "description": "Proxy of MCP tool search_docs on Internal Tools MCP.",
+    "destructive": false,
+    "inputs": [
+      { "key": "query", "widget": "text", "required": true }
+    ],
+    "mcp_source": { "server_id": "<custom_connector_mcp_servers.id>", "tool_name": "search_docs" }
+  }
+]
 ```
 
-**Templating rules:**
+**`custom_connectors.source_meta`** — `custom.SourceMeta`:
 
-- Go `text/template` dengan `.cfg.<key>` dan `.in.<key>` namespaces.
-- Functions whitelist: `urlquery`, `js`, `printf`, `default`,
-  `lower`, `upper`. **No `exec`, no shell, no file read.**
+```json
+{ "category": "Development", "server_id": "<uuid, source=mcp only>" }
+```
+
+**Templating rules (final — `template.go`):**
+
+- Go `text/template` dengan `.cfg.<key>` dan `.in.<key>` namespaces;
+  berlaku untuk `url_template`, semua header values, dan
+  `body_template`.
+- Custom funcs whitelist: `default`, `lower`, `upper`, `b64` (Basic
+  auth recipes). Plus safe builtins: `urlquery`, `js`, `printf`.
+  **No `exec`, no shell, no file read** — text/template memang tidak
+  punya builtin berbahaya.
+- `missingkey=error` — typo `{{.cfg.api_keyy}}` jadi error jelas di
+  `connector_runs.error_msg`, bukan `<no value>` nyasar ke upstream.
+- Rendered output capped **1 MB** per template; rendered URL wajib
+  `http(s)://`.
 - Template errors → returned via `connector_runs.error_msg`, not
   panic.
 
@@ -572,10 +743,13 @@ shows result inline:
 
 Save is **gated by at least one successful test** in the current form
 session. Without that, the form submit returns a validation error.
-This prevents half-broken MCP rows from polluting `custom_mcp_servers`.
+This prevents half-broken MCP rows from polluting the table — and
+guarantees the module build right after save (which re-probes) succeeds.
 
-On save → tools snapshot cached to `custom_mcp_servers.tools_cache`
-(JSONB). Admin can re-test anytime from the detail page to refresh.
+On save → **connector langsung dibuat** (create) atau di-rebuild
+(edit). No tools cache, no import step. Reconnect / refresh kapan pun:
+buka form server (detail MCP) → Test now → Save, atau tombol
+**↻ Re-sync tools** di halaman connector.
 
 **Why HTTP-only:** wick stays a forwarder. No spawn lifecycle, no
 idle timeout, no respawn watcher, no node/python runtime in the wick
@@ -583,21 +757,23 @@ container, no arbitrary command exec. Existing stdio MCP servers can
 be exposed via a small sidecar (`mcp-proxy`, `supergateway`, or
 similar) — that complexity sits with the server owner, not wick.
 
-### 5.2 Tool import
+### 5.2 Live ops + exclude list (replaces tool import)
 
-For each tool admin **picks to import**:
+Tidak ada import step. `BuildModule` untuk def `source=mcp`:
 
-- One row in `connector_def_ops` with:
+- probe `tools/list` live (timeout 15s; gagal → module 0 ops +
+  warn log, boot tetap jalan; Reload re-sync setelah server balik)
+- map **semua** tool minus `excluded_tools` → `DefOp` in-memory:
   - `mcp_source = {server_id, tool_name}`
-  - `inputs` derived from MCP `inputSchema` (JSON Schema → wick
+  - `inputs` derived dari MCP `inputSchema` (JSON Schema → wick
     widget grammar; see § 5.4)
-  - `request` = `null` (executor will see `mcp_source != null` and
-    use MCP proxy path)
+  - destructive guess dari nama (`delete_/remove_/drop_/...`)
+- kolom `ops` di row def **selalu `"[]"`** untuk source=mcp —
+  nothing per-tool persists.
 
-Multiple tools from one MCP server can be grouped under **one**
-`connector_defs` row (admin's choice: 1 def per server, or 1 def
-per logical bundle). Default: 1 def per server, named after the
-server label.
+**1 server = 1 connector**, named after the server label (key =
+slug(label), immutable). Exclude list = opt-out checkboxes di form
+server; ganti exclude → save → module rebuild langsung.
 
 ### 5.3 Execution path
 
@@ -672,11 +848,10 @@ Detail visual: [`mockup.html`](mockup.html). High-level mapping:
 | ① Paste · cURL tab | `/manager/connectors/custom/new/paste` | Default tab. Big textarea + "Parse" button. Regex grammar, sync |
 | ① Paste · AI tab | same URL, `?parser=ai` | Same textarea, LLM extract on submit. Tab hidden if no provider configured |
 | ② Review | `/manager/connectors/custom/new/paste/review` | Split view: extracted fields ← → JSON preview. Same form for both parsers |
-| ③ MCP server list | `/manager/connectors/custom/mcp-servers` | Tabel server: status, last test, # tools |
-| ④ MCP server new | `/manager/connectors/custom/mcp-servers/new` | URL + auth scheme (none/bearer/header/SSO) + extra headers + inline Test connection (save gated by ≥1 success) |
-| ⑤ MCP tool import | `/manager/connectors/custom/mcp-servers/{id}/import` | Checkbox grid of tools, per-tool input schema preview |
+| ③ MCP server form | `/manager/connectors/custom/mcp-servers` (alias `/new`) | URL + auth scheme (none/bearer/header/SSO) + extra headers + inline Test connection (save gated by ≥1 success) + **exclude-list tools** (muncul setelah test). Save → connector langsung jadi. No list page, no import picker |
+| ④ MCP server edit | `/manager/connectors/custom/mcp-servers/edit?id=` | Form sama, prefilled; tools di-probe live server-side buat exclude list. "Edit definition" def MCP redirect ke sini. Reconnect = Test now → Save |
 | ⑥ Manual builder | `/manager/connectors/custom/new/manual` | Meta → Configs → Operations stepper |
-| ⑦ Custom detail | `/manager/connectors/{key}` | Same chrome as built-in; tambah "Edit definition" + badge "Custom" + reload banner kalau dirty |
+| ⑦ Custom detail | `/manager/connectors/{key}` | Same chrome as built-in; tambah "Edit definition" + badge "Custom · <source>" + reload banner kalau dirty + **↻ Re-sync tools** (MCP only) |
 
 Entry button di index ada di kanan-atas card list, persis di kanan
 search box, supaya sealiran sama existing chrome (lihat
@@ -882,32 +1057,40 @@ nggak peduli source. Audit log + admin UI yang membedakan.
 
 ---
 
-## 12. Refactor surface — impact zones
+## 12. Refactor surface — impact zones (actual, 2026-06-11)
 
-### 12.1 Core (new)
+### 12.1 Core (landed)
 
 | Zona | File / pkg | Catatan |
 |---|---|---|
-| Pkg baru | `internal/connectors/custom/` | `def.go` (CRUD), `executor.go` (generic ExecuteFunc), `mcp_proxy.go` (Flow B runtime), `curl_parser.go` (Flow A), `template.go` (text/template w/ whitelist funcs) |
-| Schema | `internal/entity/connector_def.go` | `ConnectorDef`, `ConnectorDefOp`, `CustomMCPServer` structs |
-| Migration | `internal/entity/migrations/NNNN_custom_connectors.go` | 3 new tables |
-| Registry | `internal/connectors/registry.go` | `RegisterBuiltins` + `RegisterCustom(ctx, db)` — second pass yg baca DB |
+| Schemas + validation | `internal/connectors/custom/schema.go` | `DefField`, `DefOp`, `OpRequest`, `MCPSource`, `HeaderRow`, `SSOExtra`, `SourceMeta`, `Draft` + `ValidateDraft`/`ValidateFields` |
+| Orchestration | `internal/connectors/custom/service.go` | `Service`: `RegisterAllAtBoot`, `SaveNew`/`Update`/`Reload`/`Delete`, `IsDirty`, per-def tags (`defaultTagsFor`, `EnsureInstanceTags`), `ParsePaste`, `TestServer`/`SaveServer`/`ProbeStored`, `ImportTools` + inputSchema→widget mapper |
+| Generic executor | `internal/connectors/custom/executor.go` | `BuildModule` (def row → `connector.Module`, `Meta.Fixed=true`), `executeHTTP` (template render + shared client), `executeMCP`, `coerceArgs` |
+| Template engine | `internal/connectors/custom/template.go` | text/template whitelist (`default`/`lower`/`upper`/`b64`), `missingkey=error`, 1 MB output cap |
+| cURL parser | `internal/connectors/custom/curl_parser.go` | tokenizer + `ParseCurl` + `Extract` (Configs/Inputs split) + secret heuristics |
+| AI parser | `internal/connectors/custom/ai_parser.go` + `ai_parser.tmpl` | `NewProviderAIParser` — wraps workflow-provider `StructuredCall`; nil (tab hidden) kalau provider tanpa structured output |
+| MCP forwarder + SSO | `internal/connectors/custom/mcp_client.go` | per-call JSON-RPC (initialize/tools-list/tools-call, SSE-tolerant, `Mcp-Session-Id`), 4 auth schemes, `ssoSigner` (ED25519 JWT, seed di `configs` owner=`custom_connector`) |
+| Persistence | `internal/connectors/custom/store.go` | gorm CRUD defs + servers; `ErrKeyTaken` |
+| Entities | `internal/entity/custom_connector.go` | `entity.CustomConnector`, `entity.CustomConnectorMCPServer` |
+| Migration | `internal/pkg/postgres/migrate.go` | dua entity ditambah ke `db.AutoMigrate(...)` — no SQL files |
+| Wiring | `internal/pkg/api/server.go` | `customConnSvc := customconn.New(...)` → `SetAIParser` (first structured-output CLI provider) → `RegisterAllAtBoot` **sebelum** `connectorsSvc.Bootstrap`; `SetTags` + `EnsureInstanceTags` setelah `tagsSvc`; `managerHandler.SetCustomConnectors` |
 
 ### 12.2 Manager UI
 
-| Zona | File / pkg | Catatan |
+| Zona | File / pkg | Status |
 |---|---|---|
-| Routes | `internal/manager/connectors.go` | + `/manager/connectors/custom/*` paths (new flow pages, mcp-servers, edit) |
-| Views | `internal/manager/view/custom_*.templ` | `custom_curl.templ`, `custom_mcp.templ`, `custom_manual.templ`, `custom_review.templ` |
-| Index page tweak | `internal/manager/view/connectors_index.templ` | + "New connector" dropdown btn (cURL / MCP / Blank), + "Custom" badge per card |
-| JS | `internal/manager/js/custom_*.js` | cURL paste parser preview (live JSON), MCP tool picker, form steppers |
+| Service hook | `internal/manager/custom_connectors.go` + `handler.go` | ✅ `SetCustomConnectors` late-binds service ke handler |
+| Routes | `/manager/connectors/custom/*` (paste, review, mcp-servers, manual, edit) | ⏳ belum — backend endpoints ready di `custom.Service` |
+| Views / JS | `internal/manager/view/custom_*.templ`, `internal/manager/js/custom_*.js` | ⏳ belum |
+| Index tweak | "+ New connector" dropdown, "Custom" badge | ⏳ belum |
+| Pubkey route | `GET /.well-known/wick-pubkey.pem` → `customConnSvc.SSO().PublicKeyPEM()` | ⏳ belum di-mount (signer + accessor sudah ada) |
 
 ### 12.3 Connector framework
 
 | Zona | File / pkg | Catatan |
 |---|---|---|
-| `pkg/connector` | (no public API change) | Generic executor punya `ExecuteFunc` yang valid; tetap `ctx` + Input/Cfg pattern |
-| `connectors.Service` | `internal/connectors/service.go` | No change ideally — registry-driven; custom defs just look like more built-ins |
+| `pkg/connector` | (no public API change) | Custom modules pakai `ExecuteFunc` + `Ctx` pattern apa adanya |
+| `connectors.Service` | `internal/connectors/service.go` | satu tambahan: `UpsertModule(ctx, m)` — register-or-replace di dispatch map + seed instance/config rows (dipakai save/Reload tanpa restart) |
 | `connector_runs` | (no schema change) | Reused as-is |
 
 ### 12.4 MCP server
@@ -937,79 +1120,77 @@ custom connector identik dengan built-in.
 
 ## 13. Acceptance checklist (implementation gate)
 
-- [ ] `internal/connectors/custom/` package with: `Def`, `DefOp`,
-  CRUD via `def.go`; generic `ExecuteFunc` via `executor.go`;
-  template engine via `template.go` (whitelist enforced)
-- [ ] `connector_defs`, `connector_def_ops`, `custom_mcp_servers`
-  migrations land
-- [ ] `registry.RegisterCustom` runs at boot, replays DB → registers
-  one `connector.Module` per def, auto-seeds instance row (sama
-  dengan Bootstrap built-in)
-- [ ] Encrypted-fields integration: secret-tagged Configs/Input on
+- [x] `internal/connectors/custom/` package with: `DefField`/`DefOp` +
+  `Draft` via `schema.go`, CRUD via `store.go` + `service.go`; generic
+  `ExecuteFunc` via `executor.go`; template engine via `template.go`
+  (whitelist enforced, `missingkey=error`, 1 MB cap)
+- [x] Migration lands — **single table** `custom_connectors` (ops
+  embedded JSON) + `custom_connector_mcp_servers`, via gorm
+  `AutoMigrate` di `internal/pkg/postgres/migrate.go`
+- [x] `Service.RegisterAllAtBoot` runs at boot (sebelum
+  `connectorsSvc.Bootstrap`), replays DB → registers one
+  `connector.Module` per def (key = def key, `Meta.Fixed=true`),
+  auto-seeds instance row (sama dengan Bootstrap built-in)
+- [x] Encrypted-fields integration: secret-tagged Configs/Input on
   custom def auto-decrypt + auto-mask via existing layer (no new
-  Mask call)
-- [ ] **Flow A · cURL parser** — `/manager/connectors/custom/new/paste`
-  (cURL tab default): paste + regex parse + review + save. Parser
-  handles `-X`, `-H`, `-d`, `-u`, URL
-- [ ] **Flow A · AI parser** — same page, AI tab: paste anything →
-  LLM extract via default provider → strict JSON schema validation →
-  same review form. Tab hidden when no provider configured. Raw
-  paste not persisted (only extracted def)
-- [ ] **Flow B** — `/manager/connectors/custom/mcp-servers`: register
-  server (URL + auth scheme: none/bearer/custom_header/sso), Test
-  connection blocks Save until at least one success, `tools/list`
-  cached, pick tools to import, JSON Schema → widgets
-- [ ] **Flow C** — `/manager/connectors/custom/new/manual`: Meta /
-  Configs / Operations stepper + Test button per op
-- [ ] Custom def appears in `/manager/connectors` index with "Custom"
-  badge; cards stay grouped by tag category alongside built-in
-- [ ] **Tags / ACL** — at save, wick auto-creates `custom:<def_key>`
-  filter tag (`IsFilter=true, IsSystem=false`) + tags instance row
-  with [filter, Connector, category]. Default = admin-only (no user
-  carries the tag). `/admin/tags/<id>` assigns to user groups to
-  open access. `/manager/connectors/<key>/<id>` Access section shows
-  current visibility state + "Open to all" shortcut (removes filter
-  tag). Per-op `enabled` + `admin_only` reused as-is from built-in
-  framework. Three independent off-switches: row-tag, op-enabled,
-  op-admin-only
-- [ ] Edit flow: bump `updated_at`, show "Reload" banner; one-click
-  rebuild Module without server restart
-- [ ] `connector_runs` writes the same shape for custom ops as for
-  built-in
-- [ ] Tests pass: cURL parser table-driven, template whitelist denies
-  `exec`/file read, MCP proxy in-process roundtrip, secret leak path
-- [ ] Docs: user-facing `docs/guide/custom-connectors.md` + sidebar
+  Mask call); MCP server creds encrypted under master key
+  (`configs.EncryptSecret`)
+- [x] **Flow A · cURL parser** — backend + manager page
+  `/manager/connectors/custom/new/paste` (paste + review UI) ✅
+- [x] **Flow A · AI parser** — backend + AI tab UI ✅ (tab hidden
+  tanpa provider structured-output; raw paste not persisted)
+- [x] **Flow B** — backend + pages `/manager/connectors/custom/
+  mcp-servers*` ✅ (save gate, auth none/bearer/custom_header/sso/
+  **oauth**, live ops + exclude list — import picker dihapus, lihat
+  update notes); pubkey route `/.well-known/wick-pubkey.pem` mounted
+- [x] **Flow C** — `/manager/connectors/custom/new/manual` stepper ✅
+- [x] Custom def di index dengan badge "Custom · <source>" + status
+  chip; "+ New connector" dropdown (semua approved user) ✅
+- [x] **Tags / ACL** — at save + at boot (idempotent), wick
+  auto-creates `custom:<def_key>` filter tag (`IsFilter=true,
+  IsSystem=false`, SortOrder 2000) + tags instance row with [filter,
+  Connector, category] via `EnsureToolDefaultTags`. Default =
+  admin-only. Per-op `enabled` + `admin_only` reused as-is.
+  (⏳ UI "Open to all" shortcut menyusul bareng manager pages)
+- [x] Edit flow — banner + Reload + per-instance Re-sync ✅ (atomic
+  swap via `UpsertModule`, no restart)
+- [x] `connector_runs` writes the same shape for custom ops as for
+  built-in (eksekusi lewat `connectors.Service.Execute` yang sama)
+- [x] Tests pass: cURL parser table-driven, template whitelist, MCP
+  proxy in-process roundtrip (incl. JWT verify), OAuth discovery/DCR/
+  PKCE/refresh, schema, executor mapper
+- [x] Docs: user-facing `docs/guide/custom-connectors.md` + sidebar
   entry; design.md + mockup.html kept in sync with code
+  (2026-06-11)
 
 ---
 
-## 14. Open questions (need user input before scoping)
+## 14. Open questions — **semua resolved per 2026-06-11**
 
-These are the questions I want a human answer to before generating any
-code:
-
-1. **Naming** — `custom-connector`, `connector-builder`, atau `byoc`?
-   Default rekomendasi: `custom-connector` (docs + UI) /
-   `internal/connectors/custom/` (Go).
+1. ~~**Naming**~~ — **RESOLVED 2026-06-11:** "custom connector" di
+   docs + UI copy; Go package `internal/connectors/custom/`; entities
+   `entity.CustomConnector` + `entity.CustomConnectorMCPServer`.
 2. ~~**MCP transport priority**~~ — **RESOLVED 2026-06-05:**
    streamable-HTTP only di v1. Wick = forwarder murni. Stdio
    di-defer (alasan: process supervision overhead, gak match dengan
    "wick stays light" prinsip). User yang punya stdio MCP existing
    bisa pakai sidecar (mcp-proxy/supergateway) buat expose lewat
    HTTP.
-3. **Body template engine** — Go `text/template` dgn whitelist
-   functions cukup, atau perlu Mustache-style logic-less (lebih aman
-   untuk admin yang nggak kenal Go template syntax)?
-4. **Edit-while-running** — banner "Reload" cukup, atau perlu hot
-   swap auto (test in background, atomic switch)? V1 saya
-   propose: explicit reload button. Konfirmasi?
-5. **Per-row Configs** — v1 saya kunci 1 def = 1 instance (sama
-   seperti pasangan Meta+Configs di built-in module). User OK dengan
-   itu, atau dari awal multi-row supaya satu Stripe def bisa punya
-   row "live" + row "test"?
-6. **Live Test button** — di Flow C butuh real upstream call dengan
-   admin's Configs. OK untuk one-shot (mirror Connector Test page
-   existing) atau perlu sandbox / mock?
+3. ~~**Body template engine**~~ — **RESOLVED 2026-06-11:** Go
+   `text/template` dengan whitelist (`default`/`lower`/`upper`/`b64`
+   + safe builtins `urlquery`/`js`/`printf`), `missingkey=error`,
+   1 MB output cap. Mustache ditolak — Go template + missingkey
+   errors udah cukup aman dan ekspresif (`template.go`).
+4. ~~**Edit-while-running**~~ — **RESOLVED 2026-06-11:** explicit
+   Reload. `Update` cuma rewrite row (module lama tetap serving);
+   `IsDirty` drives banner; `Reload` rebuild + atomic swap via
+   `connectors.Service.UpsertModule`. No auto hot-swap.
+5. ~~**Per-row Configs**~~ — **RESOLVED 2026-06-11:** 1 def = 1
+   instance, enforced via `Meta.Fixed=true` di `BuildModule`.
+   Multi-row tetap deferred (lihat TODO).
+6. ~~**Live Test button**~~ — **RESOLVED 2026-06-11:** one-shot,
+   mirror existing Connector Test panel — instance row dari def
+   dipakai apa adanya, no sandbox/mock.
 
 ---
 

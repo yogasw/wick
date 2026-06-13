@@ -6,9 +6,75 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Custom Connectors** — build LLM-callable connectors from the admin UI, no Go code or redeploy. Three creation paths from **Connectors → + New connector**:
+    *   **Paste a cURL** — deterministic parser splits the command into per-instance configs (base URL, secrets) and per-call inputs; an **AI tab** (shown when a structured-output provider is configured) extracts the same shape from `fetch()` snippets, Postman fragments, or prose.
+    *   **Connect an MCP server** (streamable HTTP) — one server = one connector. Every tool the server lists becomes an operation automatically; tools added upstream appear after a re-sync. Control the surface with an exclude list instead of an import picker. Auth schemes: `none`, `bearer`, `custom_header`, **`oauth`** (standard MCP authorization: discovery, dynamic client registration, PKCE browser login, RFC 8707 resource indicator, per-instance accounts with transparent token refresh), and **`sso`** (forwards the calling wick user as a signed JWT validated against `/.well-known/wick-pubkey.pem`).
+    *   **Manual builder** — Meta → Configs → Operations stepper with Go `text/template` request recipes.
+*   **Multi-instance custom connectors** — instances behave exactly like built-ins (`+ New row`, Duplicate, per-row credentials); no row is auto-created until you add one. Opt into "single instance only" per definition.
+*   **Ownership contract** — any approved user can create a custom connector; editing or deleting a definition is admin-or-creator only, and instance creators are marked with an `owner:` tag. The new `custom-connector` management connector exposes the same lifecycle as MCP operations (scoped per caller) so an agent can build connectors without the dashboard.
+*   **Connection status & live catalog** — MCP definitions show a Connected/Disconnected chip, re-sync per instance (probes run under that instance's account), refresh their tool catalog lazily on `wick_get`, and connect in the background at startup behind the boot gate.
+*   **Connector icons** — pick an emoji (emoji-mart picker, fully vendored) or paste an inline SVG / base64 image (32KB cap, rendered safely via `<img>`).
+
+### Changed
+
+*   Connectors no longer auto-create their first instance at boot (single-instance/Fixed modules excepted) — rows are created explicitly via **+ New row** and deleted rows stay deleted across restarts.
+*   Outbound MCP requests now emit a debug log trail (URL, RPC method, payload, response, latency) carrying the originating `request_id`.
 
 ---
+
+## [v0.16.16](https://github.com/yogasw/wick/compare/v0.16.15...v0.16.16) — TTY
+
+_Released on 2026-06-12_
+
+### Fixed
+*   Resolved an issue where WebSocket upgrades for the terminal (tty) could fail when reverse proxies stripped the `upgrade` token from the `Connection` header. The system now correctly re-injects the `upgrade` token if `Upgrade: websocket` is present, ensuring successful terminal connections.
+
+---
+
+
+## [v0.16.15](https://github.com/yogasw/wick/compare/v0.16.14...v0.16.15) — Systemd & Phoenix
+
+_Released on 2026-06-12_
+
+### Added
+
+*   **Daemon auto-enablement of systemd linger on headless installs**: The `service install` command now automatically enables systemd linger for the current user, ensuring the daemon and its child processes persist after SSH session logout on headless Linux servers. `systemdStatus` now reports the live linger state and provides the exact command if manual enablement is needed.
+*   **Active Processes panel scoped to current session**: The "Active Processes" slide-over panel now filters processes to the current session only. It also displays "queued" requests (pre-PID) with a dequeue action, providing better visibility for accepted-but-not-yet-running requests.
+
+### Improved
+
+*   **Phoenix `get_span` surfaces tool catalog and span metadata**: The `get_span` function now returns four previously unexposed signals that were already on the wire:
+    *   `tools`: The catalog of tools the model considered, including each tool's name, description (carrying selection preconditions), and raw parameter schema. This allows comparison with a message's `tool_calls` to understand why a model picked or ignored a tool.
+    *   `invocation_parameters`: Model parameters such as `temperature`, `reasoning_effort`, and `tool_choice` (the redundant tools array is stripped).
+    *   `metadata`: Passthrough of the producing application's span metadata, including `request_id`, `room_id`, `user_id`, `langgraph_node`, and `question_history_id`.
+    *   `token_count *_details`: A breakdown of `cache_read` and `reasoning` tokens.
+
+---
+
+
+## [v0.16.14](https://github.com/yogasw/wick/compare/v0.16.13...v0.16.14) — Memory, Gate, Wick
+
+_Released on 2026-06-12_
+
+### Fixed
+
+*   Fixed memory leak in stream broadcaster by deleting stale keys when the last subscriber unsubscribes.
+*   Cleaned buffer map on slot release and tracked preempt goroutines to prevent resource leaks.
+*   Deduplicated background rescan goroutines in provider using singleflight to prevent excessive resource usage.
+*   Eliminated data race with `PartialText` by guarding `turnBuf` writes with a mutex.
+*   Propagated request context to `PublishAndReload` and `ToggleAndReload` in workflows to ensure proper cancellation and timeout.
+*   Prevented timer leak in `terminateProc` by replacing `time.After` with `NewTimer` and `Stop`.
+*   Resolved agent deadlock by releasing agent mutex before stdin write in `send()` to prevent conflict with `drainPending`.
+
+### Improved
+
+*   **Gate auto-approves wick read-only / info MCP tools**: The `PreToolUse` gate binary now has a built-in always-allow list for wick's non-mutating tools — `wick_list`, `wick_search`, `wick_get`, `wick_info`, `wick_list_providers`, `wick_skill_list`, `wick_session_info`, and `wick_set_title`. These no longer trigger the per-tool approval prompt. `wick_execute` and `wick_skill_sync` remain gated.
+*   **Title state in agent system prompt**: The "This session" identity block injected into every agent's system prompt now includes the session's current `title` and `title_custom` flag. The agent reads these from the prompt at spawn time instead of making a `wick_session_info` round-trip on every first turn.
+
+---
+
 
 ## [v0.16.13](https://github.com/yogasw/wick/compare/v0.16.12...v0.16.13) — Daemon & Session Titles
 

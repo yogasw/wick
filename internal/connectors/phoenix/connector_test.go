@@ -1,6 +1,9 @@
 package phoenix
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // sampleAttrs mirrors the nested OpenInference shape Phoenix returns in the
 // stringified `attributes` field over GraphQL: attrs.llm.{model_name,
@@ -10,8 +13,15 @@ const sampleAttrs = `{
   "llm": {
     "model_name": "gpt-4o",
     "provider": "openai",
-    "token_count": {"prompt": 1100, "completion": 134, "total": 1234},
-    "invocation_parameters": "{\"temperature\":0.0,\"azure_deployment\":\"gpt-4o-deploy\"}",
+    "tools": [
+      {"tool": {"json_schema": "{\"type\":\"function\",\"function\":{\"name\":\"get_order\",\"description\":\"Look up an order by id.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}}}}}"}}
+    ],
+    "token_count": {
+      "prompt": 1100, "completion": 134, "total": 1234,
+      "prompt_details": {"cache_read": 512},
+      "completion_details": {"reasoning": 48}
+    },
+    "invocation_parameters": "{\"temperature\":0.0,\"azure_deployment\":\"gpt-4o-deploy\",\"reasoning_effort\":\"low\",\"tools\":[{\"type\":\"function\"}]}",
     "input_messages": [
       {"message": {"role": "system", "content": "You are a helpful assistant."}},
       {"message": {"role": "user", "content": "refund saya gagal"}},
@@ -23,7 +33,8 @@ const sampleAttrs = `{
     "output_messages": [
       {"message": {"role": "assistant", "content": "Maaf atas kendalanya, refund sudah diproses."}}
     ]
-  }
+  },
+  "metadata": {"request_id": "req-abc-123", "room_id": 123456789, "node": "responder"}
 }`
 
 func sampleSpan() wireSpan {
@@ -81,8 +92,44 @@ func TestBuildSpanDetail(t *testing.T) {
 	if d.Tokens.Prompt != 1100 || d.Tokens.Completion != 134 || d.Tokens.Total != 1234 {
 		t.Errorf("tokens = %+v", d.Tokens)
 	}
+	if d.Tokens.CacheRead != 512 || d.Tokens.Reasoning != 48 {
+		t.Errorf("token detail = cache_read %d / reasoning %d, want 512 / 48", d.Tokens.CacheRead, d.Tokens.Reasoning)
+	}
 	if d.Cost != 0.0042 {
 		t.Errorf("cost = %v, want 0.0042", d.Cost)
+	}
+
+	// Tool catalog parsed out of llm.tools[].tool.json_schema (a JSON string).
+	if len(d.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(d.Tools))
+	}
+	if d.Tools[0].Name != "get_order" {
+		t.Errorf("tool name = %q, want get_order", d.Tools[0].Name)
+	}
+	if d.Tools[0].Description != "Look up an order by id." {
+		t.Errorf("tool description = %q", d.Tools[0].Description)
+	}
+	if !strings.Contains(string(d.Tools[0].Parameters), `"id"`) {
+		t.Errorf("tool parameters missing schema: %s", d.Tools[0].Parameters)
+	}
+
+	// Invocation params surfaced, but the redundant `tools` array stripped.
+	if d.InvocationParams == nil {
+		t.Fatal("invocation_parameters should be populated")
+	}
+	if _, leaked := d.InvocationParams["tools"]; leaked {
+		t.Error("invocation_parameters should not carry the redundant tools array")
+	}
+	if d.InvocationParams["reasoning_effort"] != "low" {
+		t.Errorf("invocation_parameters[reasoning_effort] = %v, want low", d.InvocationParams["reasoning_effort"])
+	}
+
+	// Metadata passed through verbatim — keys vary by the producing application.
+	if d.Metadata == nil {
+		t.Fatal("metadata should be populated")
+	}
+	if d.Metadata["request_id"] != "req-abc-123" {
+		t.Errorf("metadata[request_id] = %v", d.Metadata["request_id"])
 	}
 }
 
@@ -124,11 +171,11 @@ func TestParseAttrsMalformed(t *testing.T) {
 }
 
 func TestAppIDFilter(t *testing.T) {
-	got, err := appIDFilter("bibgs-tho4nvlkboaezdf")
+	got, err := appIDFilter("myapp-a1b2c3d4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if want := "metadata['app_id'] == 'bibgs-tho4nvlkboaezdf'"; got != want {
+	if want := "metadata['app_id'] == 'myapp-a1b2c3d4'"; got != want {
 		t.Errorf("filter = %q, want %q", got, want)
 	}
 
