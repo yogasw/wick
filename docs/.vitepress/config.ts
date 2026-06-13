@@ -97,6 +97,7 @@ export default withMermaid(defineConfig({
           { text: 'GitHub', link: '/connectors/github' },
           { text: 'Bitbucket', link: '/connectors/bitbucket' },
           { text: 'Slack', link: '/connectors/slack' },
+          { text: 'Google Workspace', link: '/connectors/googleworkspace' },
           { text: 'Phoenix', link: '/connectors/phoenix' },
           { text: 'Wick Manager', link: '/connectors/wickmanager' },
           { text: 'Workflow', link: '/connectors/workflow' },
