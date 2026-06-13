@@ -33,6 +33,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
@@ -55,6 +56,7 @@ var (
 	globalChannels   *agentchannels.Registry
 	globalSyncMgr    *providersync.Manager
 	globalSkillStore *skills.Store
+	globalTagsSvc    *tags.Service
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -143,6 +145,9 @@ func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
 // SetSkillStore wires the skills ownership store so delete/upload/sync
 // handlers can enforce owner-or-admin access control.
 func SetSkillStore(s *skills.Store) { globalSkillStore = s }
+
+// SetTagsService wires the tags service for skill ownership checks.
+func SetTagsService(svc *tags.Service) { globalTagsSvc = svc }
 
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
@@ -421,7 +426,16 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
 		filtered := allProjectIDs[:0:0]
 		for _, pid := range allProjectIDs {
-			if p, ok := allProjects[pid]; ok && p.Meta.OwnerUserID == u.ID {
+			p, ok := allProjects[pid]
+			if !ok {
+				continue
+			}
+			if globalTagsSvc != nil {
+				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, pid)
+				if owns {
+					filtered = append(filtered, pid)
+				}
+			} else if p.Meta.OwnerUserID == "" || p.Meta.OwnerUserID == u.ID {
 				filtered = append(filtered, pid)
 			}
 		}
@@ -462,8 +476,15 @@ func projectChoices(c *tool.Ctx) []view.ProjectChoiceVM {
 		if !ok {
 			continue
 		}
-		if u != nil && !u.IsAdmin() && p.Meta.OwnerUserID != u.ID {
-			continue
+		if u != nil && !u.IsAdmin() {
+			if globalTagsSvc != nil {
+				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, id)
+				if !owns {
+					continue
+				}
+			} else if p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != u.ID {
+				continue
+			}
 		}
 		out = append(out, view.ProjectChoiceVM{
 			ID:              id,
@@ -552,6 +573,9 @@ func ensurePersonalProjectForUser(c *tool.Ctx) {
 			return
 		}
 		pid = p.Meta.ID
+		if globalTagsSvc != nil {
+			_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), pid, u.ID)
+		}
 	}
 	if u.Metadata.PinnedAgentProjectID == pid {
 		return
@@ -1683,6 +1707,9 @@ func createProject(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("create project %s: %s", name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), opt.ID, actorID(c))
 	}
 	// Land on the new project's page (sidebar-driven nav — no list page).
 	c.Redirect(c.Base()+"/sessions?project="+opt.ID, http.StatusSeeOther)
