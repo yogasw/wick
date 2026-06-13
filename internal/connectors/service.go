@@ -527,16 +527,19 @@ func (s *Service) ListAccounts(ctx context.Context, connectorID string) ([]entit
 
 // SaveAccount persists a connected OAuth account. Respects MultiAccount
 // from the connector row: false = replace existing, true = add new.
-func (s *Service) SaveAccount(ctx context.Context, connectorID, wickUserID, displayName, accessToken string) error {
+// wickUserID is the wick platform user who initiated the OAuth flow.
+// externalUserID is the provider-side user ID from GetUserIdentity.
+func (s *Service) SaveAccount(ctx context.Context, connectorID, wickUserID, externalUserID, displayName, accessToken string) error {
 	row, err := s.repo.Get(ctx, connectorID)
 	if err != nil {
 		return err
 	}
 	acc := &entity.ConnectorAccount{
-		ConnectorID: connectorID,
-		WickUserID:  wickUserID,
-		DisplayName: displayName,
-		AccessToken: accessToken,
+		ConnectorID:    connectorID,
+		WickUserID:     wickUserID,
+		ExternalUserID: externalUserID,
+		DisplayName:    displayName,
+		AccessToken:    accessToken,
 	}
 	return s.repo.UpsertAccount(ctx, acc, row.MultiAccount)
 }

@@ -220,8 +220,9 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		displayName = slackUserID
 	}
 
-	// Persist token to connector row.
-	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth, row.MultiAccount)
+	// Persist token to connector row. Pass the wick platform user ID (from the
+	// OAuth state entry) as wickUserID and the provider-side user ID as externalUserID.
+	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, entry.wickUserID, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth, row.MultiAccount)
 	if saveErr != nil {
 		log.Error().Err(saveErr).Str("connector", key).Str("user_id", userID).Msg("manager oauth: oauthSaveToken failed")
 		http.Error(w, "failed to save token: "+saveErr.Error(), http.StatusInternalServerError)
@@ -260,15 +261,16 @@ func (h *Handler) exchangeSlackCode(ctx context.Context, clientID, clientSecret,
 // oauthSaveToken persists an access token as a ConnectorAccount under the
 // originating connector row. MultiAccount behaviour is handled by the repo
 // upsert: false = replace existing account, true = add new account.
-func (h *Handler) oauthSaveToken(ctx context.Context, key, userID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta, multiAccount bool) (savedRowID string, err error) {
+// wickUserID is the wick platform user; externalUserID is the provider-side ID.
+func (h *Handler) oauthSaveToken(ctx context.Context, key, wickUserID, externalUserID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta, multiAccount bool) (savedRowID string, err error) {
 	if connectorRowID == "" {
 		return "", fmt.Errorf("oauth save: connector_id is required")
 	}
-	if err := h.connectors.SaveAccount(ctx, connectorRowID, userID, displayName, accessToken); err != nil {
+	if err := h.connectors.SaveAccount(ctx, connectorRowID, wickUserID, externalUserID, displayName, accessToken); err != nil {
 		return "", fmt.Errorf("oauth save: %w", err)
 	}
-	log.Info().Str("connector", key).Str("user_id", userID).Str("connector_id", connectorRowID).
-		Str("display_name", displayName).Msg("manager oauth: account saved")
+	log.Info().Str("connector", key).Str("wick_user_id", wickUserID).Str("external_user_id", externalUserID).
+		Str("connector_id", connectorRowID).Str("display_name", displayName).Msg("manager oauth: account saved")
 	return connectorRowID, nil
 }
 

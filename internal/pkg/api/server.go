@@ -995,9 +995,8 @@ func NewServer() *Server {
 			})
 
 			// WickUserIDFn resolves a Slack user ID to a wick platform user ID
-			// by scanning ConnectorAccount rows for a matching WickUserID field.
-			// ConnectorAccount.WickUserID stores the external platform user ID
-			// returned by the Slack OAuth GetUserIdentity call (resp.UserID).
+			// by scanning ConnectorAccount rows where ExternalUserID matches the
+			// inbound Slack user ID and returning the stored WickUserID.
 			slackCh.SetWickUserIDFn(func(ctx context.Context, slackUserID string) (string, bool) {
 				rows, err := connectorsSvc.ListByKey(ctx, "slack")
 				if err != nil {
@@ -1009,7 +1008,7 @@ func NewServer() *Server {
 						continue
 					}
 					for _, acc := range accs {
-						if acc.WickUserID == slackUserID && acc.WickUserID != "" {
+						if acc.ExternalUserID == slackUserID && acc.WickUserID != "" {
 							return acc.WickUserID, true
 						}
 					}
