@@ -59,6 +59,22 @@ func filterOutOwnerTags(tags []*entity.Tag) []*entity.Tag {
 	return out
 }
 
+// filterOwnerTagsForIDs keeps only owner: tags whose extracted ID is in the
+// given set. Non-owner tags always pass through unchanged.
+func filterOwnerTagsForIDs(tags []*entity.Tag, ids map[string]struct{}) []*entity.Tag {
+	out := tags[:0:0]
+	for _, t := range tags {
+		if !strings.HasPrefix(t.Name, "owner:") {
+			out = append(out, t)
+			continue
+		}
+		if _, ok := ids[strings.TrimPrefix(t.Name, "owner:")]; ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 type Handler struct {
 	repo       *repo
 	tools      []tool.Tool
@@ -412,6 +428,7 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 	perms, _ := h.repo.ListToolPerms(r.Context(), paths)
 	allTags, _ := h.repo.ListTags(r.Context())
 	h.repo.ResolveOwnerDisplayNames(r.Context(), allTags)
+	allTags = filterOutOwnerTags(allTags)
 
 	items := make([]view.ToolRow, len(toolsOnly))
 	for i, t := range toolsOnly {
@@ -508,6 +525,7 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	perms, _ := h.repo.ListToolPerms(ctx, paths)
 	allTags, _ := h.repo.ListTags(ctx)
 	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	allTags = filterOutOwnerTags(allTags)
 
 	systemTagIDs := make(map[string]bool)
 	for _, t := range allTags {

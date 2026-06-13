@@ -375,7 +375,19 @@ func (r *repo) ResolveOwnerDisplayNames(ctx context.Context, tags []*entity.Tag)
 	for _, w := range workflows {
 		if t, ok := byID[w.ID]; ok {
 			t.DisplayName = w.Name
+			delete(byID, w.ID)
 		}
+	}
+
+	// Anything still in byID has no matching entity in any known table —
+	// it is a stale orphaned owner tag. Delete it silently.
+	for _, t := range byID {
+		r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			tx.Where("tag_id = ?", t.ID).Delete(&entity.ToolTag{})
+			tx.Where("tag_id = ?", t.ID).Delete(&entity.UserTag{})
+			tx.Delete(&entity.Tag{}, "id = ?", t.ID)
+			return nil
+		})
 	}
 }
 
