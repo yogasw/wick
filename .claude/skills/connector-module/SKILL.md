@@ -303,13 +303,20 @@ import (
     "github.com/yogasw/wick/pkg/connector"
 )
 
-// OAuthMeta returns the OAuth configuration for MyConn.
 func OAuthMeta() *connector.OAuthMeta {
     return &connector.OAuthMeta{
         // AuthorizeURL is the provider's consent page.
         AuthorizeURL: "https://myservice.com/oauth/authorize",
-        // Scopes is the comma or space-separated list of requested user scopes.
-        Scopes: "read:user,write:messages",
+        // TokenURL: standard token exchange endpoint (POST). When set, the generic
+        // callback POSTs here instead of using the Slack-specific slackgo path.
+        // Leave empty only for Slack (backward-compat).
+        TokenURL: "https://myservice.com/oauth/token",
+        // ExtraParams: extra query params appended to the authorize URL.
+        // Use for provider-specific requirements, e.g.:
+        //   Google: {"access_type":"offline","prompt":"consent"} → gets refresh_token
+        ExtraParams: map[string]string{},
+        // Scopes is the space or comma-separated list of requested user scopes.
+        Scopes: "read:user write:messages",
         // DisplayName appears on the "Connect" button in the UI.
         DisplayName: "MyService",
         // Icon is an inline SVG or emoji rendered on the Connect button.
@@ -388,9 +395,10 @@ Provider redirects back
 
 ### Caveats
 
-- The generic callback uses `slackgo.GetOAuthV2ResponseContext` — currently Slack-specific. If your provider uses a different token exchange endpoint, update `internal/manager/oauth.go::oauthCallback` to detect by connector key or add a `TokenURL` field to `OAuthMeta`.
+- When `OAuthMeta.TokenURL` is set, `oauthCallback` uses a standard HTTP POST exchange (generic — works for any provider). When `TokenURL` is empty, the Slack-specific `slackgo` path is used (backward-compatible; leave empty for Slack). If the response includes a `refresh_token`, the callback saves it to the `refresh_token` config key automatically.
 - `GetUserIdentity` is called with the **access token**, not the refresh token. Store the access token in the connector row; add a `RefreshToken` field to `Configs` if your provider issues long-lived refresh tokens.
 - The stored token is written to the connector row's `user_token` config key. Your `Configs` struct must have a `UserToken string` field tagged `wick:"secret;..."` for the admin UI to show it (and for `c.Cfg("user_token")` to work in operations).
+- For providers that issue short-lived access tokens (e.g., Google OAuth — 1 hour TTL), implement **lazy token refresh** in `repo.go`: try the API call with the stored token; on 401, POST to the token endpoint with `grant_type=refresh_token` + stored `refresh_token`, get a new access token, retry. Keep the new token in-memory for the current call — no persistence needed since `refresh_token` is long-lived. Return a clear error if `refresh_token` is missing: "Access token expired. Reconnect via Manager → Connectors → [Name] → Connect Account."
 
 ## Bootstrap
 
