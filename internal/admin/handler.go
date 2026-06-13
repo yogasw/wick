@@ -10,6 +10,7 @@ import (
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin/view"
+	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -26,6 +27,21 @@ type JobListProvider interface {
 	ListJobs(ctx context.Context) ([]entity.Job, error)
 }
 
+// ProjectLister lists all projects from the in-memory registry.
+type ProjectLister interface {
+	Projects() map[string]agentproject.Project
+}
+
+// WorkflowLister lists all workflow IDs.
+type WorkflowLister interface {
+	List() ([]string, error)
+}
+
+// SkillLister lists all skills from the DB.
+type SkillLister interface {
+	List(ctx context.Context) ([]entity.Skill, error)
+}
+
 type Handler struct {
 	repo       *repo
 	tools      []tool.Tool
@@ -36,6 +52,9 @@ type Handler struct {
 	tokens     *accesstoken.Service
 	oauth      *oauth.Service
 	auth       *login.Service
+	projects   ProjectLister
+	workflows  WorkflowLister
+	skillsDB   SkillLister
 }
 
 func NewHandler(
@@ -48,6 +67,9 @@ func NewHandler(
 	tokensSvc *accesstoken.Service,
 	oauthSvc *oauth.Service,
 	authSvc *login.Service,
+	projects ProjectLister,
+	workflows WorkflowLister,
+	skillsDB SkillLister,
 ) *Handler {
 	return &Handler{
 		repo:       newRepo(db),
@@ -59,6 +81,9 @@ func NewHandler(
 		tokens:     tokensSvc,
 		oauth:      oauthSvc,
 		auth:       authSvc,
+		projects:   projects,
+		workflows:  workflows,
+		skillsDB:   skillsDB,
 	}
 }
 
@@ -129,6 +154,16 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
 	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
 	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
+
+	// Projects, Workflows, Skills — ownership/access tag management.
+	mux.Handle("GET /admin/projects", admin(h.projectsAdminPage))
+	mux.Handle("POST /admin/projects/{id}/tags", admin(h.setProjectTags))
+
+	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))
+	mux.Handle("POST /admin/workflows/{id}/tags", admin(h.setWorkflowTags))
+
+	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
+	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
 
 	// Personal access tokens (admin override view). PATs authenticate
 	// any wick HTTP API — MCP is just one caller — so the surface is

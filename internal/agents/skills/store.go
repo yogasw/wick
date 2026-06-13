@@ -50,6 +50,15 @@ func (s *Store) OwnsSkill(ctx context.Context, userID, name string) (bool, error
 	return err == nil, err
 }
 
+// List returns all skill records.
+func (s *Store) List(ctx context.Context) ([]entity.Skill, error) {
+	var skills []entity.Skill
+	if err := s.db.WithContext(ctx).Find(&skills).Error; err != nil {
+		return nil, err
+	}
+	return skills, nil
+}
+
 // RegisterSystem upserts a system-owned skill record (no creator).
 func (s *Store) RegisterSystem(ctx context.Context, name, filePath string) error {
 	existing := &entity.Skill{}

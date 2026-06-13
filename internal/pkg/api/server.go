@@ -78,6 +78,7 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -1222,7 +1223,12 @@ func NewServer() *Server {
 	}
 
 	// ── Admin ────────────────────────────────────────────────────
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc)
+	skillsStore := agentskills.NewStore(db)
+	var wfLister admin.WorkflowLister
+	if wfMgr != nil {
+		wfLister = wfMgr.Service
+	}
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore)
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
