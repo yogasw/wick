@@ -1,9 +1,11 @@
-// Package googleworkspace wraps the Google Drive REST API v3 for LLM consumption.
+// Package googleworkspace wraps Google Drive, Sheets, Docs, and Slides REST APIs
+// for LLM consumption.
 //
-// Purpose: Provides Meta, Configs, 8 Operations, and HealthCheck. Each user
+// Purpose: Provides Meta, Configs, 11 Operations, and HealthCheck. Each user
 // authenticates their own Google account via OAuth2 (Connect Account button).
 // Operations are split read-only (list, search, info, content) vs mutating
-// (upload, create_folder, delete, share). Mutating ops default to disabled.
+// (upload, create_folder, delete, share, create_doc, create_sheet, create_slides).
+// Mutating ops default to disabled.
 //
 // Caller:   internal/connectors/registry.go::RegisterBuiltins()
 // Dependencies: googleworkspace/service.go, googleworkspace/repo.go, googleworkspace/oauth.go
@@ -22,10 +24,10 @@ import (
 // Meta returns the connector definition metadata.
 func Meta() connector.Meta {
 	return connector.Meta{
-		Key:         "google_drive",
-		Name:        "Google Drive",
-		Description: "Read, search, upload, and manage files in Google Drive using per-user OAuth2.",
-		Icon:        "📁",
+		Key:         "google_workspace",
+		Name:        "Google Workspace",
+		Description: "Manage files in Drive, read and write Sheets data, edit Docs content, and manage Slides presentations — all with one Google OAuth account.",
+		Icon:        "🗂️",
 	}
 }
 
@@ -89,7 +91,28 @@ type ShareFileInput struct {
 	Role   string `wick:"required;dropdown=reader|writer|commenter;desc=Access level to grant."`
 }
 
-// Operations returns all 8 operations for the Google Drive connector.
+// CreateDocInput is the argument schema for the create_doc operation.
+type CreateDocInput struct {
+	Name     string `wick:"required;desc=Document name. Example: Meeting Notes 2026."`
+	FolderID string `wick:"desc=Parent folder ID. Leave empty for My Drive root."`
+	Content  string `wick:"textarea;desc=Optional initial plain-text body. Leave empty to create a blank document."`
+}
+
+// CreateSheetInput is the argument schema for the create_sheet operation.
+type CreateSheetInput struct {
+	Name     string `wick:"required;desc=Spreadsheet name. Example: Sales Data Q1."`
+	FolderID string `wick:"desc=Parent folder ID. Leave empty for My Drive root."`
+	CSVData  string `wick:"textarea;desc=Optional CSV string to pre-populate the first sheet. Leave empty for a blank spreadsheet."`
+}
+
+// CreateSlidesInput is the argument schema for the create_slides operation.
+type CreateSlidesInput struct {
+	Name           string `wick:"required;desc=Presentation name."`
+	FolderID       string `wick:"desc=Parent folder ID. Leave empty for My Drive root."`
+	FirstSlideText string `wick:"desc=Optional title text for the first slide."`
+}
+
+// Operations returns all 11 operations for the Google Workspace connector.
 func Operations() []connector.Operation {
 	return []connector.Operation{
 		connector.Op("list_files", "List Files",
@@ -116,6 +139,15 @@ func Operations() []connector.Operation {
 		connector.OpDestructive("share_file", "Share File",
 			"Grant access to a file or folder by email address. Role must be reader, writer, or commenter. Returns the created permission ID.",
 			ShareFileInput{}, shareFile, wickdocs.Docs{}),
+		connector.OpDestructive("create_doc", "Create Google Doc",
+			"Create a new Google Document in Drive. Optionally supply initial plain-text content. Returns file ID and web view link.",
+			CreateDocInput{}, createDoc, wickdocs.Docs{}),
+		connector.OpDestructive("create_sheet", "Create Google Sheet",
+			"Create a new Google Spreadsheet in Drive. Optionally supply CSV data to pre-populate the first sheet. Returns file ID and web view link.",
+			CreateSheetInput{}, createSheet, wickdocs.Docs{}),
+		connector.OpDestructive("create_slides", "Create Google Slides",
+			"Create a new Google Slides presentation in Drive. Optionally set the title of the first slide. Returns file ID and web view link.",
+			CreateSlidesInput{}, createSlides, wickdocs.Docs{}),
 	}
 }
 
@@ -247,4 +279,30 @@ func shareFile(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return createPermission(c, fileID, email, role)
+}
+
+func createDoc(c *connector.Ctx) (any, error) {
+	name, err := validateString(c.Input("name"), "name")
+	if err != nil {
+		return nil, err
+	}
+	return createWorkspaceFile(c, name, "application/vnd.google-apps.document",
+		c.Input("folder_id"), c.Input("content"), "text/plain")
+}
+
+func createSheet(c *connector.Ctx) (any, error) {
+	name, err := validateString(c.Input("name"), "name")
+	if err != nil {
+		return nil, err
+	}
+	return createWorkspaceFile(c, name, "application/vnd.google-apps.spreadsheet",
+		c.Input("folder_id"), c.Input("csv_data"), "text/csv")
+}
+
+func createSlides(c *connector.Ctx) (any, error) {
+	name, err := validateString(c.Input("name"), "name")
+	if err != nil {
+		return nil, err
+	}
+	return createWorkspaceFileAndSetTitle(c, name, c.Input("folder_id"), c.Input("first_slide_text"))
 }
