@@ -19,10 +19,22 @@ import (
 type Server struct {
 	pool   *agentpool.Pool
 	layout agentconfig.Layout
+	// onRefresh handles OpRefreshSession — reload the session into the
+	// daemon's registry + re-broadcast its meta. nil = the op is a
+	// no-op (returns OK so the stdio caller doesn't treat it as fatal).
+	onRefresh func(sessionID string)
 }
 
 func NewServer(pool *agentpool.Pool, layout agentconfig.Layout) *Server {
 	return &Server{pool: pool, layout: layout}
+}
+
+// WithRefresh wires the OpRefreshSession handler. Pass a closure that
+// reloads the session into the in-memory registry and broadcasts its
+// meta over SSE.
+func (s *Server) WithRefresh(fn func(sessionID string)) *Server {
+	s.onRefresh = fn
+	return s
 }
 
 // Listen binds the socket and serves until ctx is cancelled.
@@ -62,10 +74,12 @@ func (s *Server) handle(conn net.Conn) {
 	}
 	var rep Reply
 	switch cmd.Op {
-	case "switch_provider":
+	case OpSwitchProvider:
 		rep = s.switchProvider(cmd)
-	case "kill":
+	case OpKill:
 		rep = s.kill(cmd)
+	case OpRefreshSession:
+		rep = s.refreshSession(cmd)
 	default:
 		rep = Reply{Error: "unknown op: " + cmd.Op}
 	}
@@ -159,6 +173,16 @@ func (s *Server) switchProvider(cmd Cmd) Reply {
 		ProviderType: provType,
 		ProviderName: provName,
 	}
+}
+
+func (s *Server) refreshSession(cmd Cmd) Reply {
+	if cmd.SessionID == "" {
+		return Reply{Error: "session_id required for refresh_session"}
+	}
+	if s.onRefresh != nil {
+		s.onRefresh(cmd.SessionID)
+	}
+	return Reply{OK: true, SessionID: cmd.SessionID}
 }
 
 func (s *Server) kill(cmd Cmd) Reply {

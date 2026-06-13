@@ -405,6 +405,7 @@ templ SessionDetail(vm SessionDetailVM) {
 				</button>
 				<div class="max-w-4xl mx-auto">
 					@AskUserCard(vm.Base)
+					@AskUserFormModal(vm.Base)
 					@chatComposer(vm)
 				</div>
 			</div>
@@ -431,7 +432,9 @@ templ SessionDetail(vm SessionDetailVM) {
 		</div>
 		@ApprovalModal(vm.Base)
 		@ContextPanel(vm.Base, vm.Session.ID)
+		<script src={ vm.Base + "/static/js/notify.js" }></script>
 		<script src={ vm.Base + "/static/js/agents.js" }></script>
+		<script src={ vm.Base + "/static/js/askuser.js" }></script>
 		<script src={ vm.Base + "/static/js/context.js" }></script>
 		<script src={ vm.Base + "/static/js/process.js" }></script>
 		<script src={ vm.Base + "/static/js/scm-dock.js" }></script>

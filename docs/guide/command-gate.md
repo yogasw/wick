@@ -46,16 +46,18 @@ The master gate switch on the Providers page fans out — toggle ON sets every i
 
 **Bypass lock**: if the gate's `PermissionMode` is set to `bypass` (non-interactive channels), the master switch shows a `locked (bypass)` badge and refuses toggles. Switch `PermissionMode` back to `on` first.
 
-### Umbrella policy
+### Command gate config
 
-The gate config is the umbrella for **every user-facing prompt** an agent might issue, not just shell approval. It carries two sub-modes:
+The gate config carries two independent modes:
 
-| Field | What it gates | Values |
+| Field | What it controls | Values |
 |---|---|---|
 | `PermissionMode` | Per-tool permission prompts (the `PreToolUse` hook on each provider) | `on` (install hook) / `bypass` (skip — for Slack / HTTP / cron channels where no human can answer) |
-| `AskUserMode` | The `ask_user` MCP tool the agent calls mid-turn | `on` (route question to the web UI) / `off` (return a clean error to the LLM so it picks a default instead of hanging) |
+| `AskUserMode` | The `ask_user` MCP tool the agent calls mid-turn (global fallback) | `on` (route question to the web UI) / `off` (return a clean error to the LLM so it picks a default instead of hanging) |
 
-The master `GateEnabled` flag is the global kill-switch — off snaps every sub-mode to its unguarded default (`PermissionMode: bypass`, `AskUserMode: off`). On honors each sub-mode independently.
+The master `GateEnabled` flag controls **only** the command gate (the `PreToolUse` hook path). Turning it off sets `PermissionMode: bypass` — commands run unguarded. It does **not** disable `ask_user`; that tool rides wick's own socket/SSE channel independently of whether the hook is installed.
+
+`AskUserMode` is the global fallback for `ask_user`. Per-channel overrides take priority — see [AskUser policy](#askuser-policy) below.
 
 Defaults on fresh install: gate on, permission prompts on, ask_user routed to the UI. The legacy `bypass_permissions` checkbox was retired in v0.13.0 — its value is one-shot migrated to `PermissionMode` at boot.
 
@@ -108,6 +110,7 @@ The gate binary has a built-in always-allow list for wick's read-only discovery 
 | `wick_skill_list` | List available skills |
 | `wick_session_info` | Read session metadata |
 | `wick_set_title` | Update the session sidebar title |
+| `wick_session_config` | Read or override per-session connector configs |
 | `ask_user` / `AskUserQuestion` | Route a question to the web UI |
 
 `wick_execute` and `wick_skill_sync` are **not** on this list — they run real connector ops or write files and remain gated. The gate-exempt tools are also guarded server-side (access control, audit log), so the exemption at the gate is a UX shortcut, not a security gap. If you need management ops reviewed at the gate, see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).
@@ -326,6 +329,21 @@ Use this as a smoke test after upgrading a provider CLI — the contract has cha
 | Bypass flag + gate ON | Spawner strips hook config, runs unguarded | Gate won't fire — bypass intent (non-interactive channels) takes precedence |
 
 Infrastructure failures outside wick's control fail open; failures inside the gate (malformed stdin, post-dial hang) fail closed.
+
+## AskUser policy
+
+`ask_user` is resolved per session origin, not by the command gate master switch.
+
+| Session origin | Default behavior | How to change |
+|---|---|---|
+| Web UI / stdio / external MCP | Enabled — routes to the web UI card | Toggle `AskUserMode` in Configs → `agents` group |
+| Slack | Disabled — returns an error so the agent picks a default | Add `ask_user_enabled = true` to the Slack channel config |
+| Telegram | Disabled | Add `ask_user_enabled = true` to the Telegram channel config |
+| REST | Disabled | Add `ask_user_enabled = true` to the REST channel config |
+
+Enabling `ask_user_enabled` on a channel only makes sense once that channel can render the interactive modal; the flag exists to let operators opt in when that UI is available for their deployment.
+
+The global `AskUserMode` setting is the fallback for web/stdio/MCP sessions. Per-channel flags take full priority over it.
 
 ## Two patterns of approval
 

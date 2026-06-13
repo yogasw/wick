@@ -312,6 +312,12 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		return
 	}
 
+	overrides, err := handlers.SessionOverridesFor(h.layout, args, connectorID)
+	if err != nil {
+		sseWriteToolError(sess, req, err.Error(), toolID)
+		return
+	}
+
 	rawParams, _ := args["params"].(map[string]any)
 	input := handlers.StringifyArgs(rawParams)
 
@@ -343,15 +349,16 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 	resCh := make(chan execOut, 1)
 	go func() {
 		res, err := h.connectors.Execute(execCtx, connectors.ExecuteParams{
-			ConnectorID:  connectorID,
-			OperationKey: opKey,
-			Input:        input,
-			Source:       entity.ConnectorRunSourceMCP,
-			UserID:       user.ID,
-			IPAddress:    handlers.ClientIP(r),
-			UserAgent:    r.Header.Get("User-Agent"),
-			Progress:     reporter,
-			AccountID:    accountID,
+			ConnectorID:     connectorID,
+			OperationKey:    opKey,
+			Input:           input,
+			Source:          entity.ConnectorRunSourceMCP,
+			UserID:          user.ID,
+			IPAddress:       handlers.ClientIP(r),
+			UserAgent:       r.Header.Get("User-Agent"),
+			Progress:        reporter,
+			AccountID:       accountID,
+			ConfigOverrides: overrides,
 		})
 		resCh <- execOut{res: res, err: err}
 	}()

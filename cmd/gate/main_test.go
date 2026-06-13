@@ -14,6 +14,7 @@ import (
 func TestIsAlwaysAllowedTool(t *testing.T) {
 	allowed := []string{
 		"AskUserQuestion",
+		"ToolSearch",
 		"mcp__wick-agent__ask_user",
 		"mcp__wick-agent__wick_list",
 		"mcp__wick-agent__wick_search",
@@ -23,6 +24,7 @@ func TestIsAlwaysAllowedTool(t *testing.T) {
 		"mcp__wick-agent__wick_skill_list",
 		"mcp__wick-agent__wick_session_info",
 		"mcp__wick-agent__wick_set_title",
+		"mcp__wick-agent__wick_session_config",
 	}
 	for _, name := range allowed {
 		if !isAlwaysAllowedTool(name) {

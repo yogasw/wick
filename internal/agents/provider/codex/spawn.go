@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -79,18 +80,32 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	bin = resolved
 
-	// Write preset to .codex/soul.md and point codex at it via
-	// -c instructions_files so the instructions apply on both fresh and
-	// resumed sessions (AGENTS.md is ignored on resume).
+	// Write preset to <session>/.codex/soul.md and point codex at it via
+	// -c model_instructions_file so the instructions apply on both fresh
+	// and resumed sessions (AGENTS.md is ignored on resume).
+	//
+	// soul.md MUST live under the per-session dir, not the project
+	// Workspace: the preset embeds the session identity block
+	// (session_id, channel), and many sessions can share one project
+	// workspace — a workspace-local soul.md would clobber across
+	// sessions and race on concurrent spawns, feeding codex the wrong
+	// session_id. SessionDir is empty only in legacy/test paths, where
+	// we fall back to the workspace.
 	soulPath := ""
-	if opt.Workspace != "" && opt.Preset != "" {
-		codexDir := filepath.Join(opt.Workspace, ".codex")
-		if err := os.MkdirAll(codexDir, 0o755); err == nil {
-			p := filepath.Join(codexDir, "soul.md")
-			if err := os.WriteFile(p, []byte(opt.Preset), 0o644); err == nil {
-				soulPath = p
-			} else {
-				log.Warn().Err(err).Str("path", p).Msg("agents.spawn: write soul.md failed")
+	if opt.Preset != "" {
+		soulDir := opt.SessionDir
+		if soulDir == "" {
+			soulDir = opt.Workspace
+		}
+		if soulDir != "" {
+			codexDir := filepath.Join(soulDir, ".codex")
+			if err := os.MkdirAll(codexDir, 0o755); err == nil {
+				p := filepath.Join(codexDir, "soul.md")
+				if err := os.WriteFile(p, []byte(opt.Preset), 0o644); err == nil {
+					soulPath = p
+				} else {
+					log.Warn().Err(err).Str("path", p).Msg("agents.spawn: write soul.md failed")
+				}
 			}
 		}
 	}
@@ -119,8 +134,13 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	if soulPath != "" {
-		// Use JSON array syntax for TOML list value.
-		args = append(args, "-c", `instructions_files=["`+soulPath+`"]`)
+		// model_instructions_file points codex at our preset file as the
+		// model instructions. The earlier `instructions_files` key was
+		// silently ignored by codex (unknown config key) — the model
+		// never received soul.md at all, so it had no session identity
+		// or wick rules. Value is a TOML literal string (single quotes)
+		// so Windows backslashes in the path are not treated as escapes.
+		args = append(args, "-c", `model_instructions_file=`+tomlLiteral(soulPath))
 	}
 	if opt.ResumeID != "" {
 		args = append(args, "resume", opt.ResumeID)
@@ -193,6 +213,18 @@ func (s Spawner) applyHookConfig(opt provider.SpawnOptions) bool {
 		return false
 	}
 	return true
+}
+
+// tomlLiteral wraps s in a TOML literal string (single quotes) so
+// backslashes and other escape-prone chars in a Windows path pass
+// through verbatim. TOML literal strings cannot contain a single
+// quote; if s does (not expected for wick-controlled session paths),
+// fall back to a basic string with backslashes doubled.
+func tomlLiteral(s string) string {
+	if !strings.Contains(s, "'") {
+		return "'" + s + "'"
+	}
+	return `"` + strings.ReplaceAll(s, `\`, `\\`) + `"`
 }
 
 // process implements provider.Process for a started codex subprocess.

@@ -43,6 +43,7 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
 | `wick_session_info` | `readOnlyHint` | Read the active session's metadata: `session_id`, `title`, `title_custom`, `origin`, `status`, `project_id`. Used by the agent to decide whether to set a title. |
 | `wick_set_title` | `idempotentHint` | Set the session's sidebar title and mark it as custom so the auto-derived first-message label never overwrites it. Title is truncated to 60 characters. |
+| `wick_session_config` | — | Read or temporarily override a connector row's config for one session. Overrides live in the session dir and die with the session — the connector row in the DB is never touched. See [Session config overrides](#session-config-overrides). |
 
 Why not a static list?
 
@@ -505,6 +506,62 @@ When the agent system prompt is active (wick-agent server), the immutable system
 3. If `title_custom` is already `true`, leave the title alone.
 
 This means sessions get a descriptive label automatically without prompting the user, while a title set manually by the user or by a previous agent turn is never clobbered.
+
+## Session config overrides
+
+`wick_session_config` lets an agent (or a workflow) temporarily override a connector row's config for the duration of one session — without touching the DB row. Overrides live in the session directory and are discarded when the session ends.
+
+Secrets are always handled as `wick_enc_` tokens — plaintext never leaves the server through this tool.
+
+### Actions
+
+| `action` | What it does |
+|----------|-------------|
+| `get` | Return the effective config (DB row merged with session overrides). Secret values are returned as `wick_enc_` tokens. |
+| `set` | Apply one or more overrides directly. Secret values must already be `wick_enc_` tokens — use `wick_encrypt` to mint one, or use `ask` instead. |
+| `ask` | Open a step-by-step form in the session web UI. The user types values (including secrets) directly in the browser; the server encrypts them. The agent only ever receives tokens, never plaintext. |
+| `clear` | Drop overrides. Pass `keys: ["key1","key2"]` to clear specific keys, or omit `keys` to clear all overrides for this connector in this session. |
+
+### Required parameters (all actions)
+
+| Parameter | Description |
+|-----------|-------------|
+| `session_id` | The active session ID |
+| `connector_id` | The connector row ID (from `wick_list`) |
+| `action` | One of `get`, `set`, `ask`, `clear` |
+
+### `get` response shape
+
+```json
+{
+  "connector_id": "abc123",
+  "session_id": "9b7e-...",
+  "fields": [
+    { "key": "base_url", "value": "https://api.example.com", "secret": false, "required": true, "overridden": false },
+    { "key": "api_key",  "value": "wick_enc_...", "secret": true, "required": true, "overridden": true }
+  ]
+}
+```
+
+`overridden: true` means the value came from a session override rather than the DB row.
+
+### `set` example
+
+```json
+{
+  "session_id": "9b7e-...",
+  "connector_id": "abc123",
+  "action": "set",
+  "overrides": {
+    "base_url": "https://staging.example.com",
+    "api_key": "wick_enc_..."
+  }
+}
+```
+
+### How overrides are applied at execution time
+
+When `wick_execute` is called with a `session_id`, the server loads any overrides stored for that `(session_id, connector_id)` pair and merges them on top of the DB row before `ExecuteFunc` runs. The audit log records which keys were overridden.
 
 ## Reference
 
