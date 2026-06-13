@@ -85,6 +85,8 @@ func getPresentationContent(c *connector.Ctx, fileID string) (PresentationConten
 }
 
 // addSlide adds a new slide at the given index (or appends if insertAtIndex < 0).
+// Title and body text are set via a second batchUpdate using the actual
+// API-assigned placeholder object IDs (not hardcoded IDs).
 func addSlide(c *connector.Ctx, fileID, title, bodyText, layout string, insertAtIndex int) (SlideAddResult, error) {
 	slideID := fmt.Sprintf("new_slide_%d", insertAtIndex)
 	createSlideReq := map[string]any{
@@ -94,26 +96,9 @@ func addSlide(c *connector.Ctx, fileID, title, bodyText, layout string, insertAt
 	if insertAtIndex >= 0 {
 		createSlideReq["insertionIndex"] = insertAtIndex
 	}
-	reqs := []any{map[string]any{"createSlide": createSlideReq}}
-	if title != "" {
-		reqs = append(reqs, map[string]any{
-			"insertText": map[string]any{
-				"objectId":       slideID + "_title",
-				"insertionIndex": 0,
-				"text":           title,
-			},
-		})
-	}
-	if bodyText != "" {
-		reqs = append(reqs, map[string]any{
-			"insertText": map[string]any{
-				"objectId":       slideID + "_body",
-				"insertionIndex": 0,
-				"text":           bodyText,
-			},
-		})
-	}
-	respBody, err := slidesPost(c, "/"+fileID+":batchUpdate", map[string]any{"requests": reqs})
+	respBody, err := slidesPost(c, "/"+fileID+":batchUpdate", map[string]any{
+		"requests": []any{map[string]any{"createSlide": createSlideReq}},
+	})
 	if err != nil {
 		return SlideAddResult{}, fmt.Errorf("slides add slide: %w", err)
 	}
@@ -130,6 +115,56 @@ func addSlide(c *connector.Ctx, fileID, title, bodyText, layout string, insertAt
 	resultID := slideID
 	if len(resp.Replies) > 0 && resp.Replies[0].CreateSlide != nil {
 		resultID = resp.Replies[0].CreateSlide.ObjectID
+	}
+
+	// Best-effort: set title/body using actual API-assigned placeholder IDs.
+	if (title != "" || bodyText != "") && resultID != "" {
+		presBody, err := slidesGet(c, "/"+fileID+"?fields=slides.objectId,slides.pageElements")
+		if err == nil {
+			var pres struct {
+				Slides []struct {
+					ObjectID     string `json:"objectId"`
+					PageElements []struct {
+						ObjectID string `json:"objectId"`
+						Shape    *struct {
+							Placeholder *struct{ Type string `json:"type"` } `json:"placeholder"`
+						} `json:"shape"`
+					} `json:"pageElements"`
+				} `json:"slides"`
+			}
+			if json.Unmarshal(presBody, &pres) == nil {
+				var textReqs []any
+				for _, sl := range pres.Slides {
+					if sl.ObjectID != resultID {
+						continue
+					}
+					for _, el := range sl.PageElements {
+						if el.Shape == nil || el.Shape.Placeholder == nil {
+							continue
+						}
+						var text string
+						switch el.Shape.Placeholder.Type {
+						case "TITLE", "CENTERED_TITLE":
+							text = title
+						case "BODY", "SUBTITLE":
+							text = bodyText
+						}
+						if text != "" {
+							textReqs = append(textReqs, map[string]any{
+								"insertText": map[string]any{
+									"objectId":       el.ObjectID,
+									"insertionIndex": 0,
+									"text":           text,
+								},
+							})
+						}
+					}
+				}
+				if len(textReqs) > 0 {
+					_, _ = slidesPost(c, "/"+fileID+":batchUpdate", map[string]any{"requests": textReqs})
+				}
+			}
+		}
 	}
 	return SlideAddResult{SlideID: resultID, SlideIndex: insertAtIndex}, nil
 }
