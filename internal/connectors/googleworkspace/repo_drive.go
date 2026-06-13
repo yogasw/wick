@@ -288,6 +288,149 @@ func createPermission(c *connector.Ctx, fileID, email, role string) (any, error)
 	}, nil
 }
 
+// buildJSONRequest builds an HTTP request with a JSON body. Shared by repo_sheets, repo_docs, repo_slides.
+func buildJSONRequest(c *connector.Ctx, method, fullURL string, body any) (*http.Request, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(c.Context(), method, fullURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
+}
+
+// createWorkspaceFile creates a Google Workspace file (Doc, Sheet, or Slides) using the Drive API.
+// If content is non-empty, it is imported via multipart upload with the given contentMimeType.
+// Returns WorkspaceFileResult.
+func createWorkspaceFile(c *connector.Ctx, name, workspaceMime, folderID, content, contentMime string) (WorkspaceFileResult, error) {
+	var body []byte
+	var err error
+	if content != "" {
+		body, err = uploadMultipartWorkspace(c, name, workspaceMime, folderID, content, contentMime)
+	} else {
+		meta := map[string]any{"name": name, "mimeType": workspaceMime}
+		if folderID != "" {
+			meta["parents"] = []string{folderID}
+		}
+		body, err = drivePost(c, "/files?fields=id,name,webViewLink", meta)
+	}
+	if err != nil {
+		return WorkspaceFileResult{}, err
+	}
+	var f driveFile
+	if err := json.Unmarshal(body, &f); err != nil {
+		return WorkspaceFileResult{}, fmt.Errorf("parse workspace file response: %w", err)
+	}
+	return WorkspaceFileResult{ID: f.ID, Name: f.Name, WebViewLink: f.WebViewLink}, nil
+}
+
+// uploadMultipartWorkspace uploads content with a target Google Workspace MIME type,
+// causing Drive to import it as a native workspace file (Doc, Sheet, etc).
+func uploadMultipartWorkspace(c *connector.Ctx, name, workspaceMime, folderID, content, contentMime string) ([]byte, error) {
+	meta := map[string]any{"name": name, "mimeType": workspaceMime}
+	if folderID != "" {
+		meta["parents"] = []string{folderID}
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return nil, fmt.Errorf("marshal workspace metadata: %w", err)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	metaHeader := textproto.MIMEHeader{}
+	metaHeader.Set("Content-Type", "application/json; charset=UTF-8")
+	metaPart, err := mw.CreatePart(metaHeader)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata part: %w", err)
+	}
+	if _, err := metaPart.Write(metaJSON); err != nil {
+		return nil, fmt.Errorf("write metadata part: %w", err)
+	}
+
+	contentHeader := textproto.MIMEHeader{}
+	contentHeader.Set("Content-Type", contentMime)
+	contentPart, err := mw.CreatePart(contentHeader)
+	if err != nil {
+		return nil, fmt.Errorf("create content part: %w", err)
+	}
+	if _, err := contentPart.Write([]byte(content)); err != nil {
+		return nil, fmt.Errorf("write content part: %w", err)
+	}
+	mw.Close()
+
+	boundary := mw.Boundary()
+	bufBytes := buf.Bytes()
+	return doWithRefresh(c, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(c.Context(), http.MethodPost,
+			"https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",
+			bytes.NewReader(bufBytes))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
+		return req, nil
+	})
+}
+
+// createWorkspaceFileAndSetTitle creates a blank Google Slides presentation and
+// optionally sets the first slide's title via the Slides API batchUpdate.
+// The title update is best-effort: if it fails, the created file is still returned.
+func createWorkspaceFileAndSetTitle(c *connector.Ctx, name, folderID, firstSlideText string) (WorkspaceFileResult, error) {
+	result, err := createWorkspaceFile(c, name, "application/vnd.google-apps.presentation", folderID, "", "")
+	if err != nil {
+		return WorkspaceFileResult{}, err
+	}
+	if firstSlideText == "" {
+		return result, nil
+	}
+	presBody, err := slidesGet(c, "/"+result.ID+"?fields=slides")
+	if err != nil {
+		return result, nil
+	}
+	var pres struct {
+		Slides []struct {
+			PageElements []struct {
+				ObjectID string `json:"objectId"`
+				Shape    *struct {
+					Placeholder *struct{ Type string `json:"type"` } `json:"placeholder"`
+				} `json:"shape"`
+			} `json:"pageElements"`
+		} `json:"slides"`
+	}
+	if err := json.Unmarshal(presBody, &pres); err != nil || len(pres.Slides) == 0 {
+		return result, nil
+	}
+	var titleObjectID string
+	for _, el := range pres.Slides[0].PageElements {
+		if el.Shape != nil && el.Shape.Placeholder != nil && el.Shape.Placeholder.Type == "TITLE" {
+			titleObjectID = el.ObjectID
+			break
+		}
+	}
+	if titleObjectID == "" {
+		return result, nil
+	}
+	updateReq := map[string]any{
+		"requests": []any{
+			map[string]any{
+				"insertText": map[string]any{
+					"objectId":       titleObjectID,
+					"insertionIndex": 0,
+					"text":           firstSlideText,
+				},
+			},
+		},
+	}
+	_, _ = slidesPost(c, "/"+result.ID+":batchUpdate", updateReq)
+	return result, nil
+}
+
 // uploadMultipart uploads file content with metadata using multipart/related.
 func uploadMultipart(c *connector.Ctx, name, content, folderID, mimeType string) ([]byte, error) {
 	if mimeType == "" {
