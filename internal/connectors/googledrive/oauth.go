@@ -23,8 +23,9 @@ func OAuthMeta() *connector.OAuthMeta {
 		AuthorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:     "https://oauth2.googleapis.com/token",
 		ExtraParams: map[string]string{
-			"access_type": "offline",
-			"prompt":      "consent",
+			"response_type": "code",
+			"access_type":   "offline",
+			"prompt":        "consent",
 		},
 		Scopes:      "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email",
 		DisplayName: "Google Drive",

@@ -307,13 +307,23 @@ func uploadMultipart(c *connector.Ctx, name, content, folderID, mimeType string)
 
 	metaHeader := textproto.MIMEHeader{}
 	metaHeader.Set("Content-Type", "application/json; charset=UTF-8")
-	metaPart, _ := mw.CreatePart(metaHeader)
-	metaPart.Write(metaJSON)
+	metaPart, err := mw.CreatePart(metaHeader)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata part: %w", err)
+	}
+	if _, err := metaPart.Write(metaJSON); err != nil {
+		return nil, fmt.Errorf("write metadata part: %w", err)
+	}
 
 	contentHeader := textproto.MIMEHeader{}
 	contentHeader.Set("Content-Type", mimeType)
-	contentPart, _ := mw.CreatePart(contentHeader)
-	contentPart.Write([]byte(content))
+	contentPart, err := mw.CreatePart(contentHeader)
+	if err != nil {
+		return nil, fmt.Errorf("create content part: %w", err)
+	}
+	if _, err := contentPart.Write([]byte(content)); err != nil {
+		return nil, fmt.Errorf("write content part: %w", err)
+	}
 	mw.Close()
 
 	boundary := mw.Boundary()

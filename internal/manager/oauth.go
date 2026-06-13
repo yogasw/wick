@@ -229,6 +229,11 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// Resolve display name via GetUserIdentity.
 	userID, displayName, err := mod.OAuth.GetUserIdentity(r.Context(), accessToken)
 	if err != nil {
+		if fallbackUserID == "" {
+			log.Error().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed, no fallback user ID")
+			http.Error(w, "failed to resolve user identity: "+err.Error(), http.StatusBadGateway)
+			return
+		}
 		log.Warn().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed; using fallback user ID")
 		userID = fallbackUserID
 		displayName = fallbackUserID
