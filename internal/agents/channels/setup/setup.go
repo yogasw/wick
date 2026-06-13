@@ -17,15 +17,15 @@ import (
 	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
 
-// SlackStore is the full set of capabilities the Slack composer needs:
-// load the config + ensure the agent_channels row exists. Composed from
-// the smaller interfaces declared in the channels package so a test fake
-// only has to satisfy these two methods.
+// SlackStore is the full set of capabilities the Slack composer needs.
 type SlackStore interface {
 	agentchannels.SlackConfigStore
 	agentchannels.ChannelEnsurer
+	LoadSlackForUser(userID string) (agentconfig.SlackChannelConfig, string, error)
+	ListChannelOwners(channelType string) ([]*string, error)
 }
 
 // TelegramStore mirrors SlackStore.
@@ -64,30 +64,43 @@ func All(reg *agentchannels.Registry, store Store, sendFn SendFnFactory, restAut
 	Rest(reg, store, sendFn("rest"), restAuth)
 }
 
-// Slack constructs the Slack channel from the store, applies its setters,
-// and registers it (with a hot-reload ConfigSource) on reg. Returns the
-// channel for callers that need to retain a reference; safe to ignore.
-//
-// Logs whether the channel is configured so operators see at boot why a
-// transport may stay dormant.
-func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.SendFunc) *agentslack.Channel {
+func instanceKey(channelType string, ownerUserID *string) string {
+	if ownerUserID == nil || *ownerUserID == "" {
+		return channelType + ":__owner__"
+	}
+	return channelType + ":" + *ownerUserID
+}
+
+// Slack loads all configured user channel rows and registers one keyed instance per user.
+func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.SendFunc) {
 	if err := store.EnsureChannel("slack"); err != nil {
 		log.Warn().Err(err).Msg("agents: slack channel ensure failed")
 	}
-	cfg, pubURL, err := store.LoadSlack()
+	owners, err := store.ListChannelOwners("slack")
 	if err != nil {
-		log.Warn().Err(err).Msg("agents: failed to load slack config from agent_channels")
+		log.Warn().Err(err).Msg("agents: slack list channel owners failed; loading App Owner only")
+		owners = []*string{nil}
 	}
-	ch := agentslack.New(cfg)
-	ch.SetSendFunc(sendFn)
-	ch.SetPublicURL(pubURL)
-	reg.Add(ch, agentslack.NewConfigSource(store, ch))
-	if ch.IsConfigured() {
-		log.Info().Msg("agents: slack channel configured, will start with server")
-	} else {
-		log.Info().Msg("agents: slack channel not configured, skipping (set BotToken + AppToken in Channels → Slack)")
+	for _, ownerID := range owners {
+		uid := ""
+		if ownerID != nil {
+			uid = *ownerID
+		}
+		cfg, pubURL, err := store.LoadSlackForUser(uid)
+		if err != nil {
+			log.Warn().Err(err).Str("user_id", uid).Msg("agents: failed to load slack config for user")
+			continue
+		}
+		ch := agentslack.NewWithOwner(cfg, uid)
+		ch.SetSendFunc(sendFn)
+		ch.SetPublicURL(pubURL)
+		key := instanceKey("slack", ownerID)
+		src := agentslack.NewConfigSourceKeyed(store, ch, uid)
+		reg.AddKeyed(key, ch, src)
+		if ch.IsConfigured() {
+			log.Info().Str("instance", key).Msg("agents: slack channel configured")
+		}
 	}
-	return ch
 }
 
 // Rest constructs the OpenAI-compatible REST channel and registers it
