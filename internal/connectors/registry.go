@@ -126,6 +126,10 @@ func RegisterBuiltins() {
 		Meta:       withConnectorTag(httprest.Meta(), tags.API),
 		Configs:    entity.StructToConfigs(httprest.Configs{}),
 		Operations: httprest.Operations(),
+		// Generic HTTP connector: base_url / auth header are exactly the
+		// kind of config a user may want to point at staging or another
+		// account for a single session.
+		AllowSessionConfig: true,
 	})
 	registerOnce(connector.Module{
 		Meta:        withConnectorTag(slack.Meta(), tags.Communication),

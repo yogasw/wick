@@ -110,7 +110,7 @@ The gate binary has a built-in always-allow list for wick's read-only discovery 
 | `wick_skill_list` | List available skills |
 | `wick_session_info` | Read session metadata |
 | `wick_set_title` | Update the session sidebar title |
-| `wick_session_config` | Read or override per-session connector configs |
+| `wick_session_workspace` | Manage per-session ephemeral connector instances |
 | `ask_user` / `AskUserQuestion` | Route a question to the web UI |
 
 `wick_execute` and `wick_skill_sync` are **not** on this list — they run real connector ops or write files and remain gated. The gate-exempt tools are also guarded server-side (access control, audit log), so the exemption at the gate is a UX shortcut, not a security gap. If you need management ops reviewed at the gate, see [Wick Manager → Command gate & management ops](/connectors/wickmanager#command-gate-management-ops).

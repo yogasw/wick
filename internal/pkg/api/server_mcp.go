@@ -164,7 +164,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		WithAppURL(configsSvc.AppURL).
 		WithDB(db).
 		// Session-scoped tools (wick_session_info / wick_set_title /
-		// wick_session_config) read the same on-disk layout the server
+		// wick_session_workspace) read the same on-disk layout the server
 		// writes — stdio shares it via agents.base_dir config.
 		WithLayout(stdioWfLayout).
 		// Stdio writes session meta straight to disk, but the running

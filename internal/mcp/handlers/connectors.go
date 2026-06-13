@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	"github.com/yogasw/wick/internal/agents/sessionconfig"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -69,7 +68,7 @@ type connectorDetail struct {
 	Tools       []toolDetail `json:"tools"`
 }
 
-func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, tagIDs []string, isAdmin bool) {
+func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
@@ -149,6 +148,15 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			}
 		}
 	}
+	// Session-workspace instances: ephemeral connectors scoped to the
+	// caller's session, listed only when a session_id is passed. They
+	// appear like brand-new connectors but live and die with the session.
+	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
+		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, strings.TrimSpace(sid))
+		summaries = append(summaries, sessSummaries...)
+		totalTools += sessTools
+	}
+
 	rsp.ToolJSON(w, req.ID, ListResult{
 		Connectors:      summaries,
 		TotalConnectors: len(summaries),
@@ -222,13 +230,27 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	rsp.ToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
 }
 
-func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, tagIDs []string, isAdmin bool) {
+func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	rawID, _ := args["id"].(string)
 	rawID = strings.TrimSpace(rawID)
 	// id may be composite "connectorID/accountID" from wick_list account entries.
 	connectorID, scopedAccountID, _ := strings.Cut(rawID, "/")
 	if connectorID == "" {
 		rsp.ToolError(w, req.ID, "id is required", "")
+		return
+	}
+	// Session-workspace instance: resolve from the session file and render
+	// the base module's op schema, no DB row involved.
+	if target, ok, err := SessionInstanceFor(layout, args, connectorID); err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), connectorID)
+		return
+	} else if ok {
+		detail, found := sessionInstanceDetail(svc, target, connectorID)
+		if !found {
+			rsp.ToolError(w, req.ID, "session connector base module not registered", connectorID)
+			return
+		}
+		rsp.ToolJSON(w, req.ID, detail)
 		return
 	}
 	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
@@ -296,15 +318,20 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
 	}
-	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-	if err != nil || !allowed {
-		rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
-		return
-	}
-	overrides, err := SessionOverridesFor(layout, args, connectorID)
+	// Session-workspace instance: run against the ephemeral instance's own
+	// config (no DB row, no tag visibility — the session itself is the
+	// authorization scope).
+	sessionTarget, isSession, err := SessionInstanceFor(layout, args, connectorID)
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
+	}
+	if !isSession {
+		allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		if err != nil || !allowed {
+			rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+			return
+		}
 	}
 	rawParams, _ := args["params"].(map[string]any)
 	input := StringifyArgs(rawParams)
@@ -318,7 +345,7 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		IPAddress:       ClientIP(r),
 		UserAgent:       r.Header.Get("User-Agent"),
 		AccountID:       accountID,
-		ConfigOverrides: overrides,
+		SessionInstance: sessionTarget,
 	})
 	if execErr != nil {
 		body := execErr.Error()
@@ -332,26 +359,6 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		Content: []ToolContent{{Type: "text", Text: res.ResponseJSON}},
 		IsError: false,
 	})
-}
-
-// SessionOverridesFor extracts the optional session_id from
-// wick_execute args and loads that session's config overrides for
-// the connector. No session_id (or an empty file) yields nil — the
-// Execute path then runs on the row's saved configs untouched.
-func SessionOverridesFor(layout agentconfig.Layout, args map[string]any, connectorID string) (map[string]string, error) {
-	sid, _ := args["session_id"].(string)
-	sid = strings.TrimSpace(sid)
-	if sid == "" {
-		return nil, nil
-	}
-	overrides, err := sessionconfig.For(layout, sid, connectorID)
-	if err != nil {
-		return nil, fmt.Errorf("load session config overrides: %w", err)
-	}
-	if len(overrides) == 0 {
-		return nil, nil
-	}
-	return overrides, nil
 }
 
 // FormatToolID produces the opaque tool identifier.

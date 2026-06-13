@@ -111,35 +111,93 @@
     b.addEventListener("click", () => { onClick(); renderAll(); });
     return b;
   }
+  // iconDeleteBtn is the prominent top-right delete: a trash icon with a
+  // 32px hit area and a red hover, used on field + operation cards.
+  function iconDeleteBtn(title, onClick) {
+    const b = el("button", "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-neg-100 hover:text-neg-400 dark:text-black-600", { title: title || "Remove" });
+    b.type = "button";
+    b.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 11v6M14 11v6" stroke-linecap="round"/></svg>';
+    b.addEventListener("click", () => { onClick(); renderAll(); });
+    return b;
+  }
+
+  // labeledField stacks a small label above an input so the form reads
+  // clearly on every width (no placeholder-only guessing).
+  function labeledField(labelText, inputEl) {
+    const wrap = el("div", "min-w-0");
+    const lbl = el("label", "mb-1 block text-[11px] font-medium text-black-800 dark:text-black-600");
+    lbl.textContent = labelText;
+    wrap.append(lbl, inputEl);
+    return wrap;
+  }
+
+  // toggleSwitch is the compact on/off switch (same visual as the Access
+  // Policy toggles), with its label to the right. Replaces the tiny
+  // checkboxes that collided with the inputs on narrow rows.
+  function toggleSwitch(checked, label, onChange) {
+    const wrap = el("label", "flex cursor-pointer select-none items-center gap-2");
+    const sw = el("span", "relative inline-block h-5 w-9 shrink-0");
+    const input = el("input", "peer sr-only");
+    input.type = "checkbox";
+    input.checked = !!checked;
+    const track = el("span", "absolute inset-0 rounded-full bg-white-400 transition-colors peer-checked:bg-green-500 dark:bg-navy-600");
+    const thumb = el("span", "absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white-100 shadow transition-transform peer-checked:translate-x-4");
+    input.addEventListener("change", () => { onChange(input.checked); refreshPreview(); });
+    sw.append(input, track, thumb);
+    const txt = el("span", "text-xs font-medium text-black-800 dark:text-black-600");
+    txt.textContent = label;
+    wrap.append(sw, txt);
+    return wrap;
+  }
 
   // ── field rows (shared by configs + op inputs) ─────────────────────
+  // Each field is a self-contained card: labeled inputs in a grid that is
+  // 1-column on mobile and 2-column from sm up, a delete icon top-right,
+  // and the Required / Secret switches on their own row. Nothing overlaps
+  // at any width.
   function fieldRow(f, list, idx) {
     const secretBg = f.secret || f.widget === "secret";
-    const row = el("div", "grid grid-cols-12 items-center gap-2 rounded-lg p-1.5" + (secretBg ? " bg-cau-100 dark:bg-cau-100/10" : ""));
-    const key = textInput(f.key, "key", true, (v) => { f.key = v; });
-    key.classList.add("col-span-3");
+    const card = el("div", "rounded-xl border border-white-300 p-3 dark:border-navy-600 " + (secretBg ? "bg-cau-100/60 dark:bg-cau-100/10" : "bg-white-100 dark:bg-navy-700"));
+
+    const top = el("div", "flex items-start gap-2");
+    const grid = el("div", "grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2");
+
+    const key = textInput(f.key, "field_key", true, (v) => { f.key = v; });
     const widget = select(WIDGETS, f.widget, (v) => {
       f.widget = v;
       if (v === "secret") f.secret = true;
       renderAll();
     });
-    widget.classList.add("col-span-2");
-    const def = textInput(f.default, "default", false, (v) => { f.default = v; });
-    def.classList.add("col-span-3");
+    const def = textInput(f.default, "default value", false, (v) => { f.default = v; });
     if (f.widget === "secret") def.type = "password";
-    const desc = textInput(f.desc, "description", false, (v) => { f.desc = v; });
-    desc.classList.add("col-span-2");
-    const flags = el("div", "col-span-2 flex items-center justify-end gap-2");
-    flags.appendChild(checkbox(f.required, "req", (v) => { f.required = v; }));
-    flags.appendChild(checkbox(f.secret, "secret", (v) => { f.secret = v; renderAll(); }));
-    flags.appendChild(removeBtn(() => list.splice(idx, 1)));
-    row.append(key, widget, def, desc, flags);
+    const desc = textInput(f.desc, "what this field is for", false, (v) => { f.desc = v; });
+
+    grid.append(
+      labeledField("Key", key),
+      labeledField("Type", widget),
+      labeledField("Default", def),
+      labeledField("Description", desc),
+    );
+
+    const del = iconDeleteBtn("Remove field", () => list.splice(idx, 1));
+    top.append(grid, del);
+    card.appendChild(top);
+
     if (f.widget === "dropdown") {
       const opts = textInput(f.options, "options: a|b|c", true, (v) => { f.options = v; });
-      opts.classList.add("col-span-12");
-      row.appendChild(opts);
+      const optWrap = labeledField("Options", opts);
+      optWrap.classList.add("mt-3");
+      card.appendChild(optWrap);
     }
-    return row;
+
+    const flags = el("div", "mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-white-300 pt-3 dark:border-navy-600");
+    flags.append(
+      toggleSwitch(f.required, "Required", (v) => { f.required = v; }),
+      toggleSwitch(f.secret, "Secret", (v) => { f.secret = v; renderAll(); }),
+    );
+    card.appendChild(flags);
+
+    return card;
   }
 
   function renderFieldList(container, list) {
@@ -156,19 +214,20 @@
   function opCard(op, idx) {
     const card = el("div", "rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4 space-y-3");
 
-    const head = el("div", "flex flex-wrap items-center gap-2");
+    const head = el("div", "flex items-start gap-2");
+    const fields = el("div", "flex min-w-0 flex-1 flex-wrap items-center gap-2");
     const key = textInput(op.key, "op_key", true, (v) => { op.key = v; });
     key.classList.add("max-w-[10rem]");
     const name = textInput(op.name, "Display name", false, (v) => { op.name = v; });
     name.classList.add("max-w-[14rem]");
     const destr = checkbox(op.destructive, "destructive", (v) => { op.destructive = v; });
-    head.append(key, name, destr);
+    fields.append(key, name, destr);
     if (op.mcp_source) {
       const chip = el("span", "inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600");
       chip.textContent = "MCP · " + op.mcp_source.tool_name;
-      head.appendChild(chip);
+      fields.appendChild(chip);
     }
-    head.appendChild(removeBtn(() => draft.ops.splice(idx, 1)));
+    head.append(fields, iconDeleteBtn("Delete operation", () => draft.ops.splice(idx, 1)));
     card.appendChild(head);
 
     const desc = textInput(op.description, "Description shown to the LLM — action verbs, be specific.", false, (v) => { op.description = v; });
@@ -257,6 +316,7 @@
       source: draft.source,
       category: (document.getElementById("cc-category") || {}).value || "",
       single: !!(document.getElementById("cc-single") || {}).checked,
+      allow_session_config: !!(document.getElementById("cc-allow-session-config") || {}).checked,
       configs: draft.configs,
       ops: draft.ops,
     };
@@ -272,6 +332,102 @@
     }
   }
 
+  // ── navigator (Jump list + JSON), collapsible / slide-over ──────────
+  function isDesktop() { return window.matchMedia("(min-width: 1024px)").matches; }
+
+  // renderNav rebuilds the Jump list from the current draft. Each entry
+  // scrolls (+ highlights) the matching editor card. Indices track the
+  // ids assigned in renderAll (cc-cfg-N / cc-op-N).
+  function renderNav() {
+    const box = root.querySelector("[data-cc-nav-jump]");
+    if (!box) return;
+    box.innerHTML = "";
+    box.appendChild(navSection("Configs", draft.configs, (f) => f.key || "(unnamed)", "cc-cfg-"));
+    box.appendChild(navSection("Operations", draft.ops, (o) => o.name || o.key || "(unnamed)", "cc-op-"));
+  }
+  function navSection(title, items, labelFn, prefix) {
+    const wrap = el("div", "mb-3");
+    const h = el("div", "px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-black-700 dark:text-black-600");
+    h.textContent = title + " (" + items.length + ")";
+    wrap.appendChild(h);
+    if (!items.length) {
+      const e = el("p", "px-2 text-[11px] text-black-700 dark:text-black-600");
+      e.textContent = "None yet.";
+      wrap.appendChild(e);
+      return wrap;
+    }
+    items.forEach((it, i) => {
+      const b = el("button", "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 hover:text-green-600 dark:text-black-600 dark:hover:bg-navy-800");
+      b.type = "button";
+      const dot = el("span", "h-1.5 w-1.5 flex-shrink-0 rounded-full bg-green-500");
+      const t = el("span", "min-w-0 truncate");
+      t.textContent = labelFn(it);
+      b.append(dot, t);
+      b.addEventListener("click", () => jumpTo(prefix + i));
+      wrap.appendChild(b);
+    });
+    return wrap;
+  }
+  function jumpTo(id) {
+    const target = document.getElementById(id);
+    if (!target) return;
+    if (!isDesktop()) closeSlideOver();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.classList.add("ring-2", "ring-green-400");
+    setTimeout(() => target.classList.remove("ring-2", "ring-green-400"), 1500);
+  }
+
+  function setNavTab(which) {
+    const jumpPane = root.querySelector("[data-cc-nav-jump]");
+    const jsonPane = root.querySelector("[data-cc-nav-json]");
+    if (jumpPane) jumpPane.classList.toggle("hidden", which !== "jump");
+    if (jsonPane) jsonPane.classList.toggle("hidden", which !== "json");
+    root.querySelectorAll("[data-cc-nav-tab]").forEach((btn) => {
+      const active = btn.dataset.ccNavTab === which;
+      btn.className = "rounded-lg px-3 py-1.5 text-xs font-medium " +
+        (active
+          ? "bg-green-500/10 text-green-600 dark:text-green-400"
+          : "text-black-700 hover:text-green-600 dark:text-black-600");
+    });
+  }
+
+  function openSlideOver() {
+    root.querySelector("[data-cc-nav]")?.classList.remove("translate-x-full");
+    root.querySelector("[data-cc-nav-backdrop]")?.classList.remove("hidden");
+  }
+  function closeSlideOver() {
+    root.querySelector("[data-cc-nav]")?.classList.add("translate-x-full");
+    root.querySelector("[data-cc-nav-backdrop]")?.classList.add("hidden");
+  }
+  function collapseDesktop() {
+    root.querySelector("[data-cc-editor]")?.classList.remove("lg:col-span-7");
+    root.querySelector("[data-cc-editor]")?.classList.add("lg:col-span-12");
+    root.querySelector("[data-cc-nav-col]")?.classList.add("lg:hidden");
+    root.querySelector("[data-cc-nav-open]")?.classList.remove("lg:hidden");
+  }
+  function expandDesktop() {
+    root.querySelector("[data-cc-editor]")?.classList.add("lg:col-span-7");
+    root.querySelector("[data-cc-editor]")?.classList.remove("lg:col-span-12");
+    root.querySelector("[data-cc-nav-col]")?.classList.remove("lg:hidden");
+    root.querySelector("[data-cc-nav-open]")?.classList.add("lg:hidden");
+  }
+
+  function setupNav() {
+    root.querySelectorAll("[data-cc-nav-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => setNavTab(btn.dataset.ccNavTab));
+    });
+    // Open button: expand on desktop, slide-over on mobile.
+    root.querySelector("[data-cc-nav-open]")?.addEventListener("click", () => {
+      if (isDesktop()) expandDesktop(); else openSlideOver();
+    });
+    // Close button: collapse on desktop, close slide-over on mobile.
+    root.querySelector("[data-cc-nav-close]")?.addEventListener("click", () => {
+      if (isDesktop()) collapseDesktop(); else closeSlideOver();
+    });
+    root.querySelector("[data-cc-nav-backdrop]")?.addEventListener("click", closeSlideOver);
+    setNavTab("jump");
+  }
+
   function showError(msg) {
     const box = root.querySelector("[data-cc-error]");
     const txt = root.querySelector("[data-cc-error-text]");
@@ -285,7 +441,8 @@
 
   async function save() {
     hideError();
-    const btn = root.querySelector("[data-cc-save]");
+    // Save button lives in the sticky page toolbar, outside [data-cc-review].
+    const btn = document.querySelector("[data-cc-save]");
     if (btn) btn.disabled = true;
     try {
       const resp = await fetch(saveURL, {
@@ -303,12 +460,16 @@
         location.href = data.redirect;
         return;
       }
-      // Edit mode: stay, surface the reload hint.
-      const hint = root.querySelector("[data-cc-reload-hint]");
-      if (hint) {
-        hint.classList.remove("hidden");
-        hint.classList.add("flex");
-        hint.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Edit mode: the server already reloaded the live module, so the
+      // change is applied. Quick inline feedback on the Save button itself
+      // (it lives in the sticky toolbar — no banner, no scrolling).
+      if (data.reload_error) {
+        showError("Saved, but live reload failed: " + data.reload_error + " — open the connector to retry.");
+      } else if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = "Saved ✓";
+        clearTimeout(save._flash);
+        save._flash = setTimeout(function () { btn.textContent = orig; }, 1600);
       }
     } catch (err) {
       showError(String(err));
@@ -319,7 +480,8 @@
 
   // ── render ─────────────────────────────────────────────────────────
   function renderAll() {
-    renderFieldList(document.getElementById("cc-configs"), draft.configs);
+    const cfgBox = document.getElementById("cc-configs");
+    renderFieldList(cfgBox, draft.configs);
     const opsBox = document.getElementById("cc-ops");
     opsBox.innerHTML = "";
     if (!draft.ops.length) {
@@ -328,6 +490,11 @@
       opsBox.appendChild(empty);
     }
     draft.ops.forEach((op, i) => opsBox.appendChild(opCard(op, i)));
+    // Anchor each card so the Jump navigator can scroll to it (scroll-mt
+    // clears the sticky toolbar). Indices mirror the nav list.
+    Array.from(cfgBox.children).forEach((c, i) => { c.id = "cc-cfg-" + i; c.classList.add("scroll-mt-24", "transition-shadow"); });
+    Array.from(opsBox.children).forEach((c, i) => { c.id = "cc-op-" + i; c.classList.add("scroll-mt-24", "transition-shadow"); });
+    renderNav();
     refreshPreview();
   }
 
@@ -352,6 +519,11 @@
     single.checked = !!draft.single;
     single.addEventListener("change", refreshPreview);
   }
+  const allowSessionCfg = document.getElementById("cc-allow-session-config");
+  if (allowSessionCfg) {
+    allowSessionCfg.checked = !!draft.allow_session_config;
+    allowSessionCfg.addEventListener("change", refreshPreview);
+  }
 
   root.querySelector("[data-cc-add-config]")?.addEventListener("click", () => {
     draft.configs.push(normFieldNew());
@@ -364,7 +536,8 @@
     });
     renderAll();
   });
-  root.querySelector("[data-cc-save]")?.addEventListener("click", save);
+  document.querySelector("[data-cc-save]")?.addEventListener("click", save);
 
+  setupNav();
   renderAll();
 })();

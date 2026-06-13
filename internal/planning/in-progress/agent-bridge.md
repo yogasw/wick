@@ -11,14 +11,25 @@ instead of a new bespoke channel each time.
 Everything below landed together; each line is a discrete change with
 its key files, ready to fan out into the docs site + changelog.
 
-1. **`wick_session_config` MCP tool** — override a connector's config
-   for the current session only (`get` / `set` / `ask` / `clear`).
-   Overrides live in `sessions/<id>/config_overrides.json`, applied in
-   `Service.Execute` when `wick_execute` is passed `session_id`. Secrets
-   stay `wick_enc_` tokens end to end. Files:
-   `internal/mcp/handlers/session_config.go`,
-   `internal/agents/sessionconfig/`, `internal/connectors/service.go`
-   (`ExecuteParams.ConfigOverrides`), `internal/mcp/handlers/tools.go`.
+1. **`wick_session_workspace` MCP tool + session Config tab** — spin up
+   ephemeral connector instances scoped to one session: a private clone
+   of a base connector (point at staging, use a different key) that
+   appears in `wick_list`/`wick_get`/`wick_execute` for that session only
+   (id `sw_<uuid>`) and is purged when it ends. Actions: `list` / `add` /
+   `duplicate` / `configure` / `test` / `remove`. Config is HUMAN-driven:
+   the agent creates blank instances + can open the fill modal, but the
+   user types values; secrets are stored as `wick_cenc_` MASTER tokens
+   (system-decryptable only) and decrypted at execute time via the
+   virtual `SessionInstance` path (no DB row). Eligibility = module
+   `AllowSessionConfig` capability AND per-instance admin toggle (custom
+   defs carry `allow_session_config`). Replaces the earlier per-key
+   override model (`wick_session_config` / `config_overrides.json`).
+   Files: `internal/mcp/handlers/session_workspace.go`,
+   `internal/mcp/handlers/session_instances.go`,
+   `internal/agents/sessionworkspace/`, `internal/connectors/service.go`
+   (virtual Execute), `internal/tools/agents/session_workspace_handler.go`
+   (Config tab), `internal/tools/agents/js/sessionconfig.js`,
+   `internal/mcp/handlers/tools.go`.
 2. **`ask_user` multi-question wizard** — `questions[]` renders a
    step-by-step form (one question per step, Back/Skip/Next, progress).
    Field types `choice` / `multi` / `rank` / `dropdown` / `text` /
@@ -33,7 +44,7 @@ its key files, ready to fan out into the docs site + changelog.
    external MCP clients reach the daemon's ask manager. Decoupled from
    the master command gate (ask_user no longer dies when the gate is
    off). Per-channel `AskUserEnabled` toggle (slack/telegram/rest), and
-   gate allowlists `ask_user` + `wick_session_config` + `ToolSearch`.
+   gate allowlists `ask_user` + `wick_session_workspace` + `ToolSearch`.
    Files: `internal/agents/askuser/socket.go`,
    `internal/pkg/api/askuser_policy.go`, `internal/agents/config/{slack,telegram,rest}.go`,
    `cmd/gate/main.go`.
@@ -113,7 +124,7 @@ and tools reach it through one of these:
 | **HTTP MCP** `/mcp` (in-process) | claude (wick-injected `--mcp-config` → loopback) | request/response | Same process as the daemon — handlers call registry/broadcaster directly. |
 | **stdio MCP** (`wick mcp serve`) | codex + external clients (Claude Desktop/Code/Cursor) | request/response | A SEPARATE process. Cannot touch the daemon's in-memory state — must use a socket below. |
 | **gate.sock** | `wick-gate` hook binary (PreToolUse) | request → blocks → reply | Command permission. `internal/agents/gate`. |
-| **askuser.sock** | stdio MCP (`ask_user`, `wick_session_config action=ask`) | request → blocks → reply | Renders a card/modal in the UI; blocks the tool until the user answers. `internal/agents/askuser/socket.go`. |
+| **askuser.sock** | stdio MCP (`ask_user`, `wick_session_workspace` configure/add) | request → blocks → reply | Renders a card/modal in the UI; blocks the tool until the user answers. `internal/agents/askuser/socket.go`. |
 | **agentctl.sock** | stdio MCP | command (`switch_provider`, `kill`, `refresh_session`) | Fire-and-forget control ops. `internal/agents/agentctl`. |
 | **SSE** `/stream?session=<id>` | daemon → browser | server push | The only daemon→browser channel. Events: `lifecycle`, `ask_user`, `approval_request`, `session_meta`, … `internal/tools/agents/stream.go`. |
 

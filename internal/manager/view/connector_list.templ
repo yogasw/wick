@@ -84,21 +84,22 @@ templ ConnectorListPage(mod connector.Module, rows []entity.Connector, tagsByRow
 
 templ connectorListCard(mod connector.Module, row entity.Connector, tagNames []string, accounts []entity.ConnectorAccount, oauthURL string) {
 	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">
-		<!-- Main row -->
-		<div class="group relative flex items-center gap-4 px-4 py-3">
+		<!-- Main row — stacks on mobile so the tag/status chips wrap below
+		     the label instead of overflowing the card. -->
+		<div class="group relative flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
 			<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID) } class="absolute inset-0 z-0 rounded-xl" aria-label="Open"></a>
 			<div class="pointer-events-none relative min-w-0 flex-1">
 				<p class="truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{ row.Label }</p>
 				<p class="mt-0.5 truncate font-mono text-[10px] text-black-700 dark:text-black-600">{ row.ID }</p>
 			</div>
-			<div class="pointer-events-none relative flex flex-shrink-0 items-center gap-2">
+			<div class="pointer-events-none relative flex flex-wrap items-center gap-2 sm:flex-shrink-0">
 				if len(tagNames) == 0 {
 					<span class="hidden rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600 sm:inline">Everyone</span>
 				} else {
 					for _, n := range tagNames {
-						<span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
-							<svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-							{ n }
+						<span class="inline-flex min-w-0 max-w-[12rem] items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
+							<svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+							<span class="truncate">{ n }</span>
 						</span>
 					}
 				}

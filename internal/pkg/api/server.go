@@ -63,6 +63,7 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
+	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
@@ -143,6 +144,7 @@ func NewServer() *Server {
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
+	sessionconfigpurge.Register()
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -650,7 +652,7 @@ func NewServer() *Server {
 	agentstool.SetAskUsers(askUsersMgr)
 	// Bind the askuser unix socket so sibling processes (stdio MCP —
 	// Claude Desktop/Cursor/Claude Code running `wick mcp serve`) can
-	// route ask_user / wick_session_config asks into this process's
+	// route ask_user / wick_session_workspace asks into this process's
 	// web UI. Same trust model as gate.sock: 0700 parent dir, no HTTP
 	// auth. Best-effort — stdio asks degrade to an error without it.
 	if askSock, err := askuser.ServeSocket(askuser.SocketPath(appname.Resolve()), askUsersMgr); err != nil {
@@ -892,6 +894,9 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+	// Wire the connectors service into the agents tool so the session
+	// Config tab can read connector field schemas + AllowSessionConfig.
+	agentstool.SetConnectors(connectorsSvc)
 
 	// Wire the agent factory's connector-catalog loader now that the
 	// connectors service exists. The loader runs at every agent spawn,

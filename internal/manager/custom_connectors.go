@@ -242,15 +242,16 @@ func customDraftFromDef(def *entity.CustomConnector) (*customconn.Draft, error) 
 		return nil, err
 	}
 	return &customconn.Draft{
-		Key:         def.Key,
-		Name:        def.Name,
-		Description: def.Description,
-		Icon:        def.Icon,
-		Source:      string(def.Source),
-		Category:    customconn.ParseSourceMeta(def.SourceMeta).Category,
-		Single:      def.SingleInstance,
-		Configs:     fields,
-		Ops:         ops,
+		Key:                def.Key,
+		Name:               def.Name,
+		Description:        def.Description,
+		Icon:               def.Icon,
+		Source:             string(def.Source),
+		Category:           customconn.ParseSourceMeta(def.SourceMeta).Category,
+		Single:             def.SingleInstance,
+		AllowSessionConfig: def.AllowSessionConfig,
+		Configs:            fields,
+		Ops:                ops,
 	}, nil
 }
 
@@ -293,6 +294,13 @@ func (h *Handler) customSaveExisting(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.custom.Update(r.Context(), def.ID, &d); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	// Apply immediately — swap the live module so the edit takes effect
+	// without a separate manual Reload step. In-flight calls finish on the
+	// old closures; new calls see the new schema.
+	if err := h.custom.Reload(r.Context(), def.ID); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reload_error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

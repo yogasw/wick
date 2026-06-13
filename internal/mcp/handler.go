@@ -40,13 +40,13 @@ type Handler struct {
 	// appURL returns the live base URL at request time. Used to build
 	// absolute redirect links for wick_encrypt / wick_decrypt.
 	appURL func() string
-	// askUsers handles the ask_user MCP tool (and wick_session_config
-	// action=ask). In the HTTP server it's the in-process
+	// askUsers handles the ask_user MCP tool (and wick_session_workspace
+	// configure/add modals). In the HTTP server it's the in-process
 	// askuser.Manager; in stdio mode it's an askuser.SocketAsker that
 	// forwards to the running server over the askuser unix socket.
 	// nil = tool returns an error.
 	askUsers askuser.Asker
-	// askUserAllowed is the policy check for ask_user / wick_session_config
+	// askUserAllowed is the policy check for ask_user / wick_session_workspace
 	// asks, resolved per session origin (see api.askUserPolicy). The
 	// argument is the request's session_id. nil = always allowed
 	// (tests).
@@ -103,7 +103,7 @@ func (h *Handler) WithDB(db *gorm.DB) *Handler {
 
 // WithLayout wires the agents storage layout without a pool — stdio
 // mode needs it for the session-scoped tools (wick_session_info,
-// wick_set_title, wick_session_config) even though no agent pool
+// wick_set_title, wick_session_workspace) even though no agent pool
 // runs in that process.
 func (h *Handler) WithLayout(l agentconfig.Layout) *Handler {
 	h.layout = l
@@ -334,11 +334,11 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 
 	switch p.Name {
 	case "wick_list":
-		handlers.WickList(w, r, hreq, rsp, h.connectors, tagIDs, user.IsAdmin())
+		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_search":
 		handlers.WickSearch(w, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_get":
-		handlers.WickGet(w, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickGet(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_execute":
 		handlers.WickExecute(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, user, tagIDs)
 	case "wick_info":
@@ -349,8 +349,8 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		handlers.WickDecrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "ask_user":
 		handlers.AskUser(w, r, hreq, rsp, h.askUsers, h.askUserAllowed, p.Arguments)
-	case "wick_session_config":
-		handlers.WickSessionConfig(w, r, hreq, rsp, h.connectors, h.layout, h.askUsers, h.askUserAllowed, p.Arguments, user, tagIDs)
+	case "wick_session_workspace":
+		handlers.WickSessionWorkspace(w, r, hreq, rsp, h.connectors, h.layout, h.askUsers, h.askUserAllowed, p.Arguments, user, tagIDs)
 	case "wick_list_providers":
 		handlers.WickListProviders(w, hreq, rsp, h.layout, p.Arguments)
 	case "wick_skill_list":

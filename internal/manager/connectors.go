@@ -41,6 +41,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/duplicate", auth(h.duplicateConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/access-policy", auth(h.setConnectorAccessPolicy))
+	mux.Handle("POST /manager/connectors/{key}/{id}/session-config", auth(h.setConnectorSessionConfig))
 	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(h.accountOpsPage))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.disconnectAccount))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.setAccountDisabledOps))
@@ -770,6 +771,35 @@ func (h *Handler) setConnectorAccessPolicy(w http.ResponseWriter, r *http.Reques
 	enableSSO := boolParam(r, "enable_sso")
 	multiAccount := boolParam(r, "multi_account")
 	if err := h.connectors.SetAccessPolicy(ctx, row.ID, allowConfigure, allowSSO, enableSSO, multiAccount); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
+
+// setConnectorSessionConfig flips the per-instance "allow per-session
+// config override" opt-in. Admin-only, and only honored when the
+// connector's module is session-config capable.
+func (h *Handler) setConnectorSessionConfig(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if user == nil || !user.IsAdmin() {
+		http.Error(w, "admin only", http.StatusForbidden)
+		return
+	}
+	if !h.connectors.SessionConfigCapable(row.Key) {
+		http.Error(w, "this connector does not support per-session config override", http.StatusBadRequest)
+		return
+	}
+	if err := h.connectors.SetSessionConfigAllowed(ctx, row.ID, boolParam(r, "allow_session_config")); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

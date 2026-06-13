@@ -102,7 +102,11 @@
       el.classList.toggle("flex", show);
     });
     var title = panel.querySelector("[data-panel-title]");
-    if (title) title.textContent = tab === "process" ? "Active Processes" : "Context";
+    if (title) {
+      title.textContent =
+        tab === "process" ? "Active Processes" : tab === "config" ? "Session Workspace" : "Context";
+    }
+    if (tab === "config" && window.WickSessionConfig) window.WickSessionConfig.load();
   }
 
   // Exported so process.js can switch to process tab programmatically.

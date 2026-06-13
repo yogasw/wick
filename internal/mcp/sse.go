@@ -306,16 +306,19 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		return
 	}
 
-	allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-	if err != nil || !allowed {
-		sseWriteToolError(sess, req, "tool_id not found or not accessible", toolID)
-		return
-	}
-
-	overrides, err := handlers.SessionOverridesFor(h.layout, args, connectorID)
+	// Session-workspace instance: run against the ephemeral instance's
+	// own config; the session is the authorization scope, no DB row.
+	sessionTarget, isSession, err := handlers.SessionInstanceFor(h.layout, args, connectorID)
 	if err != nil {
 		sseWriteToolError(sess, req, err.Error(), toolID)
 		return
+	}
+	if !isSession {
+		allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		if err != nil || !allowed {
+			sseWriteToolError(sess, req, "tool_id not found or not accessible", toolID)
+			return
+		}
 	}
 
 	rawParams, _ := args["params"].(map[string]any)
@@ -358,7 +361,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			UserAgent:       r.Header.Get("User-Agent"),
 			Progress:        reporter,
 			AccountID:       accountID,
-			ConfigOverrides: overrides,
+			SessionInstance: sessionTarget,
 		})
 		resCh <- execOut{res: res, err: err}
 	}()

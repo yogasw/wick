@@ -131,8 +131,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"session_id": map[string]any{
 						"type": "string",
-						"description": "Optional wick agent session ID. Pass it when session config overrides were set via " +
-							"wick_session_config so they apply to this call; omit to run on the connector's saved config.",
+						"description": "Wick agent session ID. REQUIRED when tool_id targets a session-workspace " +
+							"connector (its id starts with sw_); omit for normal saved connectors.",
 					},
 				},
 				"required": []string{"tool_id", "params"},
@@ -281,52 +281,70 @@ func MetaToolDescriptors() []ToolDescriptor {
 			},
 		},
 		{
-			Name: "wick_session_config",
-			Description: "Read or override a connector's config for the CURRENT SESSION ONLY (e.g. swap base_url or an API key " +
-				"without touching the saved connector). Overrides die with the session; the connector row is never modified. " +
-				"Actions: " +
-				"'get' returns the effective config (saved + session overrides merged) — secret values come back as wick_enc_ tokens, never plaintext. " +
-				"'set' applies overrides directly when you already know the values (e.g. the user stated a base_url, or handed you a wick_enc_ token); " +
-				"secret fields REQUIRE a wick_enc_ token — plaintext secrets are rejected. " +
-				"'ask' opens a form in the user's session UI where they type the values themselves (including secrets, which the server " +
-				"encrypts before you see anything) — use this when values are unknown or sensitive; blocks until submit, like ask_user. " +
-				"'clear' removes overrides (all keys, or pass keys to remove a subset). " +
-				"After setting overrides, pass the same session_id to wick_execute so they apply.",
+			Name: "wick_session_workspace",
+			Description: "Spin up throwaway connector instances scoped to the CURRENT SESSION — a private clone of a base connector " +
+				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
+				"for THIS session only and is purged when the session ends. The saved connector rows are never touched. " +
+				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
+				"You NEVER see config values: you create a blank instance and the USER fills it (secrets are encrypted server-side); " +
+				"only the key names ever come back to you. Actions: " +
+				"'list' shows this session's instances (id, status, missing keys) and available_bases (connectors you may add). " +
+				"'add' creates a blank instance from a base_key; by default it pops a fill modal for the user right away. " +
+				"'duplicate' copies an existing session instance (config and all) into a new one. " +
+				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. " +
+				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
+				"'remove' deletes a session instance. " +
+				"After adding+configuring, the instance's id shows in wick_list (pass the same session_id) and you wick_execute it like any connector.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"action": map[string]any{
 						"type":        "string",
-						"enum":        []string{"get", "set", "ask", "clear"},
-						"description": "What to do: get, set, ask, or clear.",
+						"enum":        []string{"list", "add", "duplicate", "configure", "test", "remove"},
+						"description": "list | add | duplicate | configure | test | remove.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "ID of the active wick agent session the override is scoped to.",
+						"description": "ID of the active wick agent session the instance is scoped to. Required for every action.",
+					},
+					"base_key": map[string]any{
+						"type":        "string",
+						"description": "action=add: the base connector key to clone (from action=list available_bases).",
 					},
 					"connector_id": map[string]any{
 						"type":        "string",
-						"description": "Connector id from wick_list or wick_search.",
+						"description": "The session instance id (sw_…) for duplicate/configure/test/remove.",
 					},
-					"values": map[string]any{
-						"type":                 "object",
-						"description":          "action=set only: map of config key → new value. Secret fields require a wick_enc_ token.",
-						"additionalProperties": map[string]any{"type": "string"},
+					"label": map[string]any{
+						"type":        "string",
+						"description": "action=add/duplicate: optional human label for the new instance.",
+					},
+					"prompt": map[string]any{
+						"type":        "boolean",
+						"description": "action=add: open the fill modal immediately (default true). Set false to create blank and let the user fill it later in the Config tab.",
 					},
 					"keys": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "action=ask: limit the form to these config keys. action=clear: remove only these keys (omit to clear all).",
+						"description": "action=add/configure: limit the fill modal to these config keys (omit for all).",
+					},
+					"operation": map[string]any{
+						"type":        "string",
+						"description": "action=test: run this operation key as the probe instead of the health check.",
+					},
+					"params": map[string]any{
+						"type":        "object",
+						"description": "action=test with operation: parameters for the probe call.",
 					},
 					"reason": map[string]any{
 						"type":        "string",
-						"description": "action=ask only: short text shown to the user explaining why the override is needed.",
+						"description": "action=add/configure: short text shown to the user explaining what the connector is for.",
 					},
 				},
-				"required": []string{"action", "session_id", "connector_id"},
+				"required": []string{"action", "session_id"},
 			},
 			Annotations: &ToolAnnotation{
-				Title:        "Session config override",
+				Title:        "Session workspace",
 				ReadOnlyHint: PtrBool(false),
 			},
 		},

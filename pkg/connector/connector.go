@@ -245,4 +245,11 @@ type Module struct {
 	HealthCheck HealthCheckFunc
 	// OAuth is non-nil when this connector supports user OAuth.
 	OAuth *OAuthMeta
+	// AllowSessionConfig lets this connector be cloned into a per-session
+	// instance (the session Config tab + the wick_session_workspace MCP
+	// tool). Default false: most connectors — especially OAuth/SSO ones,
+	// which have no replaceable config keys — should not be cloneable. Set
+	// true only when a connector has config (base_url, API key, …) that a
+	// user may legitimately want to swap for one session.
+	AllowSessionConfig bool
 }

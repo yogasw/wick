@@ -111,6 +111,34 @@ Read `SKILL.md` from the `config-tags` folder (sibling of this skill's folder) f
 
 **Read at runtime via `c.Cfg("base_url")`, `c.CfgInt("port")`, `c.CfgBool("use_tls")`** — keys are the snake_cased field name unless overridden with `key=`. Reads always return plaintext; the encrypted-fields layer happens around `ExecuteFunc`, not inside it.
 
+### Session connectors (`Module.AllowSessionConfig`)
+
+Set `AllowSessionConfig: true` on the `Module` to declare that this connector can be **cloned into a per-session instance** — a throwaway connector a user spins up for one agent session (point `base_url` at staging, use a different key) without touching any saved connector row.
+
+```go
+connector.Module{
+    Meta:               httprest.Meta(),
+    Configs:            entity.StructToConfigs(httprest.Configs{}),
+    Operations:         httprest.Operations(),
+    AllowSessionConfig: true, // capability — see below
+}
+```
+
+This is the **capability** flag (default false). Leave it false for OAuth/SSO connectors (their config is a user token, not a replaceable per-session value) and anything where a session-scoped clone makes no sense.
+
+It is a **two-layer opt-in** — both must hold for a connector to be addable as a session instance:
+
+1. **`Module.AllowSessionConfig`** (this flag, code) — the module *can* be cloned.
+2. **`entity.Connector.AllowSessionConfig`** (per-instance, admin) — an admin flips "Allow per-session config override" in Manager → Connectors → {instance} → *Per-session config*. Default false.
+
+How it works at runtime:
+
+- A **session instance** is a clone of the base module with its own id (`sw_<uuid>`), label, and config map. It lives in `sessions/<id>/workspace.json`, appears in `wick_list`/`wick_get`/`wick_execute` **only when that `session_id` is passed**, and is swept by the `session-config-purge` job (file age TTL) — it dies with the session.
+- Users add/fill/test/remove instances in the session **Config tab** (the Workspace panel); the agent does the same via the **`wick_session_workspace`** MCP tool (`list`/`add`/`duplicate`/`configure`/`test`/`remove`). The agent NEVER sees config values — it creates blank instances and the user fills them; secret values are stored as `wick_cenc_` MASTER tokens (system-decryptable only) and decrypted in `Service.Execute` via the virtual `SessionInstance` path (no DB row).
+- Custom connectors carry the same flag in their definition (`allow_session_config` in the def draft / builder).
+
+Background: [`internal/planning/in-progress/agent-bridge.md`](../../../internal/planning/in-progress/agent-bridge.md).
+
 ### Per-operation `Input` structs
 
 Each operation has its own input schema. Same `wick:"..."` grammar; the framework reflects it into the MCP JSON Schema clients see in `wick_get`.

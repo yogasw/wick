@@ -12,7 +12,7 @@ import (
 )
 
 // askUserPolicy resolves whether the ask_user tool (and
-// wick_session_config action=ask) may run for one session.
+// wick_session_workspace configure/add modals) may run for one session.
 //
 // The decision is per-session ORIGIN, not the master command gate —
 // ask_user rides wick's own socket/SSE channel, so the PreToolUse

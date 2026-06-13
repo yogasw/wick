@@ -24,7 +24,7 @@ func TestIsAlwaysAllowedTool(t *testing.T) {
 		"mcp__wick-agent__wick_skill_list",
 		"mcp__wick-agent__wick_session_info",
 		"mcp__wick-agent__wick_set_title",
-		"mcp__wick-agent__wick_session_config",
+		"mcp__wick-agent__wick_session_workspace",
 	}
 	for _, name := range allowed {
 		if !isAlwaysAllowedTool(name) {

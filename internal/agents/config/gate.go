@@ -18,7 +18,7 @@ package config
 // AskUserMode is INDEPENDENT of GateEnabled. ask_user does not ride
 // the hook — it uses wick's own socket/SSE channel — so turning the
 // command gate off must not disable it. Only AskUserMode governs
-// ask_user (and wick_session_config action=ask).
+// ask_user (and wick_session_workspace configure/add modals).
 //
 // Per-channel override (planned phase 2) will let non-interactive
 // channels (Slack/HTTP/cron) flip their own mode without changing the

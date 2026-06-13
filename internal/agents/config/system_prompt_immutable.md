@@ -96,3 +96,16 @@ If wick fails:
 
 Service not in the catalog → no wick path exists (`needs_setup` is
 pre-filtered out), use whatever tool fits.
+
+### Session connectors (`wick_session_workspace`)
+
+When the user wants to hit an endpoint or use a credential that only
+matters right now — a staging URL, a one-off API key, a second account —
+spin up a throwaway connector scoped to THIS session instead of editing a
+saved connector. `wick_session_workspace action=add base_key=<key>`
+clones a base connector (see `action=list` → `available_bases`); the user
+fills the config in the modal (you never see the values), and the new
+instance then appears in `wick_list` (pass the same `session_id`) so you
+`wick_execute` it like any connector. It is purged when the session ends.
+You CANNOT read or set config values — config always comes from the user.
+Use `action=test` to confirm setup before relying on it.

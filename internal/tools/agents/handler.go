@@ -32,6 +32,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/pkg/ui"
@@ -57,6 +58,7 @@ var (
 	globalSyncMgr    *providersync.Manager
 	globalSkillStore *skills.Store
 	globalTagsSvc    *tags.Service
+	globalConnectors *connectors.Service
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -149,6 +151,11 @@ func SetSkillStore(s *skills.Store) { globalSkillStore = s }
 // SetTagsService wires the tags service for skill ownership checks.
 func SetTagsService(svc *tags.Service) { globalTagsSvc = svc }
 
+// SetConnectors wires the connectors service so the session Config tab
+// can read a connector's field schema (to render the form) and resolve
+// which connectors opted into per-session overrides.
+func SetConnectors(c *connectors.Service) { globalConnectors = c }
+
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
 func GetGateStatus() GateStatus { return globalGateStatus }
@@ -213,6 +220,15 @@ func Register(r tool.Router) {
 	// POSTs the answer here; rehydrate runs on page load.
 	r.POST("/sessions/{id}/answer", answerAsk)
 	r.GET("/sessions/{id}/asks", asksSnapshot)
+	// Session workspace (the Config tab) — user-initiated, ephemeral
+	// connector instances scoped to this session, no agent involvement.
+	r.GET("/sessions/{id}/workspace", sessionWorkspaceListUI)
+	r.POST("/sessions/{id}/workspace", sessionWorkspaceAddUI)
+	r.GET("/sessions/{id}/workspace/{cid}", sessionWorkspaceInstanceUI)
+	r.POST("/sessions/{id}/workspace/{cid}", sessionWorkspaceSetUI)
+	r.POST("/sessions/{id}/workspace/{cid}/duplicate", sessionWorkspaceDuplicateUI)
+	r.POST("/sessions/{id}/workspace/{cid}/test", sessionWorkspaceTestUI)
+	r.DELETE("/sessions/{id}/workspace/{cid}", sessionWorkspaceRemoveUI)
 
 	// No standalone /projects list page — the sidebar Projects section is
 	// the canonical project nav. "+ New" → /projects/new (create page),

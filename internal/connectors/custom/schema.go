@@ -237,8 +237,12 @@ type Draft struct {
 	Source      string     `json:"source"`
 	Category    string     `json:"category"`
 	Single      bool       `json:"single"`
-	Configs     []DefField `json:"configs"`
-	Ops         []DefOp    `json:"ops"`
+	// AllowSessionConfig opts this def into per-session config override
+	// (Module.AllowSessionConfig). Default off; only meaningful for
+	// curl/manual API defs, never oauth/sso token configs.
+	AllowSessionConfig bool       `json:"allow_session_config"`
+	Configs            []DefField `json:"configs"`
+	Ops                []DefOp    `json:"ops"`
 }
 
 // maxIconBytes caps icon payloads — enough for a reasonable SVG or a

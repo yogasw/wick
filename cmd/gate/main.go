@@ -419,7 +419,7 @@ var alwaysAllowedMCPSuffixes = []string{
 	"__wick_skill_list",
 	"__wick_session_info",
 	"__wick_set_title",
-	"__wick_session_config",
+	"__wick_session_workspace",
 }
 
 // runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob, MCP, etc.).

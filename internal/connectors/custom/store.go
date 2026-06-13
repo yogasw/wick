@@ -65,14 +65,15 @@ func (s *Store) UpdateDef(ctx context.Context, d *entity.CustomConnector) error 
 	return s.db.WithContext(ctx).Model(&entity.CustomConnector{}).
 		Where("id = ?", d.ID).
 		Updates(map[string]any{
-			"name":            d.Name,
-			"description":     d.Description,
-			"icon":            d.Icon,
-			"source_meta":     d.SourceMeta,
-			"configs":         d.Configs,
-			"ops":             d.Ops,
-			"single_instance": d.SingleInstance,
-			"disabled":        d.Disabled,
+			"name":                 d.Name,
+			"description":          d.Description,
+			"icon":                 d.Icon,
+			"source_meta":          d.SourceMeta,
+			"configs":              d.Configs,
+			"ops":                  d.Ops,
+			"single_instance":      d.SingleInstance,
+			"allow_session_config": d.AllowSessionConfig,
+			"disabled":             d.Disabled,
 		}).Error
 }
 
