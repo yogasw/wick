@@ -140,7 +140,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
 						}
 						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
-						if user != nil && user.IsAdmin() {
+						if user != nil {
 							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
