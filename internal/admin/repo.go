@@ -342,6 +342,8 @@ var ErrTagNameTaken = errors.New("a tag with that name already exists")
 // the UI would desync the seed catalog from the DB.
 var ErrSystemTagImmutable = errors.New("system tags are read-only and cannot be modified")
 
+var ErrOwnerTagImmutable = errors.New("owner tags are managed automatically and cannot be modified")
+
 // ErrSystemEntityImmutable is returned when an admin tries to mutate
 // (disable/hide/retag) a tool/job/connector that carries any System
 // tag. System-tagged entities are owned by code — see entity.Tag godoc.
@@ -395,6 +397,9 @@ func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, i
 	if current.IsSystem {
 		return ErrSystemTagImmutable
 	}
+	if strings.HasPrefix(current.Name, "owner:") {
+		return ErrOwnerTagImmutable
+	}
 	var clash entity.Tag
 	err := r.db.WithContext(ctx).Where("name = ? AND id <> ?", name, tagID).First(&clash).Error
 	if err == nil {
@@ -425,6 +430,9 @@ func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
 		}
 		if current.IsSystem {
 			return ErrSystemTagImmutable
+		}
+		if strings.HasPrefix(current.Name, "owner:") {
+			return ErrOwnerTagImmutable
 		}
 		if err := tx.Where("tag_id = ?", tagID).Delete(&entity.ToolTag{}).Error; err != nil {
 			return err

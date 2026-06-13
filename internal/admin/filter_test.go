@@ -1,10 +1,55 @@
 package admin
 
 import (
+	"context"
 	"testing"
 
 	"github.com/yogasw/wick/internal/entity"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
+
+func newTestRepo(t *testing.T) *repo {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&entity.Tag{}, &entity.ToolTag{}, &entity.UserTag{}); err != nil {
+		t.Fatal(err)
+	}
+	return newRepo(db)
+}
+
+func TestUpdateTagRejectsOwnerTag(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+
+	tag := &entity.Tag{Name: "owner:some-uuid", IsFilter: true}
+	if err := r.db.WithContext(ctx).Create(tag).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := r.UpdateTag(ctx, tag.ID, "new-name", "", false, false, 0)
+	if err != ErrOwnerTagImmutable {
+		t.Fatalf("expected ErrOwnerTagImmutable, got %v", err)
+	}
+}
+
+func TestDeleteTagRejectsOwnerTag(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+
+	tag := &entity.Tag{Name: "owner:some-uuid", IsFilter: true}
+	if err := r.db.WithContext(ctx).Create(tag).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := r.DeleteTag(ctx, tag.ID)
+	if err != ErrOwnerTagImmutable {
+		t.Fatalf("expected ErrOwnerTagImmutable, got %v", err)
+	}
+}
 
 func TestFilterOutOwnerTags(t *testing.T) {
 	tags := []*entity.Tag{
