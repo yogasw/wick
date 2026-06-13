@@ -6,14 +6,6 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet._
-
----
-
-## [v0.16.17](https://github.com/yogasw/wick/compare/v0.16.16...v0.16.17) — Custom Connectors
-
-_Released on 2026-06-13_
-
 ### Added
 
 *   **Custom Connectors** — build LLM-callable connectors from the admin UI, no Go code or redeploy. Three creation paths from **Connectors → + New connector**:
