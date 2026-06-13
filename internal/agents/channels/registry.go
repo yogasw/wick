@@ -21,6 +21,7 @@ import (
 	"context"
 	"maps"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,6 +204,23 @@ func (r *Registry) HasKey(instanceKey string) bool {
 	defer r.mu.Unlock()
 	_, ok := r.sources[instanceKey]
 	return ok
+}
+
+// HasAnyKeyed reports whether any instance registered under the per-user
+// keyed scheme (key = "<channelType>:<something>") exists for the given
+// channelType prefix. Used to distinguish per-user channel types (slack)
+// from single-instance types (telegram, rest) when deciding whether to
+// fall back to ChannelByName for unconfigured users.
+func (r *Registry) HasAnyKeyed(channelType string) bool {
+	prefix := channelType + ":"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range r.sources {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ChannelByKey returns the channel registered under instanceKey, or nil.

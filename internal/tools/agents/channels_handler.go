@@ -173,6 +173,12 @@ func channelForUser(c *tool.Ctx, slug string) agentchannels.Channel {
 	if ch := globalChannels.ChannelByKey(iKey); ch != nil {
 		return ch
 	}
+	// Per-user channel types (e.g. slack) use AddKeyed — don't fall back to
+	// another user's instance when this user has no row yet.
+	// Single-instance types (telegram, rest) use Add — fall back is correct.
+	if globalChannels.HasAnyKeyed(slug) {
+		return nil
+	}
 	return globalChannels.ChannelByName(slug)
 }
 
