@@ -86,8 +86,9 @@ type turn struct {
 // Hot-reload: call Reload(ctx, newCfg, pubURL) to apply new credentials
 // without restarting the server.
 type Channel struct {
-	sendFn  agentchannels.SendFunc
-	ownerFn func(ctx context.Context, sessionID, userID string)
+	sendFn     agentchannels.SendFunc
+	ownerFn    func(ctx context.Context, sessionID, userID string)
+	ownerUserID string // wick user who owns this channel row; empty = App Owner
 
 	cfgMu          sync.Mutex
 	cfg            agentconfig.SlackChannelConfig
@@ -148,6 +149,14 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 		userTokenCache: make(map[string]string),
 	}
 	ch.applyConfig(cfg, "")
+	return ch
+}
+
+// NewWithOwner creates a Slack Channel tied to a specific wick user owner.
+// ownerUserID="" means the App Owner's channel (user_id = NULL row).
+func NewWithOwner(cfg agentconfig.SlackChannelConfig, ownerUserID string) *Channel {
+	ch := New(cfg)
+	ch.ownerUserID = ownerUserID
 	return ch
 }
 
@@ -889,6 +898,9 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
 			s.ownerFn(context.Background(), threadTS, wickUserID)
 		}
+	}
+	if s.ownerFn != nil && s.ownerUserID != "" {
+		s.ownerFn(context.Background(), threadTS, s.ownerUserID)
 	}
 	// Message accepted by the pool: cancel pending queue timer (and remove
 	// ⏳ if it had already fired), then surface the "thinking" banner so
