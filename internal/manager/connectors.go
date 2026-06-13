@@ -803,6 +803,10 @@ func (h *Handler) deleteConnector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if err := h.connectors.Delete(ctx, row.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -854,6 +858,10 @@ func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Reques
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	enabled := boolParam(r, "enabled")
@@ -923,6 +931,10 @@ func (h *Handler) toggleOperationAdminOnly(w http.ResponseWriter, r *http.Reques
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if user == nil || !user.IsAdmin() {
+		http.Error(w, "forbidden: admin only", http.StatusForbidden)
 		return
 	}
 	adminOnly := boolParam(r, "admin_only")
