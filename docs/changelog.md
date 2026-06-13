@@ -6,7 +6,21 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Custom Connectors** — build LLM-callable connectors from the admin UI, no Go code or redeploy. Three creation paths from **Connectors → + New connector**:
+    *   **Paste a cURL** — deterministic parser splits the command into per-instance configs (base URL, secrets) and per-call inputs; an **AI tab** (shown when a structured-output provider is configured) extracts the same shape from `fetch()` snippets, Postman fragments, or prose.
+    *   **Connect an MCP server** (streamable HTTP) — one server = one connector. Every tool the server lists becomes an operation automatically; tools added upstream appear after a re-sync. Control the surface with an exclude list instead of an import picker. Auth schemes: `none`, `bearer`, `custom_header`, **`oauth`** (standard MCP authorization: discovery, dynamic client registration, PKCE browser login, RFC 8707 resource indicator, per-instance accounts with transparent token refresh), and **`sso`** (forwards the calling wick user as a signed JWT validated against `/.well-known/wick-pubkey.pem`).
+    *   **Manual builder** — Meta → Configs → Operations stepper with Go `text/template` request recipes.
+*   **Multi-instance custom connectors** — instances behave exactly like built-ins (`+ New row`, Duplicate, per-row credentials); no row is auto-created until you add one. Opt into "single instance only" per definition.
+*   **Ownership contract** — any approved user can create a custom connector; editing or deleting a definition is admin-or-creator only, and instance creators are marked with an `owner:` tag. The new `custom-connector` management connector exposes the same lifecycle as MCP operations (scoped per caller) so an agent can build connectors without the dashboard.
+*   **Connection status & live catalog** — MCP definitions show a Connected/Disconnected chip, re-sync per instance (probes run under that instance's account), refresh their tool catalog lazily on `wick_get`, and connect in the background at startup behind the boot gate.
+*   **Connector icons** — pick an emoji (emoji-mart picker, fully vendored) or paste an inline SVG / base64 image (32KB cap, rendered safely via `<img>`).
+
+### Changed
+
+*   Connectors no longer auto-create their first instance at boot (single-instance/Fixed modules excepted) — rows are created explicitly via **+ New row** and deleted rows stay deleted across restarts.
+*   Outbound MCP requests now emit a debug log trail (URL, RPC method, payload, response, latency) carrying the originating `request_id`.
 
 ---
 

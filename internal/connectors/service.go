@@ -89,6 +89,10 @@ type Service struct {
 	httpClient *http.Client
 	rl         *rateLimiter
 
+	// catalogRefresh is the lazy re-sync hook wick_get fires before
+	// reading a module — see SetCatalogRefresh. Set once at boot.
+	catalogRefresh func(ctx context.Context, key, instanceID string)
+
 	mu      sync.RWMutex
 	modules map[string]connector.Module // key -> registered module
 
@@ -203,49 +207,92 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 	s.mu.Unlock()
 
 	for _, m := range mods {
-		n, err := s.repo.CountByKey(ctx, m.Meta.Key)
-		if err != nil {
-			return fmt.Errorf("count rows for %q: %w", m.Meta.Key, err)
+		if err := s.seedModuleRows(ctx, m); err != nil {
+			return err
 		}
-		if n == 0 {
-			row := &entity.Connector{
-				Key:   m.Meta.Key,
-				Label: m.Meta.Name,
-			}
-			if err := s.repo.Create(ctx, row); err != nil {
-				return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
-			}
+	}
+	return nil
+}
+
+// seedModuleRows is the per-module half of Bootstrap: auto-create the
+// single row of a Fixed module when the Key has none (Fixed hides
+// "+ New row", so the row must exist up front), then reconcile every
+// row of the Key with the module's declared config schema. Non-fixed
+// connectors are never auto-seeded — instances are created explicitly
+// via "+ New row" and deleting the last one keeps the connector empty
+// across restarts. Existing values are preserved; metadata
+// (description, required, secret, ...) is refreshed so renames in code
+// propagate without a migration.
+func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error {
+	n, err := s.repo.CountByKey(ctx, m.Meta.Key)
+	if err != nil {
+		return fmt.Errorf("count rows for %q: %w", m.Meta.Key, err)
+	}
+	if n == 0 && m.Meta.Fixed {
+		row := &entity.Connector{
+			Key:   m.Meta.Key,
+			Label: m.Meta.Name,
 		}
-		// Reconcile every row of this Key with the module's declared
-		// config schema. Existing values are preserved; metadata
-		// (description, required, secret, ...) is refreshed so renames
-		// in code propagate without a migration.
-		rows, err := s.repo.ListByKey(ctx, m.Meta.Key)
-		if err != nil {
-			return fmt.Errorf("list rows for %q: %w", m.Meta.Key, err)
+		if err := s.repo.Create(ctx, row); err != nil {
+			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
 		}
-		for _, row := range rows {
-			configs := m.Configs
-			// OAuth connectors get a framework-managed connected_user field
-			// injected automatically — no need for each connector to declare it.
-			if m.OAuth != nil {
-				configs = append(configs, entity.Config{
-					Key:         "connected_user",
-					Description: "Display name of the connected " + m.OAuth.DisplayName + " account. Set automatically after OAuth connect.",
-				})
-			}
-			if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(row.ID), configs...); err != nil {
-				return fmt.Errorf("ensure configs for %q: %w", row.ID, err)
-			}
-			if s.tags != nil && len(m.Meta.DefaultTags) > 0 {
-				path := "/connectors/" + row.ID
-				if err := s.tags.EnsureToolDefaultTags(ctx, path, m.Meta.DefaultTags); err != nil {
-					return fmt.Errorf("ensure tags for %q: %w", row.ID, err)
-				}
+	}
+	rows, err := s.repo.ListByKey(ctx, m.Meta.Key)
+	if err != nil {
+		return fmt.Errorf("list rows for %q: %w", m.Meta.Key, err)
+	}
+	for _, row := range rows {
+		configs := m.Configs
+		// OAuth connectors get a framework-managed connected_user field
+		// injected automatically — no need for each connector to declare it.
+		if m.OAuth != nil {
+			configs = append(configs, entity.Config{
+				Key:         "connected_user",
+				Description: "Display name of the connected " + m.OAuth.DisplayName + " account. Set automatically after OAuth connect.",
+			})
+		}
+		if err := s.cfgs.EnsureOwned(ctx, ownerForConnector(row.ID), configs...); err != nil {
+			return fmt.Errorf("ensure configs for %q: %w", row.ID, err)
+		}
+		if s.tags != nil && len(m.Meta.DefaultTags) > 0 {
+			path := "/connectors/" + row.ID
+			if err := s.tags.EnsureToolDefaultTags(ctx, path, m.Meta.DefaultTags); err != nil {
+				return fmt.Errorf("ensure tags for %q: %w", row.ID, err)
 			}
 		}
 	}
 	return nil
+}
+
+// SetCatalogRefresh installs the hook wick_get fires before reading a
+// module's operations — custom MCP connectors lazily re-sync their
+// live tool catalog there. Nil (the default) is a no-op; set once at
+// boot before serving.
+func (s *Service) SetCatalogRefresh(h func(ctx context.Context, key, instanceID string)) {
+	s.catalogRefresh = h
+}
+
+// CatalogRefresh runs the lazy catalog re-sync hook, when installed.
+// instanceID is the row whose account should authenticate the probe
+// (oauth scheme) — servers may expose different tools per account.
+func (s *Service) CatalogRefresh(ctx context.Context, key, instanceID string) {
+	if s.catalogRefresh != nil {
+		s.catalogRefresh(ctx, key, instanceID)
+	}
+}
+
+// UpsertModule installs or replaces one module in the dispatch map at
+// runtime and runs the same row seeding / config reconciliation as
+// Bootstrap. This is the post-boot registration path for DB-defined
+// custom connectors (save + reload) — built-in modules never change
+// after boot. The map swap is atomic under the service mutex: in-
+// flight Execute calls keep the module they already resolved, new
+// calls see the replacement.
+func (s *Service) UpsertModule(ctx context.Context, m connector.Module) error {
+	s.mu.Lock()
+	s.modules[m.Meta.Key] = m
+	s.mu.Unlock()
+	return s.seedModuleRows(ctx, m)
 }
 
 // Modules returns the registered definitions, useful for the

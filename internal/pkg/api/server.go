@@ -49,7 +49,9 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	"github.com/yogasw/wick/internal/connectors/notifications"
+	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -919,6 +921,47 @@ func NewServer() *Server {
 		Push: pushSvc,
 	}))
 
+	// Custom connectors: replay admin-built definitions from the DB
+	// into the registry. MUST run before Bootstrap so custom modules
+	// ride the same instance seeding, allItems, and tag passes as
+	// built-ins. Tags are late-bound below (tagsSvc doesn't exist yet).
+	customConnSvc := customconn.New(customconn.Deps{
+		DB:         db,
+		Connectors: connectorsSvc,
+		Keys:       configsSvc,
+		BaseURL:    configsSvc.AppURL,
+	})
+	// Paste-page AI tab: the provider list resolves live per render /
+	// per parse, so adding or disabling a provider instance shows up
+	// without a restart. Only structured-output-capable providers
+	// qualify (NewProviderAIParser returns nil otherwise).
+	customConnSvc.SetAIProviders(func() []customconn.AIProviderEntry {
+		provs, perr := wfsetup.NewCLIProviders()
+		if perr != nil {
+			return nil
+		}
+		out := []customconn.AIProviderEntry{}
+		for _, p := range provs {
+			if ai := customconn.NewProviderAIParser(p); ai != nil {
+				out = append(out, customconn.AIProviderEntry{Name: p.Name(), Parser: ai})
+			}
+		}
+		return out
+	})
+	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
+		log.Error().Err(err).Msg("custom connectors: boot registration failed")
+	}
+	// custom-connector is the management connector for custom defs:
+	// the UI's create/update/re-sync/disable/delete lifecycle exposed
+	// as admin-only MCP operations, so an LLM can build a connector
+	// without the dashboard.
+	connectors.Register(customconnector.Module(customconnector.Deps{
+		Custom:     customConnSvc,
+		Connectors: connectorsSvc,
+	}))
+	// wick_get lazily re-syncs custom MCP tool catalogs (throttled).
+	connectorsSvc.SetCatalogRefresh(customConnSvc.RefreshIfStale)
+
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -1026,7 +1069,25 @@ func NewServer() *Server {
 	tr.mount(toolsMux)
 
 	tagsSvc := tags.NewService(db)
+	// Late-bind tags into the custom-connector service and link the
+	// per-def access tags ([custom:<key> filter, Connector, category])
+	// onto existing instance rows. Idempotent — rows that already carry
+	// tags keep their admin edits.
+	customConnSvc.SetTags(tagsSvc)
+	customConnSvc.EnsureInstanceTags(context.Background())
+	// Connect MCP custom connectors before the gate lifts: boot
+	// registered them without probing, this pass pulls each server's
+	// live catalog now that configs (incl. oauth instance tokens) are
+	// loaded — so the app opens with every MCP connector already
+	// connected instead of racing the first wick_list.
+	bootGate.Register("mcp-connectors")
+	go func() {
+		defer bootGate.Done("mcp-connectors")
+		bootGate.SetPhase("connecting-mcp")
+		customConnSvc.ResyncMCPAtBoot(context.Background())
+	}()
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
+	managerHandler.SetCustomConnectors(customConnSvc)
 
 	// Build the hidden-key set from the "agents" module's seed. Any config
 	// field tagged with `wick:"hidden"` is managed from a dedicated UI page

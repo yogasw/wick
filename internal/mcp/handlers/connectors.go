@@ -93,6 +93,25 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 				count++
 			}
 		}
+		// Live-catalog modules (custom MCP) at zero ops may simply not
+		// have synced yet — run the lazy refresh (throttled) and
+		// recount before deciding to hide the connector. Without this,
+		// an unsynced connector would never surface: invisible here
+		// means no wick_get, and no wick_get means no refresh.
+		if count == 0 && mod.Meta.LiveCatalog {
+			svc.CatalogRefresh(r.Context(), row.Key, row.ID)
+			if fresh, ok2 := svc.Module(row.Key); ok2 {
+				mod = fresh
+				if states, err = svc.OperationStates(r.Context(), row.ID, row.Key); err != nil {
+					continue
+				}
+				for _, op := range mod.Operations {
+					if states[op.Key] {
+						count++
+					}
+				}
+			}
+		}
 		if count == 0 {
 			continue
 		}
@@ -220,6 +239,10 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolError(w, req.ID, "get connector: "+err.Error(), connectorID)
 		return
 	}
+	// Custom MCP connectors lazily re-sync their live tool catalog here
+	// (throttled), so the schemas the LLM reads are near-fresh without
+	// wick_list paying a network round-trip per call.
+	svc.CatalogRefresh(r.Context(), row.Key, row.ID)
 	mod, ok := svc.Module(row.Key)
 	if !ok {
 		rsp.ToolError(w, req.ID, "connector module not registered", connectorID)

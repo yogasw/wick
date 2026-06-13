@@ -1,0 +1,119 @@
+package view
+
+// CustomReloadBanner sits at the top of a custom connector's detail
+// page while the stored definition is newer than the serving module.
+// Reload rebuilds + atomically swaps the executor; until then the old
+// in-memory module keeps serving.
+templ CustomReloadBanner(info *CustomDefInfo) {
+	<div class="mt-4 flex items-center gap-3 rounded-xl border border-cau-400 bg-cau-100 px-4 py-3">
+		<span class="font-semibold text-cau-400">⚠</span>
+		<p class="flex-1 text-sm text-black-800">
+			<span class="font-semibold text-cau-400">Definition updated</span>
+			— click Reload to apply changes to live MCP dispatch. The current in-memory executor keeps serving until then.
+		</p>
+		<form method="POST" action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/reload") }>
+			<button type="submit" class="rounded-lg bg-green-500 px-3 py-1.5 text-sm font-medium text-white-100 hover:bg-green-600">Reload</button>
+		</form>
+	</div>
+}
+
+// CustomBadge marks a custom definition in the list/detail header:
+// source badge + the connection status chip (MCP only — Connected
+// stays until a re-sync/reconnect flips it, Disconnected after a
+// failed probe, Disabled when the def is switched off; cURL/manual
+// defs have no connection to track). Pure display — the definition
+// actions live in CustomDefActions on the list page.
+templ CustomBadge(info *CustomDefInfo) {
+	<span class="inline-flex flex-shrink-0 items-center rounded-full bg-green-200 dark:bg-green-800 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">Custom · { info.SourceLabel }</span>
+	@customStatusChip(info)
+}
+
+// CustomDefActions is the definition-owner button group on the
+// connector list page: the jump into the definition editor. Re-sync
+// lives on each instance page (CustomResyncTools) — the probe runs
+// under that instance's account.
+templ CustomDefActions(info *CustomDefInfo) {
+	<a href={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/edit") } class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">Edit definition</a>
+}
+
+// CustomResyncTools is the per-instance catalog re-sync on an MCP
+// def's instance page: re-fetches the server's live tools/list under
+// THIS instance's account (oauth servers may expose different tools
+// per account) and atomically swaps the fresh operation set in.
+templ CustomResyncTools(info *CustomDefInfo, instanceID string) {
+	<form method="POST" action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/reload") } class="inline">
+		<input type="hidden" name="instance_id" value={ instanceID }/>
+		<button type="submit" title="Re-fetch the server's tools/list using this instance's account" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">↻ Re-sync tools</button>
+	</form>
+}
+
+// customStatusChip renders the definition state: Disabled (any source)
+// wins, then the MCP connection state from the server row's last probe.
+templ customStatusChip(info *CustomDefInfo) {
+	if info.Disabled {
+		<span class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">● Disabled</span>
+	} else if info.MCP {
+		if info.Connected {
+			<span class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">● Connected</span>
+		} else if info.Tested {
+			<span class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-neg-100 px-2.5 py-0.5 text-xs font-medium text-neg-400">● Disconnected</span>
+		} else {
+			<span class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">● Never tested</span>
+		}
+	}
+}
+
+// CustomConnectAccount is the per-instance OAuth login control on the
+// instance detail page: full-page redirect into the authorization
+// server; the callback attaches the account to this row and re-syncs
+// the def. account is the row's connected marker — present, it renders
+// as a chip and the button flips to Reconnect.
+templ CustomConnectAccount(instanceID, account string, connected bool) {
+	if account != "" {
+		<span class="inline-flex flex-shrink-0 items-center rounded-full bg-pos-100 px-2.5 py-1.5 text-xs font-medium text-pos-400" title="OAuth account attached to this instance">Connected: { account }</span>
+	}
+	<form method="POST" action="/manager/connectors/custom/mcp-servers/connect" class="inline">
+		<input type="hidden" name="instance_id" value={ instanceID }/>
+		if connected {
+			<button type="submit" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">Reconnect →</button>
+		} else {
+			<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Connect account →</button>
+		}
+	</form>
+}
+
+// CustomDangerRow is the definition-level danger zone: the disable
+// toggle (zero operations served until re-enabled; cards and instance
+// rows stay) and the delete (removes the definition, its instances,
+// and — for MCP defs — the server registration; run history survives
+// and the access tag is kept for re-creates).
+templ CustomDangerRow(info *CustomDefInfo) {
+	<section class="mt-8 rounded-xl border border-neg-400 bg-neg-100/50 dark:bg-transparent p-5">
+		<h2 class="text-base font-semibold text-neg-400">Definition danger zone</h2>
+		<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+			Disable stops serving every operation (instances and pages stay) until re-enabled. Delete removes the definition and its instances
+			if info.MCP {
+				— including the MCP server registration
+			}
+			; run history is kept for audit and the access tag survives so a re-created key restores prior grants.
+		</p>
+		<div class="mt-3 flex items-center gap-2">
+			if info.Disabled {
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/enable") }>
+					<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Enable definition</button>
+				</form>
+			} else {
+				<form method="POST" action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/disable") }>
+					<button type="submit" class="rounded-lg border border-cau-400 bg-cau-100 px-4 py-2 text-sm font-medium text-cau-400 hover:bg-cau-100/70">Disable definition</button>
+				</form>
+			}
+			<form
+				method="POST"
+				action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/delete") }
+				onsubmit="return confirm('Delete this custom connector definition and its instances? This cannot be undone.')"
+			>
+				<button type="submit" class="rounded-lg border border-neg-400 bg-neg-100 px-4 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100/70">Delete definition</button>
+			</form>
+		</div>
+	</section>
+}

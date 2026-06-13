@@ -1,0 +1,11 @@
+package view
+
+// ConnectorIcon renders a module icon: emoji/text verbatim, inline
+// <svg> and data:image payloads as an <img> sized to its container.
+templ ConnectorIcon(icon string) {
+	if src, ok := iconImageSrc(icon); ok {
+		<img src={ templ.SafeURL(src) } class="h-7 w-7 object-contain" alt="" loading="lazy"/>
+	} else {
+		{ icon }
+	}
+}

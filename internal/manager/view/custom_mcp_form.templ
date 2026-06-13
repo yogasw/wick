@@ -1,0 +1,239 @@
+package view
+
+import (
+	customconn "github.com/yogasw/wick/internal/connectors/custom"
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// CustomMCPServerFormPage renders the MCP server registration form —
+// label + URL, the four auth scheme panels (one visible at a time,
+// toggled by custom_mcp_form.js), scheme-independent extra headers,
+// the Test-connection card, and the tool exclude-list. Saving creates
+// the connector directly: every tool the server lists is an operation
+// unless ticked as excluded, and tools added server-side appear after
+// a reload with no wick change. Save stays disabled until one
+// successful test in this form session; the server re-enforces the
+// gate in SaveServer. serverID=="" registers a new server, otherwise
+// the form edits the stored row (form prefilled; secret values stay as
+// their wick_enc_ tokens and pass through unchanged unless replaced;
+// tools carries the live catalog probed server-side for the exclude
+// list — empty when the server was unreachable at render).
+templ CustomMCPServerFormPage(serverID string, form *customconn.ServerForm, tools []MCPToolRow, info *CustomDefInfo, user *entity.User) {
+	@Layout("Manager · MCP server", user) {
+		<main
+			class="mx-auto w-full max-w-container px-6 py-8"
+			data-cc-mcp-form
+			data-server-id={ serverID }
+			data-test-url="/manager/connectors/custom/mcp-servers/test"
+			data-save-url="/manager/connectors/custom/mcp-servers/save"
+			data-oauth-start-url="/manager/connectors/custom/mcp-servers/oauth/start"
+		>
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/manager/connectors" class="hover:text-green-600">Connectors</a>
+				<span>/</span>
+				<span>MCP servers</span>
+				<span>/</span>
+				if serverID == "" {
+					<span class="text-black-900 dark:text-white-100">Register</span>
+				} else {
+					<span class="text-black-900 dark:text-white-100">Edit</span>
+				}
+			</div>
+			<div class="mt-4">
+				if serverID == "" {
+					<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Register MCP server</h1>
+				} else {
+					<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Edit MCP server</h1>
+				}
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+					Wick forwards JSON-RPC (<code class="font-mono">initialize</code>, <code class="font-mono">tools/list</code>, <code class="font-mono">tools/call</code>) to this URL per request. Stdio servers are out of scope — expose them over HTTP with a sidecar.
+				</p>
+			</div>
+			if form != nil {
+				@templ.JSONScript("cc-server-form", form)
+			}
+			if len(tools) > 0 {
+				@templ.JSONScript("cc-server-tools", tools)
+			}
+			<div class="mt-6 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
+				<div class="grid grid-cols-12 gap-4">
+					<div class="col-span-3 sm:col-span-1">
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Icon</label>
+						@IconPicker("cc-srv-icon")
+					</div>
+					<div class="col-span-9 sm:col-span-4">
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Label</label>
+						<input id="cc-srv-label" type="text" placeholder="Internal Tools MCP" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+						<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Display name — becomes the connector's name (and its key, slugified).</p>
+					</div>
+					<div class="col-span-12 sm:col-span-7">
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">MCP URL <span class="text-neg-400">*</span></label>
+						<input id="cc-srv-url" type="url" placeholder="https://mcp.internal.example.com/v1" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+						<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Streamable-HTTP endpoint.</p>
+					</div>
+					<div class="col-span-12">
+						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Description (optional)</label>
+						<textarea id="cc-srv-desc" rows="2" placeholder="Leave empty to use the server's own description" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"></textarea>
+						<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Empty = adopt the server's self-description (from its <code class="font-mono">initialize</code> instructions) and keep it fresh on every re-sync. Write your own to lock it — clearing the field hands it back to the server.</p>
+					</div>
+				</div>
+
+				<!-- Auth scheme -->
+				<div class="mt-6">
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600">Auth scheme</label>
+					<div class="mt-2 flex flex-wrap gap-3">
+						@authSchemeRadio("none", "None")
+						@authSchemeRadio("bearer", "Bearer token")
+						@authSchemeRadio("custom_header", "Custom header")
+						@authSchemeRadio("oauth", "OAuth (login on the server)")
+						@authSchemeRadio("sso", "SSO (forward caller's session)")
+					</div>
+					<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Switching schemes preserves the extra header rows below.</p>
+				</div>
+
+				<!-- Panel: bearer -->
+				<div data-cc-auth-panel="bearer" class="mt-4 hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+					<label class="block text-xs font-medium text-black-800 dark:text-black-600">Bearer token <span class="text-neg-400">*</span></label>
+					<input id="cc-srv-bearer" type="password" placeholder="eyJhbGc…" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+					<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Stored encrypted (<code class="font-mono">wick_enc_…</code>), decrypted server-side per request. Leave the token value untouched when editing to keep the stored secret.</p>
+				</div>
+
+				<!-- Panel: custom_header -->
+				<div data-cc-auth-panel="custom_header" class="mt-4 hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+					<div class="flex items-center justify-between">
+						<label class="text-xs font-medium text-black-800 dark:text-black-600">Auth headers</label>
+						<button type="button" data-cc-add-auth-header class="rounded-lg border border-white-400 dark:border-navy-600 px-2.5 py-1 text-[11px] font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">+ Add row</button>
+					</div>
+					<div id="cc-srv-auth-headers" class="mt-2 space-y-2"></div>
+					<p class="mt-2 text-[11px] text-black-700 dark:text-black-600">For schemes that don't fit Bearer — paired ID + secret headers, subscription keys. Rows marked secret encrypt at rest.</p>
+				</div>
+
+				<!-- Panel: oauth -->
+				<div data-cc-auth-panel="oauth" class="mt-4 hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+					<p class="text-xs text-black-800 dark:text-black-600">
+						Standard MCP authorization (<code class="font-mono">Authorization: Bearer</code>): wick discovers the server's authorization server, registers a client automatically when the server supports it, and signs you in via a browser popup. <span class="font-semibold">Each instance connects its own account</span> — Test now opens the login; saving creates the connector with the signed-in account as its first instance, and more accounts connect from each instance's page.
+					</p>
+					<div class="mt-3 grid grid-cols-12 gap-3">
+						<div class="col-span-12 sm:col-span-5">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600">Client ID (optional)</label>
+							<input id="cc-srv-oauth-id" type="text" placeholder="auto via dynamic registration" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+						</div>
+						<div class="col-span-12 sm:col-span-4">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600">Client secret (optional)</label>
+							<input id="cc-srv-oauth-secret" type="password" placeholder="public client when empty" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+						</div>
+						<div class="col-span-12 sm:col-span-3">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600">Scopes (optional)</label>
+							<input id="cc-srv-oauth-scopes" type="text" placeholder="space-separated" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+						</div>
+					</div>
+					<div data-cc-oauth-status class="mt-3 hidden rounded-lg border border-pos-400 bg-pos-100 px-3 py-2">
+						<p class="text-[11px] text-black-800"><span class="font-semibold text-pos-400">✓ Signed in.</span> Saving attaches this account to the connector's first instance.</p>
+					</div>
+				</div>
+
+				<!-- Panel: sso -->
+				<div data-cc-auth-panel="sso" class="mt-4 hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+					<p class="text-xs text-black-800 dark:text-black-600">
+						Wick mints a short-lived ED25519-signed JWT for <em>the user who triggered the call</em> and forwards it as <code class="font-mono">X-Wick-User</code>. No shared secret is stored.
+					</p>
+					<label class="mt-3 block text-xs font-medium text-black-800 dark:text-black-600">Claim mapping (read-only)</label>
+					<pre class="mt-1 overflow-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 font-mono text-xs leading-relaxed text-black-900 dark:text-white-100">{ ssoClaimExample }</pre>
+					<div class="mt-3 grid grid-cols-12 gap-3">
+						<div class="col-span-12 sm:col-span-7">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600">Audience (<code class="font-mono">aud</code> claim)</label>
+							<input id="cc-srv-sso-aud" type="text" placeholder="defaults to the MCP URL host" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+							<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">The MCP server should validate this — prevents token re-use across servers.</p>
+						</div>
+						<div class="col-span-12 sm:col-span-5">
+							<label class="block text-xs font-medium text-black-800 dark:text-black-600">Token TTL</label>
+							<select id="cc-srv-sso-ttl" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800">
+								<option value="60">1 min</option>
+								<option value="300" selected>5 min (default)</option>
+								<option value="900">15 min</option>
+							</select>
+							<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Re-minted per request — short TTL is safe.</p>
+						</div>
+					</div>
+					<div class="mt-3 rounded-lg border border-pos-400 bg-pos-100 px-3 py-2">
+						<p class="text-[11px] text-black-800">
+							<span class="font-semibold text-pos-400">✓ Why SSO:</span>
+							no shared secret in wick; per-user RBAC + audit on the MCP side; revoking a wick user revokes downstream access instantly.
+						</p>
+					</div>
+					<div class="mt-2 rounded-lg border border-cau-400 bg-cau-100 px-3 py-2">
+						<p class="text-[11px] text-black-800">
+							<span class="font-semibold text-cau-400">⚠ Server requirement:</span>
+							the MCP server must validate the JWT against <code class="font-mono">/.well-known/wick-pubkey.pem</code> on this wick. Stock open-source MCP servers don't — typically only in-house ones.
+						</p>
+					</div>
+				</div>
+
+				<!-- Extra headers (any scheme) -->
+				<div class="mt-6">
+					<div class="flex items-center justify-between">
+						<label class="text-xs font-medium text-black-800 dark:text-black-600">Extra headers (any scheme — appended on top)</label>
+						<button type="button" data-cc-add-extra-header class="rounded-lg border border-white-400 dark:border-navy-600 px-2.5 py-1 text-[11px] font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">+ Add header</button>
+					</div>
+					<div id="cc-srv-extra-headers" class="mt-2 space-y-2"></div>
+					<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Routing / tenancy headers that aren't auth. Each row independently markable as secret.</p>
+				</div>
+
+				<!-- Test connection -->
+				<div class="mt-6 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+					<div class="flex items-center justify-between gap-4">
+						<div>
+							<p class="text-sm font-semibold text-black-900 dark:text-white-100">Test connection</p>
+							<p class="text-xs text-black-800 dark:text-black-600">Fires <code class="font-mono">initialize</code> + <code class="font-mono">tools/list</code> with the current values. Save unlocks after one success.</p>
+						</div>
+						<button type="button" data-cc-test class="flex-shrink-0 rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60">▶ Test now</button>
+					</div>
+					<div data-cc-test-result class="mt-3 hidden"></div>
+				</div>
+
+				<!-- Tools (exclude list) -->
+				<div class="mt-6 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+					<p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools</p>
+					<p class="mt-0.5 text-xs text-black-800 dark:text-black-600">
+						Every tool this server lists is exposed as an operation automatically — new tools appear after a reload, nothing to re-import. Use the <span class="font-semibold">Exclude</span> button on a tool to hide it.
+					</p>
+					<div id="cc-srv-tools" class="mt-3 space-y-1.5">
+						<p class="text-[11px] text-black-700 dark:text-black-600">Run Test now to discover this server's tools.</p>
+					</div>
+				</div>
+
+				<!-- Error -->
+				<div data-cc-form-error class="mt-4 hidden rounded-lg border border-neg-400 bg-neg-100 px-4 py-3">
+					<p class="text-sm font-medium text-neg-400">✗ <span data-cc-form-error-text></span></p>
+				</div>
+
+				<!-- Footer -->
+				<div class="mt-6 flex items-center justify-between">
+					<a href="/manager/connectors" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">← Cancel</a>
+					<button type="button" data-cc-save-server disabled class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60">
+						if serverID == "" {
+							Save & create connector →
+						} else {
+							Save changes
+						}
+					</button>
+				</div>
+			</div>
+			if serverID != "" && info != nil {
+				@CustomDangerRow(info)
+			}
+		</main>
+		<script src="/modules/manager/js/vendor_emoji_mart.js"></script>
+		<script src="/modules/manager/js/icon_picker.js"></script>
+		<script src="/modules/manager/js/custom_mcp_form.js"></script>
+	}
+}
+
+// authSchemeRadio renders one auth-scheme selector pill. The js layer
+// owns checked state + panel visibility.
+templ authSchemeRadio(value, label string) {
+	<label class="flex cursor-pointer items-center gap-2 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 has-[:checked]:border-green-500" data-cc-auth-choice={ value }>
+		<input type="radio" name="cc-auth-scheme" value={ value } class="accent-green-500"/>
+		<span class="text-sm font-medium text-black-900 dark:text-white-100">{ label }</span>
+	</label>
+}
