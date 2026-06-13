@@ -341,9 +341,9 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	case "wick_skill_sync":
 		handlers.WickSkillSync(w, hreq, rsp)
 	case "wick_session_info":
-		handlers.WickSessionInfo(w, hreq, rsp, h.layout, p.Arguments)
+		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, p.Arguments)
 	case "wick_set_title":
-		handlers.WickSetTitle(w, hreq, rsp, h.layout, h.refreshSession, p.Arguments)
+		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, p.Arguments)
 	default:
 		if strings.HasPrefix(p.Name, handlers.WickManagerPrefix) {
 			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, p.Name, p.Arguments, user, tagIDs)

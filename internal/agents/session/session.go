@@ -85,6 +85,10 @@ type Meta struct {
 	// across users (anyone can open them) but pushes target only the
 	// IDs in this list — no auto-subscribe on session create.
 	Subscribers []string `json:"subscribers,omitempty"`
+	// UserID is the wick user ID that created this session. Empty for
+	// legacy sessions created before ownership tracking was added.
+	// When non-empty, only the owning user (or app owner) may access it.
+	UserID string `json:"user_id,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
@@ -151,6 +155,9 @@ type CreateOptions struct {
 	// Preset is the preset name to associate with this session.
 	// Stored in meta.json; factory loads content from presets/<name>/agent.md on spawn.
 	Preset string
+	// UserID is the wick user who is creating this session. Stored in
+	// meta.json for ownership checks in MCP handlers.
+	UserID string
 }
 
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
@@ -185,6 +192,7 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		Status:     StatusIdle,
 		CreatedAt:  now,
 		LastActive: now,
+		UserID:     opt.UserID,
 	}
 	if err := storage.WriteJSON(layout.SessionMeta(opt.ID), &meta); err != nil {
 		_ = os.RemoveAll(dir)
