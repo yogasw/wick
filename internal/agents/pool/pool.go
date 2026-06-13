@@ -922,6 +922,21 @@ func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID s
 	return p.ensureSession(ctx, sessionID, source, projectID)
 }
 
+// EnsureSessionOwner stamps UserID on an existing session when the session
+// currently has no owner. No-op when the session does not exist or already
+// has an owner.
+func (p *Pool) EnsureSessionOwner(ctx context.Context, sessionID, userID string) {
+	if sessionID == "" || userID == "" {
+		return
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil || sess.Meta.UserID != "" {
+		return
+	}
+	sess.Meta.UserID = userID
+	_ = session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta)
+}
+
 func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID string) error {
 	existing, err := session.Load(p.cfg.Layout, sessionID)
 	if err == nil {

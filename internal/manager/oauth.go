@@ -13,8 +13,8 @@
 //   - oauthCallback()                 — validates state, exchanges code, saves token
 //   - oauthSaveToken()                — persists xoxp/access token to connector row
 //   - migrateOAuthAppToInstances()    — one-shot boot migration: copies shared
-//                                       connector_oauth:{key} credentials into every
-//                                       instance row that has not yet been configured.
+//     connector_oauth:{key} credentials into every
+//     instance row that has not yet been configured.
 //
 // Storage:
 //   - Per-instance OAuth credentials: connector row configs (client_id, client_secret)
@@ -30,7 +30,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,7 +48,7 @@ import (
 // oauthStateEntry stores a pending OAuth state with its expiry and optional
 // connector row ID so the callback knows which row to update.
 type oauthStateEntry struct {
-	key            string    // connector key (e.g. "slack")
+	key            string // connector key (e.g. "slack")
 	expiresAt      time.Time
 	connectorRowID string // non-empty = update this specific row
 	wickUserID     string // wick user who initiated the flow (for owner tag)
@@ -129,9 +131,16 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 
 	params := url.Values{}
 	params.Set("client_id", clientID)
-	params.Set("user_scope", mod.OAuth.Scopes) // Slack uses user_scope; harmless for others
+	if mod.OAuth.TokenURL == "" {
+		params.Set("user_scope", mod.OAuth.Scopes)
+	} else {
+		params.Set("scope", mod.OAuth.Scopes)
+	}
 	params.Set("redirect_uri", redirectURI)
 	params.Set("state", state)
+	for k, v := range mod.OAuth.ExtraParams {
+		params.Set(k, v)
+	}
 
 	http.Redirect(w, r, mod.OAuth.AuthorizeURL+"?"+params.Encode(), http.StatusTemporaryRedirect)
 }
@@ -204,8 +213,13 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 
 	redirectURI := h.oauthRedirectURI(r, key)
 
-	// Exchange code for token. Slack uses oauth.v2.access with user_scope.
-	accessToken, slackUserID, err := h.exchangeSlackCode(r.Context(), clientID, clientSecret, code, redirectURI)
+	// Exchange code for token. Generic standard OAuth2 when TokenURL is set; Slack-specific otherwise.
+	var accessToken, refreshToken, fallbackUserID string
+	if mod.OAuth.TokenURL != "" {
+		accessToken, refreshToken, err = h.exchangeGenericCode(r.Context(), mod.OAuth.TokenURL, clientID, clientSecret, code, redirectURI)
+	} else {
+		accessToken, fallbackUserID, err = h.exchangeSlackCode(r.Context(), clientID, clientSecret, code, redirectURI)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("connector", key).Msg("manager oauth: token exchange failed")
 		http.Error(w, "token exchange failed: "+err.Error(), http.StatusBadGateway)
@@ -215,13 +229,19 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// Resolve display name via GetUserIdentity.
 	userID, displayName, err := mod.OAuth.GetUserIdentity(r.Context(), accessToken)
 	if err != nil {
-		log.Warn().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed; using token user ID as display name")
-		userID = slackUserID
-		displayName = slackUserID
+		if fallbackUserID == "" {
+			log.Error().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed, no fallback user ID")
+			http.Error(w, "failed to resolve user identity: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		log.Warn().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed; using fallback user ID")
+		userID = fallbackUserID
+		displayName = fallbackUserID
 	}
 
-	// Persist token to connector row.
-	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth, row.MultiAccount)
+	// Persist token to connector row. Pass the wick platform user ID (from the
+	// OAuth state entry) as wickUserID and the provider-side user ID as externalUserID.
+	savedRowID, saveErr := h.oauthSaveToken(r.Context(), key, entry.wickUserID, userID, displayName, accessToken, entry.connectorRowID, mod.OAuth, row.MultiAccount)
 	if saveErr != nil {
 		log.Error().Err(saveErr).Str("connector", key).Str("user_id", userID).Msg("manager oauth: oauthSaveToken failed")
 		http.Error(w, "failed to save token: "+saveErr.Error(), http.StatusInternalServerError)
@@ -231,6 +251,14 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	log.Info().Str("connector", key).Str("user_id", userID).Str("display_name", displayName).
 		Str("connector_row_id", savedRowID).
 		Msg("manager oauth: user token saved successfully")
+
+	// Persist refresh_token when received (e.g. Google OAuth offline access).
+	if refreshToken != "" {
+		if err := h.connectors.Update(r.Context(), savedRowID, row.Label,
+			map[string]string{"refresh_token": refreshToken}, row.Disabled); err != nil {
+			log.Warn().Err(err).Str("connector", key).Msg("manager oauth: failed to save refresh token")
+		}
+	}
 
 	// Assign owner tag when a new row was created (MultiAccount flow).
 	if h.tags != nil && row.MultiAccount && entry.wickUserID != "" {
@@ -257,18 +285,69 @@ func (h *Handler) exchangeSlackCode(ctx context.Context, clientID, clientSecret,
 	return resp.AuthedUser.AccessToken, resp.AuthedUser.ID, nil
 }
 
+// exchangeGenericCode exchanges an authorization code for tokens using a
+// standard HTTP POST per RFC 6749. Returns accessToken and, if present,
+// refreshToken (e.g. Google offline access).
+func (h *Handler) exchangeGenericCode(ctx context.Context, tokenURL, clientID, clientSecret, code, redirectURI string) (accessToken, refreshToken string, err error) {
+	data := url.Values{}
+	data.Set("grant_type", "authorization_code")
+	data.Set("code", code)
+	data.Set("redirect_uri", redirectURI)
+	data.Set("client_id", clientID)
+	data.Set("client_secret", clientSecret)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return "", "", fmt.Errorf("build token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("read token response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("token endpoint %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		Error        string `json:"error"`
+		ErrorDesc    string `json:"error_description"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", "", fmt.Errorf("decode token response: %w", err)
+	}
+	if result.Error != "" {
+		return "", "", fmt.Errorf("token error: %s: %s", result.Error, result.ErrorDesc)
+	}
+	if result.AccessToken == "" {
+		return "", "", fmt.Errorf("empty access_token in token response")
+	}
+	return result.AccessToken, result.RefreshToken, nil
+}
+
 // oauthSaveToken persists an access token as a ConnectorAccount under the
 // originating connector row. MultiAccount behaviour is handled by the repo
 // upsert: false = replace existing account, true = add new account.
-func (h *Handler) oauthSaveToken(ctx context.Context, key, userID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta, multiAccount bool) (savedRowID string, err error) {
+// wickUserID is the wick platform user; externalUserID is the provider-side ID.
+func (h *Handler) oauthSaveToken(ctx context.Context, key, wickUserID, externalUserID, displayName, accessToken, connectorRowID string, meta *connector.OAuthMeta, multiAccount bool) (savedRowID string, err error) {
 	if connectorRowID == "" {
 		return "", fmt.Errorf("oauth save: connector_id is required")
 	}
-	if err := h.connectors.SaveAccount(ctx, connectorRowID, userID, displayName, accessToken); err != nil {
+	if err := h.connectors.SaveAccount(ctx, connectorRowID, wickUserID, externalUserID, displayName, accessToken); err != nil {
 		return "", fmt.Errorf("oauth save: %w", err)
 	}
-	log.Info().Str("connector", key).Str("user_id", userID).Str("connector_id", connectorRowID).
-		Str("display_name", displayName).Msg("manager oauth: account saved")
+	log.Info().Str("connector", key).Str("wick_user_id", wickUserID).Str("external_user_id", externalUserID).
+		Str("connector_id", connectorRowID).Str("display_name", displayName).Msg("manager oauth: account saved")
 	return connectorRowID, nil
 }
 

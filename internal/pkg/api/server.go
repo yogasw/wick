@@ -78,6 +78,7 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -99,6 +100,21 @@ func genMCPInternalToken() string {
 		return ""
 	}
 	return hex.EncodeToString(b)
+}
+
+// wfListerAdapter wraps a workflow service.Service to satisfy admin.WorkflowLister.
+type wfListerAdapter struct{ svc interface {
+	List() ([]string, error)
+	Load(id string) (wf.Workflow, error)
+} }
+
+func (a wfListerAdapter) List() ([]string, error) { return a.svc.List() }
+func (a wfListerAdapter) LoadInfo(id string) (admin.WorkflowInfo, error) {
+	w, err := a.svc.Load(id)
+	if err != nil {
+		return admin.WorkflowInfo{}, err
+	}
+	return admin.WorkflowInfo{Name: w.Name, CreatedBy: w.CreatedBy}, nil
 }
 
 func NewServer() *Server {
@@ -1018,6 +1034,35 @@ func NewServer() *Server {
 				return "", false
 			})
 
+			// WickUserIDFn resolves a Slack user ID to a wick platform user ID
+			// by scanning ConnectorAccount rows where ExternalUserID matches the
+			// inbound Slack user ID and returning the stored WickUserID.
+			slackCh.SetWickUserIDFn(func(ctx context.Context, slackUserID string) (string, bool) {
+				rows, err := connectorsSvc.ListByKey(ctx, "slack")
+				if err != nil {
+					return "", false
+				}
+				for _, row := range rows {
+					accs, err := connectorsSvc.ListAccounts(ctx, row.ID)
+					if err != nil {
+						continue
+					}
+					for _, acc := range accs {
+						if acc.ExternalUserID == slackUserID && acc.WickUserID != "" {
+							return acc.WickUserID, true
+						}
+					}
+				}
+				return "", false
+			})
+
+			// OwnerFn stamps the resolved wick user ID on the session.
+			if agentsPool != nil {
+				slackCh.SetOwnerFn(func(ctx context.Context, sessionID, userID string) {
+					agentsPool.EnsureSessionOwner(ctx, sessionID, userID)
+				})
+			}
+
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)
@@ -1091,6 +1136,8 @@ func NewServer() *Server {
 	// onto existing instance rows. Idempotent — rows that already carry
 	// tags keep their admin edits.
 	customConnSvc.SetTags(tagsSvc)
+	agentstool.SetTagsService(tagsSvc)
+	agentstool.SetSkillStore(agentskills.NewStore(db))
 	customConnSvc.EnsureInstanceTags(context.Background())
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
@@ -1210,7 +1257,12 @@ func NewServer() *Server {
 	}
 
 	// ── Admin ────────────────────────────────────────────────────
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc)
+	skillsStore := agentskills.NewStore(db)
+	var wfLister admin.WorkflowLister
+	if wfMgr != nil {
+		wfLister = wfListerAdapter{svc: wfMgr.Service}
+	}
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore)
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)

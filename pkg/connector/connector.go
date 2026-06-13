@@ -204,10 +204,18 @@ type OAuthMeta struct {
 	// AuthorizeURL is the OAuth consent redirect URL
 	// (e.g. https://slack.com/oauth/v2/authorize).
 	AuthorizeURL string
+	// TokenURL is the standard OAuth2 token exchange endpoint (RFC 6749).
+	// When set, oauthCallback uses a generic HTTP POST exchange.
+	// When empty, the Slack-specific slackgo path is used (backward-compat).
+	TokenURL string
+	// ExtraParams are appended to the authorization URL redirect.
+	// Use for provider-specific requirements, e.g.:
+	//   Google: {"access_type":"offline","prompt":"consent"} → gets refresh_token
+	ExtraParams map[string]string
 	// Scopes is the space- or comma-separated list of requested scopes
-	// (sent as the user_scope param for Slack, scope for standard OAuth2).
+	// (sent as user_scope for Slack when TokenURL is empty, or scope for standard OAuth2).
 	Scopes string
-	// DisplayName is shown on the Connect button (e.g. "Slack", "Google").
+	// DisplayName is shown on the Connect button (e.g. "Slack", "Google Drive").
 	DisplayName string
 	// Icon is an SVG string or emoji rendered next to the Connect button.
 	Icon string

@@ -30,8 +30,11 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/tags"
+	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -52,6 +55,8 @@ var (
 	globalDB         *gorm.DB
 	globalChannels   *agentchannels.Registry
 	globalSyncMgr    *providersync.Manager
+	globalSkillStore *skills.Store
+	globalTagsSvc    *tags.Service
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -70,7 +75,10 @@ type GateStatus struct {
 }
 
 // SetManager wires in the agents registry manager.
-func SetManager(m *registry.Manager) { globalMgr = m }
+func SetManager(m *registry.Manager) {
+	globalMgr = m
+	ui.SetAgentsAvailable(func() bool { return globalMgr != nil })
+}
 
 // SetPool wires in the agent subprocess pool.
 func SetPool(p *pool.Pool) { globalPool = p }
@@ -133,6 +141,13 @@ func SetChannelRegistry(r *agentchannels.Registry) { globalChannels = r }
 
 // SetSyncManager wires the provider storage sync manager.
 func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
+
+// SetSkillStore wires the skills ownership store so delete/upload/sync
+// handlers can enforce owner-or-admin access control.
+func SetSkillStore(s *skills.Store) { globalSkillStore = s }
+
+// SetTagsService wires the tags service for skill ownership checks.
+func SetTagsService(svc *tags.Service) { globalTagsSvc = svc }
 
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.
@@ -309,6 +324,14 @@ func Register(r tool.Router) {
 	r.GET("/data-tables/{slug}/export.csv", exportDataTableCSV)
 }
 
+func requireAdmin(c *tool.Ctx) bool {
+	if u := login.GetUser(c.Context()); u == nil || !u.IsAdmin() {
+		c.Error(http.StatusForbidden, "admins only")
+		return false
+	}
+	return true
+}
+
 func settingsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -398,6 +421,31 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		labels[r.id] = r.label
 	}
 	close(ch)
+	allProjects := globalMgr.Registry().Projects()
+	allProjectIDs := globalMgr.Registry().ProjectIDs()
+	if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+		filtered := allProjectIDs[:0:0]
+		for _, pid := range allProjectIDs {
+			p, ok := allProjects[pid]
+			if !ok {
+				continue
+			}
+			if globalTagsSvc != nil {
+				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, pid)
+				if owns {
+					filtered = append(filtered, pid)
+				}
+			} else if p.Meta.OwnerUserID == "" || p.Meta.OwnerUserID == u.ID {
+				filtered = append(filtered, pid)
+			}
+		}
+		allProjectIDs = filtered
+		filteredMap := make(map[string]project.Project, len(filtered))
+		for _, pid := range filtered {
+			filteredMap[pid] = allProjects[pid]
+		}
+		allProjects = filteredMap
+	}
 	return view.AgentsLayoutVM{
 		Base:             c.Base(),
 		ActivePage:       activePage,
@@ -407,8 +455,8 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		SidebarLabels:    labels,
 		ActiveSessionID:  activeSessionID,
 		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
-		Projects:         globalMgr.Registry().Projects(),
-		ProjectList:      globalMgr.Registry().ProjectIDs(),
+		Projects:         allProjects,
+		ProjectList:      allProjectIDs,
 		ProjectCounts:    counts,
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
@@ -416,15 +464,27 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 }
 
 // projectChoices builds the picker rows for the compose form / move menu
-// from the registry projects, ordered by display name.
-func projectChoices() []view.ProjectChoiceVM {
+// from the registry projects, ordered by display name. Non-admin users only
+// see their own personal project.
+func projectChoices(c *tool.Ctx) []view.ProjectChoiceVM {
 	ids := globalMgr.Registry().ProjectIDs()
 	projects := globalMgr.Registry().Projects()
+	u := login.GetUser(c.Context())
 	out := make([]view.ProjectChoiceVM, 0, len(ids))
 	for _, id := range ids {
 		p, ok := projects[id]
 		if !ok {
 			continue
+		}
+		if u != nil && !u.IsAdmin() {
+			if globalTagsSvc != nil {
+				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, id)
+				if !owns {
+					continue
+				}
+			} else if p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != u.ID {
+				continue
+			}
 		}
 		out = append(out, view.ProjectChoiceVM{
 			ID:              id,
@@ -452,6 +512,7 @@ func createSessionQuick(c *tool.Ctx) {
 		ID:     id,
 		Origin: session.OriginUI,
 		Preset: "default",
+		UserID: actorID(c),
 	})
 	if err != nil {
 		c.Error(http.StatusInternalServerError, err.Error())
@@ -474,6 +535,56 @@ func notReady(c *tool.Ctx) bool {
 	return false
 }
 
+// ownsSession reports whether the caller may access sess. App owners see
+// all sessions; regular users may only access sessions they own or legacy
+// sessions that have no recorded owner (UserID=="").
+func ownsSession(c *tool.Ctx, sess session.Session) bool {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return true
+	}
+	if u.CanSeeAllSessions() {
+		return true
+	}
+	return sess.Meta.UserID == "" || sess.Meta.UserID == u.ID
+}
+
+// ensurePersonalProjectForUser auto-creates a personal project for a non-admin
+// user on their first agents access, then pins it so pinnedProjectID() returns
+// it on subsequent visits. Best-effort: errors are logged and do not block access.
+func ensurePersonalProjectForUser(c *tool.Ctx) {
+	if globalMgr == nil || globalAuth == nil {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsAdmin() {
+		return
+	}
+	pid, err := project.FindPersonalProject(globalLayout, u.ID)
+	if err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("user", u.ID).Msg("findPersonalProject failed")
+		return
+	}
+	if pid == "" {
+		opt := project.PersonalProjectOptions(uuid.New().String(), u.ID, u.Name)
+		p, cerr := globalMgr.CreateProject(c.Context(), opt)
+		if cerr != nil {
+			log.Ctx(c.Context()).Warn().Err(cerr).Str("user", u.ID).Msg("createPersonalProject failed")
+			return
+		}
+		pid = p.Meta.ID
+		if globalTagsSvc != nil {
+			_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), pid, u.ID)
+		}
+	}
+	if u.Metadata.PinnedAgentProjectID == pid {
+		return
+	}
+	if err := globalAuth.SetPinnedAgentProject(c.Context(), u.ID, pid); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("user", u.ID).Msg("pin personal project failed")
+	}
+}
+
 // newSessionCompose renders the compose page: provider/preset/workspace
 // pickers + a textarea for the first message. No session is persisted
 // here — that only happens in startNewSession when the form posts back
@@ -482,6 +593,7 @@ func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	ensurePersonalProjectForUser(c)
 	renderCompose(c, "", "")
 }
 
@@ -531,6 +643,7 @@ func startNewSession(c *tool.Ctx) {
 		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
+		UserID:    actorID(c),
 	}); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose create session: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -623,7 +736,7 @@ func renderCompose(c *tool.Ctx, message, errMsg string) {
 		Base:             c.Base(),
 		Providers:        providers,
 		Presets:          globalMgr.Registry().PresetNames(),
-		Projects:         projectChoices(),
+		Projects:         projectChoices(c),
 		DefaultProvider:  defaultProv,
 		DefaultPreset:    defaultPreset,
 		ScopedProjectID:  scoped,
@@ -706,11 +819,21 @@ func sessionsPage(c *tool.Ctx) {
 		}
 	}
 	ids := globalMgr.Registry().SessionIDs()
+	caller := login.GetUser(c.Context())
+	allSessions := globalMgr.Registry().Sessions()
 	if scoped != "" {
-		sessions := globalMgr.Registry().Sessions()
 		filtered := ids[:0:0]
 		for _, id := range ids {
-			if s, ok := sessions[id]; ok && s.Meta.ProjectID == scoped {
+			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scoped {
+				filtered = append(filtered, id)
+			}
+		}
+		ids = filtered
+	}
+	if caller != nil && !caller.CanSeeAllSessions() {
+		filtered := ids[:0:0]
+		for _, id := range ids {
+			if s, ok := allSessions[id]; ok && (s.Meta.UserID == "" || s.Meta.UserID == caller.ID) {
 				filtered = append(filtered, id)
 			}
 		}
@@ -771,7 +894,7 @@ func sessionsPage(c *tool.Ctx) {
 		Layout:          sidebarVMScoped(c, "sessions", "", scoped),
 		Base:            c.Base(),
 		IDs:             ids,
-		Sessions:        globalMgr.Registry().Sessions(),
+		Sessions:        allSessions,
 		Labels:          pageLabels,
 		Projects:        globalMgr.Registry().Projects(),
 		ProjectList:     globalMgr.Registry().ProjectIDs(),
@@ -805,6 +928,7 @@ func createSession(c *tool.Ctx) {
 		ProjectID: projectID,
 		Origin:    session.OriginUI,
 		Preset:    presetName,
+		UserID:    actorID(c),
 	})
 	if err != nil {
 		log.Ctx(c.Context()).Error().Msgf("create session: %s", err.Error())
@@ -825,7 +949,7 @@ func sessionDetail(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.NotFound()
 		return
 	}
@@ -950,15 +1074,21 @@ func switchProvider(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
+	}
+	u := login.GetUser(c.Context())
+	callerID := ""
+	if u != nil {
+		callerID = u.ID
 	}
 	newID := uuid.New().String()
 	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
 		ID:        newID,
 		ProjectID: sess.Meta.ProjectID,
 		Origin:    session.OriginUI,
+		UserID:    callerID,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -993,7 +1123,7 @@ func moveSessionToProject(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1053,7 +1183,7 @@ func sendMessage(c *tool.Ctx) {
 	// #<provider> prefix → switch provider before sending.
 	if r := agentchannels.ParseProviderTag(req.Text); r.HasTag {
 		sess, ok := globalMgr.Registry().Session(id)
-		if !ok {
+		if !ok || !ownsSession(c, sess) {
 			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 			return
 		}
@@ -1097,7 +1227,7 @@ func sendMessage(c *tool.Ctx) {
 	}
 
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1127,7 +1257,7 @@ func dequeueAgent(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1165,7 +1295,7 @@ func sessionSubscriptionStatus(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1189,6 +1319,10 @@ func sessionSubscribe(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	if _, err := globalMgr.SubscribeUser(id, u.ID); err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -1208,6 +1342,10 @@ func sessionUnsubscribe(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	if _, err := globalMgr.UnsubscribeUser(id, u.ID); err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -1217,7 +1355,14 @@ func sessionUnsubscribe(c *tool.Ctx) {
 
 // sessionProcesses returns active pool entries for the given session as JSON.
 func sessionProcesses(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	type procEntry struct {
 		SessionID string `json:"session_id"`
 		AgentName string `json:"agent_name"`
@@ -1298,7 +1443,7 @@ func killAgent(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1319,6 +1464,11 @@ func deleteSession(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
 	if err := globalMgr.DeleteSession(c.Context(), id); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("delete session %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1334,6 +1484,10 @@ func sessionTurnEvent(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no payload"})
+		return
+	}
 	turnID := c.PathValue("turn_id")
 	eventID := c.PathValue("event_id")
 	data, err := os.ReadFile(globalLayout.SessionThinkingEvent(id, turnID, eventID))
@@ -1357,6 +1511,10 @@ func sessionTurnTrace(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no trace"})
+		return
+	}
 	turnID := c.PathValue("turn_id")
 	tracePath := globalLayout.SessionThinking(id, turnID)
 	data, err := os.ReadFile(tracePath)
@@ -1538,6 +1696,7 @@ func createProject(c *tool.Ctx) {
 		Icon:        strings.TrimSpace(c.Form("icon")),
 		Description: c.Form("description"),
 		CustomPath:  customPath,
+		OwnerUserID: actorID(c),
 		Defaults: project.Defaults{
 			Preset:      c.Form("preset"),
 			Provider:    c.Form("provider"),
@@ -1548,6 +1707,9 @@ func createProject(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("create project %s: %s", name, err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), opt.ID, actorID(c))
 	}
 	// Land on the new project's page (sidebar-driven nav — no list page).
 	c.Redirect(c.Base()+"/sessions?project="+opt.ID, http.StatusSeeOther)

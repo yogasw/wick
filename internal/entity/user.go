@@ -20,6 +20,7 @@ type User struct {
 	Name         string `gorm:"not null"`
 	Avatar       string
 	Role         UserRole     `gorm:"type:varchar(50);default:'user'"`
+	IsOwner      bool         `gorm:"column:is_owner;not null;default:false"`
 	Approved     bool         `gorm:"default:false"`
 	PasswordHash string       `gorm:"type:varchar(255)"`
 	Metadata     UserMetadata `gorm:"type:jsonb"`
@@ -35,5 +36,9 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 }
 
 func (u *User) IsAdmin() bool {
-	return u.Role == RoleAdmin
+	return u.Role == RoleAdmin || u.IsOwner
+}
+
+func (u *User) CanSeeAllSessions() bool {
+	return u.IsOwner
 }

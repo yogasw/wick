@@ -182,15 +182,18 @@ type ConnectorRun struct {
 // token here is the source of truth for execution; the connector reads it
 // via c.Cfg("user_token") which resolves from this table at call time.
 //
-// WickUserID is the wick platform user who initiated the OAuth flow (may be
-// empty for tokens connected before this table existed). Used for ownership
-// checks and the "connected as" display in the UI.
+// ConnectorAccount stores one OAuth-connected user account per connector
+// instance. WickUserID is the wick platform user who initiated the OAuth flow.
+// ExternalUserID is the provider-side user ID returned by GetUserIdentity
+// (e.g. Slack U01ABCDEF, Google sub claim) — used for token lookup by the
+// channel layer when routing inbound messages to sessions.
 type ConnectorAccount struct {
-	ID          string    `gorm:"type:varchar(36);primaryKey"`
-	ConnectorID string    `gorm:"type:varchar(36);not null;index"`
-	WickUserID  string    `gorm:"type:varchar(36);index"`
-	DisplayName string    `gorm:"type:varchar(255);not null"`
-	AccessToken string    `gorm:"type:text;not null"`
+	ID             string    `gorm:"type:varchar(36);primaryKey"`
+	ConnectorID    string    `gorm:"type:varchar(36);not null;index"`
+	WickUserID     string    `gorm:"type:varchar(36);index"`
+	ExternalUserID string    `gorm:"type:varchar(255);index"`
+	DisplayName    string    `gorm:"type:varchar(255);not null"`
+	AccessToken    string    `gorm:"type:text;not null"`
 	// DisabledOps is a JSON array of operation keys disabled for this
 	// account. Empty = all ops allowed. Example: ["send_message","delete_message"]
 	DisabledOps string    `gorm:"type:text;default:''"`

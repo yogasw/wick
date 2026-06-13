@@ -3,11 +3,22 @@
     "allow": [
       "Bash(templ generate:*)",
       "Bash(go build:*)",
+      "Bash(go build ./...)",
       "Skill(tool-module)",
       "Skill(tool-module:*)",
       "Bash(ls Makefile)",
       "Skill(design-system)",
-      "Skill(design-system:*)"
+      "Skill(design-system:*)",
+      "Skill(connector-module)",
+      "Skill(connector-module:*)",
+      "Skill(encrypted-fields)",
+      "Skill(encrypted-fields:*)",
+      "Skill(config-tags)",
+      "Skill(config-tags:*)",
+      "Skill(agent-channel-module)",
+      "Skill(agent-channel-module:*)",
+      "Skill(workflow-node-module)",
+      "Skill(workflow-node-module:*)"
     ]
   },
   "hooks": {
