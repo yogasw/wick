@@ -1076,8 +1076,6 @@ func NewServer() *Server {
 					ch.RefreshTokenMap(context.Background())
 				}
 			}(slackCh)
-
-			break
 		}
 	}
 

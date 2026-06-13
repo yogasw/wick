@@ -26,6 +26,10 @@ All notable changes to Wick are documented here.
 *   **Connection status & live catalog** — MCP definitions show a Connected/Disconnected chip, re-sync per instance (probes run under that instance's account), refresh their tool catalog lazily on `wick_get`, and connect in the background at startup behind the boot gate.
 *   **Connector icons** — pick an emoji (emoji-mart picker, fully vendored) or paste an inline SVG / base64 image (32KB cap, rendered safely via `<img>`).
 
+### Added (channels)
+
+*   **Per-user Slack channels** — each wick user can configure their own Slack bot credentials independently. Every non-owner user gets a separate `agent_channels` row (`user_id = <id>`); the App Owner row uses `user_id = NULL`. Saving a bot token hot-adds a new keyed registry instance immediately — no server restart required. Removing the token removes the instance. The Channels menu is now accessible to all logged-in users (admin gate removed).
+
 ### Fixed
 
 *   **Codex `model_instructions_file`** — the per-session `soul.md` preset was previously passed via the unknown key `instructions_files` (silently ignored by Codex), so the model never received the session identity block or wick rules. Fixed to use `model_instructions_file`. The file now lives in the per-session `.codex/` dir so concurrent sessions no longer clobber each other's preset.

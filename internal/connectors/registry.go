@@ -23,7 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors/bitbucket"
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
 	"github.com/yogasw/wick/internal/connectors/github"
-	"github.com/yogasw/wick/internal/connectors/googledrive"
+	"github.com/yogasw/wick/internal/connectors/googleworkspace"
 	"github.com/yogasw/wick/internal/connectors/httprest"
 	"github.com/yogasw/wick/internal/connectors/loki"
 	"github.com/yogasw/wick/internal/connectors/phoenix"
@@ -154,11 +154,11 @@ func RegisterBuiltins() {
 		Operations: phoenix.Operations(),
 	})
 	registerOnce(connector.Module{
-		Meta:        withConnectorTag(googledrive.Meta(), tags.API),
-		Configs:     entity.StructToConfigs(googledrive.Configs{}),
-		Operations:  googledrive.Operations(),
-		HealthCheck: googledrive.HealthCheck,
-		OAuth:       googledrive.OAuthMeta(),
+		Meta:        withConnectorTag(googleworkspace.Meta(), tags.API),
+		Configs:     entity.StructToConfigs(googleworkspace.Configs{}),
+		Operations:  googleworkspace.Operations(),
+		HealthCheck: googleworkspace.HealthCheck,
+		OAuth:       googleworkspace.OAuthMeta(),
 	})
 }
 
