@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
 	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/enc"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -220,6 +221,16 @@ func spaWorkflowList(c *tool.Ctx) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	user := login.GetUser(c.Context())
+	if user != nil && !user.IsAdmin() {
+		filtered := summaries[:0]
+		for _, s := range summaries {
+			if s.CreatedBy == "" || s.CreatedBy == user.ID {
+				filtered = append(filtered, s)
+			}
+		}
+		summaries = filtered
 	}
 	out := make([]spaWorkflowSummary, 0, len(summaries))
 	for _, s := range summaries {
