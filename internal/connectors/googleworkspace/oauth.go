@@ -13,11 +13,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
 )
 
-// OAuthMeta returns the OAuthMeta descriptor for Google Drive user token OAuth.
+// OAuthMeta returns the OAuthMeta descriptor for Google Workspace user token OAuth.
 func OAuthMeta() *connector.OAuthMeta {
 	return &connector.OAuthMeta{
 		AuthorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
@@ -27,9 +28,15 @@ func OAuthMeta() *connector.OAuthMeta {
 			"access_type":   "offline",
 			"prompt":        "consent",
 		},
-		Scopes:      "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email",
-		DisplayName: "Google Drive",
-		Icon:        "📁",
+		Scopes: strings.Join([]string{
+			"https://www.googleapis.com/auth/drive",
+			"https://www.googleapis.com/auth/spreadsheets",
+			"https://www.googleapis.com/auth/documents",
+			"https://www.googleapis.com/auth/presentations",
+			"https://www.googleapis.com/auth/userinfo.email",
+		}, " "),
+		DisplayName: "Google Workspace",
+		Icon:        "🗂️",
 		GetUserIdentity: func(ctx context.Context, accessToken string) (string, string, error) {
 			return fetchUserInfo(ctx, accessToken)
 		},
