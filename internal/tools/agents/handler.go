@@ -1668,6 +1668,7 @@ func createProject(c *tool.Ctx) {
 		Icon:        strings.TrimSpace(c.Form("icon")),
 		Description: c.Form("description"),
 		CustomPath:  customPath,
+		OwnerUserID: actorID(c),
 		Defaults: project.Defaults{
 			Preset:      c.Form("preset"),
 			Provider:    c.Form("provider"),
