@@ -49,6 +49,16 @@ type SkillLister interface {
 	List(ctx context.Context) ([]entity.Skill, error)
 }
 
+func filterOutOwnerTags(tags []*entity.Tag) []*entity.Tag {
+	out := tags[:0:0]
+	for _, t := range tags {
+		if !strings.HasPrefix(t.Name, "owner:") {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 type Handler struct {
 	repo       *repo
 	tools      []tool.Tool

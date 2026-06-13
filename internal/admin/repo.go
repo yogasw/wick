@@ -278,6 +278,61 @@ func (r *repo) ListTags(ctx context.Context) ([]*entity.Tag, error) {
 	return tags, nil
 }
 
+func (r *repo) ResolveOwnerDisplayNames(ctx context.Context, tags []*entity.Tag) {
+	ids := make([]string, 0, len(tags))
+	byID := make(map[string]*entity.Tag, len(tags))
+	for _, t := range tags {
+		if !strings.HasPrefix(t.Name, "owner:") {
+			continue
+		}
+		id := strings.TrimPrefix(t.Name, "owner:")
+		ids = append(ids, id)
+		byID[id] = t
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	var users []struct {
+		ID    string
+		Name  string
+		Email string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.User{}).
+		Select("id, name, email").
+		Where("id IN ?", ids).
+		Find(&users)
+	for _, u := range users {
+		if t, ok := byID[u.ID]; ok {
+			t.DisplayName = u.Name + " (" + u.Email + ")"
+			delete(byID, u.ID)
+		}
+	}
+
+	if len(byID) == 0 {
+		return
+	}
+	remaining := make([]string, 0, len(byID))
+	for id := range byID {
+		remaining = append(remaining, id)
+	}
+	var connectors []struct {
+		ID    string
+		Label string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.Connector{}).
+		Select("id, label").
+		Where("id IN ?", remaining).
+		Find(&connectors)
+	for _, c := range connectors {
+		if t, ok := byID[c.ID]; ok {
+			t.DisplayName = c.Label
+		}
+	}
+}
+
 // ErrTagNameTaken is returned when creating or renaming a tag to an existing name.
 var ErrTagNameTaken = errors.New("a tag with that name already exists")
 
