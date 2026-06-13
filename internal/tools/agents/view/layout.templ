@@ -136,9 +136,13 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					</summary>
 					<div class="flex flex-col gap-0.5 pt-0.5">
 						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
-						@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+						if user != nil && user.IsAdmin() {
+							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+						}
 						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
-						@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+						if user != nil {
+							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
 					</div>
 				</details>
@@ -327,11 +331,14 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 			templ.KV("hover:bg-white-200 dark:hover:bg-navy-600/60", !active),
 		}
 	>
-		<span class={
-			"flex-1 min-w-0 truncate text-sm",
-			templ.KV("font-semibold text-black-900 dark:text-white-100", active),
-			templ.KV("font-normal text-black-800 dark:text-black-600", !active),
-		}>
+		<span
+			data-session-title={ id }
+			class={
+				"flex-1 min-w-0 truncate text-sm",
+				templ.KV("font-semibold text-black-900 dark:text-white-100", active),
+				templ.KV("font-normal text-black-800 dark:text-black-600", !active),
+			}
+		>
 			if label != "" {
 				{ label }
 			} else {

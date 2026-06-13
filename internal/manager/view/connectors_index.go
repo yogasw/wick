@@ -15,6 +15,14 @@ type ConnectorIndexCard struct {
 	NeedsSetupCount int // enabled instances with required config still missing
 	DisabledCount   int // instances the caller can manage that are row-disabled
 	System          bool
+	// Custom marks definitions that live in the custom_connectors table
+	// instead of Go code; CustomSource carries the import origin shown on
+	// the badge ("cURL" / "MCP" / "Manual"); NeedsReload flags a custom
+	// def whose stored definition is newer than the module currently
+	// serving.
+	Custom       bool
+	CustomSource string
+	NeedsReload  bool
 }
 
 // ConnectorIndexGroup is a category section on the connectors index page,

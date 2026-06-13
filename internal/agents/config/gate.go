@@ -1,7 +1,6 @@
 package config
 
-// GateConfig holds command-gate knobs. Gate is the umbrella policy
-// for every user-facing prompt the agent might issue:
+// GateConfig holds command-gate knobs.
 //
 //   - PermissionMode: gates per-tool permission prompts (PreToolUse
 //     hook). "on" installs the hook; "bypass" skips it (use for
@@ -11,17 +10,23 @@ package config
 //     question to the web UI; "off" returns an error to the LLM so
 //     it picks a default instead of hanging the run.
 //
-// The master GateEnabled flag is the global kill-switch — off means
-// every sub-policy short-circuits to its unguarded default (permission
-// bypass, ask_user off). When on, each sub-mode is honored.
+// GateEnabled is the master switch for the COMMAND gate only — the
+// PreToolUse hook path (PermissionMode + AllowedCmds + the gate
+// binary). Off = the hook is not installed and commands run
+// unguarded.
+//
+// AskUserMode is INDEPENDENT of GateEnabled. ask_user does not ride
+// the hook — it uses wick's own socket/SSE channel — so turning the
+// command gate off must not disable it. Only AskUserMode governs
+// ask_user (and wick_session_workspace configure/add modals).
 //
 // Per-channel override (planned phase 2) will let non-interactive
 // channels (Slack/HTTP/cron) flip their own mode without changing the
 // global config; until then the global mode applies everywhere.
 type GateConfig struct {
-	GateEnabled    bool   `wick:"bool;desc=Master gate switch. Off = every sub-policy short-circuits to its unguarded default (permission bypass, ask_user off). On = sub-modes below take effect."`
+	GateEnabled    bool   `wick:"bool;desc=Master switch for the COMMAND gate (PreToolUse hook). Off = commands run unguarded (permission bypass). Does NOT affect ask_user — that has its own switch below."`
 	PermissionMode string `wick:"dropdown=on|bypass;desc=Permission policy. on = install PreToolUse hook so the user approves each tool call. bypass = run unguarded (use for Slack/HTTP where no human can approve)."`
-	AskUserMode    string `wick:"dropdown=on|off;desc=Ask-user policy. on = route ask_user MCP calls to the web UI. off = return an error so the agent picks a sensible default instead of blocking."`
+	AskUserMode    string `wick:"dropdown=on|off;desc=Ask-user policy (independent of the command gate). on = route ask_user MCP calls to the web UI. off = return an error so the agent picks a sensible default instead of blocking."`
 	AllowedCmds    string `wick:"kvlist=pattern|scope;desc=Command whitelist for the permission gate. pattern supports a trailing * wildcard (e.g. 'git *'). scope (optional) restricts path args to a directory prefix."`
 }
 

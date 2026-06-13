@@ -41,6 +41,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/duplicate", auth(h.duplicateConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/access-policy", auth(h.setConnectorAccessPolicy))
+	mux.Handle("POST /manager/connectors/{key}/{id}/session-config", auth(h.setConnectorSessionConfig))
 	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(h.accountOpsPage))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.disconnectAccount))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.setAccountDisabledOps))
@@ -101,7 +102,11 @@ func (h *Handler) connectorListPage(w http.ResponseWriter, r *http.Request) {
 	oauthSuccess := r.URL.Query().Get("oauth") == "success"
 	oauthUser := r.URL.Query().Get("user")
 
-	view.ConnectorListPage(mod, rows, tagsByRow, accountsByRow, oauthURLByRow, oauthSuccess, oauthUser, user).Render(ctx, w)
+	// Definition-level controls render for whoever may mutate the def
+	// (admin ∨ creator) — customDefInfo gates internally.
+	customInfo := h.customDefInfo(ctx, key, user)
+
+	view.ConnectorListPage(mod, rows, tagsByRow, accountsByRow, oauthURLByRow, oauthSuccess, oauthUser, customInfo, user).Render(ctx, w)
 }
 
 // ── Index page ───────────────────────────────────────────────────────
@@ -170,7 +175,7 @@ func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
 			b = &bucket{sort: catSort, desc: catDesc}
 			buckets[cat] = b
 		}
-		b.cards = append(b.cards, view.ConnectorIndexCard{
+		card := view.ConnectorIndexCard{
 			Key:             m.Meta.Key,
 			Name:            m.Meta.Name,
 			Description:     m.Meta.Description,
@@ -181,7 +186,13 @@ func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
 			NeedsSetupCount: cnt.needsSetup,
 			DisabledCount:   cnt.disabled,
 			System:          system,
-		})
+		}
+		if info := h.customDefInfo(ctx, m.Meta.Key, user); info != nil {
+			card.Custom = true
+			card.CustomSource = info.SourceLabel
+			card.NeedsReload = info.Dirty
+		}
+		b.cards = append(b.cards, card)
 	}
 
 	groups := make([]view.ConnectorIndexGroup, 0, len(buckets))
@@ -197,7 +208,9 @@ func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
 		return groups[i].Name < groups[j].Name
 	})
 
-	view.ConnectorsIndexPage(groups, user).Render(ctx, w)
+	// + New connector is open to every approved user (ownership level
+	// 1: anyone creates, only admin/creator mutates).
+	view.ConnectorsIndexPage(groups, h.custom != nil, user).Render(ctx, w)
 }
 
 // connectorCategory picks the display category for a connector from its
@@ -303,11 +316,34 @@ func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	configs := h.connectors.RowConfigs(*row)
+	customInfo := h.customDefInfo(ctx, key, user)
+	// Hidden configs (machine-managed values like OAuth tokens) are
+	// seeded and readable at runtime but never hand-edited — skip them.
+	// The connected-account marker surfaces in the header instead.
+	visible := configs[:0]
+	for _, cfg := range configs {
+		if customInfo != nil {
+			switch cfg.Key {
+			case "oauth_account":
+				// Legacy labels were 'Connected <ts>' before identity
+				// resolution existed — not an identity, hide the chip.
+				if !strings.HasPrefix(cfg.Value, "Connected ") {
+					customInfo.OAuthAccount = cfg.Value
+				}
+			case "oauth_access_token":
+				customInfo.OAuthConnected = cfg.Value != ""
+			}
+		}
+		if !cfg.Hidden {
+			visible = append(visible, cfg)
+		}
+	}
+	configs = visible
 	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
 	editKey := r.URL.Query().Get("edit")
 
 	isAdmin := user != nil && user.IsAdmin()
-	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, isAdmin).Render(ctx, w)
+	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, isAdmin, customInfo).Render(ctx, w)
 }
 
 // connectorTestPage renders the standalone Postman-style test surface
@@ -463,6 +499,11 @@ func (h *Handler) createConnectorRow(w http.ResponseWriter, r *http.Request) {
 			log.Warn().Err(err).Str("row_id", row.ID).Msg("manager: create owner tag failed")
 		}
 	}
+	// Custom defs link their access tags per instance — run it now so the
+	// fresh row is governed immediately instead of on the next boot.
+	if h.custom != nil {
+		h.custom.EnsureTagsForKey(ctx, key)
+	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
 
@@ -509,6 +550,15 @@ func (h *Handler) setConnectorConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.canConfigureRow(user, row) {
 		http.Error(w, "not allowed", http.StatusForbidden)
 		return
+	}
+	for _, cfg := range h.connectors.RowConfigs(*row) {
+		if cfg.Key == configKey && cfg.IsSecret {
+			if !h.canConfigureSecretField(user, row) {
+				http.Error(w, "forbidden: secret fields require admin or connector owner", http.StatusForbidden)
+				return
+			}
+			break
+		}
 	}
 	stored := h.connectors.LoadConfigs(*row)
 	stored[configKey] = r.FormValue("value")
@@ -727,6 +777,35 @@ func (h *Handler) setConnectorAccessPolicy(w http.ResponseWriter, r *http.Reques
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
 
+// setConnectorSessionConfig flips the per-instance "allow per-session
+// config override" opt-in. Admin-only, and only honored when the
+// connector's module is session-config capable.
+func (h *Handler) setConnectorSessionConfig(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if user == nil || !user.IsAdmin() {
+		http.Error(w, "admin only", http.StatusForbidden)
+		return
+	}
+	if !h.connectors.SessionConfigCapable(row.Key) {
+		http.Error(w, "this connector does not support per-session config override", http.StatusBadRequest)
+		return
+	}
+	if err := h.connectors.SetSessionConfigAllowed(ctx, row.ID, boolParam(r, "allow_session_config")); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
+}
+
 func (h *Handler) duplicateConnector(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
@@ -761,6 +840,10 @@ func (h *Handler) deleteConnector(w http.ResponseWriter, r *http.Request) {
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err := h.connectors.Delete(ctx, row.ID); err != nil {
@@ -814,6 +897,10 @@ func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Reques
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	enabled := boolParam(r, "enabled")
@@ -883,6 +970,10 @@ func (h *Handler) toggleOperationAdminOnly(w http.ResponseWriter, r *http.Reques
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if user == nil || !user.IsAdmin() {
+		http.Error(w, "forbidden: admin only", http.StatusForbidden)
 		return
 	}
 	adminOnly := boolParam(r, "admin_only")
@@ -972,6 +1063,27 @@ func (h *Handler) canConfigureRow(user *entity.User, row *entity.Connector) bool
 		}
 	}
 	return row.AllowOthersConfigure
+}
+
+// canConfigureSecretField reports whether the user may write a secret config
+// field on the given connector row.
+// Allow order: admin → owner tag. AllowOthersConfigure is intentionally NOT
+// sufficient — any user granted AllowOthersConfigure could otherwise overwrite
+// credentials they should not see.
+func (h *Handler) canConfigureSecretField(user *entity.User, row *entity.Connector) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAdmin() {
+		return true
+	}
+	if h.tags != nil {
+		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
+		if owns {
+			return true
+		}
+	}
+	return false
 }
 
 // canConnectSSO reports whether the user may initiate an OAuth connect on the

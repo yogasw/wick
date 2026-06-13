@@ -41,6 +41,7 @@ type Meta struct {
 	Defaults       Defaults  `json:"defaults"`
 	PinnedSessions []string  `json:"pinned_sessions,omitempty"`
 	Tags           []string  `json:"tags,omitempty"`
+	OwnerUserID    string    `json:"owner_user_id,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -63,6 +64,7 @@ type CreateOptions struct {
 	CustomPath  string
 	Defaults    Defaults
 	Tags        []string
+	OwnerUserID string
 }
 
 // Create materialises the on-disk project entry.
@@ -107,6 +109,7 @@ func Create(layout config.Layout, opt CreateOptions) (Project, error) {
 		CustomPath:  opt.CustomPath,
 		Defaults:    opt.Defaults,
 		Tags:        opt.Tags,
+		OwnerUserID: opt.OwnerUserID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -215,4 +218,44 @@ func EnsureDefault(layout config.Layout, newID func() string) error {
 		Description: "Built-in default project.",
 	})
 	return err
+}
+
+// FindPersonalProject returns the project ID owned by userID, or "" if none exists.
+// It scans all projects on disk looking for a matching OwnerUserID field.
+func FindPersonalProject(layout config.Layout, userID string) (string, error) {
+	if userID == "" {
+		return "", fmt.Errorf("userID is required")
+	}
+	ids, err := List(layout)
+	if err != nil {
+		return "", fmt.Errorf("FindPersonalProject list: %w", err)
+	}
+	for _, id := range ids {
+		var m Meta
+		if rerr := storage.ReadJSON(layout.ProjectMeta(id), &m); rerr != nil {
+			continue
+		}
+		if m.OwnerUserID == userID {
+			return m.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// PersonalProjectOptions returns CreateOptions pre-filled for a personal project
+// owned by userID. The caller is responsible for generating a unique ID and
+// calling Create (or the registry manager's CreateProject) with the result.
+func PersonalProjectOptions(newID, userID, displayName string) CreateOptions {
+	name := displayName
+	if name == "" {
+		name = "Personal"
+	}
+	return CreateOptions{
+		ID:          newID,
+		Name:        name,
+		Icon:        "👤",
+		Description: "Personal project.",
+		Tags:        []string{"personal"},
+		OwnerUserID: userID,
+	}
 }

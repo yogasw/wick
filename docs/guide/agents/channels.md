@@ -181,7 +181,9 @@ When all probes pass the panel shows a single "✓ All checks passed" line.
 
 ### Hot-reload
 
-Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is `Add`ed to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); the fingerprint covers the credentials (`Mode`, `BotToken`, `AppToken`, `SigningSecret`, `pubURL`) plus every access-control field (`UsersMode`, `AllowedUsers`, `GroupsMode`, `AllowedGroups`, `ChannelsMode`, `AllowedChannels`) and the approver block (`GateApprovers`, `GateApproverUsers`, `GateApproverGroups`). When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
+Hot-reload runs through `Registry.WatchConfigs` (30-second poll). Each channel registers a `ConfigSource` — a `(Hash, Reload)` pair — when it is added to the registry. For Slack the source lives in [`slack/source.go`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/source.go); the fingerprint covers the credentials (`Mode`, `BotToken`, `AppToken`, `SigningSecret`, `pubURL`) plus every access-control field (`UsersMode`, `AllowedUsers`, `GroupsMode`, `AllowedGroups`, `ChannelsMode`, `AllowedChannels`) and the approver block (`GateApprovers`, `GateApproverUsers`, `GateApproverGroups`). When the hash changes the registry calls `Reload`, which triggers a graceful stop + restart of the Socket Mode connection. Config save → 30s tail → Slack picks up the new tokens. No server restart.
+
+Each per-user Slack instance gets its own `ConfigSource` scoped to that user's row (`NewConfigSourceKeyed`). Hot-reload monitors all instances independently; a credential change by one user does not affect other users' running instances.
 
 ### Project selection
 
@@ -270,7 +272,9 @@ The snapshot endpoint (`GET /stream/snapshot?session=<id>`) replays the **curren
 
 ### AskUser MCP tool
 
-This is the agent-initiated counterpart to the gate. The agent calls the `ask_user` MCP tool ([askuser.go:38-45](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L38)):
+This is the agent-initiated counterpart to the gate. The agent calls the `ask_user` MCP tool. Two call styles are supported:
+
+**Single question** (original form):
 
 ```json
 {
@@ -284,9 +288,59 @@ This is the agent-initiated counterpart to the gate. The agent calls the `ask_us
 }
 ```
 
-The handler registers a pending question, broadcasts SSE, blocks the MCP call until the user answers (default 5min timeout per [askuser.go:27](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L27)), then returns the answer to the agent. Unlike the gate, this is **voluntary** — the agent decides when to ask, and a forgetful agent can skip it.
+Response: `{"value": "prod", "text": "Production"}`
+
+**Multi-question wizard** (`questions[]`):
+
+```json
+{
+  "session_id": "9b7e-...",
+  "questions": [
+    {
+      "key": "env",
+      "question": "Which environment?",
+      "type": "choice",
+      "options": [
+        {"label": "Production", "value": "prod", "description": "Live traffic"},
+        {"label": "Staging", "value": "stg"}
+      ],
+      "required": true
+    },
+    {
+      "key": "reason",
+      "question": "Reason for change",
+      "type": "text",
+      "placeholder": "Brief description",
+      "required": true
+    }
+  ]
+}
+```
+
+Response: `{"values": {"env": "prod", "reason": "routine deploy"}}`
+
+Question types: `choice` (single-select; auto-advances on pick), `multi` (multi-select checkbox), `rank` (drag-to-rank), `dropdown` (select), `text` (free text), `secret` (masked input). A missing `type` defaults to `choice` when `options` are present, otherwise `text`.
+
+The UI renders a step-by-step modal with Back / Skip / Next navigation and required-field validation. Single-select options auto-advance to the next question; Enter also advances.
+
+The handler registers a pending question, broadcasts SSE, blocks the MCP call until the user answers (4-minute timeout), then returns the answer to the agent. Unlike the gate, this is **voluntary** — the agent decides when to ask, and a forgetful agent can skip it.
 
 The reason wick ships its own AskUser MCP tool instead of relying on Claude Code's `AskUserQuestion` harness tool: the harness tool isn't available when Claude runs in pipe mode (`-p`), only inside the Claude Code TUI. An MCP tool works in every mode.
+
+#### Per-channel ask_user control
+
+By default `ask_user` is enabled for web UI and interactive clients, and disabled for Slack, Telegram, and REST sessions (those channels cannot currently render the modal). Operators can flip this per channel:
+
+- Slack / Telegram / REST channel config: add `ask_user_enabled = true` to opt in.
+- Global fallback (web / stdio / external MCP): controlled by `AskUserMode` in Configs → `agents` group (`on` / `off`).
+
+See [AskUser policy](../command-gate#askuser-policy) for the full resolution table.
+
+### Attention notifications
+
+When the session tab is in the background and an `ask_user` or `approval_request` SSE event arrives, wick plays a short two-tone chime and (if the browser has been granted notification permission) fires a browser `Notification`. This covers the "tab open but not visible" case; the PWA web-push path covers "web UI fully closed."
+
+The audio context and notification permission are both unlocked on the first click or keypress inside the page (browser autoplay policy requirement). No extra configuration is needed.
 
 ## REST (OpenAI-compatible)
 
@@ -403,16 +457,25 @@ Some Slack workspaces strip leading `/` characters from messages routed through 
 
 ## Channel config in DB
 
-Channel configs live in `agent_channels` ([store.go](https://github.com/yogasw/wick/blob/master/internal/agents/channels/store.go)), one row per channel type:
+Channel configs live in `agent_channels` ([store.go](https://github.com/yogasw/wick/blob/master/internal/agents/channels/store.go)), one row per channel type per user:
 
 | Column | Holds |
 |---|---|
 | `type` | `slack` / `telegram` / `rest` |
 | `name` | Display name (currently always `default`) |
+| `user_id` | Owner of this row. `NULL` = App Owner row (the oldest promoted user). |
 | `enabled` | Mirrors whether `bot_token` is non-empty |
 | `config` | JSON map: per-field settings (one per `wick:"key=..."` field) |
 
-`config` is a flat JSON map, not a typed struct on disk. The typed struct is rebuilt at load time ([store.go:112-141](https://github.com/yogasw/wick/blob/master/internal/agents/channels/store.go#L112)). Reasoning: keeps channel-specific schema migrations cheap — add a new field to `SlackChannelConfig`, add the form field, no DB migration.
+`config` is a flat JSON map, not a typed struct on disk. The typed struct is rebuilt at load time. Reasoning: keeps channel-specific schema migrations cheap — add a new field to `SlackChannelConfig`, add the form field, no DB migration.
+
+### Per-user vs App Owner rows
+
+Every non-owner user who saves a Slack config gets their own `agent_channels` row (`user_id = <their id>`). The App Owner's row uses `user_id = NULL`. When a user saves their config for the first time, a new Slack channel instance is started immediately (hot-add) without a server restart; removing the `bot_token` removes that instance.
+
+The Channels menu is visible to all logged-in users, not admins only. Each user sees and edits only their own row.
+
+On existing installs where `is_owner` was not set, the migration promotes the oldest user to App Owner automatically.
 
 ## Adding a new channel
 

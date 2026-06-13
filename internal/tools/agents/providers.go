@@ -40,6 +40,9 @@ func providersPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	if !requireAdmin(c) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
 	defer cancel()
@@ -150,6 +153,9 @@ func currentPermissionMode() string {
 //
 // Effect is immediate — next spawn reads the live per-instance flag.
 func toggleGate(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalConfigs == nil {
 		c.Error(http.StatusServiceUnavailable, "configs service not wired")
 		return
@@ -198,6 +204,9 @@ func toggleGate(c *tool.Ctx) {
 // system prompt instead. The field remains on GateConfig and respects
 // whatever the config layer has stored (default "on").
 func saveGateModes(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalConfigs == nil {
 		c.Error(http.StatusServiceUnavailable, "configs service not wired")
 		return
@@ -259,6 +268,9 @@ func runBackgroundProbeAll() {
 // providerDetailPage renders the per-provider detail + edit page.
 func providerDetailPage(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -334,6 +346,9 @@ func saveProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	if !requireAdmin(c) {
+		return
+	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
 	ins, err := provider.Find(t, name)
@@ -365,6 +380,9 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	if !requireAdmin(c) {
+		return
+	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
 	key := c.PathValue("key")
@@ -386,6 +404,9 @@ func saveProviderConfigKey(c *tool.Ctx) {
 // name on PATH.
 func saveProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
 		return
 	}
 	t := provider.Type(strings.TrimSpace(c.Form("type")))
@@ -427,6 +448,9 @@ func saveProviderInstance(c *tool.Ctx) {
 //
 // POST /providers/{type}/{name}/sync
 func syncProviderStorage(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return
@@ -594,6 +618,9 @@ func autoInstallMCP(name string) {
 // removes it from the blocklist so future auto-installs can reach it.
 // POST /providers/mcp/{clientID}/install
 func mcpInstallClient(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	clientID := c.PathValue("clientID")
 	cwd, _ := os.Getwd()
 	cl, ok := mcpconfig.Find(cwd, clientID)
@@ -620,6 +647,9 @@ func mcpInstallClient(c *tool.Ctx) {
 // adds it to the blocklist so auto-install never re-installs it.
 // POST /providers/mcp/{clientID}/uninstall
 func mcpUninstallClient(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	clientID := c.PathValue("clientID")
 	cwd, _ := os.Getwd()
 	cl, ok := mcpconfig.Find(cwd, clientID)
@@ -651,6 +681,9 @@ func parseIntForm(s string) int {
 // canonical default.
 func deleteProviderInstance(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -698,6 +731,9 @@ func autoRescanEnabled() bool {
 // just installed a new CLI and doesn't want to wait for the 24h
 // auto-refresh.
 func rescanAllProviders(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
 	defer cancel()
 	provider.RescanAll(ctx)
@@ -717,6 +753,9 @@ func rescanAllProviders(c *tool.Ctx) {
 // in one place.
 func probeProviderGate(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
 		return
 	}
 	t := provider.Type(c.PathValue("type"))
@@ -770,6 +809,9 @@ func probeProviderGate(c *tool.Ctx) {
 // Path: POST /agents/providers/{type}/{name}/hooks/{event}/enable
 func enableProviderHook(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
 		return
 	}
 	t, name, event, ok := parseHookParams(c)
@@ -827,6 +869,9 @@ func enableProviderHook(c *tool.Ctx) {
 // Path: POST /agents/providers/{type}/{name}/hooks/{event}/disable
 func disableProviderHook(c *tool.Ctx) {
 	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
 		return
 	}
 	t, name, event, ok := parseHookParams(c)
@@ -900,6 +945,9 @@ func checkProviderHook(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	if !requireAdmin(c) {
+		return
+	}
 	t, name, event, ok := parseHookParams(c)
 	if !ok {
 		return
@@ -921,6 +969,9 @@ func checkProviderHook(c *tool.Ctx) {
 // rescanOneProvider re-probes a single instance. Used by the per-card
 // Rescan button so the user can refresh just the row they care about.
 func rescanOneProvider(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	t := provider.Type(c.PathValue("type"))
 	name := c.PathValue("name")
 	if t == "" || name == "" {
@@ -936,6 +987,9 @@ func rescanOneProvider(c *tool.Ctx) {
 // toggleAutoRescan flips agents.auto_rescan in configs. When off, the
 // background staleness re-probe stops; user must hit Rescan manually.
 func toggleAutoRescan(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalConfigs == nil {
 		c.Error(http.StatusServiceUnavailable, "configs service not wired")
 		return
@@ -954,6 +1008,9 @@ func toggleAutoRescan(c *tool.Ctx) {
 // `file` path param is the bare filename (no directory) — the
 // SpawnLogger resolves it under its own BaseDir.
 func providerSpawnDetail(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSpawnLog == nil {
 		c.Error(http.StatusServiceUnavailable, "spawn logger not ready")
 		return

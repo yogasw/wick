@@ -27,9 +27,21 @@ func SocketPath() string {
 	return filepath.Join(home, "."+app, "agents", "agentctl.sock")
 }
 
+// Op values for Cmd.Op.
+const (
+	OpSwitchProvider = "switch_provider"
+	OpKill           = "kill"
+	// OpRefreshSession tells the daemon to reload one session from disk
+	// into its in-memory registry and re-broadcast its meta. Used after
+	// a stdio process mutates session meta on disk (e.g. wick_set_title)
+	// so the daemon's cache + the live UI stay in sync instead of going
+	// stale until the next page load.
+	OpRefreshSession = "refresh_session"
+)
+
 // Cmd is the command sent from stdio → daemon.
 type Cmd struct {
-	Op           string `json:"op"`                      // "switch_provider" | "kill"
+	Op           string `json:"op"`                      // see Op* constants
 	SessionID    string `json:"session_id,omitempty"`    // empty = auto-resolve from active pool
 	AgentName    string `json:"agent_name,omitempty"`    // empty = "main"
 	ProviderType string `json:"provider_type,omitempty"` // for switch_provider
@@ -67,4 +79,13 @@ func Send(cmd Cmd) (Reply, error) {
 		return Reply{}, fmt.Errorf("agentctl: decode reply: %w", err)
 	}
 	return rep, nil
+}
+
+// SignalRefresh asks the daemon to reload sessionID and re-broadcast
+// its meta. Best-effort: a dial error (no daemon running) is returned
+// but callers typically log-and-ignore — the on-disk write already
+// landed, so the worst case is the UI lags until the next page load.
+func SignalRefresh(sessionID string) error {
+	_, err := Send(Cmd{Op: OpRefreshSession, SessionID: sessionID})
+	return err
 }

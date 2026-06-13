@@ -153,6 +153,25 @@ func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName
 	})
 }
 
+// PublishSessionMeta broadcasts a session's current title + status so
+// open tabs update the header/sidebar live — no page reload. Fired
+// after session meta changes (wick_set_title, status transitions),
+// including changes that originated in a sibling stdio process and
+// were relayed in via the agentctl refresh_session op.
+func (b *Broadcaster) PublishSessionMeta(sessionID, title string, titleCustom bool, status string) {
+	body, _ := json.Marshal(map[string]any{
+		"session_id":   sessionID,
+		"title":        title,
+		"title_custom": titleCustom,
+		"status":       status,
+	})
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		Type:      "session_meta",
+		Data:      string(body),
+	})
+}
+
 // PublishGitStatusJSON broadcasts a pre-marshalled git_status payload to
 // a session's subscribers. The payload is the full repo+status snapshot
 // (built by the fs watcher) so the FE updates entirely from the event —

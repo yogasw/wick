@@ -20,6 +20,7 @@ func wickManagerStubModule() connector.Module {
 			Key:         "wickmanager",
 			Name:        "Wick Manager",
 			Description: "Manage wick itself (test stub)",
+			Fixed:       true,
 		},
 		Operations: []connector.Operation{
 			connector.Op("app_list", "App List", "List app config keys", AppListInput{},

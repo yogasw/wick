@@ -21,7 +21,7 @@ func TestConnectorsIndexPageRender(t *testing.T) {
 	}
 
 	var sb strings.Builder
-	if err := ConnectorsIndexPage(groups, nil).Render(context.Background(), &sb); err != nil {
+	if err := ConnectorsIndexPage(groups, false, nil).Render(context.Background(), &sb); err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	html := sb.String()

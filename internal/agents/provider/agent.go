@@ -133,6 +133,13 @@ type Options struct {
 
 	OnEvent func(event.AgentEvent)
 	OnExit  func(reason ExitReason)
+	// OnSpawn fires every time a real subprocess starts, carrying its
+	// binary, argv, pid, and the message that triggered it. Unlike the
+	// pool's one-shot post-Start hook, this also fires for
+	// respawn-per-turn providers (codex), whose process does not exist
+	// at Start() time — so the spawn log can record the actual argv /
+	// pid / Reproduce command for every turn instead of a blank start.
+	OnSpawn func(binary string, argv []string, pid int, firstMessage string)
 
 	// Instance is the per-instance config the spawner should consult
 	// every spawn (hook intent, env, …). Forwarded into SpawnOptions
@@ -149,6 +156,10 @@ type Options struct {
 	// per-channel transports (Slack, HTTP) that need to inject auth
 	// tokens or routing keys.
 	ExtraEnv []string
+	// SessionDir is the per-session storage dir, forwarded into every
+	// SpawnOptions so providers write session-scoped files (codex's
+	// soul.md) there instead of the shared project workspace.
+	SessionDir string
 	// MessageEncoder formats a user message before writing to stdin.
 	// nil = default Claude stream-json envelope. Ignored unless SendMode
 	// is SendAppend.
@@ -272,6 +283,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:  a.cfg.Workspace,
+		SessionDir: a.cfg.SessionDir,
 		ResumeID:   a.resumeID,
 		ExtraEnv:   a.cfg.ExtraEnv,
 		Instance:   a.cfg.Instance,
@@ -422,6 +434,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:      a.cfg.Workspace,
+		SessionDir:     a.cfg.SessionDir,
 		ResumeID:       resumeID,
 		ExtraEnv:       a.cfg.ExtraEnv,
 		Instance:       a.cfg.Instance,
@@ -449,6 +462,14 @@ func (a *Agent) respawnWithMessage(text string) error {
 	// the badge stuck at idle until the first event arrives).
 	if a.state != nil {
 		a.state.MarkSpawning()
+	}
+
+	// Record the real argv/pid for this turn's subprocess. The pool's
+	// post-Start hook saw no process (respawn providers defer the first
+	// spawn to here), so without this the spawn log shows a blank start
+	// with no Reproduce command — see Options.OnSpawn.
+	if a.cfg.OnSpawn != nil {
+		a.cfg.OnSpawn(proc.Binary(), proc.Argv(), proc.Pid(), text)
 	}
 
 	go a.run(subCtx)

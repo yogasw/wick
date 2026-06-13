@@ -37,12 +37,23 @@ import (
 // set. Return found=false when no connector row holds a token for that user.
 type ConnectorTokenFn func(ctx context.Context, slackUserID string) (token string, found bool)
 
+// WickUserIDFn resolves a Slack user ID to a wick platform user ID.
+// Returns ("", false) when no mapping is found (e.g. user never connected OAuth).
+type WickUserIDFn func(ctx context.Context, slackUserID string) (wickUserID string, found bool)
+
 // SetConnectorTokenFn wires an optional user-token lookup function so
 // sendHandler can post messages appearing to come from a specific user.
 // Safe to call after New; nil = no user-token DM support (default).
 func (s *Channel) SetConnectorTokenFn(fn ConnectorTokenFn) {
 	s.cfgMu.Lock()
 	s.connectorToken = fn
+	s.cfgMu.Unlock()
+}
+
+// SetWickUserIDFn wires a Slack→wick user mapping function for session ownership.
+func (s *Channel) SetWickUserIDFn(fn WickUserIDFn) {
+	s.cfgMu.Lock()
+	s.wickUserIDFn = fn
 	s.cfgMu.Unlock()
 }
 

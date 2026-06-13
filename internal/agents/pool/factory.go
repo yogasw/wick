@@ -283,7 +283,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		})
 	}
 
-	onStarted := func(meta SpawnStartMeta) {
+	writeStartEvent := func(pid int, binary string, argv []string, firstMsg string) {
 		if f.SpawnLogger == nil || spawnLogPath == "" {
 			return
 		}
@@ -294,11 +294,22 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			ProviderName:     pName,
 			SessionID:        opt.SessionID,
 			AgentName:        opt.AgentName,
-			PID:              meta.PID,
-			Binary:           meta.Binary,
-			Args:             meta.Argv,
-			FirstUserMessage: provider.TruncateFirstMessage(meta.FirstUserMessage),
+			PID:              pid,
+			Binary:           binary,
+			Args:             argv,
+			FirstUserMessage: provider.TruncateFirstMessage(firstMsg),
 		})
+	}
+
+	onStarted := func(meta SpawnStartMeta) {
+		// Respawn-per-turn providers (codex) have no live process at the
+		// pool's post-Start hook, so PID/Argv are empty here — the real
+		// start event comes via OnSpawn below. Skip the blank record so
+		// the spawn log doesn't show a start with no Reproduce command.
+		if meta.PID == 0 && len(meta.Argv) == 0 {
+			return
+		}
+		writeStartEvent(meta.PID, meta.Binary, meta.Argv, meta.FirstUserMessage)
 	}
 
 	onExit := func(r provider.ExitReason) {
@@ -322,6 +333,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	insCopy := resolvedIns
 	a := provider.New(provider.Options{
 		Workspace:     opt.Workspace,
+		SessionDir:    f.Layout.SessionDir(opt.SessionID),
 		ResumeID:      opt.ResumeID,
 		IdleTimeout:   opt.IdleTimeout,
 		KillAfterIdle: opt.KillAfterIdle,
@@ -336,6 +348,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		State:      st,
 		OnEvent:    onEvent,
 		OnExit:     onExit,
+		OnSpawn: func(binary string, argv []string, pid int, firstMsg string) {
+			writeStartEvent(pid, binary, argv, firstMsg)
+		},
 		Instance:   &insCopy,
 		GateBinary: gateBin,
 		Preset:     presetContent,

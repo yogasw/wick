@@ -16,8 +16,9 @@ import (
 
 // ConfigSource implements agentchannels.ConfigSource for *Channel.
 type ConfigSource struct {
-	store agentchannels.SlackConfigStore
-	ch    *Channel
+	store  agentchannels.SlackConfigStore
+	ch     *Channel
+	loadFn func() (agentconfig.SlackChannelConfig, string) // optional override
 }
 
 // NewConfigSource binds a Slack channel to a config store so the
@@ -26,7 +27,32 @@ func NewConfigSource(store agentchannels.SlackConfigStore, ch *Channel) *ConfigS
 	return &ConfigSource{store: store, ch: ch}
 }
 
+// NewConfigSourceKeyed creates a ConfigSource that loads config for a specific
+// user's Slack channel row. userID="" loads the App Owner row.
+func NewConfigSourceKeyed(store agentchannels.SlackConfigStore, ch *Channel, userID string) *ConfigSource {
+	type perUserLoader interface {
+		LoadSlackForUser(string) (agentconfig.SlackChannelConfig, string, error)
+	}
+	if loader, ok := store.(perUserLoader); ok {
+		return &ConfigSource{
+			store: store,
+			ch:    ch,
+			loadFn: func() (agentconfig.SlackChannelConfig, string) {
+				cfg, pubURL, err := loader.LoadSlackForUser(userID)
+				if err != nil {
+					return agentconfig.SlackChannelConfig{}, ""
+				}
+				return cfg, pubURL
+			},
+		}
+	}
+	return NewConfigSource(store, ch)
+}
+
 func (s *ConfigSource) load() (agentconfig.SlackChannelConfig, string) {
+	if s.loadFn != nil {
+		return s.loadFn()
+	}
 	cfg, pubURL, err := s.store.LoadSlack()
 	if err != nil {
 		return agentconfig.SlackChannelConfig{}, ""

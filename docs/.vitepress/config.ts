@@ -77,6 +77,7 @@ export default withMermaid(defineConfig({
           { text: 'Tool Module', link: '/guide/tool-module' },
           { text: 'Background Job', link: '/guide/job-module' },
           { text: 'Connector Module', link: '/guide/connector-module' },
+          { text: 'Custom Connectors', link: '/guide/custom-connectors' },
         ],
       },
       {
@@ -96,6 +97,7 @@ export default withMermaid(defineConfig({
           { text: 'GitHub', link: '/connectors/github' },
           { text: 'Bitbucket', link: '/connectors/bitbucket' },
           { text: 'Slack', link: '/connectors/slack' },
+          { text: 'Google Workspace', link: '/connectors/googleworkspace' },
           { text: 'Phoenix', link: '/connectors/phoenix' },
           { text: 'Wick Manager', link: '/connectors/wickmanager' },
           { text: 'Workflow', link: '/connectors/workflow' },

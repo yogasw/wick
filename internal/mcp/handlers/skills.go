@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/yogasw/wick/internal/agents/skillsync"
+	"github.com/yogasw/wick/internal/login"
 )
 
 // WickSkillList handles the wick_skill_list tool.
@@ -28,7 +29,13 @@ func WickSkillList(w http.ResponseWriter, req RPCRequest, rsp Responder) {
 }
 
 // WickSkillSync handles the wick_skill_sync tool.
-func WickSkillSync(w http.ResponseWriter, req RPCRequest, rsp Responder) {
+func WickSkillSync(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder) {
+	caller := login.GetUser(r.Context())
+	if caller == nil || !caller.IsAdmin() {
+		rsp.ToolError(w, req.ID, "forbidden: skill sync requires admin", "wick_skill_sync")
+		return
+	}
+
 	res, err := skillsync.Sync()
 	if err != nil {
 		rsp.ToolError(w, req.ID, "skill sync: "+err.Error(), "wick_skill_sync")

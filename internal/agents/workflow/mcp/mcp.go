@@ -267,6 +267,7 @@ func (m *Ops) List() ([]Summary, error) {
 			Name:      w.Name,
 			Enabled:   w.Enabled,
 			Version:   w.Version,
+			CreatedBy: w.CreatedBy,
 			CreatedAt: w.CreatedAt,
 		}
 		// Use draft timestamp as UpdatedAt when draft exists, else CreatedAt.
@@ -500,6 +501,7 @@ type Summary struct {
 	Name      string    `json:"name"`
 	Enabled   bool      `json:"enabled"`
 	Version   int       `json:"version"`
+	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }

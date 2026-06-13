@@ -8,13 +8,16 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// answerReq is the body for POST /sessions/{id}/answer. Either
-// value (preset option click) or text (freeform input) may be set;
-// if both are present, value wins.
+// answerReq is the body for POST /sessions/{id}/answer. One of
+// value (preset option click), text (freeform input), or values
+// (structured form submit) may be set; if value and text are both
+// present, value wins. values may be an empty map — that's a form
+// the user declined/submitted unchanged, still a valid resolution.
 type answerReq struct {
-	ID    string `json:"id"`
-	Value string `json:"value,omitempty"`
-	Text  string `json:"text,omitempty"`
+	ID     string             `json:"id"`
+	Value  string             `json:"value,omitempty"`
+	Text   string             `json:"text,omitempty"`
+	Values *map[string]string `json:"values,omitempty"`
 }
 
 func notReadyAskUser(c *tool.Ctx) bool {
@@ -36,13 +39,20 @@ func answerAsk(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "id required"})
 		return
 	}
-	if strings.TrimSpace(req.Value) == "" && strings.TrimSpace(req.Text) == "" {
+	if strings.TrimSpace(req.Value) == "" && strings.TrimSpace(req.Text) == "" && req.Values == nil {
 		c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "value or text required",
+			"error": "value, text, or values required",
 		})
 		return
 	}
-	if !globalAskUsers.Resolve(req.ID, askuser.Answer{Value: req.Value, Text: req.Text}) {
+	ans := askuser.Answer{Value: req.Value, Text: req.Text}
+	if req.Values != nil {
+		ans.Values = *req.Values
+		if ans.Values == nil {
+			ans.Values = map[string]string{}
+		}
+	}
+	if !globalAskUsers.Resolve(req.ID, ans) {
 		c.JSON(http.StatusGone, map[string]string{
 			"error": "ask id no longer pending (timed out or already resolved)",
 		})

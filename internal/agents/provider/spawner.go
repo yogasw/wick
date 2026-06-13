@@ -70,6 +70,13 @@ type Spawner interface {
 type SpawnOptions struct {
 	Workspace string
 	ResumeID  string
+	// SessionDir is the per-session storage dir (abs path). Providers
+	// that materialise per-session files (e.g. codex's soul.md, which
+	// embeds the session identity block) MUST write them here, not into
+	// Workspace — multiple sessions can share one project workspace, so
+	// a workspace-local file would clobber across sessions / race on
+	// concurrent spawns. Empty = fall back to Workspace (tests).
+	SessionDir string
 	// ExtraEnv lets the gate (phase 3) inject hook config paths
 	// without coupling the agent package to gate internals.
 	ExtraEnv []string

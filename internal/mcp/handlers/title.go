@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/login"
 )
 
 // titleMaxRunes caps a session title so the sidebar never overflows.
@@ -17,7 +19,7 @@ const titleMaxRunes = 60
 // of one session's meta so the agent can decide whether to set a title.
 // Returns title (current Label), title_custom (true = already explicitly
 // set by a human or the agent), origin, status, and project_id.
-func WickSessionInfo(w http.ResponseWriter, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
+func WickSessionInfo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
 	sessionID, _ := args["session_id"].(string)
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -27,6 +29,11 @@ func WickSessionInfo(w http.ResponseWriter, req RPCRequest, rsp Responder, layou
 	sess, err := session.Load(layout, sessionID)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "load session: "+err.Error(), "wick_session_info")
+		return
+	}
+	caller := login.GetUser(r.Context())
+	if caller != nil && !caller.CanSeeAllSessions() && sess.Meta.UserID != "" && sess.Meta.UserID != caller.ID {
+		rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), "wick_session_info")
 		return
 	}
 	out := map[string]any{
@@ -51,7 +58,7 @@ func WickSessionInfo(w http.ResponseWriter, req RPCRequest, rsp Responder, layou
 //
 // refreshSession, when non-nil, reloads the session into the in-memory
 // registry so the live dashboard reflects the new title immediately.
-func WickSetTitle(w http.ResponseWriter, req RPCRequest, rsp Responder, layout agentconfig.Layout, refreshSession func(id string) error, args map[string]any) {
+func WickSetTitle(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, refreshSession func(id string) error, args map[string]any) {
 	sessionID, _ := args["session_id"].(string)
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -64,13 +71,18 @@ func WickSetTitle(w http.ResponseWriter, req RPCRequest, rsp Responder, layout a
 		rsp.ToolError(w, req.ID, "title is required", "wick_set_title")
 		return
 	}
-	if r := []rune(title); len(r) > titleMaxRunes {
-		title = string(r[:titleMaxRunes])
+	if runes := []rune(title); len(runes) > titleMaxRunes {
+		title = string(runes[:titleMaxRunes])
 	}
 
 	sess, err := session.Load(layout, sessionID)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "load session: "+err.Error(), "wick_set_title")
+		return
+	}
+	caller := login.GetUser(r.Context())
+	if caller != nil && !caller.CanSeeAllSessions() && sess.Meta.UserID != "" && sess.Meta.UserID != caller.ID {
+		rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), "wick_set_title")
 		return
 	}
 	sess.Meta.Label = title

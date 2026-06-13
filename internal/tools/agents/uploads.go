@@ -231,7 +231,7 @@ func sessionUploadServe(c *tool.Ctx) {
 		c.Error(http.StatusBadRequest, "invalid upload name")
 		return
 	}
-	if _, ok := globalMgr.Registry().Session(id); !ok {
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
 		c.Error(http.StatusNotFound, "session not found")
 		return
 	}

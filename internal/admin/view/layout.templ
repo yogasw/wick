@@ -29,6 +29,11 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 					@adminTab("/admin/tools", "Tools", activeTab == "tools")
 					@adminTab("/admin/jobs", "Jobs", activeTab == "jobs")
 					@adminTab("/admin/connectors", "Connectors", activeTab == "connectors")
+					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
+						{Href: "/admin/projects", Label: "Projects", Active: activeTab == "projects"},
+						{Href: "/admin/workflows", Label: "Workflows", Active: activeTab == "workflows"},
+						{Href: "/admin/skills", Label: "Skills", Active: activeTab == "skills"},
+					})
 					@adminDropdown("Access", isAccessActive(activeTab), []dropdownItem{
 						{Href: "/admin/access-tokens", Label: "Access Tokens", Active: activeTab == "access-tokens"},
 						{Href: "/admin/connections", Label: "Connected Apps", Active: activeTab == "connections"},
@@ -69,6 +74,10 @@ type dropdownItem struct {
 	Href   string
 	Label  string
 	Active bool
+}
+
+func isAgentsActive(tab string) bool {
+	return tab == "projects" || tab == "workflows" || tab == "skills"
 }
 
 func isAccessActive(tab string) bool {

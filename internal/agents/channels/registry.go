@@ -19,7 +19,9 @@ package channels
 
 import (
 	"context"
+	"maps"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,15 +41,19 @@ type Registry struct {
 	approveFn      RegistryApproveFn
 	publicURL      string
 
-	mu       sync.Mutex
-	channels []Channel
-	sources  map[string]ConfigSource // by Channel.Name()
+	mu           sync.Mutex
+	channels     []Channel
+	sources      map[string]ConfigSource // by Channel.Name()
+	instanceKeys map[Channel]string
 }
 
 // NewRegistry returns an empty registry. Use the With* methods to attach
 // shared dependencies before calling Add.
 func NewRegistry() *Registry {
-	return &Registry{sources: map[string]ConfigSource{}}
+	return &Registry{
+		sources:      map[string]ConfigSource{},
+		instanceKeys: map[Channel]string{},
+	}
 }
 
 // WithSendFunc attaches the pool dispatch closure. Called once at boot.
@@ -120,6 +126,120 @@ func (r *Registry) Add(c Channel, src ConfigSource) {
 	r.mu.Unlock()
 }
 
+// AddKeyed registers a channel under an explicit instanceKey (e.g. "slack:user-abc")
+// instead of c.Name(). Use when multiple instances of the same channel type coexist.
+func (r *Registry) AddKeyed(instanceKey string, c Channel, src ConfigSource) {
+	if c == nil {
+		return
+	}
+	if r.sendFn != nil {
+		if x, ok := c.(SendFuncSetter); ok {
+			x.SetSendFunc(r.sendFn)
+		}
+	}
+	if r.sessionChecker != nil {
+		if x, ok := c.(SessionCheckerSetter); ok {
+			x.SetSessionChecker(r.sessionChecker)
+		}
+	}
+	if r.sessionHook != nil {
+		if x, ok := c.(SessionStartHookSetter); ok {
+			x.SetSessionStartHook(r.sessionHook)
+		}
+	}
+	if r.approveFn != nil {
+		if x, ok := c.(ApproveFnSetter); ok {
+			name := c.Name()
+			fn := r.approveFn
+			x.SetApproveFn(func(sid, rid, decision, matchKey string) error {
+				return fn(name, sid, rid, decision, matchKey)
+			})
+		}
+	}
+	if r.publicURL != "" {
+		if x, ok := c.(PublicURLSetter); ok {
+			x.SetPublicURL(r.publicURL)
+		}
+	}
+
+	r.mu.Lock()
+	r.channels = append(r.channels, c)
+	r.instanceKeys[c] = instanceKey
+	if src != nil {
+		r.sources[instanceKey] = src
+	}
+	r.mu.Unlock()
+}
+
+// RemoveKeyed stops and removes the channel registered under instanceKey.
+func (r *Registry) RemoveKeyed(instanceKey string) {
+	r.mu.Lock()
+	var target Channel
+	for _, c := range r.channels {
+		if r.instanceKeys[c] == instanceKey {
+			target = c
+			break
+		}
+	}
+	if target == nil {
+		r.mu.Unlock()
+		return
+	}
+	newChannels := make([]Channel, 0, len(r.channels)-1)
+	for _, c := range r.channels {
+		if c != target {
+			newChannels = append(newChannels, c)
+		}
+	}
+	r.channels = newChannels
+	delete(r.instanceKeys, target)
+	delete(r.sources, instanceKey)
+	r.mu.Unlock()
+	target.Stop()
+}
+
+// HasKey reports whether an instance with the given key is registered.
+func (r *Registry) HasKey(instanceKey string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.sources[instanceKey]
+	return ok
+}
+
+// HasAnyKeyed reports whether any instance registered under the per-user
+// keyed scheme (key = "<channelType>:<something>") exists for the given
+// channelType prefix. Used to distinguish per-user channel types (slack)
+// from single-instance types (telegram, rest) when deciding whether to
+// fall back to ChannelByName for unconfigured users.
+func (r *Registry) HasAnyKeyed(channelType string) bool {
+	prefix := channelType + ":"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range r.sources {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ChannelByKey returns the channel registered under instanceKey, or nil.
+func (r *Registry) ChannelByKey(instanceKey string) Channel {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for c, k := range r.instanceKeys {
+		if k == instanceKey {
+			return c
+		}
+	}
+	return nil
+}
+
+// SendFuncFor returns the registry's shared sendFn (used when dynamically adding channels).
+func (r *Registry) SendFuncFor(_ string) SendFunc {
+	return r.sendFn
+}
+
 // ChannelByName returns the registered channel matching name, or nil.
 func (r *Registry) ChannelByName(name string) Channel {
 	r.mu.Lock()
@@ -147,9 +267,7 @@ func (r *Registry) HTTPHandlers() map[string]http.Handler {
 	out := map[string]http.Handler{}
 	for _, c := range r.Channels() {
 		if h, ok := c.(MultiHTTPHandlerProvider); ok {
-			for path, handler := range h.HTTPHandlers() {
-				out[path] = handler
-			}
+			maps.Copy(out, h.HTTPHandlers())
 		} else if h, ok := c.(HTTPHandlerProvider); ok {
 			out[h.HTTPPath()] = h.HTTPHandler()
 		}
@@ -238,9 +356,7 @@ func (r *Registry) WatchConfigs(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			r.mu.Lock()
 			snap := make(map[string]ConfigSource, len(r.sources))
-			for k, v := range r.sources {
-				snap[k] = v
-			}
+			maps.Copy(snap, r.sources)
 			r.mu.Unlock()
 
 			for name, src := range snap {

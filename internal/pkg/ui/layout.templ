@@ -61,6 +61,27 @@ templ Layout(title string) {
 					window.addEventListener('DOMContentLoaded', sync);
 				})()
 			</script>
+			<!-- Themed native scrollbars (code blocks, overflow panels) so
+			     they match the cream / navy palette instead of the OS default.
+			     WebKit pseudo-elements cover Chromium/Safari/Electron; the
+			     scrollbar-* shorthands cover Firefox. Track stays transparent
+			     to blend into whatever surface the scroll container sits on. -->
+			<style>
+				* { scrollbar-width: thin; scrollbar-color: #cfc9b8 transparent; }
+				.dark * { scrollbar-color: #2c3a5a transparent; }
+				*::-webkit-scrollbar { width: 10px; height: 10px; }
+				*::-webkit-scrollbar-track { background: transparent; }
+				*::-webkit-scrollbar-thumb {
+					background: #cfc9b8;
+					border-radius: 999px;
+					border: 2px solid transparent;
+					background-clip: padding-box;
+				}
+				*::-webkit-scrollbar-thumb:hover { background: #b9b29d; background-clip: padding-box; border: 2px solid transparent; }
+				.dark *::-webkit-scrollbar-thumb { background: #2c3a5a; background-clip: padding-box; }
+				.dark *::-webkit-scrollbar-thumb:hover { background: #3d4f74; background-clip: padding-box; }
+				*::-webkit-scrollbar-corner { background: transparent; }
+			</style>
 		</head>
 		<body>
 			{ children... }

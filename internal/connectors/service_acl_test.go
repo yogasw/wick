@@ -19,7 +19,7 @@ func adminModule() connector.Module {
 	}
 	noop := func(c *connector.Ctx) (any, error) { return "ok", nil }
 	return connector.Module{
-		Meta:    connector.Meta{Key: "acl-stub", Name: "ACL Stub", Description: "access control test"},
+		Meta:    connector.Meta{Key: "acl-stub", Name: "ACL Stub", Description: "access control test", Fixed: true},
 		Configs: nil,
 		Operations: []connector.Operation{
 			connector.Op("read", "Read", "readable by all", In{}, noop, wickdocs.Docs{}),

@@ -306,10 +306,19 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 		return
 	}
 
-	allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-	if err != nil || !allowed {
-		sseWriteToolError(sess, req, "tool_id not found or not accessible", toolID)
+	// Session-workspace instance: run against the ephemeral instance's
+	// own config; the session is the authorization scope, no DB row.
+	sessionTarget, isSession, err := handlers.SessionInstanceFor(h.layout, args, connectorID)
+	if err != nil {
+		sseWriteToolError(sess, req, err.Error(), toolID)
 		return
+	}
+	if !isSession {
+		allowed, err := h.connectors.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		if err != nil || !allowed {
+			sseWriteToolError(sess, req, "tool_id not found or not accessible", toolID)
+			return
+		}
 	}
 
 	rawParams, _ := args["params"].(map[string]any)
@@ -343,15 +352,16 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 	resCh := make(chan execOut, 1)
 	go func() {
 		res, err := h.connectors.Execute(execCtx, connectors.ExecuteParams{
-			ConnectorID:  connectorID,
-			OperationKey: opKey,
-			Input:        input,
-			Source:       entity.ConnectorRunSourceMCP,
-			UserID:       user.ID,
-			IPAddress:    handlers.ClientIP(r),
-			UserAgent:    r.Header.Get("User-Agent"),
-			Progress:     reporter,
-			AccountID:    accountID,
+			ConnectorID:     connectorID,
+			OperationKey:    opKey,
+			Input:           input,
+			Source:          entity.ConnectorRunSourceMCP,
+			UserID:          user.ID,
+			IPAddress:       handlers.ClientIP(r),
+			UserAgent:       r.Header.Get("User-Agent"),
+			Progress:        reporter,
+			AccountID:       accountID,
+			SessionInstance: sessionTarget,
 		})
 		resCh <- execOut{res: res, err: err}
 	}()

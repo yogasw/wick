@@ -46,6 +46,7 @@ func stubModule() connector.Module {
 			Key:         "stub",
 			Name:        "Stub Connector",
 			Description: "In-process test connector",
+			Fixed:       true,
 		},
 		Operations: []connector.Operation{
 			connector.Op("echo", "Echo", "Returns Msg back to the caller",

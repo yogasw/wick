@@ -44,7 +44,7 @@ func echoModule() connector.Module {
 		Password string `wick:"required;secret"`
 	}
 	return connector.Module{
-		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test"},
+		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test", Fixed: true},
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
@@ -209,7 +209,7 @@ func echoNonSecretModule() connector.Module {
 		Note string `wick:"required"` // ← intentionally NOT secret
 	}
 	return connector.Module{
-		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test"},
+		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test", Fixed: true},
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
@@ -301,7 +301,7 @@ func echoMaskModule() connector.Module {
 		Note string `wick:"required"`
 	}
 	return connector.Module{
-		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test"},
+		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test", Fixed: true},
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
@@ -364,7 +364,7 @@ func errLeakModule() connector.Module {
 		Note string `wick:"required"`
 	}
 	return connector.Module{
-		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test"},
+		Meta: connector.Meta{Key: "stub", Name: "Stub", Description: "test", Fixed: true},
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},

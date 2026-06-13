@@ -71,7 +71,18 @@ type Meta struct {
 	// service that can only have one configuration.
 	//
 	// Default false = many instances allowed (existing behaviour).
+	//
+	// Fixed is also the only case wick auto-seeds an instance row: the
+	// admin UI hides "+ New row" for fixed modules, so the single row
+	// must exist up front. Every other connector starts with zero rows
+	// — instances are created explicitly via "+ New row" and deleting
+	// the last one does not bring it back on restart.
 	Fixed bool
+	// LiveCatalog marks modules whose operation set mirrors an external
+	// live source (custom MCP connectors): zero operations may just
+	// mean "not synced yet", not "nothing to offer". wick_list runs the
+	// lazy catalog refresh before deciding to hide such a connector.
+	LiveCatalog bool
 	// DefaultTags is the list of tags wick auto-attaches to each newly
 	// seeded row for this connector at boot. Tags are reused across
 	// connectors via the central tags package; admins can add or remove
@@ -193,10 +204,18 @@ type OAuthMeta struct {
 	// AuthorizeURL is the OAuth consent redirect URL
 	// (e.g. https://slack.com/oauth/v2/authorize).
 	AuthorizeURL string
+	// TokenURL is the standard OAuth2 token exchange endpoint (RFC 6749).
+	// When set, oauthCallback uses a generic HTTP POST exchange.
+	// When empty, the Slack-specific slackgo path is used (backward-compat).
+	TokenURL string
+	// ExtraParams are appended to the authorization URL redirect.
+	// Use for provider-specific requirements, e.g.:
+	//   Google: {"access_type":"offline","prompt":"consent"} → gets refresh_token
+	ExtraParams map[string]string
 	// Scopes is the space- or comma-separated list of requested scopes
-	// (sent as the user_scope param for Slack, scope for standard OAuth2).
+	// (sent as user_scope for Slack when TokenURL is empty, or scope for standard OAuth2).
 	Scopes string
-	// DisplayName is shown on the Connect button (e.g. "Slack", "Google").
+	// DisplayName is shown on the Connect button (e.g. "Slack", "Google Drive").
 	DisplayName string
 	// Icon is an SVG string or emoji rendered next to the Connect button.
 	Icon string
@@ -226,4 +245,11 @@ type Module struct {
 	HealthCheck HealthCheckFunc
 	// OAuth is non-nil when this connector supports user OAuth.
 	OAuth *OAuthMeta
+	// AllowSessionConfig lets this connector be cloned into a per-session
+	// instance (the session Config tab + the wick_session_workspace MCP
+	// tool). Default false: most connectors — especially OAuth/SSO ones,
+	// which have no replaceable config keys — should not be cloneable. Set
+	// true only when a connector has config (base_url, API key, …) that a
+	// user may legitimately want to swap for one session.
+	AllowSessionConfig bool
 }

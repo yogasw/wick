@@ -110,7 +110,7 @@ func sessionContextList(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -173,7 +173,7 @@ func sessionContextRead(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -248,7 +248,7 @@ func sessionContextDownload(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.Error(http.StatusNotFound, "session not found")
 		return
 	}
@@ -296,7 +296,7 @@ func sessionContextSave(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -349,7 +349,7 @@ func sessionContextCreate(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -403,7 +403,7 @@ func sessionContextDelete(c *tool.Ctx) {
 		return
 	}
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}

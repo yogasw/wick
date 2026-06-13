@@ -2,7 +2,7 @@ package view
 
 import (
 	"fmt"
-	"strings"
+	"net/url"
 
 	managerview "github.com/yogasw/wick/internal/manager/view"
 )
@@ -132,7 +132,7 @@ templ ProviderDetailPage(vm ProviderDetailVM) {
 						</thead>
 						<tbody>
 							for _, s := range vm.Spawns {
-								<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer" onclick={ templ.ComponentScript{Call: fmt.Sprintf("window.location='%s/providers/spawns/%s'", vm.Base, s.Path[strings.LastIndex(s.Path, "/")+1:])} }>
+								<tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer" onclick={ templ.ComponentScript{Call: fmt.Sprintf("window.location='%s/providers/spawns/%s'", vm.Base, url.PathEscape(filenameOf(s.Path)))} }>
 									<td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">{ s.StartedAt.Format("2006-01-02 15:04:05") }</td>
 									<td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{ shortID(s.SessionID) }</td>
 									<td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">

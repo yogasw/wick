@@ -129,6 +129,11 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description":          "Arguments matching the tool's input_schema. Use {} when the tool has no input fields.",
 						"additionalProperties": true,
 					},
+					"session_id": map[string]any{
+						"type": "string",
+						"description": "Wick agent session ID. REQUIRED when tool_id targets a session-workspace " +
+							"connector (its id starts with sw_); omit for normal saved connectors.",
+					},
 				},
 				"required": []string{"tool_id", "params"},
 			},
@@ -218,11 +223,128 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"type":        "boolean",
 						"description": "When true the UI also offers a text input so the user can type a custom answer (returned as text).",
 					},
+					"questions": map[string]any{
+						"type": "array",
+						"description": "Multi-question form: ask several things in ONE prompt, each with its own options. " +
+							"When set, the single-question fields above are ignored and the answer comes back as " +
+							"{\"values\": {<key>: <answer>}} keyed by each question's key. Use this instead of chaining " +
+							"several ask_user calls. The top-level 'question' (if given) is shown as the form header.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"key": map[string]any{
+									"type":        "string",
+									"description": "Identifies this question's answer in the returned values map. Defaults to q1, q2… if omitted.",
+								},
+								"question": map[string]any{
+									"type":        "string",
+									"description": "The question/label shown for this field.",
+								},
+								"type": map[string]any{
+									"type":        "string",
+									"enum":        []string{"choice", "multi", "rank", "dropdown", "text", "secret", "number"},
+									"description": "Widget: choice = pick one, multi = pick many (answer is a JSON array string), rank = drag to order (answer is a JSON array of values in chosen order), dropdown = compact select, text/secret/number = typed input. Defaults to 'choice' when options are given, else 'text'. Multi-question asks render as a step-by-step wizard the user can page through and skip.",
+								},
+								"options": map[string]any{
+									"type":        "array",
+									"description": "Choices for choice/multi/rank/dropdown. Each item is {label, value, description?} — description is an optional secondary line shown under the label.",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"label":       map[string]any{"type": "string"},
+											"value":       map[string]any{"type": "string"},
+											"description": map[string]any{"type": "string"},
+										},
+										"required": []string{"label", "value"},
+									},
+								},
+								"allow_freeform": map[string]any{
+									"type":        "boolean",
+									"description": "For choice/dropdown: also show an 'Other…' text box so the user can answer outside the options.",
+								},
+								"required": map[string]any{
+									"type":        "boolean",
+									"description": "When true the user must answer this question before submitting.",
+								},
+								"placeholder": map[string]any{"type": "string"},
+								"help":        map[string]any{"type": "string", "description": "Optional helper text under the field."},
+							},
+							"required": []string{"question"},
+						},
+					},
 				},
-				"required": []string{"session_id", "question"},
+				"required": []string{"session_id"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Ask the human operator",
+				ReadOnlyHint: PtrBool(false),
+			},
+		},
+		{
+			Name: "wick_session_workspace",
+			Description: "Spin up throwaway connector instances scoped to the CURRENT SESSION — a private clone of a base connector " +
+				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
+				"for THIS session only and is purged when the session ends. The saved connector rows are never touched. " +
+				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
+				"You NEVER see config values: you create a blank instance and the USER fills it (secrets are encrypted server-side); " +
+				"only the key names ever come back to you. Actions: " +
+				"'list' shows this session's instances (id, status, missing keys) and available_bases (connectors you may add). " +
+				"'add' creates a blank instance from a base_key; by default it pops a fill modal for the user right away. " +
+				"'duplicate' copies an existing session instance (config and all) into a new one. " +
+				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. " +
+				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
+				"'remove' deletes a session instance. " +
+				"After adding+configuring, the instance's id shows in wick_list (pass the same session_id) and you wick_execute it like any connector.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action": map[string]any{
+						"type":        "string",
+						"enum":        []string{"list", "add", "duplicate", "configure", "test", "remove"},
+						"description": "list | add | duplicate | configure | test | remove.",
+					},
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "ID of the active wick agent session the instance is scoped to. Required for every action.",
+					},
+					"base_key": map[string]any{
+						"type":        "string",
+						"description": "action=add: the base connector key to clone (from action=list available_bases).",
+					},
+					"connector_id": map[string]any{
+						"type":        "string",
+						"description": "The session instance id (sw_…) for duplicate/configure/test/remove.",
+					},
+					"label": map[string]any{
+						"type":        "string",
+						"description": "action=add/duplicate: optional human label for the new instance.",
+					},
+					"prompt": map[string]any{
+						"type":        "boolean",
+						"description": "action=add: open the fill modal immediately (default true). Set false to create blank and let the user fill it later in the Config tab.",
+					},
+					"keys": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "action=add/configure: limit the fill modal to these config keys (omit for all).",
+					},
+					"operation": map[string]any{
+						"type":        "string",
+						"description": "action=test: run this operation key as the probe instead of the health check.",
+					},
+					"params": map[string]any{
+						"type":        "object",
+						"description": "action=test with operation: parameters for the probe call.",
+					},
+					"reason": map[string]any{
+						"type":        "string",
+						"description": "action=add/configure: short text shown to the user explaining what the connector is for.",
+					},
+				},
+				"required": []string{"action", "session_id"},
+			},
+			Annotations: &ToolAnnotation{
+				Title:        "Session workspace",
 				ReadOnlyHint: PtrBool(false),
 			},
 		},

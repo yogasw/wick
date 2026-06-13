@@ -23,6 +23,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors/bitbucket"
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
 	"github.com/yogasw/wick/internal/connectors/github"
+	"github.com/yogasw/wick/internal/connectors/googleworkspace"
 	"github.com/yogasw/wick/internal/connectors/httprest"
 	"github.com/yogasw/wick/internal/connectors/loki"
 	"github.com/yogasw/wick/internal/connectors/phoenix"
@@ -125,6 +126,10 @@ func RegisterBuiltins() {
 		Meta:       withConnectorTag(httprest.Meta(), tags.API),
 		Configs:    entity.StructToConfigs(httprest.Configs{}),
 		Operations: httprest.Operations(),
+		// Generic HTTP connector: base_url / auth header are exactly the
+		// kind of config a user may want to point at staging or another
+		// account for a single session.
+		AllowSessionConfig: true,
 	})
 	registerOnce(connector.Module{
 		Meta:        withConnectorTag(slack.Meta(), tags.Communication),
@@ -147,6 +152,13 @@ func RegisterBuiltins() {
 		Meta:       withConnectorTag(phoenix.Meta(), tags.Observability),
 		Configs:    entity.StructToConfigs(phoenix.Configs{}),
 		Operations: phoenix.Operations(),
+	})
+	registerOnce(connector.Module{
+		Meta:        withConnectorTag(googleworkspace.Meta(), tags.API),
+		Configs:     entity.StructToConfigs(googleworkspace.Configs{}),
+		Operations:  googleworkspace.Operations(),
+		HealthCheck: googleworkspace.HealthCheck,
+		OAuth:       googleworkspace.OAuthMeta(),
 	})
 }
 
