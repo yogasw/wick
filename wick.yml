@@ -31,7 +31,7 @@ vars:
   # LDFLAGS bakes the app name and version into both binaries so paths
   # (socket, logs, spec) resolve correctly and wick_info reports the right
   # app_name / app_version regardless of working directory at runtime.
-  LDFLAGS: -X=github.com/yogasw/wick/internal/appname.BuildAppName={{.NAME}} -X=github.com/yogasw/wick/internal/appname.BuildAppVersion={{.VERSION}}
+  LDFLAGS: -s -w -X=github.com/yogasw/wick/internal/appname.BuildAppName={{.NAME}} -X=github.com/yogasw/wick/internal/appname.BuildAppVersion={{.VERSION}}
 
 tasks:
   setup:

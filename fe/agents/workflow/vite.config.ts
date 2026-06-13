@@ -22,7 +22,7 @@ export default defineConfig({
     outDir: OUT_DIR,
     emptyOutDir: !WATCH,
     assetsDir: "assets",
-    sourcemap: true,
+    sourcemap: false,
   },
   resolve: {
     alias: {
