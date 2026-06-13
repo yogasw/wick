@@ -1120,6 +1120,7 @@ func NewServer() *Server {
 	// tags keep their admin edits.
 	customConnSvc.SetTags(tagsSvc)
 	agentstool.SetTagsService(tagsSvc)
+	agentstool.SetSkillStore(agentskills.NewStore(db))
 	customConnSvc.EnsureInstanceTags(context.Background())
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
