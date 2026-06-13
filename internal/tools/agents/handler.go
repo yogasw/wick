@@ -1198,7 +1198,7 @@ func sessionSubscriptionStatus(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	sess, ok := globalMgr.Registry().Session(id)
-	if !ok || (!u.CanSeeAllSessions() && sess.Meta.UserID != "" && sess.Meta.UserID != u.ID) {
+	if !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1222,7 +1222,7 @@ func sessionSubscribe(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
-	if sub, ok := globalMgr.Registry().Session(id); !ok || (!u.CanSeeAllSessions() && sub.Meta.UserID != "" && sub.Meta.UserID != u.ID) {
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1245,7 +1245,7 @@ func sessionUnsubscribe(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
-	if sub, ok := globalMgr.Registry().Session(id); !ok || (!u.CanSeeAllSessions() && sub.Meta.UserID != "" && sub.Meta.UserID != u.ID) {
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -1258,12 +1258,13 @@ func sessionUnsubscribe(c *tool.Ctx) {
 
 // sessionProcesses returns active pool entries for the given session as JSON.
 func sessionProcesses(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
 	id := c.PathValue("id")
-	if globalMgr != nil {
-		if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
-			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
-			return
-		}
+	if sess, ok := globalMgr.Registry().Session(id); !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
 	}
 	type procEntry struct {
 		SessionID string `json:"session_id"`
