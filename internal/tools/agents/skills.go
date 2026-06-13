@@ -17,17 +17,21 @@ import (
 
 
 // canMutateSkill returns true when the caller is an admin or owns the named skill.
-// It writes a 403 response and returns false when access is denied.
-// When globalSkillStore is nil (boot-time not yet wired) all users are allowed through.
+// It writes a 401/403 response and returns false when access is denied.
 func canMutateSkill(c *tool.Ctx, name string) bool {
-	if globalSkillStore == nil {
-		return true
-	}
 	u := login.GetUser(c.Context())
-	if u == nil || u.IsAdmin() {
+	if u == nil {
+		c.Error(http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	if u.IsAdmin() {
 		return true
 	}
-	owns, err := globalSkillStore.OwnsSkill(c.Context(), u.ID, name)
+	if globalTagsSvc == nil {
+		c.Error(http.StatusForbidden, "forbidden")
+		return false
+	}
+	owns, err := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, name)
 	if err != nil || !owns {
 		c.Error(http.StatusForbidden, "forbidden")
 		return false
@@ -102,6 +106,12 @@ func skillsUpload(c *tool.Ctx) {
 		flash = fmt.Sprintf("Uploaded %q as skill %q to %d dir(s).", filename, folderName, res.Copied)
 		if len(res.Errors) > 0 {
 			flash += fmt.Sprintf(" %d error(s): %s", len(res.Errors), strings.Join(res.Errors, "; "))
+		}
+		if globalTagsSvc != nil && folderName != "" {
+			_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), folderName, actorID(c))
+		}
+		if globalSkillStore != nil && folderName != "" {
+			_ = globalSkillStore.Register(c.Context(), folderName, actorID(c), "")
 		}
 	}
 	files, dirs, _ := skillsync.Status()
@@ -216,6 +226,9 @@ func skillDelete(c *tool.Ctx) {
 		return
 	}
 	skillsync.DeleteEntry(name)
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.DeleteResourceOwnerTag(c.Context(), name)
+	}
 	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
@@ -258,6 +271,9 @@ func skillDeleteFromDir(c *tool.Ctx) {
 	if len(presentIn) > 0 {
 		c.Redirect(c.Base()+"/skills/"+name, http.StatusSeeOther)
 	} else {
+		if globalTagsSvc != nil {
+			_ = globalTagsSvc.DeleteResourceOwnerTag(c.Context(), name)
+		}
 		c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 	}
 }
