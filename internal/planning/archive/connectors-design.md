@@ -1151,6 +1151,97 @@ spesifik muncul. Ditulis disini biar ga lupa kontex aslinya.
 
 ---
 
+## 12. Session workspace (instance ephemeral per-sesi)
+
+Status: implemented. Menggantikan model "session config override" per-key
+yg lama (`wick_session_config` + `config_overrides.json`).
+
+> **User-facing docs:** [`docs/guide/mcp.md#session-workspace`](../../../docs/guide/mcp.md) +
+> bagian "Allow per-session config override" di
+> [`docs/guide/custom-connectors.md`](../../../docs/guide/custom-connectors.md).
+
+### 12.1 Konsep
+
+**Session instance** = clone ephemeral dari sebuah base module (httprest,
+custom API def, …) yg hidup cuma di SATU sesi agent. Punya id sendiri
+(`sw_<uuid>`), label, dan config map. Muncul di `wick_list`/`wick_get`/
+`wick_execute` **hanya kalau caller passing `session_id` sesi pemiliknya**
+— berperilaku seperti connector baru yg hidup-mati bareng session dir.
+Row connector di DB tidak pernah disentuh.
+
+Use case: agent mau hit endpoint / pakai credential yg cuma relevan saat
+itu (staging URL, key kedua, akun lain) tanpa nilai-nya lewat LLM dan
+tanpa mutasi row shared.
+
+### 12.2 Eligibility (dual-flag opt-in)
+
+Sebuah connector bisa di-clone ke session instance hanya kalau **dua-duanya** true:
+
+1. **`Module.AllowSessionConfig`** (kapabilitas, code) — author module
+   declare bahwa configs-nya masuk akal di-clone per-sesi. Default false;
+   off untuk OAuth/SSO (config-nya token user, bukan nilai yg di-replace).
+   Built-in `httprest` true; custom connector bawa flag yg sama di
+   definisi (`allow_session_config`, persisted di kolom `custom_connectors`).
+2. **`entity.Connector.AllowSessionConfig`** (per-instance, admin) — admin
+   nyalain toggle "Allow per-session config override" di detail instance.
+   Default false; UI cuma nampilin toggle kalau modulnya capable.
+
+### 12.3 Store (`internal/agents/sessionworkspace/`)
+
+File-based, satu file per sesi: `sessions/<id>/workspace.json`.
+
+```
+Instance{ id: "sw_<uuid>", base_key, label, config: map[string]string,
+          created_by: "ai"|"user", created_at }
+Workspace{ instances: []Instance }
+```
+
+CRUD: `Load` / `List` / `Get` / `Add` / `SetConfig` / `Remove`. Secret
+config disimpan sebagai token **MASTER** `wick_cenc_` (system-only,
+bukan per-user `wick_enc_`) — caller meng-enkripsi SEBELUM Set/Add;
+package ini tidak pernah lihat plaintext. File mati bareng session dir;
+job `session-config-purge` jadi TTL backstop (harian, retensi 30 hari,
+mtime-based).
+
+### 12.4 Virtual execute path
+
+`connectors.Service.Execute` dapat cabang virtual lewat
+`ExecuteParams.SessionInstance` (`SessionInstanceTarget{BaseKey, Label,
+Config}`). Saat non-nil: tidak ada `repo.Get`, module di-clone dari
+`BaseKey`, config = map instance verbatim; cek per-row (op enable/disable
+rows, admin-only, OAuth account) di-skip karena session instance tidak
+punya backing rows itu. ConnectorID = `sw_<uuid>` cuma dipakai buat run
+logging + rate limit. Secret master token di-decrypt tepat sebelum call
+(pass yg sama yg dipakai per-user `wick_enc_`), lalu di-re-mask di
+response. Health check: `HealthCheckSessionInstance` jalanin HealthCheck
+base module dengan config instance (atau caller run op nyata sbg probe).
+
+### 12.5 MCP routing
+
+- `wick_list` + `session_id` → append session instances (status
+  ready/needs_setup dihitung dari required fields base module).
+- `wick_get`/`wick_execute` (+ SSE path) → kalau connector id ber-prefix
+  `sw_`, resolve dari `workspace.json` sesi itu (`SessionInstanceFor`),
+  bukan DB; session itu sendiri yg jadi authorization scope (tidak ada
+  tag visibility check).
+- **`wick_session_workspace`** tool — human-driven: `list` / `add` /
+  `duplicate` / `configure` / `test` / `remove`. Agent bikin instance
+  blank + bisa buka modal isi (reuse `ask_user` socket), tapi USER yg
+  ngetik value; agent cuma tahu key mana yg keisi, ngak pernah value-nya.
+- UI: tab **Config / Workspace** di slide-over agent
+  (`session_workspace_handler.go` + `js/sessionconfig.js`) — list, add
+  dari picker base, edit/test/duplicate/remove.
+
+### 12.6 Kenapa ganti dari override per-key
+
+Model lama (`wick_session_config` set/get config keys di row existing)
+naruh config row shared di context agent dan bikin agent bisa nimpa
+config row beneran. Instance model lebih aman + fleksibel: clone
+terisolasi, secret system-only, ngak ada mutasi row tersimpan, dan bisa
+bikin instance yg row-nya bahkan belum ada.
+
+---
+
 ## 11. Glosarium
 
 - **Definisi connector / Module** — modul Go yg didaftarkan saat boot.

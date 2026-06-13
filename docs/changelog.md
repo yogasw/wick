@@ -6,38 +6,45 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+---
+
+## [v0.16.17](https://github.com/yogasw/wick/compare/v0.16.16...v0.16.17) — Custom Connectors
+
+_Released on 2026-06-13_
+
 ### Added
-
-*   **`wick_session_workspace` MCP tool + session Config tab** — spin up ephemeral connector instances scoped to one session: a private clone of a base connector (point it at staging, use a different key) that appears in `wick_list`/`wick_get`/`wick_execute` for that session only and is purged when it ends. The saved connector rows are never touched. Actions: `list` / `add` / `duplicate` / `configure` / `test` / `remove`. The agent creates blank instances and can open the fill modal, but the **user** types the config; secrets are stored under a system-only master key, decrypted only at execution time, and never returned to the agent. A connector is eligible only when its module declares `AllowSessionConfig` **and** an admin enables the per-instance toggle (the custom-connector definition carries the same `allow_session_config` flag). See [Session workspace](./guide/mcp#session-workspace).
-*   **`ask_user` multi-question wizard** — pass `questions[]` instead of a single `question` to collect multiple answers in one step-by-step modal. Each question has a `key`, `type` (`choice` / `multi` / `rank` / `dropdown` / `text` / `secret`), optional `options` with per-option `description`, `required`, `placeholder`, and `help`. Single-select options auto-advance; Enter also advances. Response is `{"values": {"key": "answer", ...}}`.
-*   **`ask_user` from stdio** — an `askuser.sock` Unix socket bridges `ask_user` calls from stdio MCP processes (e.g. a spawned Codex agent) to the running server's web-UI modal without HTTP auth. The gate allowlist now includes `ask_user` and `wick_session_workspace` so they are never blocked at the hook level.
-*   **Per-channel `ask_user_enabled`** — Slack, Telegram, and REST channels each gain an `ask_user_enabled` config field (default `false`). Web UI and interactive MCP clients use the global `AskUserMode` setting. See [AskUser policy](./guide/command-gate#askuser-policy).
-*   **Gate / ask_user decoupled** — `GateEnabled` now controls only the `PreToolUse` command-gate hook. Turning the gate off no longer disables `ask_user`.
-*   **Attention notifications** — when an `ask_user` or `approval_request` SSE event fires while the session tab is in the background, wick plays a short two-tone chime and (with permission) fires a browser `Notification`. Audio and notification permission are unlocked on the first user gesture.
-
-### Added (from feat/custom-connectors)
 
 *   **Custom Connectors** — build LLM-callable connectors from the admin UI, no Go code or redeploy. Three creation paths from **Connectors → + New connector**:
     *   **Paste a cURL** — deterministic parser splits the command into per-instance configs (base URL, secrets) and per-call inputs; an **AI tab** (shown when a structured-output provider is configured) extracts the same shape from `fetch()` snippets, Postman fragments, or prose.
     *   **Connect an MCP server** (streamable HTTP) — one server = one connector. Every tool the server lists becomes an operation automatically; tools added upstream appear after a re-sync. Control the surface with an exclude list instead of an import picker. Auth schemes: `none`, `bearer`, `custom_header`, **`oauth`** (standard MCP authorization: discovery, dynamic client registration, PKCE browser login, RFC 8707 resource indicator, per-instance accounts with transparent token refresh), and **`sso`** (forwards the calling wick user as a signed JWT validated against `/.well-known/wick-pubkey.pem`).
     *   **Manual builder** — Meta → Configs → Operations stepper with Go `text/template` request recipes.
-*   **Multi-instance custom connectors** — instances behave exactly like built-ins (`+ New row`, Duplicate, per-row credentials); no row is auto-created until you add one. Opt into "single instance only" per definition.
+*   **Multi-instance custom connectors** — instances behave exactly like built-ins (`+ New row`, Duplicate, per-row credentials); no row is auto-created until you add one. Opt into "single instance only" per definition. See [Custom Connectors](./guide/custom-connectors).
 *   **Ownership contract** — any approved user can create a custom connector; editing or deleting a definition is admin-or-creator only, and instance creators are marked with an `owner:` tag. The new `custom-connector` management connector exposes the same lifecycle as MCP operations (scoped per caller) so an agent can build connectors without the dashboard.
 *   **Connection status & live catalog** — MCP definitions show a Connected/Disconnected chip, re-sync per instance (probes run under that instance's account), refresh their tool catalog lazily on `wick_get`, and connect in the background at startup behind the boot gate.
 *   **Connector icons** — pick an emoji (emoji-mart picker, fully vendored) or paste an inline SVG / base64 image (32KB cap, rendered safely via `<img>`).
-
-### Added (channels)
-
+*   **Google Workspace connector** — one Google OAuth account now drives **Drive, Sheets, Docs, and Slides** through a single connector (`google_workspace`, 20 operations). The 8 Drive ops carry over from the old code-only `google_drive` connector, joined by 12 new ops: file creation (`create_doc`, `create_sheet` from CSV, `create_slides`), Sheets API v4 (`sheets_read_range`/`append_rows`/`update_range`/`clear_range`), Docs API v1 (`docs_append_text`/`replace_text`), and Slides API v1 (`slides_get_content`/`add_slide`/`duplicate_slide`). OAuth scopes expand to `drive`, `spreadsheets`, `documents`, `presentations`, `userinfo.email`; the health check probes the granted scopes and reports per-op availability. See [Google Workspace](./connectors/googleworkspace).
+*   **Session workspace** (`wick_session_workspace` MCP tool + session Config tab) — spin up ephemeral connector instances scoped to one session: a private clone of a base connector (point it at staging, use a different key) that appears in `wick_list`/`wick_get`/`wick_execute` for that session only and is purged when it ends. The saved connector rows are never touched. Actions: `list` / `add` / `duplicate` / `configure` / `test` / `remove`. The agent creates blank instances and can open the fill modal, but the **user** types the config; secrets are stored under a system-only master key, decrypted only at execution time, and never returned to the agent. A connector is eligible only when its module declares `AllowSessionConfig` **and** an admin enables the per-instance toggle (the custom-connector definition carries the same `allow_session_config` flag). See [Session workspace](./guide/mcp#session-workspace).
+*   **`ask_user` multi-question wizard** — pass `questions[]` instead of a single `question` to collect multiple answers in one step-by-step modal. Each question has a `key`, `type` (`choice` / `multi` / `rank` / `dropdown` / `text` / `secret`), optional `options` with per-option `description`, `required`, `placeholder`, and `help`. Single-select options auto-advance; Enter also advances. Response is `{"values": {"key": "answer", ...}}`.
+*   **`ask_user` from stdio** — an `askuser.sock` Unix socket bridges `ask_user` calls from stdio MCP processes (e.g. a spawned Codex agent) to the running server's web-UI modal without HTTP auth. The gate allowlist now includes `ask_user` and `wick_session_workspace` so they are never blocked at the hook level.
+*   **Per-channel `ask_user_enabled`** — Slack, Telegram, and REST channels each gain an `ask_user_enabled` config field (default `false`). Web UI and interactive MCP clients use the global `AskUserMode` setting. See [AskUser policy](./guide/command-gate#askuser-policy).
+*   **Attention notifications** — when an `ask_user` or `approval_request` SSE event fires while the session tab is in the background, wick plays a short two-tone chime and (with permission) fires a browser `Notification`. Audio and notification permission are unlocked on the first user gesture.
+*   **Access control — App Owner tier & per-user isolation** — a new `is_owner` tier sits above admin: the first registered user is auto-promoted, `IsAdmin()` is true for both owners and admins, but only the App Owner can see every user's sessions. Non-admin users now see only their own sessions, projects, workflows, and skills in the agents UI; session, send, kill, and trace routes are gated by ownership and return **404** (not 403) when a session belongs to someone else. The same ownership check guards the `wick_session_info` and `wick_set_title` MCP tools.
+*   **Tag-based ownership for projects, workflows & skills** — each resource gets an `owner:{resourceID}` tag at create time, with `created_by` kept as an audit trail; sharing is done by assigning group tags. New admin pages — **`/admin/projects`**, **`/admin/workflows`**, and **`/admin/skills`** — expose a tag picker to manage ownership and sharing. Skills now persist in their own DB table with `created_by` stamped on upload.
 *   **Per-user Slack channels** — each wick user can configure their own Slack bot credentials independently. Every non-owner user gets a separate `agent_channels` row (`user_id = <id>`); the App Owner row uses `user_id = NULL`. Saving a bot token hot-adds a new keyed registry instance immediately — no server restart required. Removing the token removes the instance. The Channels menu is now accessible to all logged-in users (admin gate removed).
-
-### Fixed
-
-*   **Codex `model_instructions_file`** — the per-session `soul.md` preset was previously passed via the unknown key `instructions_files` (silently ignored by Codex), so the model never received the session identity block or wick rules. Fixed to use `model_instructions_file`. The file now lives in the per-session `.codex/` dir so concurrent sessions no longer clobber each other's preset.
 
 ### Changed
 
 *   Connectors no longer auto-create their first instance at boot (single-instance/Fixed modules excepted) — rows are created explicitly via **+ New row** and deleted rows stay deleted across restarts.
 *   Outbound MCP requests now emit a debug log trail (URL, RPC method, payload, response, latency) carrying the originating `request_id`.
+*   **Gate / ask_user decoupled** — `GateEnabled` now controls only the `PreToolUse` command-gate hook. Turning the gate off no longer disables `ask_user`.
+*   **`google_drive` → `google_workspace`** — the code-only Google Drive connector was replaced by the broader Google Workspace connector under a new key. Existing `google_drive` instance rows are orphaned on restart and must be re-created under the new key.
+
+### Fixed
+
+*   **Codex `model_instructions_file`** — the per-session `soul.md` preset was previously passed via the unknown key `instructions_files` (silently ignored by Codex), so the model never received the session identity block or wick rules. Fixed to use `model_instructions_file`. The file now lives in the per-session `.codex/` dir so concurrent sessions no longer clobber each other's preset.
+*   **Connector access-control hardening** — toggling a connector operation, flipping its admin-only flag, and deleting a connector are now gated server-side (admin-or-owner, returning 403); writing a config field tagged `secret` likewise requires admin or the connector's owner. The OAuth `ConnectorAccount` schema separates `ExternalUserID` (provider-side) from `WickUserID` (wick platform), fixing session-ownership stamping for connections such as Slack. The `wick_skill_sync` MCP tool is restricted to admins.
 
 ---
 

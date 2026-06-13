@@ -8,6 +8,10 @@ This page collects screenshots of every admin surface in one place. Each subsect
 A user becomes admin in one of two ways: their email is in `APP_ADMIN_EMAILS` at first login, or an existing admin promotes them at `/admin/users`. See [Environment Variables](../reference/env-vars#admin) for the env-only bootstrap path.
 :::
 
+::: tip App Owner
+Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own; per-session routes return `404` for sessions they don't own. There is no env var for this — it's assigned automatically to the first account.
+:::
+
 ## Dashboard
 
 ![Admin Dashboard](/screenshots/admin-dashboard.png)
@@ -50,6 +54,16 @@ For System-tagged jobs the action buttons are removed and the tag picker is read
 A row whose `Key` no longer has a registered module is tolerated: the row stays, marked "Module not registered". `wick_execute` against such a row returns an error.
 
 Operational guide: [Connector Module](./connector-module).
+
+## Projects, Workflows & Skills (ownership)
+
+`/admin/projects`, `/admin/workflows`, and `/admin/skills` are cross-user lists of every project, workflow, and skill, each with a tag picker — the admin surface for the **ownership** model that backs per-user isolation.
+
+- Each of these resources gets an `owner:{resourceID}` filter tag at creation time, and stamps `created_by` as an audit trail. The owner (and any admin) sees it; everyone else is filtered out — same `IsFilter` mechanism as the [Tags](#tags) section, just auto-created per resource instead of hand-assigned.
+- **Share** a resource by assigning a group tag to it here (and the same tag to the users/groups who should see it at `/admin/users`). **Transfer or open up** by editing its tags.
+- Skills now live in their own DB table with `created_by` set on upload; `wick_skill_sync` over MCP is admin-only.
+
+This is the same tag-filter model used for connectors and tools — the `owner:` tags simply make every user-created resource private-by-default to its creator until explicitly shared.
 
 ## Access Tokens
 
