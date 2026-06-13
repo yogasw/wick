@@ -509,6 +509,9 @@ func deleteWorkflow(c *tool.Ctx) {
 		}
 		return
 	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.DeleteResourceOwnerTag(c.Context(), id)
+	}
 	if c.R.Header.Get("Accept") == "application/json" {
 		c.JSON(http.StatusOK, map[string]any{"ok": true})
 		return

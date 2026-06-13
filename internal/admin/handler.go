@@ -32,9 +32,16 @@ type ProjectLister interface {
 	Projects() map[string]agentproject.Project
 }
 
-// WorkflowLister lists all workflow IDs.
+// WorkflowInfo carries the fields the admin page needs for a workflow row.
+type WorkflowInfo struct {
+	Name      string
+	CreatedBy string
+}
+
+// WorkflowLister lists workflow IDs and loads individual workflow metadata.
 type WorkflowLister interface {
 	List() ([]string, error)
+	LoadInfo(id string) (WorkflowInfo, error)
 }
 
 // SkillLister lists all skills from the DB.

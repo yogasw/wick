@@ -81,12 +81,19 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 
 	rows := make([]adminview.ResourceAdminRow, len(ids))
 	for i, id := range ids {
-		rows[i] = adminview.ResourceAdminRow{
+		row := adminview.ResourceAdminRow{
 			ID:     id,
 			Name:   id,
 			TagIDs: perms[i].TagIDs,
 			Path:   paths[i],
 		}
+		if info, err := h.workflows.LoadInfo(id); err == nil {
+			if info.Name != "" {
+				row.Name = info.Name
+			}
+			row.CreatedBy = info.CreatedBy
+		}
+		rows[i] = row
 	}
 
 	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", rows, allTags, user).Render(ctx, w)

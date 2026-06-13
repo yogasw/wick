@@ -137,6 +137,13 @@ func spaWorkflowCreate(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if a := actorID(c); a != "" {
+		w.CreatedBy = a
+		_ = globalWorkflowMgr.Service.SaveDraft(w.ID, w)
+	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), w.ID, actorID(c))
+	}
 	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
@@ -170,9 +177,15 @@ func spaWorkflowImport(c *tool.Ctx) {
 		return
 	}
 	w.ID = created.ID
+	if a := actorID(c); a != "" {
+		w.CreatedBy = a
+	}
 	if err := globalWorkflowMgr.Service.SaveDraft(created.ID, w); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), created.ID, actorID(c))
 	}
 	c.JSON(http.StatusOK, map[string]any{"id": created.ID, "name": created.Name})
 }
@@ -210,6 +223,9 @@ func spaWorkflowDuplicate(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if globalTagsSvc != nil {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), w.ID, actorID(c))
+	}
 	c.JSON(http.StatusOK, map[string]any{"id": w.ID, "name": w.Name})
 }
 
@@ -224,13 +240,24 @@ func spaWorkflowList(c *tool.Ctx) {
 	}
 	user := login.GetUser(c.Context())
 	if user != nil && !user.IsAdmin() {
-		filtered := summaries[:0]
-		for _, s := range summaries {
-			if s.CreatedBy == "" || s.CreatedBy == user.ID {
-				filtered = append(filtered, s)
+		if globalTagsSvc != nil {
+			filtered := summaries[:0]
+			for _, s := range summaries {
+				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), user.ID, s.ID)
+				if owns {
+					filtered = append(filtered, s)
+				}
 			}
+			summaries = filtered
+		} else {
+			filtered := summaries[:0]
+			for _, s := range summaries {
+				if s.CreatedBy == "" || s.CreatedBy == user.ID {
+					filtered = append(filtered, s)
+				}
+			}
+			summaries = filtered
 		}
-		summaries = filtered
 	}
 	out := make([]spaWorkflowSummary, 0, len(summaries))
 	for _, s := range summaries {

@@ -102,6 +102,21 @@ func genMCPInternalToken() string {
 	return hex.EncodeToString(b)
 }
 
+// wfListerAdapter wraps a workflow service.Service to satisfy admin.WorkflowLister.
+type wfListerAdapter struct{ svc interface {
+	List() ([]string, error)
+	Load(id string) (wf.Workflow, error)
+} }
+
+func (a wfListerAdapter) List() ([]string, error) { return a.svc.List() }
+func (a wfListerAdapter) LoadInfo(id string) (admin.WorkflowInfo, error) {
+	w, err := a.svc.Load(id)
+	if err != nil {
+		return admin.WorkflowInfo{}, err
+	}
+	return admin.WorkflowInfo{Name: w.Name, CreatedBy: w.CreatedBy}, nil
+}
+
 func NewServer() *Server {
 	cfg := config.Load()
 
@@ -1104,6 +1119,7 @@ func NewServer() *Server {
 	// onto existing instance rows. Idempotent — rows that already carry
 	// tags keep their admin edits.
 	customConnSvc.SetTags(tagsSvc)
+	agentstool.SetTagsService(tagsSvc)
 	customConnSvc.EnsureInstanceTags(context.Background())
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
@@ -1226,7 +1242,7 @@ func NewServer() *Server {
 	skillsStore := agentskills.NewStore(db)
 	var wfLister admin.WorkflowLister
 	if wfMgr != nil {
-		wfLister = wfMgr.Service
+		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore)
 
