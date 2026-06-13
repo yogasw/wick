@@ -30,6 +30,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -52,6 +53,7 @@ var (
 	globalDB         *gorm.DB
 	globalChannels   *agentchannels.Registry
 	globalSyncMgr    *providersync.Manager
+	globalSkillStore *skills.Store
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -133,6 +135,10 @@ func SetChannelRegistry(r *agentchannels.Registry) { globalChannels = r }
 
 // SetSyncManager wires the provider storage sync manager.
 func SetSyncManager(m *providersync.Manager) { globalSyncMgr = m }
+
+// SetSkillStore wires the skills ownership store so delete/upload/sync
+// handlers can enforce owner-or-admin access control.
+func SetSkillStore(s *skills.Store) { globalSkillStore = s }
 
 // GetGateStatus is the read side. Returns a zero value when boot
 // hasn't reached SetGateStatus yet.

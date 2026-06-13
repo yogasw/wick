@@ -10,10 +10,30 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/skillsync"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
+
+// canMutateSkill returns true when the caller is an admin or owns the named skill.
+// It writes a 403 response and returns false when access is denied.
+// When globalSkillStore is nil (boot-time not yet wired) all users are allowed through.
+func canMutateSkill(c *tool.Ctx, name string) bool {
+	if globalSkillStore == nil {
+		return true
+	}
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsAdmin() {
+		return true
+	}
+	owns, err := globalSkillStore.OwnsSkill(c.Context(), u.ID, name)
+	if err != nil || !owns {
+		c.Error(http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
 
 func skillsPage(c *tool.Ctx) {
 	files, dirs, _ := skillsync.Status()
@@ -21,6 +41,10 @@ func skillsPage(c *tool.Ctx) {
 }
 
 func skillsSync(c *tool.Ctx) {
+	if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+		c.Error(http.StatusForbidden, "admins only")
+		return
+	}
 	res, err := skillsync.Sync()
 	flash := ""
 	errMsg := ""
@@ -37,6 +61,10 @@ func skillsSync(c *tool.Ctx) {
 }
 
 func skillsUpload(c *tool.Ctx) {
+	if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+		c.Error(http.StatusForbidden, "admins only")
+		return
+	}
 	if err := c.R.ParseMultipartForm(10 << 20); err != nil {
 		c.Error(http.StatusBadRequest, "parse form: "+err.Error())
 		return
@@ -88,6 +116,9 @@ func skillDetail(c *tool.Ctx) {
 // For files that exist in multiple dirs, newest mtime wins.
 func skillEntrySync(c *tool.Ctx) {
 	name := c.PathValue("name")
+	if !canMutateSkill(c, name) {
+		return
+	}
 	allDirs := skillsync.KnownDirs()
 
 	// find source: first dir that has this entry
@@ -181,6 +212,9 @@ func skillDetailByPath(c *tool.Ctx, name string) {
 
 func skillDelete(c *tool.Ctx) {
 	name := c.PathValue("name")
+	if !canMutateSkill(c, name) {
+		return
+	}
 	skillsync.DeleteEntry(name)
 	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
@@ -200,6 +234,9 @@ func skillDownload(c *tool.Ctx) {
 
 func skillDeleteFromDir(c *tool.Ctx) {
 	name := c.PathValue("name")
+	if !canMutateSkill(c, name) {
+		return
+	}
 	dirLabel := c.PathValue("dirLabel")
 	var targetDir string
 	for _, d := range skillsync.KnownDirs() {
@@ -265,6 +302,9 @@ func skillFolderFileDelete(c *tool.Ctx) {
 	folder := c.PathValue("folder")
 	file := c.PathValue("file")
 	name := folder + "/" + file
+	if !canMutateSkill(c, folder) {
+		return
+	}
 	skillsync.DeleteEntry(name)
 	c.Redirect(c.Base()+"/skills/"+folder, http.StatusSeeOther)
 }
@@ -389,6 +429,14 @@ func skillProviderSync(c *tool.Ctx) {
 	cleanPath, ok := safeSkillPath(rawPath)
 	if !ok {
 		c.Error(http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	skillName := rawPath
+	if skillName == "" {
+		skillName = provider
+	}
+	if !canMutateSkill(c, skillName) {
 		return
 	}
 
