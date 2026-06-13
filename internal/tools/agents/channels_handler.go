@@ -2,7 +2,7 @@
 //
 // Purpose:     Renders and saves Slack / Telegram channel config pages.
 //              Config values are stored in agent_channels table (one row per
-//              channel type, JSON blob), not in the generic configs table.
+//              channel type + user, JSON blob), not in the generic configs table.
 // Caller:      handler.go Register() mounts routes under /channels/*.
 // Dependencies:
 //   - internal/agents/channels (store helpers)
@@ -11,27 +11,43 @@
 //   - internal/entity           (entity.Config for ConfigsTable UI)
 //
 // Main Functions:
-//   - channelsPage        — list page (Slack, Telegram cards)
-//   - slackChannelPage    — Slack config form
-//   - telegramChannelPage — Telegram config form
-//   - saveChannelConfig   — POST handler for one key update
-//   - loadChannelRows     — merge seed + DB values into UI rows
+//   - channelsPage           — list page (Slack, Telegram cards)
+//   - slackChannelPage       — Slack config form
+//   - telegramChannelPage    — Telegram config form
+//   - makeChannelSaveHandler — POST handler for one key update (per-user)
+//   - loadChannelRows        — merge seed + DB values (App Owner row)
+//   - loadChannelRowsForUser — merge seed + DB values (per-user row)
+//   - syncChannelInstance    — hot-add/reload registry entry after save
 //
 // Side Effects: Reads/writes agent_channels table via store helpers.
 
 package agents
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
+
+// currentUserIDForChannel returns the userID key to use for per-user channel
+// config lookups. App Owner users return "" (owner row).
+func currentUserIDForChannel(c *tool.Ctx) string {
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsOwner {
+		return ""
+	}
+	return u.ID
+}
 
 // channelsPage renders the list of available channels (Slack, Telegram).
 func channelsPage(c *tool.Ctx) {
@@ -62,10 +78,10 @@ func channelsPage(c *tool.Ctx) {
 			HRef:        base + "/channels/rest",
 		},
 	}
-	// Populate Configured status from agent_channels table.
 	if globalDB != nil {
+		userID := currentUserIDForChannel(c)
 		for i := range channels {
-			m, _ := agentchannels.GetChannelConfigMap(globalDB, channels[i].Slug)
+			m, _ := agentchannels.GetChannelConfigMapForUser(globalDB, channels[i].Slug, userID)
 			if channels[i].Slug == "rest" {
 				channels[i].Configured = m["enabled"] == "true"
 			} else {
@@ -81,7 +97,8 @@ func slackChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("slack", agentconfig.SeedSlackChannelConfig(), "project_id")
+	userID := currentUserIDForChannel(c)
+	rows := loadChannelRowsForUser("slack", userID, agentconfig.SeedSlackChannelConfig(), "project_id")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -98,7 +115,8 @@ func restChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("rest", agentconfig.SeedRestChannelConfig(), "project_id")
+	userID := currentUserIDForChannel(c)
+	rows := loadChannelRowsForUser("rest", userID, agentconfig.SeedRestChannelConfig(), "project_id")
 
 	appURL := ""
 	if globalConfigs != nil {
@@ -128,7 +146,8 @@ func telegramChannelPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	rows := loadChannelRows("telegram", agentconfig.SeedTelegramChannelConfig(), "project_id")
+	userID := currentUserIDForChannel(c)
+	rows := loadChannelRowsForUser("telegram", userID, agentconfig.SeedTelegramChannelConfig(), "project_id")
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -256,21 +275,20 @@ func channelSecretKeys(channelType string) map[string]bool {
 }
 
 // makeChannelSaveHandler returns a POST handler for /channels/{channelType}/{key}
-// that saves one config value for channelType in the agent_channels table.
+// that saves one config value for the current user in the agent_channels table.
 // Fields declared secret in the channel's config struct are encrypted at rest.
+// Any logged-in user can configure their own channel (no admin gate).
 func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 	secretKeys := channelSecretKeys(channelType)
 	return func(c *tool.Ctx) {
 		if notReady(c) {
 			return
 		}
-		if !requireAdmin(c) {
-			return
-		}
 		if globalDB == nil {
 			c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not ready"})
 			return
 		}
+		userID := currentUserIDForChannel(c)
 		key := c.PathValue("key")
 		value := c.Form("value")
 		if value != "" && secretKeys[key] && globalConfigs != nil {
@@ -281,16 +299,17 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 			}
 			value = encrypted
 		}
-		if err := agentchannels.SetChannelConfigKey(globalDB, channelType, key, value); err != nil {
+		if err := agentchannels.SetChannelConfigKeyForUser(globalDB, channelType, userID, key, value); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		syncChannelInstance(c.R.Context(), channelType, userID)
 		c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 
 // loadChannelRows returns entity.Config rows (for the ConfigsTable UI component)
-// with values populated from the agent_channels JSON config.
+// with values populated from the App Owner's agent_channels JSON config.
 // projectKey is the key whose Options should be set to the live project list
 // (formatted "name::id" so the dropdown shows names but stores the id).
 // Secret values stored as wick_cenc_ tokens are decrypted before render so the
@@ -299,7 +318,6 @@ func loadChannelRows(channelType string, seed []entity.Config, projectKey string
 	rows := make([]entity.Config, len(seed))
 	copy(rows, seed)
 
-	// Inject current values from agent_channels config JSON.
 	if globalDB != nil {
 		m, _ := agentchannels.GetChannelConfigMap(globalDB, channelType)
 		for i := range rows {
@@ -317,8 +335,6 @@ func loadChannelRows(channelType string, seed []entity.Config, projectKey string
 		}
 	}
 
-	// Populate project dropdown options as "name::id" pairs so the
-	// dropdown shows display names but stores the project id.
 	if globalLayout.BaseDir != "" && projectKey != "" {
 		ids, err := agentproject.List(globalLayout)
 		if err == nil && len(ids) > 0 {
@@ -345,4 +361,97 @@ func loadChannelRows(channelType string, seed []entity.Config, projectKey string
 	}
 
 	return rows
+}
+
+// loadChannelRowsForUser returns entity.Config rows with values populated from
+// a specific user's agent_channels JSON config. App Owner users pass userID=""
+// which falls back to the owner row. Secret tokens are decrypted before render.
+func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, projectKey string) []entity.Config {
+	rows := make([]entity.Config, len(seed))
+	copy(rows, seed)
+	if globalDB != nil {
+		m, _ := agentchannels.GetChannelConfigMapForUser(globalDB, channelType, userID)
+		for i := range rows {
+			v, ok := m[rows[i].Key]
+			if !ok {
+				continue
+			}
+			if rows[i].IsSecret && globalConfigs != nil {
+				plain, err := globalConfigs.DecryptSecret(v)
+				if err == nil {
+					v = plain
+				}
+			}
+			rows[i].Value = v
+		}
+	}
+	if globalLayout.BaseDir != "" && projectKey != "" {
+		ids, err := agentproject.List(globalLayout)
+		if err == nil && len(ids) > 0 {
+			var opts []string
+			for _, id := range ids {
+				p, lerr := agentproject.Load(globalLayout, id)
+				if lerr != nil {
+					continue
+				}
+				label := p.Meta.Name
+				if label == "" {
+					label = id
+				}
+				opts = append(opts, label+"::"+id)
+			}
+			if len(opts) > 0 {
+				for i := range rows {
+					if rows[i].Key == projectKey {
+						rows[i].Options = strings.Join(opts, "|")
+					}
+				}
+			}
+		}
+	}
+	return rows
+}
+
+// syncChannelInstance adds or reloads the channel registry entry for a user
+// after their config is saved. No-op when globalChannels is nil.
+func syncChannelInstance(ctx context.Context, channelType, userID string) {
+	if globalChannels == nil || globalDB == nil {
+		return
+	}
+	store := agentchannels.NewDBStore(globalDB)
+	store.Configs = globalConfigs
+	iKey := channelType + ":" + userID
+	if userID == "" {
+		iKey = channelType + ":__owner__"
+	}
+	switch channelType {
+	case "slack":
+		cfg, pubURL, err := store.LoadSlackForUser(userID)
+		if err != nil {
+			return
+		}
+		if cfg.BotToken == "" {
+			if globalChannels.HasKey(iKey) {
+				globalChannels.RemoveKeyed(iKey)
+			}
+			return
+		}
+		if globalChannels.HasKey(iKey) {
+			ch := globalChannels.ChannelByKey(iKey)
+			if slackCh, ok := ch.(*agentslack.Channel); ok {
+				slackCh.Reload(ctx, cfg, pubURL)
+			}
+		} else {
+			ch := agentslack.NewWithOwner(cfg, userID)
+			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
+			ch.SetPublicURL(pubURL)
+			src := agentslack.NewConfigSourceKeyed(store, ch, userID)
+			globalChannels.AddKeyed(iKey, ch, src)
+			go func() {
+				if err := ch.Start(ctx); err != nil {
+					log.Warn().Str("instance", iKey).Err(err).Msg("agents: channel instance stopped")
+				}
+			}()
+		}
+	}
 }
