@@ -15,7 +15,6 @@
 //   - slackChannelPage       — Slack config form
 //   - telegramChannelPage    — Telegram config form
 //   - makeChannelSaveHandler — POST handler for one key update (per-user)
-//   - loadChannelRows        — merge seed + DB values (App Owner row)
 //   - loadChannelRowsForUser — merge seed + DB values (per-user row)
 //   - syncChannelInstance    — hot-add/reload registry entry after save
 //
@@ -308,60 +307,7 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 	}
 }
 
-// loadChannelRows returns entity.Config rows (for the ConfigsTable UI component)
-// with values populated from the App Owner's agent_channels JSON config.
-// projectKey is the key whose Options should be set to the live project list
-// (formatted "name::id" so the dropdown shows names but stores the id).
-// Secret values stored as wick_cenc_ tokens are decrypted before render so the
-// UI can show the "stored" badge correctly (non-empty value = stored).
-func loadChannelRows(channelType string, seed []entity.Config, projectKey string) []entity.Config {
-	rows := make([]entity.Config, len(seed))
-	copy(rows, seed)
 
-	if globalDB != nil {
-		m, _ := agentchannels.GetChannelConfigMap(globalDB, channelType)
-		for i := range rows {
-			v, ok := m[rows[i].Key]
-			if !ok {
-				continue
-			}
-			if rows[i].IsSecret && globalConfigs != nil {
-				plain, err := globalConfigs.DecryptSecret(v)
-				if err == nil {
-					v = plain
-				}
-			}
-			rows[i].Value = v
-		}
-	}
-
-	if globalLayout.BaseDir != "" && projectKey != "" {
-		ids, err := agentproject.List(globalLayout)
-		if err == nil && len(ids) > 0 {
-			var opts []string
-			for _, id := range ids {
-				p, lerr := agentproject.Load(globalLayout, id)
-				if lerr != nil {
-					continue
-				}
-				label := p.Meta.Name
-				if label == "" {
-					label = id
-				}
-				opts = append(opts, label+"::"+id)
-			}
-			if len(opts) > 0 {
-				for i := range rows {
-					if rows[i].Key == projectKey {
-						rows[i].Options = strings.Join(opts, "|")
-					}
-				}
-			}
-		}
-	}
-
-	return rows
-}
 
 // loadChannelRowsForUser returns entity.Config rows with values populated from
 // a specific user's agent_channels JSON config. App Owner users pass userID=""
