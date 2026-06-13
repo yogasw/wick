@@ -994,6 +994,36 @@ func NewServer() *Server {
 				return "", false
 			})
 
+			// WickUserIDFn resolves a Slack user ID to a wick platform user ID
+			// by scanning ConnectorAccount rows for a matching WickUserID field.
+			// ConnectorAccount.WickUserID stores the external platform user ID
+			// returned by the Slack OAuth GetUserIdentity call (resp.UserID).
+			slackCh.SetWickUserIDFn(func(ctx context.Context, slackUserID string) (string, bool) {
+				rows, err := connectorsSvc.ListByKey(ctx, "slack")
+				if err != nil {
+					return "", false
+				}
+				for _, row := range rows {
+					accs, err := connectorsSvc.ListAccounts(ctx, row.ID)
+					if err != nil {
+						continue
+					}
+					for _, acc := range accs {
+						if acc.WickUserID == slackUserID && acc.WickUserID != "" {
+							return acc.WickUserID, true
+						}
+					}
+				}
+				return "", false
+			})
+
+			// OwnerFn stamps the resolved wick user ID on the session.
+			if agentsPool != nil {
+				slackCh.SetOwnerFn(func(ctx context.Context, sessionID, userID string) {
+					agentsPool.EnsureSessionOwner(ctx, sessionID, userID)
+				})
+			}
+
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)
