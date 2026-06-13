@@ -61,6 +61,25 @@ func Migrate(db *gorm.DB) {
 	if res := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_tree ON provider_storage (provider_type, instance_name, parent_id, name)`); res.Error != nil {
 		log.Warn().Err(res.Error).Msg("migrate: idx_storage_tree creation failed (duplicates present?)")
 	}
+
+	seedOwner(db)
+}
+
+// seedOwner promotes the oldest user to App Owner when no owner exists.
+// Handles DBs created before the is_owner column was added (existing installs).
+func seedOwner(db *gorm.DB) {
+	var ownerCount int64
+	db.Model(&entity.User{}).Where("is_owner = ?", true).Count(&ownerCount)
+	if ownerCount > 0 {
+		return
+	}
+	var oldest entity.User
+	if err := db.Order("created_at ASC").First(&oldest).Error; err != nil {
+		return
+	}
+	if err := db.Model(&oldest).Update("is_owner", true).Error; err != nil {
+		log.Warn().Err(err).Str("user_id", oldest.ID).Msg("migrate: seedOwner failed")
+	}
 }
 
 // repairProviderStorageTree rewires every row's parent_id from its rel_path
