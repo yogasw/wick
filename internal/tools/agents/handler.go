@@ -309,6 +309,14 @@ func Register(r tool.Router) {
 	r.GET("/data-tables/{slug}/export.csv", exportDataTableCSV)
 }
 
+func requireAdmin(c *tool.Ctx) bool {
+	if u := login.GetUser(c.Context()); u == nil || !u.IsAdmin() {
+		c.Error(http.StatusForbidden, "admins only")
+		return false
+	}
+	return true
+}
+
 func settingsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
