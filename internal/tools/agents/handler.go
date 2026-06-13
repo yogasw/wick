@@ -33,6 +33,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -72,7 +73,10 @@ type GateStatus struct {
 }
 
 // SetManager wires in the agents registry manager.
-func SetManager(m *registry.Manager) { globalMgr = m }
+func SetManager(m *registry.Manager) {
+	globalMgr = m
+	ui.SetAgentsAvailable(func() bool { return globalMgr != nil })
+}
 
 // SetPool wires in the agent subprocess pool.
 func SetPool(p *pool.Pool) { globalPool = p }
