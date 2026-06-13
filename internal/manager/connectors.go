@@ -550,6 +550,15 @@ func (h *Handler) setConnectorConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not allowed", http.StatusForbidden)
 		return
 	}
+	for _, cfg := range h.connectors.RowConfigs(*row) {
+		if cfg.Key == configKey && cfg.IsSecret {
+			if !h.canConfigureSecretField(user, row) {
+				http.Error(w, "forbidden: secret fields require admin or connector owner", http.StatusForbidden)
+				return
+			}
+			break
+		}
+	}
 	stored := h.connectors.LoadConfigs(*row)
 	stored[configKey] = r.FormValue("value")
 	if err := h.connectors.Update(ctx, row.ID, row.Label, stored, row.Disabled); err != nil {
@@ -803,6 +812,10 @@ func (h *Handler) deleteConnector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if err := h.connectors.Delete(ctx, row.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -854,6 +867,10 @@ func (h *Handler) toggleConnectorOperation(w http.ResponseWriter, r *http.Reques
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	enabled := boolParam(r, "enabled")
@@ -923,6 +940,10 @@ func (h *Handler) toggleOperationAdminOnly(w http.ResponseWriter, r *http.Reques
 	row, err := h.connectors.Get(ctx, id)
 	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if user == nil || !user.IsAdmin() {
+		http.Error(w, "forbidden: admin only", http.StatusForbidden)
 		return
 	}
 	adminOnly := boolParam(r, "admin_only")
@@ -1012,6 +1033,27 @@ func (h *Handler) canConfigureRow(user *entity.User, row *entity.Connector) bool
 		}
 	}
 	return row.AllowOthersConfigure
+}
+
+// canConfigureSecretField reports whether the user may write a secret config
+// field on the given connector row.
+// Allow order: admin → owner tag. AllowOthersConfigure is intentionally NOT
+// sufficient — any user granted AllowOthersConfigure could otherwise overwrite
+// credentials they should not see.
+func (h *Handler) canConfigureSecretField(user *entity.User, row *entity.Connector) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAdmin() {
+		return true
+	}
+	if h.tags != nil {
+		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
+		if owns {
+			return true
+		}
+	}
+	return false
 }
 
 // canConnectSSO reports whether the user may initiate an OAuth connect on the

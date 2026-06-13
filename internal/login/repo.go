@@ -15,6 +15,14 @@ func newRepo(db *gorm.DB) *repo {
 	return &repo{db: db}
 }
 
+func (r *repo) markOwnerIfFirst(ctx context.Context, userID string) {
+	var total int64
+	r.db.WithContext(ctx).Model(&entity.User{}).Count(&total)
+	if total == 1 {
+		r.db.WithContext(ctx).Model(&entity.User{}).Where("id = ?", userID).Update("is_owner", true)
+	}
+}
+
 func (r *repo) UpsertUser(ctx context.Context, email, name, avatar string, adminEmails map[string]bool) (*entity.User, error) {
 	var u entity.User
 	err := r.db.WithContext(ctx).Where("email = ?", email).First(&u).Error
@@ -30,6 +38,7 @@ func (r *repo) UpsertUser(ctx context.Context, email, name, avatar string, admin
 		if err := r.db.WithContext(ctx).Create(&u).Error; err != nil {
 			return nil, err
 		}
+		r.markOwnerIfFirst(ctx, u.ID)
 		return &u, nil
 	}
 	if err != nil {
@@ -82,6 +91,7 @@ func (r *repo) CreateUserWithPassword(ctx context.Context, email, name, password
 	if err := r.db.WithContext(ctx).Create(&u).Error; err != nil {
 		return nil, err
 	}
+	r.markOwnerIfFirst(ctx, u.ID)
 	return &u, nil
 }
 

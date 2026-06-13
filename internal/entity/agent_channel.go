@@ -12,6 +12,7 @@ type AgentChannel struct {
 	Name      string    `gorm:"type:varchar(128);not null;default:'default'"`
 	Enabled   bool      `gorm:"not null;default:true"`
 	Config    string    `gorm:"type:text;not null;default:'{}'"`
+	CreatedBy *string   `gorm:"column:created_by;type:varchar(36)"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

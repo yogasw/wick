@@ -264,6 +264,9 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 		if notReady(c) {
 			return
 		}
+		if !requireAdmin(c) {
+			return
+		}
 		if globalDB == nil {
 			c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not ready"})
 			return
