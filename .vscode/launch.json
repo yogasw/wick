@@ -12,7 +12,8 @@
       "args": ["server"],
       "envFile": "${workspaceFolder}/.env",
       "env": {
-        "WICK_DEV_REPO_ROOT": "${workspaceFolder}"
+        "WICK_DEV_REPO_ROOT": "${workspaceFolder}",
+        "WICK_STRICT_MCP": "1"
       },
       "preLaunchTask": "debug: prep"
     },

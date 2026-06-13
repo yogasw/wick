@@ -49,7 +49,9 @@ import (
 	"github.com/yogasw/wick/internal/bookmark"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	"github.com/yogasw/wick/internal/connectors/notifications"
+	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -61,6 +63,7 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
+	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
@@ -76,6 +79,7 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -97,6 +101,21 @@ func genMCPInternalToken() string {
 		return ""
 	}
 	return hex.EncodeToString(b)
+}
+
+// wfListerAdapter wraps a workflow service.Service to satisfy admin.WorkflowLister.
+type wfListerAdapter struct{ svc interface {
+	List() ([]string, error)
+	Load(id string) (wf.Workflow, error)
+} }
+
+func (a wfListerAdapter) List() ([]string, error) { return a.svc.List() }
+func (a wfListerAdapter) LoadInfo(id string) (admin.WorkflowInfo, error) {
+	w, err := a.svc.Load(id)
+	if err != nil {
+		return admin.WorkflowInfo{}, err
+	}
+	return admin.WorkflowInfo{Name: w.Name, CreatedBy: w.CreatedBy}, nil
 }
 
 func NewServer() *Server {
@@ -125,6 +144,7 @@ func NewServer() *Server {
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
+	sessionconfigpurge.Register()
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -325,6 +345,20 @@ func NewServer() *Server {
 		log.Fatal().Msgf("agents bootstrap: %s", agentsBootErr.Error())
 	}
 	agentsBcast := agentstool.NewBroadcaster()
+	// syncSessionMeta reloads one session into the in-memory registry and
+	// broadcasts its current title + status over SSE so open tabs update
+	// live. Used by wick_set_title (HTTP, in-process) and — relayed via
+	// the agentctl refresh_session op — by stdio MCP processes that
+	// mutated session meta on disk. Without the broadcast the sidebar
+	// would only catch up on the next page load.
+	syncSessionMeta := func(sessionID string) {
+		if err := agentsMgr.RefreshSession(sessionID); err != nil {
+			return
+		}
+		if sess, ok := agentsMgr.Registry().Session(sessionID); ok {
+			agentsBcast.PublishSessionMeta(sessionID, sess.Meta.Label, sess.Meta.TitleCustom, string(sess.Meta.Status))
+		}
+	}
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
 	// Trim any backlog of spawn logs from before pruning existed so the
 	// dir is bounded immediately, not only after the next spawn.
@@ -616,6 +650,16 @@ func NewServer() *Server {
 		},
 	})
 	agentstool.SetAskUsers(askUsersMgr)
+	// Bind the askuser unix socket so sibling processes (stdio MCP —
+	// Claude Desktop/Cursor/Claude Code running `wick mcp serve`) can
+	// route ask_user / wick_session_workspace asks into this process's
+	// web UI. Same trust model as gate.sock: 0700 parent dir, no HTTP
+	// auth. Best-effort — stdio asks degrade to an error without it.
+	if askSock, err := askuser.ServeSocket(askuser.SocketPath(appname.Resolve()), askUsersMgr); err != nil {
+		log.Warn().Err(err).Msg("agents: askuser socket bind failed — stdio MCP ask_user unavailable")
+	} else {
+		log.Info().Str("socket", askSock.SocketPath()).Msg("agents: askuser socket ready")
+	}
 
 	// Workflow stack — bundles every workflow subpkg into one Manager
 	// and bootstraps the router with every workflow folder found on disk.
@@ -850,6 +894,9 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+	// Wire the connectors service into the agents tool so the session
+	// Config tab can read connector field schemas + AllowSessionConfig.
+	agentstool.SetConnectors(connectorsSvc)
 
 	// Wire the agent factory's connector-catalog loader now that the
 	// connectors service exists. The loader runs at every agent spawn,
@@ -919,6 +966,47 @@ func NewServer() *Server {
 		Push: pushSvc,
 	}))
 
+	// Custom connectors: replay admin-built definitions from the DB
+	// into the registry. MUST run before Bootstrap so custom modules
+	// ride the same instance seeding, allItems, and tag passes as
+	// built-ins. Tags are late-bound below (tagsSvc doesn't exist yet).
+	customConnSvc := customconn.New(customconn.Deps{
+		DB:         db,
+		Connectors: connectorsSvc,
+		Keys:       configsSvc,
+		BaseURL:    configsSvc.AppURL,
+	})
+	// Paste-page AI tab: the provider list resolves live per render /
+	// per parse, so adding or disabling a provider instance shows up
+	// without a restart. Only structured-output-capable providers
+	// qualify (NewProviderAIParser returns nil otherwise).
+	customConnSvc.SetAIProviders(func() []customconn.AIProviderEntry {
+		provs, perr := wfsetup.NewCLIProviders()
+		if perr != nil {
+			return nil
+		}
+		out := []customconn.AIProviderEntry{}
+		for _, p := range provs {
+			if ai := customconn.NewProviderAIParser(p); ai != nil {
+				out = append(out, customconn.AIProviderEntry{Name: p.Name(), Parser: ai})
+			}
+		}
+		return out
+	})
+	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
+		log.Error().Err(err).Msg("custom connectors: boot registration failed")
+	}
+	// custom-connector is the management connector for custom defs:
+	// the UI's create/update/re-sync/disable/delete lifecycle exposed
+	// as admin-only MCP operations, so an LLM can build a connector
+	// without the dashboard.
+	connectors.Register(customconnector.Module(customconnector.Deps{
+		Custom:     customConnSvc,
+		Connectors: connectorsSvc,
+	}))
+	// wick_get lazily re-syncs custom MCP tool catalogs (throttled).
+	connectorsSvc.SetCatalogRefresh(customConnSvc.RefreshIfStale)
+
 	if err := connectorsSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -951,6 +1039,35 @@ func NewServer() *Server {
 				return "", false
 			})
 
+			// WickUserIDFn resolves a Slack user ID to a wick platform user ID
+			// by scanning ConnectorAccount rows where ExternalUserID matches the
+			// inbound Slack user ID and returning the stored WickUserID.
+			slackCh.SetWickUserIDFn(func(ctx context.Context, slackUserID string) (string, bool) {
+				rows, err := connectorsSvc.ListByKey(ctx, "slack")
+				if err != nil {
+					return "", false
+				}
+				for _, row := range rows {
+					accs, err := connectorsSvc.ListAccounts(ctx, row.ID)
+					if err != nil {
+						continue
+					}
+					for _, acc := range accs {
+						if acc.ExternalUserID == slackUserID && acc.WickUserID != "" {
+							return acc.WickUserID, true
+						}
+					}
+				}
+				return "", false
+			})
+
+			// OwnerFn stamps the resolved wick user ID on the session.
+			if agentsPool != nil {
+				slackCh.SetOwnerFn(func(ctx context.Context, sessionID, userID string) {
+					agentsPool.EnsureSessionOwner(ctx, sessionID, userID)
+				})
+			}
+
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)
@@ -959,8 +1076,6 @@ func NewServer() *Server {
 					ch.RefreshTokenMap(context.Background())
 				}
 			}(slackCh)
-
-			break
 		}
 	}
 
@@ -983,24 +1098,17 @@ func NewServer() *Server {
 		WithAppURL(configsSvc.AppURL).
 		WithDB(db).
 		WithAskUser(askUsersMgr).
-		WithAskUserPolicy(func() (bool, string) {
-			// Master gate off → ask_user short-circuits along with every
-			// other sub-policy. Slack/HTTP installs that disable the gate
-			// don't want the LLM hanging on a prompt no one will answer.
-			if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
-				return false, "master gate is off"
-			}
-			mode := configsSvc.GetOwned("agents", "ask_user_mode")
-			if mode == "" {
-				mode = "on"
-			}
-			if mode != "on" {
-				return false, "ask_user_mode=" + mode
-			}
-			return true, ""
+		WithAskUserPolicy(func(sessionID string) (bool, string) {
+			// Resolved per session origin — independent of the master
+			// command gate. ui/external → global agents.ask_user_mode;
+			// slack/telegram/rest → that channel's own ask_user_mode.
+			return askUserPolicy(db, configsSvc, agentsLayout, sessionID)
 		}).
 		WithPool(agentsPool, agentsLayout).
-		WithRefreshSession(agentsMgr.RefreshSession)
+		WithRefreshSession(func(id string) error {
+			syncSessionMeta(id)
+			return nil
+		})
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -1026,7 +1134,27 @@ func NewServer() *Server {
 	tr.mount(toolsMux)
 
 	tagsSvc := tags.NewService(db)
+	// Late-bind tags into the custom-connector service and link the
+	// per-def access tags ([custom:<key> filter, Connector, category])
+	// onto existing instance rows. Idempotent — rows that already carry
+	// tags keep their admin edits.
+	customConnSvc.SetTags(tagsSvc)
+	agentstool.SetTagsService(tagsSvc)
+	agentstool.SetSkillStore(agentskills.NewStore(db))
+	customConnSvc.EnsureInstanceTags(context.Background())
+	// Connect MCP custom connectors before the gate lifts: boot
+	// registered them without probing, this pass pulls each server's
+	// live catalog now that configs (incl. oauth instance tokens) are
+	// loaded — so the app opens with every MCP connector already
+	// connected instead of racing the first wick_list.
+	bootGate.Register("mcp-connectors")
+	go func() {
+		defer bootGate.Done("mcp-connectors")
+		bootGate.SetPhase("connecting-mcp")
+		customConnSvc.ResyncMCPAtBoot(context.Background())
+	}()
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
+	managerHandler.SetCustomConnectors(customConnSvc)
 
 	// Build the hidden-key set from the "agents" module's seed. Any config
 	// field tagged with `wick:"hidden"` is managed from a dedicated UI page
@@ -1132,7 +1260,12 @@ func NewServer() *Server {
 	}
 
 	// ── Admin ────────────────────────────────────────────────────
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc)
+	skillsStore := agentskills.NewStore(db)
+	var wfLister admin.WorkflowLister
+	if wfMgr != nil {
+		wfLister = wfListerAdapter{svc: wfMgr.Service}
+	}
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore)
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
@@ -1293,7 +1426,7 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
 }
 
 type Server struct {
@@ -1302,7 +1435,12 @@ type Server struct {
 	authMidd     *login.Middleware
 	agentsPool   *agentpool.Pool
 	agentsLayout agentconfig.Layout
-	channelReg   *agentchannels.Registry
+	// syncSessionMeta reloads one session into the in-memory registry
+	// and broadcasts its meta over SSE. Built in NewServer (where the
+	// registry + broadcaster are in scope) and reused by Run to wire
+	// the agentctl refresh_session handler. nil before agents boot.
+	syncSessionMeta func(sessionID string)
+	channelReg      *agentchannels.Registry
 	db           *gorm.DB
 	gateBin      string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc      *manager.Service
@@ -1566,6 +1704,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// switch_provider / kill commands to this daemon's pool.
 	if s.agentsPool != nil {
 		agentctlSrv := agentctl.NewServer(s.agentsPool, s.agentsLayout)
+		if s.syncSessionMeta != nil {
+			agentctlSrv.WithRefresh(s.syncSessionMeta)
+		}
 		go func() {
 			if err := agentctlSrv.Listen(ctx); err != nil {
 				log.Warn().Err(err).Msg("agentctl: socket closed")

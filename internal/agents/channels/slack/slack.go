@@ -86,7 +86,9 @@ type turn struct {
 // Hot-reload: call Reload(ctx, newCfg, pubURL) to apply new credentials
 // without restarting the server.
 type Channel struct {
-	sendFn agentchannels.SendFunc
+	sendFn     agentchannels.SendFunc
+	ownerFn    func(ctx context.Context, sessionID, userID string)
+	ownerUserID string // wick user who owns this channel row; empty = App Owner
 
 	cfgMu          sync.Mutex
 	cfg            agentconfig.SlackChannelConfig
@@ -98,6 +100,7 @@ type Channel struct {
 	teamName       string           // Workspace display name (resp.Team)
 	teamDomain     string           // Workspace subdomain extracted from resp.URL
 	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
+	wickUserIDFn   WickUserIDFn     // optional; resolves Slack user ID → wick user ID
 
 	mu    sync.Mutex
 	turns map[string]*turn
@@ -149,8 +152,21 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 	return ch
 }
 
+// NewWithOwner creates a Slack Channel tied to a specific wick user owner.
+// ownerUserID="" means the App Owner's channel (user_id = NULL row).
+func NewWithOwner(cfg agentconfig.SlackChannelConfig, ownerUserID string) *Channel {
+	ch := New(cfg)
+	ch.ownerUserID = ownerUserID
+	return ch
+}
+
 // SetSendFunc satisfies channels.SendFuncSetter.
 func (s *Channel) SetSendFunc(fn agentchannels.SendFunc) { s.sendFn = fn }
+
+// SetOwnerFn wires a function that stamps a wick user ID on a session.
+func (s *Channel) SetOwnerFn(fn func(ctx context.Context, sessionID, userID string)) {
+	s.ownerFn = fn
+}
 
 // API returns the live Slack web-API client. Returns nil when the
 // channel isn't configured yet — callers must nil-check before use.
@@ -877,6 +893,14 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
 		s.postReply(ev.Channel, threadTS, "Agent error: could not queue message. Check the dashboard for details.")
 		return
+	}
+	if s.ownerFn != nil && s.wickUserIDFn != nil {
+		if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
+			s.ownerFn(context.Background(), threadTS, wickUserID)
+		}
+	}
+	if s.ownerFn != nil && s.ownerUserID != "" {
+		s.ownerFn(context.Background(), threadTS, s.ownerUserID)
 	}
 	// Message accepted by the pool: cancel pending queue timer (and remove
 	// ⏳ if it had already fired), then surface the "thinking" banner so

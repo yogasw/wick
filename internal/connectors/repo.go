@@ -257,6 +257,17 @@ func (r *Repo) SetAccessPolicy(ctx context.Context, id string, allowConfigure, a
 		}).Error
 }
 
+// SetSessionConfigAllowed flips the per-instance opt-in for per-session
+// config overrides. Separate from SetAccessPolicy so the toggle has its
+// own POST and doesn't round-trip the SSO fields.
+func (r *Repo) SetSessionConfigAllowed(ctx context.Context, id string, allowed bool) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"allow_session_config": allowed,
+			"updated_at":           time.Now(),
+		}).Error
+}
+
 // Delete hard-deletes a connector row plus its operation toggles and
 // connected accounts. Run history is intentionally preserved.
 func (r *Repo) Delete(ctx context.Context, id string) error {

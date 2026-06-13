@@ -38,6 +38,9 @@ type StoragePageVM struct {
 
 // storagePage renders the Provider Storage Manager page.
 func storagePage(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.Error(http.StatusServiceUnavailable, "sync manager not ready")
 		return
@@ -90,6 +93,9 @@ func storagePage(c *tool.Ctx) {
 // storageRestoreSelected restores selected file IDs to filesystem.
 // POST /providers/storage/restore  body: ids=1&ids=2&ids=3
 func storageRestoreSelected(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return
@@ -125,6 +131,9 @@ func storageRestoreSelected(c *tool.Ctx) {
 // storagePreview returns the content of one file for preview.
 // GET /providers/storage/{id}/preview
 func storagePreview(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return
@@ -164,6 +173,9 @@ func storagePreview(c *tool.Ctx) {
 // storageSetRetention updates retention_days for one file row.
 // POST /providers/storage/{id}/retention  body: days=7
 func storageSetRetention(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return
@@ -190,6 +202,9 @@ func storageSetRetention(c *tool.Ctx) {
 // storageDelete removes one file row from DB.
 // DELETE /providers/storage/{id}
 func storageDelete(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return
@@ -211,6 +226,9 @@ func storageDelete(c *tool.Ctx) {
 // storageUpload handles manual file upload into DB.
 // POST /providers/storage/upload  multipart: provider_type, instance_name, rel_path, file
 func storageUpload(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
 	if globalSyncMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sync manager not ready"})
 		return

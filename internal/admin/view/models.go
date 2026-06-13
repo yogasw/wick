@@ -72,6 +72,18 @@ type AccessTokenRow struct {
 	OwnerEmail string
 }
 
+// ResourceAdminRow is a generic view model used by the Projects, Workflows,
+// and Skills admin pages. Each row shows a name, optional icon, optional
+// created-by audit field, and a tag picker addressed by Path.
+type ResourceAdminRow struct {
+	ID        string
+	Name      string
+	Icon      string
+	CreatedBy string
+	TagIDs    []string
+	Path      string
+}
+
 // ConnectionRow is the view model for one (user, OAuth client) grant
 // in the admin connections table. Owner fields come from the user
 // table; Granted/LastUsed/TokenCount are aggregated across the active

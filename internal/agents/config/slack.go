@@ -23,6 +23,8 @@ type SlackChannelConfig struct {
 	ChannelsMode    string `wick:"dropdown=all|whitelist;default=all;hidden;key=channels_mode;desc=Restrict which channels can trigger agents."`
 	AllowedChannels string `wick:"picker=slack.channels;hidden;key=allowed_channels;visible_when=channels_mode:whitelist;desc=Allowed channels."`
 
+	AskUserEnabled bool `wick:"bool;hidden;key=ask_user_enabled;desc=Allow the ask_user MCP tool for sessions from this Slack channel. Off = the agent gets an error and picks a default (recommended until the ask is rendered in Slack — today the prompt only shows in the wick web UI)."`
+
 	GateApprovers      string `wick:"dropdown=trigger_users|admins|custom;default=trigger_users;hidden;key=gate_approvers;desc=Who may resolve approval gates. trigger_users = anyone who passed the access checks."`
 	GateApproverUsers  string `wick:"picker=slack.users;hidden;key=gate_approver_users;visible_when=gate_approvers:custom;desc=Custom approver users."`
 	GateApproverGroups string `wick:"picker=slack.usergroups;hidden;key=gate_approver_groups;visible_when=gate_approvers:custom;desc=Custom approver user groups."`
@@ -36,10 +38,11 @@ type SlackChannelConfig struct {
 // `default=all` wick tag on each field, so first-boot config is permissive.
 func DefaultSlackChannelConfig() SlackChannelConfig {
 	return SlackChannelConfig{
-		Mode:          "socket",
-		UsersMode:     "all",
-		GroupsMode:    "all",
-		ChannelsMode:  "all",
-		GateApprovers: "trigger_users",
+		Mode:           "socket",
+		UsersMode:      "all",
+		GroupsMode:     "all",
+		ChannelsMode:   "all",
+		AskUserEnabled: false,
+		GateApprovers:  "trigger_users",
 	}
 }

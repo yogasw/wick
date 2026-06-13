@@ -163,6 +163,53 @@ func (s *Service) UserOwnsConnector(ctx context.Context, userID, connectorID str
 	return s.repo.UserCarriesTag(ctx, userID, t.ID)
 }
 
+// CreateResourceOwnerTag creates an owner tag for a generic resource
+// (project, workflow, skill). Unlike CreateOwnerTag it does NOT link
+// a tool-path row — it only creates the tag and links it to the user.
+// The tag name is "owner:{resourceID}". Idempotent.
+func (s *Service) CreateResourceOwnerTag(ctx context.Context, resourceID, userID string) error {
+	if resourceID == "" || userID == "" {
+		return nil
+	}
+	name := "owner:" + resourceID
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		t = &entity.Tag{Name: name, IsFilter: true}
+		if err := s.repo.CreateTag(ctx, t); err != nil {
+			return err
+		}
+	}
+	return s.repo.LinkUserTag(ctx, userID, t.ID)
+}
+
+// UserOwnsResource reports whether the user carries the owner tag for
+// the given resource ID. Returns false (not error) when tag doesn't exist.
+func (s *Service) UserOwnsResource(ctx context.Context, userID, resourceID string) (bool, error) {
+	if resourceID == "" || userID == "" {
+		return false, nil
+	}
+	name := "owner:" + resourceID
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		return false, nil
+	}
+	return s.repo.UserCarriesTag(ctx, userID, t.ID)
+}
+
+// DeleteResourceOwnerTag removes the owner tag for the resource and all
+// its UserTag associations. Safe to call when tag doesn't exist.
+func (s *Service) DeleteResourceOwnerTag(ctx context.Context, resourceID string) error {
+	if resourceID == "" {
+		return nil
+	}
+	name := "owner:" + resourceID
+	t, err := s.repo.GetTagByNameExact(ctx, name)
+	if err != nil {
+		return nil
+	}
+	return s.repo.DeleteTag(ctx, t.ID)
+}
+
 // ToolTagIDs returns a map from tool_path to the list of tag ids it has.
 func (s *Service) ToolTagIDs(ctx context.Context, toolPaths []string) (map[string][]string, error) {
 	out := make(map[string][]string)

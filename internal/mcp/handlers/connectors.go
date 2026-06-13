@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -67,7 +68,7 @@ type connectorDetail struct {
 	Tools       []toolDetail `json:"tools"`
 }
 
-func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, tagIDs []string, isAdmin bool) {
+func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
@@ -91,6 +92,25 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		for _, op := range mod.Operations {
 			if states[op.Key] {
 				count++
+			}
+		}
+		// Live-catalog modules (custom MCP) at zero ops may simply not
+		// have synced yet — run the lazy refresh (throttled) and
+		// recount before deciding to hide the connector. Without this,
+		// an unsynced connector would never surface: invisible here
+		// means no wick_get, and no wick_get means no refresh.
+		if count == 0 && mod.Meta.LiveCatalog {
+			svc.CatalogRefresh(r.Context(), row.Key, row.ID)
+			if fresh, ok2 := svc.Module(row.Key); ok2 {
+				mod = fresh
+				if states, err = svc.OperationStates(r.Context(), row.ID, row.Key); err != nil {
+					continue
+				}
+				for _, op := range mod.Operations {
+					if states[op.Key] {
+						count++
+					}
+				}
 			}
 		}
 		if count == 0 {
@@ -128,6 +148,15 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			}
 		}
 	}
+	// Session-workspace instances: ephemeral connectors scoped to the
+	// caller's session, listed only when a session_id is passed. They
+	// appear like brand-new connectors but live and die with the session.
+	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
+		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, strings.TrimSpace(sid))
+		summaries = append(summaries, sessSummaries...)
+		totalTools += sessTools
+	}
+
 	rsp.ToolJSON(w, req.ID, ListResult{
 		Connectors:      summaries,
 		TotalConnectors: len(summaries),
@@ -201,13 +230,27 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	rsp.ToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
 }
 
-func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, tagIDs []string, isAdmin bool) {
+func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	rawID, _ := args["id"].(string)
 	rawID = strings.TrimSpace(rawID)
 	// id may be composite "connectorID/accountID" from wick_list account entries.
 	connectorID, scopedAccountID, _ := strings.Cut(rawID, "/")
 	if connectorID == "" {
 		rsp.ToolError(w, req.ID, "id is required", "")
+		return
+	}
+	// Session-workspace instance: resolve from the session file and render
+	// the base module's op schema, no DB row involved.
+	if target, ok, err := SessionInstanceFor(layout, args, connectorID); err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), connectorID)
+		return
+	} else if ok {
+		detail, found := sessionInstanceDetail(svc, target, connectorID)
+		if !found {
+			rsp.ToolError(w, req.ID, "session connector base module not registered", connectorID)
+			return
+		}
+		rsp.ToolJSON(w, req.ID, detail)
 		return
 	}
 	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
@@ -220,6 +263,10 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolError(w, req.ID, "get connector: "+err.Error(), connectorID)
 		return
 	}
+	// Custom MCP connectors lazily re-sync their live tool catalog here
+	// (throttled), so the schemas the LLM reads are near-fresh without
+	// wick_list paying a network round-trip per call.
+	svc.CatalogRefresh(r.Context(), row.Key, row.ID)
 	mod, ok := svc.Module(row.Key)
 	if !ok {
 		rsp.ToolError(w, req.ID, "connector module not registered", connectorID)
@@ -259,7 +306,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	})
 }
 
-func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, user *entity.User, tagIDs []string) {
+func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
 	toolID, _ := args["tool_id"].(string)
 	toolID = strings.TrimSpace(toolID)
 	if toolID == "" {
@@ -271,23 +318,34 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
 	}
-	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-	if err != nil || !allowed {
-		rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+	// Session-workspace instance: run against the ephemeral instance's own
+	// config (no DB row, no tag visibility — the session itself is the
+	// authorization scope).
+	sessionTarget, isSession, err := SessionInstanceFor(layout, args, connectorID)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
+	}
+	if !isSession {
+		allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		if err != nil || !allowed {
+			rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+			return
+		}
 	}
 	rawParams, _ := args["params"].(map[string]any)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(r.Context(), connectors.ExecuteParams{
-		ConnectorID:  connectorID,
-		OperationKey: opKey,
-		Input:        input,
-		Source:       entity.ConnectorRunSourceMCP,
-		UserID:       user.ID,
-		IsAdmin:      user.IsAdmin(),
-		IPAddress:    ClientIP(r),
-		UserAgent:    r.Header.Get("User-Agent"),
-		AccountID:    accountID,
+		ConnectorID:     connectorID,
+		OperationKey:    opKey,
+		Input:           input,
+		Source:          entity.ConnectorRunSourceMCP,
+		UserID:          user.ID,
+		IsAdmin:         user.IsAdmin(),
+		IPAddress:       ClientIP(r),
+		UserAgent:       r.Header.Get("User-Agent"),
+		AccountID:       accountID,
+		SessionInstance: sessionTarget,
 	})
 	if execErr != nil {
 		body := execErr.Error()

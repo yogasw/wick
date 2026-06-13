@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager/view"
@@ -33,6 +34,9 @@ type Handler struct {
 	tags             *tags.Service
 	users            *login.Service
 	tools            []tool.Tool
+	// custom is the custom-connector service (nil until SetCustomConnectors
+	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
+	custom *customconn.Service
 	// configDecorators: per-tool key → function that can mutate config rows
 	// before they are rendered (e.g. to inject dynamic dropdown options).
 	configDecorators map[string]func([]entity.Config) []entity.Config
@@ -102,6 +106,10 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 
 	// Connectors — list + per-row detail with test panel and action menu.
 	h.connectorRoutes(mux, authMidd)
+	// Custom connectors — admin-only builder flows (paste/MCP/manual).
+	h.customConnectorRoutes(mux, authMidd)
+	// SSO verification key for custom-connector MCP servers — public.
+	mux.HandleFunc("GET /.well-known/wick-pubkey.pem", h.customPubkeyPEM)
 	// OAuth — public routes for connector user OAuth flows (no auth middleware).
 	h.oauthRoutes(mux)
 
