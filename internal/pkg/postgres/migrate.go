@@ -74,7 +74,7 @@ func seedOwner(db *gorm.DB) {
 		return
 	}
 	var oldest entity.User
-	if err := db.Order("created_at ASC").First(&oldest).Error; err != nil {
+	if err := db.Where("role = ?", entity.RoleAdmin).Order("created_at ASC").First(&oldest).Error; err != nil {
 		return
 	}
 	if err := db.Model(&oldest).Update("is_owner", true).Error; err != nil {
