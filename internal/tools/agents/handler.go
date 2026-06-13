@@ -412,6 +412,22 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		labels[r.id] = r.label
 	}
 	close(ch)
+	allProjects := globalMgr.Registry().Projects()
+	allProjectIDs := globalMgr.Registry().ProjectIDs()
+	if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+		filtered := allProjectIDs[:0:0]
+		for _, pid := range allProjectIDs {
+			if p, ok := allProjects[pid]; ok && p.Meta.OwnerUserID == u.ID {
+				filtered = append(filtered, pid)
+			}
+		}
+		allProjectIDs = filtered
+		filteredMap := make(map[string]project.Project, len(filtered))
+		for _, pid := range filtered {
+			filteredMap[pid] = allProjects[pid]
+		}
+		allProjects = filteredMap
+	}
 	return view.AgentsLayoutVM{
 		Base:             c.Base(),
 		ActivePage:       activePage,
@@ -421,8 +437,8 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		SidebarLabels:    labels,
 		ActiveSessionID:  activeSessionID,
 		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
-		Projects:         globalMgr.Registry().Projects(),
-		ProjectList:      globalMgr.Registry().ProjectIDs(),
+		Projects:         allProjects,
+		ProjectList:      allProjectIDs,
 		ProjectCounts:    counts,
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
@@ -430,14 +446,19 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 }
 
 // projectChoices builds the picker rows for the compose form / move menu
-// from the registry projects, ordered by display name.
-func projectChoices() []view.ProjectChoiceVM {
+// from the registry projects, ordered by display name. Non-admin users only
+// see their own personal project.
+func projectChoices(c *tool.Ctx) []view.ProjectChoiceVM {
 	ids := globalMgr.Registry().ProjectIDs()
 	projects := globalMgr.Registry().Projects()
+	u := login.GetUser(c.Context())
 	out := make([]view.ProjectChoiceVM, 0, len(ids))
 	for _, id := range ids {
 		p, ok := projects[id]
 		if !ok {
+			continue
+		}
+		if u != nil && !u.IsAdmin() && p.Meta.OwnerUserID != u.ID {
 			continue
 		}
 		out = append(out, view.ProjectChoiceVM{
@@ -503,6 +524,39 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	return sess.Meta.UserID == "" || sess.Meta.UserID == u.ID
 }
 
+// ensurePersonalProjectForUser auto-creates a personal project for a non-admin
+// user on their first agents access, then pins it so pinnedProjectID() returns
+// it on subsequent visits. Best-effort: errors are logged and do not block access.
+func ensurePersonalProjectForUser(c *tool.Ctx) {
+	if globalMgr == nil || globalAuth == nil {
+		return
+	}
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsAdmin() {
+		return
+	}
+	pid, err := project.FindPersonalProject(globalLayout, u.ID)
+	if err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("user", u.ID).Msg("findPersonalProject failed")
+		return
+	}
+	if pid == "" {
+		opt := project.PersonalProjectOptions(uuid.New().String(), u.ID, u.Name)
+		p, cerr := globalMgr.CreateProject(c.Context(), opt)
+		if cerr != nil {
+			log.Ctx(c.Context()).Warn().Err(cerr).Str("user", u.ID).Msg("createPersonalProject failed")
+			return
+		}
+		pid = p.Meta.ID
+	}
+	if u.Metadata.PinnedAgentProjectID == pid {
+		return
+	}
+	if err := globalAuth.SetPinnedAgentProject(c.Context(), u.ID, pid); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("user", u.ID).Msg("pin personal project failed")
+	}
+}
+
 // newSessionCompose renders the compose page: provider/preset/workspace
 // pickers + a textarea for the first message. No session is persisted
 // here — that only happens in startNewSession when the form posts back
@@ -511,6 +565,7 @@ func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	ensurePersonalProjectForUser(c)
 	renderCompose(c, "", "")
 }
 
@@ -653,7 +708,7 @@ func renderCompose(c *tool.Ctx, message, errMsg string) {
 		Base:             c.Base(),
 		Providers:        providers,
 		Presets:          globalMgr.Registry().PresetNames(),
-		Projects:         projectChoices(),
+		Projects:         projectChoices(c),
 		DefaultProvider:  defaultProv,
 		DefaultPreset:    defaultPreset,
 		ScopedProjectID:  scoped,
