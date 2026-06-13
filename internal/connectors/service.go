@@ -140,6 +140,14 @@ func (s *Service) SetEnc(e *enc.Service) {
 	s.enc = e
 }
 
+// Enc exposes the encrypted-fields cipher for callers that must
+// tokenize values outside an Execute round-trip (wick_session_config
+// encrypts user-typed secrets before persisting overrides). May be
+// nil — callers must treat that as "encryption unavailable".
+func (s *Service) Enc() *enc.Service {
+	return s.enc
+}
+
 // SetConfigs wires the central configs.Service used to store per-
 // instance config rows under owner = "connector:{id}". When nil,
 // reads fall back to the legacy JSON blob on entity.Connector. Call
@@ -824,6 +832,14 @@ type ExecuteParams struct {
 	// whose access token overrides the row's user_token config. Used by
 	// the test panel when multiple accounts are connected to one instance.
 	AccountID string
+	// ConfigOverrides is the per-session config layer set via the
+	// wick_session_config MCP tool. Applied on top of the row's saved
+	// configs (and after AccountID token injection), so a session
+	// override always wins. Values may be wick_enc_ tokens — the
+	// decrypt pass below resolves them like any stored config. Keys
+	// are validated against the module spec by the MCP handler; the
+	// merge here is deliberately dumb.
+	ConfigOverrides map[string]string
 }
 
 // ExecuteResult carries the outcome of one Execute call. Returned
@@ -918,6 +934,11 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			configs["user_token"] = acc.AccessToken
 			configs["auth_mode"] = "user_token"
 		}
+	}
+
+	// Per-session overrides win over everything loaded above.
+	for k, v := range p.ConfigOverrides {
+		configs[k] = v
 	}
 
 	// Snapshot the request BEFORE we decrypt anything — by design the

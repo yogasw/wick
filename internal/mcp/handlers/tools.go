@@ -129,6 +129,11 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description":          "Arguments matching the tool's input_schema. Use {} when the tool has no input fields.",
 						"additionalProperties": true,
 					},
+					"session_id": map[string]any{
+						"type": "string",
+						"description": "Optional wick agent session ID. Pass it when session config overrides were set via " +
+							"wick_session_config so they apply to this call; omit to run on the connector's saved config.",
+					},
 				},
 				"required": []string{"tool_id", "params"},
 			},
@@ -218,11 +223,110 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"type":        "boolean",
 						"description": "When true the UI also offers a text input so the user can type a custom answer (returned as text).",
 					},
+					"questions": map[string]any{
+						"type": "array",
+						"description": "Multi-question form: ask several things in ONE prompt, each with its own options. " +
+							"When set, the single-question fields above are ignored and the answer comes back as " +
+							"{\"values\": {<key>: <answer>}} keyed by each question's key. Use this instead of chaining " +
+							"several ask_user calls. The top-level 'question' (if given) is shown as the form header.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"key": map[string]any{
+									"type":        "string",
+									"description": "Identifies this question's answer in the returned values map. Defaults to q1, q2… if omitted.",
+								},
+								"question": map[string]any{
+									"type":        "string",
+									"description": "The question/label shown for this field.",
+								},
+								"type": map[string]any{
+									"type":        "string",
+									"enum":        []string{"choice", "multi", "rank", "dropdown", "text", "secret", "number"},
+									"description": "Widget: choice = pick one, multi = pick many (answer is a JSON array string), rank = drag to order (answer is a JSON array of values in chosen order), dropdown = compact select, text/secret/number = typed input. Defaults to 'choice' when options are given, else 'text'. Multi-question asks render as a step-by-step wizard the user can page through and skip.",
+								},
+								"options": map[string]any{
+									"type":        "array",
+									"description": "Choices for choice/multi/rank/dropdown. Each item is {label, value, description?} — description is an optional secondary line shown under the label.",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"label":       map[string]any{"type": "string"},
+											"value":       map[string]any{"type": "string"},
+											"description": map[string]any{"type": "string"},
+										},
+										"required": []string{"label", "value"},
+									},
+								},
+								"allow_freeform": map[string]any{
+									"type":        "boolean",
+									"description": "For choice/dropdown: also show an 'Other…' text box so the user can answer outside the options.",
+								},
+								"required": map[string]any{
+									"type":        "boolean",
+									"description": "When true the user must answer this question before submitting.",
+								},
+								"placeholder": map[string]any{"type": "string"},
+								"help":        map[string]any{"type": "string", "description": "Optional helper text under the field."},
+							},
+							"required": []string{"question"},
+						},
+					},
 				},
-				"required": []string{"session_id", "question"},
+				"required": []string{"session_id"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Ask the human operator",
+				ReadOnlyHint: PtrBool(false),
+			},
+		},
+		{
+			Name: "wick_session_config",
+			Description: "Read or override a connector's config for the CURRENT SESSION ONLY (e.g. swap base_url or an API key " +
+				"without touching the saved connector). Overrides die with the session; the connector row is never modified. " +
+				"Actions: " +
+				"'get' returns the effective config (saved + session overrides merged) — secret values come back as wick_enc_ tokens, never plaintext. " +
+				"'set' applies overrides directly when you already know the values (e.g. the user stated a base_url, or handed you a wick_enc_ token); " +
+				"secret fields REQUIRE a wick_enc_ token — plaintext secrets are rejected. " +
+				"'ask' opens a form in the user's session UI where they type the values themselves (including secrets, which the server " +
+				"encrypts before you see anything) — use this when values are unknown or sensitive; blocks until submit, like ask_user. " +
+				"'clear' removes overrides (all keys, or pass keys to remove a subset). " +
+				"After setting overrides, pass the same session_id to wick_execute so they apply.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action": map[string]any{
+						"type":        "string",
+						"enum":        []string{"get", "set", "ask", "clear"},
+						"description": "What to do: get, set, ask, or clear.",
+					},
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "ID of the active wick agent session the override is scoped to.",
+					},
+					"connector_id": map[string]any{
+						"type":        "string",
+						"description": "Connector id from wick_list or wick_search.",
+					},
+					"values": map[string]any{
+						"type":                 "object",
+						"description":          "action=set only: map of config key → new value. Secret fields require a wick_enc_ token.",
+						"additionalProperties": map[string]any{"type": "string"},
+					},
+					"keys": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "action=ask: limit the form to these config keys. action=clear: remove only these keys (omit to clear all).",
+					},
+					"reason": map[string]any{
+						"type":        "string",
+						"description": "action=ask only: short text shown to the user explaining why the override is needed.",
+					},
+				},
+				"required": []string{"action", "session_id", "connector_id"},
+			},
+			Annotations: &ToolAnnotation{
+				Title:        "Session config override",
 				ReadOnlyHint: PtrBool(false),
 			},
 		},

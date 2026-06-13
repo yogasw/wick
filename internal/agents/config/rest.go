@@ -5,12 +5,13 @@ package config
 // field is stored on the channel itself — every request carries its own
 // Bearer.
 type RestChannelConfig struct {
-	Enabled   string `wick:"dropdown=true|false;hidden;key=enabled;desc=Enable the OpenAI-compatible REST endpoint at /integrations/rest/api/v1/openai/chat/completions."`
-	ProjectID string `wick:"dropdown;hidden;key=project_id;desc=Default project for REST sessions. A request can override it per-call with a \"project\" field (or metadata.project) in the body. Leave empty to use the global default."`
+	Enabled     string `wick:"dropdown=true|false;hidden;key=enabled;desc=Enable the OpenAI-compatible REST endpoint at /integrations/rest/api/v1/openai/chat/completions."`
+	AskUserEnabled bool `wick:"bool;hidden;key=ask_user_enabled;desc=Allow the ask_user MCP tool for REST sessions. REST is non-interactive (no human to answer), so leaving this off is recommended — on will hang the request until the ask times out."`
+	ProjectID   string `wick:"dropdown;hidden;key=project_id;desc=Default project for REST sessions. A request can override it per-call with a \"project\" field (or metadata.project) in the body. Leave empty to use the global default."`
 }
 
 // DefaultRestChannelConfig returns the empty REST defaults. REST stays off
 // until the operator flips Enabled.
 func DefaultRestChannelConfig() RestChannelConfig {
-	return RestChannelConfig{Enabled: "false"}
+	return RestChannelConfig{Enabled: "false", AskUserEnabled: false}
 }

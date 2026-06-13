@@ -133,6 +133,15 @@ func (l Layout) SessionRaw(id string) string {
 	return filepath.Join(l.SessionDir(id), "raw.jsonl")
 }
 
+// SessionConfigOverrides holds per-session connector config overrides
+// set via the wick_session_config MCP tool. Shape:
+// { "<connectorID>": { "<configKey>": "<value>" } } — secret values
+// are stored as wick_enc_ tokens, never plaintext. The file dies with
+// the session dir, which is exactly the intended override lifetime.
+func (l Layout) SessionConfigOverrides(id string) string {
+	return filepath.Join(l.SessionDir(id), "config_overrides.json")
+}
+
 // SessionInflight is an append-only JSONL of every event in the
 // currently in-progress assistant turn: text_delta chunks, tool_use,
 // tool_result, thinking. The store appends as events arrive and

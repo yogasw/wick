@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/sessionconfig"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -282,7 +284,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	})
 }
 
-func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, user *entity.User, tagIDs []string) {
+func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
 	toolID, _ := args["tool_id"].(string)
 	toolID = strings.TrimSpace(toolID)
 	if toolID == "" {
@@ -299,18 +301,24 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
 		return
 	}
+	overrides, err := SessionOverridesFor(layout, args, connectorID)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), toolID)
+		return
+	}
 	rawParams, _ := args["params"].(map[string]any)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(r.Context(), connectors.ExecuteParams{
-		ConnectorID:  connectorID,
-		OperationKey: opKey,
-		Input:        input,
-		Source:       entity.ConnectorRunSourceMCP,
-		UserID:       user.ID,
-		IsAdmin:      user.IsAdmin(),
-		IPAddress:    ClientIP(r),
-		UserAgent:    r.Header.Get("User-Agent"),
-		AccountID:    accountID,
+		ConnectorID:     connectorID,
+		OperationKey:    opKey,
+		Input:           input,
+		Source:          entity.ConnectorRunSourceMCP,
+		UserID:          user.ID,
+		IsAdmin:         user.IsAdmin(),
+		IPAddress:       ClientIP(r),
+		UserAgent:       r.Header.Get("User-Agent"),
+		AccountID:       accountID,
+		ConfigOverrides: overrides,
 	})
 	if execErr != nil {
 		body := execErr.Error()
@@ -324,6 +332,26 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		Content: []ToolContent{{Type: "text", Text: res.ResponseJSON}},
 		IsError: false,
 	})
+}
+
+// SessionOverridesFor extracts the optional session_id from
+// wick_execute args and loads that session's config overrides for
+// the connector. No session_id (or an empty file) yields nil — the
+// Execute path then runs on the row's saved configs untouched.
+func SessionOverridesFor(layout agentconfig.Layout, args map[string]any, connectorID string) (map[string]string, error) {
+	sid, _ := args["session_id"].(string)
+	sid = strings.TrimSpace(sid)
+	if sid == "" {
+		return nil, nil
+	}
+	overrides, err := sessionconfig.For(layout, sid, connectorID)
+	if err != nil {
+		return nil, fmt.Errorf("load session config overrides: %w", err)
+	}
+	if len(overrides) == 0 {
+		return nil, nil
+	}
+	return overrides, nil
 }
 
 // FormatToolID produces the opaque tool identifier.

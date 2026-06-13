@@ -378,7 +378,13 @@ func run() int {
 // tool_use, renders the question, and sends a tool_result frame back
 // into Claude's stdin. The gate just needs to get out of the way.
 func isAlwaysAllowedTool(name string) bool {
-	if name == "AskUserQuestion" {
+	// Plain (non-MCP) Claude Code tools that are pure infrastructure:
+	// AskUserQuestion renders its own prompt; ToolSearch only loads
+	// deferred MCP tool schemas (no side effects). Gating either is
+	// pure noise — and ToolSearch sits in front of every wick MCP call,
+	// so prompting on it would double the approvals.
+	switch name {
+	case "AskUserQuestion", "ToolSearch":
 		return true
 	}
 	if !strings.HasPrefix(name, "mcp__") {
@@ -413,6 +419,7 @@ var alwaysAllowedMCPSuffixes = []string{
 	"__wick_skill_list",
 	"__wick_session_info",
 	"__wick_set_title",
+	"__wick_session_config",
 }
 
 // runPathGate handles non-Bash tool calls (Read, Write, Edit, Glob, MCP, etc.).

@@ -9,6 +9,8 @@ import (
 
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
+	"github.com/yogasw/wick/internal/agents/agentctl"
+	"github.com/yogasw/wick/internal/agents/askuser"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
@@ -160,7 +162,31 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		WithBuildInfo(version, commit, buildTime).
 		WithWickRoot(root).
 		WithAppURL(configsSvc.AppURL).
-		WithDB(db)
+		WithDB(db).
+		// Session-scoped tools (wick_session_info / wick_set_title /
+		// wick_session_config) read the same on-disk layout the server
+		// writes — stdio shares it via agents.base_dir config.
+		WithLayout(stdioWfLayout).
+		// Stdio writes session meta straight to disk, but the running
+		// daemon owns the in-memory registry + the live UI. Relay a
+		// refresh signal over the agentctl socket so the daemon reloads
+		// the session and broadcasts its new meta — otherwise the
+		// sidebar/title stays stale until the next page load. Best-effort:
+		// no daemon running just means the on-disk write stands alone.
+		WithRefreshSession(func(id string) error {
+			return agentctl.SignalRefresh(id)
+		}).
+		// ask_user from stdio can't render UI in this process; forward
+		// to the running server over the askuser unix socket (gate.sock
+		// pattern). Dial happens per ask, so server restarts are fine;
+		// no server running → the tool returns a clear error.
+		WithAskUser(&askuser.SocketAsker{Path: askuser.SocketPath(appname.Resolve())}).
+		WithAskUserPolicy(func(sessionID string) (bool, string) {
+			// Same per-origin resolution as the HTTP server (shared
+			// configs + agent_channels tables); uses the stdio workflow
+			// layout to load the session.
+			return askUserPolicy(db, configsSvc, stdioWfLayout, sessionID)
+		})
 	return h, ctx
 }
 
