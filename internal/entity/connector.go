@@ -80,8 +80,15 @@ type Connector struct {
 	// true — each user that connects gets their own auto-created row
 	// labelled "{Connector} – @{displayName}".
 	MultiAccount bool `gorm:"default:false"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// AllowSessionConfig opts THIS instance into per-session cloning (the
+	// Config tab + wick_session_workspace). Default false — admins flip it
+	// per instance. Only meaningful when the connector's module declares
+	// AllowSessionConfig=true (the capability); the UI only shows the
+	// toggle for capable connectors. Effective gate: module-capable AND
+	// this instance flag on.
+	AllowSessionConfig bool `gorm:"default:false"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (c *Connector) BeforeCreate(tx *gorm.DB) error {

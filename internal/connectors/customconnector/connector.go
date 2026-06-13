@@ -69,7 +69,7 @@ type defKeyInput struct {
 }
 
 type defCreateInput struct {
-	Draft string `wick:"textarea;required;desc=Full definition draft as JSON: {key, name, description, icon, category, single, configs: [{key,label,widget,secret,required,default,desc}], ops: [{key,name,description,destructive,inputs:[...],request:{method,url_template,headers,body_template,content_type}}]}. Read def_schema FIRST for the full contract (widgets, template syntax, validation rules, example), and show the user the plan before creating."`
+	Draft string `wick:"textarea;required;desc=Full definition draft as JSON: {key, name, description, icon, category, single, allow_session_config, configs: [{key,label,widget,secret,required,default,desc}], ops: [{key,name,description,destructive,inputs:[...],request:{method,url_template,headers,body_template,content_type}}]}. Read def_schema FIRST for the full contract (widgets, template syntax, validation rules, example), and show the user the plan before creating."`
 }
 
 type defUpdateInput struct {

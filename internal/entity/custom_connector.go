@@ -57,7 +57,14 @@ type CustomConnector struct {
 	// custom connectors behave like built-ins — admins add/duplicate
 	// instance rows, each with its own credentials.
 	SingleInstance bool `gorm:"default:false"`
-	Disabled       bool `gorm:"default:false"`
+	// AllowSessionConfig is the capability flag mirrored onto
+	// Module.AllowSessionConfig: when true this def's configs (base_url,
+	// keys, …) may be overridden per agent session. Default off; an admin
+	// still has to enable the per-instance toggle before any override is
+	// accepted. Only meaningful for curl/manual API defs — leave off for
+	// oauth/sso-backed MCP defs whose config is a user token.
+	AllowSessionConfig bool `gorm:"default:false"`
+	Disabled           bool `gorm:"default:false"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

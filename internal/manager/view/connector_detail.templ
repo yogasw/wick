@@ -19,24 +19,24 @@ import (
 templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs []entity.Config, opStates map[string]connectors.OpState, editKey string, user *entity.User, _ HealthBanner, isAdmin bool, customInfo *CustomDefInfo) {
 	@Layout("Manager · "+row.Label, user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
-			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
-				<a href="/" class="hover:text-green-600">Home</a>
+			<div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-black-700 dark:text-black-600">
+				<a href="/" class="whitespace-nowrap hover:text-green-600">Home</a>
 				<span>/</span>
-				<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key) } class="hover:text-green-600">{ mod.Meta.Name }</a>
+				<a href={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key) } class="inline-block max-w-[55vw] truncate align-bottom hover:text-green-600 sm:max-w-[18rem]">{ mod.Meta.Name }</a>
 				<span>/</span>
-				<span class="text-black-900 dark:text-white-100">{ row.Label }</span>
+				<span class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 sm:max-w-[18rem]">{ row.Label }</span>
 			</div>
 			if customInfo != nil && customInfo.Dirty && isAdmin {
 				@CustomReloadBanner(customInfo)
 			}
 
 			<div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-				<div class="flex items-center gap-3">
+				<div class="flex min-w-0 items-center gap-3">
 					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
 						@ConnectorIcon(mod.Meta.Icon)
 					</div>
-					<div>
-						<div class="flex items-center gap-2">
+					<div class="min-w-0">
+						<div class="flex flex-wrap items-center gap-2">
 							<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{ row.Label }</h1>
 							if row.Disabled {
 								<span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
@@ -108,7 +108,16 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 				@ConfigsTable(configs, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID+"/configs", editKey, "/manager/connectors/"+mod.Meta.Key+"/"+row.ID)
 			</section>
 
-			<!-- Rate Limit -->
+			<!-- Access Policy + Per-session config (admin only) — grouped
+			     with Credentials since they all govern this instance. -->
+			if isAdmin {
+				@connectorAccessSection(mod, row)
+				if mod.AllowSessionConfig {
+					@connectorSessionConfigSection(mod, row)
+				}
+			}
+
+			<!-- Rate Limit — operational knob, kept last. -->
 			<section class="mt-8">
 				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate Limit</h2>
 				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
@@ -131,11 +140,6 @@ templ ConnectorDetailPage(mod connector.Module, row *entity.Connector, configs [
 					}
 				</form>
 			</section>
-
-			<!-- Access Policy (admin only) -->
-			if isAdmin {
-				@connectorAccessSection(mod, row)
-			}
 
 			@OpsSection(
 				mod,
@@ -526,6 +530,41 @@ templ connectorAccessSection(mod connector.Module, row *entity.Connector) {
 		<script>
 		(function(){
 			var form = document.getElementById('access-policy-form');
+			if (!form) return;
+			form.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+				cb.addEventListener('change', function() { form.submit(); });
+			});
+		})();
+		</script>
+	</section>
+}
+
+// connectorSessionConfigSection renders the per-instance "allow
+// per-session config override" toggle. Only shown for connectors whose
+// module declared the capability (mod.AllowSessionConfig). Its own form
+// → POSTs to the dedicated /session-config endpoint.
+templ connectorSessionConfigSection(mod connector.Module, row *entity.Connector) {
+	<section class="mt-8">
+		<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Per-session config</h2>
+		<p class="mt-1 text-sm text-black-800 dark:text-black-600">
+			Let users temporarily override this instance's config for a single agent session (e.g. point at staging, use a different key) without changing the saved instance. Overrides live only in that session and are never shown to the agent.
+		</p>
+		<form
+			id="session-config-form"
+			method="POST"
+			action={ templ.SafeURL("/manager/connectors/" + mod.Meta.Key + "/" + row.ID + "/session-config") }
+			class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700"
+		>
+			@accessPolicyRow(
+				"Allow per-session config override",
+				"When on, users (and the agent's wick_session_workspace tool) can clone this connector into a per-session instance from the session Config tab — its own config, scoped to one session. Default off.",
+				"allow_session_config",
+				row.AllowSessionConfig,
+			)
+		</form>
+		<script>
+		(function(){
+			var form = document.getElementById('session-config-form');
 			if (!form) return;
 			form.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
 				cb.addEventListener('change', function() { form.submit(); });

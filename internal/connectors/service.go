@@ -140,6 +140,14 @@ func (s *Service) SetEnc(e *enc.Service) {
 	s.enc = e
 }
 
+// Enc exposes the encrypted-fields cipher for callers that must
+// tokenize values outside an Execute round-trip (wick_session_workspace
+// encrypts user-typed secrets before persisting instance config). May be
+// nil — callers must treat that as "encryption unavailable".
+func (s *Service) Enc() *enc.Service {
+	return s.enc
+}
+
 // SetConfigs wires the central configs.Service used to store per-
 // instance config rows under owner = "connector:{id}". When nil,
 // reads fall back to the legacy JSON blob on entity.Connector. Call
@@ -596,6 +604,21 @@ func (s *Service) SetAccessPolicy(ctx context.Context, id string, allowConfigure
 	return s.repo.SetAccessPolicy(ctx, id, allowConfigure, allowSSO, enableSSO, multiAccount)
 }
 
+// SetSessionConfigAllowed flips the per-instance opt-in for per-session
+// cloning (Config tab + wick_session_workspace). Only meaningful when the
+// module declares AllowSessionConfig.
+func (s *Service) SetSessionConfigAllowed(ctx context.Context, id string, allowed bool) error {
+	return s.repo.SetSessionConfigAllowed(ctx, id, allowed)
+}
+
+// SessionConfigCapable reports whether a connector's MODULE opted into
+// per-session config (the capability). The per-instance toggle is only
+// shown / honored for capable connectors.
+func (s *Service) SessionConfigCapable(key string) bool {
+	mod, ok := s.Module(key)
+	return ok && mod.AllowSessionConfig
+}
+
 // Delete hard-deletes the connector row plus its operation toggles
 // and its per-field config rows. Run history is intentionally
 // preserved for audit.
@@ -796,6 +819,60 @@ func (s *Service) RunHealthCheck(ctx context.Context, connectorID string) (*Heal
 // on that connector at all.
 var ErrNoHealthCheck = errors.New("connector does not implement HealthCheck")
 
+// decryptInstanceConfig resolves a session-workspace instance's config
+// map to plaintext: wick_cenc_ master tokens (the secret fields) via the
+// system master key, plus any wick_enc_ tokens via the empty-user key.
+// Used by the virtual execute/health paths, which have no DB row to read
+// credentials from.
+func (s *Service) decryptInstanceConfig(config map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(config))
+	for k, v := range config {
+		out[k] = v
+	}
+	if s.enc == nil || s.enc.Disabled() {
+		return out, nil
+	}
+	for k, v := range out {
+		if !enc.IsMasterToken(v) {
+			continue
+		}
+		plain, err := s.enc.DecryptMaster(v)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt session config %q: %w", k, err)
+		}
+		out[k] = plain
+	}
+	if decoded, _, derr := unmaskMap(s.enc, out, ""); derr == nil {
+		out = decoded
+	}
+	return out, nil
+}
+
+// HealthCheckSessionInstance runs a base module's HealthCheck hook
+// against a session-workspace instance's own config — the "test setup"
+// button for an ephemeral instance. Returns ErrNoHealthCheck when the
+// base module registers no hook, so the caller can fall back to running
+// a real operation as the probe.
+func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, instanceID string, config map[string]string) ([]connector.OpHealth, error) {
+	mod, ok := s.Module(baseKey)
+	if !ok {
+		return nil, fmt.Errorf("no implementation registered for base connector key %q", baseKey)
+	}
+	if mod.HealthCheck == nil {
+		return nil, ErrNoHealthCheck
+	}
+	cfg, err := s.decryptInstanceConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	cctx := connector.NewCtx(ctx, instanceID, cfg, nil, s.httpClient, nil, nil)
+	report, err := mod.HealthCheck(cctx)
+	if err != nil {
+		return nil, fmt.Errorf("health check: %w", err)
+	}
+	return report, nil
+}
+
 
 // ── Execution ───────────────────────────────────────────────────────
 
@@ -827,6 +904,24 @@ type ExecuteParams struct {
 	// whose access token overrides the row's user_token config. Used by
 	// the test panel when multiple accounts are connected to one instance.
 	AccountID string
+	// SessionInstance, when non-nil, runs against a session-workspace
+	// instance instead of a DB connector row: there is no row to load,
+	// so the base module is cloned and the instance's own Config map is
+	// used verbatim. ConnectorID is the synthetic "sw_<uuid>" id (used
+	// for run logging + rate limiting only). Per-row checks (op enable/
+	// disable rows, admin-only flags, OAuth accounts) are skipped — a
+	// session instance has none of that backing state.
+	SessionInstance *SessionInstanceTarget
+}
+
+// SessionInstanceTarget describes an ephemeral session-workspace
+// connector for Execute. BaseKey is the module it clones; Config is its
+// full config map (secret values stored as wick_cenc_ master tokens,
+// decrypted by the shared master-token pass in Execute).
+type SessionInstanceTarget struct {
+	BaseKey string
+	Label   string
+	Config  map[string]string
 }
 
 // ExecuteResult carries the outcome of one Execute call. Returned
@@ -855,21 +950,37 @@ type ExecuteResult struct {
 //  3. requested OperationKey exists on the module
 //  4. operation is currently Enabled (per OperationStates)
 func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult, error) {
-	c, err := s.repo.Get(ctx, p.ConnectorID)
-	if err != nil {
-		return nil, fmt.Errorf("connector not found: %w", err)
-	}
-	if c.Disabled {
-		return nil, fmt.Errorf("connector %q is disabled", c.ID)
-	}
-
-	if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
-		return nil, err
-	}
-
-	mod, ok := s.Module(c.Key)
-	if !ok {
-		return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
+	var c *entity.Connector
+	var mod connector.Module
+	virtual := p.SessionInstance != nil
+	if virtual {
+		// Session-workspace instance: clone the base module, no DB row.
+		m, ok := s.Module(p.SessionInstance.BaseKey)
+		if !ok {
+			return nil, fmt.Errorf("no implementation registered for base connector key %q", p.SessionInstance.BaseKey)
+		}
+		mod = m
+		c = &entity.Connector{ID: p.ConnectorID, Key: p.SessionInstance.BaseKey, Label: p.SessionInstance.Label}
+		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
+			return nil, err
+		}
+	} else {
+		row, err := s.repo.Get(ctx, p.ConnectorID)
+		if err != nil {
+			return nil, fmt.Errorf("connector not found: %w", err)
+		}
+		c = row
+		if c.Disabled {
+			return nil, fmt.Errorf("connector %q is disabled", c.ID)
+		}
+		if err := s.rl.Allow(c.ID, c.RateLimitRPM); err != nil {
+			return nil, err
+		}
+		m, ok := s.Module(c.Key)
+		if !ok {
+			return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
+		}
+		mod = m
 	}
 
 	var op *connector.Operation
@@ -883,36 +994,50 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("unknown operation %q on connector %q", p.OperationKey, c.Key)
 	}
 
-	states, err := s.OperationStatesFull(ctx, c.ID, c.Key)
-	if err != nil {
-		return nil, fmt.Errorf("load op states: %w", err)
-	}
-	if st, ok := states[p.OperationKey]; ok {
-		if !st.Enabled {
-			return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
-		}
-		// SystemDisabled is a warning, not a hard block — admin can override by
-		// explicitly enabling the op. If enabled=true, we let it through and log
-		// the warning so the run history captures the context.
-	}
-
-	if !p.IsAdmin {
-		adminOnly, err := s.repo.IsOperationAdminOnly(ctx, c.ID, p.OperationKey)
+	// Per-row state checks (op enable/disable, admin-only) only apply to
+	// real DB rows; a session-workspace instance has no such backing
+	// rows — every base op is available.
+	if !virtual {
+		states, err := s.OperationStatesFull(ctx, c.ID, c.Key)
 		if err != nil {
-			return nil, fmt.Errorf("check op access: %w", err)
+			return nil, fmt.Errorf("load op states: %w", err)
 		}
-		if adminOnly {
-			return nil, fmt.Errorf("operation %q is restricted to admin users", p.OperationKey)
+		if st, ok := states[p.OperationKey]; ok {
+			if !st.Enabled {
+				return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
+			}
+			// SystemDisabled is a warning, not a hard block — admin can override by
+			// explicitly enabling the op. If enabled=true, we let it through and log
+			// the warning so the run history captures the context.
+		}
+
+		if !p.IsAdmin {
+			adminOnly, err := s.repo.IsOperationAdminOnly(ctx, c.ID, p.OperationKey)
+			if err != nil {
+				return nil, fmt.Errorf("check op access: %w", err)
+			}
+			if adminOnly {
+				return nil, fmt.Errorf("operation %q is restricted to admin users", p.OperationKey)
+			}
 		}
 	}
 
-	// Load the credential map from the configs table — one row per
-	// field, owner = "connector:{id}".
-	configs := s.LoadConfigs(*c)
+	// Load the credential map. A session-workspace instance carries its
+	// own config in the params; a real row reads the configs table (one
+	// row per field, owner = "connector:{id}").
+	var configs map[string]string
+	if virtual {
+		configs = make(map[string]string, len(p.SessionInstance.Config))
+		for k, v := range p.SessionInstance.Config {
+			configs[k] = v
+		}
+	} else {
+		configs = s.LoadConfigs(*c)
+	}
 
 	// AccountID override: inject the selected account's token and check
-	// per-account disabled ops.
-	if p.AccountID != "" {
+	// per-account disabled ops. Real rows only.
+	if !virtual && p.AccountID != "" {
 		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
 			disabled := AccountDisabledOps(acc)
 			if disabled[p.OperationKey] {
@@ -920,6 +1045,27 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			}
 			configs["user_token"] = acc.AccessToken
 			configs["auth_mode"] = "user_token"
+		}
+	}
+
+	// Session-workspace instance secrets are stored as MASTER (wick_cenc_)
+	// tokens — system-only, never per-user decryptable, never shown to
+	// the agent. Decrypt them to plaintext here so the connector gets
+	// usable creds. The plaintext then flows into the per-call masker
+	// below (via collectSensitiveValues on secret-tagged fields), so it
+	// is re-masked in the response. Failure is fatal: running against an
+	// undecryptable credential authenticates as nothing. (No-op for a
+	// normal row whose secrets are wick_enc_ — handled by the pass below.)
+	if s.enc != nil && !s.enc.Disabled() {
+		for k, v := range configs {
+			if !enc.IsMasterToken(v) {
+				continue
+			}
+			plain, err := s.enc.DecryptMaster(v)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt session config %q: %w", k, err)
+			}
+			configs[k] = plain
 		}
 	}
 

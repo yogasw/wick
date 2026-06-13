@@ -39,16 +39,49 @@ templ CustomMCPServerFormPage(serverID string, form *customconn.ServerForm, tool
 					<span class="text-black-900 dark:text-white-100">Edit</span>
 				}
 			</div>
-			<div class="mt-4">
-				if serverID == "" {
-					<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Register MCP server</h1>
-				} else {
-					<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Edit MCP server</h1>
-				}
-				<p class="mt-1 text-sm text-black-800 dark:text-black-600">
-					Wick forwards JSON-RPC (<code class="font-mono">initialize</code>, <code class="font-mono">tools/list</code>, <code class="font-mono">tools/call</code>) to this URL per request. Stdio servers are out of scope — expose them over HTTP with a sidecar.
-				</p>
+			<!-- Sticky action toolbar — title left, all actions top-right so
+			     they never scroll out of reach on a long form. -->
+			<div class="sticky top-16 z-30 mt-3 -mx-6 border-b border-white-300 bg-white-200 px-6 py-3 dark:border-navy-600 dark:bg-navy-800">
+				<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+					<h1 class="min-w-0 truncate text-lg font-semibold text-black-900 dark:text-white-100">
+						if serverID == "" {
+							Register MCP server
+						} else {
+							Edit MCP server
+						}
+					</h1>
+					<div class="flex flex-wrap items-center gap-2 sm:flex-shrink-0">
+						if serverID != "" && info != nil {
+							if info.Disabled {
+								<form method="POST" action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/enable") }>
+									<button type="submit" class="rounded-lg border border-green-500 px-4 py-2 text-sm font-medium text-green-600 transition-colors hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20">Enable</button>
+								</form>
+							} else {
+								<form method="POST" action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/disable") }>
+									<button type="submit" class="rounded-lg border border-cau-400 px-4 py-2 text-sm font-medium text-cau-400 transition-colors hover:bg-cau-100">Disable</button>
+								</form>
+							}
+							<form
+								method="POST"
+								action={ templ.SafeURL("/manager/connectors/custom/" + info.DefID + "/delete") }
+								onsubmit="return confirm('Delete this custom connector definition and its instances? This cannot be undone.')"
+							>
+								<button type="submit" class="rounded-lg border border-neg-400 px-4 py-2 text-sm font-medium text-neg-400 transition-colors hover:bg-neg-100">Delete</button>
+							</form>
+						}
+						<button type="button" data-cc-save-server disabled class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 shadow-sm transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60">
+							if serverID == "" {
+								Save &amp; create →
+							} else {
+								Save changes
+							}
+						</button>
+					</div>
+				</div>
 			</div>
+			<p class="mt-3 text-sm text-black-800 dark:text-black-600">
+				Wick forwards JSON-RPC (<code class="font-mono text-xs">initialize</code>, <code class="font-mono text-xs">tools/list</code>, <code class="font-mono text-xs">tools/call</code>) to this URL per request. Stdio servers are out of scope — expose them over HTTP with a sidecar.
+			</p>
 			if form != nil {
 				@templ.JSONScript("cc-server-form", form)
 			}
@@ -73,7 +106,7 @@ templ CustomMCPServerFormPage(serverID string, form *customconn.ServerForm, tool
 					</div>
 					<div class="col-span-12">
 						<label class="block text-xs font-medium text-black-800 dark:text-black-600">Description (optional)</label>
-						<textarea id="cc-srv-desc" rows="2" placeholder="Leave empty to use the server's own description" class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"></textarea>
+						<textarea id="cc-srv-desc" rows="4" placeholder="Leave empty to use the server's own description" class="mt-1 w-full resize-y rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"></textarea>
 						<p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Empty = adopt the server's self-description (from its <code class="font-mono">initialize</code> instructions) and keep it fresh on every re-sync. Write your own to lock it — clearing the field hands it back to the server.</p>
 					</div>
 				</div>
@@ -207,21 +240,7 @@ templ CustomMCPServerFormPage(serverID string, form *customconn.ServerForm, tool
 					<p class="text-sm font-medium text-neg-400">✗ <span data-cc-form-error-text></span></p>
 				</div>
 
-				<!-- Footer -->
-				<div class="mt-6 flex items-center justify-between">
-					<a href="/manager/connectors" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">← Cancel</a>
-					<button type="button" data-cc-save-server disabled class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60">
-						if serverID == "" {
-							Save & create connector →
-						} else {
-							Save changes
-						}
-					</button>
-				</div>
 			</div>
-			if serverID != "" && info != nil {
-				@CustomDangerRow(info)
-			}
 		</main>
 		<script src="/modules/manager/js/vendor_emoji_mart.js"></script>
 		<script src="/modules/manager/js/icon_picker.js"></script>

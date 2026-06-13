@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -67,7 +68,7 @@ type connectorDetail struct {
 	Tools       []toolDetail `json:"tools"`
 }
 
-func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, tagIDs []string, isAdmin bool) {
+func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "list connectors: "+err.Error(), "")
@@ -147,6 +148,15 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			}
 		}
 	}
+	// Session-workspace instances: ephemeral connectors scoped to the
+	// caller's session, listed only when a session_id is passed. They
+	// appear like brand-new connectors but live and die with the session.
+	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
+		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, strings.TrimSpace(sid))
+		summaries = append(summaries, sessSummaries...)
+		totalTools += sessTools
+	}
+
 	rsp.ToolJSON(w, req.ID, ListResult{
 		Connectors:      summaries,
 		TotalConnectors: len(summaries),
@@ -220,13 +230,27 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 	rsp.ToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
 }
 
-func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, tagIDs []string, isAdmin bool) {
+func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	rawID, _ := args["id"].(string)
 	rawID = strings.TrimSpace(rawID)
 	// id may be composite "connectorID/accountID" from wick_list account entries.
 	connectorID, scopedAccountID, _ := strings.Cut(rawID, "/")
 	if connectorID == "" {
 		rsp.ToolError(w, req.ID, "id is required", "")
+		return
+	}
+	// Session-workspace instance: resolve from the session file and render
+	// the base module's op schema, no DB row involved.
+	if target, ok, err := SessionInstanceFor(layout, args, connectorID); err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), connectorID)
+		return
+	} else if ok {
+		detail, found := sessionInstanceDetail(svc, target, connectorID)
+		if !found {
+			rsp.ToolError(w, req.ID, "session connector base module not registered", connectorID)
+			return
+		}
+		rsp.ToolJSON(w, req.ID, detail)
 		return
 	}
 	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, isAdmin)
@@ -282,7 +306,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	})
 }
 
-func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, user *entity.User, tagIDs []string) {
+func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
 	toolID, _ := args["tool_id"].(string)
 	toolID = strings.TrimSpace(toolID)
 	if toolID == "" {
@@ -294,23 +318,34 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
 	}
-	allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-	if err != nil || !allowed {
-		rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+	// Session-workspace instance: run against the ephemeral instance's own
+	// config (no DB row, no tag visibility — the session itself is the
+	// authorization scope).
+	sessionTarget, isSession, err := SessionInstanceFor(layout, args, connectorID)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), toolID)
 		return
+	}
+	if !isSession {
+		allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
+		if err != nil || !allowed {
+			rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
+			return
+		}
 	}
 	rawParams, _ := args["params"].(map[string]any)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(r.Context(), connectors.ExecuteParams{
-		ConnectorID:  connectorID,
-		OperationKey: opKey,
-		Input:        input,
-		Source:       entity.ConnectorRunSourceMCP,
-		UserID:       user.ID,
-		IsAdmin:      user.IsAdmin(),
-		IPAddress:    ClientIP(r),
-		UserAgent:    r.Header.Get("User-Agent"),
-		AccountID:    accountID,
+		ConnectorID:     connectorID,
+		OperationKey:    opKey,
+		Input:           input,
+		Source:          entity.ConnectorRunSourceMCP,
+		UserID:          user.ID,
+		IsAdmin:         user.IsAdmin(),
+		IPAddress:       ClientIP(r),
+		UserAgent:       r.Header.Get("User-Agent"),
+		AccountID:       accountID,
+		SessionInstance: sessionTarget,
 	})
 	if execErr != nil {
 		body := execErr.Error()

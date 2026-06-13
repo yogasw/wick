@@ -8,6 +8,15 @@ All notable changes to Wick are documented here.
 
 ### Added
 
+*   **`wick_session_workspace` MCP tool + session Config tab** — spin up ephemeral connector instances scoped to one session: a private clone of a base connector (point it at staging, use a different key) that appears in `wick_list`/`wick_get`/`wick_execute` for that session only and is purged when it ends. The saved connector rows are never touched. Actions: `list` / `add` / `duplicate` / `configure` / `test` / `remove`. The agent creates blank instances and can open the fill modal, but the **user** types the config; secrets are stored under a system-only master key, decrypted only at execution time, and never returned to the agent. A connector is eligible only when its module declares `AllowSessionConfig` **and** an admin enables the per-instance toggle (the custom-connector definition carries the same `allow_session_config` flag). See [Session workspace](./guide/mcp#session-workspace).
+*   **`ask_user` multi-question wizard** — pass `questions[]` instead of a single `question` to collect multiple answers in one step-by-step modal. Each question has a `key`, `type` (`choice` / `multi` / `rank` / `dropdown` / `text` / `secret`), optional `options` with per-option `description`, `required`, `placeholder`, and `help`. Single-select options auto-advance; Enter also advances. Response is `{"values": {"key": "answer", ...}}`.
+*   **`ask_user` from stdio** — an `askuser.sock` Unix socket bridges `ask_user` calls from stdio MCP processes (e.g. a spawned Codex agent) to the running server's web-UI modal without HTTP auth. The gate allowlist now includes `ask_user` and `wick_session_workspace` so they are never blocked at the hook level.
+*   **Per-channel `ask_user_enabled`** — Slack, Telegram, and REST channels each gain an `ask_user_enabled` config field (default `false`). Web UI and interactive MCP clients use the global `AskUserMode` setting. See [AskUser policy](./guide/command-gate#askuser-policy).
+*   **Gate / ask_user decoupled** — `GateEnabled` now controls only the `PreToolUse` command-gate hook. Turning the gate off no longer disables `ask_user`.
+*   **Attention notifications** — when an `ask_user` or `approval_request` SSE event fires while the session tab is in the background, wick plays a short two-tone chime and (with permission) fires a browser `Notification`. Audio and notification permission are unlocked on the first user gesture.
+
+### Added (from feat/custom-connectors)
+
 *   **Custom Connectors** — build LLM-callable connectors from the admin UI, no Go code or redeploy. Three creation paths from **Connectors → + New connector**:
     *   **Paste a cURL** — deterministic parser splits the command into per-instance configs (base URL, secrets) and per-call inputs; an **AI tab** (shown when a structured-output provider is configured) extracts the same shape from `fetch()` snippets, Postman fragments, or prose.
     *   **Connect an MCP server** (streamable HTTP) — one server = one connector. Every tool the server lists becomes an operation automatically; tools added upstream appear after a re-sync. Control the surface with an exclude list instead of an import picker. Auth schemes: `none`, `bearer`, `custom_header`, **`oauth`** (standard MCP authorization: discovery, dynamic client registration, PKCE browser login, RFC 8707 resource indicator, per-instance accounts with transparent token refresh), and **`sso`** (forwards the calling wick user as a signed JWT validated against `/.well-known/wick-pubkey.pem`).
@@ -17,9 +26,13 @@ All notable changes to Wick are documented here.
 *   **Connection status & live catalog** — MCP definitions show a Connected/Disconnected chip, re-sync per instance (probes run under that instance's account), refresh their tool catalog lazily on `wick_get`, and connect in the background at startup behind the boot gate.
 *   **Connector icons** — pick an emoji (emoji-mart picker, fully vendored) or paste an inline SVG / base64 image (32KB cap, rendered safely via `<img>`).
 
-### Added
+### Added (channels)
 
 *   **Per-user Slack channels** — each wick user can configure their own Slack bot credentials independently. Every non-owner user gets a separate `agent_channels` row (`user_id = <id>`); the App Owner row uses `user_id = NULL`. Saving a bot token hot-adds a new keyed registry instance immediately — no server restart required. Removing the token removes the instance. The Channels menu is now accessible to all logged-in users (admin gate removed).
+
+### Fixed
+
+*   **Codex `model_instructions_file`** — the per-session `soul.md` preset was previously passed via the unknown key `instructions_files` (silently ignored by Codex), so the model never received the session identity block or wick rules. Fixed to use `model_instructions_file`. The file now lives in the per-session `.codex/` dir so concurrent sessions no longer clobber each other's preset.
 
 ### Changed
 

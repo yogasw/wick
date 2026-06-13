@@ -43,6 +43,7 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
 | `wick_session_info` | `readOnlyHint` | Read the active session's metadata: `session_id`, `title`, `title_custom`, `origin`, `status`, `project_id`. Used by the agent to decide whether to set a title. |
 | `wick_set_title` | `idempotentHint` | Set the session's sidebar title and mark it as custom so the auto-derived first-message label never overwrites it. Title is truncated to 60 characters. |
+| `wick_session_workspace` | — | Spin up throwaway connector instances scoped to one session (clone a base connector, point it at staging, use a different key). The agent creates blank instances; the **user** fills the config in a UI form; the agent never sees the values. Instances appear in `wick_list` for that session only and die with it. See [Session workspace](#session-workspace). |
 
 Why not a static list?
 
@@ -505,6 +506,54 @@ When the agent system prompt is active (wick-agent server), the immutable system
 3. If `title_custom` is already `true`, leave the title alone.
 
 This means sessions get a descriptive label automatically without prompting the user, while a title set manually by the user or by a previous agent turn is never clobbered.
+
+## Session workspace
+
+`wick_session_workspace` lets an agent (or the user, via the session **Config** tab) spin up **ephemeral connector instances** scoped to one session: a private clone of a base connector — an httprest pointed at staging, a second API key — that behaves like a brand-new connector but lives and dies with the session. The saved connector rows are never touched.
+
+Use it when the user wants to hit an endpoint or use a credential that only matters right now. Once added and configured, the instance's id shows in `wick_list` (pass the same `session_id`) and you `wick_execute` it like any connector.
+
+The tool is **human-driven for config**. The agent creates blank instances and can open the fill modal, but the **user** types the values; secrets are encrypted server-side with a system-only master key, and the agent only ever learns **which keys were filled**, never the values. This keeps connector credentials and endpoints off the agent's context entirely.
+
+### Eligibility
+
+A connector can be cloned into a session instance only when **both** hold:
+
+1. its module declares `AllowSessionConfig: true` (capability, set in code / the custom-connector definition), and
+2. an admin enabled **Allow per-session config override** on a visible instance (Manager → Connectors → {instance} → *Per-session config*).
+
+`action=list` returns the `available_bases` you may add.
+
+### Actions
+
+| `action` | What it does |
+|----------|-------------|
+| `list` | This session's instances (id, status, missing keys) + `available_bases`. |
+| `add` | Create a blank instance from a `base_key`. By default pops the fill modal for the user right away (`prompt: false` to skip). |
+| `duplicate` | Copy an existing session instance (config and all) into a new one. |
+| `configure` | Reopen the fill modal so the user edits an instance's config. Blocks until submit (like `ask_user`). |
+| `test` | Verify setup — runs the base connector's health check, or pass `operation` (+ `params`) to run a real call. |
+| `remove` | Delete a session instance. |
+
+The agent can neither read nor set config values directly — config is always entered by the user. Secret values are stored as system-only master tokens and decrypted only at execution time, never returned.
+
+### Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `session_id` | The active session ID (required for every action) |
+| `action` | `list` / `add` / `duplicate` / `configure` / `test` / `remove` |
+| `base_key` | `add`: the base connector key to clone (from `available_bases`) |
+| `connector_id` | The session instance id (`sw_…`) for `duplicate` / `configure` / `test` / `remove` |
+| `label` | `add` / `duplicate`: optional human label |
+| `prompt` | `add`: open the fill modal immediately (default `true`) |
+| `keys` | `add` / `configure`: limit the fill modal to these keys |
+| `operation`, `params` | `test`: run this operation as the probe instead of the health check |
+| `reason` | `add` / `configure`: short text shown to the user explaining what the connector is for |
+
+### How instances run at execution time
+
+When `wick_execute` (or `wick_get`) is called with a `session_id` and a `sw_…` connector id, the server resolves the instance from `sessions/<id>/workspace.json`, clones the base module, and runs against the instance's own config — no DB row, no tag visibility (the session itself is the authorization scope). Secret values (master tokens) are decrypted just before the call and re-masked in the response. A `session-config-purge` job sweeps stale workspace files by age as a TTL backstop.
 
 ## Reference
 

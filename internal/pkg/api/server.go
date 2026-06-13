@@ -63,6 +63,7 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
+	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
@@ -143,6 +144,7 @@ func NewServer() *Server {
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
+	sessionconfigpurge.Register()
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -343,6 +345,20 @@ func NewServer() *Server {
 		log.Fatal().Msgf("agents bootstrap: %s", agentsBootErr.Error())
 	}
 	agentsBcast := agentstool.NewBroadcaster()
+	// syncSessionMeta reloads one session into the in-memory registry and
+	// broadcasts its current title + status over SSE so open tabs update
+	// live. Used by wick_set_title (HTTP, in-process) and — relayed via
+	// the agentctl refresh_session op — by stdio MCP processes that
+	// mutated session meta on disk. Without the broadcast the sidebar
+	// would only catch up on the next page load.
+	syncSessionMeta := func(sessionID string) {
+		if err := agentsMgr.RefreshSession(sessionID); err != nil {
+			return
+		}
+		if sess, ok := agentsMgr.Registry().Session(sessionID); ok {
+			agentsBcast.PublishSessionMeta(sessionID, sess.Meta.Label, sess.Meta.TitleCustom, string(sess.Meta.Status))
+		}
+	}
 	agentsSpawnLogger := provider.NewSpawnLogger(agentsLayout.BaseDir)
 	// Trim any backlog of spawn logs from before pruning existed so the
 	// dir is bounded immediately, not only after the next spawn.
@@ -634,6 +650,16 @@ func NewServer() *Server {
 		},
 	})
 	agentstool.SetAskUsers(askUsersMgr)
+	// Bind the askuser unix socket so sibling processes (stdio MCP —
+	// Claude Desktop/Cursor/Claude Code running `wick mcp serve`) can
+	// route ask_user / wick_session_workspace asks into this process's
+	// web UI. Same trust model as gate.sock: 0700 parent dir, no HTTP
+	// auth. Best-effort — stdio asks degrade to an error without it.
+	if askSock, err := askuser.ServeSocket(askuser.SocketPath(appname.Resolve()), askUsersMgr); err != nil {
+		log.Warn().Err(err).Msg("agents: askuser socket bind failed — stdio MCP ask_user unavailable")
+	} else {
+		log.Info().Str("socket", askSock.SocketPath()).Msg("agents: askuser socket ready")
+	}
 
 	// Workflow stack — bundles every workflow subpkg into one Manager
 	// and bootstraps the router with every workflow folder found on disk.
@@ -868,6 +894,9 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+	// Wire the connectors service into the agents tool so the session
+	// Config tab can read connector field schemas + AllowSessionConfig.
+	agentstool.SetConnectors(connectorsSvc)
 
 	// Wire the agent factory's connector-catalog loader now that the
 	// connectors service exists. The loader runs at every agent spawn,
@@ -1069,24 +1098,17 @@ func NewServer() *Server {
 		WithAppURL(configsSvc.AppURL).
 		WithDB(db).
 		WithAskUser(askUsersMgr).
-		WithAskUserPolicy(func() (bool, string) {
-			// Master gate off → ask_user short-circuits along with every
-			// other sub-policy. Slack/HTTP installs that disable the gate
-			// don't want the LLM hanging on a prompt no one will answer.
-			if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
-				return false, "master gate is off"
-			}
-			mode := configsSvc.GetOwned("agents", "ask_user_mode")
-			if mode == "" {
-				mode = "on"
-			}
-			if mode != "on" {
-				return false, "ask_user_mode=" + mode
-			}
-			return true, ""
+		WithAskUserPolicy(func(sessionID string) (bool, string) {
+			// Resolved per session origin — independent of the master
+			// command gate. ui/external → global agents.ask_user_mode;
+			// slack/telegram/rest → that channel's own ask_user_mode.
+			return askUserPolicy(db, configsSvc, agentsLayout, sessionID)
 		}).
 		WithPool(agentsPool, agentsLayout).
-		WithRefreshSession(agentsMgr.RefreshSession)
+		WithRefreshSession(func(id string) error {
+			syncSessionMeta(id)
+			return nil
+		})
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -1404,7 +1426,7 @@ func NewServer() *Server {
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.Index))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
 }
 
 type Server struct {
@@ -1413,7 +1435,12 @@ type Server struct {
 	authMidd     *login.Middleware
 	agentsPool   *agentpool.Pool
 	agentsLayout agentconfig.Layout
-	channelReg   *agentchannels.Registry
+	// syncSessionMeta reloads one session into the in-memory registry
+	// and broadcasts its meta over SSE. Built in NewServer (where the
+	// registry + broadcaster are in scope) and reused by Run to wire
+	// the agentctl refresh_session handler. nil before agents boot.
+	syncSessionMeta func(sessionID string)
+	channelReg      *agentchannels.Registry
 	db           *gorm.DB
 	gateBin      string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc      *manager.Service
@@ -1677,6 +1704,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// switch_provider / kill commands to this daemon's pool.
 	if s.agentsPool != nil {
 		agentctlSrv := agentctl.NewServer(s.agentsPool, s.agentsLayout)
+		if s.syncSessionMeta != nil {
+			agentctlSrv.WithRefresh(s.syncSessionMeta)
+		}
 		go func() {
 			if err := agentctlSrv.Listen(ctx); err != nil {
 				log.Warn().Err(err).Msg("agentctl: socket closed")

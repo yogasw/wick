@@ -272,7 +272,9 @@ The snapshot endpoint (`GET /stream/snapshot?session=<id>`) replays the **curren
 
 ### AskUser MCP tool
 
-This is the agent-initiated counterpart to the gate. The agent calls the `ask_user` MCP tool ([askuser.go:38-45](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L38)):
+This is the agent-initiated counterpart to the gate. The agent calls the `ask_user` MCP tool. Two call styles are supported:
+
+**Single question** (original form):
 
 ```json
 {
@@ -286,9 +288,59 @@ This is the agent-initiated counterpart to the gate. The agent calls the `ask_us
 }
 ```
 
-The handler registers a pending question, broadcasts SSE, blocks the MCP call until the user answers (default 5min timeout per [askuser.go:27](https://github.com/yogasw/wick/blob/master/internal/agents/askuser/askuser.go#L27)), then returns the answer to the agent. Unlike the gate, this is **voluntary** — the agent decides when to ask, and a forgetful agent can skip it.
+Response: `{"value": "prod", "text": "Production"}`
+
+**Multi-question wizard** (`questions[]`):
+
+```json
+{
+  "session_id": "9b7e-...",
+  "questions": [
+    {
+      "key": "env",
+      "question": "Which environment?",
+      "type": "choice",
+      "options": [
+        {"label": "Production", "value": "prod", "description": "Live traffic"},
+        {"label": "Staging", "value": "stg"}
+      ],
+      "required": true
+    },
+    {
+      "key": "reason",
+      "question": "Reason for change",
+      "type": "text",
+      "placeholder": "Brief description",
+      "required": true
+    }
+  ]
+}
+```
+
+Response: `{"values": {"env": "prod", "reason": "routine deploy"}}`
+
+Question types: `choice` (single-select; auto-advances on pick), `multi` (multi-select checkbox), `rank` (drag-to-rank), `dropdown` (select), `text` (free text), `secret` (masked input). A missing `type` defaults to `choice` when `options` are present, otherwise `text`.
+
+The UI renders a step-by-step modal with Back / Skip / Next navigation and required-field validation. Single-select options auto-advance to the next question; Enter also advances.
+
+The handler registers a pending question, broadcasts SSE, blocks the MCP call until the user answers (4-minute timeout), then returns the answer to the agent. Unlike the gate, this is **voluntary** — the agent decides when to ask, and a forgetful agent can skip it.
 
 The reason wick ships its own AskUser MCP tool instead of relying on Claude Code's `AskUserQuestion` harness tool: the harness tool isn't available when Claude runs in pipe mode (`-p`), only inside the Claude Code TUI. An MCP tool works in every mode.
+
+#### Per-channel ask_user control
+
+By default `ask_user` is enabled for web UI and interactive clients, and disabled for Slack, Telegram, and REST sessions (those channels cannot currently render the modal). Operators can flip this per channel:
+
+- Slack / Telegram / REST channel config: add `ask_user_enabled = true` to opt in.
+- Global fallback (web / stdio / external MCP): controlled by `AskUserMode` in Configs → `agents` group (`on` / `off`).
+
+See [AskUser policy](../command-gate#askuser-policy) for the full resolution table.
+
+### Attention notifications
+
+When the session tab is in the background and an `ask_user` or `approval_request` SSE event arrives, wick plays a short two-tone chime and (if the browser has been granted notification permission) fires a browser `Notification`. This covers the "tab open but not visible" case; the PWA web-push path covers "web UI fully closed."
+
+The audio context and notification permission are both unlocked on the first click or keypress inside the page (browser autoplay policy requirement). No extra configuration is needed.
 
 ## REST (OpenAI-compatible)
 

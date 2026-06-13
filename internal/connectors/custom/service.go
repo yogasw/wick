@@ -366,9 +366,10 @@ func (s *Service) SaveNew(ctx context.Context, d *Draft, createdBy string) (*ent
 		Source:         entity.CustomConnectorSource(d.Source),
 		SourceMeta:     mustJSON(SourceMeta{Category: d.Category, ServerID: serverIDOf(d)}),
 		Configs:        mustJSON(d.Configs),
-		Ops:            mustJSON(d.Ops),
-		SingleInstance: d.Single,
-		CreatedBy:      createdBy,
+		Ops:                mustJSON(d.Ops),
+		SingleInstance:     d.Single,
+		AllowSessionConfig: d.AllowSessionConfig,
+		CreatedBy:          createdBy,
 	}
 	if err := s.store.CreateDef(ctx, def); err != nil {
 		return nil, "", err
@@ -404,6 +405,7 @@ func (s *Service) Update(ctx context.Context, defID string, d *Draft) error {
 	def.Configs = mustJSON(d.Configs)
 	def.Ops = mustJSON(d.Ops)
 	def.SingleInstance = d.Single
+	def.AllowSessionConfig = d.AllowSessionConfig
 	return s.store.UpdateDef(ctx, def)
 }
 

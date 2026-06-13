@@ -331,11 +331,14 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 			templ.KV("hover:bg-white-200 dark:hover:bg-navy-600/60", !active),
 		}
 	>
-		<span class={
-			"flex-1 min-w-0 truncate text-sm",
-			templ.KV("font-semibold text-black-900 dark:text-white-100", active),
-			templ.KV("font-normal text-black-800 dark:text-black-600", !active),
-		}>
+		<span
+			data-session-title={ id }
+			class={
+				"flex-1 min-w-0 truncate text-sm",
+				templ.KV("font-semibold text-black-900 dark:text-white-100", active),
+				templ.KV("font-normal text-black-800 dark:text-black-600", !active),
+			}
+		>
 			if label != "" {
 				{ label }
 			} else {

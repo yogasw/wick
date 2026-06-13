@@ -27,10 +27,46 @@ import (
 const DefaultTimeout = 5 * time.Minute
 
 // Option is one choice presented to the user. Label = what they
-// see, Value = what gets returned to the agent.
+// see, Value = what gets returned to the agent, Description = optional
+// secondary line shown under the label in the wizard.
 type Option struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	Label       string `json:"label"`
+	Value       string `json:"value"`
+	Description string `json:"description,omitempty"`
+}
+
+// Field is one question/input in a structured form ask. When
+// Question.Fields is non-empty the UI renders a form modal instead of
+// the plain option/freeform card, and the answer comes back as
+// Answer.Values keyed by Field.Key.
+//
+// Type drives the input widget:
+//   - "choice"   — Options as single-select rows (pick one)
+//   - "multi"    — Options as multi-select rows (pick many; the
+//     answer is a JSON-encoded array of the selected values)
+//   - "rank"     — Options drag-reordered; the answer is a
+//     JSON-encoded array of values in the user's chosen order
+//   - "dropdown" — Options as a <select> (pick one, compact)
+//   - "text"     — free text input (default when no Options)
+//   - "secret"   — password input; plaintext handled server-side,
+//     never echoed to the agent
+//   - "number"   — numeric input
+//
+// In a multi-question ask (Question.Fields), the UI renders each field
+// as one step in a wizard the user pages through and can skip.
+//
+// AllowFreeform on a choice/dropdown field adds an "Other…" text box
+// so the user can answer outside the preset Options.
+type Field struct {
+	Key           string   `json:"key"`
+	Label         string   `json:"label"`
+	Type          string   `json:"type,omitempty"`
+	Placeholder   string   `json:"placeholder,omitempty"`
+	Value         string   `json:"value,omitempty"` // prefill; empty for secrets
+	Required      bool     `json:"required,omitempty"`
+	Help          string   `json:"help,omitempty"`
+	Options       []Option `json:"options,omitempty"`        // choice/multi/dropdown
+	AllowFreeform bool     `json:"allow_freeform,omitempty"` // add an "Other…" text box
 }
 
 // Question is the input to Manager.Ask. Mirrors the MCP tool's
@@ -41,16 +77,19 @@ type Question struct {
 	Question      string        `json:"question"`
 	Options       []Option      `json:"options,omitempty"`
 	AllowFreeform bool          `json:"allow_freeform,omitempty"`
+	Fields        []Field       `json:"fields,omitempty"`
 	Timeout       time.Duration `json:"-"`
 }
 
 // Answer is what the user posts via /sessions/{id}/answer. One of
-// Value / Text is set; if both are present, Value wins (it's the
-// label of a clicked option, more authoritative than free-typed
-// text on the same form).
+// Value / Text / Values is set; if Value and Text are both present,
+// Value wins (it's the label of a clicked option, more authoritative
+// than free-typed text on the same form). Values carries the field
+// map of a structured form ask.
 type Answer struct {
-	Value string `json:"value,omitempty"`
-	Text  string `json:"text,omitempty"`
+	Value  string            `json:"value,omitempty"`
+	Text   string            `json:"text,omitempty"`
+	Values map[string]string `json:"values,omitempty"`
 }
 
 // AskRequest is the broadcast payload — Question + a server-minted
@@ -63,6 +102,7 @@ type AskRequest struct {
 	Question      string   `json:"question"`
 	Options       []Option `json:"options,omitempty"`
 	AllowFreeform bool     `json:"allow_freeform,omitempty"`
+	Fields        []Field  `json:"fields,omitempty"`
 }
 
 // pending is one in-flight ask. ch is buffered cap 1 so a late
@@ -132,6 +172,7 @@ func (m *Manager) Ask(q Question, done <-chan struct{}) (Answer, error) {
 		Question:      q.Question,
 		Options:       q.Options,
 		AllowFreeform: q.AllowFreeform,
+		Fields:        q.Fields,
 	}
 	ch := make(chan Answer, 1)
 	m.mu.Lock()

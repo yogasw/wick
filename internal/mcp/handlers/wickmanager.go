@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -68,5 +69,7 @@ func WickManagerExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, 
 		"tool_id": FormatToolID(rows[0].ID, op),
 		"params":  params,
 	}
-	WickExecute(w, r, req, rsp, svc, args, user, tagIDs)
+	// Zero layout: wick_manager_* ops manage wick itself — session
+	// config overrides don't apply, and no session_id arg is passed.
+	WickExecute(w, r, req, rsp, svc, agentconfig.Layout{}, args, user, tagIDs)
 }

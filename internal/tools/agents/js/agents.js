@@ -696,7 +696,9 @@
           return;
         }
         if (ev.type === "approval_request") {
-          showApprovalModal(JSON.parse(ev.data));
+          var apprReq = JSON.parse(ev.data);
+          showApprovalModal(apprReq);
+          if (window.WickNotify) window.WickNotify.alert("Approval needed", apprReq && apprReq.cmd);
           return;
         }
         if (ev.type === "approval_resolved") {
@@ -705,16 +707,22 @@
           return;
         }
         if (ev.type === "ask_user") {
-          showAskUserCard(JSON.parse(ev.data));
+          var askReq = JSON.parse(ev.data);
+          if (window.WickAskUser) window.WickAskUser.show(askReq);
+          if (window.WickNotify) window.WickNotify.alert("Agent is asking you", askReq && askReq.question);
           return;
         }
         if (ev.type === "ask_user_resolved") {
-          hideAskUserCard(JSON.parse(ev.data));
+          if (window.WickAskUser) window.WickAskUser.hide(JSON.parse(ev.data));
           return;
         }
         if (ev.type === "system_turn") {
           var d = JSON.parse(ev.data || "{}");
           appendSystemTurn(d.text || "", d.steps || []);
+          return;
+        }
+        if (ev.type === "session_meta") {
+          applySessionMeta(JSON.parse(ev.data || "{}"));
           return;
         }
         // Lifecycle (working/idle/spawning/killed) is BE-driven via the
@@ -1138,6 +1146,26 @@
       } else {
         if (arc) arc.setAttribute("stroke-dashoffset", String(RING_CIRCUMFERENCE));
         if (centre) centre.setAttribute("r", "1");
+      }
+    }
+
+    // applySessionMeta updates the sidebar row title + browser tab when
+    // a session's meta changes (title set by the agent, incl. from a
+    // sibling stdio process relayed via agentctl). Driven by the
+    // "session_meta" SSE event so the UI reflects the new title without
+    // a page reload.
+    function applySessionMeta(meta) {
+      if (!meta || !meta.session_id) return;
+      var title = (meta.title || "").trim();
+      if (title) {
+        var span = document.querySelector(
+          '[data-session-title="' + meta.session_id + '"]'
+        );
+        if (span) span.textContent = title;
+        // Update the browser tab title when this is the open session.
+        if (sessionID && meta.session_id === sessionID) {
+          document.title = title;
+        }
       }
     }
 
@@ -2311,84 +2339,6 @@
       return li;
     }
 
-    // ── ask_user card (gate Stage 6) ──────────────────────────────────
-    // The card sits above the composer in the Conversation tab. Only
-    // one ask is in flight per session at a time (the MCP tool blocks
-    // the agent), so we don't queue — a new ask_user replaces the
-    // current card body.
-    var askUserCurrent = null;
-
-    function showAskUserCard(req) {
-      var card = document.getElementById("ask-user-card");
-      if (!card || !req || !req.id) return;
-      askUserCurrent = req;
-      card.querySelector("[data-ask-question]").textContent = req.question || "";
-      var optsBox = card.querySelector("[data-ask-options]");
-      optsBox.innerHTML = "";
-      (req.options || []).forEach(function (opt) {
-        var btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors";
-        btn.textContent = opt.label;
-        btn.addEventListener("click", function () {
-          submitAskAnswer({ id: req.id, value: opt.value });
-        });
-        optsBox.appendChild(btn);
-      });
-      var freeForm = card.querySelector("[data-ask-freeform]");
-      var textInput = card.querySelector("[data-ask-text]");
-      if (req.allow_freeform) {
-        freeForm.classList.remove("hidden");
-        if (textInput) textInput.value = "";
-      } else {
-        freeForm.classList.add("hidden");
-      }
-      card.classList.remove("hidden");
-    }
-
-    function hideAskUserCard(payload) {
-      var card = document.getElementById("ask-user-card");
-      if (!card) return;
-      if (payload && askUserCurrent && payload.id !== askUserCurrent.id) return;
-      card.classList.add("hidden");
-      askUserCurrent = null;
-    }
-
-    function submitAskAnswer(body) {
-      var b = resolveBase();
-      if (!b || !sessionID) return;
-      fetch(b + "/sessions/" + encodeURIComponent(sessionID) + "/answer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }).then(function () {
-        // ask_user_resolved SSE will dismiss the card across all tabs.
-      }).catch(function () {});
-    }
-
-    document.addEventListener("submit", function (e) {
-      var form = e.target.closest("[data-ask-freeform]");
-      if (!form || !askUserCurrent) return;
-      e.preventDefault();
-      var text = form.querySelector("[data-ask-text]").value.trim();
-      if (!text) return;
-      submitAskAnswer({ id: askUserCurrent.id, text: text });
-    });
-
-    // Rehydrate ask_user state on page load.
-    if (sessionID) {
-      var b0 = resolveBase();
-      if (b0) {
-        fetch(b0 + "/sessions/" + encodeURIComponent(sessionID) + "/asks")
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (data) {
-            if (data && Array.isArray(data.pending) && data.pending.length > 0) {
-              showAskUserCard(data.pending[0]);
-            }
-          })
-          .catch(function () {});
-      }
-    }
 
     // ── Helpers ───────────────────────────────────────────────────────
     function resolveBase() {

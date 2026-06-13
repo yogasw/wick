@@ -108,6 +108,9 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 		},
 		Configs:    FieldsToConfigs(cfgFields),
 		Operations: operations,
+		// Author opt-in: lets users override this def's config per agent
+		// session (still gated by the per-instance admin toggle).
+		AllowSessionConfig: def.AllowSessionConfig,
 	}, nil
 }
 
