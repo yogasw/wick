@@ -157,6 +157,25 @@ func telegramChannelPage(c *tool.Ctx) {
 	}))
 }
 
+// channelForUser returns the registry channel instance that belongs to the
+// current user. Instance key is "<slug>:<userID>" or "<slug>:__owner__" for
+// App Owner. Falls back to ChannelByName so Telegram/REST (single-instance)
+// still resolve correctly.
+func channelForUser(c *tool.Ctx, slug string) agentchannels.Channel {
+	if globalChannels == nil {
+		return nil
+	}
+	userID := currentUserIDForChannel(c)
+	iKey := slug + ":" + userID
+	if userID == "" {
+		iKey = slug + ":__owner__"
+	}
+	if ch := globalChannels.ChannelByKey(iKey); ch != nil {
+		return ch
+	}
+	return globalChannels.ChannelByName(slug)
+}
+
 // channelLookupHandler routes a picker search to the named channel's
 // LookupProvider. URL: GET /channels/{slug}/lookup?source=<src>&q=<query>.
 // Returns JSON array of {id,name}.
@@ -175,7 +194,7 @@ func channelLookupHandler(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "slug and source required"})
 		return
 	}
-	ch := globalChannels.ChannelByName(slug)
+	ch := channelForUser(c, slug)
 	if ch == nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
 		return
@@ -208,7 +227,7 @@ func channelHealthHandler(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	ch := globalChannels.ChannelByName(slug)
+	ch := channelForUser(c, slug)
 	if ch == nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
 		return
@@ -237,7 +256,7 @@ func channelStatusHandler(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	ch := globalChannels.ChannelByName(slug)
+	ch := channelForUser(c, slug)
 	if ch == nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "channel not registered"})
 		return
