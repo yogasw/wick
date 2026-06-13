@@ -19,6 +19,7 @@ package channels
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -248,9 +249,7 @@ func (r *Registry) HTTPHandlers() map[string]http.Handler {
 	out := map[string]http.Handler{}
 	for _, c := range r.Channels() {
 		if h, ok := c.(MultiHTTPHandlerProvider); ok {
-			for path, handler := range h.HTTPHandlers() {
-				out[path] = handler
-			}
+			maps.Copy(out, h.HTTPHandlers())
 		} else if h, ok := c.(HTTPHandlerProvider); ok {
 			out[h.HTTPPath()] = h.HTTPHandler()
 		}
@@ -339,9 +338,7 @@ func (r *Registry) WatchConfigs(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			r.mu.Lock()
 			snap := make(map[string]ConfigSource, len(r.sources))
-			for k, v := range r.sources {
-				snap[k] = v
-			}
+			maps.Copy(snap, r.sources)
 			r.mu.Unlock()
 
 			for name, src := range snap {
