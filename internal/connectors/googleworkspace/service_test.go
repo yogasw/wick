@@ -154,3 +154,130 @@ func TestValidateString(t *testing.T) {
 		}
 	})
 }
+
+func TestParseCSV(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    [][]string
+		wantErr bool
+	}{
+		{
+			name:  "simple rows",
+			input: "Alice,30,Engineer\nBob,25,Designer",
+			want:  [][]string{{"Alice", "30", "Engineer"}, {"Bob", "25", "Designer"}},
+		},
+		{
+			name:  "quoted field with comma",
+			input: `"Alice, Jr",30,Engineer`,
+			want:  [][]string{{"Alice, Jr", "30", "Engineer"}},
+		},
+		{
+			name:  "single row",
+			input: "a,b,c",
+			want:  [][]string{{"a", "b", "c"}},
+		},
+		{
+			name:  "empty input",
+			input: "",
+			want:  nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseCSV(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseCSV() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.input == "" {
+				if len(got) != 0 {
+					t.Fatalf("expected empty result for empty input, got %v", got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("row count = %d, want %d", len(got), len(tt.want))
+			}
+			for i, row := range got {
+				if len(row) != len(tt.want[i]) {
+					t.Fatalf("row %d col count = %d, want %d", i, len(row), len(tt.want[i]))
+				}
+				for j, cell := range row {
+					if cell != tt.want[i][j] {
+						t.Errorf("row %d col %d = %q, want %q", i, j, cell, tt.want[i][j])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeGrantedWorkspace(t *testing.T) {
+	tests := []struct {
+		name      string
+		scopes    string
+		wantTrue  []string
+		wantFalse []string
+	}{
+		{
+			name:   "drive implies drive.readonly",
+			scopes: "https://www.googleapis.com/auth/drive",
+			wantTrue: []string{
+				"https://www.googleapis.com/auth/drive",
+				"https://www.googleapis.com/auth/drive.readonly",
+			},
+			wantFalse: []string{
+				"https://www.googleapis.com/auth/spreadsheets.readonly",
+				"https://www.googleapis.com/auth/presentations.readonly",
+			},
+		},
+		{
+			name:   "spreadsheets implies spreadsheets.readonly",
+			scopes: "https://www.googleapis.com/auth/spreadsheets",
+			wantTrue: []string{
+				"https://www.googleapis.com/auth/spreadsheets",
+				"https://www.googleapis.com/auth/spreadsheets.readonly",
+			},
+			wantFalse: []string{
+				"https://www.googleapis.com/auth/drive.readonly",
+				"https://www.googleapis.com/auth/presentations.readonly",
+			},
+		},
+		{
+			name:   "presentations implies presentations.readonly",
+			scopes: "https://www.googleapis.com/auth/presentations",
+			wantTrue: []string{
+				"https://www.googleapis.com/auth/presentations",
+				"https://www.googleapis.com/auth/presentations.readonly",
+			},
+			wantFalse: []string{
+				"https://www.googleapis.com/auth/drive.readonly",
+				"https://www.googleapis.com/auth/spreadsheets.readonly",
+			},
+		},
+		{
+			name:   "all workspace scopes",
+			scopes: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/presentations",
+			wantTrue: []string{
+				"https://www.googleapis.com/auth/drive.readonly",
+				"https://www.googleapis.com/auth/spreadsheets.readonly",
+				"https://www.googleapis.com/auth/presentations.readonly",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeGranted(tt.scopes)
+			for _, s := range tt.wantTrue {
+				if !got[s] {
+					t.Errorf("expected %q to be granted, but it was not", s)
+				}
+			}
+			for _, s := range tt.wantFalse {
+				if got[s] {
+					t.Errorf("expected %q NOT to be granted, but it was", s)
+				}
+			}
+		})
+	}
+}
