@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { render, screen, fireEvent } from "@testing-library/svelte";
 import ConversationThread from "../ConversationThread.svelte";
 import type { ConversationTurn, LiveTurn, TypingState } from "../../types/agents.js";
 
@@ -42,6 +42,24 @@ describe("ConversationThread", () => {
       props: { turns: [], live, typing: { active: false } },
     });
     expect(screen.getByText("streaming text here")).toBeDefined();
+  });
+
+  test("live trace blocks are collapsed behind a toggle by default", async () => {
+    const live: LiveTurn = {
+      text: "",
+      blocks: [
+        { kind: "thinking", text: "secret thinking" },
+        { kind: "tool", toolUseId: "t1", toolName: "Search", toolInput: "{}" },
+      ],
+    };
+    const { container } = render(ConversationThread, {
+      props: { turns: [], live, typing: { active: true, substate: "thinking" } },
+    });
+    expect(container.innerHTML).toContain("show trace");
+    expect(container.innerHTML).toContain("2 steps");
+    expect(screen.queryByText("secret thinking")).toBeNull();
+    await fireEvent.click(screen.getByText("show trace"));
+    expect(screen.getByText("secret thinking")).toBeDefined();
   });
 
   test("shows typing indicator when typing.active is true", () => {

@@ -22,11 +22,7 @@
     return `running ${substate}…`;
   }
 
-  const liveToolBlocks = $derived(
-    live
-      ? live.blocks.filter((b): b is Extract<ThreadBlock, { kind: "tool" }> => b.kind === "tool")
-      : []
-  );
+  let liveTraceOpen = $state(false);
 
   onMount(() => {
     if (!containerEl) return;
@@ -51,19 +47,37 @@
   {#if live}
     <div class="flex justify-start">
       <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
-        {#if liveToolBlocks.length > 0}
-          <div class="flex flex-col gap-1">
-            {#each liveToolBlocks as block}
-              <ToolCard {block} />
-            {/each}
-          </div>
-        {/if}
-        {#if live.blocks.some((b) => b.kind === "thinking")}
-          {#each live.blocks.filter((b) => b.kind === "thinking") as block}
-            <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
-              {(block as Extract<ThreadBlock, { kind: "thinking" }>).text}
+        {#if live.blocks.length > 0}
+          <button
+            type="button"
+            data-live-trace-toggle
+            class="self-start inline-flex items-center gap-1.5 text-xs text-black-600 dark:text-black-500 hover:text-black-800 dark:hover:text-black-300 transition-colors"
+            onclick={() => (liveTraceOpen = !liveTraceOpen)}
+          >
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <circle cx="8" cy="8" r="5.5"></circle><path d="M6 8h4M8 6v4" stroke-linecap="round"></path>
+            </svg>
+            <span>{liveTraceOpen ? "hide trace" : "show trace"}</span>
+            {#if !liveTraceOpen}
+              <span class="text-black-500 dark:text-black-600">· {live.blocks.length} step{live.blocks.length === 1 ? "" : "s"}</span>
+            {/if}
+            <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 transition-transform {liveTraceOpen ? 'rotate-90' : ''}" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M4.5 3l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </button>
+          {#if liveTraceOpen}
+            <div class="flex flex-col gap-1">
+              {#each live.blocks as block, bi (bi)}
+                {#if block.kind === "tool"}
+                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} />
+                {:else if block.kind === "thinking"}
+                  <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
+                    {(block as Extract<ThreadBlock, { kind: "thinking" }>).text}
+                  </div>
+                {/if}
+              {/each}
             </div>
-          {/each}
+          {/if}
         {/if}
         {#if live.text}
           <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
