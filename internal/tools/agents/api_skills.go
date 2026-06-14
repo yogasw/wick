@@ -162,6 +162,12 @@ func apiSkillFolderFileDetail(c *tool.Ctx) {
 	}
 	name := folder + "/" + cleanFile
 
+	_, allDirs, _ := skillsync.Status()
+	inDirs := dirsContaining(allDirs, name)
+	if inDirs == nil {
+		inDirs = []string{}
+	}
+
 	dirs := skillsync.KnownDirs()
 	for _, d := range dirs {
 		target := filepath.Join(d, name)
@@ -183,11 +189,6 @@ func apiSkillFolderFileDetail(c *tool.Ctx) {
 					MissingDirs: []string{},
 				})
 			}
-			_, allDirs, _ := skillsync.Status()
-			inDirs := dirsContaining(allDirs, name)
-			if inDirs == nil {
-				inDirs = []string{}
-			}
 			c.JSON(http.StatusOK, SkillFileDetailResponse{
 				Name:    name,
 				IsDir:   true,
@@ -196,26 +197,24 @@ func apiSkillFolderFileDetail(c *tool.Ctx) {
 			})
 			return
 		}
-		break
-	}
-
-	data, srcPath, err := skillsync.ReadFile(name)
-	if err != nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
+		// Read the resolved file directly so nested paths and non-.md
+		// extensions (.yml, .txt, …) all open, not just top-level .md.
+		data, rerr := os.ReadFile(target)
+		if rerr != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": rerr.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, SkillFileDetailResponse{
+			Name:       name,
+			IsDir:      false,
+			Content:    string(data),
+			SourcePath: target,
+			InDirs:     inDirs,
+		})
 		return
 	}
-	_, allDirs, _ := skillsync.Status()
-	inDirs := dirsContaining(allDirs, name)
-	if inDirs == nil {
-		inDirs = []string{}
-	}
-	c.JSON(http.StatusOK, SkillFileDetailResponse{
-		Name:       name,
-		IsDir:      false,
-		Content:    string(data),
-		SourcePath: srcPath,
-		InDirs:     inDirs,
-	})
+
+	c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 }
 
 // apiSkillProviderPath handles GET /api/skills/{provider}/{path...}.
