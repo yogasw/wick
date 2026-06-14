@@ -3,9 +3,10 @@
     onSend: (msg: { text: string; files: File[] }) => void;
     disabled?: boolean;
     placeholder?: string;
+    showShiftEnterHint?: boolean;
   };
 
-  let { onSend, disabled = false, placeholder = "Message…" }: Props = $props();
+  let { onSend, disabled = false, placeholder = "Message…", showShiftEnterHint = false }: Props = $props();
 
   let text = $state("");
   let files: File[] = $state([]);
@@ -111,15 +112,20 @@
       aria-label="File attachment picker"
     />
 
-    <button
-      type="button"
-      aria-label="Send"
-      disabled={!canSend}
-      class="rounded-xl px-4 py-1.5 text-sm font-medium transition-colors
-        {canSend
-          ? 'bg-green-500 text-white-100 hover:bg-green-600'
-          : 'bg-white-300 text-black-400 dark:bg-navy-700 dark:text-black-600 cursor-not-allowed'}"
-      onclick={doSend}
-    >Send</button>
+    <div class="flex items-center gap-2">
+      {#if showShiftEnterHint}
+        <span class="hidden sm:block text-[10px] text-black-600 dark:text-black-700">Shift+Enter for newline</span>
+      {/if}
+      <button
+        type="button"
+        aria-label="Send"
+        disabled={!canSend}
+        class="rounded-xl px-4 py-1.5 text-sm font-medium transition-colors
+          {canSend
+            ? 'bg-green-500 text-white-100 hover:bg-green-600'
+            : 'bg-white-300 text-black-400 dark:bg-navy-700 dark:text-black-600 cursor-not-allowed'}"
+        onclick={doSend}
+      >Send</button>
+    </div>
   </div>
 </div>
