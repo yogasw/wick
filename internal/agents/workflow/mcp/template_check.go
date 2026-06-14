@@ -35,6 +35,13 @@ type TemplateTestInput struct {
 	Template    string `json:"template"`
 	Context     string `json:"context,omitempty"`
 	SampleEvent string `json:"sample_event,omitempty"`
+	// Expressions, when set, requests a per-expression breakdown: each is
+	// rendered against the SAME resolved context as Template, and the
+	// results land in TemplateTestResult.Results in order. This is one
+	// round-trip — the FE used to fire N parallel calls and trip the
+	// per-endpoint rate limiter (every row came back 429 → "nil/error"
+	// while the combined Template render succeeded).
+	Expressions []string `json:"expressions,omitempty"`
 }
 
 // TemplateTestResult is the workflow_template_test response.
@@ -55,6 +62,18 @@ type TemplateTestResult struct {
 	// without a separate API call.
 	EnvKeys    []string `json:"env_keys,omitempty"`
 	SecretKeys []string `json:"secret_keys,omitempty"`
+	// Results carries the per-expression breakdown when the request set
+	// Expressions. Each entry mirrors the OK/Rendered/Error of a single
+	// render, in the same order as the input expressions.
+	Results []ExprResult `json:"results,omitempty"`
+}
+
+// ExprResult is one row of the per-expression breakdown.
+type ExprResult struct {
+	Expression string `json:"expression"`
+	OK         bool   `json:"ok"`
+	Rendered   string `json:"rendered,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // TemplateTest renders `in.Template` against the resolved context and
@@ -98,6 +117,19 @@ func (m *Ops) TemplateTest(in TemplateTestInput) (TemplateTestResult, error) {
 	}
 	sort.Strings(secretKeys)
 
+	// Per-expression breakdown — rendered against the same context so one
+	// failing ref is isolated to its own row instead of blanking the whole
+	// preview. Computed once here and attached to whichever result returns.
+	var exprResults []ExprResult
+	for _, ex := range in.Expressions {
+		r, e := wftemplate.Render(ex, previewRctx)
+		if e != nil {
+			exprResults = append(exprResults, ExprResult{Expression: ex, OK: false, Error: e.Error()})
+		} else {
+			exprResults = append(exprResults, ExprResult{Expression: ex, OK: true, Rendered: r})
+		}
+	}
+
 	rendered, rerr := wftemplate.Render(in.Template, previewRctx)
 	if rerr == nil {
 		// Warn when rendered output looks like a Go map dump (e.g. {{.Env}} without a key).
@@ -105,13 +137,14 @@ func (m *Ops) TemplateTest(in TemplateTestInput) (TemplateTestResult, error) {
 		if strings.HasPrefix(rendered, "map[") {
 			hint = "Looks like you used {{.Env}} without a key — use {{.Env.KEY_NAME}} instead."
 		}
-		return TemplateTestResult{OK: true, Rendered: rendered, Hint: hint, EnvKeys: envKeys, SecretKeys: secretKeys}, nil
+		return TemplateTestResult{OK: true, Rendered: rendered, Hint: hint, EnvKeys: envKeys, SecretKeys: secretKeys, Results: exprResults}, nil
 	}
 	res := TemplateTestResult{
 		OK:         false,
 		Error:      rerr.Error(),
 		EnvKeys:    envKeys,
 		SecretKeys: secretKeys,
+		Results:    exprResults,
 	}
 	// missingkey=error fires "map has no entry for key \"X\"" — when we
 	// can locate it inside the template, introspect ctxRaw and dump

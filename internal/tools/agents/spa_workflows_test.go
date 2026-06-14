@@ -34,6 +34,52 @@ func TestRerunEvent(t *testing.T) {
 	}
 }
 
+// TestRunNowPayload_ReplaySuppliedWins confirms a Replay-to-editor
+// payload fires verbatim (so {{.Event.Payload.x}} sees the real run's
+// data) and is NOT clobbered by the synthetic source/trigger_id keys.
+func TestRunNowPayload_ReplaySuppliedWins(t *testing.T) {
+	supplied := map[string]any{
+		"body":   map[string]any{"action": "opened"},
+		"method": "POST",
+	}
+	got := runNowPayload(supplied, "trg-1")
+	if _, ok := got["source"]; ok {
+		t.Fatalf("supplied replay payload must not gain synthetic keys: %+v", got)
+	}
+	body, _ := got["body"].(map[string]any)
+	if body == nil || body["action"] != "opened" {
+		t.Fatalf("replay payload not preserved: %+v", got)
+	}
+}
+
+// TestRunNowPayload_PlainExecuteSynthesizes confirms a plain Execute (no
+// replay) still gets the provenance placeholder so logs stay honest.
+func TestRunNowPayload_PlainExecuteSynthesizes(t *testing.T) {
+	got := runNowPayload(nil, "trg-9")
+	if got["source"] != "spa" || got["trigger_id"] != "trg-9" {
+		t.Fatalf("synthetic payload wrong: %+v", got)
+	}
+}
+
+// TestMissingUpstreamNode parses the un-run upstream node out of a Go
+// template nil-pointer panic so the exec-node handler can replace the
+// cryptic error with an actionable one.
+func TestMissingUpstreamNode(t *testing.T) {
+	cases := map[string]string{
+		`executing "node" at <.Node.analyze.text>: nil pointer evaluating interface {}.text`:            "analyze",
+		`pre-render url: template: node:1:21: executing "node" at <.Node.fetch_diff.body>: nil pointer`: "fetch_diff",
+		// not a node-ref nil-pointer → no match
+		`map has no entry for key "channel"`:                  "",
+		`executing "node" at <.Event.Payload.x>: some error`:  "",
+		`<.Node.analyze.session_id>: nil pointer evaluating`:  "analyze",
+	}
+	for in, want := range cases {
+		if got := missingUpstreamNode(in); got != want {
+			t.Errorf("missingUpstreamNode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestNormaliseWorkflowBody_RawWorkflowJSON confirms the FE can post
 // the Workflow object directly and the normaliser round-trips it back
 // to JSON the parser can consume.
