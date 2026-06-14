@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { renderMarkdown } from "@wick-fe/common-md";
   import { getSkill, postMutation } from "$lib/api.js";
@@ -58,7 +57,10 @@
     }
   }
 
-  onMount(load);
+  $effect(() => {
+    void name;
+    load();
+  });
 </script>
 
 <div class="space-y-6">

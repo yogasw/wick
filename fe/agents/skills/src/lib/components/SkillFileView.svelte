@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { renderMarkdown } from "@wick-fe/common-md";
   import { getSkillFile } from "$lib/api.js";
   import type { SkillFileDetailResponse } from "$lib/types.js";
@@ -26,16 +25,16 @@
     return dir;
   }
 
-  onMount(async () => {
+  $effect(() => {
+    const f = folder;
+    const fl = file;
     loading = true;
     error = null;
-    try {
-      data = await getSkillFile(folder, file);
-    } catch (e) {
-      error = e instanceof Error ? e.message : "Failed to load";
-    } finally {
-      loading = false;
-    }
+    data = null;
+    getSkillFile(f, fl)
+      .then((d) => { data = d; })
+      .catch((e) => { error = e instanceof Error ? e.message : "Failed to load"; })
+      .finally(() => { loading = false; });
   });
 </script>
 
