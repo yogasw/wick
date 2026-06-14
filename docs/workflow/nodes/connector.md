@@ -52,7 +52,9 @@ File a GitHub issue from a Slack thread:
 
 ## Tag visibility
 
-The runtime calls `wick_execute` under the hood, so the same tag-filter rule applies — the workflow caller must have visibility on the (module, op) pair. Workflow runs as the user who triggered the run (channel-bound) or the system user (cron / webhook); align tags accordingly.
+The runtime calls `wick_execute` under the hood, so the same tag-filter rule applies — the workflow caller must have visibility on the (module, op) pair.
+
+For **channel-bound** runs (Slack mention, webhook with a user context) the run identity is the triggering user. For **headless** runs (cron, webhook, manual trigger with no authenticated session) the connector node executes as the **workflow owner** — the user recorded in `created_by` at workflow creation time. Connector operations that require an authenticated user (e.g. `notifications.send_to_push_id`) therefore work correctly from headless runs without extra configuration; just ensure the workflow owner has the necessary tag access on the connector instance.
 
 ## Pair with
 

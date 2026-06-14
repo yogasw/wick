@@ -21,8 +21,9 @@ The canvas at `/tools/agents/workflows/<id>` is the visual editor. Built on Draw
 1. Drag a node from the palette → it lands with default field values.
 2. Double-click to focus the inspector. Fill required fields (red asterisk).
 3. Drag from a node's output port to another node's input port to add an edge. `case:` labels appear on outgoing ports of branching nodes.
-4. **Save** writes the current state to `workflow.draft.json`.
-5. **Publish** validates the canvas state, runs the same `workflow_diagnose` checks the MCP surface uses, and only writes `workflow.json` if every check passes. Failed checks land inline next to the offending node. One class of check is a **publish-blocker**: any field whose `arg_modes` entry is `fixed` but whose value contains a Go template (`{{...}}`) is reported as an Error — the template would never evaluate at runtime. Draft Save is not affected; only the Publish step is gated.
+4. **Rename a node label** — edit the label field in the inspector and blur. The canvas automatically rewrites every `{{.Node.<old>.…}}` reference across all other nodes to the new label, keeping the graph consistent. A toast confirms how many references were updated.
+5. **Save** writes the current state to `workflow.draft.json`.
+6. **Publish** validates the canvas state, runs the same `workflow_diagnose` checks the MCP surface uses, and only writes `workflow.json` if every check passes. Failed checks land inline next to the offending node. One class of check is a **publish-blocker**: any field whose `arg_modes` entry is `fixed` but whose value contains a Go template (`{{...}}`) is reported as an Error — the template would never evaluate at runtime. Draft Save is not affected; only the Publish step is gated.
 
 ::: info Two ways to edit the same workflow
 The canvas + MCP `workflow_*` ops mutate the same `workflow.json`. An LLM can scaffold the graph over MCP, you tighten it in the canvas, and the DB record stays consistent. There is no separate "AI mode" / "canvas mode" — both write through the same engine validator.
@@ -43,7 +44,27 @@ The canvas + MCP `workflow_*` ops mutate the same `workflow.json`. An LLM can sc
 
 Pick a past run → the canvas highlights the `path_taken` and the timeline shows per-node input / output / duration / error. Click **Rerun** to navigate to the manual runner pre-filled with the original payload — see [Run state](./state#replay).
 
-The **Copy to editor** button on a run loads the run state, saves the current published workflow as draft, and writes `runs/<run_id>/mocks.json` so the next Execute step can prefill from real data. Same op surfaces from MCP as `workflow_copy_run_to_editor`.
+The **Copy to editor** button on a run imports the full run state into the canvas:
+
+- Each node card gets a status overlay (success / failed / running) from the run.
+- The inspector's OUTPUT pane is pre-populated with the node's stored output so you can inspect or drag values into templates without re-running.
+- The trigger's event payload is pinned in the INPUT dropdown of every node inspector — `{{.Event.Payload.*}}` refs resolve to the real run data instead of the synthetic Execute placeholder.
+
+After importing, clicking **Execute** on a node sends that pinned payload as the event, reproducing the exact input the original run saw — n8n-style "retry with pinned input". Use **Unpin** on the trigger OUTPUT pane to clear the pinned payload and return to the synthetic one. Same op surfaces from MCP as `workflow_copy_run_to_editor`.
+
+## Node inspector — expression preview
+
+Every template field in the inspector has an inline preview that renders `{{...}}` expressions against the current context (replayed event payload + upstream node outputs):
+
+- **Per-expression breakdown table** — when a field contains multiple `{{...}}` segments the preview shows a row per expression: the expression text, the rendered value (or an error), and whether it resolved OK. This isolates a failing reference without blanking the combined output.
+- **Dynamic autocomplete** — the expression input autocompletes `.Event.Payload.*`, `.Node.<label>.*`, `.Env.*`, and `.Trigger.*` paths from the live context so you can discover available keys without reading `state.json`.
+- **Manual refresh** — click the refresh icon to re-render against the latest upstream outputs when context changes outside the inspector.
+
+Missing optional fields (e.g. a webhook body that doesn't always include an `action` key) no longer fail the preview or the live run — the template engine uses `missingkey=zero`, rendering the missing key as `<no value>` and continuing. Wrap optional fields with `{{ .Event.Payload.action | default "" }}` when you want a clean empty string instead.
+
+::: info Missing upstream node error
+If an Execute step references `{{.Node.<label>.…}}` for a node that hasn't run yet in this isolated step, the error message now names the blocking node: `references {{.Node.analyze.…}} but node "analyze" has no output yet — run "analyze" first`. Run that node first (or replay a run that includes it).
+:::
 
 ## Doctor + Validate
 

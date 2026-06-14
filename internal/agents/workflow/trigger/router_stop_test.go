@@ -1,7 +1,6 @@
 package trigger
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 // workers finish before the deadline.
 func TestRouterStop_DrainsCleanly(t *testing.T) {
 	r := &Router{
-		workers: map[string]context.CancelFunc{},
+		workers: map[string]*workerHandle{},
 		index:   map[string][]triggerRef{},
 		defs:    map[string]workflow.Workflow{},
 		queues:  map[string]*Queue{},
@@ -43,7 +42,7 @@ func TestRouterStop_DrainsCleanly(t *testing.T) {
 // forever when a worker is stuck — it returns after StopTimeout.
 func TestRouterStop_TimesOutOnStuckWorker(t *testing.T) {
 	r := &Router{
-		workers: map[string]context.CancelFunc{},
+		workers: map[string]*workerHandle{},
 		index:   map[string][]triggerRef{},
 		defs:    map[string]workflow.Workflow{},
 		queues:  map[string]*Queue{},

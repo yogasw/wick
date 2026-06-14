@@ -3,6 +3,7 @@ import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
 import { workflowAPI, type ValidationReport, type ValidationIssue, type WorkflowState, type PaletteDrag } from "$lib/api/workflow";
 import { APIError } from "@wick-fe/common-api";
 import { toastError, toastOk } from "@wick-fe/common-stores";
+import { renameNodeRefs, type GraphNode } from "$lib/components/workflow/renameNodeRefs";
 
 // Decorate raw {Path, Message} issues with severity + node so consumers
 // (toolbar chip, ValidationTab) don't repeat the extraction logic.
@@ -120,6 +121,141 @@ export function savePinnedTrigger(workflowID: string, triggerID: string | null) 
   } catch {
     /* storage full / denied — in-memory pin still works for this session */
   }
+}
+
+// Last-fired event payload per trigger id. Populated by Replay-to-editor
+// (which carries the picked run's event.payload) so the TriggerDetailModal
+// OUTPUT pane can show what the trigger received — the same "surfaces once
+// a run lands" affordance the node inspector gets from stepResultsByNode.
+// SSE workflow_started doesn't carry the payload, so replay is the feed.
+export const triggerEventByID = writable<Record<string, unknown>>({});
+export function setTriggerEvent(triggerID: string, payload: unknown) {
+  triggerEventByID.update((m) => ({ ...m, [triggerID]: payload }));
+}
+// unpinTriggerEvent clears a replayed payload — n8n-style "unpin data".
+// After this the trigger falls back to the synthetic Execute payload and
+// the OUTPUT pane goes back to "No event data".
+export function unpinTriggerEvent(triggerID: string) {
+  triggerEventByID.update((m) => {
+    if (!(triggerID in m)) return m;
+    const { [triggerID]: _, ...rest } = m;
+    return rest;
+  });
+}
+
+// HydrateSummary reports what hydrateFromRun actually populated, so the
+// caller can give honest feedback instead of always claiming success.
+// "replay sukses tapi kosong" happens for runs that genuinely carry no
+// data — failed at the first node (no outputs) or a legacy manual Execute
+// whose payload is just the {source:spa,trigger_id} placeholder.
+export type HydrateSummary = {
+  nodeCount: number; // nodes that got a ✓/✗ status overlay
+  outputCount: number; // nodes with a stored output
+  triggerPinned: boolean; // a meaningful event payload was pinned
+  syntheticPayload: boolean; // payload was the {source:spa} placeholder
+};
+
+// isSyntheticPayload detects the placeholder a plain manual Execute writes
+// ({source:"spa", trigger_id:"..."}) — there's no real data to pin.
+function isSyntheticPayload(p: unknown): boolean {
+  if (!p || typeof p !== "object") return false;
+  const keys = Object.keys(p as Record<string, unknown>);
+  return keys.length === 2 && keys.includes("source") && keys.includes("trigger_id")
+    && (p as Record<string, unknown>).source === "spa";
+}
+
+// hydrateFromRun replays a past run's full state onto the canvas — the
+// n8n "import execution" affordance. It fills three stores so opening a
+// run looks exactly like having just executed it:
+//   - runStatusByNode: ✓/✗/skip from completed/failed/skipped arrays
+//   - stepResultsByNode: each node's output (+ the failed node's error)
+//     from the Outputs map, so the node inspector shows real I/O
+//   - triggerEventByID: the trigger event payload, so the entry node's
+//     {{.Event.Payload.x}} resolves and Execute can re-fire with it
+// runDetail is the flattened run-state object the ExecutionsPanel builds
+// ({...state, events}); fields mirror workflow.RunState (Go side).
+// Returns a HydrateSummary so the caller can warn on empty runs.
+export function hydrateFromRun(runDetail: any | null | undefined): HydrateSummary {
+  const empty: HydrateSummary = { nodeCount: 0, outputCount: 0, triggerPinned: false, syntheticPayload: false };
+  if (!runDetail) return empty;
+  const at = Date.now();
+
+  const status: Record<string, "success" | "failed" | "running"> = {};
+  for (const id of (runDetail.completed ?? []) as string[]) status[id] = "success";
+  for (const id of (runDetail.failed ?? []) as string[]) status[id] = "failed";
+  // skipped nodes carry no status colour (they didn't run) — left out on
+  // purpose so the overlay matches what actually executed.
+  runStatusByNode.set(status);
+
+  const outputs = (runDetail.outputs ?? {}) as Record<string, unknown>;
+  const failedSet = new Set<string>((runDetail.failed ?? []) as string[]);
+  const errMsg: string | undefined =
+    typeof runDetail.error?.message === "string" ? runDetail.error.message : undefined;
+  const errNode: string | undefined =
+    typeof runDetail.error?.node === "string" ? runDetail.error.node : undefined;
+
+  const steps: Record<string, StepResult> = {};
+  for (const [nodeID, out] of Object.entries(outputs)) {
+    steps[nodeID] = {
+      ok: !failedSet.has(nodeID),
+      output: (out ?? undefined) as Record<string, unknown> | undefined,
+      at,
+    };
+  }
+  // The failed node usually has no Outputs entry (it errored before
+  // producing one) — seed it so the inspector shows the failure + error.
+  if (errNode && !steps[errNode]) {
+    steps[errNode] = { ok: false, error: errMsg, at };
+  } else if (errNode && steps[errNode]) {
+    steps[errNode] = { ...steps[errNode], ok: false, error: errMsg };
+  }
+  stepResultsByNode.set(steps);
+
+  // Trigger event — keyed by the trigger that fired. Prefer the explicit
+  // event.trigger_id, but older / re-run / webhook-test runs sometimes
+  // carry a real payload with NO trigger_id (e.g. event.trigger_id=null).
+  // In that case fall back to the trigger whose entry_node matches the
+  // run's entry, then to the sole trigger — otherwise a run with good data
+  // would import with an empty trigger OUTPUT ("event hilang pas replay").
+  const ev = runDetail.event;
+  const triggers = get(draftWorkflow)?.triggers ?? [];
+  let triggerID: string | undefined =
+    (typeof ev?.trigger_id === "string" && ev.trigger_id) ||
+    (typeof ev?.payload?.trigger_id === "string" && ev.payload.trigger_id) ||
+    (typeof runDetail.trigger_id === "string" && runDetail.trigger_id) ||
+    undefined;
+  if (!triggerID && ev?.payload != null) {
+    const entry = typeof runDetail.entry === "string" ? runDetail.entry : "";
+    const byEntry = entry ? triggers.find((t) => t.entry_node === entry) : undefined;
+    triggerID = byEntry?.id ?? (triggers.length === 1 ? triggers[0]?.id : undefined);
+  }
+  const synthetic = isSyntheticPayload(ev?.payload);
+  let triggerPinned = false;
+  if (triggerID && ev?.payload != null) {
+    // Pin even the synthetic payload (so Execute routes the trigger), but
+    // report it as not-meaningfully-pinned so the caller can warn.
+    setTriggerEvent(triggerID, ev.payload);
+    triggerPinned = !synthetic;
+  }
+  // Trigger status overlay — a run that produced any node activity means
+  // the trigger fired. Mark it failed only if the whole run failed AND no
+  // node ran (trigger itself was the failure point); otherwise success.
+  // This is what gives the trigger card its ✓/✗ after "import execution".
+  if (triggerID) {
+    const anyNodeRan = Object.keys(status).length > 0;
+    const runFailed = runDetail.status === "failed";
+    triggerRunStatus.update((m) => ({
+      ...m,
+      [triggerID]: anyNodeRan || !runFailed ? "success" : "failed",
+    }));
+  }
+
+  return {
+    nodeCount: Object.keys(status).length,
+    outputCount: Object.keys(outputs).length,
+    triggerPinned,
+    syntheticPayload: synthetic,
+  };
 }
 
 // Last run summary — drives the "Run completed in XXms" toast at the
@@ -348,6 +484,44 @@ export function updateNode(id: string, patch: Partial<Node>) {
     wf.graph.nodes[idx] = { ...wf.graph.nodes[idx], ...patch };
     return wf;
   });
+}
+
+// renameNodeLabel commits a label change AND cascades every
+// {{.Node.<oldLabel>.…}} reference across the workflow to the new label,
+// so renaming a node never orphans the templates that read its output
+// (n8n-style rename cascade). Call this on label-commit (blur), not on
+// every keystroke. Returns the number of OTHER nodes whose refs changed
+// so the UI can surface "updated N references".
+export function renameNodeLabel(id: string, newLabel: string): number {
+  if (lockGuard("renaming nodes")) return 0;
+  let changed = 0;
+  draftWorkflow.update((wf) => {
+    if (!wf) return wf;
+    ensureGraph(wf);
+    const node = wf.graph.nodes.find((n) => n.id === id);
+    if (!node) return wf;
+    const oldLabel = node.label ?? "";
+    if (!oldLabel || oldLabel === newLabel) {
+      // No cascade needed — just set the label.
+      const idx = wf.graph.nodes.findIndex((n) => n.id === id);
+      if (idx >= 0) wf.graph.nodes[idx] = { ...wf.graph.nodes[idx], label: newLabel };
+      return wf;
+    }
+    const before = wf.graph.nodes.map((n) => JSON.stringify(n));
+    wf.graph.nodes = renameNodeRefs(
+      wf.graph.nodes as unknown as GraphNode[],
+      id,
+      oldLabel,
+      newLabel,
+    ) as unknown as typeof wf.graph.nodes;
+    // Count OTHER nodes whose serialization changed (the renamed node
+    // always changes — exclude it from the "references updated" count).
+    wf.graph.nodes.forEach((n, i) => {
+      if (n.id !== id && JSON.stringify(n) !== before[i]) changed++;
+    });
+    return wf;
+  });
+  return changed;
 }
 
 // Generate a label like `<type>_<N>` that isn't already used by any

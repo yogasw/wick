@@ -928,6 +928,10 @@ func NewServer() *Server {
 	// Workflow connector executor needs row credentials resolved
 	// from the connectors service — wire after the service is built.
 	wfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connectorsSvc))
+	// Run identity-gated connector ops as the workflow owner — headless
+	// runs have no cookie session to stamp login.GetUser. See connector
+	// node executor.
+	wfMgr.Connectors.SetUserResolver(wfsetup.UserResolverAdapter(authSvc))
 
 	// Resolve every tool meta up front — wick stamps the mount path
 	// from meta.Key so modules never have to. (Earlier here than in

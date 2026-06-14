@@ -5,7 +5,7 @@
   // initial port has zero JS-lib dependency. When we wire Drawflow back,
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
-  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, paletteAddRequest, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField, searchOpen } from "$lib/stores/editor";
+  import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, paletteAddRequest, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, triggerEventByID, setLockedField, searchOpen } from "$lib/stores/editor";
   import { toastError } from "@wick-fe/common-stores";
   import { get } from "svelte/store";
 
@@ -1055,8 +1055,13 @@
       return;
     }
     lastFiredTriggerID.set(fired);
+    // If a past run was replayed onto this trigger, fire with its event
+    // payload so node templates ({{.Event.Payload.x}}) resolve to the
+    // real run's data — n8n-style retry-with-pinned-input. Otherwise the
+    // backend synthesizes a placeholder payload.
+    const replayed = $triggerEventByID[fired] as Record<string, unknown> | undefined;
     try {
-      await workflowAPI.runNow(wf.id, fired);
+      await workflowAPI.runNow(wf.id, fired, replayed ?? null);
     } catch (e) {
       console.error("execute workflow failed:", e);
       lastFiredTriggerID.set(null);
@@ -1334,7 +1339,9 @@
             aria-label="Connect input"
             style="background:rgba(250,204,21,0.4)"
           ></button>
-          {#if status === "success"}
+          {#if status === "running"}
+            <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-500 text-white-100 text-[10px] flex items-center justify-center shadow animate-pulse" title="Running…">⟳</div>
+          {:else if status === "success"}
             <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-emerald-500 text-white-100 text-[10px] flex items-center justify-center shadow">✓</div>
           {:else if status === "failed"}
             <div class="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-rose-500 text-white-100 text-[10px] flex items-center justify-center shadow">✗</div>
@@ -1541,6 +1548,7 @@
         </div>
         {#each $draftWorkflow?.triggers ?? [] as t}
           {@const isPinned = t.id === $pinnedTriggerID}
+          {@const hasPinnedData = $triggerEventByID[t.id] != null}
           {@const entryNode = ($draftWorkflow?.graph?.nodes ?? []).find((n) => n.id === t.entry_node)}
           {@const entryLabel = entryNode?.label || "?"}
           <button
@@ -1562,6 +1570,11 @@
             <!-- Entry node chip -->
             {#if entryNode}
               <span class="text-[11px] text-black-600 dark:text-black-600 shrink-0">→ {entryLabel}</span>
+            {/if}
+            <!-- Pinned-data badge: this trigger fires Execute with a
+                 replayed run's payload (n8n-style pinned data). -->
+            {#if hasPinnedData}
+              <span class="text-[10px] shrink-0" title="Replayed payload pinned — Execute uses it">📌</span>
             {/if}
             <!-- Pinned indicator -->
             {#if isPinned}

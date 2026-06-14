@@ -117,6 +117,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	// matters; see internal/agents/workflow/setup/connectors.go.
 	wfsetup.RegisterLiveConnectors(stdioWfMgr.Connectors)
 	stdioWfMgr.Connectors.SetRowCreds(wfsetup.ConnectorsCredsAdapter(connSvc))
+	stdioWfMgr.Connectors.SetUserResolver(wfsetup.UserResolverAdapter(authSvc))
 	// Register Slack workflow descriptors into the integration registry
 	// so workflow_integration / workflow_channels can surface full
 	// MatchSchema + InputSchema metadata. Execute closures bind to a

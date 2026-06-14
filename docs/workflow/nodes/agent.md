@@ -21,7 +21,7 @@ Spawn an agent turn through the existing pool. Templated prompt, optional skills
 | `skills` | array | | Skill names to expose to this turn. Per-provider — see [Providers](/guide/agents/providers). |
 | `tools` | array | | Tool names to allowlist. Empty = provider default. |
 | `max_turns` | int | | Cap on agentic turns passed as `--max-turns` to the provider CLI. `0` (default) = unlimited (provider default). |
-| `session` | string | | `new` = fresh session per run, empty = inherit the run's session. |
+| `session` | string | | `new` = fresh session per run, empty = inherit the run's session. The session directory is created automatically on first use — a `session_init` upstream node is not required. |
 
 ## Output
 

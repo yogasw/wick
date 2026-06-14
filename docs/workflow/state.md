@@ -54,7 +54,16 @@ From MCP, `workflow_replay_run` is the equivalent — loads `RunState.Event` fro
 
 ### Copy to editor (pre-fill runner)
 
-The **Copy to editor** button (and the MCP `workflow_copy_run_to_editor` op) loads the run state and saves the current published workflow as draft so you can edit without overwriting production. Use this when iterating on a workflow against real-world failure data: load the failed run → edit the graph → re-run.
+The **Copy to editor** button (and the MCP `workflow_copy_run_to_editor` op) loads the full run state into the canvas editor:
+
+- Saves the current published workflow as draft so you can edit without overwriting production.
+- Overlays per-node status (success / failed) on every canvas card.
+- Pre-populates each node inspector's OUTPUT pane with that node's stored output.
+- Pins the run's trigger event payload so `{{.Event.Payload.*}}` refs in templates and the **Execute step** button resolve against the real run data instead of the synthetic `{source: spa}` placeholder.
+
+Use this when iterating on a workflow against real-world failure data: load the failed run → inspect node outputs → fix the graph → Execute the affected step with the same payload → re-run the whole workflow.
+
+The pinned event payload shows in the trigger inspector's OUTPUT pane. Click **Unpin** there to clear it and return to the synthetic payload.
 
 
 ## Version history

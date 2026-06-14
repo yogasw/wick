@@ -13,7 +13,7 @@
 
   type Props = {
     workflowID: string;
-    onReplay?: (triggerID: string | null) => void;
+    onReplay?: (runDetail: any | null) => void;
   };
   let { workflowID, onReplay }: Props = $props();
 

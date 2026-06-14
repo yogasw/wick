@@ -15,12 +15,13 @@
   // Field set tracked against the v1 audit — keep this 1:1; improve
   // where it helps but never reduce the surface.
 
-  import { detailNodeID, draftWorkflow, removeNode, updateNode, isValidLabel, LABEL_FORMAT_HINT, stepResultsByNode, type StepResult } from "$lib/stores/editor";
+  import { detailNodeID, draftWorkflow, removeNode, updateNode, renameNodeLabel, isValidLabel, LABEL_FORMAT_HINT, stepResultsByNode, runStatusByNode, triggerEventByID, type StepResult } from "$lib/stores/editor";
   import JsonViewer from "./fields/JsonViewer.svelte";
+  import { resolveNodeInput, EVENT_SOURCE } from "./nodeInput";
   import { inferSchema } from "./fields/jsonSchema";
   import { catalog } from "$lib/stores/catalog";
   import { workflowAPI } from "$lib/api/workflow";
-  import { toastError } from "@wick-fe/common-stores";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
   import type { Node } from "$lib/types/workflow";
   import ArgField from "./fields/ArgField.svelte";
   import KvListField from "./fields/KvListField.svelte";
@@ -105,6 +106,24 @@
   function patch(field: keyof Node, value: unknown) {
     if (!node) return;
     updateNode(node.id, { [field]: value } as Partial<Node>);
+  }
+
+  // Label is special: renaming cascades {{.Node.<old>.…}} refs across the
+  // whole workflow. We commit that on BLUR (not per-keystroke) so the
+  // rewrite fires once, against the final label. labelBeforeEdit captures
+  // the value on focus so we can detect an actual change.
+  let labelBeforeEdit = $state("");
+  function commitLabelRename(finalLabel: string) {
+    if (!node) return;
+    const newLabel = finalLabel.trim();
+    if (!newLabel || newLabel === labelBeforeEdit) return;
+    // Don't cascade an invalid/duplicate label — the inline error already
+    // tells the user; leave the (locally-patched) value for them to fix.
+    if (!isValidLabel(newLabel) || labelClashesWith(node)) return;
+    const refs = renameNodeLabel(node.id, newLabel);
+    if (refs > 0) {
+      toastOk("Node renamed", `Updated ${refs} reference${refs === 1 ? "" : "s"} to "${newLabel}".`);
+    }
   }
 
   // Set the editor mode pill for a given field key. Mode lives in
@@ -198,17 +217,36 @@
       .filter((row) => row.run?.output);
   });
 
+  // The trigger that has a replayed event payload, if any — drives an
+  // extra option in the INPUT dropdown so every node (not just the entry
+  // node) can inspect .Event alongside its upstream outputs.
+  const eventTrigger = $derived(
+    ($draftWorkflow?.triggers ?? []).find((t) => $triggerEventByID[t.id] != null),
+  );
+  // Combined selectable INPUT sources: the trigger event first (labelled
+  // with the trigger's real name, e.g. "github_pr"), then each upstream
+  // node that produced output.
+  const inputSources = $derived([
+    ...(eventTrigger
+      ? [{ id: EVENT_SOURCE, label: `${eventTrigger.label || eventTrigger.id} (event)` }]
+      : []),
+    ...upstreamWithOutput.map((r) => ({ id: r.id, label: r.label })),
+  ]);
+
   // Which parent output is being shown in the INPUT pane. Defaults to
   // direct parent when it has data, falls back to first available.
   let selectedInputSource = $state<string | null>(null);
   $effect(() => {
     if (!node) return;
-    const available = upstreamWithOutput.map((r) => r.id);
+    const available = inputSources.map((r) => r.id);
     if (selectedInputSource && available.includes(selectedInputSource)) return;
+    // Prefer the direct parent's output; else first upstream; else the
+    // trigger event (so entry nodes default to .Event).
     if (parentNodeID && available.includes(parentNodeID)) {
       selectedInputSource = parentNodeID;
     } else {
-      selectedInputSource = available[0] ?? null;
+      const firstUpstream = upstreamWithOutput[0]?.id;
+      selectedInputSource = firstUpstream ?? available[0] ?? null;
     }
   });
 
@@ -224,34 +262,19 @@
   //   (b) No dropdown selection but a mock_input is set → show that
   //       as the active sample (prefix `.Input` since that's how the
   //       backend wires it into rc.Outputs["input"]).
-  const inputResolved = $derived.by<{ data: unknown; prefix: string; source: "upstream" | "mock" | "none"; sourceLabel: string }>(() => {
-    if (!node) return { data: null, prefix: "", source: "none", sourceLabel: "" };
-    if (selectedInputSource) {
-      const row = upstreamWithOutput.find((r) => r.id === selectedInputSource);
-      if (row?.run?.output) {
-        return {
-          data: row.run.output,
-          prefix: ".Node." + row.label,
-          source: "upstream",
-          sourceLabel: row.label,
-        };
-      }
-    }
-    const mockRaw = (node as { mock_input?: string }).mock_input ?? "";
-    if (mockRaw.trim()) {
-      try {
-        return {
-          data: JSON.parse(mockRaw),
-          prefix: ".Input",
-          source: "mock",
-          sourceLabel: "mock",
-        };
-      } catch {
-        /* fall through */
-      }
-    }
-    return { data: null, prefix: "", source: "none", sourceLabel: "" };
-  });
+  // Resolved INPUT data — precedence + cases live in resolveNodeInput
+  // (nodeInput.ts) so they're unit-tested. We just feed it the current
+  // reactive values here.
+  const inputResolved = $derived(
+    resolveNodeInput({
+      hasNode: !!node,
+      selectedInputSource,
+      upstreamWithOutput: upstreamWithOutput.map((r) => ({ id: r.id, label: r.label, output: r.run?.output })),
+      mockRaw: (node as { mock_input?: string })?.mock_input ?? "",
+      triggerIDs: ($draftWorkflow?.triggers ?? []).map((t) => t.id),
+      triggerEvents: $triggerEventByID,
+    }),
+  );
 
   async function runStep() {
     if (!node) return;
@@ -279,12 +302,29 @@
     }
     executing = true;
     const nodeID = node.id;
+    // Drive the canvas card overlay so the node shows a ⟳ spinner while
+    // the step runs (agent nodes can take a while) and flips to ✓/✗ on
+    // completion — Execute step used to only update stepResultsByNode, so
+    // the card kept its stale status (e.g. ✗ from an imported run).
+    runStatusByNode.update((m) => ({ ...m, [nodeID]: "running" }));
     try {
       const wf = $draftWorkflow;
-      if (!wf) return;
+      if (!wf) { runStatusByNode.update((m) => { const { [nodeID]: _, ...rest } = m; return rest; }); return; }
+      // Feed the replayed trigger event (set by Replay-to-editor) so an
+      // entry node's {{.Event.Payload.x}} resolves to the real run's data
+      // during a single-node step run — same data a full run would see.
+      // Picks the workflow's trigger payload; falls back to any replayed
+      // entry. Without this, .Event is empty and entry-node steps render
+      // <no value>, which is exactly the "input not detected" symptom.
+      const events = $triggerEventByID;
+      const triggerID = (wf.triggers ?? []).map((t) => t.id).find((tid) => events[tid] != null);
+      const eventForRun = triggerID
+        ? { payload: events[triggerID] as Record<string, unknown> }
+        : undefined;
       const res = await workflowAPI.execNode(wf.id, {
         node,
         input: inputForRun,
+        event: eventForRun,
         parent_id: parentForRun ?? undefined,
         node_outputs: Object.keys(upstreamSnapshot).length > 0 ? upstreamSnapshot : undefined,
       });
@@ -298,6 +338,7 @@
         at: Date.now(),
       };
       stepResultsByNode.update((m) => ({ ...m, [nodeID]: entry }));
+      runStatusByNode.update((m) => ({ ...m, [nodeID]: res.ok ? "success" : "failed" }));
       if (!res.ok) {
         toastError("Execute step failed", res.error ?? "Executor returned an error.");
       }
@@ -307,6 +348,7 @@
         ...m,
         [nodeID]: { ok: false, error: errMsg, input: inputForRun, parent_id: parentForRun ?? undefined, at: Date.now() },
       }));
+      runStatusByNode.update((m) => ({ ...m, [nodeID]: "failed" }));
       toastError("Execute step failed", errMsg);
     } finally {
       executing = false;
@@ -465,16 +507,29 @@
              renderInteractiveJSON UX. -->
         <section class="flex flex-1 lg:flex min-h-0 flex-col p-3 overflow-y-auto" class:hidden={mobilePane !== "input"}>
           <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">INPUT</div>
-          {#if upstreamWithOutput.length > 0 || inputResolved.source === "mock"}
-            {#if upstreamWithOutput.length > 0}
+          {#if inputSources.length > 0 || inputResolved.source === "mock" || inputResolved.source === "event"}
+            {#if inputSources.length > 1}
+              <!-- Multiple sources: trigger event + upstream nodes. The
+                   user picks which to inspect / drag from. -->
               <select
                 class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
                 bind:value={selectedInputSource}
               >
-                {#each upstreamWithOutput as src}
+                {#each inputSources as src}
                   <option value={src.id}>{src.label}</option>
                 {/each}
               </select>
+            {:else if inputSources.length === 1 && inputSources[0].id !== EVENT_SOURCE}
+              <select
+                class="w-full mb-2 rounded border border-slate-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 text-xs"
+                bind:value={selectedInputSource}
+              >
+                {#each inputSources as src}
+                  <option value={src.id}>{src.label}</option>
+                {/each}
+              </select>
+            {:else if inputResolved.source === "event"}
+              <div class="mb-2 text-[10px] px-1.5 py-0.5 inline-block rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 self-start" title="Replayed trigger event — drag fields in as .Event.Payload refs">{eventTrigger ? `${eventTrigger.label || eventTrigger.id} (event)` : "trigger event"}</div>
             {:else}
               <div class="mb-2 text-[10px] px-1.5 py-0.5 inline-block rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 self-start">mock</div>
             {/if}
@@ -563,7 +618,9 @@
                   class:border-white-400={!labelErr}
                   class:border-navy-600={!labelErr}
                   value={node.label ?? ""}
+                  onfocus={(e) => (labelBeforeEdit = (e.target as HTMLInputElement).value)}
                   oninput={(e) => patch("label", (e.target as HTMLInputElement).value)}
+                  onblur={(e) => commitLabelRename((e.target as HTMLInputElement).value)}
                   placeholder="my_step"
                 />
                 {#if labelBadFormat}
