@@ -207,6 +207,11 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)
 
+	// JSON API — conversation SPA endpoints.
+	r.GET("/api/sessions", apiSessionList)
+	r.GET("/api/sessions/{id}/conversation", apiSessionConversation)
+	r.GET("/api/sessions/{id}/meta", apiSessionMeta)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 
