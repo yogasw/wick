@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -242,6 +243,7 @@ func Register(r tool.Router) {
 	// /projects/{id} is the per-project settings page.
 	r.GET("/projects", projectsRedirect) // legacy entry → all chats
 	r.GET("/projects/options", projectOptionsJSON)
+	r.GET("/providers/options", providerOptionsJSON)
 	r.GET("/projects/{id}", projectSettingsPage)
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
@@ -557,6 +559,17 @@ func notReady(c *tool.Ctx) bool {
 	return false
 }
 
+// idleTimeoutMs returns the configured agents idle timeout in milliseconds.
+// Falls back to 120 000 ms when globalConfigs is unavailable or the key is unset.
+func idleTimeoutMs() int {
+	if globalConfigs != nil {
+		if n, err := strconv.Atoi(globalConfigs.GetOwned("agents", "idle_timeout_sec")); err == nil && n > 0 {
+			return n * 1000
+		}
+	}
+	return 120 * 1000
+}
+
 // ownsSession reports whether the caller may access sess. App owners see
 // all sessions; regular users may only access sessions they own or legacy
 // sessions that have no recorded owner (UserID=="").
@@ -834,10 +847,11 @@ func sessionsPage(c *tool.Ctx) {
 		return
 	}
 	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:   sidebarVM(c, "sessions", ""),
-		Base:     c.Base(),
-		AssetURL: spaAssetURL("conversation"),
-		ScmAsset: spaAssetURL("scm"),
+		Layout:        sidebarVM(c, "sessions", ""),
+		Base:          c.Base(),
+		AssetURL:      spaAssetURL("conversation"),
+		ScmAsset:      spaAssetURL("scm"),
+		IdleTimeoutMs: idleTimeoutMs(),
 	}))
 }
 
@@ -893,6 +907,7 @@ func sessionDetail(c *tool.Ctx) {
 		AssetURL:       spaAssetURL("conversation"),
 		ScmAsset:       spaAssetURL("scm"),
 		InitialSession: id,
+		IdleTimeoutMs:  idleTimeoutMs(),
 	}))
 }
 
@@ -1511,6 +1526,25 @@ func projectOptionsJSON(c *tool.Ctx) {
 			path = globalLayout.ProjectManagedPath(id)
 		}
 		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path})
+	}
+	c.JSON(http.StatusOK, opts)
+}
+
+// providerOptionsJSON returns [{type, name, version}] for every healthy
+// provider — consumed by the composer's provider selector in the SPA.
+func providerOptionsJSON(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	type option struct {
+		Type    string `json:"type"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	ps := providerChoicesCached(c.Context())
+	opts := make([]option, 0, len(ps))
+	for _, p := range ps {
+		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version})
 	}
 	c.JSON(http.StatusOK, opts)
 }

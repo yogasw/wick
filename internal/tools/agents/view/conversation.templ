@@ -1,17 +1,22 @@
 package view
 
+import "strconv"
+
 // ConversationVM feeds the thin-shell that hosts the conversation SPA
 // inside the standard agents layout. AssetURL is the hashed Vite bundle
 // path resolved at boot via spaAssetURL("conversation"); ScmAsset is the
 // hashed SCM bundle path used by the docked source-control panel.
 // InitialSession, when non-empty, causes the SPA to deep-link directly
 // to that session on load via the #app data-initial-session attribute.
+// IdleTimeoutMs is the agents idle_timeout_sec × 1000, used by the SPA
+// idle lifecycle badge for the "kill in Ns" countdown.
 type ConversationVM struct {
-	Layout          AgentsLayoutVM
-	Base            string
-	AssetURL        string
-	ScmAsset        string
-	InitialSession  string
+	Layout         AgentsLayoutVM
+	Base           string
+	AssetURL       string
+	ScmAsset       string
+	InitialSession string
+	IdleTimeoutMs  int
 }
 
 // Conversation renders the conversation SPA shell inside the agents chrome.
@@ -31,6 +36,7 @@ templ Conversation(vm ConversationVM) {
 				data-base={ vm.Base }
 				data-scm-asset={ vm.ScmAsset }
 				data-initial-session={ vm.InitialSession }
+				data-idle-timeout-ms={ strconv.Itoa(vm.IdleTimeoutMs) }
 				class="h-full"
 			></div>
 			<script type="module" src={ vm.AssetURL }></script>
