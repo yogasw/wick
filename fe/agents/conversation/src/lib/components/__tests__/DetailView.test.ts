@@ -131,6 +131,8 @@ describe("DetailView — SCM source rail panel", () => {
       el.id = "app";
       document.body.appendChild(el);
     }
+    /* Reset WickSCM stub between tests */
+    (window as unknown as Record<string, unknown>)["WickSCM"] = undefined;
   });
 
   test("source rail button is rendered", () => {
@@ -183,6 +185,95 @@ describe("DetailView — SCM source rail panel", () => {
 
     /* source panel removed; context btn is now active */
     expect(contextBtn).toBeDefined();
+  });
+
+  test("SCM host div is only in DOM when source tab is active — absent on other tabs", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    /* Initially no source tab active — no scm host */
+    expect(container.querySelector("[data-scm-host]")).toBeNull();
+
+    /* Open source tab */
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+    expect(container.querySelector("[data-scm-host]")).not.toBeNull();
+
+    /* Switch to context — scm host must be gone */
+    const contextBtn = screen.getByRole("button", { name: /context/i });
+    await fireEvent.click(contextBtn);
+    expect(container.querySelector("[data-scm-host]")).toBeNull();
+  });
+
+  test("WickSCM.mount is called with non-empty sessionID when source tab opens", async () => {
+    const mountFn = vi.fn();
+    const unmountFn = vi.fn();
+    (window as unknown as Record<string, unknown>)["WickSCM"] = { mount: mountFn, unmount: unmountFn };
+
+    render(DetailView, { props: DEFAULT_PROPS });
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    /* Allow microtasks to flush */
+    await Promise.resolve();
+
+    expect(mountFn).toHaveBeenCalledOnce();
+    const [, opts] = mountFn.mock.calls[0] as [unknown, { sessionID: string }];
+    expect(opts.sessionID).toBe("test-sess");
+    expect(opts.sessionID.length).toBeGreaterThan(0);
+  });
+
+  test("WickSCM.mount is NOT called when sessionId is empty string", async () => {
+    const mountFn = vi.fn();
+    (window as unknown as Record<string, unknown>)["WickSCM"] = { mount: mountFn, unmount: vi.fn() };
+
+    render(DetailView, { props: { base: "/api", sessionId: "" } });
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+    await Promise.resolve();
+
+    expect(mountFn).not.toHaveBeenCalled();
+  });
+
+  test("WickSCM.unmount is called when leaving source tab", async () => {
+    const mountFn = vi.fn();
+    const unmountFn = vi.fn();
+    (window as unknown as Record<string, unknown>)["WickSCM"] = { mount: mountFn, unmount: unmountFn };
+
+    render(DetailView, { props: DEFAULT_PROPS });
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+    await Promise.resolve();
+
+    /* Switch away from source */
+    const contextBtn = screen.getByRole("button", { name: /context/i });
+    await fireEvent.click(contextBtn);
+    await Promise.resolve();
+
+    expect(unmountFn).toHaveBeenCalledOnce();
+  });
+
+  test("mobile overlay for source tab has fixed inset-0 classes (full-screen, not floating box)", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    /* The mobile overlay wrapper must have fixed+inset-0+z-40 */
+    const overlay = container.querySelector(".fixed.inset-0.z-40");
+    expect(overlay).not.toBeNull();
+  });
+
+  test("mobile overlay for source tab renders SCM host div, not 'open on desktop' message", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    /* Should NOT show the old desktop-only message in mobile overlay */
+    const desktopMsg = container.querySelector(".lg\\:hidden");
+    if (desktopMsg) {
+      expect(desktopMsg.textContent).not.toContain("open on desktop");
+    }
   });
 });
 

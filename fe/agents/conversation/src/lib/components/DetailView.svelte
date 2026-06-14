@@ -226,32 +226,49 @@
 
   /* ── SCM island mount when source tab opens ───────────────────── */
   $effect(() => {
-    if (railTab === "source" && scmHostEl && !scmMounted) {
-      const w = window as unknown as { WickSCM?: { mount: (h: HTMLElement, o: { sessionID: string; mode: "sidebar" }) => void } };
-      const doMount = async () => {
-        try {
-          if (scmAssetUrl) {
-            const existing = (window as unknown as { WickSCM?: unknown }).WickSCM;
-            if (!existing) {
-              await new Promise<void>((resolve, reject) => {
-                const s = document.createElement("script");
-                s.type = "module";
-                s.src = scmAssetUrl;
-                s.onload = () => {
-                  if ((window as unknown as { WickSCM?: unknown }).WickSCM) resolve();
-                  else reject(new Error("WickSCM not installed"));
-                };
-                s.onerror = () => reject(new Error("failed to load scm bundle"));
-                document.head.appendChild(s);
-              });
-            }
-          }
-          w.WickSCM?.mount(scmHostEl!, { sessionID: sessionId, mode: "sidebar" });
-          scmMounted = true;
-        } catch (_) { /* bundle load failure — island stays blank */ }
+    if (railTab !== "source" || !scmHostEl || !sessionId) return;
+
+    const w = window as unknown as {
+      WickSCM?: {
+        mount: (h: HTMLElement, o: { sessionID: string; mode: "sidebar" }) => void;
+        unmount: (h: HTMLElement) => void;
       };
-      doMount();
-    }
+    };
+
+    /* Capture host at mount time so teardown can still unmount after bind:this clears */
+    const capturedHost = scmHostEl;
+    const capturedSessionId = sessionId;
+    let active = true;
+
+    const doMount = async () => {
+      try {
+        if (scmAssetUrl && !w.WickSCM) {
+          await new Promise<void>((resolve, reject) => {
+            const s = document.createElement("script");
+            s.type = "module";
+            s.src = scmAssetUrl;
+            s.onload = () => {
+              if (w.WickSCM) resolve();
+              else reject(new Error("WickSCM not installed"));
+            };
+            s.onerror = () => reject(new Error("failed to load scm bundle"));
+            document.head.appendChild(s);
+          });
+        }
+        if (active) {
+          w.WickSCM?.mount(capturedHost, { sessionID: capturedSessionId, mode: "sidebar" });
+          scmMounted = true;
+        }
+      } catch (_) { /* bundle load failure — island stays blank */ }
+    };
+
+    doMount();
+
+    return () => {
+      active = false;
+      w.WickSCM?.unmount(capturedHost);
+      scmMounted = false;
+    };
   });
 
   /* ── file viewer ──────────────────────────────────────────────── */
@@ -571,7 +588,7 @@
       class={`hidden lg:flex flex-col ${railTab === "source" ? "w-96" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
     >
       {#if railTab === "source"}
-        <div class="flex-1 overflow-hidden" bind:this={scmHostEl}></div>
+        <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
       {:else if railTab === "context"}
         <ContextPanel
           cwd={cwdVal}
@@ -682,7 +699,7 @@
         </div>
         <div class="flex-1 overflow-hidden flex flex-col">
           {#if railTab === "source"}
-            <div class="flex flex-1 items-center justify-center text-sm text-black-600 dark:text-black-700 p-4">Source Control — open on desktop</div>
+            <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host-mobile></div>
           {:else if railTab === "context"}
             <ContextPanel
               cwd={cwdVal}
