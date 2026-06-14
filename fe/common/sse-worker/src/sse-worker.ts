@@ -2,8 +2,8 @@
 /*
  * Purpose:    SharedWorker — holds one EventSource per sessionID, fans events
  *             to subscribed MessagePorts, fetches /stream/snapshot on each
- *             new subscribe. TypeScript port of internal/tools/agents/js/sse-worker.js.
- * Caller:     Instantiated by sse.ts via `new SharedWorker(new URL(...), { type: "module" })`
+ *             new subscribe. Shared by conversation and scm SPAs.
+ * Caller:     Instantiated via `new SharedWorker(new URL(...), { type: "module" })`
  * Dependencies: Browser EventSource, fetch
  * Main Functions: self.onconnect handler
  * Side Effects: Opens/closes EventSource connections per session

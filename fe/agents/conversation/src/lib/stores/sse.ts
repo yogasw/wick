@@ -30,7 +30,7 @@ export interface SessionStream {
 function makeWorkerTransport(base: string, sessionID: string): SSETransport {
   if (typeof SharedWorker !== "undefined") {
     const worker = new SharedWorker(
-      new URL("../workers/sse-worker.ts", import.meta.url),
+      new URL("@wick-fe/common-sse-worker/src/sse-worker.ts", import.meta.url),
       { type: "module" }
     );
     const port = worker.port;
