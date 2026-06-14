@@ -1,4 +1,4 @@
-import type { ProvidersListResponse } from "./types.js";
+import type { ProvidersListResponse, ProviderDetailResponse } from "./types.js";
 
 class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -118,6 +118,75 @@ export async function apiDeleteProvider(type: string, name: string): Promise<voi
 
 export async function apiProbeGate(type: string, name: string): Promise<void> {
   return post<void>(`/providers/probe-gate/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+}
+
+export function normalizeProviderDetail(r: ProviderDetailResponse): ProviderDetailResponse {
+  return {
+    ...r,
+    Hooks: r.Hooks ?? {},
+    HookEnabled: r.HookEnabled ?? {},
+    ActivePIDs: r.ActivePIDs ?? [],
+    ConfigFields: r.ConfigFields ?? [],
+    Spawns: r.Spawns ?? [],
+    Gate: r.Gate ?? {
+      Enabled: false,
+      Binary: "",
+      Source: "",
+      Reason: "",
+      Note: "",
+      PermissionMode: "",
+      BypassLocked: false,
+    },
+  };
+}
+
+export async function apiGetProviderDetail(base: string, type: string, name: string): Promise<ProviderDetailResponse> {
+  const r = await get<ProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+  return normalizeProviderDetail(r);
+}
+
+export async function apiSaveProviderDetail(base: string, type: string, name: string, fields: Record<string, string>): Promise<void> {
+  const form = new URLSearchParams(fields);
+  const resp = await fetch(
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/save`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+      redirect: "manual",
+    },
+  );
+  if (resp.type === "opaqueredirect" || resp.status === 303 || resp.status === 302) return;
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
+}
+
+export async function apiSaveConfigKey(base: string, type: string, name: string, key: string, value: string): Promise<unknown> {
+  return post<unknown>(
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/${encodeURIComponent(key)}`,
+    { value },
+  );
+}
+
+export async function apiHookCheck(base: string, type: string, name: string, event: string): Promise<unknown> {
+  return post<unknown>(
+    `${base}/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/hooks/${encodeURIComponent(event)}/check`,
+  );
+}
+
+export async function apiHookEnable(base: string, type: string, name: string, event: string): Promise<unknown> {
+  return post<unknown>(
+    `${base}/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/hooks/${encodeURIComponent(event)}/enable`,
+  );
+}
+
+export async function apiHookDisable(base: string, type: string, name: string, event: string): Promise<unknown> {
+  return post<unknown>(
+    `${base}/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/hooks/${encodeURIComponent(event)}/disable`,
+  );
 }
 
 export { ApiError };

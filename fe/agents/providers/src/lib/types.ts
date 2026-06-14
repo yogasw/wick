@@ -90,3 +90,32 @@ export interface ProvidersListResponse {
   LiveProcesses: LiveProcessDTO[];
   SupportedKeys: string[];
 }
+
+export interface ConfigFieldDTO {
+  Key: string;
+  Value: string;
+  Type: string;
+  Options: string;
+  IsSecret: boolean;
+  Description: string;
+  Required: boolean;
+}
+
+export interface ProviderDetailResponse {
+  Instance: ProviderInstanceDTO;
+  Path: string;
+  PathFound: boolean;
+  Version: string;
+  VersionErr: string;
+  Probing: boolean;
+  Hooks: Record<string, HookCapabilityDTO>;
+  HookEnabled: Record<string, boolean>;
+  Gate: GateStatusDTO;
+  GlobalMax: number;
+  ActiveCount: number;
+  ActivePIDs: LiveProcessDTO[];
+  ConfigFields: ConfigFieldDTO[];
+  Spawns: SpawnLogFileDTO[];
+  Page: number;
+  HasNext: boolean;
+}
