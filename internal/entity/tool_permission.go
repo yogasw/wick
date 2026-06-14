@@ -62,6 +62,7 @@ type Tag struct {
 	IsSystem    bool   `gorm:"default:false"`
 	SortOrder   int    `gorm:"default:0"`
 	CreatedAt   time.Time
+	DisplayName string `gorm:"-"`
 }
 
 func (t *Tag) BeforeCreate(tx *gorm.DB) error {

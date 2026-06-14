@@ -10,6 +10,44 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.0](https://github.com/yogasw/wick/compare/v0.17.0...v0.18.0) — Core & Admin
+
+_Released on 2026-06-14_
+
+### Added
+
+*   **Workflow editor — replay-to-editor imports full run state** — the **Copy to editor** button now pins the run's trigger event payload alongside per-node status overlays and output pre-population. Every node inspector's INPUT dropdown gains an entry for the pinned event so `{{.Event.Payload.*}}` expressions resolve to the real run's data during an Execute step (n8n-style "retry with pinned input"). A **Unpin** action on the trigger OUTPUT pane clears the pinned payload. See [Canvas editor — Run timeline](./workflow/canvas#run-timeline).
+*   **Workflow editor — per-expression preview table** — template fields that contain multiple `{{...}}` segments now show a breakdown table in the inspector preview: one row per expression with its rendered value or error, isolating a failing ref without blanking the combined output. Autocomplete now suggests `.Event.Payload.*`, `.Node.<label>.*`, `.Env.*`, and `.Trigger.*` paths from the live context, and a manual refresh button re-renders when upstream outputs change.
+*   **Workflow editor — node rename cascades `{{.Node.<label>.…}}` refs** — renaming a node label in the inspector rewrites every reference to that label across all other nodes in the workflow automatically. A toast confirms how many references were updated.
+*   **Batch template-test expressions endpoint** — `POST /api/workflows/template-test` now accepts an `expressions` array for a per-expression breakdown in one round-trip, replacing N parallel calls that previously triggered rate-limit 429 responses.
+*   **Custom connector health check** — a definition can nominate one operation as a health probe (`health_op` + optional `health_expect` in `SourceMeta`). When set, every instance page shows a **Check Permissions** button and a status banner — same as built-in connectors. Healthy when the probe operation runs without error (HTTP 2xx / MCP non-error result) and, when `health_expect` is set, the response contains the expected substring. A failing probe system-disables every operation on that instance (single credential = whole connector verdict) until a passing check clears it. Set from the **Health check** block on the review / edit form. See [Custom connectors — Health check](/guide/custom-connectors#health-check).
+*   **Session Workspace tab UX** — the Workspace rail tab on the session slide-over gains: count badge showing active session connectors; inline rename (pencil icon on each card); auto-generated default label when an instance is added; dirty-tracking per field so Save/Test send only edited values; Reset button that appears while edits are pending; single **Test** button that exercises the config currently on screen (live field values overlaid on stored config for the probe, never persisted). See [MCP — Workspace tab (UI)](/guide/mcp#workspace-tab-ui).
+*   **Admin — Enhanced Tag Management**:
+    *   `owner:` tags now display human-readable names (`display_name`) in pickers and chips, with resolutions for custom connectors and workflows.
+    *   `owner:` tags are immutable and cannot be modified or deleted, enforced by `ErrOwnerTagImmutable` guard.
+    *   Contextual filtering for `owner:` tags: hidden from the `/admin/tags` page, but visible in resource/connector pickers with display names.
+    *   Orphaned `owner:` tags are automatically deleted.
+*   **Admin — Agents Navigation Control**: The Agents navigation link now respects tool access control policies.
+
+### Changed
+
+*   **Template engine — `missingkey=zero`** — the workflow template engine switched from `missingkey=error` to `missingkey=zero`. A payload field that is simply absent (e.g. a webhook body without an `action` key) no longer fails the node — it renders the zero value (`<no value>` for map fields) and the run continues. Wrap optional fields with `{{ .Event.Payload.action | default "" }}` for a clean empty string.
+*   **Session workspace discoverability** — `wick_list`, `wick_search`, and `wick_get` now accept an optional `session_id` argument. Passing it causes `wick_list` to include this session's `sw_…` workspace instances alongside regular connectors and return a `session_config_bases` array (connectors that can be cloned but haven't been added yet). `wick_search` now also matches workspace instances so a connector spun up for the session is findable. For `wick_get`, `session_id` is a separate argument — never append it to the connector id.
+*   **Session instance status** — a workspace instance in `wick_list` / `wick_search` results reports `kind: "session"`. When its config is incomplete the status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`), directing the user to the session Workspace tab rather than the admin dashboard.
+*   **`AllowSessionConfig` auto-on** — the per-instance *Allow per-session config override* toggle now defaults to enabled for any instance whose connector module declares the capability (e.g. httprest). No manual admin toggle required to make an eligible connector available for session cloning; admins can still turn individual rows off.
+
+### Fixed
+
+*   **Agent node `session: "new"` without `session_init`** — agent nodes with `session: "new"` (or any ad-hoc `wf_adhoc_<uuid>` session) no longer fail with "cannot find the path" when there is no `session_init` node upstream. The session directory is created automatically before the first turn.
+*   **Execute step — clearer missing-upstream error** — when an Execute step on a node references `{{.Node.<label>.…}}` for a node that has no output yet, the error message now names the blocking node explicitly instead of surfacing a raw Go-template nil-pointer panic.
+
+### Improved
+
+*   **Binary Size Reduction**: Reduced the release binary size from 84MB to 55MB by stripping symbols and DWARF via `-s -w` in `LDFLAGS` and disabling Vite sourcemap output for SPA bundles.
+
+---
+
+
 ## [v0.17.0](https://github.com/yogasw/wick/compare/v0.16.16...v0.17.0) — Connectors & Access Control
 
 _Released on 2026-06-13_

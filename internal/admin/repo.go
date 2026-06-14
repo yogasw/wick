@@ -278,6 +278,119 @@ func (r *repo) ListTags(ctx context.Context) ([]*entity.Tag, error) {
 	return tags, nil
 }
 
+func (r *repo) ResolveOwnerDisplayNames(ctx context.Context, tags []*entity.Tag) {
+	ids := make([]string, 0, len(tags))
+	byID := make(map[string]*entity.Tag, len(tags))
+	for _, t := range tags {
+		if !strings.HasPrefix(t.Name, "owner:") {
+			continue
+		}
+		id := strings.TrimPrefix(t.Name, "owner:")
+		ids = append(ids, id)
+		byID[id] = t
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	var users []struct {
+		ID    string
+		Name  string
+		Email string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.User{}).
+		Select("id, name, email").
+		Where("id IN ?", ids).
+		Find(&users)
+	for _, u := range users {
+		if t, ok := byID[u.ID]; ok {
+			t.DisplayName = u.Name + " (" + u.Email + ")"
+			delete(byID, u.ID)
+		}
+	}
+
+	if len(byID) == 0 {
+		return
+	}
+	remaining := make([]string, 0, len(byID))
+	for id := range byID {
+		remaining = append(remaining, id)
+	}
+	var connectors []struct {
+		ID    string
+		Label string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.Connector{}).
+		Select("id, label").
+		Where("id IN ?", remaining).
+		Find(&connectors)
+	for _, c := range connectors {
+		if t, ok := byID[c.ID]; ok {
+			t.DisplayName = c.Label
+			delete(byID, c.ID)
+		}
+	}
+
+	if len(byID) == 0 {
+		return
+	}
+	remaining2 := make([]string, 0, len(byID))
+	for id := range byID {
+		remaining2 = append(remaining2, id)
+	}
+	var customConnectors []struct {
+		ID   string
+		Name string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.CustomConnector{}).
+		Select("id, name").
+		Where("id IN ?", remaining2).
+		Find(&customConnectors)
+	for _, c := range customConnectors {
+		if t, ok := byID[c.ID]; ok {
+			t.DisplayName = c.Name
+			delete(byID, c.ID)
+		}
+	}
+
+	if len(byID) == 0 {
+		return
+	}
+	remaining3 := make([]string, 0, len(byID))
+	for id := range byID {
+		remaining3 = append(remaining3, id)
+	}
+	var workflows []struct {
+		ID   string
+		Name string
+	}
+	r.db.WithContext(ctx).
+		Model(&entity.Workflow{}).
+		Select("id, name").
+		Where("id IN ?", remaining3).
+		Find(&workflows)
+	for _, w := range workflows {
+		if t, ok := byID[w.ID]; ok {
+			t.DisplayName = w.Name
+			delete(byID, w.ID)
+		}
+	}
+
+	// Anything still in byID has no matching entity in any known table —
+	// it is a stale orphaned owner tag. Delete it silently.
+	for _, t := range byID {
+		r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			tx.Where("tag_id = ?", t.ID).Delete(&entity.ToolTag{})
+			tx.Where("tag_id = ?", t.ID).Delete(&entity.UserTag{})
+			tx.Delete(&entity.Tag{}, "id = ?", t.ID)
+			return nil
+		})
+	}
+}
+
 // ErrTagNameTaken is returned when creating or renaming a tag to an existing name.
 var ErrTagNameTaken = errors.New("a tag with that name already exists")
 
@@ -286,6 +399,8 @@ var ErrTagNameTaken = errors.New("a tag with that name already exists")
 // owned by code (seeded via tool/job DefaultTags) and changing them from
 // the UI would desync the seed catalog from the DB.
 var ErrSystemTagImmutable = errors.New("system tags are read-only and cannot be modified")
+
+var ErrOwnerTagImmutable = errors.New("owner tags are managed automatically and cannot be modified")
 
 // ErrSystemEntityImmutable is returned when an admin tries to mutate
 // (disable/hide/retag) a tool/job/connector that carries any System
@@ -340,6 +455,9 @@ func (r *repo) UpdateTag(ctx context.Context, tagID, name, description string, i
 	if current.IsSystem {
 		return ErrSystemTagImmutable
 	}
+	if strings.HasPrefix(current.Name, "owner:") {
+		return ErrOwnerTagImmutable
+	}
 	var clash entity.Tag
 	err := r.db.WithContext(ctx).Where("name = ? AND id <> ?", name, tagID).First(&clash).Error
 	if err == nil {
@@ -370,6 +488,9 @@ func (r *repo) DeleteTag(ctx context.Context, tagID string) error {
 		}
 		if current.IsSystem {
 			return ErrSystemTagImmutable
+		}
+		if strings.HasPrefix(current.Name, "owner:") {
+			return ErrOwnerTagImmutable
 		}
 		if err := tx.Where("tag_id = ?", tagID).Delete(&entity.ToolTag{}).Error; err != nil {
 			return err

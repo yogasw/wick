@@ -355,12 +355,43 @@ func sessionWorkspaceDuplicateUI(c *tool.Ctx) {
 	c.JSON(http.StatusOK, wsInstanceToVM(copyInst))
 }
 
-// sessionWorkspaceTestUI verifies an instance: base HealthCheck, or run a
-// named operation (?operation=…) as the probe.
+// sessionWorkspaceRenameUI sets a new label on a session instance.
+func sessionWorkspaceRenameUI(c *tool.Ctx) {
+	sid := c.PathValue("id")
+	cid := c.PathValue("cid")
+	if _, _, ok := wsResolve(c, sid, cid); !ok {
+		return
+	}
+	var body struct {
+		Label string `json:"label"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.Error(http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if strings.TrimSpace(body.Label) == "" {
+		c.Error(http.StatusBadRequest, "label is required")
+		return
+	}
+	if err := sessionworkspace.SetLabel(globalLayout, sid, cid, body.Label); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	inst, _, _ := sessionworkspace.Get(globalLayout, sid, cid)
+	c.JSON(http.StatusOK, wsInstanceToVM(inst))
+}
+
+// sessionWorkspaceTestUI verifies an instance against the config the user
+// is currently editing — NOT only what is saved. The form posts its live
+// field values in `config`; they are overlaid on the stored config for
+// this probe alone and never persisted (Save is a separate action). So a
+// single Test button always exercises exactly what is on screen. Two
+// modes: base HealthCheck (default), or run a named operation
+// (?operation=…) as the probe.
 func sessionWorkspaceTestUI(c *tool.Ctx) {
 	sid := c.PathValue("id")
 	cid := c.PathValue("cid")
-	inst, _, ok := wsResolve(c, sid, cid)
+	inst, specs, ok := wsResolve(c, sid, cid)
 	if !ok {
 		return
 	}
@@ -370,11 +401,18 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 		return
 	}
 
+	var body struct {
+		Config map[string]string `json:"config"`
+		Params map[string]string `json:"params"`
+	}
+	_ = c.BindJSON(&body)
+
+	// Effective config = stored ⊕ typed. Secrets stay plaintext here — the
+	// decrypt step in the connectors service is a no-op on non-token values,
+	// so a draft secret probes correctly without ever being written to disk.
+	cfg := mergeDraftConfig(inst.Config, body.Config, specs)
+
 	if opKey := strings.TrimSpace(c.Query("operation")); opKey != "" {
-		var body struct {
-			Params map[string]string `json:"params"`
-		}
-		_ = c.BindJSON(&body)
 		res, execErr := globalConnectors.Execute(c.Context(), connectors.ExecuteParams{
 			ConnectorID:  inst.ID,
 			OperationKey: opKey,
@@ -383,7 +421,7 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 			UserID:       user.ID,
 			IsAdmin:      user.IsAdmin(),
 			SessionInstance: &connectors.SessionInstanceTarget{
-				BaseKey: inst.BaseKey, Label: inst.Label, Config: inst.Config,
+				BaseKey: inst.BaseKey, Label: inst.Label, Config: cfg,
 			},
 		})
 		if execErr != nil {
@@ -394,7 +432,7 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 		return
 	}
 
-	report, err := globalConnectors.HealthCheckSessionInstance(c.Context(), inst.BaseKey, inst.ID, inst.Config)
+	report, err := globalConnectors.HealthCheckSessionInstance(c.Context(), inst.BaseKey, inst.ID, cfg)
 	if err != nil {
 		if err == connectors.ErrNoHealthCheck {
 			c.JSON(http.StatusOK, map[string]any{"ok": false, "no_health_check": true, "note": "No health check — pass ?operation= to run a real call."})
@@ -411,6 +449,35 @@ func sessionWorkspaceTestUI(c *tool.Ctx) {
 		}
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": allOK, "report": report})
+}
+
+// mergeDraftConfig overlays the form's typed values on the stored config
+// for a one-off test probe. Stored values are the base; a typed value
+// replaces its key only when non-empty (an empty field means "leave as
+// saved" — same rule as Save). Unknown keys (not in the base module's
+// config specs) are ignored. Nothing here is persisted.
+func mergeDraftConfig(stored, typed map[string]string, specs []entity.Config) map[string]string {
+	out := make(map[string]string, len(stored)+len(typed))
+	for k, v := range stored {
+		out[k] = v
+	}
+	if len(typed) == 0 {
+		return out
+	}
+	known := make(map[string]bool, len(specs))
+	for _, sp := range specs {
+		known[sp.Key] = true
+	}
+	for k, v := range typed {
+		if !known[k] {
+			continue
+		}
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // sessionWorkspaceRemoveUI deletes an instance.

@@ -11,9 +11,12 @@
     draftWorkflow,
     removeTrigger,
     updateTrigger,
+    triggerEventByID,
+    unpinTriggerEvent,
     isValidLabel,
     LABEL_FORMAT_HINT,
   } from "$lib/stores/editor";
+  import { toastOk } from "$lib/stores/toast";
   import { catalog } from "$lib/stores/catalog";
   import type { Trigger } from "$lib/types/workflow";
   import type {
@@ -49,6 +52,20 @@
     return ($draftWorkflow.triggers ?? []).find((t) => t.id === id) ?? null;
   });
 
+  // Last-fired event payload for this trigger, fed by Replay-to-editor.
+  // Pretty-printed JSON when present; null until a run is replayed.
+  const eventPayloadText = $derived.by<string | null>(() => {
+    const id = trigger?.id;
+    if (!id) return null;
+    const payload = $triggerEventByID[id];
+    if (payload == null) return null;
+    try {
+      return JSON.stringify(payload, null, 2);
+    } catch {
+      return String(payload);
+    }
+  });
+
   let activeTab = $state<"params" | "settings">("params");
   let webhookURLTab = $state<"test" | "live">("test");
 
@@ -71,6 +88,15 @@
 
   function close() {
     detailTriggerID.set(null);
+  }
+
+  // unpinEvent clears the replayed payload for this trigger so Execute
+  // goes back to a synthetic event. Mirrors n8n's "unpin data".
+  function unpinEvent() {
+    const id = trigger?.id;
+    if (!id) return;
+    unpinTriggerEvent(id);
+    toastOk("Payload unpinned", "Execute reverts to a synthetic event.");
   }
 
   function patch(field: keyof Trigger, value: unknown) {
@@ -608,14 +634,35 @@
              stream surfaces a payload — same n8n-style affordance as
              NodeDetailModal's output column. -->
         <section class="flex flex-1 lg:flex min-h-0 flex-col p-4 overflow-y-auto" class:hidden={mobilePane !== "output"}>
-          <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600 mb-2">OUTPUT</div>
-          <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
-            <div class="text-2xl">⤒</div>
-            <div>No event data</div>
-            <div class="text-[11px] text-center max-w-[180px]">
-              Last-fired event payload surfaces here once a run lands.
-            </div>
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[11px] font-semibold tracking-wider text-black-700 dark:text-black-600">OUTPUT</div>
+            {#if eventPayloadText}
+              <!-- Pinned-data affordance (n8n-style): the payload here came
+                   from a replayed run and overrides the synthetic Execute
+                   payload until unpinned. Make that state obvious + reversible. -->
+              <div class="flex items-center gap-2">
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300" title="This trigger fires Execute with a replayed run's payload">📌 PINNED</span>
+                <button
+                  type="button"
+                  class="px-1.5 py-0.5 rounded border border-slate-300 dark:border-navy-600 text-[10px] text-black-600 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-600"
+                  onclick={unpinEvent}
+                  title="Clear the pinned payload — Execute reverts to a synthetic event"
+                >unpin</button>
+              </div>
+            {/if}
           </div>
+          {#if eventPayloadText}
+            <pre class="flex-1 overflow-auto rounded bg-slate-50 dark:bg-navy-800 border border-amber-400/40 dark:border-amber-500/30 p-3 text-[11px] font-mono text-black-800 dark:text-white-100 whitespace-pre-wrap">{eventPayloadText}</pre>
+          {:else}
+            <div class="flex-1 flex flex-col items-center justify-center text-black-700 dark:text-black-500 text-xs gap-3">
+              <div class="text-2xl">⤒</div>
+              <div>No event data</div>
+              <div class="text-[11px] text-center max-w-[180px]">
+                Last-fired event payload surfaces here once a run lands.
+                Use <span class="font-medium">Replay to editor</span> on a past run to inspect its payload.
+              </div>
+            </div>
+          {/if}
         </section>
       </div>
     </div>

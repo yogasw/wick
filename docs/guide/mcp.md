@@ -34,9 +34,9 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 
 | Tool | Annotation | Purpose |
 |------|------------|---------|
-| `wick_list` | `readOnlyHint` | List every connector instance and connected OAuth account visible to the caller. Each entry has `id`, `connector` (label), `description`, `total_tools`, `status`, `kind`, and `parent_id`. |
-| `wick_search` | `readOnlyHint` | Substring search over label, name, description |
-| `wick_get` | `readOnlyHint` | Fetch full detail for one `id` (connector or composite `connectorID/accountID`), including `input_schema` and account-scoped `tool_id` values |
+| `wick_list` | `readOnlyHint` | List every connector instance and connected OAuth account visible to the caller. Each entry has `id`, `connector` (label), `description`, `total_tools`, `status`, `kind`, and `parent_id`. Pass `session_id` to also include this session's workspace connectors (`sw_…` entries) and a `session_config_bases` array (connectors that can be cloned into a session workspace but haven't been added yet). |
+| `wick_search` | `readOnlyHint` | Substring search over label, name, description. Pass `session_id` to also match this session's workspace connectors. |
+| `wick_get` | `readOnlyHint` | Fetch full detail for one `id` (connector or composite `connectorID/accountID`), including `input_schema` and account-scoped `tool_id` values. For session-workspace connectors (`sw_…` id), also pass `session_id` as a separate argument. |
 | `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params`. Composite tool IDs (`conn:…/op@accountID`) inject the account token automatically. |
 | `wick_info` | `readOnlyHint` | Return server version and build info |
 | `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
@@ -509,9 +509,9 @@ This means sessions get a descriptive label automatically without prompting the 
 
 ## Session workspace
 
-`wick_session_workspace` lets an agent (or the user, via the session **Config** tab) spin up **ephemeral connector instances** scoped to one session: a private clone of a base connector — an httprest pointed at staging, a second API key — that behaves like a brand-new connector but lives and dies with the session. The saved connector rows are never touched.
+`wick_session_workspace` lets an agent (or the user, via the session **Workspace** tab) spin up **ephemeral connector instances** scoped to one session: a private clone of a base connector — an httprest pointed at staging, a second API key — that behaves like a brand-new connector but lives and dies with the session. The saved connector rows are never touched.
 
-Use it when the user wants to hit an endpoint or use a credential that only matters right now. Once added and configured, the instance's id shows in `wick_list` (pass the same `session_id`) and you `wick_execute` it like any connector.
+Use it when the user wants to hit an endpoint or use a credential that only matters right now. Once added and configured, the instance's id shows in `wick_list` (pass the same `session_id`) and you `wick_execute` it like any connector. A session instance reports `kind: "session"` in the list response. When its config is incomplete its status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`) — direct the user to the **Workspace** tab, not the admin dashboard.
 
 The tool is **human-driven for config**. The agent creates blank instances and can open the fill modal, but the **user** types the values; secrets are encrypted server-side with a system-only master key, and the agent only ever learns **which keys were filled**, never the values. This keeps connector credentials and endpoints off the agent's context entirely.
 
@@ -520,9 +520,11 @@ The tool is **human-driven for config**. The agent creates blank instances and c
 A connector can be cloned into a session instance only when **both** hold:
 
 1. its module declares `AllowSessionConfig: true` (capability, set in code / the custom-connector definition), and
-2. an admin enabled **Allow per-session config override** on a visible instance (Manager → Connectors → {instance} → *Per-session config*).
+2. the **Allow per-session config override** toggle is on for a visible instance (Manager → Connectors → {instance} → *Per-session config*).
 
-`action=list` returns the `available_bases` you may add.
+Condition 2 **defaults to on** for any instance whose module has the capability — so eligible built-in connectors (e.g. httprest) are ready without a manual admin toggle. Admins can still turn a row off explicitly.
+
+`action=list` returns the `available_bases` you may add. `wick_list` (with `session_id`) exposes the same set as `session_config_bases` so the agent can proactively offer to add one.
 
 ### Actions
 
@@ -550,6 +552,18 @@ The agent can neither read nor set config values directly — config is always e
 | `keys` | `add` / `configure`: limit the fill modal to these keys |
 | `operation`, `params` | `test`: run this operation as the probe instead of the health check |
 | `reason` | `add` / `configure`: short text shown to the user explaining what the connector is for |
+
+### Workspace tab (UI)
+
+The **Workspace** rail tab on the session slide-over is the user-facing equivalent of `wick_session_workspace`. It lists every session connector as a collapsible card, with a count badge that mirrors the number of active instances.
+
+From the tab a user can:
+
+- **Add** a session connector — pick a base from the dropdown; a blank instance is created immediately and its card expands so you can fill it in.
+- **Rename** an instance inline — click the pencil icon next to the label, edit in place, confirm with Enter or blur.
+- **Edit config** — expand a card, type values into the fields. Only changed fields are marked dirty. The **Save** button sends only the fields you actually edited; a **Reset** button (shown while edits are pending) reverts the card to its last-saved state. An autofilled-but-untouched field is never sent.
+- **Test** — runs the connector's health check (or a named operation via `?operation=`) against the config values **currently on screen**, not only what is saved. Live field values overlay the stored config for this probe only; nothing is persisted. This lets you verify a new key before committing.
+- **Duplicate / Delete** — copy an instance with its config, or remove it.
 
 ### How instances run at execution time
 

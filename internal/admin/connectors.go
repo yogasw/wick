@@ -21,6 +21,12 @@ func (h *Handler) connectorsAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	connectorIDs := make(map[string]struct{}, len(rows))
+	for _, c := range rows {
+		connectorIDs[c.ID] = struct{}{}
+	}
+	allTags = filterOwnerTagsForIDs(allTags, connectorIDs)
 
 	paths := make([]string, len(rows))
 	for i, c := range rows {

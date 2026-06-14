@@ -276,3 +276,72 @@ func TestCoerceArgsUsesOriginalNames(t *testing.T) {
 		t.Errorf("label-less field must fall back to key, got %#v", out)
 	}
 }
+
+func TestHealthCheckForVerdict(t *testing.T) {
+	opKeys := []string{"ping", "list"}
+
+	cases := []struct {
+		name       string
+		probe      connector.ExecuteFunc
+		expect     string
+		wantOK     bool
+		wantReason string // substring; empty = no reason expected
+	}{
+		{
+			name:   "executes ok no expect",
+			probe:  func(*connector.Ctx) (any, error) { return map[string]any{"ok": true}, nil },
+			wantOK: true,
+		},
+		{
+			name:       "execute error fails all",
+			probe:      func(*connector.Ctx) (any, error) { return nil, errString("upstream HTTP 401: bad key") },
+			wantOK:     false,
+			wantReason: "401",
+		},
+		{
+			name:   "expect substring present in json",
+			probe:  func(*connector.Ctx) (any, error) { return map[string]any{"ok": true}, nil },
+			expect: `"ok":true`,
+			wantOK: true,
+		},
+		{
+			name:       "expect substring missing",
+			probe:      func(*connector.Ctx) (any, error) { return map[string]any{"ok": false}, nil },
+			expect:     `"ok":true`,
+			wantOK:     false,
+			wantReason: "did not contain",
+		},
+		{
+			name:   "expect matches raw string body",
+			probe:  func(*connector.Ctx) (any, error) { return "pong", nil },
+			expect: "pong",
+			wantOK: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hc := healthCheckFor(tc.probe, opKeys, tc.expect)
+			report, err := hc(connector.NewCtx(context.Background(), "i", nil, nil, nil, nil, nil))
+			if err != nil {
+				t.Fatalf("health check returned error: %v", err)
+			}
+			if len(report) != len(opKeys) {
+				t.Fatalf("report has %d entries, want %d (one per op)", len(report), len(opKeys))
+			}
+			for _, h := range report {
+				if h.OK != tc.wantOK {
+					t.Errorf("op %q OK = %v, want %v", h.Key, h.OK, tc.wantOK)
+				}
+				if tc.wantReason != "" && !strings.Contains(h.Reason, tc.wantReason) {
+					t.Errorf("op %q reason = %q, want substring %q", h.Key, h.Reason, tc.wantReason)
+				}
+			}
+		})
+	}
+}
+
+// errString is a tiny error helper so the test does not pull in fmt.
+type errString string
+
+func (e errString) Error() string { return string(e) }
