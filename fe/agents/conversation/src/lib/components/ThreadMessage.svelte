@@ -8,16 +8,19 @@
 
   const isUser = $derived(turn.role === "user");
 
+  const safeEvents = $derived(turn.events ?? []);
+  const safeAttachments = $derived(turn.attachments ?? []);
+
   const toolBlocks = $derived(
-    turn.events
+    safeEvents
       .filter((ev) => ev.type === "tool_use")
       .map((ev) => ({
         kind: "tool" as const,
         toolUseId: ev.tool_use_id ?? "",
         toolName: ev.tool_name ?? "",
         toolInput: ev.tool_input ?? "",
-        result: turn.events.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
-        isError: turn.events.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
+        result: safeEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
+        isError: safeEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
       } satisfies Extract<ThreadBlock, { kind: "tool" }>)
     )
   );
@@ -26,9 +29,9 @@
 {#if isUser}
   <div class="flex justify-end gap-2 group">
     <div class="flex flex-col items-end gap-1 max-w-[80%] min-w-0">
-      {#if turn.attachments.length > 0}
+      {#if safeAttachments.length > 0}
         <div class="flex flex-wrap justify-end gap-1.5 max-w-full">
-          {#each turn.attachments as attachment}
+          {#each safeAttachments as attachment}
             <a
               href={attachment.url}
               target="_blank"

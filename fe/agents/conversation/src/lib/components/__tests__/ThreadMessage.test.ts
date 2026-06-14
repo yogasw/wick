@@ -61,3 +61,25 @@ describe("ThreadMessage - assistant turn", () => {
     expect(screen.getByText("bash")).toBeDefined();
   });
 });
+
+describe("ThreadMessage - null-safe backend arrays (Go nil → JSON null)", () => {
+  test("renders user turn without crash when events and attachments are null (Go nil slice)", () => {
+    const turn = makeTurn({
+      role: "user",
+      text: "hi",
+      events: undefined as any,
+      attachments: undefined as any,
+    });
+    expect(() => render(ThreadMessage, { props: { turn } })).not.toThrow();
+  });
+
+  test("renders assistant turn without crash when events is null (Go nil slice)", () => {
+    const turn = makeTurn({
+      role: "assistant",
+      text: "hello",
+      events: null as any,
+      attachments: null as any,
+    });
+    expect(() => render(ThreadMessage, { props: { turn } })).not.toThrow();
+  });
+});

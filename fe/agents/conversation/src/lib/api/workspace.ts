@@ -1,21 +1,29 @@
+import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
 import type { WsInstance, WsBase } from "../types/agents.js";
+
+const normalizeInstance = (i: WsInstance): WsInstance => ({ ...i, fields: i.fields ?? [] });
 
 export const listWorkspace = (base: string, sessionId: string) =>
   apiGetE<{ instances: WsInstance[]; bases: WsBase[] }>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/workspace`,
+  ).pipe(
+    Effect.map((r) => ({
+      instances: (r.instances ?? []).map(normalizeInstance),
+      bases: r.bases ?? [],
+    })),
   );
 
 export const addWorkspace = (base: string, sessionId: string, baseKey: string, label?: string) =>
   apiPostE<WsInstance>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/workspace`,
     label ? { base_key: baseKey, label } : { base_key: baseKey },
-  );
+  ).pipe(Effect.map(normalizeInstance));
 
 export const getWorkspaceInstance = (base: string, sessionId: string, cid: string) =>
   apiGetE<WsInstance>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(cid)}`,
-  );
+  ).pipe(Effect.map(normalizeInstance));
 
 export const saveWorkspaceConfig = (
   base: string,
@@ -31,7 +39,7 @@ export const saveWorkspaceConfig = (
 export const duplicateWorkspace = (base: string, sessionId: string, cid: string) =>
   apiPostE<WsInstance>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(cid)}/duplicate`,
-  );
+  ).pipe(Effect.map(normalizeInstance));
 
 export const renameWorkspace = (base: string, sessionId: string, cid: string, label: string) =>
   apiPostE<{ status: string }>(

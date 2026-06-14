@@ -104,6 +104,47 @@ describe("getConversation", () => {
   });
 });
 
+describe("getConversation - null array normalization (Go nil → JSON null)", () => {
+  test("normalizes null events and attachments to empty arrays", async () => {
+    const result = await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(
+        Effect.provide(
+          mockLayer(200, {
+            turns: [
+              {
+                turn_id: "1",
+                role: "assistant",
+                agent: "claude",
+                provider: "anthropic",
+                text: "hi",
+                timestamp: 0,
+                truncated: false,
+                interrupted: false,
+                has_trace: false,
+                events: null,
+                attachments: null,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    expect(result.turns[0].events).toEqual([]);
+    expect(result.turns[0].attachments).toEqual([]);
+  });
+});
+
+describe("listSessions - null array normalization (Go nil → JSON null)", () => {
+  test("normalizes null sessions array to empty array", async () => {
+    const result = await Effect.runPromise(
+      listSessions("/tools/agents").pipe(
+        Effect.provide(mockLayer(200, { sessions: null })),
+      ),
+    );
+    expect(result.sessions).toEqual([]);
+  });
+});
+
 describe("getSessionMeta", () => {
   test("parses session meta from response", async () => {
     const result = await Effect.runPromise(

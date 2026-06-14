@@ -1,8 +1,11 @@
+import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
 import type { ContextFileEntry, FileContent } from "../types/agents.js";
 
 export const listFiles = (base: string, id: string) =>
-  apiGetE<{ cwd: string; files: ContextFileEntry[] }>(`${base}/sessions/${id}/files`);
+  apiGetE<{ cwd: string; files: ContextFileEntry[] }>(`${base}/sessions/${id}/files`).pipe(
+    Effect.map((r) => ({ ...r, files: r.files ?? [] })),
+  );
 
 export const readFile = (base: string, id: string, path: string) =>
   apiGetE<FileContent>(`${base}/sessions/${id}/files/read?path=${encodeURIComponent(path)}`);

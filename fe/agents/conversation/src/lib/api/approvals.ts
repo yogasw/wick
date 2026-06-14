@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
 import type { ApprovalsResponse, ApprovalDecision } from "../types/agents.js";
 
@@ -9,7 +10,13 @@ type ApprovalDecisionBody = {
 };
 
 export const getApprovals = (base: string, id: string) =>
-  apiGetE<ApprovalsResponse>(`${base}/sessions/${id}/approvals`);
+  apiGetE<ApprovalsResponse>(`${base}/sessions/${id}/approvals`).pipe(
+    Effect.map((r) => ({
+      pending: r.pending ?? [],
+      session_approved: r.session_approved ?? [],
+      always_approved: r.always_approved ?? [],
+    })),
+  );
 
 export const sendApprovalDecision = (base: string, id: string, body: ApprovalDecisionBody) =>
   apiPostE<{ status: string }>(`${base}/sessions/${id}/approve`, body);
