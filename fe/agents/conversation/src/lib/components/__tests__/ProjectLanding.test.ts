@@ -8,7 +8,7 @@ vi.mock("../../router.js", () => ({
 
 import ProjectLanding from "../ProjectLanding.svelte";
 
-const PROJECT: ProjectOption = { id: "proj-42", name: "Acme API", path: "" };
+const PROJECT: ProjectOption = { id: "proj-42", name: "Acme API", path: "/managed/path", managed: true };
 
 const PROVIDER: ProviderOption = { type: "anthropic", name: "Claude Sonnet", version: "claude-sonnet-4" };
 
@@ -45,15 +45,15 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(screen.getByText(/3 chats/)).toBeDefined();
   });
 
-  test("shows 'managed' when project path is empty", () => {
+  test("shows 'managed' when project.managed is true", () => {
     render(ProjectLanding, { props: baseProps });
     expect(screen.getByText(/managed/)).toBeDefined();
   });
 
-  test("shows path label when project has a non-empty path", () => {
-    const customProject = { ...PROJECT, path: "/home/user/acme" };
+  test("shows 'custom' when project.managed is false", () => {
+    const customProject = { ...PROJECT, managed: false };
     render(ProjectLanding, { props: { ...baseProps, project: customProject } });
-    expect(screen.getByText(/\/home\/user\/acme/)).toBeDefined();
+    expect(screen.getByText(/custom/)).toBeDefined();
   });
 
   test("renders a Pin as default button", () => {

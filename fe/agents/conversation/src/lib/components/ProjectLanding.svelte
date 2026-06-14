@@ -24,7 +24,6 @@
     if (!selectedProvider && providers.length > 0) selectedProvider = providers[0].type;
   });
 
-  const isManaged = $derived(project.path === "");
   const chatCount = $derived(sessions.length);
 
   const filtered = $derived(
@@ -61,7 +60,7 @@
   }
 </script>
 
-<div class="flex flex-col h-full p-6 max-w-2xl mx-auto w-full gap-6">
+<div class="flex flex-col h-full p-6 max-w-4xl mx-auto w-full gap-6">
 
   <!-- Back link -->
   <a
@@ -75,7 +74,7 @@
   </a>
 
   <!-- Project header -->
-  <div class="flex items-start justify-between gap-4">
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
     <div class="flex items-center gap-3 min-w-0">
       <div class="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600">
         <svg viewBox="0 0 16 16" class="h-5 w-5 text-black-800 dark:text-white-100" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -85,12 +84,12 @@
       <div class="min-w-0">
         <h1 class="text-lg font-semibold text-black-900 dark:text-white-100 truncate">{project.name}</h1>
         <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">
-          {chatCount} chats · {isManaged ? "managed" : project.path}
+          {chatCount} chats · {project.managed ? "managed" : "custom"}
         </p>
       </div>
     </div>
 
-    <div class="flex items-center gap-2 shrink-0">
+    <div class="flex flex-wrap items-center gap-2">
       <button
         type="button"
         onclick={onPin}

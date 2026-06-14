@@ -94,7 +94,7 @@
     onpaste={handlePaste}
   ></textarea>
 
-  <div class="flex items-center justify-between gap-2">
+  <div class="flex flex-wrap items-center gap-2">
     <div class="flex items-center gap-1.5">
       <button
         type="button"
@@ -120,7 +120,7 @@
       aria-label="File attachment picker"
     />
 
-    <div class="flex items-center gap-2">
+    <div class="ml-auto flex items-center gap-2">
       {#if showShiftEnterHint}
         <span class="hidden sm:block text-[10px] text-black-600 dark:text-black-700">Shift+Enter for newline</span>
       {/if}

@@ -9,7 +9,7 @@ export const getProviderOptions = (base: string) =>
 
 export const getProjectOptions = (base: string) =>
   apiGetE<ProjectOption[] | null>(`${base}/projects/options`).pipe(
-    Effect.map((r) => r ?? []),
+    Effect.map((r) => (r ?? []).map((p) => ({ ...p, managed: p.managed ?? false }))),
   );
 
 export const switchProvider = (base: string, sessionId: string, provider: string) =>

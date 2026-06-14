@@ -23,7 +23,7 @@ const mockLayer = (status: number, body: unknown) =>
   );
 
 const PROVIDER: ProviderOption = { type: "anthropic", name: "Claude Sonnet", version: "claude-sonnet-4" };
-const PROJECT: ProjectOption = { id: "proj-1", name: "My Project", path: "/home/user/project" };
+const PROJECT: ProjectOption = { id: "proj-1", name: "My Project", path: "/home/user/project", managed: false };
 
 describe("getProviderOptions", () => {
   test("parses provider options array from response", async () => {
@@ -68,6 +68,17 @@ describe("getProjectOptions", () => {
     expect(result[0].id).toBe("proj-1");
     expect(result[0].name).toBe("My Project");
     expect(result[0].path).toBe("/home/user/project");
+    expect(result[0].managed).toBe(false);
+  });
+
+  test("normalizes managed field to false when absent", async () => {
+    const noManaged = { id: "proj-2", name: "Legacy", path: "/some/path" };
+    const result = await Effect.runPromise(
+      getProjectOptions("/tools/agents").pipe(
+        Effect.provide(mockLayer(200, [noManaged])),
+      ),
+    );
+    expect(result[0].managed).toBe(false);
   });
 
   test("normalizes null response to empty array", async () => {

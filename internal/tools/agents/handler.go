@@ -1514,18 +1514,20 @@ func projectOptionsJSON(c *tool.Ctx) {
 		return
 	}
 	type option struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Path string `json:"path"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Managed bool   `json:"managed"`
 	}
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
+		managed := p.Meta.CustomPath == ""
 		path := p.Meta.CustomPath
 		if path == "" {
 			path = globalLayout.ProjectManagedPath(id)
 		}
-		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path})
+		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path, Managed: managed})
 	}
 	c.JSON(http.StatusOK, opts)
 }
