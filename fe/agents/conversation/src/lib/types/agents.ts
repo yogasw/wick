@@ -157,3 +157,28 @@ export type ThreadBlock =
 export type LiveTurn = { text: string; blocks: ThreadBlock[] };
 
 export type TypingState = { active: boolean; substate?: string };
+
+export type WsField = {
+  key: string;
+  label?: string;
+  type: "text" | "password" | "dropdown" | string;
+  required?: boolean;
+  secret?: boolean;
+  set?: boolean;
+  placeholder?: string;
+  options?: string[];
+  value?: string;
+  help?: string;
+};
+
+export type WsInstance = {
+  id: string;
+  label?: string;
+  status: string;
+  fields?: WsField[];
+};
+
+export type WsBase = {
+  base_key: string;
+  label?: string;
+};
