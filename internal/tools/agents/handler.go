@@ -226,6 +226,10 @@ func Register(r tool.Router) {
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)
 
+	// JSON API — project-settings SPA endpoints.
+	r.GET("/api/projects/{id}", apiProjectDetail)
+	r.POST("/api/projects/{id}", apiProjectUpdate)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 
@@ -1430,63 +1434,26 @@ func toggleProjectPin(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "ok", "pinned": pinned != "", "project_id": pinned})
 }
 
-// projectSettingsPage renders the full project settings page (mockup ④)
-// for an existing project, or the create form when id == "new".
+// projectSettingsPage renders the project-settings SPA shell for an existing
+// project or the create form when id == "new". Data is served via the JSON
+// API endpoint GET /api/projects/{id}.
 func projectSettingsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	id := c.PathValue("id")
-	vm := view.ProjectSettingsVM{
-		Layout:     sidebarVM(c, "projects", ""),
-		Base:       c.Base(),
-		PresetList: globalMgr.Registry().PresetNames(),
-		Managed:    true,
-	}
-	if id == "new" {
-		vm.IsNew = true
-		vm.Icon = "📁"
-		vm.DefaultPreset = "default"
-		vm.DefaultProvider = "claude"
-		vm.Action = c.Base() + "/projects"
-		c.HTML(view.ProjectSettingsPage(vm))
-		return
-	}
-	p, ok := globalMgr.Registry().Project(id)
-	if !ok {
-		c.NotFound()
-		return
-	}
-	vm.ID = id
-	vm.Name = p.Meta.Name
-	vm.Icon = p.Meta.Icon
-	vm.Description = p.Meta.Description
-	vm.CustomPath = p.Meta.CustomPath
-	vm.Managed = p.Meta.CustomPath == ""
-	vm.IsDefault = p.Meta.Name == project.DefaultName
-	vm.DefaultPreset = p.Meta.Defaults.Preset
-	vm.DefaultProvider = p.Meta.Defaults.Provider
-	vm.SystemAddon = p.Meta.Defaults.SystemAddon
-	vm.CreatedAt = p.Meta.CreatedAt.Format("2006-01-02")
-	vm.Action = c.Base() + "/projects/" + id
-	// Session count + pinned labels.
-	for sid, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.ProjectID == id {
-			vm.ChatCount++
+	if id != "new" {
+		if _, ok := globalMgr.Registry().Project(id); !ok {
+			c.NotFound()
+			return
 		}
-		_ = sid
 	}
-	for _, pinID := range p.Meta.PinnedSessions {
-		label := loadFirstUserMessage(globalLayout, pinID, 50)
-		if label == "" {
-			label = pinID
-		}
-		vm.Pinned = append(vm.Pinned, view.PinnedSessionVM{ID: pinID, Label: label})
-	}
-	if b, err := json.MarshalIndent(p.Meta, "", "  "); err == nil {
-		vm.MetaJSON = string(b)
-	}
-	c.HTML(view.ProjectSettingsPage(vm))
+	c.HTML(view.ProjectSettingsSPA(view.ProjectSettingsSPAVM{
+		Layout:    sidebarVM(c, "projects", ""),
+		Base:      c.Base(),
+		ProjectID: id,
+		AssetURL:  spaAssetURL("project-settings"),
+	}))
 }
 
 // projectOptionsJSON returns [{id, name, path}] for every project —
