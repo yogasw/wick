@@ -3,17 +3,51 @@
   import type { LifecycleState } from "../stores/thread.js";
   import { idleCountdownText } from "../idleCountdown.js";
 
+  export type ActiveView = "conversation" | "commands" | "approvals" | "raw";
+
+  const TAB_LABELS: Record<ActiveView, string> = {
+    conversation: "Conversation",
+    commands: "Commands",
+    approvals: "Approvals",
+    raw: "Raw",
+  };
+
+  const TAB_ORDER: ActiveView[] = ["conversation", "commands", "approvals", "raw"];
+
   type Props = {
     title: string;
     agentLabel?: string;
     sseStatus: SSEStatus;
     lifecycle?: LifecycleState;
     idleTimeoutMs?: number;
+    activeView?: ActiveView;
     onKill: () => void;
     onDelete: () => void;
+    onTabChange?: (view: ActiveView) => void;
   };
 
-  let { title, agentLabel = "", sseStatus, lifecycle, idleTimeoutMs = 120_000, onKill, onDelete }: Props = $props();
+  let {
+    title,
+    agentLabel = "",
+    sseStatus,
+    lifecycle,
+    idleTimeoutMs = 120_000,
+    activeView = "conversation",
+    onKill,
+    onDelete,
+    onTabChange,
+  }: Props = $props();
+
+  let tabMenuOpen = $state(false);
+
+  function toggleTabMenu() {
+    tabMenuOpen = !tabMenuOpen;
+  }
+
+  function selectTab(view: ActiveView) {
+    tabMenuOpen = false;
+    onTabChange?.(view);
+  }
 
   const statusClass = $derived(
     sseStatus === "connected"
@@ -72,10 +106,55 @@
 </script>
 
 <div
-  class="shrink-0 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2 bg-white-100/80 dark:bg-navy-800/80 backdrop-blur-sm border-b border-white-300 dark:border-navy-600"
+  class="shrink-0 flex flex-wrap items-center justify-between gap-2 pl-2 pr-2 md:px-4 py-2 bg-white-100/80 dark:bg-navy-800/80 backdrop-blur-sm border-b border-white-300 dark:border-navy-600"
 >
-  <!-- Left: title + agent label -->
+  <!-- Left: tab dropdown burger + title + agent label -->
   <div class="flex items-center gap-2 min-w-0 flex-1">
+    <!-- Tab dropdown -->
+    <div class="relative shrink-0">
+      <button
+        type="button"
+        aria-label="Tab menu"
+        onclick={toggleTabMenu}
+        class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 px-2.5 py-1.5 text-xs font-medium text-black-800 dark:text-black-300 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+      >
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h12" stroke-linecap="round"></path>
+        </svg>
+        <span>{TAB_LABELS[activeView]}</span>
+        <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </button>
+      {#if tabMenuOpen}
+        <div
+          data-tab-dropdown
+          class="absolute top-full left-0 mt-1 z-20 min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
+        >
+          {#each TAB_ORDER as tab}
+            <button
+              type="button"
+              aria-label={TAB_LABELS[tab]}
+              onclick={() => selectTab(tab)}
+              class={[
+                "w-full text-left px-3 py-2 text-xs transition-colors flex items-center justify-between gap-2",
+                activeView === tab
+                  ? "text-green-700 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/20"
+                  : "text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700",
+              ].join(" ")}
+            >
+              {TAB_LABELS[tab]}
+              {#if activeView === tab}
+                <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 text-green-500" fill="currentColor" aria-hidden="true">
+                  <path d="M2 6.5L5 9.5L10 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
     <span class="font-semibold text-sm text-black-900 dark:text-white-100 truncate">{title}</span>
     {#if agentLabel}
       <span class="hidden md:inline text-xs text-black-600 dark:text-black-700 shrink-0"

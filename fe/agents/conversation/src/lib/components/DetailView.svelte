@@ -17,7 +17,7 @@
   import { getConversation, getSessionMeta, deleteSession } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { answerAsk } from "../api/asks.js";
-  import { sendApprovalDecision } from "../api/approvals.js";
+  import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
   import { listFiles, readFile, saveFile, createFile, downloadURL } from "../api/files.js";
   import { getProcesses, killProcess, dequeueProcess } from "../api/processes.js";
@@ -37,10 +37,13 @@
   import ScmDock from "./ScmDock.svelte";
   import AskUserModal from "./AskUserModal.svelte";
   import ApprovalsModal from "./ApprovalsModal.svelte";
+  import ApprovedPanel from "./ApprovedPanel.svelte";
+  import type { ActiveView } from "./ConversationHeader.svelte";
 
   import type {
     ConversationTurn, LiveTurn, TypingState,
     ContextFileEntry, AskAnswer, ApprovalDecision,
+    ApprovedItem,
     WsInstance, WsBase, ProcessInfo, FileContent,
     ProviderOption, ProjectOption,
   } from "../types/agents.js";
@@ -113,6 +116,38 @@
     "";
   let scmOpen = $state(false);
   let scmChangeCount = $state(0);
+
+  /* ── header tab view ──────────────────────────────────────────── */
+  let activeView = $state<ActiveView>("conversation");
+
+  /* ── approvals tab state ──────────────────────────────────────── */
+  let approvalsTabPending = $state<import("../types/agents.js").ApprovalRequest[]>([]);
+  let approvalsTabSession = $state<ApprovedItem[]>([]);
+  let approvalsTabAlways = $state<ApprovedItem[]>([]);
+
+  function loadApprovalsTab() {
+    run(getApprovals(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        approvalsTabPending = res.pending;
+        approvalsTabSession = res.session_approved;
+        approvalsTabAlways = res.always_approved;
+      })
+      .catch((e: unknown) => toastError(`Approvals: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  async function handleRevokeApproval(matchKey: string, scope: "session" | "always") {
+    try {
+      await run(revokeApproval(base, sessionId, matchKey, scope).pipe(Effect.provide(WickClientLayer)));
+      loadApprovalsTab();
+    } catch (e: unknown) {
+      toastError(`Revoke: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  function handleTabChange(view: ActiveView) {
+    activeView = view;
+    if (view === "approvals") loadApprovalsTab();
+  }
 
   /* ── Effect runner ────────────────────────────────────────────── */
   function run<T>(eff: Effect.Effect<T, unknown, never>): Promise<T> {
@@ -386,50 +421,124 @@
       {sseStatus}
       lifecycle={agentLifecycle}
       {idleTimeoutMs}
+      {activeView}
       onKill={handleKill}
       onDelete={handleDelete}
+      onTabChange={handleTabChange}
     />
 
-    <!-- Zone 2: scrollable thread -->
-    <div
-      class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800"
-      bind:this={threadEl}
-      data-chat-panel
-    >
-      <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-4 pb-4">
-        <ConversationThread {turns} {live} {typing} />
+    <!-- Zone 2: main content area — switches by activeView -->
+    {#if activeView === "conversation"}
+      <div
+        class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800"
+        bind:this={threadEl}
+        data-chat-panel
+      >
+        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-4 pb-4">
+          <ConversationThread {turns} {live} {typing} />
+        </div>
       </div>
-    </div>
 
-    <!-- Zone 3: ask inline -->
-    <div class="shrink-0 px-4 md:px-6 bg-white-200 dark:bg-navy-800">
-      <div class="max-w-4xl mx-auto">
-        <AskUserModal
-          request={$currentAsk}
-          onSubmit={handleAskSubmit}
-          onDismiss={hideAsk}
-        />
+      <!-- Zone 3: ask inline -->
+      <div class="shrink-0 px-4 md:px-6 bg-white-200 dark:bg-navy-800">
+        <div class="max-w-4xl mx-auto">
+          <AskUserModal
+            request={$currentAsk}
+            onSubmit={handleAskSubmit}
+            onDismiss={hideAsk}
+          />
+        </div>
       </div>
-    </div>
 
-    <!-- Zone 4: composer docked at bottom -->
-    <div class="relative shrink-0 px-4 md:px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
-      <div class="max-w-4xl mx-auto flex flex-col gap-1.5">
-        <ComposerToolbar
-          providers={providerOptions}
-          projects={projectOptions}
-          activeProvider={activeProvider}
-          activeProjectId={activeProjectId}
-          onProviderChange={handleProviderChange}
-          onProjectChange={handleProjectChange}
-        />
-        <Composer
-          onSend={handleSend}
-          placeholder="Message the agent…"
-          showShiftEnterHint={true}
-        />
+      <!-- Zone 4: composer with leading toolbar actions in one row -->
+      <div class="relative shrink-0 px-4 md:px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+        <div class="max-w-4xl mx-auto">
+          {#snippet toolbarLeading()}
+            <ComposerToolbar
+              providers={providerOptions}
+              projects={projectOptions}
+              activeProvider={activeProvider}
+              activeProjectId={activeProjectId}
+              onProviderChange={handleProviderChange}
+              onProjectChange={handleProjectChange}
+            />
+          {/snippet}
+          <Composer
+            onSend={handleSend}
+            placeholder="Message the agent…"
+            showShiftEnterHint={true}
+            leadingActions={toolbarLeading}
+          />
+        </div>
       </div>
-    </div>
+    {:else if activeView === "approvals"}
+      <div class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800">
+        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 py-6 flex flex-col gap-4">
+          {#if approvalsTabPending.length > 0}
+            <div>
+              <h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-3">Pending approvals</h3>
+              <div class="flex flex-col gap-3">
+                {#each approvalsTabPending as req (req.id)}
+                  <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm px-5 py-4 space-y-3">
+                    <dl class="space-y-1.5 text-xs">
+                      <div class="flex gap-3">
+                        <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Agent</dt>
+                        <dd class="font-mono text-black-900 dark:text-white-100">{req.agent_name || "—"}</dd>
+                      </div>
+                      <div class="flex gap-3">
+                        <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Tool</dt>
+                        <dd class="font-mono text-black-900 dark:text-white-100">{req.tool || "—"}</dd>
+                      </div>
+                      <div class="flex gap-3">
+                        <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Command</dt>
+                        <dd class="font-mono text-black-900 dark:text-white-100 break-all">{req.cmd || "—"}</dd>
+                      </div>
+                    </dl>
+                    <div class="grid grid-cols-4 gap-2">
+                      <button
+                        type="button"
+                        class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 transition-colors"
+                        onclick={() => handleApprovalDecide("approve_once")}
+                      >Approve once</button>
+                      <button
+                        type="button"
+                        class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                        onclick={() => handleApprovalDecide("approve_session")}
+                      >Allow session</button>
+                      <button
+                        type="button"
+                        class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                        onclick={() => handleApprovalDecide("approve_always")}
+                      >Always allow</button>
+                      <button
+                        type="button"
+                        class="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors"
+                        onclick={() => handleApprovalDecide("block")}
+                      >Block</button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {:else}
+            <div class="text-sm text-black-700 dark:text-black-600 italic">No pending approvals.</div>
+          {/if}
+          <ApprovedPanel
+            sessionApproved={approvalsTabSession}
+            alwaysApproved={approvalsTabAlways}
+            onRevoke={handleRevokeApproval}
+          />
+        </div>
+      </div>
+    {:else if activeView === "commands"}
+      <div class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
+        <p class="text-sm text-black-600 dark:text-black-700">Commands view — coming soon to the new UI</p>
+      </div>
+    {:else if activeView === "raw"}
+      <div class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
+        <p class="text-sm text-black-600 dark:text-black-700">Raw trace — coming soon</p>
+      </div>
+    {/if}
   </div>
 
   <!-- Side panel: slides in when a rail tab is active (non-source) -->

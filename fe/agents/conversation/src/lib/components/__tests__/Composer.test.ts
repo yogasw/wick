@@ -1,6 +1,7 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import Composer from "../Composer.svelte";
+import ComposerWithLeading from "./helpers/ComposerWithLeading.svelte";
 
 describe("Composer", () => {
   test("clicking Send with text calls onSend and clears the textarea", async () => {
@@ -150,5 +151,14 @@ describe("Composer", () => {
     render(Composer, { props: { onSend: vi.fn(), placeholder: "Type a message…" } });
     const textarea = screen.getByPlaceholderText("Type a message…");
     expect(textarea).not.toBeNull();
+  });
+
+  test("leadingActions snippet renders its content inside the composer action row", () => {
+    const { container } = render(ComposerWithLeading, {
+      props: { onSend: vi.fn() },
+    });
+    const leading = container.querySelector("[data-leading-action]");
+    expect(leading).not.toBeNull();
+    expect(leading!.textContent).toContain("LEADING");
   });
 });

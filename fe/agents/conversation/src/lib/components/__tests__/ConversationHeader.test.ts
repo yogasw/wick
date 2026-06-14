@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { render, screen, fireEvent } from "@testing-library/svelte";
 import ConversationHeader from "../ConversationHeader.svelte";
 import type { LifecycleState } from "../../stores/thread.js";
 
@@ -12,6 +12,8 @@ const baseProps = {
   sseStatus: "connected" as const,
   onKill: () => {},
   onDelete: () => {},
+  activeView: "conversation" as const,
+  onTabChange: () => {},
 };
 
 describe("ConversationHeader", () => {
@@ -151,6 +153,50 @@ describe("ConversationHeader", () => {
         },
       });
       expect(container.innerHTML).not.toContain("kill in");
+    });
+  });
+
+  describe("tab dropdown", () => {
+    test("renders the current tab label in the burger button", () => {
+      render(ConversationHeader, { props: { ...baseProps, activeView: "conversation" } });
+      const tabBtn = screen.getByRole("button", { name: /tab menu/i });
+      expect(tabBtn.textContent).toContain("Conversation");
+    });
+
+    test("dropdown is hidden by default", () => {
+      const { container } = render(ConversationHeader, { props: baseProps });
+      expect(container.querySelector("[data-tab-dropdown]")).toBeNull();
+    });
+
+    test("clicking the burger button shows the 4 tab options", async () => {
+      const { container } = render(ConversationHeader, { props: baseProps });
+      const tabBtn = screen.getByRole("button", { name: /tab menu/i });
+      await fireEvent.click(tabBtn);
+      const dropdown = container.querySelector("[data-tab-dropdown]");
+      expect(dropdown).not.toBeNull();
+      expect(dropdown!.textContent).toContain("Conversation");
+      expect(dropdown!.textContent).toContain("Commands");
+      expect(dropdown!.textContent).toContain("Approvals");
+      expect(dropdown!.textContent).toContain("Raw");
+    });
+
+    test("clicking a tab option calls onTabChange with the correct value", async () => {
+      const onTabChange = vi.fn();
+      render(ConversationHeader, { props: { ...baseProps, onTabChange } });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      const approvalsBtn = screen.getByRole("button", { name: /^Approvals$/i });
+      await fireEvent.click(approvalsBtn);
+      expect(onTabChange).toHaveBeenCalledWith("approvals");
+    });
+
+    test("clicking the active tab still calls onTabChange", async () => {
+      const onTabChange = vi.fn();
+      render(ConversationHeader, {
+        props: { ...baseProps, activeView: "conversation", onTabChange },
+      });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      await fireEvent.click(screen.getByRole("button", { name: /^Conversation$/i }));
+      expect(onTabChange).toHaveBeenCalledWith("conversation");
     });
   });
 });

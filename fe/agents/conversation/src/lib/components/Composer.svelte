@@ -1,12 +1,15 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
+
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
     disabled?: boolean;
     placeholder?: string;
     showShiftEnterHint?: boolean;
+    leadingActions?: Snippet;
   };
 
-  let { onSend, disabled = false, placeholder = "Message…", showShiftEnterHint = false }: Props = $props();
+  let { onSend, disabled = false, placeholder = "Message…", showShiftEnterHint = false, leadingActions }: Props = $props();
 
   let text = $state("");
   let files: File[] = $state([]);
@@ -92,16 +95,21 @@
   ></textarea>
 
   <div class="flex items-center justify-between gap-2">
-    <button
-      type="button"
-      aria-label="Attach files"
-      class="rounded-lg p-1.5 text-black-500 hover:text-green-500 dark:text-black-600 dark:hover:text-green-400"
-      onclick={() => fileInputEl?.click()}
-    >
-      <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="M14 8.5V11a4 4 0 01-8 0V4a2.5 2.5 0 015 0v7a1 1 0 01-2 0V5" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </button>
+    <div class="flex items-center gap-1.5">
+      <button
+        type="button"
+        aria-label="Attach files"
+        class="rounded-lg p-1.5 text-black-500 hover:text-green-500 dark:text-black-600 dark:hover:text-green-400"
+        onclick={() => fileInputEl?.click()}
+      >
+        <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M14 8.5V11a4 4 0 01-8 0V4a2.5 2.5 0 015 0v7a1 1 0 01-2 0V5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      {#if leadingActions}
+        {@render leadingActions()}
+      {/if}
+    </div>
 
     <input
       bind:this={fileInputEl}
