@@ -1,10 +1,14 @@
 <script lang="ts">
   import { ToastHost } from "@wick-fe/common-ui";
-  import { route, match } from "./lib/router.js";
+  import { route, match, push, initialRoute } from "./lib/router.js";
   import ListView from "./lib/components/ListView.svelte";
   import DetailView from "./lib/components/DetailView.svelte";
 
-  const base = document.getElementById("app")?.dataset.base ?? "";
+  const appEl = document.getElementById("app");
+  const base = appEl?.dataset.base ?? "";
+
+  const deepLink = initialRoute(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash, appEl?.dataset.initialSession);
+  if (deepLink) push(deepLink);
 
   let currentRoute = $state("/");
   route.subscribe((v) => { currentRoute = v; });

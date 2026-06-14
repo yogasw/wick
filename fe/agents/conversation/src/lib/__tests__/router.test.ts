@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { match } from "../router.js";
+import { match, initialRoute } from "../router.js";
 
 describe("router.match", () => {
   it("returns params for /sessions/:id", () => {
@@ -22,5 +22,27 @@ describe("router.match", () => {
 
   it("returns null when root pattern does not match detail path", () => {
     expect(match("/", "/sessions/abc")).toBeNull();
+  });
+});
+
+describe("router.initialRoute", () => {
+  it("returns session path when hash is / and initialSession is set", () => {
+    expect(initialRoute("/", "abc")).toBe("/sessions/abc");
+  });
+
+  it("returns session path when hash is empty and initialSession is set", () => {
+    expect(initialRoute("", "abc")).toBe("/sessions/abc");
+  });
+
+  it("returns null when explicit hash route is present (hash wins)", () => {
+    expect(initialRoute("/sessions/xyz", "abc")).toBeNull();
+  });
+
+  it("returns null when initialSession is empty string", () => {
+    expect(initialRoute("/", "")).toBeNull();
+  });
+
+  it("returns null when initialSession is null", () => {
+    expect(initialRoute("/", null)).toBeNull();
   });
 });

@@ -17,6 +17,12 @@ export function push(path: string): void {
   window.location.hash = path;
 }
 
+export function initialRoute(hash: string, initialSession: string | null | undefined): string | null {
+  if (hash && hash !== "/") return null;
+  if (initialSession) return "/sessions/" + initialSession;
+  return null;
+}
+
 export function match(
   pattern: string,
   path: string,
