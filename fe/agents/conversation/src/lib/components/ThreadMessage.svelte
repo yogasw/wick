@@ -14,43 +14,39 @@
   const safeEvents = $derived(turn.events ?? []);
   const safeAttachments = $derived(turn.attachments ?? []);
 
-  const toolBlocks = $derived(
-    safeEvents
-      .filter((ev) => ev.type === "tool_use")
-      .map((ev) => ({
-        kind: "tool" as const,
-        toolUseId: ev.tool_use_id ?? "",
-        toolName: ev.tool_name ?? "",
-        toolInput: ev.tool_input ?? "",
-        result: safeEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
-        isError: safeEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
-      } satisfies Extract<ThreadBlock, { kind: "tool" }>)
-    )
+  const showTraceToggle = $derived(!isUser && ((safeEvents.length > 0) || turn.has_trace === true));
+
+  const isSyntheticId = $derived(
+    turn.turn_id.startsWith("live-") || turn.turn_id.startsWith("sys-")
   );
 
-  const showTraceToggle = $derived(!isUser && turn.has_trace && loadTrace !== undefined);
+  const canFetch = $derived(
+    turn.has_trace === true && loadTrace !== undefined && !isSyntheticId
+  );
 
   let traceOpen = $state(false);
   let traceLoading = $state(false);
   let traceEvents = $state<TurnEvent[] | null>(null);
   let traceError = $state(false);
 
+  const resolvedTraceEvents = $derived(traceEvents ?? safeEvents);
+
   const traceToolBlocks = $derived(
-    (traceEvents ?? [])
+    resolvedTraceEvents
       .filter((ev) => ev.type === "tool_use")
       .map((ev) => ({
         kind: "tool" as const,
         toolUseId: ev.tool_use_id ?? "",
         toolName: ev.tool_name ?? "",
         toolInput: ev.tool_input ?? "",
-        result: (traceEvents ?? []).find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
-        isError: (traceEvents ?? []).find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
+        result: resolvedTraceEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
+        isError: resolvedTraceEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
       } satisfies Extract<ThreadBlock, { kind: "tool" }>)
     )
   );
 
   const traceThinkingEvents = $derived(
-    (traceEvents ?? []).filter((ev) => ev.type === "thinking")
+    resolvedTraceEvents.filter((ev) => ev.type === "thinking")
   );
 
   async function toggleTrace() {
@@ -58,7 +54,7 @@
       traceOpen = false;
       return;
     }
-    if (traceEvents !== null) {
+    if (traceEvents !== null || !canFetch) {
       traceOpen = true;
       return;
     }
@@ -141,7 +137,7 @@
             </div>
           {/if}
 
-          {#if traceOpen && traceEvents !== null}
+          {#if traceOpen}
             <div class="flex flex-col gap-1 mt-0.5">
               {#each traceThinkingEvents as ev}
                 <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
@@ -156,13 +152,6 @@
         </div>
       {/if}
 
-      {#if toolBlocks.length > 0}
-        <div class="flex flex-col gap-1">
-          {#each toolBlocks as block}
-            <ToolCard {block} />
-          {/each}
-        </div>
-      {/if}
       {#if turn.text}
         <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
           {@html renderMarkdown(turn.text)}

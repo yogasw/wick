@@ -73,9 +73,7 @@ export function createThreadStore(): ThreadStore {
         truncated: false,
         interrupted: false,
         has_trace: current.blocks.length > 0,
-        events: current.blocks
-          .filter((b) => b.kind === "tool")
-          .map((b) => {
+        events: current.blocks.map((b) => {
             if (b.kind === "tool") {
               return {
                 type: "tool_use",
@@ -86,7 +84,7 @@ export function createThreadStore(): ThreadStore {
                 text: b.result,
               };
             }
-            return { type: "thinking" };
+            return { type: "thinking", text: b.text };
           }),
         attachments: [],
       };

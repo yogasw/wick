@@ -313,6 +313,49 @@ describe("createThreadStore", () => {
     expect(get(store.meta).title).toBe("Keep me");
   });
 
+  /* ── finalize: thinking blocks in events ───────────────────────── */
+
+  test("done after thinking event includes thinking entry in finalized turn events", () => {
+    store.handleEvent(ev("thinking", { data: "my reasoning" }));
+    store.handleEvent(ev("text_delta", { data: "answer" }));
+    store.handleEvent(ev("done"));
+    const turn = get(store.turns)[0];
+    const thinkingEntries = turn.events.filter((e) => e.type === "thinking");
+    expect(thinkingEntries).toHaveLength(1);
+    expect(thinkingEntries[0].text).toBe("my reasoning");
+  });
+
+  test("done after thinking event sets has_trace to true", () => {
+    store.handleEvent(ev("thinking", { data: "ponder" }));
+    store.handleEvent(ev("text_delta", { data: "ok" }));
+    store.handleEvent(ev("done"));
+    expect(get(store.turns)[0].has_trace).toBe(true);
+  });
+
+  test("done with only thinking block (no text) still finalizes turn with thinking in events", () => {
+    store.handleEvent(ev("thinking", { data: "silent reasoning" }));
+    store.handleEvent(ev("done"));
+    const turns = get(store.turns);
+    expect(turns).toHaveLength(1);
+    const thinkingEntries = turns[0].events.filter((e) => e.type === "thinking");
+    expect(thinkingEntries).toHaveLength(1);
+    expect(thinkingEntries[0].text).toBe("silent reasoning");
+  });
+
+  test("done with thinking + tool blocks includes both in finalized turn events", () => {
+    store.handleEvent(ev("thinking", { data: "think first" }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}", at: 1 }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "output", is_error: false, at: 2 }));
+    store.handleEvent(ev("text_delta", { data: "result" }));
+    store.handleEvent(ev("done"));
+    const turn = get(store.turns)[0];
+    const thinkingEntries = turn.events.filter((e) => e.type === "thinking");
+    const toolEntries = turn.events.filter((e) => e.type === "tool_use");
+    expect(thinkingEntries).toHaveLength(1);
+    expect(toolEntries).toHaveLength(1);
+    expect(toolEntries[0].tool_name).toBe("bash");
+  });
+
   /* ── ignored event types ────────────────────────────────────────── */
 
   test("approval_request is ignored without side-effects", () => {
