@@ -34,7 +34,6 @@
   import FileViewerModal from "./FileViewerModal.svelte";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
-  import ScmDock from "./ScmDock.svelte";
   import AskUserModal from "./AskUserModal.svelte";
   import ApprovalsModal from "./ApprovalsModal.svelte";
   import ApprovedPanel from "./ApprovedPanel.svelte";
@@ -114,8 +113,9 @@
     document.getElementById("app")?.dataset.scmAsset ??
     document.querySelector<HTMLElement>("[data-scm-asset]")?.dataset.scmAsset ??
     "";
-  let scmOpen = $state(false);
   let scmChangeCount = $state(0);
+  let scmHostEl: HTMLElement | undefined = $state(undefined);
+  let scmMounted = false;
 
   /* ── header tab view ──────────────────────────────────────────── */
   let activeView = $state<ActiveView>("conversation");
@@ -221,6 +221,36 @@
     const _dep2 = live;
     if (threadEl) {
       threadEl.scrollTop = threadEl.scrollHeight;
+    }
+  });
+
+  /* ── SCM island mount when source tab opens ───────────────────── */
+  $effect(() => {
+    if (railTab === "source" && scmHostEl && !scmMounted) {
+      const w = window as unknown as { WickSCM?: { mount: (h: HTMLElement, o: { sessionID: string; mode: "sidebar" }) => void } };
+      const doMount = async () => {
+        try {
+          if (scmAssetUrl) {
+            const existing = (window as unknown as { WickSCM?: unknown }).WickSCM;
+            if (!existing) {
+              await new Promise<void>((resolve, reject) => {
+                const s = document.createElement("script");
+                s.type = "module";
+                s.src = scmAssetUrl;
+                s.onload = () => {
+                  if ((window as unknown as { WickSCM?: unknown }).WickSCM) resolve();
+                  else reject(new Error("WickSCM not installed"));
+                };
+                s.onerror = () => reject(new Error("failed to load scm bundle"));
+                document.head.appendChild(s);
+              });
+            }
+          }
+          w.WickSCM?.mount(scmHostEl!, { sessionID: sessionId, mode: "sidebar" });
+          scmMounted = true;
+        } catch (_) { /* bundle load failure — island stays blank */ }
+      };
+      doMount();
     }
   });
 
@@ -341,13 +371,7 @@
 
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
-    if (tab === "source") {
-      scmOpen = !scmOpen;
-      railTab = scmOpen ? "source" : null;
-      return;
-    }
     railTab = railTab === tab ? null : tab;
-    if (railTab !== "source") scmOpen = false;
   }
 
   /* ── mount/unmount ────────────────────────────────────────────── */
@@ -405,7 +429,7 @@
     },
   ];
 
-  const sideOpen = $derived(railTab !== null && railTab !== "source");
+  const sideOpen = $derived(railTab !== null);
 </script>
 
 <!-- Full-height flex row: main area + vertical rail -->
@@ -541,12 +565,14 @@
     {/if}
   </div>
 
-  <!-- Side panel: slides in when a rail tab is active (non-source) -->
+  <!-- Side panel: slides in when a rail tab is active -->
   {#if sideOpen}
     <div
-      class="hidden lg:flex flex-col w-80 shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden"
+      class={`hidden lg:flex flex-col ${railTab === "source" ? "w-96" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
     >
-      {#if railTab === "context"}
+      {#if railTab === "source"}
+        <div class="flex-1 overflow-hidden" bind:this={scmHostEl}></div>
+      {:else if railTab === "context"}
         <ContextPanel
           cwd={cwdVal}
           files={filesVal}
@@ -655,7 +681,9 @@
           </button>
         </div>
         <div class="flex-1 overflow-hidden flex flex-col">
-          {#if railTab === "context"}
+          {#if railTab === "source"}
+            <div class="flex flex-1 items-center justify-center text-sm text-black-600 dark:text-black-700 p-4">Source Control — open on desktop</div>
+          {:else if railTab === "context"}
             <ContextPanel
               cwd={cwdVal}
               files={filesVal}
@@ -740,20 +768,6 @@
     </div>
   {/if}
 
-  <!-- SCM dock (Source tab) — driven by ScmDock component -->
-  {#if scmOpen}
-    <ScmDock
-      {sessionId}
-      assetUrl={scmAssetUrl}
-      bind:open={scmOpen}
-      changeCount={scmChangeCount}
-      onOpenChange={(v) => {
-        scmOpen = v;
-        if (!v) railTab = null;
-      }}
-    />
-  {/if}
-
   <!-- Vertical rail strip — fixed on right edge -->
   <div
     class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md overflow-hidden"
@@ -767,7 +781,7 @@
         class={[
           "group inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 transition-colors",
           i > 0 ? "border-t border-white-300 dark:border-navy-600" : "",
-          railTab === tab.id || (tab.id === "source" && scmOpen)
+          railTab === tab.id
             ? "bg-green-50 dark:bg-green-900/20"
             : "hover:bg-white-200 dark:hover:bg-navy-800",
         ].join(" ")}
@@ -776,10 +790,7 @@
           <span class="relative">
             <svg
               viewBox="0 0 16 16"
-              class={[
-                "h-4 w-4",
-                railTab === "source" || scmOpen ? "text-green-500" : "text-green-500",
-              ].join(" ")}
+              class="h-4 w-4 text-green-500"
               fill="none"
               stroke="currentColor"
               stroke-width="1.5"
@@ -804,7 +815,7 @@
         <span
           class={[
             "text-[9px] font-medium [writing-mode:vertical-rl] [transform:rotate(180deg)] tracking-wide",
-            railTab === tab.id || (tab.id === "source" && scmOpen)
+            railTab === tab.id
               ? "text-green-600 dark:text-green-400"
               : "text-black-700 dark:text-black-600",
           ].join(" ")}

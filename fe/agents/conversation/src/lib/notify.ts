@@ -31,7 +31,12 @@ function realBeep(): void {
   } catch (_) { /* audio blocked — notification still fires */ }
 }
 
+const NOTIFY_PREF_KEY = "wick.conv.notify";
+
 function realShowNotification(title: string, body: string): void {
+  try {
+    if (localStorage.getItem(NOTIFY_PREF_KEY) !== "true") return;
+  } catch (_) { /* storage inaccessible */ }
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   try {
     const n = new Notification(title, { body, tag: "wick-ask", renotify: true } as NotificationOptions);

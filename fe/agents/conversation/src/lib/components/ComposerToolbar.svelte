@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { NOTIFY_KEY } from "../notify-pref.js";
   import type { ProviderOption, ProjectOption } from "../types/agents.js";
 
   type Props = {
@@ -21,8 +23,8 @@
 
   let providerMenuOpen = $state(false);
   let projectMenuOpen = $state(false);
-  let bellGranted = $state(
-    typeof Notification !== "undefined" ? Notification.permission === "granted" : false,
+  let notifyOn = $state(
+    typeof localStorage !== "undefined" ? localStorage.getItem(NOTIFY_KEY) === "true" : false,
   );
   let bellDenied = $state(
     typeof Notification !== "undefined" ? Notification.permission === "denied" : false,
@@ -54,15 +56,39 @@
 
   async function handleBellClick() {
     if (typeof Notification === "undefined") return;
+
+    if (notifyOn) {
+      notifyOn = false;
+      try { localStorage.setItem(NOTIFY_KEY, "false"); } catch (_) { /* blocked */ }
+      toastOk("Notifications muted");
+      return;
+    }
+
+    if (Notification.permission === "denied") {
+      bellDenied = true;
+      toastError("Notifications blocked — enable them in your browser settings");
+      return;
+    }
+
     if (Notification.permission === "default") {
       const perm = await Notification.requestPermission();
-      bellGranted = perm === "granted";
-      bellDenied = perm === "denied";
-    } else if (Notification.permission === "denied") {
-      bellDenied = true;
-    } else {
-      bellGranted = true;
+      if (perm === "granted") {
+        notifyOn = true;
+        bellDenied = false;
+        try { localStorage.setItem(NOTIFY_KEY, "true"); } catch (_) { /* blocked */ }
+        toastOk("Notifications enabled");
+      } else {
+        bellDenied = perm === "denied";
+        toastError("Notifications blocked — enable them in your browser settings");
+      }
+      return;
     }
+
+    /* permission === "granted" already */
+    notifyOn = true;
+    bellDenied = false;
+    try { localStorage.setItem(NOTIFY_KEY, "true"); } catch (_) { /* blocked */ }
+    toastOk("Notifications enabled");
   }
 </script>
 
@@ -71,7 +97,7 @@
   <button
     type="button"
     aria-label="Notifications"
-    title="Notifications"
+    title={notifyOn ? "Mute notifications" : "Enable notifications"}
     onclick={handleBellClick}
     class="relative inline-flex items-center justify-center h-7 w-7 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
   >
@@ -82,7 +108,7 @@
         <path d="M3 3l10 10" stroke-linecap="round"></path>
       {/if}
     </svg>
-    {#if bellGranted && !bellDenied}
+    {#if notifyOn && !bellDenied}
       <span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-200 dark:ring-navy-700" aria-hidden="true"></span>
     {/if}
   </button>
