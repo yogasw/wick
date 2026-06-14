@@ -106,7 +106,7 @@
       title.textContent =
         tab === "process" ? "Active Processes" : tab === "config" ? "Session Workspace" : "Context";
     }
-    if (tab === "config" && window.WickSessionConfig) window.WickSessionConfig.load();
+    if (tab === "config" && window.WickSessionWorkspace) window.WickSessionWorkspace.load();
   }
 
   // Exported so process.js can switch to process tab programmatically.
