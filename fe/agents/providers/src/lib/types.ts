@@ -101,6 +101,25 @@ export interface ConfigFieldDTO {
   Required: boolean;
 }
 
+export interface StorageFileDTO {
+  id: number;
+  provider_type: string;
+  instance_name: string;
+  rel_path: string;
+  name: string;
+  is_dir: boolean;
+  size: number;
+  synced_at: string;
+  retention_days: number;
+}
+
+export interface StorageResponse {
+  files: StorageFileDTO[];
+  filter_provider: string;
+  filter_instance: string;
+  provider_types: string[];
+}
+
 export interface ProviderDetailResponse {
   Instance: ProviderInstanceDTO;
   Path: string;

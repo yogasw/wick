@@ -1,4 +1,4 @@
-import type { ProvidersListResponse, ProviderDetailResponse } from "./types.js";
+import type { ProvidersListResponse, ProviderDetailResponse, StorageResponse, StorageFileDTO } from "./types.js";
 
 class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -192,5 +192,101 @@ export async function apiHookDisable(base: string, type: string, name: string, e
     `${base}/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/hooks/${encodeURIComponent(event)}/disable`,
   );
 }
+
+export function normalizeStorage(r: StorageResponse): StorageResponse {
+  return {
+    files: (r.files ?? []).map((f) => ({
+      id: f.id ?? 0,
+      provider_type: f.provider_type ?? "",
+      instance_name: f.instance_name ?? "",
+      rel_path: f.rel_path ?? "",
+      name: f.name ?? "",
+      is_dir: f.is_dir ?? false,
+      size: f.size ?? 0,
+      synced_at: f.synced_at ?? "",
+      retention_days: f.retention_days ?? 0,
+    })),
+    filter_provider: r.filter_provider ?? "",
+    filter_instance: r.filter_instance ?? "",
+    provider_types: r.provider_types ?? [],
+  };
+}
+
+export async function apiGetStorage(filterProvider = "", filterInstance = ""): Promise<StorageResponse> {
+  const params = new URLSearchParams();
+  if (filterProvider) params.set("provider", filterProvider);
+  if (filterInstance) params.set("instance", filterInstance);
+  const qs = params.toString();
+  const r = await get<StorageResponse>(getBase() + "/api/providers/storage" + (qs ? `?${qs}` : ""));
+  return normalizeStorage(r);
+}
+
+export async function apiStorageRetention(id: number, days: number): Promise<void> {
+  const form = new URLSearchParams({ days: String(days) });
+  const resp = await fetch(getBase() + `/providers/storage/${id}/retention`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
+}
+
+export async function apiStoragePreview(id: number): Promise<Record<string, unknown>> {
+  return get<Record<string, unknown>>(getBase() + `/providers/storage/${id}/preview`);
+}
+
+export async function apiStorageRestore(ids: number[]): Promise<{ restored: number }> {
+  const form = new URLSearchParams();
+  for (const id of ids) form.append("ids", String(id));
+  const resp = await fetch(getBase() + "/providers/storage/restore", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function apiStorageDelete(id: number): Promise<void> {
+  return del<void>(getBase() + `/providers/storage/${id}`);
+}
+
+export async function apiStorageSync(type: string, name: string): Promise<void> {
+  return post<void>(getBase() + `/providers/storage/sync/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+}
+
+export async function apiStorageUpload(
+  providerType: string,
+  instanceName: string,
+  relPath: string,
+  file: File,
+): Promise<void> {
+  const form = new FormData();
+  form.append("provider_type", providerType);
+  form.append("instance_name", instanceName);
+  form.append("rel_path", relPath);
+  form.append("file", file);
+  const resp = await fetch(getBase() + "/providers/storage/upload", {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+    redirect: "follow",
+  });
+  if (resp.type === "opaqueredirect" || resp.status === 303 || resp.status === 302) return;
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
+}
+
+export type { StorageFileDTO };
 
 export { ApiError };
