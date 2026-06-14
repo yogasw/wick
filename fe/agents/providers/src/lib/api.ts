@@ -6,6 +6,10 @@ class ApiError extends Error {
   }
 }
 
+function getBase(): string {
+  return document.getElementById("app")?.dataset.base ?? "";
+}
+
 async function get<T>(path: string): Promise<T> {
   const resp = await fetch(path, {
     credentials: "same-origin",
@@ -80,44 +84,44 @@ export function normalizeProviders(r: ProvidersListResponse): ProvidersListRespo
 }
 
 export async function apiGetProviders(): Promise<ProvidersListResponse> {
-  const r = await get<ProvidersListResponse>("/api/providers");
+  const r = await get<ProvidersListResponse>(getBase() + "/api/providers");
   return normalizeProviders(r);
 }
 
 export async function apiRescanAll(): Promise<void> {
-  return post<void>("/providers/rescan");
+  return post<void>(getBase() + "/providers/rescan");
 }
 
 export async function apiRescanOne(type: string, name: string): Promise<void> {
-  return post<void>(`/providers/rescan/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+  return post<void>(getBase() + `/providers/rescan/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
 export async function apiGateToggle(): Promise<void> {
-  return post<void>("/providers/gate/toggle");
+  return post<void>(getBase() + "/providers/gate/toggle");
 }
 
 export async function apiGateModes(modes: Record<string, boolean>): Promise<void> {
-  return post<void>("/providers/gate/modes", modes);
+  return post<void>(getBase() + "/providers/gate/modes", modes);
 }
 
 export async function apiAutoRescanToggle(): Promise<void> {
-  return post<void>("/providers/auto-rescan/toggle");
+  return post<void>(getBase() + "/providers/auto-rescan/toggle");
 }
 
 export async function apiMCPInstall(clientID: string): Promise<void> {
-  return post<void>(`/providers/mcp/${encodeURIComponent(clientID)}/install`);
+  return post<void>(getBase() + `/providers/mcp/${encodeURIComponent(clientID)}/install`);
 }
 
 export async function apiMCPUninstall(clientID: string): Promise<void> {
-  return post<void>(`/providers/mcp/${encodeURIComponent(clientID)}/uninstall`);
+  return post<void>(getBase() + `/providers/mcp/${encodeURIComponent(clientID)}/uninstall`);
 }
 
 export async function apiDeleteProvider(type: string, name: string): Promise<void> {
-  return del<void>(`/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+  return del<void>(getBase() + `/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
 export async function apiProbeGate(type: string, name: string): Promise<void> {
-  return post<void>(`/providers/probe-gate/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+  return post<void>(getBase() + `/providers/probe-gate/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
 export function normalizeProviderDetail(r: ProviderDetailResponse): ProviderDetailResponse {

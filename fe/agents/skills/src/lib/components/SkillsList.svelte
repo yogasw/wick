@@ -56,7 +56,8 @@
     const fd = new FormData(form);
     uploading = true;
     try {
-      const resp = await fetch("/skills/upload", { method: "POST", body: fd, redirect: "manual" });
+      const base = document.getElementById("app")?.dataset.base ?? "";
+      const resp = await fetch(base + "/skills/upload", { method: "POST", body: fd, redirect: "manual" });
       if (resp.type === "opaqueredirect" || resp.status === 303 || resp.ok) {
         toastOk("Uploaded successfully");
         showUpload = false;

@@ -6,8 +6,12 @@ class ApiError extends Error {
   }
 }
 
+function getBase(): string {
+  return document.getElementById("app")?.dataset.base ?? "";
+}
+
 async function get<T>(path: string): Promise<T> {
-  const resp = await fetch(path, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+  const resp = await fetch(getBase() + path, { credentials: "same-origin", headers: { "Accept": "application/json" } });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new ApiError(resp.status, body || `HTTP ${resp.status}`);
@@ -53,7 +57,7 @@ export async function getSkillFile(folder: string, file: string): Promise<SkillF
 }
 
 export async function postMutation(url: string): Promise<void> {
-  const resp = await fetch(url, { method: "POST", redirect: "manual" });
+  const resp = await fetch(getBase() + url, { method: "POST", redirect: "manual" });
   if (resp.type === "opaqueredirect" || resp.status === 303 || resp.ok) return;
   throw new ApiError(resp.status, await resp.text().catch(() => ""));
 }
