@@ -8,8 +8,9 @@
   type Props = {
     name: string;
     onBack: () => void;
+    onOpen: (entryName: string) => void;
   };
-  let { name, onBack }: Props = $props();
+  let { name, onBack, onOpen }: Props = $props();
 
   let data = $state<SkillDetailResponse | null>(null);
   let loading = $state(true);
@@ -106,7 +107,13 @@
           </thead>
           <tbody class="divide-y divide-white-300 dark:divide-navy-600">
             {#each (data.entries ?? []) as entry}
-              <tr class="cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+              <tr
+                class="cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+                role="button"
+                tabindex="0"
+                onclick={() => onOpen(entry.name)}
+                onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(entry.name); } }}
+              >
                 <td class="px-5 py-3">
                   <div class="flex items-center gap-2">
                     {#if entry.is_dir}

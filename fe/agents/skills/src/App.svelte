@@ -21,7 +21,11 @@
   {#if fileParams}
     <SkillFileView folder={fileParams.folder} file={fileParams.file} onBack={() => push(`/skills/${fileParams!.folder}`)} />
   {:else if detailParams}
-    <SkillDetail name={detailParams.name} onBack={() => push("/")} />
+    <SkillDetail
+      name={detailParams.name}
+      onBack={() => push("/")}
+      onOpen={(entryName) => push(`/skills/${encodeURIComponent(detailParams!.name)}/files/${encodeURIComponent(entryName)}`)}
+    />
   {:else}
     <SkillsList onNavigate={(name) => push(`/skills/${encodeURIComponent(name)}`)} />
   {/if}
