@@ -173,7 +173,7 @@ Deleting a connector removes the definition and its instances — and for MCP de
 A definition can opt into [**session workspace**](/guide/mcp#session-workspace) cloning — letting a user (or the agent, via `wick_session_workspace`) spin up a throwaway copy of the connector pointed at a different base URL or key for a single agent session, without touching the saved instance.
 
 - On the review / edit form, tick **Allow per-session config override** (default off). This sets `allow_session_config: true` on the definition — the capability flag.
-- It is a **two-layer opt-in**: the capability alone does nothing until an admin also flips the **Per-session config** toggle on a specific instance (Manager → Connectors → {instance}). Both must be on before the connector shows up as a base in the session Config tab or the `wick_session_workspace` `add` action.
+- It is a **two-layer opt-in**: the capability alone does nothing until an admin also flips the **Per-session config** toggle on a specific instance (Manager → Connectors → {instance}). Both must be on before the connector shows up as a base in the session Workspace tab or the `wick_session_workspace` `add` action.
 - Best for cURL / manual API definitions whose config is a swappable base URL + key. Leave it off for OAuth / SSO-backed MCP definitions, whose "config" is a user token, not a replaceable value.
 
 Session instances live only in the session that created them, store secrets under a system-only master key (never returned to the agent), and are purged when the session ends. See [Session workspace](/guide/mcp#session-workspace) for the full model.

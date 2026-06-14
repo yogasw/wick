@@ -6,10 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Added
+
+*   **Custom connector health check** — a definition can nominate one operation as a health probe (`health_op` + optional `health_expect` in `SourceMeta`). When set, every instance page shows a **Check Permissions** button and a status banner — same as built-in connectors. Healthy when the probe operation runs without error (HTTP 2xx / MCP non-error result) and, when `health_expect` is set, the response contains the expected substring. A failing probe system-disables every operation on that instance (single credential = whole connector verdict) until a passing check clears it. Set from the **Health check** block on the review / edit form. See [Custom connectors — Health check](/guide/custom-connectors#health-check).
+*   **Session Workspace tab UX** — the Workspace rail tab on the session slide-over gains: count badge showing active session connectors; inline rename (pencil icon on each card); auto-generated default label when an instance is added; dirty-tracking per field so Save/Test send only edited values; Reset button that appears while edits are pending; single **Test** button that exercises the config currently on screen (live field values overlaid on stored config for the probe, never persisted). See [MCP — Workspace tab (UI)](/guide/mcp#workspace-tab-ui).
+
 ### Changed
 
 *   **Session workspace discoverability** — `wick_list`, `wick_search`, and `wick_get` now accept an optional `session_id` argument. Passing it causes `wick_list` to include this session's `sw_…` workspace instances alongside regular connectors and return a `session_config_bases` array (connectors that can be cloned but haven't been added yet). `wick_search` now also matches workspace instances so a connector spun up for the session is findable. For `wick_get`, `session_id` is a separate argument — never append it to the connector id.
-*   **Session instance status** — a workspace instance in `wick_list` / `wick_search` results reports `kind: "session"`. When its config is incomplete the status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`), directing the user to the session Config tab rather than the admin dashboard.
+*   **Session instance status** — a workspace instance in `wick_list` / `wick_search` results reports `kind: "session"`. When its config is incomplete the status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`), directing the user to the session Workspace tab rather than the admin dashboard.
 *   **`AllowSessionConfig` auto-on** — the per-instance *Allow per-session config override* toggle now defaults to enabled for any instance whose connector module declares the capability (e.g. httprest). No manual admin toggle required to make an eligible connector available for session cloning; admins can still turn individual rows off.
 
 ---

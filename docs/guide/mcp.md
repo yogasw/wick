@@ -509,9 +509,9 @@ This means sessions get a descriptive label automatically without prompting the 
 
 ## Session workspace
 
-`wick_session_workspace` lets an agent (or the user, via the session **Config** tab) spin up **ephemeral connector instances** scoped to one session: a private clone of a base connector — an httprest pointed at staging, a second API key — that behaves like a brand-new connector but lives and dies with the session. The saved connector rows are never touched.
+`wick_session_workspace` lets an agent (or the user, via the session **Workspace** tab) spin up **ephemeral connector instances** scoped to one session: a private clone of a base connector — an httprest pointed at staging, a second API key — that behaves like a brand-new connector but lives and dies with the session. The saved connector rows are never touched.
 
-Use it when the user wants to hit an endpoint or use a credential that only matters right now. Once added and configured, the instance's id shows in `wick_list` (pass the same `session_id`) and you `wick_execute` it like any connector. A session instance reports `kind: "session"` in the list response. When its config is incomplete its status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`) — direct the user to the **Session Workspace** tab, not the admin dashboard.
+Use it when the user wants to hit an endpoint or use a credential that only matters right now. Once added and configured, the instance's id shows in `wick_list` (pass the same `session_id`) and you `wick_execute` it like any connector. A session instance reports `kind: "session"` in the list response. When its config is incomplete its status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`) — direct the user to the **Workspace** tab, not the admin dashboard.
 
 The tool is **human-driven for config**. The agent creates blank instances and can open the fill modal, but the **user** types the values; secrets are encrypted server-side with a system-only master key, and the agent only ever learns **which keys were filled**, never the values. This keeps connector credentials and endpoints off the agent's context entirely.
 
@@ -552,6 +552,18 @@ The agent can neither read nor set config values directly — config is always e
 | `keys` | `add` / `configure`: limit the fill modal to these keys |
 | `operation`, `params` | `test`: run this operation as the probe instead of the health check |
 | `reason` | `add` / `configure`: short text shown to the user explaining what the connector is for |
+
+### Workspace tab (UI)
+
+The **Workspace** rail tab on the session slide-over is the user-facing equivalent of `wick_session_workspace`. It lists every session connector as a collapsible card, with a count badge that mirrors the number of active instances.
+
+From the tab a user can:
+
+- **Add** a session connector — pick a base from the dropdown; a blank instance is created immediately and its card expands so you can fill it in.
+- **Rename** an instance inline — click the pencil icon next to the label, edit in place, confirm with Enter or blur.
+- **Edit config** — expand a card, type values into the fields. Only changed fields are marked dirty. The **Save** button sends only the fields you actually edited; a **Reset** button (shown while edits are pending) reverts the card to its last-saved state. An autofilled-but-untouched field is never sent.
+- **Test** — runs the connector's health check (or a named operation via `?operation=`) against the config values **currently on screen**, not only what is saved. Live field values overlay the stored config for this probe only; nothing is persisted. This lets you verify a new key before committing.
+- **Duplicate / Delete** — copy an instance with its config, or remove it.
 
 ### How instances run at execution time
 
