@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "type": "module",
   "workspaces": [
-    "agents/*"
+    "agents/*",
+    "common/*"
   ],
   "scripts": {
     "build": "npm --workspaces --if-present run build",
