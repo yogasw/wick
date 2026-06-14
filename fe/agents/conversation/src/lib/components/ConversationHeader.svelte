@@ -106,7 +106,7 @@
 </script>
 
 <div
-  class="shrink-0 flex flex-wrap items-center justify-between gap-2 pl-2 pr-2 md:px-4 py-2 bg-white-100/80 dark:bg-navy-800/80 backdrop-blur-sm border-b border-white-300 dark:border-navy-600"
+  class="relative z-30 shrink-0 flex flex-wrap items-center justify-between gap-2 pl-2 pr-2 md:px-4 py-2 bg-white-100/80 dark:bg-navy-800/80 backdrop-blur-sm border-b border-white-300 dark:border-navy-600"
 >
   <!-- Left: tab dropdown burger + title + agent label -->
   <div class="flex items-center gap-2 min-w-0 flex-1">
@@ -129,7 +129,7 @@
       {#if tabMenuOpen}
         <div
           data-tab-dropdown
-          class="absolute top-full left-0 mt-1 z-40 min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
+          class="absolute top-full left-0 mt-1 z-50 min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
         >
           {#each TAB_ORDER as tab}
             <button

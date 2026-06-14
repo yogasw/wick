@@ -1,5 +1,5 @@
-import { describe, test, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/svelte";
 import type { ProjectOption, ProviderOption, SessionListItem } from "../../types/agents.js";
 
 vi.mock("../../router.js", () => ({
@@ -56,28 +56,6 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(screen.getByText(/\/home\/user\/acme/)).toBeDefined();
   });
 
-  test("renders compose form with action pointing to base + '/'", () => {
-    const { container } = render(ProjectLanding, { props: baseProps });
-    const form = container.querySelector("form");
-    expect(form).not.toBeNull();
-    expect(form?.getAttribute("action")).toBe("/tools/agents/");
-    expect(form?.getAttribute("method")).toBe("POST");
-  });
-
-  test("compose form contains hidden project_id input with correct value", () => {
-    const { container } = render(ProjectLanding, { props: baseProps });
-    const hidden = container.querySelector("input[name='project_id']") as HTMLInputElement | null;
-    expect(hidden).not.toBeNull();
-    expect(hidden?.type).toBe("hidden");
-    expect(hidden?.value).toBe("proj-42");
-  });
-
-  test("compose form contains a message textarea", () => {
-    const { container } = render(ProjectLanding, { props: baseProps });
-    const ta = container.querySelector("textarea[name='message']");
-    expect(ta).not.toBeNull();
-  });
-
   test("renders a Pin as default button", () => {
     render(ProjectLanding, { props: baseProps });
     expect(screen.getByRole("button", { name: /pin as default/i })).toBeDefined();
@@ -99,5 +77,111 @@ describe("ProjectLanding — presentational rendering", () => {
   test("shows 0 chats when sessions array is empty", () => {
     render(ProjectLanding, { props: { ...baseProps, sessions: [] } });
     expect(screen.getByText(/0 chats/)).toBeDefined();
+  });
+
+  test("Composer has the correct placeholder text (message textarea present)", () => {
+    render(ProjectLanding, { props: baseProps });
+    expect(screen.getByPlaceholderText(/ask anything/i)).toBeDefined();
+  });
+
+  test("Composer renders an Attach files button (bell + attach via Composer)", () => {
+    render(ProjectLanding, { props: baseProps });
+    const attachBtn = screen.getByRole("button", { name: /attach files/i });
+    expect(attachBtn).toBeDefined();
+  });
+
+  test("Composer renders a Notifications bell button (via ComposerToolbar)", () => {
+    render(ProjectLanding, { props: baseProps });
+    const bellBtn = screen.getByRole("button", { name: /notifications/i });
+    expect(bellBtn).toBeDefined();
+  });
+
+  test("renders an 'All chats' back-link pointing to base/sessions", () => {
+    render(ProjectLanding, { props: baseProps });
+    const link = screen.getByRole("link", { name: /all chats/i });
+    expect(link).toBeDefined();
+    expect(link.getAttribute("href")).toBe("/tools/agents/sessions");
+  });
+});
+
+describe("ProjectLanding — create-and-navigate on send", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+    fetchSpy = vi.fn();
+    global.fetch = fetchSpy;
+    /* suppress window.location.href assignment in jsdom */
+    Object.defineProperty(window, "location", {
+      value: { href: "" },
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  test("sending a message POSTs FormData with project_id and provider to base + '/'", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      redirected: false,
+      url: "/tools/agents/sessions/new-sess",
+    } as Response);
+
+    render(ProjectLanding, {
+      props: {
+        base: "/tools/agents",
+        project: PROJECT,
+        providers: [PROVIDER],
+        sessions: [],
+        onPin: vi.fn(),
+        onSelectSession: vi.fn(),
+      },
+    });
+
+    const textarea = screen.getByPlaceholderText(/ask anything/i);
+    await fireEvent.input(textarea, { target: { value: "Hello project" } });
+    const sendBtn = screen.getByRole("button", { name: /send/i });
+    await fireEvent.click(sendBtn);
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/tools/agents/");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    const fd = init.body as FormData;
+    expect(fd.get("message")).toBe("Hello project");
+    expect(fd.get("project_id")).toBe("proj-42");
+    expect(fd.get("provider")).toBe("anthropic");
+  });
+
+  test("navigates to the returned URL after successful create", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      redirected: false,
+      url: "/tools/agents/sessions/new-sess",
+    } as Response);
+
+    render(ProjectLanding, {
+      props: {
+        base: "/tools/agents",
+        project: PROJECT,
+        providers: [PROVIDER],
+        sessions: [],
+        onPin: vi.fn(),
+        onSelectSession: vi.fn(),
+      },
+    });
+
+    const textarea = screen.getByPlaceholderText(/ask anything/i);
+    await fireEvent.input(textarea, { target: { value: "Navigate me" } });
+    await fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await vi.waitFor(() => {
+      expect(window.location.href).toBe("/tools/agents/sessions/new-sess");
+    });
   });
 });

@@ -26,3 +26,20 @@ export const moveProject = (base: string, sessionId: string, projectId: string |
 
 export const pinProject = (base: string, projectId: string) =>
   apiPostE<{ status: string }>(`${base}/projects/${encodeURIComponent(projectId)}/pin`, {});
+
+export async function createSessionInProject(
+  base: string,
+  message: string,
+  files: File[],
+  provider: string,
+  projectId: string,
+): Promise<string> {
+  const fd = new FormData();
+  fd.append("message", message);
+  for (const f of files) fd.append("files", f);
+  fd.append("provider", provider);
+  fd.append("project_id", projectId);
+  const res = await fetch(`${base}/`, { method: "POST", body: fd, credentials: "same-origin" });
+  if (res.ok || res.redirected) return res.url;
+  throw new Error(`create session failed: ${res.status}`);
+}

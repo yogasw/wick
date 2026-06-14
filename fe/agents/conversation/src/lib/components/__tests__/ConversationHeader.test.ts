@@ -198,5 +198,19 @@ describe("ConversationHeader", () => {
       await fireEvent.click(screen.getByRole("button", { name: /^Conversation$/i }));
       expect(onTabChange).toHaveBeenCalledWith("conversation");
     });
+
+    test("header root element has relative positioning class to establish stacking context", () => {
+      const { container } = render(ConversationHeader, { props: baseProps });
+      const root = container.firstElementChild as HTMLElement;
+      expect(root.className).toContain("relative");
+    });
+
+    test("dropdown panel has z-50 class so it paints above zone-2 content", async () => {
+      const { container } = render(ConversationHeader, { props: baseProps });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      const dropdown = container.querySelector("[data-tab-dropdown]") as HTMLElement;
+      expect(dropdown).not.toBeNull();
+      expect(dropdown.className).toContain("z-50");
+    });
   });
 });

@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { ProjectOption, ProviderOption, SessionListItem } from "../types/agents.js";
-  import { push } from "../router.js";
+  import { toastError } from "@wick-fe/common-stores";
+  import { createSessionInProject } from "../api/options.js";
+  import Composer from "./Composer.svelte";
+  import ComposerToolbar from "./ComposerToolbar.svelte";
 
   type Props = {
     base: string;
@@ -15,10 +18,13 @@
 
   let search = $state("");
   let selectedProvider = $state<string>("");
-  $effect(() => { if (!selectedProvider && providers.length > 0) selectedProvider = providers[0].type; });
+  const activeProjectId = $derived<string | null>(project.id);
+
+  $effect(() => {
+    if (!selectedProvider && providers.length > 0) selectedProvider = providers[0].type;
+  });
 
   const isManaged = $derived(project.path === "");
-
   const chatCount = $derived(sessions.length);
 
   const filtered = $derived(
@@ -38,9 +44,35 @@
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return `${Math.floor(diff / 86400)}d ago`;
   }
+
+  async function handleSend({ text, files }: { text: string; files: File[] }) {
+    try {
+      const url = await createSessionInProject(
+        base,
+        text,
+        files,
+        selectedProvider,
+        project.id,
+      );
+      window.location.href = url;
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : "Failed to create session");
+    }
+  }
 </script>
 
 <div class="flex flex-col h-full p-6 max-w-2xl mx-auto w-full gap-6">
+
+  <!-- Back link -->
+  <a
+    href={`${base}/sessions`}
+    class="inline-flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 hover:text-green-600 dark:hover:text-green-400 transition-colors w-fit"
+  >
+    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+    All chats
+  </a>
 
   <!-- Project header -->
   <div class="flex items-start justify-between gap-4">
@@ -82,59 +114,22 @@
     </div>
   </div>
 
-  <!-- Compose box -->
-  <form
-    method="POST"
-    action={`${base}/`}
-    class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
-  >
-    <input type="hidden" name="project_id" value={project.id} />
-    <input type="hidden" name="provider" value={selectedProvider} />
-
-    <textarea
-      name="message"
-      rows="3"
-      placeholder="Ask anything… (Shift+Enter for new line)"
-      class="w-full resize-none bg-transparent px-4 pt-4 pb-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:outline-none"
-      onkeydown={(e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          (e.currentTarget.closest("form") as HTMLFormElement | null)?.submit();
-        }
-      }}
-    ></textarea>
-
-    <div class="flex items-center justify-between gap-2 px-4 py-3 border-t border-white-300 dark:border-navy-600">
-      <div class="flex items-center gap-2">
-        {#if providers.length > 1}
-          <select
-            bind:value={selectedProvider}
-            class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-1 text-xs font-medium text-black-900 dark:text-white-100 focus:outline-none focus:border-green-500"
-          >
-            {#each providers as p (p.type)}
-              <option value={p.type}>{p.name}</option>
-            {/each}
-          </select>
-        {:else}
-          <span class="inline-flex items-center rounded-full border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-300">
-            {providers[0]?.name ?? ""}
-          </span>
-        {/if}
-        <span class="inline-flex items-center rounded-full border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">
-          {project.name}
-        </span>
-      </div>
-      <button
-        type="submit"
-        class="inline-flex items-center gap-1.5 rounded-lg bg-green-500 hover:bg-green-600 active:bg-green-700 px-4 py-2 text-xs font-semibold text-white-100 transition-colors"
-      >
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 8l10-5-5 10-1.5-4.5L3 8z" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-        Send
-      </button>
-    </div>
-  </form>
+  <!-- Compose box: real Composer + ComposerToolbar -->
+  {#snippet toolbarLeading()}
+    <ComposerToolbar
+      {providers}
+      projects={[project]}
+      activeProvider={selectedProvider}
+      activeProjectId={activeProjectId}
+      onProviderChange={(type) => { selectedProvider = type; }}
+      onProjectChange={(_id) => { /* project fixed for landing */ }}
+    />
+  {/snippet}
+  <Composer
+    onSend={handleSend}
+    placeholder="Ask anything… (Shift+Enter for new line)"
+    leadingActions={toolbarLeading}
+  />
 
   <!-- Session search + list -->
   <div class="flex flex-col gap-3 flex-1 min-h-0">

@@ -116,7 +116,36 @@ describe("SessionList", () => {
     expect(selected.getAttribute("aria-current")).toBe("true");
   });
 
-  test("delete button calls onDelete with the session id", async () => {
+  test("each row renders a kebab menu button when onDelete is provided", () => {
+    render(SessionList, {
+      props: {
+        sessions: [SESSION_A],
+        search: "",
+        onSearch: vi.fn(),
+        onSelect: vi.fn(),
+        onDelete: vi.fn(),
+      },
+    });
+    const kebabBtn = screen.getByRole("button", { name: /row actions/i });
+    expect(kebabBtn).toBeDefined();
+  });
+
+  test("opening the kebab menu reveals a Delete item", async () => {
+    render(SessionList, {
+      props: {
+        sessions: [SESSION_A],
+        search: "",
+        onSearch: vi.fn(),
+        onSelect: vi.fn(),
+        onDelete: vi.fn(),
+      },
+    });
+    const kebabBtn = screen.getByRole("button", { name: /row actions/i });
+    await fireEvent.click(kebabBtn);
+    expect(screen.getByRole("button", { name: /^delete$/i })).toBeDefined();
+  });
+
+  test("clicking Delete in the kebab calls onDelete with the session id", async () => {
     const onDelete = vi.fn();
     render(SessionList, {
       props: {
@@ -127,8 +156,10 @@ describe("SessionList", () => {
         onDelete,
       },
     });
-    const btn = screen.getByRole("button", { name: "Delete" });
-    await fireEvent.click(btn);
+    const kebabBtn = screen.getByRole("button", { name: /row actions/i });
+    await fireEvent.click(kebabBtn);
+    const deleteBtn = screen.getByRole("button", { name: /^delete$/i });
+    await fireEvent.click(deleteBtn);
     expect(onDelete).toHaveBeenCalledWith("sess-a");
   });
 

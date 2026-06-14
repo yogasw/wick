@@ -24,6 +24,18 @@
   }: Props = $props();
 
   let currentPage = $state(1);
+  let openKebabId = $state<string | null>(null);
+
+  function toggleKebab(e: MouseEvent, id: string) {
+    e.stopPropagation();
+    openKebabId = openKebabId === id ? null : id;
+  }
+
+  function handleDelete(e: MouseEvent, id: string) {
+    e.stopPropagation();
+    openKebabId = null;
+    onDelete!(id);
+  }
 
   const filtered = $derived(
     search.trim() === ""
@@ -152,15 +164,29 @@
             </div>
           </div>
           {#if onDelete}
-            <div>
+            <div class="relative shrink-0">
               <button
                 type="button"
-                aria-label="Delete"
-                onclick={(e) => { e.stopPropagation(); onDelete!(sess.id); }}
-                class="inline-flex items-center gap-1 rounded-lg border border-neg-300 dark:border-neg-700 px-2 py-1 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors"
+                aria-label="Row actions"
+                onclick={(e) => toggleKebab(e, sess.id)}
+                class="inline-flex items-center justify-center h-7 w-7 rounded-lg text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
               >
-                Delete
+                <svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor" aria-hidden="true">
+                  <circle cx="8" cy="3" r="1.2"></circle>
+                  <circle cx="8" cy="8" r="1.2"></circle>
+                  <circle cx="8" cy="13" r="1.2"></circle>
+                </svg>
               </button>
+              {#if openKebabId === sess.id}
+                <div class="absolute right-0 bottom-full mb-1 z-20 min-w-[120px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1">
+                  <button
+                    type="button"
+                    aria-label="Delete"
+                    onclick={(e) => handleDelete(e, sess.id)}
+                    class="w-full text-left px-3 py-2 text-xs text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors"
+                  >Delete</button>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
