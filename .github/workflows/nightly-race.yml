@@ -1,0 +1,64 @@
+name: Nightly Race
+
+# PR CI runs the race detector only on packages changed in the PR (it's
+# the dominant cost and doesn't scale to the whole suite on every push).
+# This nightly job runs the FULL race suite so races in code that hasn't
+# changed recently still get caught — just not on every PR's critical path.
+#
+# Runs on a schedule + manual dispatch. Skips automatically on forks (the
+# schedule only fires on the upstream repo).
+
+on:
+  schedule:
+    - cron: '0 18 * * *' # 18:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  full-race:
+    name: Full race suite
+    runs-on: ubuntu-latest
+    if: github.repository == 'yogasw/wick'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        id: go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Restore Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ steps.go.outputs.go-version }}-
+
+      - name: Resolve templ version from go.mod
+        id: templ
+        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> $GITHUB_OUTPUT
+
+      - name: Cache templ binary
+        id: cache-templ
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-${{ steps.go.outputs.go-version }}-${{ steps.templ.outputs.version }}
+
+      - name: Install templ
+        if: steps.cache-templ.outputs.cache-hit != 'true'
+        run: go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
+
+      - name: Generate templ files
+        run: templ generate ./...
+
+      - name: Run full race suite
+        run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...

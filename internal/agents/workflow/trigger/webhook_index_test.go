@@ -1,7 +1,6 @@
 package trigger
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ func newTestRouter() *Router {
 		defs:         map[string]workflow.Workflow{},
 		queues:       map[string]*Queue{},
 		dedups:       map[string]*Dedup{},
-		workers:      map[string]context.CancelFunc{},
+		workers:      map[string]*workerHandle{},
 		index:        map[string][]triggerRef{},
 		webhookIndex: map[string]webhookEntry{},
 		clock:        time.Now,

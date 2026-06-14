@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -46,14 +47,33 @@ type webhookEntry struct {
 	secretRef  string
 }
 
+// workerHandle tracks one worker goroutine. cancel stops it; alive is
+// flipped to false when runWorker returns, so Dispatch can tell whether a
+// queue still has a LIVE consumer — the map entry alone is not proof the
+// goroutine is running (a worker born from a cancelled ctx dies but its
+// handle lingers until Unregister).
+type workerHandle struct {
+	cancel context.CancelFunc
+	alive  atomic.Bool
+}
+
 type Router struct {
 	mu      sync.RWMutex
 	engine  *engine.Engine
 	service service.Service
+	// baseCtx is the server-lifetime context every worker goroutine is
+	// spawned under. Set once via SetBaseCtx at boot. Register ignores
+	// the ctx its caller passes for worker lifetime — HTTP handlers used
+	// to pass the request ctx, which cancelled the moment the response
+	// flushed and silently killed the just-spawned worker (queue lingered,
+	// runs piled up, nothing drained). Falls back to context.Background()
+	// if unset so tests and any pre-SetBaseCtx Register still get a
+	// long-lived worker.
+	baseCtx context.Context
 	defs    map[string]workflow.Workflow
 	queues  map[string]*Queue
 	dedups  map[string]*Dedup
-	workers map[string]context.CancelFunc
+	workers map[string]*workerHandle
 	// index maps a route key → list of (id, triggerIdx) pairs so
 	// Dispatch can skip workflows that don't subscribe to this event.
 	// Built/torn-down by Register/Unregister; never read without
@@ -82,6 +102,16 @@ type triggerRef struct {
 // the swap keeps the queues + dedup tables pointing at the same data.
 func (r *Router) SetService(svc service.Service) { r.service = svc }
 
+// SetBaseCtx pins the server-lifetime context all workers are spawned
+// under. Call once at boot (Bootstrap) before any Register. Workers
+// spawned after this use baseCtx, so a caller passing a short-lived
+// request ctx to Register can no longer kill them.
+func (r *Router) SetBaseCtx(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.baseCtx = ctx
+}
+
 // NewRouter wires a Router to an Engine + Service.
 func NewRouter(e *engine.Engine, svc service.Service) *Router {
 	return &Router{
@@ -90,7 +120,7 @@ func NewRouter(e *engine.Engine, svc service.Service) *Router {
 		defs:         map[string]workflow.Workflow{},
 		queues:       map[string]*Queue{},
 		dedups:       map[string]*Dedup{},
-		workers:      map[string]context.CancelFunc{},
+		workers:      map[string]*workerHandle{},
 		index:        map[string][]triggerRef{},
 		webhookIndex: map[string]webhookEntry{},
 		clock:        func() time.Time { return time.Now() },
@@ -117,20 +147,42 @@ func (r *Router) Register(ctx context.Context, w workflow.Workflow) {
 			dedupTTL = time.Duration(t) * time.Second
 		}
 		r.dedups[w.ID] = NewDedup(1024, dedupTTL)
-		wctx, cancel := context.WithCancel(ctx)
-		r.workers[w.ID] = cancel
+		// Worker lifetime = server lifetime (baseCtx), NOT the ctx the
+		// caller passed. HTTP publish/toggle handlers pass the request
+		// ctx; honouring it here killed the worker the moment the
+		// response flushed. baseCtx is set once at boot via SetBaseCtx.
+		parent := r.baseCtx
+		if parent == nil {
+			parent = context.Background()
+		}
+		wctx, cancel := context.WithCancel(parent)
+		h := &workerHandle{cancel: cancel}
+		h.alive.Store(true)
+		r.workers[w.ID] = h
 		r.wg.Add(1)
-		go r.runWorker(wctx, w.ID)
+		go r.runWorker(wctx, w.ID, h)
+		log.Info().Str("component", "wf").Str("wf_id", w.ID).
+			Int("queue_max", max).Msg("router: worker spawned")
 	}
 	r.reindexLocked(w)
+}
+
+// WorkerAlive reports whether id has a registered worker whose goroutine
+// is currently running (not merely a lingering map handle). Exposed for
+// health checks and tests asserting worker lifetime.
+func (r *Router) WorkerAlive(id string) bool {
+	r.mu.RLock()
+	h := r.workers[id]
+	r.mu.RUnlock()
+	return h != nil && h.alive.Load()
 }
 
 // Unregister stops the worker for id and frees its queue.
 func (r *Router) Unregister(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cancel, ok := r.workers[id]; ok {
-		cancel()
+	if h, ok := r.workers[id]; ok {
+		h.cancel()
 		delete(r.workers, id)
 	}
 	if q, ok := r.queues[id]; ok {
@@ -313,9 +365,29 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 		}
 		r.mu.RLock()
 		q := r.queues[c.wfID]
+		h := r.workers[c.wfID]
 		r.mu.RUnlock()
+		// workerAlive reflects whether the goroutine is actually running,
+		// not just whether a handle exists in the map — a worker spawned
+		// from a cancelled ctx dies but its handle lingers until Unregister.
+		workerAlive := h != nil && h.alive.Load()
 		if q == nil {
+			// Candidate matched but no queue exists — the workflow was
+			// indexed without a live worker (stale index / failed
+			// Register). Silent before; log so a run that vanishes here
+			// leaves a trace.
+			log.Warn().Str("component", "wf").Str("wf_id", c.wfID).
+				Str("wf_event", string(c.tr.Type)).
+				Msg("dispatch: matched trigger but no queue — run dropped")
 			continue
+		}
+		if !workerAlive {
+			// Queue exists but its consumer goroutine is dead — the run
+			// would be enqueued and never drained (the original silent
+			// bug). Loud now so this is debuggable instead of a vanished run.
+			log.Warn().Str("component", "wf").Str("wf_id", c.wfID).
+				Str("wf_event", string(c.tr.Type)).Int("queue_depth", q.Len()).
+				Msg("dispatch: queue has no live worker — run will not drain")
 		}
 		// Per-trigger event copy with the originating Trigger.ID
 		// stamped so workflow_watch(trigger_id=...) can filter back
@@ -324,7 +396,17 @@ func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
 		// multiple triggers across workflows.
 		perTrig := evt
 		perTrig.TriggerID = c.tr.ID
-		_ = q.Enqueue(WorkItem{ID: c.wfID, Event: perTrig})
+		err := q.Enqueue(WorkItem{ID: c.wfID, Event: perTrig})
+		l := log.With().Str("component", "wf").Str("wf_id", c.wfID).
+			Str("wf_event", string(c.tr.Type)).Bool("worker", workerAlive).
+			Int("queue_depth", q.Len()).Logger()
+		if err != nil {
+			// Overflow drop_new returns nil, so a non-nil err here is
+			// reject/closed — the run will NOT execute. Make it loud.
+			l.Warn().Err(err).Msg("dispatch: enqueue failed — run dropped")
+			continue
+		}
+		l.Info().Msg("dispatch: run enqueued")
 		matched++
 	}
 	return matched
@@ -699,8 +781,11 @@ func dedupKey(evt workflow.Event) string {
 	return ""
 }
 
-func (r *Router) runWorker(ctx context.Context, id string) {
+func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 	defer r.wg.Done()
+	// Mark dead on exit so Dispatch reports the queue as workerless
+	// (truthful signal — the map handle alone outlives the goroutine).
+	defer h.alive.Store(false)
 	r.mu.RLock()
 	q := r.queues[id]
 	r.mu.RUnlock()
@@ -710,6 +795,13 @@ func (r *Router) runWorker(ctx context.Context, id string) {
 	for {
 		item, ok := q.Dequeue(ctx)
 		if !ok {
+			// Dequeue returns false on ctx cancel or queue close. Either
+			// way this worker stops serving runs for `id` — log it so a
+			// silently-dead worker (enqueues pile up, never execute) is
+			// visible. ctx.Err() distinguishes shutdown from Unregister.
+			log.Info().Str("component", "wf").Str("wf_id", id).
+				Bool("ctx_cancelled", ctx.Err() != nil).
+				Msg("router: worker stopped")
 			return
 		}
 		var w workflow.Workflow

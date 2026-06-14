@@ -9,6 +9,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
+	"github.com/yogasw/wick/internal/login"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
 
@@ -101,6 +102,15 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 	creds, cerr := e.Registry.RowCreds(n.Module, n.Row)
 	if cerr != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("resolve creds: %w", cerr)
+	}
+
+	// Workflows run headless — no cookie-session middleware stamps the
+	// user. Connector ops that gate on login.GetUser (e.g. notifications'
+	// requireAdmin) would otherwise fail with "not authenticated". Run as
+	// the workflow owner: resolve CreatedBy → user and stamp the same
+	// context keys the HTTP Session middleware uses.
+	if u, tagIDs, uerr := e.Registry.ResolveUser(ctx, rc.Workflow.CreatedBy); uerr == nil && u != nil {
+		ctx = login.WithUser(ctx, u, tagIDs)
 	}
 
 	cctx := pkgconnector.NewCtx(ctx, n.Row, creds, inputs, e.Registry.HTTPClient(), nil, nil)

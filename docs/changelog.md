@@ -10,6 +10,28 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.3](https://github.com/yogasw/wick/compare/v0.18.2...v0.18.3) — Workflows & Connectors
+
+_Released on 2026-06-14_
+
+### Fixed
+*   **Workflow runs from a freshly-published workflow now execute immediately** — previously, workflows created or published from the UI would accept their trigger (webhook returned `202`, dispatch reported a match) but the run never executed and never appeared in run history until the server was restarted. The per-workflow worker was being spawned bound to the HTTP request context, so it died the instant the response was sent; the queue lingered with no live consumer and runs piled up undrained. Workers are now pinned to the server lifetime, so a publish, toggle, or hot-reload from any HTTP handler produces a worker that survives the request. Publishing a new workflow (or re-publishing one) never interrupts another workflow's in-flight run.
+*   **Connector nodes that require an authenticated identity now work from workflow runs** — operations gated on the logged-in user (e.g. `notifications.send_to_push_id`) returned `not authenticated` when fired from a headless workflow run, even though they worked when tested manually through the UI. Connector nodes now run as the workflow's owner.
+
+### Changed
+*   **Workflow dispatch is no longer silent** — the router now logs when a run is enqueued, when a matched trigger has no queue or no live worker (the run would otherwise vanish without a trace), and when a worker is spawned or stops. This makes a run that fails to execute debuggable from the logs instead of leaving no evidence.
+
+### Improved
+*   **CI performance and reliability**:
+    *   **Shared caches**: A new `ci-cache-warm.yml` workflow warms shared caches (Go build, module, and templ binary) on `push:master`, making them available for all PRs.
+    *   **Faster PR tests**: PR tests now efficiently restore Go build caches and utilize a two-tier strategy: a fast full suite without `-race`, followed by `-race` only on packages changed in the PR to minimize runtime.
+    *   **Conditional job execution**: Go and frontend jobs are now gated by `dorny/paths-filter`, running only when their respective files change.
+    *   **New frontend build job**: A dedicated job with caching for Node.js and Vite builds (gated on `fe/**` changes) has been added.
+    *   **Nightly race detection**: A new `nightly-race.yml` workflow runs the full `-race` suite daily, ensuring race conditions are caught in packages not frequently touched by PRs.
+
+---
+
+
 ## [v0.18.2](https://github.com/yogasw/wick/compare/v0.18.1...v0.18.2) — GitHub Connector
 
 _Released on 2026-06-14_
