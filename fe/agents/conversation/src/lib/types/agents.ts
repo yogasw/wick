@@ -149,3 +149,11 @@ export type AgentEvent = {
 };
 
 export type SSEStatus = "connecting" | "connected" | "error";
+
+export type ThreadBlock =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; toolUseId: string; toolName: string; toolInput: string; result?: string; isError?: boolean; startedAt?: number; endedAt?: number };
+
+export type LiveTurn = { text: string; blocks: ThreadBlock[] };
+
+export type TypingState = { active: boolean; substate?: string };
