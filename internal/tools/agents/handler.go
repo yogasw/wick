@@ -230,6 +230,11 @@ func Register(r tool.Router) {
 	r.GET("/api/projects/{id}", apiProjectDetail)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
+	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
+	r.GET("/api/providers", apiProvidersList)
+	r.GET("/api/providers/storage", apiProvidersStorage)
+	r.GET("/api/providers/{type}/{name}", apiProviderDetail)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 
