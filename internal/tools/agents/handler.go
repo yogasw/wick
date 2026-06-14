@@ -213,6 +213,12 @@ func Register(r tool.Router) {
 	r.GET("/api/sessions/{id}/conversation", apiSessionConversation)
 	r.GET("/api/sessions/{id}/meta", apiSessionMeta)
 
+	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
+	r.GET("/api/skills", apiSkillsList)
+	r.GET("/api/skills/{name}", apiSkillDetail)
+	r.GET("/api/skills/{folder}/files/{file}", apiSkillFolderFileDetail)
+	r.GET("/api/skills/{provider}/{path...}", apiSkillProviderPath)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 
