@@ -1,5 +1,5 @@
 {
-  "name": "@wick-fe/agents-conversation",
+  "name": "@wick-fe/agents-skills",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@wick-fe/common-api": "*",
-    "@wick-fe/common-md": "*",
     "@wick-fe/common-stores": "*",
-    "@wick-fe/common-ui": "*"
+    "@wick-fe/common-ui": "*",
+    "@wick-fe/common-md": "*"
   }
 }

@@ -15,7 +15,8 @@
     "e2e": "npm --workspaces --if-present run test:e2e",
     "dev:workflow": "npm --workspace=@wick-fe/agents-workflow run dev",
     "dev:scm": "npm --workspace=@wick-fe/agents-scm run dev",
-    "dev:conversation": "npm --workspace=@wick-fe/agents-conversation run dev"
+    "dev:conversation": "npm --workspace=@wick-fe/agents-conversation run dev",
+    "dev:skills": "npm --workspace=@wick-fe/agents-skills run dev"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
