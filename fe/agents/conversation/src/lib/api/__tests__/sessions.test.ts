@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform";
-import { listSessions, getConversation, getSessionMeta } from "../sessions.js";
+import { listSessions, getConversation, getSessionMeta, getTurnTrace } from "../sessions.js";
 import type { SessionListItem, ConversationTurn, SessionMeta } from "../../types/agents.js";
 
 const mockLayer = (status: number, body: unknown) =>
@@ -209,5 +209,73 @@ describe("listSessions — project scoping", () => {
 
     const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
     expect(r.url).not.toContain("project=");
+  });
+});
+
+describe("getTurnTrace", () => {
+  test("normalizes array response to TurnEvent[]", async () => {
+    const events = [
+      { type: "thinking", text: "I am thinking" },
+      { type: "tool_use", tool_name: "bash", tool_use_id: "tu-1", tool_input: '{"cmd":"ls"}' },
+    ];
+    const result = await Effect.runPromise(
+      getTurnTrace("/tools/agents", "sess-1", "turn-1").pipe(
+        Effect.provide(mockLayer(200, events)),
+      ),
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0].type).toBe("thinking");
+    expect(result[0].text).toBe("I am thinking");
+    expect(result[1].type).toBe("tool_use");
+    expect(result[1].tool_name).toBe("bash");
+  });
+
+  test("normalizes {events:[]} envelope response to TurnEvent[]", async () => {
+    const events = [
+      { type: "tool_result", tool_use_id: "tu-1", text: "ok", is_error: false },
+    ];
+    const result = await Effect.runPromise(
+      getTurnTrace("/tools/agents", "sess-1", "turn-1").pipe(
+        Effect.provide(mockLayer(200, { events })),
+      ),
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("tool_result");
+    expect(result[0].tool_use_id).toBe("tu-1");
+  });
+
+  test("returns empty array when response is empty object", async () => {
+    const result = await Effect.runPromise(
+      getTurnTrace("/tools/agents", "sess-1", "turn-1").pipe(
+        Effect.provide(mockLayer(200, {})),
+      ),
+    );
+    expect(result).toEqual([]);
+  });
+
+  test("requests the correct URL for turn trace", async () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify([]), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      getTurnTrace("/tools/agents", "sess-99", "turn-42").pipe(Effect.provide(captureLayer)),
+    );
+
+    const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
+    expect(r.url).toContain("/tools/agents/api/sessions/sess-99/turns/turn-42");
   });
 });

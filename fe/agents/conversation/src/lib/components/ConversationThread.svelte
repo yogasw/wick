@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { ConversationTurn, LiveTurn, TypingState, ThreadBlock } from "../types/agents.js";
+  import type { ConversationTurn, LiveTurn, TypingState, ThreadBlock, TurnEvent } from "../types/agents.js";
   import { renderMarkdown } from "../markdown.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
@@ -9,9 +9,10 @@
     turns: ConversationTurn[];
     live: LiveTurn | null;
     typing: TypingState;
+    loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
   };
 
-  let { turns, live, typing }: Props = $props();
+  let { turns, live, typing, loadTrace }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -44,7 +45,7 @@
 
 <div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3">
   {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
-    <ThreadMessage {turn} />
+    <ThreadMessage {turn} {loadTrace} />
   {/each}
 
   {#if live}

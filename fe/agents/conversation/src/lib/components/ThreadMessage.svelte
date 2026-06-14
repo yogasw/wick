@@ -1,10 +1,13 @@
 <script lang="ts">
-  import type { ConversationTurn, ThreadBlock } from "../types/agents.js";
+  import type { ConversationTurn, ThreadBlock, TurnEvent } from "../types/agents.js";
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import ToolCard from "./ToolCard.svelte";
 
-  type Props = { turn: ConversationTurn };
-  let { turn }: Props = $props();
+  type Props = {
+    turn: ConversationTurn;
+    loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
+  };
+  let { turn, loadTrace }: Props = $props();
 
   const isUser = $derived(turn.role === "user");
 
@@ -24,6 +27,58 @@
       } satisfies Extract<ThreadBlock, { kind: "tool" }>)
     )
   );
+
+  const showTraceToggle = $derived(!isUser && turn.has_trace && loadTrace !== undefined);
+
+  let traceOpen = $state(false);
+  let traceLoading = $state(false);
+  let traceEvents = $state<TurnEvent[] | null>(null);
+  let traceError = $state(false);
+
+  const traceToolBlocks = $derived(
+    (traceEvents ?? [])
+      .filter((ev) => ev.type === "tool_use")
+      .map((ev) => ({
+        kind: "tool" as const,
+        toolUseId: ev.tool_use_id ?? "",
+        toolName: ev.tool_name ?? "",
+        toolInput: ev.tool_input ?? "",
+        result: (traceEvents ?? []).find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
+        isError: (traceEvents ?? []).find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
+      } satisfies Extract<ThreadBlock, { kind: "tool" }>)
+    )
+  );
+
+  const traceThinkingEvents = $derived(
+    (traceEvents ?? []).filter((ev) => ev.type === "thinking")
+  );
+
+  async function toggleTrace() {
+    if (traceOpen) {
+      traceOpen = false;
+      return;
+    }
+    if (traceEvents !== null) {
+      traceOpen = true;
+      return;
+    }
+    traceLoading = true;
+    traceError = false;
+    try {
+      traceEvents = await loadTrace!(turn.turn_id);
+      traceOpen = true;
+    } catch {
+      traceError = true;
+    } finally {
+      traceLoading = false;
+    }
+  }
+
+  async function retryTrace() {
+    traceError = false;
+    traceEvents = null;
+    await toggleTrace();
+  }
 </script>
 
 {#if isUser}
@@ -57,6 +112,50 @@
 {:else}
   <div class="flex justify-start group">
     <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
+      {#if showTraceToggle}
+        <div class="flex flex-col gap-1">
+          <button
+            type="button"
+            onclick={toggleTrace}
+            class="inline-flex items-center gap-1.5 self-start text-[11px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-500 transition-colors"
+          >
+            {#if traceLoading}
+              <svg class="h-3 w-3 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
+              </svg>
+              <span>loading…</span>
+            {:else}
+              <span>{traceOpen ? "⊖" : "⊕"}</span>
+              <span>{traceOpen ? "hide trace" : "show trace ›"}</span>
+            {/if}
+          </button>
+
+          {#if traceError}
+            <div class="flex items-center gap-2 text-[11px] text-red-600 dark:text-red-400">
+              <span>failed to load trace</span>
+              <button
+                type="button"
+                onclick={retryTrace}
+                class="underline hover:no-underline"
+              >retry</button>
+            </div>
+          {/if}
+
+          {#if traceOpen && traceEvents !== null}
+            <div class="flex flex-col gap-1 mt-0.5">
+              {#each traceThinkingEvents as ev}
+                <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
+                  {ev.text ?? ""}
+                </div>
+              {/each}
+              {#each traceToolBlocks as block}
+                <ToolCard {block} />
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       {#if toolBlocks.length > 0}
         <div class="flex flex-col gap-1">
           {#each toolBlocks as block}

@@ -14,7 +14,7 @@
   import { notify } from "../notify.js";
   import { push } from "../router.js";
 
-  import { getConversation, getSessionMeta, deleteSession } from "../api/sessions.js";
+  import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
@@ -476,7 +476,7 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-4 pb-4">
-          <ConversationThread {turns} {live} {typing} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} />
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiDeleteE } from "@wick-fe/common-api";
-import type { SessionListItem, SessionMeta, ConversationTurn } from "../types/agents.js";
+import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent } from "../types/agents.js";
 
 export const listSessions = (base: string, projectId?: string) => {
   const url = projectId
@@ -27,3 +27,16 @@ export const getSessionMeta = (base: string, id: string) =>
 
 export const deleteSession = (base: string, id: string) =>
   apiDeleteE<unknown>(`${base}/sessions/${encodeURIComponent(id)}`);
+
+function normalizeTurnEvents(raw: unknown): TurnEvent[] {
+  if (Array.isArray(raw)) return raw as TurnEvent[];
+  if (raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).events)) {
+    return (raw as { events: TurnEvent[] }).events;
+  }
+  return [];
+}
+
+export const getTurnTrace = (base: string, id: string, turnId: string) =>
+  apiGetE<unknown>(`${base}/api/sessions/${id}/turns/${turnId}`).pipe(
+    Effect.map(normalizeTurnEvents),
+  );
