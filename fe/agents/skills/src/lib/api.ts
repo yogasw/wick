@@ -50,10 +50,19 @@ export async function getSkill(name: string): Promise<SkillDetailResponse> {
 }
 
 export async function getSkillFile(folder: string, file: string): Promise<SkillFileDetailResponse> {
+  const encodedFile = file.split("/").map(encodeURIComponent).join("/");
   const r = await get<SkillFileDetailResponse>(
-    `/api/skills/${encodeURIComponent(folder)}/files/${encodeURIComponent(file)}`
+    `/api/skills/${encodeURIComponent(folder)}/files/${encodedFile}`
   );
-  return { ...r, in_dirs: r.in_dirs ?? [] };
+  return {
+    ...r,
+    in_dirs: r.in_dirs ?? [],
+    entries: (r.entries ?? []).map((e) => ({
+      ...e,
+      in_dirs: e.in_dirs ?? [],
+      missing_dirs: e.missing_dirs ?? [],
+    })),
+  };
 }
 
 export async function postMutation(url: string): Promise<void> {

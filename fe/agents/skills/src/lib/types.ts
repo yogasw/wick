@@ -22,9 +22,11 @@ export interface SkillDetailResponse {
 
 export interface SkillFileDetailResponse {
   name: string;
-  content: string;
-  source_path: string;
+  is_dir: boolean;
+  content?: string;
+  source_path?: string;
   in_dirs: string[];
+  entries?: SkillListItem[];
 }
 
 export interface SkillProviderEntryResponse {

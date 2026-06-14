@@ -38,6 +38,23 @@ export function match(
 ): Record<string, string> | null {
   const pSegs = pattern.split("/").filter(Boolean);
   const sSegs = path.split("/").filter(Boolean);
+
+  const catchAllIdx = pSegs.findIndex((s) => s.startsWith(":") && s.endsWith("..."));
+  if (catchAllIdx !== -1) {
+    if (sSegs.length < catchAllIdx) return null;
+    const params: Record<string, string> = {};
+    for (let i = 0; i < catchAllIdx; i++) {
+      if (pSegs[i].startsWith(":")) {
+        params[pSegs[i].slice(1)] = decodeURIComponent(sSegs[i]);
+      } else if (pSegs[i] !== sSegs[i]) {
+        return null;
+      }
+    }
+    const key = pSegs[catchAllIdx].slice(1, -3);
+    params[key] = sSegs.slice(catchAllIdx).map(decodeURIComponent).join("/");
+    return params;
+  }
+
   if (pSegs.length !== sSegs.length) return null;
   const params: Record<string, string> = {};
   for (let i = 0; i < pSegs.length; i++) {

@@ -27,6 +27,31 @@ describe("router.match", () => {
     expect(match("/skills/:folder/files/:file", "/skills/foo")).toBeNull();
   });
 
+  it("catch-all :file... captures single segment", () => {
+    expect(match("/skills/:folder/files/:file...", "/skills/system-map/files/agents")).toEqual({
+      folder: "system-map",
+      file: "agents",
+    });
+  });
+
+  it("catch-all :file... captures nested path", () => {
+    expect(match("/skills/:folder/files/:file...", "/skills/system-map/files/agents/sub/x.md")).toEqual({
+      folder: "system-map",
+      file: "agents/sub/x.md",
+    });
+  });
+
+  it("catch-all :file... decodes URI-encoded segments", () => {
+    expect(match("/skills/:folder/files/:file...", "/skills/my-skill/files/agents%2Fsub/x.md")).toEqual({
+      folder: "my-skill",
+      file: "agents/sub/x.md",
+    });
+  });
+
+  it("catch-all :file... returns null when prefix segments do not match", () => {
+    expect(match("/skills/:folder/files/:file...", "/skills/foo")).toBeNull();
+  });
+
   it("returns empty object for exact root match", () => {
     expect(match("/", "/")).toEqual({});
   });

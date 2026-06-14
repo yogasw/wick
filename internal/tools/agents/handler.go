@@ -219,7 +219,7 @@ func Register(r tool.Router) {
 	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
 	r.GET("/api/skills", apiSkillsList)
 	r.GET("/api/skills/{name}", apiSkillDetail)
-	r.GET("/api/skills/{folder}/files/{file}", apiSkillFolderFileDetail)
+	r.GET("/api/skills/{folder}/files/{file...}", apiSkillFolderFileDetail)
 	r.GET("/api/skills/{provider}/{path...}", apiSkillProviderPath)
 
 	// JSON API — presets SPA endpoints.

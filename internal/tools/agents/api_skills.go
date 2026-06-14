@@ -37,12 +37,14 @@ type SkillDetailResponse struct {
 	MissingDirs []string        `json:"missing_dirs,omitempty"`
 }
 
-// SkillFileDetailResponse is the envelope for GET /api/skills/{folder}/files/{file}.
+// SkillFileDetailResponse is the envelope for GET /api/skills/{folder}/files/{file...}.
 type SkillFileDetailResponse struct {
-	Name       string   `json:"name"`
-	Content    string   `json:"content"`
-	SourcePath string   `json:"source_path"`
-	InDirs     []string `json:"in_dirs"`
+	Name       string          `json:"name"`
+	IsDir      bool            `json:"is_dir"`
+	Content    string          `json:"content,omitempty"`
+	SourcePath string          `json:"source_path,omitempty"`
+	InDirs     []string        `json:"in_dirs"`
+	Entries    []SkillListItem `json:"entries,omitempty"`
 }
 
 // SkillProviderEntryResponse is the envelope for GET /api/skills/{provider}/{path...}.
@@ -144,27 +146,72 @@ func apiSkillDetail(c *tool.Ctx) {
 	})
 }
 
-// apiSkillFolderFileDetail handles GET /api/skills/{folder}/files/{file}.
+// apiSkillFolderFileDetail handles GET /api/skills/{folder}/files/{file...}.
+// Supports nested paths and returns a directory listing when the path resolves to a directory.
 func apiSkillFolderFileDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	folder := c.PathValue("folder")
 	file := c.PathValue("file")
-	name := folder + "/" + file
+
+	cleanFile, ok := safeSkillPath(file)
+	if !ok {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
+	name := folder + "/" + cleanFile
+
+	dirs := skillsync.KnownDirs()
+	for _, d := range dirs {
+		target := filepath.Join(d, name)
+		fi, err := os.Stat(target)
+		if err != nil {
+			continue
+		}
+		if fi.IsDir() {
+			entries, _ := os.ReadDir(target)
+			items := make([]SkillListItem, 0, len(entries))
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), ".") {
+					continue
+				}
+				items = append(items, SkillListItem{
+					Name:        e.Name(),
+					IsDir:       e.IsDir(),
+					InDirs:      []string{d},
+					MissingDirs: []string{},
+				})
+			}
+			_, allDirs, _ := skillsync.Status()
+			inDirs := dirsContaining(allDirs, name)
+			if inDirs == nil {
+				inDirs = []string{}
+			}
+			c.JSON(http.StatusOK, SkillFileDetailResponse{
+				Name:    name,
+				IsDir:   true,
+				InDirs:  inDirs,
+				Entries: items,
+			})
+			return
+		}
+		break
+	}
 
 	data, srcPath, err := skillsync.ReadFile(name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 		return
 	}
-	_, dirs, _ := skillsync.Status()
-	inDirs := dirsContaining(dirs, name)
+	_, allDirs, _ := skillsync.Status()
+	inDirs := dirsContaining(allDirs, name)
 	if inDirs == nil {
 		inDirs = []string{}
 	}
 	c.JSON(http.StatusOK, SkillFileDetailResponse{
 		Name:       name,
+		IsDir:      false,
 		Content:    string(data),
 		SourcePath: srcPath,
 		InDirs:     inDirs,
