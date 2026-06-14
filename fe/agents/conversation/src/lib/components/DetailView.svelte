@@ -6,7 +6,7 @@
   import { toastError } from "@wick-fe/common-stores";
 
   import { createThreadStore } from "../stores/thread.js";
-  import type { ThreadMeta } from "../stores/thread.js";
+  import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
   import { currentAsk, showAsk, hideAsk } from "../stores/asks.js";
@@ -54,11 +54,13 @@
   let turns = $state<ConversationTurn[]>([]);
   let live = $state<LiveTurn | null>(null);
   let typing = $state<TypingState>({ active: false });
+  let agentLifecycle = $state<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
   let threadMeta = $state<ThreadMeta>({});
 
   const unsubTurns = thread.turns.subscribe((v) => { turns = v; });
   const unsubLive = thread.live.subscribe((v) => { live = v; });
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
+  const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   const unsubMeta = thread.meta.subscribe((v) => { threadMeta = v; });
 
   /* ── session title + meta ──────────────────────────────────────── */
@@ -233,6 +235,14 @@
 
   /* ── send message ─────────────────────────────────────────────── */
   async function handleSend(msg: { text: string; files: File[] }) {
+    const optimisticAttachments = msg.files.map((f) => ({
+      name: f.name,
+      stored_name: f.name,
+      url: URL.createObjectURL(f),
+      mime: f.type || "application/octet-stream",
+      size: f.size,
+    }));
+    thread.appendUserTurn(msg.text, optimisticAttachments);
     try {
       await run(sendMessage(base, sessionId, msg).pipe(Effect.provide(WickClientLayer)));
     } catch (e: unknown) {
@@ -275,6 +285,7 @@
     unsubTurns();
     unsubLive();
     unsubTyping();
+    unsubLifecycle();
     unsubMeta();
   });
 
@@ -315,6 +326,7 @@
       title={threadMeta.title || title}
       {agentLabel}
       {sseStatus}
+      lifecycle={agentLifecycle}
       onKill={handleKill}
       onDelete={handleDelete}
     />

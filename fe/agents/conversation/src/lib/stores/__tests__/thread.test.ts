@@ -326,4 +326,84 @@ describe("createThreadStore", () => {
     expect(get(store.turns)).toHaveLength(0);
     expect(get(store.live)).toBeNull();
   });
+
+  /* ── appendUserTurn ─────────────────────────────────────────────── */
+
+  test("appendUserTurn appends a user turn with correct role and text", () => {
+    store.appendUserTurn("hi");
+    const turns = get(store.turns);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].role).toBe("user");
+    expect(turns[0].text).toBe("hi");
+  });
+
+  test("appendUserTurn sets events to empty array", () => {
+    store.appendUserTurn("hi");
+    expect(get(store.turns)[0].events).toEqual([]);
+  });
+
+  test("appendUserTurn sets attachments to empty array when none provided", () => {
+    store.appendUserTurn("hi");
+    expect(get(store.turns)[0].attachments).toEqual([]);
+  });
+
+  test("appendUserTurn uses provided attachments", () => {
+    const att = [{ name: "file.txt", stored_name: "abc.txt", url: "/f/abc", mime: "text/plain", size: 10 }];
+    store.appendUserTurn("with attachment", att);
+    expect(get(store.turns)[0].attachments).toEqual(att);
+  });
+
+  test("appendUserTurn generates unique turn_id per call", () => {
+    store.appendUserTurn("first");
+    store.appendUserTurn("second");
+    const turns = get(store.turns);
+    expect(turns[0].turn_id).not.toBe(turns[1].turn_id);
+    expect(turns[0].turn_id.startsWith("local-user-")).toBe(true);
+    expect(turns[1].turn_id.startsWith("local-user-")).toBe(true);
+  });
+
+  test("appendUserTurn appends after existing history turns", () => {
+    store.setHistory([makeTurn({ turn_id: "hist-1" })]);
+    store.appendUserTurn("new message");
+    const turns = get(store.turns);
+    expect(turns).toHaveLength(2);
+    expect(turns[1].text).toBe("new message");
+  });
+
+  /* ── lifecycle store ────────────────────────────────────────────── */
+
+  test("lifecycle starts with empty state", () => {
+    expect(get(store.lifecycle).state).toBe("");
+    expect(get(store.lifecycle).pid).toBe(0);
+  });
+
+  test("handleEvent lifecycle:working sets lifecycle store to working with pid", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 123, data: "bash", at: 500 }));
+    const lc = get(store.lifecycle);
+    expect(lc.state).toBe("working");
+    expect(lc.pid).toBe(123);
+    expect(lc.substate).toBe("bash");
+    expect(lc.at).toBe(500);
+  });
+
+  test("handleEvent lifecycle:idle sets lifecycle store to idle", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 42, at: 100 }));
+    const lc = get(store.lifecycle);
+    expect(lc.state).toBe("idle");
+    expect(lc.pid).toBe(42);
+  });
+
+  test("handleEvent lifecycle:killed sets lifecycle store to killed", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "killed", pid: 99, at: 200 }));
+    const lc = get(store.lifecycle);
+    expect(lc.state).toBe("killed");
+    expect(lc.pid).toBe(99);
+  });
+
+  test("handleEvent lifecycle:spawning sets lifecycle store to spawning", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 7, at: 300 }));
+    const lc = get(store.lifecycle);
+    expect(lc.state).toBe("spawning");
+    expect(lc.pid).toBe(7);
+  });
 });

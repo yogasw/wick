@@ -1,15 +1,17 @@
 <script lang="ts">
   import type { SSEStatus } from "../types/agents.js";
+  import type { LifecycleState } from "../stores/thread.js";
 
   type Props = {
     title: string;
     agentLabel?: string;
     sseStatus: SSEStatus;
+    lifecycle?: LifecycleState;
     onKill: () => void;
     onDelete: () => void;
   };
 
-  let { title, agentLabel = "", sseStatus, onKill, onDelete }: Props = $props();
+  let { title, agentLabel = "", sseStatus, lifecycle, onKill, onDelete }: Props = $props();
 
   const statusClass = $derived(
     sseStatus === "connected"
@@ -21,6 +23,26 @@
 
   const statusLabel = $derived(
     sseStatus === "connected" ? "live" : sseStatus === "error" ? "error" : "connecting",
+  );
+
+  const lcVisible = $derived(lifecycle && lifecycle.state !== "" && lifecycle.state !== "killed");
+
+  const lcClass = $derived(
+    lifecycle?.state === "spawning"
+      ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
+      : lifecycle?.state === "working"
+        ? "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
+        : "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
+  );
+
+  const lcLabel = $derived(
+    lifecycle?.state === "spawning"
+      ? (lifecycle.substate ? lifecycle.substate : "spawning…")
+      : lifecycle?.state === "working"
+        ? (lifecycle.substate ? lifecycle.substate : "working")
+        : lifecycle?.state === "idle"
+          ? "idle"
+          : "",
   );
 </script>
 
@@ -37,8 +59,28 @@
     {/if}
   </div>
 
-  <!-- Right: SSE status + Kill + Delete -->
+  <!-- Right: lifecycle + SSE status + Kill + Delete -->
   <div class="flex items-center gap-2 shrink-0">
+    {#if lcVisible}
+      <span
+        data-lifecycle-badge
+        class={[
+          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+          lcClass,
+        ].join(" ")}
+      >
+        {#if lifecycle?.state === "spawning" || lifecycle?.state === "working"}
+          <svg viewBox="0 0 8 8" class="h-1.5 w-1.5 animate-pulse" fill="currentColor">
+            <circle cx="4" cy="4" r="3"></circle>
+          </svg>
+        {:else}
+          <svg viewBox="0 0 8 8" class="h-1.5 w-1.5" fill="currentColor">
+            <circle cx="4" cy="4" r="3"></circle>
+          </svg>
+        {/if}
+        <span data-lifecycle-label>{lcLabel}</span>
+      </span>
+    {/if}
     <span
       class={[
         "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",

@@ -1,6 +1,6 @@
 /*
  * Purpose:    Thread streaming store — reduces live AgentEvent stream into
- *             reactive thread state (turns, live turn, typing, meta).
+ *             reactive thread state (turns, live turn, typing, lifecycle, meta).
  *             Mirrors agents.js handleAgentEvent state logic; no DOM.
  * Caller:     Conversation page / Slice 7 rendering layer
  * Dependencies: svelte/store, AgentEvent, ConversationTurn, LiveTurn,
@@ -13,6 +13,7 @@ import { writable, get } from "svelte/store";
 import type { Writable } from "svelte/store";
 import type {
   AgentEvent,
+  Attachment,
   ConversationTurn,
   LiveTurn,
   ThreadBlock,
@@ -23,19 +24,31 @@ export interface ThreadMeta {
   title?: string;
 }
 
+export type LifecycleState = {
+  state: "spawning" | "working" | "idle" | "killed" | "";
+  pid: number;
+  substate: string;
+  at: number;
+};
+
 export interface ThreadStore {
   turns: Writable<ConversationTurn[]>;
   live: Writable<LiveTurn | null>;
   typing: Writable<TypingState>;
+  lifecycle: Writable<LifecycleState>;
   meta: Writable<ThreadMeta>;
   setHistory(turns: ConversationTurn[]): void;
+  appendUserTurn(text: string, attachments?: Attachment[]): void;
   handleEvent(ev: AgentEvent): void;
 }
+
+let _userTurnCounter = 0;
 
 export function createThreadStore(): ThreadStore {
   const turns = writable<ConversationTurn[]>([]);
   const live = writable<LiveTurn | null>(null);
   const typing = writable<TypingState>({ active: false });
+  const lifecycle = writable<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
   const meta = writable<ThreadMeta>({});
 
   function ensureLive(): LiveTurn {
@@ -99,6 +112,15 @@ export function createThreadStore(): ThreadStore {
         } else if (lc === "working") {
           typing.set({ active: true, substate: ev.data ?? "" });
         }
+        const lcState = (lc === "spawning" || lc === "working" || lc === "idle" || lc === "killed")
+          ? lc as LifecycleState["state"]
+          : "" as const;
+        lifecycle.set({
+          state: lcState,
+          pid: ev.pid ?? 0,
+          substate: ev.data ?? "",
+          at: ev.at ?? 0,
+        });
         break;
       }
 
@@ -214,14 +236,34 @@ export function createThreadStore(): ThreadStore {
     }
   }
 
+  function appendUserTurn(text: string, attachments?: Attachment[]): void {
+    const id = ++_userTurnCounter;
+    const turn: ConversationTurn = {
+      turn_id: `local-user-${id}`,
+      role: "user",
+      agent: "",
+      provider: "",
+      text,
+      timestamp: Date.now(),
+      truncated: false,
+      interrupted: false,
+      has_trace: false,
+      events: [],
+      attachments: attachments ?? [],
+    };
+    turns.update((ts) => [...ts, turn]);
+  }
+
   return {
     turns,
     live,
     typing,
+    lifecycle,
     meta,
     setHistory(newTurns) {
       turns.set(newTurns);
     },
+    appendUserTurn,
     handleEvent,
   };
 }
