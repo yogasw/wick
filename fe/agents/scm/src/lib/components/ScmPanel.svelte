@@ -4,10 +4,9 @@
     sessionID, repos, activeRepo, changes, branch, loading, loadRepos, applySnapshot,
   } from "$lib/stores/scm";
   import { subscribeGitStatus } from "$lib/sse";
-  import { toastError } from "$lib/stores/toast";
+  import { toastError } from "@wick-fe/common-stores";
   import { stagePaths, unstagePaths, discardPaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
-  import ToastHost from "$lib/components/shared/ToastHost.svelte";
-  import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
+  import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import RepoSection from "$lib/components/RepoSection.svelte";
   import ChangesSection from "$lib/components/ChangesSection.svelte";
   import CommitBox from "$lib/components/CommitBox.svelte";
