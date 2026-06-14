@@ -181,8 +181,6 @@ func Register(r tool.Router) {
 	r.POST("/", startNewSession)
 	r.GET("/overview", overviewPage)
 
-	r.GET("/conversation", conversationSPAPage)
-
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
 	r.POST("/sessions/quick", createSessionQuick)
@@ -835,99 +833,11 @@ func sessionsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	scoped := c.Query("project")
-	// Validate the scope — an unknown project id falls back to all chats.
-	if scoped != "" {
-		if _, ok := globalMgr.Registry().Project(scoped); !ok {
-			scoped = ""
-		}
-	}
-	ids := globalMgr.Registry().SessionIDs()
-	caller := login.GetUser(c.Context())
-	allSessions := globalMgr.Registry().Sessions()
-	if scoped != "" {
-		filtered := ids[:0:0]
-		for _, id := range ids {
-			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scoped {
-				filtered = append(filtered, id)
-			}
-		}
-		ids = filtered
-	}
-	if caller != nil && !caller.CanSeeAllSessions() {
-		filtered := ids[:0:0]
-		for _, id := range ids {
-			if s, ok := allSessions[id]; ok && (s.Meta.UserID == "" || s.Meta.UserID == caller.ID) {
-				filtered = append(filtered, id)
-			}
-		}
-		ids = filtered
-	}
-	// Render all rows; pagination (10/page) + search run client-side so
-	// paging never reloads the page (keeps the compose box + search text).
-	// Guard against pathological counts with a generous cap.
-	const maxRender = 1000
-	if len(ids) > maxRender {
-		ids = ids[:maxRender]
-	}
-	lc := make(map[string]view.SessionLifecycleVM)
-	for _, e := range globalPool.ActiveSnapshot() {
-		entry := view.SessionLifecycleVM{
-			Lifecycle: e.Lifecycle,
-			PID:       e.PID,
-		}
-		if !e.LastActive.IsZero() {
-			entry.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		lc[e.SessionID] = entry
-	}
-	pageLabels := make(map[string]string, len(ids))
-	for _, id := range ids {
-		pageLabels[id] = loadFirstUserMessage(globalLayout, id, 60)
-	}
-	providers := providerChoicesCached(c.Context())
-	// Build the scoped project landing composer (Claude-style: compose
-	// box on top of the chats list, defaults inherited from the project).
-	var composer view.ComposerVM
-	if scoped != "" {
-		defProv := ""
-		if len(providers) > 0 {
-			defProv = providers[0].Type
-		}
-		defPreset := ""
-		if p, ok := globalMgr.Registry().Project(scoped); ok {
-			if p.Meta.Defaults.Provider != "" {
-				defProv = p.Meta.Defaults.Provider
-			}
-			defPreset = p.Meta.Defaults.Preset
-		}
-		composer = view.ComposerVM{
-			Base:            c.Base(),
-			Providers:       providers,
-			Presets:         globalMgr.Registry().PresetNames(),
-			DefaultProvider: defProv,
-			DefaultPreset:   defPreset,
-			ScopedProjectID: scoped,
-			Scoped:          true,
-			// Project picker hidden — already in the project (binding sent
-			// as a hidden field). Matches Claude's project landing.
-			ShowProjectPicker: false,
-		}
-	}
-	c.HTML(view.SessionsList(view.SessionsListVM{
-		Layout:          sidebarVMScoped(c, "sessions", "", scoped),
-		Base:            c.Base(),
-		IDs:             ids,
-		Sessions:        allSessions,
-		Labels:          pageLabels,
-		Projects:        globalMgr.Registry().Projects(),
-		ProjectList:     globalMgr.Registry().ProjectIDs(),
-		PresetList:      globalMgr.Registry().PresetNames(),
-		Providers:       providers,
-		Lifecycle:       lc,
-		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
-		ScopedProjectID: scoped,
-		Composer:        composer,
+	c.HTML(view.Conversation(view.ConversationVM{
+		Layout:   sidebarVM(c, "sessions", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("conversation"),
+		ScmAsset: spaAssetURL("scm"),
 	}))
 }
 
@@ -977,106 +887,13 @@ func sessionDetail(c *tool.Ctx) {
 		c.NotFound()
 		return
 	}
-	tab := c.Query("tab")
-	if tab == "" {
-		tab = "conversation"
-	}
-	var turns []view.TurnVM
-	var cmdLines []string
-	switch tab {
-	case "conversation":
-		raw, err := loadConversation(globalLayout, id)
-		if err != nil {
-			log.Ctx(c.Context()).Error().Msgf("load conversation %s: %s", id, err.Error())
-		}
-		for _, t := range raw {
-			vm := view.TurnVM{
-				TurnID:      t.TurnID,
-				Role:        t.Role,
-				Agent:       t.Agent,
-				Provider:    t.Provider,
-				Text:        t.Text,
-				Truncated:   t.Truncated,
-				Interrupted: t.Interrupted,
-				HasTrace:    t.HasTrace,
-				Time:        t.Timestamp,
-			}
-			// Legacy: old turns that inlined events are still rendered inline.
-			for _, e := range t.Events {
-				vm.Events = append(vm.Events, view.TurnEventVM{
-					Type:      e.Type,
-					ToolName:  e.ToolName,
-					ToolInput: e.ToolInput,
-					ToolUseID: e.ToolUseID,
-					IsError:   e.IsError,
-					Text:      e.Text,
-				})
-			}
-			for _, a := range t.Attachments {
-				// IsImage must match the server's inline-serve whitelist
-				// (imageMIMEAllowed) — SVG / generic image/* types are
-				// served as attachments, so rendering them via <img> would
-				// just produce a broken icon.
-				vm.Attachments = append(vm.Attachments, view.AttachmentVM{
-					Name:    a.Name,
-					URL:     a.URL,
-					MIME:    a.MIME,
-					Size:    a.Size,
-					IsImage: imageMIMEAllowed[a.MIME],
-				})
-			}
-			turns = append(turns, vm)
-		}
-	case "commands":
-		lines, err := loadCommands(globalLayout, id)
-		if err != nil {
-			log.Ctx(c.Context()).Error().Msgf("load commands %s: %s", id, err.Error())
-		}
-		cmdLines = lines
-	}
-	gs := GetGateStatus()
-	activeProv := ""
-	if len(sess.Agents) > 0 {
-		activeProv = sess.Agents[0].Provider
-	}
-	vm := view.SessionDetailVM{
-		Layout:          sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
-		Base:            c.Base(),
-		Session:         sess,
-		Tab:             tab,
-		Turns:           turns,
-		CmdLines:        cmdLines,
-		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
-		Providers:       providerChoicesCached(c.Context()),
-		ActiveProvider:  activeProv,
-		Projects:        globalMgr.Registry().Projects(),
-		ProjectList:     globalMgr.Registry().ProjectIDs(),
-		ActiveProjectID: sess.Meta.ProjectID,
-		SCMAssetURL:     spaAssetURL("scm"),
-		Gate: view.GateStatusVM{
-			Enabled: gs.Enabled,
-			Binary:  gs.Binary,
-			Source:  gs.Source,
-			Reason:  gs.Reason,
-		},
-	}
-	for _, e := range globalPool.ActiveSnapshot() {
-		if e.SessionID != id {
-			continue
-		}
-		vm.Lifecycle = e.Lifecycle
-		vm.PID = e.PID
-		if !e.LastActive.IsZero() {
-			vm.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		break
-	}
-	// Chat is a full-height app surface — skip the layout's px-6 py-6
-	// gutter so the composer sits flush at the viewport bottom (no
-	// leftover padding to fight the keyboard) and the overlay header
-	// aligns to the true top instead of being shifted by a -mt-6 hack.
-	vm.Layout.FullBleed = true
-	c.HTML(view.SessionDetail(vm))
+	c.HTML(view.Conversation(view.ConversationVM{
+		Layout:         sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
+		Base:           c.Base(),
+		AssetURL:       spaAssetURL("conversation"),
+		ScmAsset:       spaAssetURL("scm"),
+		InitialSession: id,
+	}))
 }
 
 type switchProviderReq struct {
@@ -2160,23 +1977,4 @@ func streamSnapshot(c *tool.Ctx) {
 		out = []Event{}
 	}
 	c.JSON(http.StatusOK, out)
-}
-
-// conversationSPAPage serves the conversation SPA thin-shell. The SPA reads
-// data-base from its #app mount div and prefixes all API calls with that
-// value (e.g. ${base}/api/sessions). c.Base() returns the tool mount path
-// (e.g. /tools/agents), which makes ${base}/api/sessions resolve to the
-// /api/sessions route registered in this same package — no path rewriting
-// needed. This route is additive and does NOT modify the existing /sessions
-// or /sessions/{id} handlers.
-func conversationSPAPage(c *tool.Ctx) {
-	if notReady(c) {
-		return
-	}
-	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:   sidebarVM(c, "sessions", ""),
-		Base:     c.Base(),
-		AssetURL: spaAssetURL("conversation"),
-		ScmAsset: spaAssetURL("scm"),
-	}))
 }
