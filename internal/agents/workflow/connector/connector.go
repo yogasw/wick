@@ -11,11 +11,19 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/yogasw/wick/internal/entity"
 	pkgconnector "github.com/yogasw/wick/pkg/connector"
 )
 
 // RowCredsFn returns the credential map for a connector row (instance).
 type RowCredsFn func(module, row string) (map[string]string, error)
+
+// UserResolverFn resolves a workflow's owner (Workflow.CreatedBy) into the
+// authenticated user + their filter tag IDs, so the connector executor can
+// stamp identity onto the run context the same way the cookie-session
+// middleware does for HTTP. Returns a nil user (no error) when the id is
+// unknown so the run continues unauthenticated rather than failing here.
+type UserResolverFn func(ctx context.Context, userID string) (*entity.User, []string, error)
 
 // RunAuditor receives one record per connector node execution.
 type RunAuditor interface {
@@ -41,11 +49,12 @@ type RunRecord struct {
 
 // Registry indexes connector modules.
 type Registry struct {
-	mu       sync.RWMutex
-	modules  map[string]pkgconnector.Module
-	rowCreds RowCredsFn
-	auditor  RunAuditor
-	httpCli  *http.Client
+	mu           sync.RWMutex
+	modules      map[string]pkgconnector.Module
+	rowCreds     RowCredsFn
+	userResolver UserResolverFn
+	auditor      RunAuditor
+	httpCli      *http.Client
 }
 
 // NewRegistry builds an empty registry.
@@ -66,6 +75,29 @@ func (r *Registry) SetRowCreds(fn RowCredsFn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rowCreds = fn
+}
+
+// SetUserResolver wires the workflow-owner → user lookup hook. Like
+// SetRowCreds it is injected post-construction from server.go once the
+// login service exists. Nil hook = runs stay unauthenticated (legacy
+// behaviour) and identity-gated connector ops keep returning their own
+// "not authenticated" error.
+func (r *Registry) SetUserResolver(fn UserResolverFn) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.userResolver = fn
+}
+
+// ResolveUser returns the user + filter tag IDs for a workflow owner id.
+// Empty id or nil hook yields (nil, nil, nil) so callers can skip stamping.
+func (r *Registry) ResolveUser(ctx context.Context, userID string) (*entity.User, []string, error) {
+	r.mu.RLock()
+	fn := r.userResolver
+	r.mu.RUnlock()
+	if fn == nil || userID == "" {
+		return nil, nil, nil
+	}
+	return fn(ctx, userID)
 }
 
 // Register adds a connector module.

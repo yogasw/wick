@@ -267,6 +267,12 @@ func (m *Manager) Stop() {
 // router + cron scheduler. Called once from server startup after
 // Service + Router are constructed.
 func Bootstrap(ctx context.Context, svc service.Service, router *trigger.Router, cron *trigger.CronScheduler, schedAt *trigger.ScheduleAtScheduler) error {
+	// Pin the server-lifetime ctx so every worker (booted here OR
+	// hot-reloaded later via an HTTP handler's request ctx) outlives the
+	// request that triggered its Register. Without this, publishing a
+	// workflow from the UI spawned a worker bound to the request ctx that
+	// died on response flush — runs enqueued but never drained until restart.
+	router.SetBaseCtx(ctx)
 	ids, err := svc.List()
 	if err != nil {
 		return err

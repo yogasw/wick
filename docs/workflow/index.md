@@ -91,6 +91,8 @@ Use this to back up a workflow, move one between environments, or share a starti
 
 Editing happens on a draft copy; **Publish** promotes the draft to the live version. Publishing is **hot** — wick immediately re-registers the workflow's triggers (channel / webhook inbound rules and cron / `schedule_at` scheduled jobs) with no server restart. A cron tick or Slack mention that arrives right after you publish runs the new graph. The same hot-reload fires when you toggle a workflow enabled/disabled.
 
+The per-workflow worker goroutine that drains the trigger queue is pinned to the server lifetime, not the HTTP request. Publishing or toggling from the UI produces a worker that survives the response and begins processing runs immediately — no server restart required to see runs in history.
+
 ## Gate integration
 
 Workflow `shell` and `agent` nodes participate in the [Command Gate](/guide/command-gate) policy:
