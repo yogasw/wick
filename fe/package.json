@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "type": "module",
   "workspaces": [
-    "agents/*"
+    "agents/*",
+    "common/*"
   ],
   "scripts": {
     "build": "npm --workspaces --if-present run build",
@@ -13,7 +14,15 @@
     "test": "npm --workspaces --if-present run test:unit",
     "e2e": "npm --workspaces --if-present run test:e2e",
     "dev:workflow": "npm --workspace=@wick-fe/agents-workflow run dev",
-    "dev:scm": "npm --workspace=@wick-fe/agents-scm run dev"
+    "dev:scm": "npm --workspace=@wick-fe/agents-scm run dev",
+    "dev:conversation": "npm --workspace=@wick-fe/agents-conversation run dev",
+    "dev:skills": "npm --workspace=@wick-fe/agents-skills run dev",
+    "dev:new-session": "npm --workspace=@wick-fe/agents-new-session run dev",
+    "dev:overview": "npm --workspace=@wick-fe/agents-overview run dev",
+    "dev:presets": "npm --workspace=@wick-fe/agents-presets run dev",
+    "dev:project-settings": "npm --workspace=@wick-fe/agents-project-settings run dev",
+    "dev:providers": "npm --workspace=@wick-fe/agents-providers run dev",
+    "dev:shell": "npm --workspace=@wick-fe/agents-shell run dev"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

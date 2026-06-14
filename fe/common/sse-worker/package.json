@@ -1,0 +1,7 @@
+{
+  "name": "@wick-fe/common-sse-worker",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/sse-worker.ts"
+}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { workflowAPI, type EnvField } from "$lib/api/workflow";
-  import Select from "$lib/components/shared/Select.svelte";
+  import { Select } from "@wick-fe/common-ui";
 
   type Props = { workflowID: string };
   let { workflowID }: Props = $props();

@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -36,58 +37,16 @@ type StoragePageVM struct {
 	ProviderTypes  []string
 }
 
-// storagePage renders the Provider Storage Manager page.
+// storagePage renders the providers SPA thin-shell (storage route handled client-side).
 func storagePage(c *tool.Ctx) {
 	if !requireAdmin(c) {
 		return
 	}
-	if globalSyncMgr == nil {
-		c.Error(http.StatusServiceUnavailable, "sync manager not ready")
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
-	defer cancel()
-
-	files, err := globalSyncMgr.ListAll(ctx)
-	if err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	filterProvider := c.Query("provider")
-	filterInstance := c.Query("instance")
-
-	var filtered []StorageFileVM
-	for _, f := range files {
-		if filterProvider != "" && f.ProviderType != filterProvider {
-			continue
-		}
-		if filterInstance != "" && f.InstanceName != filterInstance {
-			continue
-		}
-		filtered = append(filtered, StorageFileVM{
-			ProviderStorage: f,
-			SyncedAtFmt:     f.SyncedAt.Format("2006-01-02 15:04:05"),
-		})
-	}
-
-	types := make([]string, 0)
-	seen := map[string]bool{}
-	for _, t := range provider.SupportedTypes() {
-		k := string(t)
-		if !seen[k] {
-			types = append(types, k)
-			seen[k] = true
-		}
-	}
-
-	c.JSON(http.StatusOK, StoragePageVM{
-		Base:           c.Base(),
-		Files:          filtered,
-		FilterProvider: filterProvider,
-		FilterInstance: filterInstance,
-		ProviderTypes:  types,
-	})
+	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
+		Layout:   sidebarVM(c, "providers", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("providers"),
+	}))
 }
 
 // storageRestoreSelected restores selected file IDs to filesystem.

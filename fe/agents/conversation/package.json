@@ -1,0 +1,21 @@
+{
+  "name": "@wick-fe/agents-conversation",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:watch": "vite build --watch",
+    "preview": "vite preview",
+    "check": "tsc --noEmit && vite build",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@wick-fe/common-api": "*",
+    "@wick-fe/common-md": "*",
+    "@wick-fe/common-sse-worker": "*",
+    "@wick-fe/common-stores": "*",
+    "@wick-fe/common-ui": "*"
+  }
+}

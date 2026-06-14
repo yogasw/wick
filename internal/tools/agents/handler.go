@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,19 +24,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
-	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
-	agentstore "github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/skills"
+	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/processctl"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -207,6 +208,33 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)
 
+	// JSON API — overview SPA endpoint.
+	r.GET("/api/overview", apiOverview)
+
+	// JSON API — conversation SPA endpoints.
+	r.GET("/api/sessions", apiSessionList)
+	r.GET("/api/sessions/{id}/conversation", apiSessionConversation)
+	r.GET("/api/sessions/{id}/meta", apiSessionMeta)
+
+	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
+	r.GET("/api/skills", apiSkillsList)
+	r.GET("/api/skills/{name}", apiSkillDetail)
+	r.GET("/api/skills/{folder}/files/{file...}", apiSkillFolderFileDetail)
+	r.GET("/api/skills/{provider}/{path...}", apiSkillProviderPath)
+
+	// JSON API — presets SPA endpoints.
+	r.GET("/api/presets", apiPresetList)
+	r.GET("/api/presets/{name}", apiPresetDetail)
+
+	// JSON API — project-settings SPA endpoints.
+	r.GET("/api/projects/{id}", apiProjectDetail)
+	r.POST("/api/projects/{id}", apiProjectUpdate)
+
+	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
+	r.GET("/api/providers", apiProvidersList)
+	r.GET("/api/providers/storage", apiProvidersStorage)
+	r.GET("/api/providers/{type}/{name}", apiProviderDetail)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 
@@ -237,6 +265,8 @@ func Register(r tool.Router) {
 	// /projects/{id} is the per-project settings page.
 	r.GET("/projects", projectsRedirect) // legacy entry → all chats
 	r.GET("/projects/options", projectOptionsJSON)
+	r.GET("/providers/options", providerOptionsJSON)
+	r.GET("/presets/options", presetOptionsJSON)
 	r.GET("/projects/{id}", projectSettingsPage)
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
@@ -477,6 +507,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		ProjectCounts:    counts,
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
+		ShellAssetURL:    spaAssetURL("shell"),
 	}
 }
 
@@ -552,6 +583,17 @@ func notReady(c *tool.Ctx) bool {
 	return false
 }
 
+// idleTimeoutMs returns the configured agents idle timeout in milliseconds.
+// Falls back to 120 000 ms when globalConfigs is unavailable or the key is unset.
+func idleTimeoutMs() int {
+	if globalConfigs != nil {
+		if n, err := strconv.Atoi(globalConfigs.GetOwned("agents", "idle_timeout_sec")); err == nil && n > 0 {
+			return n * 1000
+		}
+	}
+	return 120 * 1000
+}
+
 // ownsSession reports whether the caller may access sess. App owners see
 // all sessions; regular users may only access sessions they own or legacy
 // sessions that have no recorded owner (UserID=="").
@@ -602,16 +644,30 @@ func ensurePersonalProjectForUser(c *tool.Ctx) {
 	}
 }
 
-// newSessionCompose renders the compose page: provider/preset/workspace
-// pickers + a textarea for the first message. No session is persisted
-// here — that only happens in startNewSession when the form posts back
-// with a non-empty message.
+// newSessionCompose renders the Svelte compose SPA shell. No session is
+// persisted here — that only happens in startNewSession when the SPA POSTs
+// back with a non-empty message.
 func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	ensurePersonalProjectForUser(c)
-	renderCompose(c, "", "")
+	scoped := c.Query("project")
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
+	}
+	if scoped == "" {
+		scoped = pinnedProjectID(c)
+	}
+	layout := sidebarVMScoped(c, "new", "", scoped)
+	layout.FullBleed = true
+	c.HTML(view.NewSessionSPA(view.NewSessionSPAVM{
+		Layout:   layout,
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("new-session"),
+	}))
 }
 
 // startNewSession is the compose form's POST target. It creates the
@@ -769,56 +825,10 @@ func overviewPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	// Active = sessions whose subprocess is still alive in the pool
-	// (any lifecycle except killed). Cap at 5; rest live in /sessions.
-	active := globalPool.ActiveSnapshot()
-	const activeCap = 5
-	lc := make(map[string]view.SessionLifecycleVM, len(active))
-	activeIDs := make([]string, 0, len(active))
-	for _, e := range active {
-		entry := view.SessionLifecycleVM{
-			Lifecycle: e.Lifecycle,
-			PID:       e.PID,
-		}
-		if !e.LastActive.IsZero() {
-			entry.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		lc[e.SessionID] = entry
-		if len(activeIDs) < activeCap {
-			activeIDs = append(activeIDs, e.SessionID)
-		}
-	}
-	queue := globalPool.QueueSnapshot()
-	now := time.Now()
-	projects := globalMgr.Registry().Projects()
-	queued := make([]view.QueuedEntryVM, len(queue))
-	for i, q := range queue {
-		projName := ""
-		if s, ok := globalMgr.Registry().Session(q.SessionID); ok && s.Meta.ProjectID != "" {
-			if p, ok := projects[s.Meta.ProjectID]; ok {
-				projName = p.Meta.Name
-			}
-		}
-		queued[i] = view.QueuedEntryVM{
-			SessionID: q.SessionID,
-			AgentName: q.AgentName,
-			WaitingMs: now.Sub(q.Enqueued).Milliseconds(),
-			Label:     loadFirstUserMessage(globalLayout, q.SessionID, 60),
-			Project:   projName,
-		}
-	}
-	c.HTML(view.Overview(view.OverviewVM{
-		Layout:        sidebarVM(c, "overview", ""),
-		Base:          c.Base(),
-		Active:        globalPool.Active(),
-		QueueLen:      globalPool.QueueLen(),
-		PoolMax:       globalPool.MaxConcurrent(),
-		SessionIDs:    activeIDs,
-		Sessions:      globalMgr.Registry().Sessions(),
-		Projects:      globalMgr.Registry().Projects(),
-		Lifecycle:     lc,
-		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
-		Queued:        queued,
+	c.HTML(view.OverviewSPA(view.OverviewSPAVM{
+		Layout:   sidebarVM(c, "overview", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("overview"),
 	}))
 }
 
@@ -828,99 +838,12 @@ func sessionsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	scoped := c.Query("project")
-	// Validate the scope — an unknown project id falls back to all chats.
-	if scoped != "" {
-		if _, ok := globalMgr.Registry().Project(scoped); !ok {
-			scoped = ""
-		}
-	}
-	ids := globalMgr.Registry().SessionIDs()
-	caller := login.GetUser(c.Context())
-	allSessions := globalMgr.Registry().Sessions()
-	if scoped != "" {
-		filtered := ids[:0:0]
-		for _, id := range ids {
-			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scoped {
-				filtered = append(filtered, id)
-			}
-		}
-		ids = filtered
-	}
-	if caller != nil && !caller.CanSeeAllSessions() {
-		filtered := ids[:0:0]
-		for _, id := range ids {
-			if s, ok := allSessions[id]; ok && (s.Meta.UserID == "" || s.Meta.UserID == caller.ID) {
-				filtered = append(filtered, id)
-			}
-		}
-		ids = filtered
-	}
-	// Render all rows; pagination (10/page) + search run client-side so
-	// paging never reloads the page (keeps the compose box + search text).
-	// Guard against pathological counts with a generous cap.
-	const maxRender = 1000
-	if len(ids) > maxRender {
-		ids = ids[:maxRender]
-	}
-	lc := make(map[string]view.SessionLifecycleVM)
-	for _, e := range globalPool.ActiveSnapshot() {
-		entry := view.SessionLifecycleVM{
-			Lifecycle: e.Lifecycle,
-			PID:       e.PID,
-		}
-		if !e.LastActive.IsZero() {
-			entry.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		lc[e.SessionID] = entry
-	}
-	pageLabels := make(map[string]string, len(ids))
-	for _, id := range ids {
-		pageLabels[id] = loadFirstUserMessage(globalLayout, id, 60)
-	}
-	providers := providerChoicesCached(c.Context())
-	// Build the scoped project landing composer (Claude-style: compose
-	// box on top of the chats list, defaults inherited from the project).
-	var composer view.ComposerVM
-	if scoped != "" {
-		defProv := ""
-		if len(providers) > 0 {
-			defProv = providers[0].Type
-		}
-		defPreset := ""
-		if p, ok := globalMgr.Registry().Project(scoped); ok {
-			if p.Meta.Defaults.Provider != "" {
-				defProv = p.Meta.Defaults.Provider
-			}
-			defPreset = p.Meta.Defaults.Preset
-		}
-		composer = view.ComposerVM{
-			Base:            c.Base(),
-			Providers:       providers,
-			Presets:         globalMgr.Registry().PresetNames(),
-			DefaultProvider: defProv,
-			DefaultPreset:   defPreset,
-			ScopedProjectID: scoped,
-			Scoped:          true,
-			// Project picker hidden — already in the project (binding sent
-			// as a hidden field). Matches Claude's project landing.
-			ShowProjectPicker: false,
-		}
-	}
-	c.HTML(view.SessionsList(view.SessionsListVM{
-		Layout:          sidebarVMScoped(c, "sessions", "", scoped),
-		Base:            c.Base(),
-		IDs:             ids,
-		Sessions:        allSessions,
-		Labels:          pageLabels,
-		Projects:        globalMgr.Registry().Projects(),
-		ProjectList:     globalMgr.Registry().ProjectIDs(),
-		PresetList:      globalMgr.Registry().PresetNames(),
-		Providers:       providers,
-		Lifecycle:       lc,
-		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
-		ScopedProjectID: scoped,
-		Composer:        composer,
+	c.HTML(view.Conversation(view.ConversationVM{
+		Layout:        sidebarVM(c, "sessions", ""),
+		Base:          c.Base(),
+		AssetURL:      spaAssetURL("conversation"),
+		ScmAsset:      spaAssetURL("scm"),
+		IdleTimeoutMs: idleTimeoutMs(),
 	}))
 }
 
@@ -970,106 +893,14 @@ func sessionDetail(c *tool.Ctx) {
 		c.NotFound()
 		return
 	}
-	tab := c.Query("tab")
-	if tab == "" {
-		tab = "conversation"
-	}
-	var turns []view.TurnVM
-	var cmdLines []string
-	switch tab {
-	case "conversation":
-		raw, err := loadConversation(globalLayout, id)
-		if err != nil {
-			log.Ctx(c.Context()).Error().Msgf("load conversation %s: %s", id, err.Error())
-		}
-		for _, t := range raw {
-			vm := view.TurnVM{
-				TurnID:      t.TurnID,
-				Role:        t.Role,
-				Agent:       t.Agent,
-				Provider:    t.Provider,
-				Text:        t.Text,
-				Truncated:   t.Truncated,
-				Interrupted: t.Interrupted,
-				HasTrace:    t.HasTrace,
-				Time:        t.Timestamp,
-			}
-			// Legacy: old turns that inlined events are still rendered inline.
-			for _, e := range t.Events {
-				vm.Events = append(vm.Events, view.TurnEventVM{
-					Type:      e.Type,
-					ToolName:  e.ToolName,
-					ToolInput: e.ToolInput,
-					ToolUseID: e.ToolUseID,
-					IsError:   e.IsError,
-					Text:      e.Text,
-				})
-			}
-			for _, a := range t.Attachments {
-				// IsImage must match the server's inline-serve whitelist
-				// (imageMIMEAllowed) — SVG / generic image/* types are
-				// served as attachments, so rendering them via <img> would
-				// just produce a broken icon.
-				vm.Attachments = append(vm.Attachments, view.AttachmentVM{
-					Name:    a.Name,
-					URL:     a.URL,
-					MIME:    a.MIME,
-					Size:    a.Size,
-					IsImage: imageMIMEAllowed[a.MIME],
-				})
-			}
-			turns = append(turns, vm)
-		}
-	case "commands":
-		lines, err := loadCommands(globalLayout, id)
-		if err != nil {
-			log.Ctx(c.Context()).Error().Msgf("load commands %s: %s", id, err.Error())
-		}
-		cmdLines = lines
-	}
-	gs := GetGateStatus()
-	activeProv := ""
-	if len(sess.Agents) > 0 {
-		activeProv = sess.Agents[0].Provider
-	}
-	vm := view.SessionDetailVM{
-		Layout:          sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
-		Base:            c.Base(),
-		Session:         sess,
-		Tab:             tab,
-		Turns:           turns,
-		CmdLines:        cmdLines,
-		IdleTimeoutMs:   globalPool.IdleTimeout().Milliseconds(),
-		Providers:       providerChoicesCached(c.Context()),
-		ActiveProvider:  activeProv,
-		Projects:        globalMgr.Registry().Projects(),
-		ProjectList:     globalMgr.Registry().ProjectIDs(),
-		ActiveProjectID: sess.Meta.ProjectID,
-		SCMAssetURL:     spaAssetURL("scm"),
-		Gate: view.GateStatusVM{
-			Enabled: gs.Enabled,
-			Binary:  gs.Binary,
-			Source:  gs.Source,
-			Reason:  gs.Reason,
-		},
-	}
-	for _, e := range globalPool.ActiveSnapshot() {
-		if e.SessionID != id {
-			continue
-		}
-		vm.Lifecycle = e.Lifecycle
-		vm.PID = e.PID
-		if !e.LastActive.IsZero() {
-			vm.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		break
-	}
-	// Chat is a full-height app surface — skip the layout's px-6 py-6
-	// gutter so the composer sits flush at the viewport bottom (no
-	// leftover padding to fight the keyboard) and the overlay header
-	// aligns to the true top instead of being shifted by a -mt-6 hack.
-	vm.Layout.FullBleed = true
-	c.HTML(view.SessionDetail(vm))
+	c.HTML(view.Conversation(view.ConversationVM{
+		Layout:         sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
+		Base:           c.Base(),
+		AssetURL:       spaAssetURL("conversation"),
+		ScmAsset:       spaAssetURL("scm"),
+		InitialSession: id,
+		IdleTimeoutMs:  idleTimeoutMs(),
+	}))
 }
 
 type switchProviderReq struct {
@@ -1609,63 +1440,26 @@ func toggleProjectPin(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "ok", "pinned": pinned != "", "project_id": pinned})
 }
 
-// projectSettingsPage renders the full project settings page (mockup ④)
-// for an existing project, or the create form when id == "new".
+// projectSettingsPage renders the project-settings SPA shell for an existing
+// project or the create form when id == "new". Data is served via the JSON
+// API endpoint GET /api/projects/{id}.
 func projectSettingsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	id := c.PathValue("id")
-	vm := view.ProjectSettingsVM{
-		Layout:     sidebarVM(c, "projects", ""),
-		Base:       c.Base(),
-		PresetList: globalMgr.Registry().PresetNames(),
-		Managed:    true,
-	}
-	if id == "new" {
-		vm.IsNew = true
-		vm.Icon = "📁"
-		vm.DefaultPreset = "default"
-		vm.DefaultProvider = "claude"
-		vm.Action = c.Base() + "/projects"
-		c.HTML(view.ProjectSettingsPage(vm))
-		return
-	}
-	p, ok := globalMgr.Registry().Project(id)
-	if !ok {
-		c.NotFound()
-		return
-	}
-	vm.ID = id
-	vm.Name = p.Meta.Name
-	vm.Icon = p.Meta.Icon
-	vm.Description = p.Meta.Description
-	vm.CustomPath = p.Meta.CustomPath
-	vm.Managed = p.Meta.CustomPath == ""
-	vm.IsDefault = p.Meta.Name == project.DefaultName
-	vm.DefaultPreset = p.Meta.Defaults.Preset
-	vm.DefaultProvider = p.Meta.Defaults.Provider
-	vm.SystemAddon = p.Meta.Defaults.SystemAddon
-	vm.CreatedAt = p.Meta.CreatedAt.Format("2006-01-02")
-	vm.Action = c.Base() + "/projects/" + id
-	// Session count + pinned labels.
-	for sid, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.ProjectID == id {
-			vm.ChatCount++
+	if id != "new" {
+		if _, ok := globalMgr.Registry().Project(id); !ok {
+			c.NotFound()
+			return
 		}
-		_ = sid
 	}
-	for _, pinID := range p.Meta.PinnedSessions {
-		label := loadFirstUserMessage(globalLayout, pinID, 50)
-		if label == "" {
-			label = pinID
-		}
-		vm.Pinned = append(vm.Pinned, view.PinnedSessionVM{ID: pinID, Label: label})
-	}
-	if b, err := json.MarshalIndent(p.Meta, "", "  "); err == nil {
-		vm.MetaJSON = string(b)
-	}
-	c.HTML(view.ProjectSettingsPage(vm))
+	c.HTML(view.ProjectSettingsSPA(view.ProjectSettingsSPAVM{
+		Layout:    sidebarVM(c, "projects", ""),
+		Base:      c.Base(),
+		ProjectID: id,
+		AssetURL:  spaAssetURL("project-settings"),
+	}))
 }
 
 // projectOptionsJSON returns [{id, name, path}] for every project —
@@ -1675,18 +1469,56 @@ func projectOptionsJSON(c *tool.Ctx) {
 		return
 	}
 	type option struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Path string `json:"path"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		Managed bool   `json:"managed"`
 	}
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
+		managed := p.Meta.CustomPath == ""
 		path := p.Meta.CustomPath
 		if path == "" {
 			path = globalLayout.ProjectManagedPath(id)
 		}
-		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path})
+		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path, Managed: managed})
+	}
+	c.JSON(http.StatusOK, opts)
+}
+
+// providerOptionsJSON returns [{type, name, version}] for every healthy
+// provider — consumed by the composer's provider selector in the SPA.
+func providerOptionsJSON(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	type option struct {
+		Type    string `json:"type"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	ps := providerChoicesCached(c.Context())
+	opts := make([]option, 0, len(ps))
+	for _, p := range ps {
+		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version})
+	}
+	c.JSON(http.StatusOK, opts)
+}
+
+// presetOptionsJSON returns [{name}] for every configured preset —
+// consumed by the new-session compose SPA's preset selector.
+func presetOptionsJSON(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	type option struct {
+		Name string `json:"name"`
+	}
+	names := globalMgr.Registry().PresetNames()
+	opts := make([]option, 0, len(names))
+	for _, n := range names {
+		opts = append(opts, option{Name: n})
 	}
 	c.JSON(http.StatusOK, opts)
 }
@@ -1813,10 +1645,10 @@ func presetsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	c.HTML(view.PresetsPage(view.PresetsVM{
-		Layout: sidebarVM(c, "presets", ""),
-		Base:   c.Base(),
-		Names:  globalMgr.Registry().PresetNames(),
+	c.HTML(view.PresetsSPA(view.PresetsSPAVM{
+		Layout:   sidebarVM(c, "presets", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("presets"),
 	}))
 }
 
@@ -1824,17 +1656,10 @@ func presetDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	name := c.PathValue("name")
-	p, err := preset.Load(globalLayout, name)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-	c.HTML(view.PresetEditor(view.PresetDetailVM{
-		Layout: sidebarVM(c, "presets", ""),
-		Base:   c.Base(),
-		Name:   p.Name,
-		Body:   p.Body,
+	c.HTML(view.PresetsSPA(view.PresetsSPAVM{
+		Layout:   sidebarVM(c, "presets", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("presets"),
 	}))
 }
 

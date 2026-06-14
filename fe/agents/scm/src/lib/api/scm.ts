@@ -1,7 +1,7 @@
 // SCM API — git source control for a session's working directory.
 // All endpoints live under the agents tool mount and are session-scoped.
 
-import { apiGet, apiPost } from "./client";
+import { apiGet, apiPost } from "@wick-fe/common-api";
 
 const BASE = "/tools/agents";
 
