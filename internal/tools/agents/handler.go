@@ -250,6 +250,7 @@ func Register(r tool.Router) {
 	r.GET("/projects", projectsRedirect) // legacy entry → all chats
 	r.GET("/projects/options", projectOptionsJSON)
 	r.GET("/providers/options", providerOptionsJSON)
+	r.GET("/presets/options", presetOptionsJSON)
 	r.GET("/projects/{id}", projectSettingsPage)
 	r.POST("/projects", createProject)
 	r.POST("/projects/{id}", updateProject)
@@ -626,16 +627,30 @@ func ensurePersonalProjectForUser(c *tool.Ctx) {
 	}
 }
 
-// newSessionCompose renders the compose page: provider/preset/workspace
-// pickers + a textarea for the first message. No session is persisted
-// here — that only happens in startNewSession when the form posts back
-// with a non-empty message.
+// newSessionCompose renders the Svelte compose SPA shell. No session is
+// persisted here — that only happens in startNewSession when the SPA POSTs
+// back with a non-empty message.
 func newSessionCompose(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	ensurePersonalProjectForUser(c)
-	renderCompose(c, "", "")
+	scoped := c.Query("project")
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
+	}
+	if scoped == "" {
+		scoped = pinnedProjectID(c)
+	}
+	layout := sidebarVMScoped(c, "new", "", scoped)
+	layout.FullBleed = true
+	c.HTML(view.NewSessionSPA(view.NewSessionSPAVM{
+		Layout:   layout,
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("new-session"),
+	}))
 }
 
 // startNewSession is the compose form's POST target. It creates the
@@ -1553,6 +1568,23 @@ func providerOptionsJSON(c *tool.Ctx) {
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
 		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version})
+	}
+	c.JSON(http.StatusOK, opts)
+}
+
+// presetOptionsJSON returns [{name}] for every configured preset —
+// consumed by the new-session compose SPA's preset selector.
+func presetOptionsJSON(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	type option struct {
+		Name string `json:"name"`
+	}
+	names := globalMgr.Registry().PresetNames()
+	opts := make([]option, 0, len(names))
+	for _, n := range names {
+		opts = append(opts, option{Name: n})
 	}
 	c.JSON(http.StatusOK, opts)
 }
