@@ -10,6 +10,29 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.1](https://github.com/yogasw/wick/compare/v0.18.0...v0.18.1) — GitHub Connector
+
+_Released on 2026-06-14_
+
+### Added
+*   **GitHub Connector Enhancements**:
+    *   **Pull Request Operations**: Introduced new operations including `get_pr_diff` (fetching a PR's unified diff), `merge_pr`, `create_pr`, and `create_or_update_file` (committing a single file, supporting both creation and updates with automatic blob SHA lookup).
+    *   **Expanded GitHub API Coverage**: Added comprehensive operations for:
+        *   **Repositories**: `get_repo`, `list_branches`, `list_commits`, `list_forks`, `create_fork`, `list_stargazers`, `star_repo`, `unstar_repo`.
+        *   **Issues**: `get_issue`, `update_issue`, `list_issue_comments`.
+        *   **Pull Requests**: `get_pr`, `list_pr_files`, `update_pr`.
+        *   **Releases**: `list_releases`, `get_latest_release`, `get_release`, `create_release`, `update_release`, `delete_release`.
+        *   **Tags**: `list_tags`.
+        *   **User**: `get_me`.
+    *   **Health Check**: Integrated a token-based `HealthCheck` for the connector (`GET /user`), providing an "auth" `OpHealth` entry.
+    *   **Documentation**: Added comprehensive documentation for the full operation set, health check, and required OAuth scopes.
+
+### Changed
+*   Renamed the `install-rtk-termux.sh` script.
+
+---
+
+
 ## [v0.18.0](https://github.com/yogasw/wick/compare/v0.17.0...v0.18.0) — Core & Admin
 
 _Released on 2026-06-14_
