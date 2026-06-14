@@ -6,7 +6,7 @@
   // it mounts inside this component and the layout/positions feed into
   // its API rather than absolute `<div style>`.
   import { draftWorkflow, selectedNodeID, selectedNodeIDs, updateNode, addNode, removeNode, removeTrigger, disconnect, setEdgeCase, paletteOpen, paletteAddRequest, detailNodeID, detailTriggerID, runStatusByNode, validationReport, triggerRunStatus, lastFiredTriggerID, pinnedTriggerID, loadPinnedTrigger, savePinnedTrigger, setLockedField, searchOpen } from "$lib/stores/editor";
-  import { toastError } from "$lib/stores/toast";
+  import { toastError } from "@wick-fe/common-stores";
   import { get } from "svelte/store";
 
   // Resolve a validation issue's Path/Message back to the node it
@@ -87,7 +87,7 @@
   import { workflowAPI, type PaletteDrag } from "$lib/api/workflow";
   import { componentFor } from "./nodes";
   import TriggerNode from "./nodes/TriggerNode.svelte";
-  import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
+  import { ConfirmDialog } from "@wick-fe/common-ui";
   import SearchOverlay from "./SearchOverlay.svelte";
   import type { NodeType, Edge } from "$lib/types/workflow";
 

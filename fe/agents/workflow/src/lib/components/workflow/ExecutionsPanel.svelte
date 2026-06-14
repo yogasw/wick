@@ -9,7 +9,7 @@
   import RunListItem from "./executions/RunListItem.svelte";
   import RunDetail from "./executions/RunDetail.svelte";
   import { runKey } from "./executions/runHelpers";
-  import { toastError, toastOk } from "$lib/stores/toast";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
 
   type Props = {
     workflowID: string;

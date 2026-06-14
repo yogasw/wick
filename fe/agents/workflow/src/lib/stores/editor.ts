@@ -1,8 +1,8 @@
 import { writable, derived, get } from "svelte/store";
 import type { Workflow, Node, Edge, Trigger } from "$lib/types/workflow";
 import { workflowAPI, type ValidationReport, type ValidationIssue, type WorkflowState, type PaletteDrag } from "$lib/api/workflow";
-import { APIError } from "$lib/api/client";
-import { toastError, toastOk } from "./toast";
+import { APIError } from "@wick-fe/common-api";
+import { toastError, toastOk } from "@wick-fe/common-stores";
 
 // Decorate raw {Path, Message} issues with severity + node so consumers
 // (toolbar chip, ValidationTab) don't repeat the extraction logic.

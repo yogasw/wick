@@ -4,7 +4,7 @@
   // replay-to-editor, export JSON. "Replay" navigates back to the
   // editor with the firing trigger pre-pinned (per the team rule:
   // replay = navigate, never auto-execute).
-  import { toastError, toastOk } from "$lib/stores/toast";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
   import { downloadJSON, triggerIDOf } from "./runHelpers";
 
   type Props = {

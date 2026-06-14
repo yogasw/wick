@@ -20,7 +20,7 @@
   import { inferSchema } from "./fields/jsonSchema";
   import { catalog } from "$lib/stores/catalog";
   import { workflowAPI } from "$lib/api/workflow";
-  import { toastError } from "$lib/stores/toast";
+  import { toastError } from "@wick-fe/common-stores";
   import type { Node } from "$lib/types/workflow";
   import ArgField from "./fields/ArgField.svelte";
   import KvListField from "./fields/KvListField.svelte";

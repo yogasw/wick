@@ -32,7 +32,7 @@
     $lastSavedAt ? fmtAgo(now - $lastSavedAt) : "",
   );
   import { workflowAPI } from "$lib/api/workflow";
-  import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
+  import { ConfirmDialog } from "@wick-fe/common-ui";
   import type { Writable } from "svelte/store";
 
   // EditorShell hoists the top-level Editor / Executions toggle and

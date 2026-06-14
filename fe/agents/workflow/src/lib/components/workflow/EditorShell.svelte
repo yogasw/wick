@@ -7,7 +7,7 @@
   import BottomTabs from "./BottomTabs.svelte";
   import ExecutionsPanel from "./ExecutionsPanel.svelte";
   import SettingsModal from "./SettingsModal.svelte";
-  import ToastHost from "$lib/components/shared/ToastHost.svelte";
+  import { ToastHost } from "@wick-fe/common-ui";
   import { writable } from "svelte/store";
 
   // Top-level tab toggle between Editor / Executions.
@@ -30,7 +30,7 @@
     savePinnedTrigger,
     searchOpen,
   } from "$lib/stores/editor";
-  import { toastOk } from "$lib/stores/toast";
+  import { toastOk } from "@wick-fe/common-stores";
   import { get } from "svelte/store";
   import { loadCatalog } from "$lib/stores/catalog";
   import { connectSSE, disconnectSSE } from "$lib/stores/sse";

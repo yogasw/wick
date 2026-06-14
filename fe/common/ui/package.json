@@ -5,6 +5,12 @@
   "type": "module",
   "main": "src/index.ts",
   "svelte": "src/index.ts",
+  "exports": {
+    ".": {
+      "svelte": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
   "dependencies": {
     "@wick-fe/common-stores": "*"
   },
