@@ -46,7 +46,9 @@ function send<T>(
 ): Effect.Effect<T, APIError, HttpClient.HttpClient> {
   return Effect.scoped(
     Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
+      const client = (yield* HttpClient.HttpClient).pipe(
+        HttpClient.mapRequest(HttpClientRequest.setHeader("Accept", "application/json")),
+      );
       const response = yield* exec(client);
       if (response.status < 200 || response.status >= 300) {
         const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));

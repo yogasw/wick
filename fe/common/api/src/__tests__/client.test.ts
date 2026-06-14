@@ -89,3 +89,20 @@ describe("Promise-compat layer", () => {
     expect(typeof apiGet).toBe("function");
   });
 });
+
+describe("Accept header", () => {
+  test("sends Accept: application/json on every request", async () => {
+    let acceptHeader: string | undefined;
+    const capturingLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        acceptHeader = req.headers["accept"];
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(req, new Response(JSON.stringify({ ok: true }), { status: 200 })),
+        );
+      }),
+    );
+    await Effect.runPromise(apiGetE("/api/test").pipe(Effect.provide(capturingLayer)));
+    expect(acceptHeader).toBe("application/json");
+  });
+});
