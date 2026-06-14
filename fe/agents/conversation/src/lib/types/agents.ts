@@ -1,3 +1,30 @@
+export type AskOption = { label: string; value: string; description?: string };
+
+export type AskField = {
+  key: string;
+  label?: string;
+  help?: string;
+  type: "rank" | "choice" | "multi" | "dropdown" | "text" | "secret" | "number" | string;
+  required?: boolean;
+  options?: AskOption[];
+  allow_freeform?: boolean;
+  placeholder?: string;
+  value?: string;
+};
+
+export type AskRequest = {
+  id: string;
+  question?: string;
+  options?: AskOption[];
+  fields?: AskField[];
+  allow_freeform?: boolean;
+};
+
+export type AskAnswer =
+  | { id: string; value: string }
+  | { id: string; text: string }
+  | { id: string; values: Record<string, string> };
+
 export type SessionListItem = {
   id: string;
   label: string;
