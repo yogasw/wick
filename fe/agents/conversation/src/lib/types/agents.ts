@@ -113,6 +113,17 @@ export type ContextFileEntry = {
   mtime: number;
 };
 
+export type ProcessInfo = {
+  session_id: string;
+  agent_name: string;
+  provider: string;
+  pid: number;
+  queued: number;
+  lifecycle: string;
+  substate?: string;
+  alive: boolean;
+};
+
 export type FileContent = {
   path: string;
   size: number;
