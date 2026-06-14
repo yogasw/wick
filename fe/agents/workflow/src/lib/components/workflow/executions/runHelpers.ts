@@ -128,8 +128,19 @@ export function kindLabel(kind: RunKind): string {
 // triggerIDOf extracts the trigger id that fired a run, looking in
 // the spots the backend writes it. Used by the replay action so the
 // editor can re-pin that trigger on switch.
+//
+// The canonical location is event.trigger_id (workflow.Event.TriggerID,
+// see types.go) — that's where webhook/cron/channel runs stamp it. Older
+// manual (spa) runs put it inside event.payload.trigger_id instead, and a
+// flattened top-level trigger_id is checked as a last resort. Webhook runs
+// in particular keep the envelope ({body,headers,…}) in payload with NO
+// trigger_id there, so event.trigger_id must be checked first or replay
+// silently pins nothing.
 export function triggerIDOf(runDetail: any | null | undefined): string | null {
   if (!runDetail) return null;
+  if (typeof runDetail.event?.trigger_id === "string") {
+    return runDetail.event.trigger_id;
+  }
   if (typeof runDetail.event?.payload?.trigger_id === "string") {
     return runDetail.event.payload.trigger_id;
   }
@@ -137,6 +148,15 @@ export function triggerIDOf(runDetail: any | null | undefined): string | null {
     return runDetail.trigger_id;
   }
   return null;
+}
+
+// eventPayloadOf extracts the event payload the trigger received for a
+// run, so Replay can surface it in the trigger inspector's OUTPUT pane.
+// The backend stores it at runDetail.event.payload (see run state.json);
+// returns null when the run predates payload capture or none landed.
+export function eventPayloadOf(runDetail: any | null | undefined): unknown {
+  if (!runDetail) return null;
+  return runDetail.event?.payload ?? null;
 }
 
 // downloadJSON writes the given JSON payload as a file named

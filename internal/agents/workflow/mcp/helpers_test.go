@@ -107,6 +107,44 @@ func TestTemplateTestSimpleRender(t *testing.T) {
 	}
 }
 
+// TestTemplateTestExpressionsBatch covers the per-expression breakdown:
+// one round-trip evaluates each expression against the same context. The
+// FE used to fire N parallel calls and trip the rate limiter (every row
+// came back 429 → "nil/error" while the combined render succeeded).
+func TestTemplateTestExpressionsBatch(t *testing.T) {
+	m := &Ops{}
+	ctx := `{"Event":{"type":"webhook","payload":{"body":{"repository":{"full_name":"yogasw/wick"},"pull_request":{"number":716}}}}}`
+	res, err := m.TemplateTest(TemplateTestInput{
+		Template: "https://api.github.com/repos/{{.Event.Payload.body.repository.full_name}}/pulls/{{.Event.Payload.body.pull_request.number}}",
+		Context:  ctx,
+		Expressions: []string{
+			"{{.Event.Payload.body.repository.full_name}}",
+			"{{.Event.Payload.body.pull_request.number}}",
+			"{{.Event.Payload.body.missing.thing}}",
+		},
+	})
+	if err != nil {
+		t.Fatalf("TemplateTest: %v", err)
+	}
+	if !res.OK || res.Rendered != "https://api.github.com/repos/yogasw/wick/pulls/716" {
+		t.Fatalf("combined render wrong: ok=%v rendered=%q", res.OK, res.Rendered)
+	}
+	if len(res.Results) != 3 {
+		t.Fatalf("want 3 expression results, got %d", len(res.Results))
+	}
+	if !res.Results[0].OK || res.Results[0].Rendered != "yogasw/wick" {
+		t.Fatalf("expr 0: %+v", res.Results[0])
+	}
+	if !res.Results[1].OK || res.Results[1].Rendered != "716" {
+		t.Fatalf("expr 1: %+v", res.Results[1])
+	}
+	// missing.thing → .missing is nil, .thing on nil errors. The row must
+	// carry that error WITHOUT failing the combined render above.
+	if res.Results[2].OK {
+		t.Fatalf("expr 2 should fail (nil .missing.thing): %+v", res.Results[2])
+	}
+}
+
 func TestTemplateTestSampleEvent(t *testing.T) {
 	m := &Ops{}
 	res, err := m.TemplateTest(TemplateTestInput{
@@ -133,23 +171,17 @@ func TestTemplateTestMissingKeyHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TemplateTest: %v", err)
 	}
-	if res.OK {
-		t.Fatalf("expected OK=false on missing key")
+	// Engine now uses missingkey=zero (a webhook body without an optional
+	// field must not fail the run), so a missing map key renders the zero
+	// value ("<no value>" for map[string]any) instead of erroring. The
+	// did-you-mean hint only fired on the old missingkey=error path, so it
+	// no longer triggers here. Preview surfaces the empty value instead —
+	// the per-expression table shows it as "(empty)".
+	if !res.OK {
+		t.Fatalf("missingkey=zero should render rather than fail: %+v", res)
 	}
-	if len(res.AvailableKeys) == 0 {
-		t.Fatalf("expected available_keys to be populated")
-	}
-	foundChannelID := false
-	for _, k := range res.AvailableKeys {
-		if k == "channel_id" {
-			foundChannelID = true
-		}
-	}
-	if !foundChannelID {
-		t.Fatalf("available_keys should include channel_id: %v", res.AvailableKeys)
-	}
-	if res.Hint == "" {
-		t.Fatalf("expected did-you-mean hint (channel → channel_id)")
+	if res.Rendered != "<no value>" {
+		t.Fatalf("missing key on map renders <no value>, got %q", res.Rendered)
 	}
 }
 

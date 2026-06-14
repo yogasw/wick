@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -443,6 +444,21 @@ func spaWorkflowLock(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"ok": true, "locked": body.Locked})
 }
 
+// runNowPayload picks the event payload for a manual Execute. When the
+// caller supplied one (Replay-to-editor sends a past run's event.payload),
+// it fires with that data verbatim so node templates ({{.Event.Payload.x}})
+// resolve to the real run's fields — n8n-style retry-with-pinned-input.
+// On a plain Execute (no replay) it synthesizes a provenance placeholder.
+func runNowPayload(supplied map[string]any, triggerID string) map[string]any {
+	if supplied != nil {
+		return supplied
+	}
+	return map[string]any{
+		"source":     "spa",
+		"trigger_id": triggerID,
+	}
+}
+
 func spaWorkflowRunNow(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -455,6 +471,13 @@ func spaWorkflowRunNow(c *tool.Ctx) {
 	// than what's visible in the UI.
 	var body struct {
 		TriggerID string `json:"trigger_id"`
+		// Payload is an optional event payload to fire with. The editor's
+		// Replay-to-editor flow sends a past run's event.payload here so
+		// Execute re-runs the workflow against the SAME data the run saw —
+		// n8n-style "retry with pinned input" so {{.Event.Payload.x}}
+		// resolves to real values instead of the synthetic placeholder.
+		// Omitted on a plain Execute (no replay) → synthetic payload below.
+		Payload map[string]any `json:"payload,omitempty"`
 	}
 	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil && err != io.EOF {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -486,12 +509,9 @@ func spaWorkflowRunNow(c *tool.Ctx) {
 		return
 	}
 	evt := wf.Event{
-		Type: string(picked.Type),
-		At:   time.Now().UTC(),
-		Payload: map[string]any{
-			"source":     "spa",
-			"trigger_id": body.TriggerID,
-		},
+		Type:    string(picked.Type),
+		At:      time.Now().UTC(),
+		Payload: runNowPayload(body.Payload, body.TriggerID),
 	}
 	if err := globalWorkflowMgr.MCP.RunNowWith(c.Context(), id, &w, evt); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -731,9 +751,10 @@ func spaTemplateTest(c *tool.Ctx) {
 	templateTestRL.mu.Unlock()
 
 	var body struct {
-		Template    string `json:"template"`
-		SampleEvent string `json:"sample_event"`
-		Context     string `json:"context"`
+		Template    string   `json:"template"`
+		SampleEvent string   `json:"sample_event"`
+		Context     string   `json:"context"`
+		Expressions []string `json:"expressions"`
 	}
 	if err := c.BindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -744,6 +765,7 @@ func spaTemplateTest(c *tool.Ctx) {
 		Template:    body.Template,
 		SampleEvent: body.SampleEvent,
 		Context:     body.Context,
+		Expressions: body.Expressions,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -809,6 +831,26 @@ func spaAutoLayout(c *tool.Ctx) {
 // a raw wf.Node JSON object (not a drawflow node blob) so the v2
 // inspector doesn't need to round-trip through the legacy codec.
 //
+// nilNodeRefRe matches a Go text/template nil-pointer panic on a
+// .Node.<label> reference, e.g.:
+//
+//	executing "node" at <.Node.analyze.text>: nil pointer evaluating interface {}.text
+//
+// Captures the node label so the caller can name the un-run upstream node.
+var nilNodeRefRe = regexp.MustCompile(`<\.Node\.([^.>]+)\.[^>]*>: nil pointer`)
+
+// missingUpstreamNode returns the .Node.<label> whose absence caused a
+// nil-pointer pre-render error, or "" when the error isn't that shape. In
+// an isolated single-node step the upstream outputs are only present if
+// they were run / replayed; referencing one that wasn't yields this panic.
+func missingUpstreamNode(errStr string) string {
+	m := nilNodeRefRe.FindStringSubmatch(errStr)
+	if len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
 // Body shape: { node: <wf.Node JSON>, input?: <map>, event?: <map>,
 // parent_id?: <string> }. Response mirrors execNodeStep so the
 // Output pane of the modal can render either result interchangeably.
@@ -900,6 +942,13 @@ func spaExecNode(c *tool.Ctx) {
 					break
 				}
 			}
+		}
+		// A "nil pointer evaluating interface {}.field" on a .Node.<label>
+		// ref means that upstream node has no output here — almost always
+		// because it hasn't been run in this isolated step. Replace the raw
+		// Go-template panic with an actionable message naming the node.
+		if missing := missingUpstreamNode(prerr.Error()); missing != "" {
+			errMsg = fmt.Sprintf("references {{.Node.%s.…}} but node %q has no output yet — run %q first (or replay a run that includes it), then Execute this step.", missing, missing, missing)
 		}
 		c.JSON(http.StatusBadRequest, map[string]any{"error": errMsg})
 		return
