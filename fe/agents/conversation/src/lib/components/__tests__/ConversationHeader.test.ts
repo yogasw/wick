@@ -164,20 +164,36 @@ describe("ConversationHeader", () => {
     });
 
     test("dropdown is hidden by default", () => {
-      const { container } = render(ConversationHeader, { props: baseProps });
-      expect(container.querySelector("[data-tab-dropdown]")).toBeNull();
+      render(ConversationHeader, { props: baseProps });
+      expect(document.querySelector("[data-tab-dropdown]")).toBeNull();
     });
 
     test("clicking the burger button shows the 4 tab options", async () => {
-      const { container } = render(ConversationHeader, { props: baseProps });
+      render(ConversationHeader, { props: baseProps });
       const tabBtn = screen.getByRole("button", { name: /tab menu/i });
       await fireEvent.click(tabBtn);
-      const dropdown = container.querySelector("[data-tab-dropdown]");
+      const dropdown = document.querySelector("[data-tab-dropdown]");
       expect(dropdown).not.toBeNull();
       expect(dropdown!.textContent).toContain("Conversation");
       expect(dropdown!.textContent).toContain("Commands");
       expect(dropdown!.textContent).toContain("Approvals");
       expect(dropdown!.textContent).toContain("Raw");
+    });
+
+    test("dropdown panel has fixed positioning class to escape ancestor overflow clipping", async () => {
+      render(ConversationHeader, { props: baseProps });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      const dropdown = document.querySelector("[data-tab-dropdown]") as HTMLElement;
+      expect(dropdown).not.toBeNull();
+      expect(dropdown.className).toContain("fixed");
+    });
+
+    test("dropdown panel has z-[1000] to render above all stacking contexts", async () => {
+      render(ConversationHeader, { props: baseProps });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      const dropdown = document.querySelector("[data-tab-dropdown]") as HTMLElement;
+      expect(dropdown).not.toBeNull();
+      expect(dropdown.className).toContain("z-[1000]");
     });
 
     test("clicking a tab option calls onTabChange with the correct value", async () => {
@@ -199,18 +215,34 @@ describe("ConversationHeader", () => {
       expect(onTabChange).toHaveBeenCalledWith("conversation");
     });
 
+    test("clicking a tab item closes the dropdown", async () => {
+      render(ConversationHeader, { props: baseProps });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      expect(document.querySelector("[data-tab-dropdown]")).not.toBeNull();
+      await fireEvent.click(screen.getByRole("button", { name: /^Commands$/i }));
+      expect(document.querySelector("[data-tab-dropdown]")).toBeNull();
+    });
+
+    test("Escape key closes the dropdown", async () => {
+      render(ConversationHeader, { props: baseProps });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      expect(document.querySelector("[data-tab-dropdown]")).not.toBeNull();
+      await fireEvent.keyDown(window, { key: "Escape" });
+      expect(document.querySelector("[data-tab-dropdown]")).toBeNull();
+    });
+
+    test("clicking outside the dropdown closes it", async () => {
+      render(ConversationHeader, { props: baseProps });
+      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
+      expect(document.querySelector("[data-tab-dropdown]")).not.toBeNull();
+      await fireEvent.click(document.body);
+      expect(document.querySelector("[data-tab-dropdown]")).toBeNull();
+    });
+
     test("header root element has relative positioning class to establish stacking context", () => {
       const { container } = render(ConversationHeader, { props: baseProps });
       const root = container.firstElementChild as HTMLElement;
       expect(root.className).toContain("relative");
-    });
-
-    test("dropdown panel has z-50 class so it paints above zone-2 content", async () => {
-      const { container } = render(ConversationHeader, { props: baseProps });
-      await fireEvent.click(screen.getByRole("button", { name: /tab menu/i }));
-      const dropdown = container.querySelector("[data-tab-dropdown]") as HTMLElement;
-      expect(dropdown).not.toBeNull();
-      expect(dropdown.className).toContain("z-50");
     });
   });
 });

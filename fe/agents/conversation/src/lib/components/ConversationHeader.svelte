@@ -39,8 +39,14 @@
   }: Props = $props();
 
   let tabMenuOpen = $state(false);
+  let buttonEl: HTMLButtonElement | undefined = $state();
+  let menuPos = $state({ top: 0, left: 0 });
 
   function toggleTabMenu() {
+    if (!tabMenuOpen && buttonEl) {
+      const r = buttonEl.getBoundingClientRect();
+      menuPos = { top: r.bottom + 4, left: r.left };
+    }
     tabMenuOpen = !tabMenuOpen;
   }
 
@@ -48,6 +54,30 @@
     tabMenuOpen = false;
     onTabChange?.(view);
   }
+
+  $effect(() => {
+    if (!tabMenuOpen) return;
+
+    function handleKeydown(e: KeyboardEvent) {
+      if (e.key === "Escape") tabMenuOpen = false;
+    }
+
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (buttonEl && buttonEl.contains(target)) return;
+      const menu = document.querySelector("[data-tab-dropdown]");
+      if (menu && menu.contains(target)) return;
+      tabMenuOpen = false;
+    }
+
+    window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("click", handleClick);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("click", handleClick);
+    };
+  });
 
   const statusClass = $derived(
     sseStatus === "connected"
@@ -111,8 +141,9 @@
   <!-- Left: tab dropdown burger + title + agent label -->
   <div class="flex items-center gap-2 min-w-0 flex-1">
     <!-- Tab dropdown -->
-    <div class="relative shrink-0">
+    <div class="shrink-0">
       <button
+        bind:this={buttonEl}
         type="button"
         aria-label="Tab menu"
         onclick={toggleTabMenu}
@@ -126,33 +157,6 @@
           <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path>
         </svg>
       </button>
-      {#if tabMenuOpen}
-        <div
-          data-tab-dropdown
-          class="absolute top-full left-0 mt-1 z-50 min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
-        >
-          {#each TAB_ORDER as tab}
-            <button
-              type="button"
-              aria-label={TAB_LABELS[tab]}
-              onclick={() => selectTab(tab)}
-              class={[
-                "w-full text-left px-3 py-2 text-xs transition-colors flex items-center justify-between gap-2",
-                activeView === tab
-                  ? "text-green-700 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/20"
-                  : "text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700",
-              ].join(" ")}
-            >
-              {TAB_LABELS[tab]}
-              {#if activeView === tab}
-                <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 text-green-500" fill="currentColor" aria-hidden="true">
-                  <path d="M2 6.5L5 9.5L10 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
-                </svg>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
     </div>
 
     <span class="font-semibold text-sm text-black-900 dark:text-white-100 truncate">{title}</span>
@@ -254,3 +258,32 @@
     </button>
   </div>
 </div>
+
+{#if tabMenuOpen}
+  <div
+    data-tab-dropdown
+    class="fixed z-[1000] min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
+    style="top:{menuPos.top}px; left:{menuPos.left}px;"
+  >
+    {#each TAB_ORDER as tab}
+      <button
+        type="button"
+        aria-label={TAB_LABELS[tab]}
+        onclick={() => selectTab(tab)}
+        class={[
+          "w-full text-left px-3 py-2 text-xs transition-colors flex items-center justify-between gap-2",
+          activeView === tab
+            ? "text-green-700 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/20"
+            : "text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700",
+        ].join(" ")}
+      >
+        {TAB_LABELS[tab]}
+        {#if activeView === tab}
+          <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 text-green-500" fill="currentColor" aria-hidden="true">
+            <path d="M2 6.5L5 9.5L10 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        {/if}
+      </button>
+    {/each}
+  </div>
+{/if}
