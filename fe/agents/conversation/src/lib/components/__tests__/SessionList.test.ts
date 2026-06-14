@@ -191,4 +191,31 @@ describe("SessionList", () => {
     expect(screen.getByText("Gamma chat")).toBeDefined();
     expect(screen.queryByText("Alpha chat")).toBeNull();
   });
+
+  test("renders New chat link with correct href when newChatHref is provided", () => {
+    render(SessionList, {
+      props: {
+        sessions: [SESSION_A],
+        search: "",
+        onSearch: vi.fn(),
+        onSelect: vi.fn(),
+        newChatHref: "/tools/agents/",
+      },
+    });
+    const link = screen.getByRole("link", { name: "New chat" });
+    expect(link).toBeDefined();
+    expect(link.getAttribute("href")).toBe("/tools/agents/");
+  });
+
+  test("New chat link is not rendered when newChatHref is omitted", () => {
+    render(SessionList, {
+      props: {
+        sessions: [SESSION_A],
+        search: "",
+        onSearch: vi.fn(),
+        onSelect: vi.fn(),
+      },
+    });
+    expect(screen.queryByRole("link", { name: "New chat" })).toBeNull();
+  });
 });

@@ -54,6 +54,7 @@
     <SessionList
       {sessions}
       {search}
+      newChatHref={`${base}/`}
       onSearch={(s) => { search = s; }}
       onSelect={(id) => push(`/sessions/${id}`)}
     />

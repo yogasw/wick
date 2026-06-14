@@ -6,6 +6,7 @@
     selectedId?: string;
     search: string;
     pageSize?: number;
+    newChatHref?: string;
     onSearch: (s: string) => void;
     onSelect: (id: string) => void;
     onDelete?: (id: string) => void;
@@ -16,6 +17,7 @@
     selectedId,
     search,
     pageSize = 10,
+    newChatHref,
     onSearch,
     onSelect,
     onDelete,
@@ -70,6 +72,17 @@
 </script>
 
 <div class="space-y-4">
+  {#if newChatHref}
+    <a
+      href={newChatHref}
+      class="inline-flex items-center gap-2 rounded-xl bg-green-600 hover:bg-green-700 active:bg-green-800 px-4 py-2.5 text-sm font-semibold text-white-100 transition-colors w-full justify-center"
+    >
+      <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M8 3v10M3 8h10" stroke-linecap="round"></path>
+      </svg>
+      New chat
+    </a>
+  {/if}
   <div class="relative">
     <svg
       viewBox="0 0 16 16"
