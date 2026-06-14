@@ -1,10 +1,11 @@
-// Session Workspace tab — a USER-initiated way to spin up ephemeral
-// connector instances scoped to this session (clone a base connector,
-// point it at staging, use a different key). Renders into the Workspace
-// panel of the Context slide-over (see context_panel.templ). Instances
-// POST to /sessions/{id}/workspace[/{cid}]; secrets are encrypted
+// session-workspace.js — the Session Workspace tab. A USER-initiated way
+// to spin up ephemeral connector instances scoped to this session (clone a
+// base connector, point it at staging, use a different key). Renders into
+// the Workspace panel of the Context slide-over (see context_panel.templ).
+// Instances POST to /sessions/{id}/workspace[/{cid}]; secrets are encrypted
 // server-side, never echoed back, never seen by the agent. Cards are
-// collapsible so a session with many instances stays tidy.
+// collapsible so a session with many instances stays tidy. The Workspace
+// rail tab shows a count badge of how many connectors live in it.
 (function () {
   "use strict";
 
@@ -43,12 +44,30 @@
     });
   }
 
+  // updateCount sets the Workspace rail-tab badge to the number of session
+  // connectors, mirroring the Context / Process / Source badges. Hidden at
+  // zero so an empty workspace shows no chip.
+  function updateCount(n) {
+    var badge = document.querySelector("[data-config-fab-count]");
+    if (!badge) return;
+    if (n > 0) {
+      badge.textContent = n;
+      badge.classList.remove("hidden");
+      badge.classList.add("inline-flex");
+    } else {
+      badge.classList.add("hidden");
+      badge.classList.remove("inline-flex");
+    }
+  }
+
   function render(data) {
     var box = listEl();
     if (!box) return;
     box.innerHTML = "";
     var instances = data.instances || [];
     var bases = data.bases || [];
+
+    updateCount(instances.length);
 
     instances.forEach(function (inst) { box.appendChild(instanceCard(inst)); });
 
@@ -136,12 +155,67 @@
     chevron.style.transform = isOpen ? "rotate(90deg)" : "";
     chevron.innerHTML = '<svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
     head.appendChild(chevron);
+
+    // Title group: label text + pencil. Clicking either swaps to an input
+    // (rename inline); the header's own toggle is suppressed while editing.
+    var titleWrap = document.createElement("span");
+    titleWrap.className = "flex-1 min-w-0 flex items-center gap-1.5";
     var title = document.createElement("span");
-    title.className = "flex-1 min-w-0 truncate text-sm font-medium text-black-900 dark:text-white-100";
+    title.className = "min-w-0 truncate text-sm font-medium text-black-900 dark:text-white-100";
     title.textContent = inst.label || inst.id;
-    head.appendChild(title);
+    titleWrap.appendChild(title);
+    var pencil = document.createElement("span");
+    pencil.className = "shrink-0 text-black-600 dark:text-black-700 hover:text-green-600 dark:hover:text-green-400 transition-colors cursor-pointer";
+    pencil.setAttribute("title", "Rename");
+    pencil.innerHTML = '<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M11.5 2.5l2 2L6 12l-2.5.5.5-2.5 7.5-7.5z" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
+    titleWrap.appendChild(pencil);
+    head.appendChild(titleWrap);
     head.appendChild(statusBadge(inst.status));
     card.appendChild(head);
+
+    function beginRename(ev) {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      if (titleWrap.querySelector("input")) return;
+      var cur = inst.label || "";
+      var inp = document.createElement("input");
+      inp.type = "text";
+      inp.value = cur;
+      inp.className =
+        "flex-1 min-w-0 rounded-md border border-green-500 bg-white-100 dark:bg-navy-800 px-2 py-0.5 text-sm font-medium text-black-900 dark:text-white-100 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none";
+      // Don't let clicks inside the input toggle the card.
+      inp.addEventListener("click", function (e) { e.stopPropagation(); });
+      title.classList.add("hidden");
+      pencil.classList.add("hidden");
+      titleWrap.appendChild(inp);
+      inp.focus();
+      inp.select();
+
+      var done = false;
+      function finish(save) {
+        if (done) return;
+        done = true;
+        var next = (inp.value || "").trim();
+        if (save && next && next !== cur) {
+          postJSON(wsURL("/" + encodeURIComponent(inst.id) + "/rename"), { label: next }, function (ok, msg) {
+            if (ok) { inst.label = next; title.textContent = next; }
+            restore();
+          });
+        } else {
+          restore();
+        }
+      }
+      function restore() {
+        if (inp.parentNode) inp.parentNode.removeChild(inp);
+        title.classList.remove("hidden");
+        pencil.classList.remove("hidden");
+      }
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); finish(true); }
+        else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      });
+      inp.addEventListener("blur", function () { finish(true); });
+    }
+    pencil.addEventListener("click", beginRename);
 
     var body = document.createElement("div");
     body.className = "p-3 space-y-3" + (isOpen ? "" : " hidden");
@@ -152,8 +226,11 @@
     });
 
     var inputs = {};
+    // onDirty repaints the action row (shows/hides Reset) the moment a
+    // field's value first diverges from what was loaded.
+    var onDirty = function () { updateDirtyUI(); };
     (inst.fields || []).forEach(function (f) {
-      body.appendChild(fieldRow(f, inputs));
+      body.appendChild(fieldRow(f, inputs, onDirty));
     });
 
     var err = document.createElement("p");
@@ -164,19 +241,34 @@
     testOut.className = "hidden text-xs font-medium";
     body.appendChild(testOut);
 
-    // Action row: Save / Test / Duplicate / Delete.
+    // dirtyValues returns only the fields the user actually edited. A
+    // field is "dirty" when its current value differs from the value it
+    // loaded with (tracked in fieldRow). This is the single source of
+    // truth for Save, Test, and Reset visibility — so a value the browser
+    // autofilled but the user never touched is never sent anywhere, and
+    // an unedited Test posts an empty config (server keeps the stored one).
+    function dirtyValues() {
+      var values = {};
+      Object.keys(inputs).forEach(function (k) {
+        var input = inputs[k];
+        if (input.dataset.dirty !== "1") return;
+        values[k] = (input.value || "").trim();
+      });
+      return values;
+    }
+    function anyDirty() {
+      return Object.keys(inputs).some(function (k) { return inputs[k].dataset.dirty === "1"; });
+    }
+
+    // Action row: Save / Reset / Test / Duplicate / Delete.
     var actions = document.createElement("div");
     actions.className = "flex flex-wrap items-center gap-2 pt-1";
 
     var save = primaryBtn("Save");
     save.addEventListener("click", function () {
-      var values = {};
-      Object.keys(inputs).forEach(function (k) {
-        var v = (inputs[k].value || "").trim();
-        if (v !== "") values[k] = v;
-      });
+      var values = dirtyValues();
       if (!Object.keys(values).length) {
-        showErr(err, "Nothing to save — fill at least one field.");
+        showErr(err, "Nothing to save — edit a field first.");
         return;
       }
       err.classList.add("hidden");
@@ -189,23 +281,47 @@
     });
     actions.appendChild(save);
 
+    // Reset reverts every field to the value it loaded with and clears the
+    // dirty flags. Only shown while something is dirty (updateDirtyUI).
+    var reset = ghostBtn("Reset");
+    reset.addEventListener("click", function () {
+      Object.keys(inputs).forEach(function (k) {
+        var input = inputs[k];
+        input.value = input.dataset.orig || "";
+        input.dataset.dirty = "0";
+      });
+      err.classList.add("hidden");
+      testOut.classList.add("hidden");
+      updateDirtyUI();
+    });
+    actions.appendChild(reset);
+
+    // runTest probes the connector with the config CURRENTLY on screen.
+    // Only edited fields are sent inline and overlaid on the saved config
+    // for this probe alone — never persisted. So Test always exercises
+    // what you see, with no Save-first dance and no autofill bleed-through.
     var test = ghostBtn("Test");
     test.addEventListener("click", function () {
       test.disabled = true;
+      testOut.classList.remove("hidden");
       testOut.className = "text-xs font-medium text-black-700 dark:text-black-600";
       testOut.textContent = "Testing…";
-      fetch(wsURL("/" + encodeURIComponent(inst.id) + "/test"), { method: "POST" })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (res) {
-          test.disabled = false;
-          if (!res) { testFeedback(testOut, false, "Test failed."); return; }
-          if (res.ok) { testFeedback(testOut, true, "Looks good."); return; }
-          if (res.no_health_check) { testFeedback(testOut, false, "No health check for this connector — run an operation to verify."); return; }
-          testFeedback(testOut, false, res.error || "Test failed.");
-        })
-        .catch(function () { test.disabled = false; testFeedback(testOut, false, "Network error."); });
+      postJSONRaw(wsURL("/" + encodeURIComponent(inst.id) + "/test"), { config: dirtyValues() }, function (res) {
+        test.disabled = false;
+        if (!res) { testFeedback(testOut, false, "Test failed."); return; }
+        if (res.ok) { testFeedback(testOut, true, "Looks good."); return; }
+        if (res.no_health_check) { testFeedback(testOut, false, "No health check for this connector — run an operation to verify."); return; }
+        testFeedback(testOut, false, res.error || "Test failed.");
+      });
     });
     actions.appendChild(test);
+
+    // updateDirtyUI shows Reset (and unlocks Save) only when there are
+    // unsaved edits. Called on every field change and after a reset.
+    function updateDirtyUI() {
+      reset.classList.toggle("hidden", !anyDirty());
+    }
+    updateDirtyUI();
 
     var dup = ghostBtn("Duplicate");
     dup.addEventListener("click", function () {
@@ -233,7 +349,7 @@
     return card;
   }
 
-  function fieldRow(f, inputs) {
+  function fieldRow(f, inputs, onDirty) {
     var wrap = document.createElement("div");
     var label = document.createElement("label");
     label.className = "block text-xs font-medium text-black-800 dark:text-white-200 mb-1";
@@ -266,10 +382,25 @@
       input = document.createElement("input");
       input.type = f.secret ? "password" : "text";
       input.className = INPUT_CLASS;
+      // Secrets always load blank (the value is never echoed back); the
+      // placeholder signals one is already set. Non-secrets prefill.
       input.value = f.secret ? "" : (f.value || "");
       input.placeholder = f.secret ? (f.set ? "•••••• (set — leave empty to keep)" : "Enter to set") : "";
       if (f.secret) input.autocomplete = "new-password";
     }
+    // Dirty-tracking: remember the loaded value; a field counts as edited
+    // only once its value diverges from it. Browser autofill that the user
+    // never confirms leaves orig === value, so it stays clean and is never
+    // sent. The check runs on each input/change, not just the first, so
+    // typing then deleting back to the original clears the dirty flag.
+    input.dataset.orig = input.value;
+    input.dataset.dirty = "0";
+    var markDirty = function () {
+      input.dataset.dirty = input.value !== input.dataset.orig ? "1" : "0";
+      if (onDirty) onDirty();
+    };
+    input.addEventListener("input", markDirty);
+    input.addEventListener("change", markDirty);
     inputs[f.key] = input;
     wrap.appendChild(input);
 
@@ -315,5 +446,29 @@
       .catch(function () { done(false, "Network error."); });
   }
 
-  window.WickSessionConfig = { load: load };
+  // postJSONRaw is postJSON for endpoints that return a JSON verdict the
+  // caller needs to inspect (the test probe). done(parsedJSON | null).
+  function postJSONRaw(url, body, done) {
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (res) { done(res); })
+      .catch(function () { done(null); });
+  }
+
+  window.WickSessionWorkspace = { load: load };
+  // Back-compat alias — older callers referenced WickSessionConfig.
+  window.WickSessionConfig = window.WickSessionWorkspace;
+
+  // Prime the rail-tab count once at startup so the badge is correct
+  // before the user ever opens the Workspace tab. load() renders into the
+  // (hidden) panel and sets the badge; reopening the tab just refreshes.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", load);
+  } else {
+    load();
+  }
 })();

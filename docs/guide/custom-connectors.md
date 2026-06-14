@@ -118,6 +118,32 @@ Stock open-source MCP servers do not validate `X-Wick-User` — the `sso` scheme
 
 A **Test** button fires the operation once against your current config values so you can verify the recipe before saving. Useful when you have API docs but neither a cURL string nor an MCP server.
 
+## Health check
+
+A definition can nominate **one operation as a health probe**. When set, every instance page gets a **Check Permissions** button and a status banner, exactly like a built-in connector — wick runs the probe with that instance's stored credentials and reports whether the connector is reachable.
+
+Set it on the review / edit form, in the **Health check** block:
+
+| Field | Meaning |
+|---|---|
+| **Probe operation** | The operation wick runs as the check. Pick a read-only call that needs no inputs (e.g. `get_account`, `ping`, `list_*` with no required parameters) — the probe runs with config only, no per-call inputs. Leave on *No health check* to disable. |
+| **Expected text in response** *(optional)* | A substring the probe response must contain. Leave empty to accept any successful response. |
+
+**Verdict.** The connector is **healthy** when the probe operation runs without error — and, when an expected text is set, the response also contains it. "Without error" is the same bar an `wick_execute` call clears, so it works for both connector sources:
+
+- **HTTP operations** (cURL / manual) — the request returns a `2xx` status with no transport error.
+- **MCP operations** (proxied tools) — the `tools/call` returns a result rather than an error.
+
+So you do not have to assume an HTTP 200: an MCP-forwarded tool with no HTTP status of its own passes as long as the tool call itself succeeds.
+
+The optional expected text catches the "200 but actually an error" case — an API that answers `200 OK` with `{"ok":false,"error":"bad key"}`. Set the expected text to something only a real success contains, e.g. `"ok":true`. The check serializes the response (decoded JSON is matched against its compact JSON form) and looks for the substring.
+
+**What a failing probe does.** A custom connector instance carries one credential, so the probe's verdict applies to the whole connector: when it fails, **every operation is system-disabled** (not listable or callable) with the failure reason attached, until a later check passes and clears it. An admin can still override an individual operation by re-enabling it. A passing probe clears any locks the previous check set.
+
+::: tip Probe ops with required inputs
+The probe runs with config values only — it supplies no per-call inputs. If the operation you pick requires inputs, the probe will send them empty and likely fail. Choose (or add) an input-free operation for the health check.
+:::
+
 ## Access control
 
 Access rides the standard tag system — there is no separate sharing mechanism.
