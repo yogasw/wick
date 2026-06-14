@@ -364,7 +364,7 @@ func (s *Service) SaveNew(ctx context.Context, d *Draft, createdBy string) (*ent
 		Description:    d.Description,
 		Icon:           defaultIcon(d.Icon),
 		Source:         entity.CustomConnectorSource(d.Source),
-		SourceMeta:     mustJSON(SourceMeta{Category: d.Category, ServerID: serverIDOf(d)}),
+		SourceMeta:     mustJSON(SourceMeta{Category: d.Category, ServerID: serverIDOf(d), HealthOp: strings.TrimSpace(d.HealthOp), HealthExpect: strings.TrimSpace(d.HealthExpect)}),
 		Configs:        mustJSON(d.Configs),
 		Ops:                mustJSON(d.Ops),
 		SingleInstance:     d.Single,
@@ -398,6 +398,11 @@ func (s *Service) Update(ctx context.Context, defID string, d *Draft) error {
 	if d.Category != "" {
 		meta.Category = d.Category
 	}
+	// Health probe is fully replaceable from the form — including clearing
+	// it (empty HealthOp turns the check off), so assign rather than
+	// conditionally merge.
+	meta.HealthOp = strings.TrimSpace(d.HealthOp)
+	meta.HealthExpect = strings.TrimSpace(d.HealthExpect)
 	def.Name = d.Name
 	def.Description = d.Description
 	def.Icon = defaultIcon(d.Icon)

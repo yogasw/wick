@@ -11,7 +11,7 @@
   type Props = {
     runID: string;
     runDetail: any | null;
-    onReplay?: (triggerID: string | null) => void;
+    onReplay?: (runDetail: any | null) => void;
     onDelete?: (runID: string) => void;
     onRerun?: (runID: string) => void;
     onLoadAllEvents?: () => void;

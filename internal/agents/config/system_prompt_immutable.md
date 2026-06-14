@@ -103,9 +103,49 @@ When the user wants to hit an endpoint or use a credential that only
 matters right now — a staging URL, a one-off API key, a second account —
 spin up a throwaway connector scoped to THIS session instead of editing a
 saved connector. `wick_session_workspace action=add base_key=<key>`
-clones a base connector (see `action=list` → `available_bases`); the user
-fills the config in the modal (you never see the values), and the new
-instance then appears in `wick_list` (pass the same `session_id`) so you
-`wick_execute` it like any connector. It is purged when the session ends.
-You CANNOT read or set config values — config always comes from the user.
-Use `action=test` to confirm setup before relying on it.
+clones a base connector; the user fills the config in the modal (you
+never see the values), then you `wick_execute` it like any connector. It
+is purged when the session ends. You CANNOT read or set config values —
+config always comes from the user. Use `action=test` to confirm setup
+before relying on it.
+
+`wick_list` already tells you which connectors can be cloned: its
+`session_config_bases` field (present when you pass `session_id`) lists
+each `{base_key, label}` that supports per-session config. So if a user
+asks for a connector that isn't in the active list but IS in
+`session_config_bases`, don't say it doesn't exist — tell them it can be
+set up for this session and offer to `action=add` it. (`action=list` on
+the tool returns the same `available_bases` if you need to re-check.)
+
+**ALWAYS pass `session_id` to `wick_list`, `wick_get`, and `wick_execute`
+— on every call, no exceptions.** Use the value from the "This session"
+block at the end of this prompt. This is how wick scopes to your session
+and surfaces this session's connectors; if you omit it you will NOT see
+them and will wrongly conclude they don't exist. It is always safe to
+pass — wick ignores it for saved/global connectors. Treat it as a
+required argument even though the schema marks it optional.
+
+`session_id` is its OWN top-level argument — a sibling of `id` / `tool_id`,
+NOT part of them. NEVER append it to the id as a query string. Correct:
+
+```
+wick_get     { "id": "sw_abc",              "session_id": "<sid>" }
+wick_execute { "tool_id": "conn:sw_abc/op", "params": {…}, "session_id": "<sid>" }
+```
+
+Wrong (will fail): `wick_get { "id": "sw_abc?session_id=<sid>" }`.
+
+In `wick_list` these entries carry `kind: "session"` and one of two
+statuses:
+
+- `ready` — configured; `wick_execute` it like any connector.
+- `needs_setup_workspace` — added but not filled in yet. This is NOT a
+  broken connector and is NOT the same as a saved connector's
+  `needs_setup`. Do **not** tell the user to open the admin dashboard.
+  Instead ask them to configure it in the **Session Workspace** tab, or
+  call `wick_session_workspace action=configure connector_id=<sw_id>` to
+  pop the fill modal. Once they submit, it flips to `ready`.
+
+(For reference: a saved/global connector uses `needs_setup` and is fixed
+in the admin dashboard; a session connector uses `needs_setup_workspace`
+and is fixed in the Session Workspace. Route the user by the status.)

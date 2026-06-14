@@ -181,9 +181,18 @@ type SSOExtra struct {
 // Category names the visual group tag chosen at review time so reloads
 // re-link the same tags; ServerID points at the MCP server for
 // source=mcp defs. Raw pastes are never stored here.
+//
+// HealthOp/HealthExpect configure the optional connector health check:
+// HealthOp names one operation to run as the probe, and the verdict is
+// "healthy" when that op executes without error (HTTP 2xx + no transport
+// error, or an MCP tools/call that returns a non-error result). When
+// HealthExpect is non-empty, the rendered response must also contain it
+// as a substring. Empty HealthOp = no health check (no chip, no button).
 type SourceMeta struct {
-	Category string `json:"category,omitempty"`
-	ServerID string `json:"server_id,omitempty"`
+	Category     string `json:"category,omitempty"`
+	ServerID     string `json:"server_id,omitempty"`
+	HealthOp     string `json:"health_op,omitempty"`
+	HealthExpect string `json:"health_expect,omitempty"`
 }
 
 // ParseSourceMeta tolerates an empty or legacy column.
@@ -241,8 +250,13 @@ type Draft struct {
 	// (Module.AllowSessionConfig). Default off; only meaningful for
 	// curl/manual API defs, never oauth/sso token configs.
 	AllowSessionConfig bool       `json:"allow_session_config"`
-	Configs            []DefField `json:"configs"`
-	Ops                []DefOp    `json:"ops"`
+	// HealthOp names the operation run as the connector health probe;
+	// empty = no health check. HealthExpect is an optional substring the
+	// probe response must contain on top of executing without error.
+	HealthOp     string     `json:"health_op,omitempty"`
+	HealthExpect string     `json:"health_expect,omitempty"`
+	Configs      []DefField `json:"configs"`
+	Ops          []DefOp    `json:"ops"`
 }
 
 // maxIconBytes caps icon payloads — enough for a reasonable SVG or a
@@ -331,6 +345,16 @@ func ValidateDraft(d *Draft) error {
 		default:
 			return fmt.Errorf("op %q: either request or mcp_source is required", op.Key)
 		}
+	}
+	// Health probe (optional) must point at a real operation. An expected
+	// substring without a probe op is meaningless — reject it so a stale
+	// form value never silently disables the whole check.
+	if h := strings.TrimSpace(d.HealthOp); h != "" {
+		if !seen[h] {
+			return fmt.Errorf("health check operation %q is not one of this connector's operations", h)
+		}
+	} else if strings.TrimSpace(d.HealthExpect) != "" {
+		return fmt.Errorf("health check expected value is set but no health check operation is chosen")
 	}
 	return nil
 }

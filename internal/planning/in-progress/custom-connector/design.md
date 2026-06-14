@@ -350,7 +350,7 @@ Ops tidak punya tabel sendiri — embedded sebagai JSON array di kolom
 | `description` | `Description` | shown in index card |
 | `icon` | `Icon` | default `🔌` |
 | `source` | `Source` | `entity.CustomConnectorSource`: `curl` \| `mcp` \| `manual` — display-only |
-| `source_meta` | `SourceMeta` | JSON `custom.SourceMeta` `{category, server_id}` — provenance only, **raw paste tidak pernah disimpan** |
+| `source_meta` | `SourceMeta` | JSON `custom.SourceMeta` `{category, server_id, health_op, health_expect}` — provenance + optional health probe, **raw paste tidak pernah disimpan** |
 | `configs` | `Configs` | JSON array of `custom.DefField` |
 | `ops` | `Ops` | JSON array of `custom.DefOp`; array order = display order |
 | `created_by` | `CreatedBy` | admin user.id |
@@ -463,8 +463,16 @@ one of `request` (HTTP path) / `mcp_source` (proxy path) is set;
 **`custom_connectors.source_meta`** — `custom.SourceMeta`:
 
 ```json
-{ "category": "Development", "server_id": "<uuid, source=mcp only>" }
+{ "category": "Development", "server_id": "<uuid, source=mcp only>",
+  "health_op": "<op key — optional health probe>", "health_expect": "<optional substring>" }
 ```
+
+`health_op` nominates one operation as the connector health probe (drives
+`Module.HealthCheck`); verdict = op runs without error (HTTP 2xx / MCP
+non-error result) AND, when `health_expect` is set, the serialized response
+contains it. A failing probe system-disables every op (one credential per
+instance → one verdict for the whole connector); a passing probe clears
+the locks. Empty `health_op` = no `Module.HealthCheck`.
 
 **Templating rules (final — `template.go`):**
 

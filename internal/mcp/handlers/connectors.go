@@ -30,6 +30,19 @@ type ListResult struct {
 	Connectors      []connectorSummary `json:"connectors"`
 	TotalConnectors int                `json:"total_connectors"`
 	TotalTools      int                `json:"total_tools"`
+	// SessionConfigBases lists connectors that CAN be cloned into a
+	// per-session instance (capability + admin opt-in) but aren't shown as
+	// usable tools until added. Populated only when session_id is passed,
+	// so the agent can proactively offer to spin one up. Add via
+	// wick_session_workspace action=add base_key=<base_key>.
+	SessionConfigBases []sessionBaseHint `json:"session_config_bases,omitempty"`
+}
+
+// sessionBaseHint names a connector the caller may clone into the current
+// session workspace.
+type sessionBaseHint struct {
+	BaseKey string `json:"base_key"`
+	Label   string `json:"label"`
 }
 
 type searchTool struct {
@@ -151,20 +164,25 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	// Session-workspace instances: ephemeral connectors scoped to the
 	// caller's session, listed only when a session_id is passed. They
 	// appear like brand-new connectors but live and die with the session.
+	var sessionBases []sessionBaseHint
 	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
 		sessSummaries, sessTools := sessionInstanceSummaries(svc, layout, strings.TrimSpace(sid))
 		summaries = append(summaries, sessSummaries...)
 		totalTools += sessTools
+		// Connectors that COULD be cloned per-session — surfaced so the
+		// agent knows the option exists without being asked.
+		sessionBases = sessionConfigBases(r, svc, tagIDs, isAdmin)
 	}
 
 	rsp.ToolJSON(w, req.ID, ListResult{
-		Connectors:      summaries,
-		TotalConnectors: len(summaries),
-		TotalTools:      totalTools,
+		Connectors:         summaries,
+		TotalConnectors:    len(summaries),
+		TotalTools:         totalTools,
+		SessionConfigBases: sessionBases,
 	})
 }
 
-func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, args map[string]any, tagIDs []string, isAdmin bool) {
+func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
 	query, _ := args["query"].(string)
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -227,6 +245,15 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 			Tools:       matched,
 		})
 	}
+	// Session-workspace instances: matched only when a session_id is
+	// passed, same as wick_list. Without this, searching for a connector
+	// the user spun up for this session returns nothing.
+	if sid, _ := args["session_id"].(string); strings.TrimSpace(sid) != "" {
+		sg, st := sessionInstanceSearch(svc, layout, strings.TrimSpace(sid), needle)
+		groups = append(groups, sg...)
+		total += st
+	}
+
 	rsp.ToolJSON(w, req.ID, searchResult{Connectors: groups, Total: total, Query: query})
 }
 

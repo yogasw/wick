@@ -18,6 +18,12 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 	}
 	allProjects := h.projects.Projects()
 	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	projectIDs := make(map[string]struct{}, len(allProjects))
+	for id := range allProjects {
+		projectIDs[id] = struct{}{}
+	}
+	allTags = filterOwnerTagsForIDs(allTags, projectIDs)
 
 	paths := make([]string, 0, len(allProjects))
 	for id := range allProjects {
@@ -72,6 +78,12 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	workflowIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		workflowIDs[id] = struct{}{}
+	}
+	allTags = filterOwnerTagsForIDs(allTags, workflowIDs)
 
 	paths := make([]string, len(ids))
 	for i, id := range ids {
@@ -125,6 +137,13 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	skillIDs := make(map[string]struct{}, len(skills))
+	for _, sk := range skills {
+		skillIDs[sk.Name] = struct{}{}
+	}
+	allTags = filterOwnerTagsForIDs(allTags, skillIDs)
+
 
 	paths := make([]string, len(skills))
 	for i, sk := range skills {

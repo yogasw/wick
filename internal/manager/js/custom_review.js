@@ -317,6 +317,8 @@
       category: (document.getElementById("cc-category") || {}).value || "",
       single: !!(document.getElementById("cc-single") || {}).checked,
       allow_session_config: !!(document.getElementById("cc-allow-session-config") || {}).checked,
+      health_op: (document.getElementById("cc-health-op") || {}).value || "",
+      health_expect: (document.getElementById("cc-health-expect") || {}).value || "",
       configs: draft.configs,
       ops: draft.ops,
     };
@@ -494,8 +496,33 @@
     // clears the sticky toolbar). Indices mirror the nav list.
     Array.from(cfgBox.children).forEach((c, i) => { c.id = "cc-cfg-" + i; c.classList.add("scroll-mt-24", "transition-shadow"); });
     Array.from(opsBox.children).forEach((c, i) => { c.id = "cc-op-" + i; c.classList.add("scroll-mt-24", "transition-shadow"); });
+    populateHealthOp();
     renderNav();
     refreshPreview();
+  }
+
+  // populateHealthOp rebuilds the probe-op picker from the current ops so
+  // it tracks adds / removes / key renames. The selection is preserved
+  // across rebuilds; if the chosen op disappears it falls back to "none".
+  function populateHealthOp() {
+    const sel = document.getElementById("cc-health-op");
+    if (!sel) return;
+    const want = sel.value || draft.health_op || "";
+    sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "— No health check —";
+    sel.appendChild(none);
+    draft.ops.forEach((op) => {
+      if (!op.key) return;
+      const o = document.createElement("option");
+      o.value = op.key;
+      o.textContent = (op.name || op.key) + " (" + op.key + ")";
+      if (op.key === want) o.selected = true;
+      sel.appendChild(o);
+    });
+    // Selected op renamed/removed → reset so we never persist a stale key.
+    if (want && sel.value !== want) draft.health_op = "";
   }
 
   // Meta seed values (inputs are static templ markup).
@@ -523,6 +550,15 @@
   if (allowSessionCfg) {
     allowSessionCfg.checked = !!draft.allow_session_config;
     allowSessionCfg.addEventListener("change", refreshPreview);
+  }
+  const healthOp = document.getElementById("cc-health-op");
+  if (healthOp) {
+    healthOp.addEventListener("change", refreshPreview);
+  }
+  const healthExpect = document.getElementById("cc-health-expect");
+  if (healthExpect) {
+    healthExpect.value = draft.health_expect || "";
+    healthExpect.addEventListener("input", refreshPreview);
   }
 
   root.querySelector("[data-cc-add-config]")?.addEventListener("click", () => {

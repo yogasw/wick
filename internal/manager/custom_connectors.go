@@ -241,15 +241,18 @@ func customDraftFromDef(def *entity.CustomConnector) (*customconn.Draft, error) 
 	if err != nil {
 		return nil, err
 	}
+	meta := customconn.ParseSourceMeta(def.SourceMeta)
 	return &customconn.Draft{
 		Key:                def.Key,
 		Name:               def.Name,
 		Description:        def.Description,
 		Icon:               def.Icon,
 		Source:             string(def.Source),
-		Category:           customconn.ParseSourceMeta(def.SourceMeta).Category,
+		Category:           meta.Category,
 		Single:             def.SingleInstance,
 		AllowSessionConfig: def.AllowSessionConfig,
+		HealthOp:           meta.HealthOp,
+		HealthExpect:       meta.HealthExpect,
 		Configs:            fields,
 		Ops:                ops,
 	}, nil

@@ -28,8 +28,10 @@
     removeNode,
     removeTrigger,
     savePinnedTrigger,
+    hydrateFromRun,
     searchOpen,
   } from "$lib/stores/editor";
+  import { triggerIDOf } from "./executions/runHelpers";
   import { toastOk } from "$lib/stores/toast";
   import { get } from "svelte/store";
   import { loadCatalog } from "$lib/stores/catalog";
@@ -81,19 +83,36 @@
     await refreshVersions();
   }
 
-  // Replay-to-editor: switch the top tab back to Editor and pin the
-  // trigger that fired the picked run so the next Execute click
-  // reuses it. Never fires the run automatically — that's the team
-  // rule: replay = navigate, not auto-execute.
-  function onReplay(triggerID: string | null) {
+  // Replay-to-editor: switch the top tab back to Editor and hydrate the
+  // canvas from the picked run — n8n "import execution". Every node gets
+  // its ✓/✗ status + output, the trigger gets its event payload pinned,
+  // and the firing trigger is pinned for Execute. Never fires the run
+  // automatically — that's the team rule: replay = navigate, not execute.
+  function onReplay(runDetail: any | null) {
+    const summary = hydrateFromRun(runDetail);
+    const triggerID = triggerIDOf(runDetail);
     if (triggerID) savePinnedTrigger(workflowID, triggerID);
     topTab.set("editor");
-    toastOk(
-      "Replay prefilled",
-      triggerID
-        ? "Trigger pinned — hit Execute to re-run."
-        : "Open the Editor and hit Execute to re-run.",
-    );
+
+    // Honest feedback. A run can import "successfully" yet show nothing —
+    // it failed at the first node (no outputs) or it's a legacy manual
+    // Execute whose payload is just the {source:spa} placeholder. Say so
+    // rather than claiming "status + output" the user won't find.
+    if (summary.outputCount === 0 && !summary.triggerPinned) {
+      toastOk(
+        "Run imported — but it's empty",
+        summary.syntheticPayload
+          ? "This was a manual Execute with no real payload. Replay a webhook/cron run to get data."
+          : "This run produced no node output (failed at the first step). Nothing to inspect.",
+      );
+    } else {
+      toastOk(
+        "Run imported",
+        triggerID
+          ? "Nodes show this run's status + output. Trigger pinned — hit Execute to re-run."
+          : "Nodes show this run's status + output. Open the Editor to inspect.",
+      );
+    }
   }
 
   // Global keyboard shortcuts. We only short-circuit when focus is in a

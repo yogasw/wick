@@ -154,7 +154,7 @@ The scripts detect OS + arch from `uname` / `$PROCESSOR_ARCHITECTURE`, query the
 After `wick init`, edit the `REPO=` line in both scripts to match the actual GitHub repo owner (the placeholder is `owner/<name>` until you set it). Override the release version with `VERSION=v1.2.3` instead of latest.
 
 ::: tip wick-agent is just the wick repo's own install script
-The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked with `APP="wick-agent"` and `REPO="yogasw/wick"`. Running them installs the **wick-agent runtime** (Slack / Telegram / Web agent host) — not the wick CLI used to scaffold projects. The CLI is installed via `go install github.com/yogasw/wick@v0.17.0`.
+The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked with `APP="wick-agent"` and `REPO="yogasw/wick"`. Running them installs the **wick-agent runtime** (Slack / Telegram / Web agent host) — not the wick CLI used to scaffold projects. The CLI is installed via `go install github.com/yogasw/wick@v0.18.0`.
 :::
 
 ## ldflags injection

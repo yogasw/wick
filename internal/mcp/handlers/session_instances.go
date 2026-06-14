@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -54,6 +55,34 @@ func sessionInstanceStatus(mod connector.Module, cfg map[string]string) string {
 	return "ready"
 }
 
+// sessionConfigBases lists the connectors the caller may clone into a
+// session workspace: module declares AllowSessionConfig AND a visible
+// instance has the per-instance toggle on. Deduped by connector key.
+// Surfaced in wick_list so the agent knows the option exists.
+func sessionConfigBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []sessionBaseHint {
+	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]sessionBaseHint, 0)
+	for _, row := range rows {
+		if seen[row.Key] {
+			continue
+		}
+		mod, ok := svc.Module(row.Key)
+		if !ok || !mod.AllowSessionConfig || !row.AllowSessionConfig {
+			continue
+		}
+		seen[row.Key] = true
+		out = append(out, sessionBaseHint{BaseKey: row.Key, Label: mod.Meta.Name})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // sessionInstanceSummaries renders a session's workspace instances as
 // wick_list entries, so they appear alongside real connectors as if they
 // were brand-new connectors scoped to this session. Returns the entries
@@ -80,16 +109,83 @@ func sessionInstanceSummaries(svc *connectors.Service, layout agentconfig.Layout
 		if strings.TrimSpace(label) == "" {
 			label = mod.Meta.Name + " (session)"
 		}
+		// kind=session + needs_setup_workspace are the load-bearing
+		// signals; how to handle them (config via the Session Workspace,
+		// not the admin dashboard) lives once in the system prompt, not
+		// repeated per entry. Keep the description short.
+		status := sessionInstanceStatus(mod, in.Config)
+		if status == "needs_setup" {
+			status = "needs_setup_workspace"
+		}
 		out = append(out, connectorSummary{
 			ID:          in.ID,
 			Connector:   label,
-			Description: mod.Meta.Description + " — session-only instance; config lives in this session.",
+			Description: mod.Meta.Description + " (session connector — this session only)",
 			TotalTools:  count,
-			Status:      sessionInstanceStatus(mod, in.Config),
+			Status:      status,
 			Kind:        "session",
 		})
 	}
 	return out, total
+}
+
+// sessionInstanceSearch matches a session's workspace instances against
+// a search needle (label + base name/key + op name/desc), mirroring the
+// global wick_search loop so a connector the user spun up for this
+// session shows up in results too. needs_setup_workspace instances are
+// included (unlike global needs_setup) so the agent can still find + then
+// configure them.
+func sessionInstanceSearch(svc *connectors.Service, layout agentconfig.Layout, sessionID, needle string) ([]searchGroup, int) {
+	instances, err := sessionworkspace.List(layout, sessionID)
+	if err != nil || len(instances) == 0 {
+		return nil, 0
+	}
+	groups := make([]searchGroup, 0)
+	total := 0
+	for _, in := range instances {
+		mod, ok := svc.Module(in.BaseKey)
+		if !ok {
+			continue
+		}
+		label := in.Label
+		if strings.TrimSpace(label) == "" {
+			label = mod.Meta.Name + " (session)"
+		}
+		matched := make([]searchTool, 0)
+		for i := range mod.Operations {
+			op := mod.Operations[i]
+			hay := strings.ToLower(label + " " + mod.Meta.Name + " " + mod.Meta.Key + " " + op.Name + " " + op.Description)
+			if !strings.Contains(hay, needle) {
+				continue
+			}
+			desc := op.Description
+			if op.Destructive {
+				desc += " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."
+			}
+			matched = append(matched, searchTool{
+				ToolID:      FormatToolID(in.ID, op.Key),
+				Name:        op.Name,
+				Description: desc,
+				Destructive: op.Destructive,
+			})
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		status := sessionInstanceStatus(mod, in.Config)
+		if status == "needs_setup" {
+			status = "needs_setup_workspace"
+		}
+		total += len(matched)
+		groups = append(groups, searchGroup{
+			ID:          in.ID,
+			Connector:   label,
+			Description: mod.Meta.Description + " (session connector — this session only)",
+			Status:      status,
+			Tools:       matched,
+		})
+	}
+	return groups, total
 }
 
 // sessionInstanceDetail renders one session-workspace instance's op

@@ -138,6 +138,20 @@ func TestValidateDraft(t *testing.T) {
 			},
 			wantErr: "server_id and tool_name",
 		},
+		{
+			name:   "valid health op",
+			mutate: func(d *Draft) { d.HealthOp = "list_pets"; d.HealthExpect = "\"ok\":true" },
+		},
+		{
+			name:    "health op not an operation",
+			mutate:  func(d *Draft) { d.HealthOp = "nope" },
+			wantErr: "not one of this connector's operations",
+		},
+		{
+			name:    "health expect without health op",
+			mutate:  func(d *Draft) { d.HealthExpect = "ok" },
+			wantErr: "no health check operation is chosen",
+		},
 	}
 
 	for _, tc := range cases {

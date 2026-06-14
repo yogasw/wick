@@ -9,6 +9,9 @@
 
   import { untrack } from "svelte";
   import { workflowAPI } from "$lib/api/workflow";
+  import { triggerEventByID, draftWorkflow, stepResultsByNode } from "$lib/stores/editor";
+  import { eventPayloadPaths, directChildren, buildPreviewRequest, bracesBalanced } from "./eventPaths";
+  import { expressionSegments } from "./splitTemplate";
 
   type Mode = "fixed" | "expression";
   type Props = {
@@ -81,10 +84,64 @@
   // ── Autocomplete ───────────────────────────────────────────────────
   const CTX_ROOTS   = [".Event.", ".Node.", ".Env.", ".Run.", ".Workflow."];
   const EVENT_PATHS = [".Event.Type", ".Event.Subtype", ".Event.Channel", ".Event.At", ".Event.Payload."];
-  const PAYLOAD_KEYS= ["text","user","channel_id","ts","thread","trigger_id","action_id",
+  // Fallback channel-event keys, used only when no run has been replayed
+  // so there's no real payload to read from.
+  const PAYLOAD_KEYS_FALLBACK = ["text","user","channel_id","ts","thread","trigger_id","action_id",
                        "value","callback_id","schedule"].map(k => `.Event.Payload.${k}`);
   const FUNCS       = ["now","timeFormat","toJSON","fromJSON","jsonEscape","upper","lower",
                        "trim","default","truncate","index"].map(f => f + " ");
+
+  // Dynamic .Event.Payload.* paths from the replayed run's event (any
+  // trigger that has a pinned payload). Lets autocomplete suggest the
+  // REAL fields a run carried — e.g. .Event.Payload.body.action for a
+  // webhook — instead of the static channel-event guess. Empty until a
+  // run is replayed, in which case we fall back to PAYLOAD_KEYS_FALLBACK.
+  // The replayed event payload for the active trigger (any trigger that
+  // has a pinned payload). Null until a run is replayed.
+  const replayedEventPayload = $derived.by<unknown>(() => {
+    const events = $triggerEventByID;
+    const ids = ($draftWorkflow?.triggers ?? []).map((t) => t.id);
+    const tid = ids.find((id) => events[id] != null) ?? Object.keys(events)[0];
+    return tid ? events[tid] ?? null : null;
+  });
+  const eventPaths = $derived<string[]>(
+    replayedEventPayload != null ? eventPayloadPaths(replayedEventPayload) : [],
+  );
+
+  // Node labels for `.Node.<label>.` autocomplete. The nodeLabels prop is
+  // almost never wired by callers, so derive from the live workflow graph —
+  // this is why the dropdown listed every node (it reads the graph) while
+  // autocomplete only offered ".Node.trigger." (the hardcoded fallback).
+  // Prefer an explicit prop when given, else all graph node labels.
+  const acNodeLabels = $derived<string[]>(
+    nodeLabels.length > 0
+      ? nodeLabels
+      : ($draftWorkflow?.graph?.nodes ?? []).map((n) => n.label || n.id).filter(Boolean),
+  );
+
+  // Per-node output fields for `.Node.<label>.<field>` autocomplete. The
+  // nodeOutputs prop is likewise rarely wired (connector-arg fields go
+  // through Field/SchemaForm which don't forward it), so derive from the
+  // run-step store, KEYED BY LABEL (stepResultsByNode is keyed by node id).
+  // This is why ".Node.session_init_1." offered no field keys even though
+  // the INPUT pane showed result/session_id — the store had them, the
+  // autocomplete didn't see them. Prop wins when explicitly provided.
+  const acNodeOutputs = $derived.by<Record<string, Record<string, unknown>>>(() => {
+    if (Object.keys(nodeOutputs).length > 0) return nodeOutputs;
+    const out: Record<string, Record<string, unknown>> = {};
+    const nodes = $draftWorkflow?.graph?.nodes ?? [];
+    const steps = $stepResultsByNode;
+    for (const n of nodes) {
+      const o = steps[n.id]?.output;
+      if (o && Object.keys(o).length > 0) out[n.label || n.id] = o;
+    }
+    return out;
+  });
+
+  // workflowId for the live preview — fall back to the draft's id when the
+  // prop isn't threaded (connector-arg fields), otherwise preview never
+  // fires (RESULT panel stays blank with no error).
+  const acWorkflowId = $derived<string | undefined>(workflowId || $draftWorkflow?.id || undefined);
 
   let acSuggestions  = $state<string[]>([]);
   let acSelected     = $state(0);
@@ -101,11 +158,17 @@
     return before.slice(openAt + 2).trimStart();
   }
 
-  function buildSuggestions(partial: string, labels: string[], outputs: Record<string, Record<string, unknown>>): string[] {
+  function buildSuggestions(partial: string, labels: string[], outputs: Record<string, Record<string, unknown>>, payloadPaths: string[]): string[] {
+    // Real replayed-payload keys take priority; fall back to the static
+    // channel guess only when no run has been replayed.
+    const payloadKeys = payloadPaths.length > 0 ? payloadPaths : PAYLOAD_KEYS_FALLBACK;
+
     if (partial === "")                return [...CTX_ROOTS, ...FUNCS];
     if (partial === ".")               return CTX_ROOTS;
     if (partial === ".Event.")         return EVENT_PATHS;
-    if (partial === ".Event.Payload.") return PAYLOAD_KEYS;
+    if (partial === ".Event.Payload.") {
+      return payloadPaths.length > 0 ? directChildren(payloadPaths, ".Event.Payload.") : PAYLOAD_KEYS_FALLBACK;
+    }
     if (partial === ".Node.") {
       return [...new Set([...labels, "trigger"])].map(l => `.Node.${l}.`);
     }
@@ -123,11 +186,18 @@
       }
     }
 
+    // Nested ".Event.Payload.<...>." → drill into the replayed payload so
+    // e.g. typing ".Event.Payload.body." lists body's keys.
+    if (payloadPaths.length > 0 && /^\.Event\.Payload\..+\.$/.test(partial)) {
+      const kids = directChildren(payloadPaths, partial);
+      if (kids.length > 0) return kids;
+    }
+
     const envSuggs = acEnvKeys.map(k => `.Env.${k}`);
     const pool = [
       ...CTX_ROOTS,
       ...EVENT_PATHS,
-      ...PAYLOAD_KEYS,
+      ...payloadKeys,
       ...[...new Set([...labels, "trigger"])].map(l => `.Node.${l}.`),
       ...Object.entries(outputs).flatMap(([l, vals]) => Object.keys(vals).map(k => `.Node.${l}.${k}`)),
       ...envSuggs,
@@ -155,7 +225,7 @@
     if (mode === "expression") {
       const partial = detectPartial(el.value, el.selectionStart ?? 0);
       if (partial !== null) {
-        const suggs = buildSuggestions(partial, nodeLabels, nodeOutputs);
+        const suggs = buildSuggestions(partial, acNodeLabels, acNodeOutputs, eventPaths);
         acSuggestions = suggs;
         acSelected = 0;
         if (suggs.length > 0) positionDropdown();
@@ -210,39 +280,81 @@
   let sampleEvent  = $state("cron");
   let preview      = $state<{ok:boolean;rendered?:string;error?:string;hint?:string}|null>(null);
   let previewing   = $state(false);
+  // Per-expression breakdown — one row per {{…}} in the template. Lets a
+  // single failing ref show as its own error/empty row while the others
+  // still render, instead of one bad ref blanking the whole preview.
+  type ExprRow = { raw: string; ok: boolean; rendered?: string; error?: string; isControl?: boolean };
+  let exprRows = $state<ExprRow[]>([]);
   // Plain variables — not $state to avoid reactive write-in-effect loops.
   let previewTimer: ReturnType<typeof setTimeout> | null = null;
   let previewAbort: AbortController | null = null;
 
   function schedulePreview(val: string) {
-    if (!workflowId || mode !== "expression" || !val.includes("{{")) {
+    if (!acWorkflowId || mode !== "expression" || !val.includes("{{")) {
       preview = null;
+      exprRows = [];
+      previewing = false;
       return;
     }
+    // Skip while the user is mid-type with an unclosed {{ — otherwise the
+    // RESULT row flashes "template parse: unclosed action". Keep the last
+    // good preview until the braces balance again.
+    if (!bracesBalanced(val)) return;
     if (previewTimer) clearTimeout(previewTimer);
     previewTimer = setTimeout(() => runPreview(val), 600);
   }
 
   async function runPreview(val: string) {
-    if (!workflowId || !val.trim()) return;
+    if (!acWorkflowId || !val.trim()) {
+      previewing = false;
+      return;
+    }
     // Cancel any in-flight request before sending a new one.
     previewAbort?.abort();
     previewAbort = new AbortController();
     const signal = previewAbort.signal;
     previewing = true;
     try {
-      const ctx = Object.keys(nodeOutputs).length > 0
-        ? JSON.stringify({ Node: nodeOutputs })
-        : undefined;
-      const result = await workflowAPI.templateTest(workflowId, {
+      // Use the replayed run's real event when available so the preview
+      // renders {{.Event.Payload.x}} against the actual payload — not the
+      // synthetic sample (which clobbers context.Event on the backend).
+      const req = buildPreviewRequest(acNodeOutputs, replayedEventPayload, sampleEvent);
+      // Per-expression breakdown rides along in ONE request via
+      // `expressions` — the backend resolves the context once and renders
+      // each. (Firing N parallel calls tripped the 200ms rate limiter, so
+      // every row came back 429 → "nil/error" while the combined render
+      // succeeded.) Only the VALUE segments are sent to render; control-flow
+      // segments (if/else/end) get a labelled row but aren't evaluated.
+      const segs = expressionSegments(val);
+      const valueSegs = segs.filter((s) => !s.isControl);
+      const wantBreakdown = segs.length > 1;
+      const result = await workflowAPI.templateTest(acWorkflowId, {
         template: val,
-        sample_event: sampleEvent,
-        context: ctx,
+        sample_event: req.sampleEvent,
+        context: req.context,
+        expressions: wantBreakdown ? valueSegs.map((e) => e.raw) : undefined,
       }, signal);
       if (!signal.aborted) {
         preview = result;
         if (result.env_keys) acEnvKeys = result.env_keys;
         if (result.secret_keys) acSecretKeys = result.secret_keys;
+        if (wantBreakdown) {
+          // Merge backend value-render results back into the full segment
+          // list (in original order), tagging control-flow rows so they
+          // render as a "control flow" label instead of an evaluated value.
+          const byRaw = new Map((result.results ?? []).map((r) => [r.expression, r]));
+          exprRows = segs.map((s) => {
+            if (s.isControl) return { raw: s.raw, ok: true, isControl: true };
+            const r = byRaw.get(s.raw);
+            return r
+              ? { raw: s.raw, ok: r.ok, rendered: r.rendered, error: r.error }
+              : { raw: s.raw, ok: false, error: "not evaluated" };
+          });
+        } else if (!result.ok && valueSegs.length === 1) {
+          exprRows = [{ raw: valueSegs[0].raw, ok: false, error: result.error }];
+        } else {
+          exprRows = [];
+        }
       }
     } catch (e: any) {
       // 429 = rate limited — silently skip, keep previous result.
@@ -250,14 +362,19 @@
         preview = { ok: false, error: "request failed" };
       }
     } finally {
-      if (!signal.aborted) previewing = false;
+      // Always clear the spinner for THIS request's controller. An
+      // aborted request hands off to its successor (which set its own
+      // previewing=true), so only clear when we're still the active
+      // controller — prevents both a stuck spinner (abort never cleared)
+      // and a flicker (clearing the successor's spinner).
+      if (previewAbort?.signal === signal) previewing = false;
     }
   }
 
   // Seed env/secret keys as soon as workflowId is known — no need to
   // wait for a preview request. Re-runs whenever workflowId changes.
   $effect(() => {
-    const wid = workflowId;
+    const wid = acWorkflowId;
     if (!wid) return;
     workflowAPI.envGet(wid).then((res) => {
       // All keys (plain + secret) accessible via {{.Env.X}} — suggest them all.
@@ -272,7 +389,7 @@
   // (preview = null) from re-triggering this effect.
   $effect(() => {
     // Read deps OUTSIDE untrack so effect re-runs when they change.
-    const v = value, m = mode, wid = workflowId;
+    const v = value, m = mode, wid = acWorkflowId;
     // ALL state writes go inside untrack — prevents write→re-run loop.
     untrack(() => {
       if (m !== "expression" || !wid || !v.includes("{{")) {
@@ -286,7 +403,7 @@
   // Re-run preview when sample event changes
   function changeSample(ev: Event) {
     sampleEvent = (ev.target as HTMLSelectElement).value;
-    if (workflowId && mode === "expression" && value.includes("{{")) {
+    if (acWorkflowId && mode === "expression" && value.includes("{{")) {
       runPreview(value);
     }
   }
@@ -384,7 +501,7 @@
   {/if}
 
   <!-- Inline result preview (n8n style) — visible when expression mode + has {{ -->
-  {#if workflowId && mode === "expression" && value.includes("{{")}
+  {#if acWorkflowId && mode === "expression" && value.includes("{{")}
     <div class="rounded border border-white-300 dark:border-navy-600 dark:border-navy-600 bg-white-100 dark:bg-navy-800/60 text-xs overflow-hidden">
       <div class="flex items-center justify-between px-3 py-1 border-b border-white-300 dark:border-navy-600/60">
         <span class="font-semibold text-black-800 dark:text-black-400 tracking-wide uppercase text-[10px]">Result</span>
@@ -395,6 +512,16 @@
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
             </svg>
           {/if}
+          <!-- Manual refresh — re-render the preview against the latest
+               context (e.g. after running an upstream node, when the field
+               text didn't change so the auto-trigger wouldn't fire). -->
+          <button
+            type="button"
+            class="text-black-700 dark:text-black-500 hover:text-black-900 dark:hover:text-white-100 disabled:opacity-40 leading-none"
+            title="Refresh preview"
+            disabled={previewing}
+            onclick={() => runPreview(value)}
+          >↻</button>
           <select
             value={sampleEvent}
             onchange={changeSample}
@@ -407,15 +534,42 @@
         </div>
       </div>
       <div class="px-3 py-2 min-h-[28px]">
-        {#if preview?.ok}
+        {#if exprRows.length > 0}
+          <!-- Per-expression table: one row per {{…}}. A failing ref shows
+               its own error/empty cell; the rest still render. -->
+          <div class="flex flex-col gap-1">
+            {#each exprRows as row}
+              <div class="flex items-start gap-2 font-mono text-[11px]">
+                <span class="shrink-0 text-black-700 dark:text-black-500 break-all max-w-[45%] truncate" title={row.raw}>{row.raw}</span>
+                <span class="text-black-600 dark:text-black-600 shrink-0">→</span>
+                {#if row.isControl}
+                  <span class="text-black-600 dark:text-black-500 italic" title="Control-flow keyword — evaluated as part of the full render below, not standalone">control flow</span>
+                {:else if row.ok}
+                  <span class="text-emerald-400 whitespace-pre-wrap break-all">{row.rendered === "" || row.rendered === "<no value>" ? "(empty)" : row.rendered}</span>
+                {:else}
+                  <span class="text-red-400 break-all" title={row.error}>nil / error</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          <!-- Combined render below the per-expression rows when it succeeds. -->
+          {#if preview?.ok}
+            <div class="mt-2 pt-2 border-t border-white-300/60 dark:border-navy-600/60 text-[11px]">
+              <span class="text-black-700 dark:text-black-500 mr-2">full:</span>
+              <span class="text-emerald-400 font-mono whitespace-pre-wrap break-all">{preview.rendered}</span>
+            </div>
+          {/if}
+        {:else if preview?.ok}
           <span class="text-emerald-400 font-mono whitespace-pre-wrap break-all">{preview.rendered}</span>
         {:else if preview?.error}
           <span class="text-red-400 font-mono">{preview.error}</span>
           {#if preview.hint}
             <span class="text-amber-400 ml-2 italic">{preview.hint}</span>
           {/if}
-        {:else}
+        {:else if previewing}
           <span class="text-black-700 dark:text-black-600 italic">waiting…</span>
+        {:else}
+          <span class="text-black-700 dark:text-black-600 italic">—</span>
         {/if}
       </div>
     </div>

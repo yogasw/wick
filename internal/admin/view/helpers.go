@@ -31,12 +31,16 @@ func itoa(n int) string {
 func tagsToJSON(tags []*entity.Tag) string {
 	out := make([]map[string]any, len(tags))
 	for i, t := range tags {
-		out[i] = map[string]any{
+		row := map[string]any{
 			"id":        t.ID,
 			"name":      t.Name,
 			"is_group":  t.IsGroup,
 			"is_filter": t.IsFilter,
 		}
+		if t.DisplayName != "" {
+			row["display_name"] = t.DisplayName
+		}
+		out[i] = row
 	}
 	b, _ := json.Marshal(out)
 	return string(b)

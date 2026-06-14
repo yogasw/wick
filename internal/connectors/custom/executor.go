@@ -77,16 +77,35 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 	}
 
 	operations := make([]connector.Operation, 0, len(ops))
+	opKeys := make([]string, 0, len(ops))
+	var probe connector.ExecuteFunc
+	meta := ParseSourceMeta(def.SourceMeta)
 	for _, op := range ops {
+		exec := s.executeFunc(cfgFields, op)
+		if op.Key == meta.HealthOp {
+			probe = exec
+		}
+		opKeys = append(opKeys, op.Key)
 		operations = append(operations, connector.Operation{
 			Key:         op.Key,
 			Name:        op.Name,
 			Description: op.Description,
 			Input:       FieldsToConfigs(op.Inputs),
 			Destructive: op.Destructive,
-			Execute:     s.executeFunc(cfgFields, op),
+			Execute:     exec,
 			Docs:        wickdocs.Docs{},
 		})
+	}
+
+	// Optional health check: run the chosen probe op and project its
+	// verdict onto every operation. Custom connectors share one credential
+	// per instance, so a passing probe means the whole connector is
+	// reachable, a failing one disables all ops — same shape as a built-in
+	// like Slack projecting auth.test. Skipped when the def is disabled
+	// (zero ops) or the named probe op vanished.
+	var healthCheck connector.HealthCheckFunc
+	if probe != nil {
+		healthCheck = healthCheckFor(probe, opKeys, meta.HealthExpect)
 	}
 
 	return connector.Module{
@@ -106,12 +125,62 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 			LiveCatalog: def.Source == entity.CustomConnectorSourceMCP,
 			DefaultTags: s.defaultTagsFor(def),
 		},
-		Configs:    FieldsToConfigs(cfgFields),
-		Operations: operations,
+		Configs:     FieldsToConfigs(cfgFields),
+		Operations:  operations,
+		HealthCheck: healthCheck,
 		// Author opt-in: lets users override this def's config per agent
 		// session (still gated by the per-instance admin toggle).
 		AllowSessionConfig: def.AllowSessionConfig,
 	}, nil
+}
+
+// healthCheckFor builds the Module.HealthCheck hook for a custom def: run
+// the chosen probe op against the live Ctx (decrypted configs, no inputs),
+// then project a single verdict onto every operation. A custom connector
+// instance carries one credential, so "the probe reached upstream" means
+// the whole connector is healthy; a probe failure disables all ops with
+// the same reason. expect (optional) is a substring the probe response
+// must contain on top of executing without error.
+func healthCheckFor(probe connector.ExecuteFunc, opKeys []string, expect string) connector.HealthCheckFunc {
+	expect = strings.TrimSpace(expect)
+	return func(c *connector.Ctx) ([]connector.OpHealth, error) {
+		ok, reason := true, ""
+		out, err := probe(c)
+		switch {
+		case err != nil:
+			ok, reason = false, err.Error()
+		case expect != "":
+			if !healthBodyContains(out, expect) {
+				ok = false
+				reason = fmt.Sprintf("response did not contain expected text %q", expect)
+			}
+		}
+		report := make([]connector.OpHealth, 0, len(opKeys))
+		for _, k := range opKeys {
+			report = append(report, connector.OpHealth{Key: k, OK: ok, Reason: reason})
+		}
+		return report, nil
+	}
+}
+
+// healthBodyContains reports whether the probe's decoded response contains
+// expect. The executor returns decoded JSON (any) or a raw string; for the
+// substring test we render JSON back to its compact form so a check like
+// `"ok":true` matches the structured value the same way it would the wire
+// bytes. Non-JSON responses are already strings and compare directly.
+func healthBodyContains(out any, expect string) bool {
+	switch v := out.(type) {
+	case string:
+		return strings.Contains(v, expect)
+	case nil:
+		return false
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return strings.Contains(fmt.Sprintf("%v", v), expect)
+		}
+		return strings.Contains(string(b), expect)
+	}
 }
 
 // liveMCPProbeTimeout bounds the tools/list probe a module build fires —

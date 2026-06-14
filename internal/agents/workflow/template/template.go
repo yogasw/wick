@@ -1,7 +1,14 @@
 // Package template renders Go text/template strings against a
-// workflow.RenderCtx. Strict missing-key handling so typos surface as
-// errors instead of `<no value>`. Used by every executor that needs to
-// interpolate {{.Event.X}} / {{.Node.X.Y}} / {{.Env.X}}.
+// workflow.RenderCtx. Missing map keys use missingkey=zero so a payload
+// that simply lacks an optional field (e.g. a webhook body without an
+// "action" key) does NOT fail the node — it renders the map element's
+// zero value and the run continues. Note: for the map[string]any payloads
+// wick passes, that zero value is nil, which text/template prints as the
+// literal "<no value>"; wrap optional fields in `default` (e.g.
+// {{ .Event.Payload.action | default "" }}) when you want a clean empty
+// string. This matches the parse-time validator (parse.go uses
+// missingkey=zero too) so a template that validates also runs. Used by
+// every executor that interpolates {{.Event.X}} / {{.Node.X.Y}} / {{.Env.X}}.
 // All env vars — plain and secret — are accessible via {{.Env.X}}.
 package template
 
@@ -24,7 +31,7 @@ func Render(tmpl string, ctx workflow.RenderCtx) (string, error) {
 		return "", nil
 	}
 	tmpl = normalizeEventPaths(tmpl)
-	t := gotemplate.New("node").Funcs(BuiltinFuncs).Option("missingkey=error")
+	t := gotemplate.New("node").Funcs(BuiltinFuncs).Option("missingkey=zero")
 	parsed, err := t.Parse(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("template parse: %w", err)

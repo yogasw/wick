@@ -222,6 +222,16 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
 
+	// Materialize the session dir + meta.json before touching it. A
+	// `session: "new"` agent node (or any ad-hoc wf_adhoc_<uuid> session)
+	// has no session_init upstream, so the dir doesn't exist yet — and
+	// SetMaxTurns/SendWithProject below read meta.json. Without this the
+	// node fails with "set max turns: open …/meta.json: cannot find the
+	// path". Idempotent: a no-op when the session already exists.
+	if err := e.Pool.EnsureSession(ctx, sessionID, "workflow", n.Workspace); err != nil {
+		return workflow.NodeOutput{}, fmt.Errorf("ensure session: %w", err)
+	}
+
 	// Always persist the cap (including 0) so switching a reused session
 	// back to 0 clears a previously-persisted cap. 0 = unlimited.
 	if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {

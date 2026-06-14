@@ -168,7 +168,8 @@ templ UserMenu(user *entity.User) {
 							</svg>
 							MCP
 						</a>
-						if agentsAvailable() {
+						{{ navP := NavParamsFor(ctx, user) }}
+						if navP.CanSeeAgents {
 							<a
 								href="/tools/agents"
 								class="flex items-center gap-2.5 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"

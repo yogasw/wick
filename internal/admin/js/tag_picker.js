@@ -21,7 +21,7 @@
     const disabled = el.dataset.disabled === 'true';
     const canCreate = el.dataset.canCreate === 'true';
     const raw = JSON.parse(el.dataset.tags || '[]');
-    const all = new Map(raw.map(t => [t.id, { id: t.id, name: t.name, is_group: !!t.is_group, is_filter: !!t.is_filter }]));
+    const all = new Map(raw.map(t => [t.id, { id: t.id, name: t.name, display_name: t.display_name || "", is_group: !!t.is_group, is_filter: !!t.is_filter }]));
     let selected = (el.dataset.selected || '')
       .split(',').map(s => s.trim()).filter(id => all.has(id));
 
@@ -63,7 +63,7 @@
         const tag = all.get(id) || { id, name: id, is_group: false, is_filter: false };
         return `
         <span class="tp-chip inline-flex items-center gap-1 rounded-full bg-green-200 px-2 py-0.5 text-xs text-green-700" data-id="${escapeHTML(id)}">
-          <button type="button" class="tp-chip-name text-green-700 hover:underline" data-id="${escapeHTML(id)}" title="Edit tag type">${escapeHTML(tag.name)}</button>
+          <button type="button" class="tp-chip-name text-green-700 hover:underline" data-id="${escapeHTML(id)}" title="Edit tag type">${escapeHTML(tag.display_name || tag.name)}</button>
           ${disabled ? '' : `<button type="button" data-id="${escapeHTML(id)}" class="tp-remove text-green-700 hover:text-green-900" aria-label="remove">&times;</button>`}
         </span>
       `;
@@ -104,7 +104,7 @@
 
       const pills = items.map(t => `
         <button type="button" data-id="${escapeHTML(t.id)}" class="tp-opt inline-flex items-center rounded-full border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-900 dark:text-white-100 hover:border-green-400 hover:bg-green-200 hover:text-green-700">
-          ${escapeHTML(t.name)}${typeLabel(t)}
+          ${escapeHTML(t.display_name || t.name)}${typeLabel(t)}
         </button>
       `).join('');
 

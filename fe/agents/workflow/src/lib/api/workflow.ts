@@ -285,11 +285,18 @@ export const workflowAPI = {
   runNow: (
     id: string,
     triggerID: string,
+    payload?: Record<string, unknown> | null,
   ): Promise<{ ok: boolean }> =>
     // trigger_id is required server-side. Pick one before calling —
     // the editor pins from workflow.triggers[] before firing so the
     // engine routes to the correct entry_node.
-    apiPost(`${BASE}/api/workflows/run/${encodeURIComponent(id)}`, { trigger_id: triggerID }),
+    // payload (optional) re-fires the workflow against a past run's
+    // event.payload — Replay-to-editor sets it so {{.Event.Payload.x}}
+    // resolves to the real run's data instead of the synthetic placeholder.
+    apiPost(`${BASE}/api/workflows/run/${encodeURIComponent(id)}`, {
+      trigger_id: triggerID,
+      ...(payload != null ? { payload } : {}),
+    }),
 
   runs: async (
     id: string,
@@ -350,9 +357,19 @@ export const workflowAPI = {
 
   templateTest: (
     id: string,
-    body: { template: string; sample_event?: string; context?: string },
+    body: { template: string; sample_event?: string; context?: string; expressions?: string[] },
     signal?: AbortSignal,
-  ): Promise<{ ok: boolean; rendered?: string; error?: string; available_keys?: string[]; hint?: string; env_keys?: string[]; secret_keys?: string[] }> =>
+  ): Promise<{
+    ok: boolean;
+    rendered?: string;
+    error?: string;
+    available_keys?: string[];
+    hint?: string;
+    env_keys?: string[];
+    secret_keys?: string[];
+    // Per-expression breakdown, present when the request set `expressions`.
+    results?: { expression: string; ok: boolean; rendered?: string; error?: string }[];
+  }> =>
     apiPost(`${BASE}/api/workflows/template-test/${encodeURIComponent(id)}`, body, signal),
 
   // Bottom-panel content endpoints (Validation / Guard / Tests).

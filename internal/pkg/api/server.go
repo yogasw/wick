@@ -625,6 +625,11 @@ func NewServer() *Server {
 	}
 
 	agentstool.SetManager(agentsMgr)
+	ui.SetNavParamsFn(func(ctx context.Context, u *entity.User) ui.NavParams {
+		return ui.NavParams{
+			CanSeeAgents: authSvc.CanAccessTool(ctx, u, "/tools/agents", entity.VisibilityPrivate),
+		}
+	})
 	agentstool.SetPool(agentsPool)
 	agentstool.SetBroadcaster(agentsBcast)
 	agentstool.SetLayout(agentsLayout)

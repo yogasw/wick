@@ -154,6 +154,29 @@ func SetConfig(layout agentconfig.Layout, sessionID, instanceID string, values m
 	return fmt.Errorf("session instance %q not found: %w", instanceID, os.ErrNotExist)
 }
 
+// SetLabel renames an instance. Returns an os.ErrNotExist-wrapped error
+// when the instance is gone. Empty label is rejected — the caller should
+// fall back to a default before calling.
+func SetLabel(layout agentconfig.Layout, sessionID, instanceID, label string) error {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return fmt.Errorf("label is required")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	ws, err := Load(layout, sessionID)
+	if err != nil {
+		return err
+	}
+	for i := range ws.Instances {
+		if ws.Instances[i].ID == instanceID {
+			ws.Instances[i].Label = label
+			return save(layout, sessionID, ws)
+		}
+	}
+	return fmt.Errorf("session instance %q not found: %w", instanceID, os.ErrNotExist)
+}
+
 // Remove deletes an instance. ok=false when it wasn't there.
 func Remove(layout agentconfig.Layout, sessionID, instanceID string) (bool, error) {
 	mu.Lock()

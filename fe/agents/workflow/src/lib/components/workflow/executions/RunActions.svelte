@@ -5,12 +5,12 @@
   // editor with the firing trigger pre-pinned (per the team rule:
   // replay = navigate, never auto-execute).
   import { toastError, toastOk } from "$lib/stores/toast";
-  import { downloadJSON, triggerIDOf } from "./runHelpers";
+  import { downloadJSON } from "./runHelpers";
 
   type Props = {
     runID: string;
     runDetail: any | null;
-    onReplay?: (triggerID: string | null) => void;
+    onReplay?: (runDetail: any | null) => void;
     onDelete?: (runID: string) => void;
     onRerun?: (runID: string) => void;
   };
@@ -50,7 +50,7 @@
   }
 
   function replay() {
-    onReplay?.(triggerIDOf(runDetail));
+    onReplay?.(runDetail);
   }
 
   function del() {

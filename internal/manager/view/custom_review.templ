@@ -151,6 +151,24 @@ templ customDraftForm(mode string, defID string, categories []string) {
 				@ccToggleRow("cc-single", "Single instance only", "Default off — like built-in connectors, admins can add and duplicate instance rows, each with its own credentials. No row is created until someone clicks + New row.")
 				@ccToggleRow("cc-allow-session-config", "Allow per-session config override", "Default off. When on, this connector can be cloned into a per-session instance from the session Config tab (point at staging, use a different key) without touching the saved instance. An admin still flips the per-instance toggle. Best for API connectors — leave off for OAuth/SSO logins.")
 			</div>
+			<div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 p-4">
+				<p class="text-sm font-medium text-black-900 dark:text-white-100">Health check</p>
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+					Optional. Pick one operation to run as a probe — the connector page gets a <span class="font-medium">Check now</span> button and a status chip. Healthy when that operation runs without error (HTTP 2xx, or an MCP tool call that returns a result). A failing probe disables every operation until it passes again. Choose a read-only operation that needs no inputs.
+				</p>
+				<div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+					<div class="min-w-0">
+						<label for="cc-health-op" class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">Probe operation</label>
+						<select id="cc-health-op" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800">
+							<option value="">— No health check —</option>
+						</select>
+					</div>
+					<div class="min-w-0">
+						<label for="cc-health-expect" class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">Expected text in response <span class="text-black-700 dark:text-black-600">(optional)</span></label>
+						<input id="cc-health-expect" type="text" placeholder={ "e.g. \"ok\":true" } class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+					</div>
+				</div>
+			</div>
 			<div class="mt-4 rounded-lg border border-cau-400 bg-cau-100 px-4 py-3">
 				<p class="text-xs text-black-800">
 					<span class="font-semibold text-cau-400">⚠ Default = admin-only.</span>
