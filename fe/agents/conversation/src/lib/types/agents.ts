@@ -104,3 +104,20 @@ export type ApprovalsResponse = {
   session_approved: ApprovedItem[];
   always_approved: ApprovedItem[];
 };
+
+export type ContextFileEntry = {
+  path: string;
+  name: string;
+  size: number;
+  isDir: boolean;
+  mtime: number;
+};
+
+export type FileContent = {
+  path: string;
+  size: number;
+  binary: boolean;
+  content?: string;
+  tooBig?: boolean;
+  mtime?: number;
+};
