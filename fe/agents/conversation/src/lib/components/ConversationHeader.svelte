@@ -1,17 +1,19 @@
 <script lang="ts">
   import type { SSEStatus } from "../types/agents.js";
   import type { LifecycleState } from "../stores/thread.js";
+  import { idleCountdownText } from "../idleCountdown.js";
 
   type Props = {
     title: string;
     agentLabel?: string;
     sseStatus: SSEStatus;
     lifecycle?: LifecycleState;
+    idleTimeoutMs?: number;
     onKill: () => void;
     onDelete: () => void;
   };
 
-  let { title, agentLabel = "", sseStatus, lifecycle, onKill, onDelete }: Props = $props();
+  let { title, agentLabel = "", sseStatus, lifecycle, idleTimeoutMs = 120_000, onKill, onDelete }: Props = $props();
 
   const statusClass = $derived(
     sseStatus === "connected"
@@ -44,6 +46,29 @@
           ? "idle"
           : "",
   );
+
+  /* idle countdown state */
+  let idleEnteredAt = $state(0);
+  let countdownText = $state("");
+
+  $effect(() => {
+    if (lifecycle?.state !== "idle") {
+      countdownText = "";
+      idleEnteredAt = 0;
+      return;
+    }
+
+    const atMs = lifecycle.at || (idleEnteredAt || Date.now());
+    if (!idleEnteredAt) idleEnteredAt = atMs;
+
+    countdownText = idleCountdownText(atMs, idleTimeoutMs, Date.now());
+
+    const timer = setInterval(() => {
+      countdownText = idleCountdownText(atMs, idleTimeoutMs, Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  });
 </script>
 
 <div
@@ -79,6 +104,9 @@
           </svg>
         {/if}
         <span data-lifecycle-label>{lcLabel}</span>
+        {#if lifecycle?.state === "idle" && countdownText}
+          <span data-idle-countdown class="ml-0.5 opacity-80">{countdownText}</span>
+        {/if}
       </span>
     {/if}
     <span

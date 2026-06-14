@@ -103,6 +103,9 @@
   let activeProvider = $state<string | null>(null);
   let activeProjectId = $state<string | null>(null);
 
+  /* ── idle timeout ─────────────────────────────────────────────── */
+  const idleTimeoutMs = parseInt(document.getElementById("app")?.dataset.idleTimeoutMs ?? "", 10) || 120_000;
+
   /* ── SCM dock ─────────────────────────────────────────────────── */
   const scmAssetUrl =
     document.getElementById("app")?.dataset.scmAsset ??
@@ -382,6 +385,7 @@
       {agentLabel}
       {sseStatus}
       lifecycle={agentLifecycle}
+      {idleTimeoutMs}
       onKill={handleKill}
       onDelete={handleDelete}
     />
