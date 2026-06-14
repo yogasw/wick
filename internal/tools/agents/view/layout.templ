@@ -215,6 +215,10 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	     wickConfirm just include the script below and the shell above. -->
 	@ui.Dialog()
 	<script src="/public/js/dialog.js"></script>
+	if vm.ShellAssetURL != "" {
+		<!-- Shell island: wires sidebar pin + drag-to-move on every agents page. -->
+		<script type="module" src={ vm.ShellAssetURL }></script>
+	}
 	<script>
 		(function () {
 			var shell = document.querySelector('[data-agents-shell]');

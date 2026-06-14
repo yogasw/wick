@@ -37,6 +37,12 @@ type AgentsLayoutVM struct {
 	// editor needs the full viewport for its canvas; padded pages
 	// (sessions, presets, …) leave this false.
 	FullBleed bool
+	// ShellAssetURL is the hashed bundle URL for the agents-shell island
+	// (fe/agents/shell). AgentsLayout emits a <script type="module"> for
+	// this URL so every agents page gets pin + drag-to-move sidebar
+	// behaviors. Empty when the bundle has not been built yet (dev
+	// machine before npm run build).
+	ShellAssetURL string
 }
 
 // ProjectName returns the display name for a project id, or the id
@@ -453,33 +459,33 @@ type ProvidersVM struct {
 	Layout        AgentsLayoutVM
 	Base          string
 	Statuses      []provider.Status
-	PoolActive     int
-	PoolQueueLen   int
-	PoolMax        int
-	LiveProcesses      []LiveProcessVM
-	ProviderCaps       map[string]ProviderCapVM // key = "type/name"
-	SupportedKeys  []string
-	Gate           GateStatusVM
-	AutoRescan     bool
-	MCP            MCPStatusVM
+	PoolActive    int
+	PoolQueueLen  int
+	PoolMax       int
+	LiveProcesses []LiveProcessVM
+	ProviderCaps  map[string]ProviderCapVM // key = "type/name"
+	SupportedKeys []string
+	Gate          GateStatusVM
+	AutoRescan    bool
+	MCP           MCPStatusVM
 }
 
 // ProviderDetailVM is the view model for the per-provider detail page.
 type ProviderDetailVM struct {
-	Layout        AgentsLayoutVM
-	Base          string
-	Status        provider.Status
-	GlobalMax     int
-	ActiveCount   int
-	ActivePIDs    []LiveProcessVM
-	Rows          []entity.Config
-	ActionBase    string
-	Spawns        []provider.SpawnLogFile
-	Page          int
-	HasNext       bool
-	Gate          GateStatusVM
-	Flash         string
-	Error         string
+	Layout      AgentsLayoutVM
+	Base        string
+	Status      provider.Status
+	GlobalMax   int
+	ActiveCount int
+	ActivePIDs  []LiveProcessVM
+	Rows        []entity.Config
+	ActionBase  string
+	Spawns      []provider.SpawnLogFile
+	Page        int
+	HasNext     bool
+	Gate        GateStatusVM
+	Flash       string
+	Error       string
 }
 
 // LiveProcessVM is one row in the Active Processes panel on the Providers page.
@@ -555,7 +561,7 @@ type SkillProviderFileVM struct {
 	Filename     string
 	Content      string
 	SourcePath   string
-	AllProviders []string // for tab switching
+	AllProviders []string        // for tab switching
 	HasFile      map[string]bool // provider label → file exists
 }
 

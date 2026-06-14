@@ -507,6 +507,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		ProjectCounts:    counts,
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
+		ShellAssetURL:    spaAssetURL("shell"),
 	}
 }
 
