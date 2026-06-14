@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.18.0](https://github.com/yogasw/wick/compare/v0.17.0...v0.18.0) — Core & Admin
+
+_Released on 2026-06-14_
+
 ### Added
 
 *   **Workflow editor — replay-to-editor imports full run state** — the **Copy to editor** button now pins the run's trigger event payload alongside per-node status overlays and output pre-population. Every node inspector's INPUT dropdown gains an entry for the pinned event so `{{.Event.Payload.*}}` expressions resolve to the real run's data during an Execute step (n8n-style "retry with pinned input"). A **Unpin** action on the trigger OUTPUT pane clears the pinned payload. See [Canvas editor — Run timeline](./workflow/canvas#run-timeline).
@@ -14,6 +22,12 @@ All notable changes to Wick are documented here.
 *   **Batch template-test expressions endpoint** — `POST /api/workflows/template-test` now accepts an `expressions` array for a per-expression breakdown in one round-trip, replacing N parallel calls that previously triggered rate-limit 429 responses.
 *   **Custom connector health check** — a definition can nominate one operation as a health probe (`health_op` + optional `health_expect` in `SourceMeta`). When set, every instance page shows a **Check Permissions** button and a status banner — same as built-in connectors. Healthy when the probe operation runs without error (HTTP 2xx / MCP non-error result) and, when `health_expect` is set, the response contains the expected substring. A failing probe system-disables every operation on that instance (single credential = whole connector verdict) until a passing check clears it. Set from the **Health check** block on the review / edit form. See [Custom connectors — Health check](/guide/custom-connectors#health-check).
 *   **Session Workspace tab UX** — the Workspace rail tab on the session slide-over gains: count badge showing active session connectors; inline rename (pencil icon on each card); auto-generated default label when an instance is added; dirty-tracking per field so Save/Test send only edited values; Reset button that appears while edits are pending; single **Test** button that exercises the config currently on screen (live field values overlaid on stored config for the probe, never persisted). See [MCP — Workspace tab (UI)](/guide/mcp#workspace-tab-ui).
+*   **Admin — Enhanced Tag Management**:
+    *   `owner:` tags now display human-readable names (`display_name`) in pickers and chips, with resolutions for custom connectors and workflows.
+    *   `owner:` tags are immutable and cannot be modified or deleted, enforced by `ErrOwnerTagImmutable` guard.
+    *   Contextual filtering for `owner:` tags: hidden from the `/admin/tags` page, but visible in resource/connector pickers with display names.
+    *   Orphaned `owner:` tags are automatically deleted.
+*   **Admin — Agents Navigation Control**: The Agents navigation link now respects tool access control policies.
 
 ### Changed
 
@@ -27,7 +41,12 @@ All notable changes to Wick are documented here.
 *   **Agent node `session: "new"` without `session_init`** — agent nodes with `session: "new"` (or any ad-hoc `wf_adhoc_<uuid>` session) no longer fail with "cannot find the path" when there is no `session_init` node upstream. The session directory is created automatically before the first turn.
 *   **Execute step — clearer missing-upstream error** — when an Execute step on a node references `{{.Node.<label>.…}}` for a node that has no output yet, the error message now names the blocking node explicitly instead of surfacing a raw Go-template nil-pointer panic.
 
+### Improved
+
+*   **Binary Size Reduction**: Reduced the release binary size from 84MB to 55MB by stripping symbols and DWARF via `-s -w` in `LDFLAGS` and disabling Vite sourcemap output for SPA bundles.
+
 ---
+
 
 ## [v0.17.0](https://github.com/yogasw/wick/compare/v0.16.16...v0.17.0) — Connectors & Access Control
 
