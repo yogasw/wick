@@ -43,7 +43,7 @@
 </script>
 
 <div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3">
-  {#each turns as turn (turn.turn_id)}
+  {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
     <ThreadMessage {turn} />
   {/each}
 

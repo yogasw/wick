@@ -294,7 +294,7 @@
         <div class="flex-1 overflow-y-auto px-5 py-4 sm:px-6 space-y-2">
           {#if field?.type === "rank"}
             <div class="space-y-2">
-              {#each rankOrder as val, i (val)}
+              {#each rankOrder as val, i (val + "-" + i)}
                 {@const opt = field.options?.find((o) => o.value === val) ?? { label: val, value: val }}
                 <div
                   class="{ROW_BASE} {ROW_OFF} cursor-grab"

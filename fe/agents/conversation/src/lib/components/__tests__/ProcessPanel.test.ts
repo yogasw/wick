@@ -126,4 +126,32 @@ describe("ProcessPanel", () => {
     });
     expect(screen.getByText("—")).toBeDefined();
   });
+
+  test("renders both rows when two processes share the same session_id without crashing", () => {
+    const procA: ProcessInfo = {
+      session_id: "shared-sess",
+      agent_name: "agent-alpha",
+      provider: "anthropic",
+      pid: 1111,
+      queued: 0,
+      lifecycle: "working",
+      alive: true,
+    };
+    const procB: ProcessInfo = {
+      session_id: "shared-sess",
+      agent_name: "agent-beta",
+      provider: "openai",
+      pid: 2222,
+      queued: 0,
+      lifecycle: "idle",
+      alive: true,
+    };
+
+    render(ProcessPanel, {
+      props: { processes: [procA, procB], onKill: vi.fn(), onDequeue: vi.fn() },
+    });
+
+    expect(screen.getByText("agent-alpha")).toBeDefined();
+    expect(screen.getByText("agent-beta")).toBeDefined();
+  });
 });

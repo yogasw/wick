@@ -48,7 +48,7 @@
   {#if rows.length === 0}
     <p class="text-xs text-black-700 dark:text-black-600 py-4 px-2">No active processes for this session.</p>
   {:else}
-    {#each rows as row (row.proc.session_id)}
+    {#each rows as row, i ((row.proc.session_id || "p") + "-" + (row.proc.pid ?? "") + "-" + i)}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 space-y-2">
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">

@@ -67,4 +67,24 @@ describe("ConversationThread", () => {
     });
     expect(container.innerHTML).toContain("running bash…");
   });
+
+  test("renders all turns when multiple turns share empty turn_id without crashing", () => {
+    const emptyA = makeTurn("", "user", "First empty-id turn");
+    const emptyB = makeTurn("", "assistant", "Second empty-id turn");
+    const dupId = makeTurn("t-dup", "user", "Third dup-id turn A");
+    const dupIdB = makeTurn("t-dup", "assistant", "Fourth dup-id turn B");
+
+    render(ConversationThread, {
+      props: {
+        turns: [emptyA, emptyB, dupId, dupIdB],
+        live: null,
+        typing: { active: false },
+      },
+    });
+
+    expect(screen.getByText("First empty-id turn")).toBeDefined();
+    expect(screen.getByText("Second empty-id turn")).toBeDefined();
+    expect(screen.getByText("Third dup-id turn A")).toBeDefined();
+    expect(screen.getByText("Fourth dup-id turn B")).toBeDefined();
+  });
 });
