@@ -276,6 +276,6 @@ describe("getTurnTrace", () => {
     );
 
     const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
-    expect(r.url).toContain("/tools/agents/api/sessions/sess-99/turns/turn-42");
+    expect(r.url).toContain("/tools/agents/sessions/sess-99/turns/turn-42");
   });
 });

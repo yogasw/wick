@@ -37,6 +37,6 @@ function normalizeTurnEvents(raw: unknown): TurnEvent[] {
 }
 
 export const getTurnTrace = (base: string, id: string, turnId: string) =>
-  apiGetE<unknown>(`${base}/api/sessions/${id}/turns/${turnId}`).pipe(
+  apiGetE<unknown>(`${base}/sessions/${id}/turns/${turnId}`).pipe(
     Effect.map(normalizeTurnEvents),
   );
