@@ -336,7 +336,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 	case "wick_list":
 		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_search":
-		handlers.WickSearch(w, r, hreq, rsp, h.connectors, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickSearch(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_get":
 		handlers.WickGet(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
 	case "wick_execute":

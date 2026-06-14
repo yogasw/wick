@@ -6,7 +6,11 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **Session workspace discoverability** — `wick_list`, `wick_search`, and `wick_get` now accept an optional `session_id` argument. Passing it causes `wick_list` to include this session's `sw_…` workspace instances alongside regular connectors and return a `session_config_bases` array (connectors that can be cloned but haven't been added yet). `wick_search` now also matches workspace instances so a connector spun up for the session is findable. For `wick_get`, `session_id` is a separate argument — never append it to the connector id.
+*   **Session instance status** — a workspace instance in `wick_list` / `wick_search` results reports `kind: "session"`. When its config is incomplete the status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`), directing the user to the session Config tab rather than the admin dashboard.
+*   **`AllowSessionConfig` auto-on** — the per-instance *Allow per-session config override* toggle now defaults to enabled for any instance whose connector module declares the capability (e.g. httprest). No manual admin toggle required to make an eligible connector available for session cloning; admins can still turn individual rows off.
 
 ---
 

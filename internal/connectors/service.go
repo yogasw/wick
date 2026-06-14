@@ -219,7 +219,39 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 			return err
 		}
 	}
+	s.backfillSessionConfigDefault(ctx, mods)
 	return nil
+}
+
+// sessionConfigBackfillKey marks that the one-time per-instance
+// AllowSessionConfig backfill has run, so it never re-enables a row an
+// admin later turns off.
+const sessionConfigBackfillKey = "connector_session_config_backfilled"
+
+// backfillSessionConfigDefault flips existing rows of session-config
+// capable modules ON once. New rows already inherit the module flag at
+// seed/create; this covers rows created before the per-instance toggle
+// existed (which sat at the gorm default of false). Runs a single time,
+// guarded by a marker — a later admin OFF then sticks.
+func (s *Service) backfillSessionConfigDefault(ctx context.Context, mods []connector.Module) {
+	if s.cfgs == nil || s.cfgs.Get(sessionConfigBackfillKey) == "done" {
+		return
+	}
+	for _, m := range mods {
+		if !m.AllowSessionConfig {
+			continue
+		}
+		rows, err := s.repo.ListByKey(ctx, m.Meta.Key)
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			if !row.AllowSessionConfig {
+				_ = s.repo.SetSessionConfigAllowed(ctx, row.ID, true)
+			}
+		}
+	}
+	_ = s.cfgs.Set(ctx, sessionConfigBackfillKey, "done")
 }
 
 // seedModuleRows is the per-module half of Bootstrap: auto-create the
@@ -238,8 +270,9 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 	}
 	if n == 0 && m.Meta.Fixed {
 		row := &entity.Connector{
-			Key:   m.Meta.Key,
-			Label: m.Meta.Name,
+			Key:                m.Meta.Key,
+			Label:              m.Meta.Name,
+			AllowSessionConfig: m.AllowSessionConfig,
 		}
 		if err := s.repo.Create(ctx, row); err != nil {
 			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
@@ -348,9 +381,10 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 		}
 	}
 	c := &entity.Connector{
-		Key:       key,
-		Label:     label,
-		CreatedBy: createdBy,
+		Key:                key,
+		Label:              label,
+		CreatedBy:          createdBy,
+		AllowSessionConfig: mod.AllowSessionConfig,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
@@ -647,9 +681,10 @@ func (s *Service) Duplicate(ctx context.Context, sourceID, createdBy string) (*e
 		return nil, ErrFixedInstanceViolation
 	}
 	c := &entity.Connector{
-		Key:       src.Key,
-		Label:     src.Label + " (copy)",
-		CreatedBy: createdBy,
+		Key:                src.Key,
+		Label:              src.Label + " (copy)",
+		CreatedBy:          createdBy,
+		AllowSessionConfig: src.AllowSessionConfig,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
