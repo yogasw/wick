@@ -49,10 +49,16 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
 				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
 				"(2) wick_get with the id (connector id or connector_id/account_id for account entries) to see its tools + input_schemas, " +
-				"(3) wick_execute with tool_id + params. Takes no arguments.",
+				"(3) wick_execute with tool_id + params. " +
+				"Pass session_id to also include this session's workspace connectors (ephemeral sw_… instances created via wick_session_workspace); in the wick agent the session is resolved automatically, so you normally do not need to pass it.",
 			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Active wick agent session id. Pass it to include session-workspace connectors (sw_…). Resolved automatically inside the wick agent.",
+					},
+				},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "List wick connectors",
@@ -66,13 +72,17 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Returns matching tools nested under their connector (id, description, status), with tool_id per hit. " +
 				"status is 'ready' or 'needs_setup' — do NOT call wick_execute on a needs_setup connector; tell the user to open the admin dashboard to complete setup. " +
 				"WORKFLOW: after finding a match, call wick_get with the connector id to get full schemas, " +
-				"then wick_execute.",
+				"then wick_execute. Pass session_id to also search this session's workspace connectors.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{
 						"type":        "string",
 						"description": "Keyword to match.",
+					},
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Active wick agent session id, as its OWN argument. Pass it to include this session's workspace connectors (sw_…) in results.",
 					},
 				},
 				"required": []string{"query"},
@@ -87,13 +97,19 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Description: "Get a connector's full tool list with input_schemas. " +
 				"Pass the connector id from wick_list or wick_search. " +
 				"ALWAYS call this before wick_execute to know the required params. " +
-				"Never guess params — read input_schema from this response first.",
+				"Never guess params — read input_schema from this response first. " +
+				"For a session-workspace connector (id starts with sw_), also pass " +
+				"session_id as a SEPARATE argument — never append it to id.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
 						"type":        "string",
-						"description": "Connector id from wick_list or wick_search.",
+						"description": "Connector id from wick_list or wick_search — the id ONLY (e.g. \"sw_abc\" or a uuid). Never append \"?session_id=...\" or any query string to it.",
+					},
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "Active wick agent session id, passed as its OWN argument (sibling of id, not part of it). Required when id starts with sw_ (a session-workspace connector); ignored otherwise.",
 					},
 				},
 				"required": []string{"id"},
@@ -122,7 +138,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"tool_id": map[string]any{
 						"type":        "string",
-						"description": "Opaque tool identifier from wick_list or wick_search.",
+						"description": "Opaque tool identifier from wick_list or wick_search — the tool_id ONLY. Never append \"?session_id=...\" or any query string to it.",
 					},
 					"params": map[string]any{
 						"type":                 "object",
@@ -131,8 +147,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"session_id": map[string]any{
 						"type": "string",
-						"description": "Wick agent session ID. REQUIRED when tool_id targets a session-workspace " +
-							"connector (its id starts with sw_); omit for normal saved connectors.",
+						"description": "Active wick agent session ID, passed as its OWN argument (sibling of tool_id, not part of it). REQUIRED when tool_id targets a session-workspace " +
+							"connector (its id starts with sw_); ignored for normal saved connectors.",
 					},
 				},
 				"required": []string{"tool_id", "params"},
