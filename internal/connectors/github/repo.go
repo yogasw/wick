@@ -70,3 +70,57 @@ func doRequest(c *connector.Ctx, method, url string, body any) (any, error) {
 	}
 	return decoded, nil
 }
+
+// doRequestText sends an authenticated GitHub API request and returns the
+// raw response body as a string, without JSON-decoding it. It mirrors
+// doRequest's auth headers but sets Accept to the caller-supplied value —
+// useful for media-type endpoints like the PR ".diff" / ".patch" views.
+// Non-2xx responses still surface GitHub's {"message"} when the error body
+// is JSON, falling back to the raw text otherwise.
+func doRequestText(c *connector.Ctx, method, url, accept string, body any) (string, error) {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return "", fmt.Errorf("marshal request body: %w", err)
+		}
+		reader = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(c.Context(), method, url, reader)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+
+	token := strings.TrimSpace(c.Cfg("token"))
+	if token == "" {
+		return "", fmt.Errorf("token is not configured for this connector instance")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", accept)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github %s %s: %w", method, url, err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Surface GitHub's error message directly — it's human-readable.
+		var ghErr struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &ghErr); err == nil && ghErr.Message != "" {
+			return "", fmt.Errorf("github %d: %s", resp.StatusCode, ghErr.Message)
+		}
+		return "", fmt.Errorf("github %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	return string(raw), nil
+}
