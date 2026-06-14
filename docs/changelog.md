@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.2](https://github.com/yogasw/wick/compare/v0.18.1...v0.18.2) — GitHub Connector
+
+_Released on 2026-06-14_
+
+### Added
+*   Enhanced GitHub connector with support for reviews.
+*   Added branch-related functionalities to the GitHub connector.
+*   Introduced label management features for the GitHub connector.
+*   Enabled search capabilities within the GitHub connector.
+*   Integrated GitHub Actions support.
+*   Added webhook functionalities.
+*   Implemented comment-edit operations for the GitHub connector.
+
+---
+
+
 ## [v0.18.1](https://github.com/yogasw/wick/compare/v0.18.0...v0.18.1) — GitHub Connector
 
 _Released on 2026-06-14_
