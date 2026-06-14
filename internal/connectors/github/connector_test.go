@@ -140,7 +140,7 @@ func TestMeta(t *testing.T) {
 
 func TestOperations(t *testing.T) {
 	ops := Operations()
-	assert.Len(t, ops, 32)
+	assert.Len(t, ops, 57)
 	keys := make([]string, len(ops))
 	for i, op := range ops {
 		keys[i] = op.Key
@@ -154,6 +154,15 @@ func TestOperations(t *testing.T) {
 		"get_pr", "list_pr_files", "update_pr",
 		"list_releases", "get_latest_release", "get_release", "create_release", "update_release", "delete_release",
 		"list_tags", "get_me",
+		"update_comment", "delete_comment",
+		"create_review", "list_reviews", "create_review_comment", "list_review_comments", "request_reviewers",
+		"create_branch", "delete_ref",
+		"add_labels", "remove_label", "add_assignees",
+		"get_commit", "compare_commits",
+		"search_issues", "search_repos", "search_code",
+		"list_collaborators", "create_repo", "update_repo",
+		"list_workflows", "list_workflow_runs", "dispatch_workflow",
+		"list_hooks", "create_hook",
 	}, keys)
 }
 
@@ -653,4 +662,374 @@ func TestHealthCheckBadToken(t *testing.T) {
 	assert.Equal(t, "auth", report[0].Key)
 	assert.False(t, report[0].OK)
 	assert.Contains(t, report[0].Reason, "Bad credentials")
+}
+
+func TestUpdateComment(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 200, map[string]any{"id": float64(123), "body": "edited"}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "comment_id": "123", "body": "edited"})
+	res, err := updateComment(c)
+	require.NoError(t, err)
+	assert.Equal(t, "PATCH", m)
+	assert.Equal(t, "/repos/octocat/hello/issues/comments/123", p)
+	assert.Equal(t, "edited", captured["body"])
+	assert.Equal(t, "edited", res.(map[string]any)["body"])
+}
+
+func TestDeleteComment(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 204, nil, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "comment_id": "123"})
+	res, err := deleteComment(c)
+	require.NoError(t, err)
+	assert.Equal(t, "DELETE", m)
+	assert.Equal(t, "/repos/octocat/hello/issues/comments/123", p)
+	assert.Equal(t, true, res.(map[string]any)["ok"])
+}
+
+func TestCreateReview(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 200, map[string]any{"id": float64(1), "state": "APPROVED"}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "7", "event": "APPROVE", "body": "LGTM"})
+	_, err := createReview(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/pulls/7/reviews", p)
+	assert.Equal(t, "APPROVE", captured["event"])
+	assert.Equal(t, "LGTM", captured["body"])
+}
+
+func TestCreateReviewDefaultEvent(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 200, map[string]any{"id": float64(1)}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "7"})
+	_, err := createReview(c)
+	require.NoError(t, err)
+	assert.Equal(t, "COMMENT", captured["event"])
+}
+
+func TestListReviews(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, []map[string]any{{"id": float64(1), "state": "APPROVED"}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "7"})
+	res, err := listReviews(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/pulls/7/reviews", p)
+	assert.Len(t, res.([]any), 1)
+}
+
+func TestCreateReviewComment(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 201, map[string]any{"id": float64(9), "path": "main.go"}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "7", "body": "nit", "commit_id": "abc123", "path": "main.go", "line": "10"})
+	_, err := createReviewComment(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/pulls/7/comments", p)
+	assert.Equal(t, "abc123", captured["commit_id"])
+	assert.Equal(t, "main.go", captured["path"])
+	assert.Equal(t, float64(10), captured["line"])
+	assert.Equal(t, "RIGHT", captured["side"])
+}
+
+func TestListReviewComments(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, []map[string]any{{"id": float64(1), "path": "main.go"}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "7"})
+	res, err := listReviewComments(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/pulls/7/comments", p)
+	assert.Len(t, res.([]any), 1)
+}
+
+func TestRequestReviewers(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 201, map[string]any{"requested_reviewers": []any{}}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "7", "reviewers": "yoga,riska"})
+	_, err := requestReviewers(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/pulls/7/requested_reviewers", p)
+	assert.ElementsMatch(t, []any{"yoga", "riska"}, captured["reviewers"])
+}
+
+func TestCreateBranch(t *testing.T) {
+	var postMethod, postPath string
+	var captured map[string]any
+	refLooked := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/octocat/hello/git/ref/heads/main":
+			refLooked = true
+			w.WriteHeader(200)
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": "headsha123"}})
+		case r.Method == "POST":
+			postMethod, postPath = r.Method, r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&captured)
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ref": "refs/heads/feature/x", "object": map[string]any{"sha": "headsha123"}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "branch": "feature/x", "from_branch": "main"})
+	res, err := createBranch(c)
+	require.NoError(t, err)
+	assert.True(t, refLooked, "expected a ref-lookup GET before the POST")
+	assert.Equal(t, "POST", postMethod)
+	assert.Equal(t, "/repos/octocat/hello/git/refs", postPath)
+	assert.Equal(t, "refs/heads/feature/x", captured["ref"])
+	assert.Equal(t, "headsha123", captured["sha"])
+	assert.Equal(t, "refs/heads/feature/x", res.(map[string]any)["ref"])
+}
+
+func TestDeleteRef(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 204, nil, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "branch": "feature/x"})
+	res, err := deleteRef(c)
+	require.NoError(t, err)
+	assert.Equal(t, "DELETE", m)
+	assert.Equal(t, "/repos/octocat/hello/git/refs/heads/feature/x", p)
+	assert.Equal(t, true, res.(map[string]any)["ok"])
+}
+
+func TestAddLabels(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 200, []map[string]any{{"name": "bug"}}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "42", "labels": "bug,priority:high"})
+	_, err := addLabels(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/issues/42/labels", p)
+	assert.ElementsMatch(t, []any{"bug", "priority:high"}, captured["labels"])
+}
+
+func TestRemoveLabel(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, []map[string]any{}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "42", "name": "bug"})
+	_, err := removeLabel(c)
+	require.NoError(t, err)
+	assert.Equal(t, "DELETE", m)
+	assert.Equal(t, "/repos/octocat/hello/issues/42/labels/bug", p)
+}
+
+func TestAddAssignees(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 201, map[string]any{"number": float64(42)}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "number": "42", "assignees": "yoga,riska"})
+	_, err := addAssignees(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/issues/42/assignees", p)
+	assert.ElementsMatch(t, []any{"yoga", "riska"}, captured["assignees"])
+}
+
+func TestGetCommit(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"sha": "abc123"}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "sha": "abc123"})
+	res, err := getCommit(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/commits/abc123", p)
+	assert.Equal(t, "abc123", res.(map[string]any)["sha"])
+}
+
+func TestCompareCommits(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"status": "ahead", "ahead_by": float64(3)}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "base": "main", "head": "feature/x"})
+	res, err := compareCommits(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/compare/main...feature/x", p)
+	assert.Equal(t, "ahead", res.(map[string]any)["status"])
+}
+
+func TestSearchIssues(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"total_count": float64(1), "items": []any{map[string]any{"number": float64(1)}}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"q": "repo:abc/web is:open", "per_page": "10"})
+	res, err := searchIssues(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/search/issues", p)
+	assert.Contains(t, q, "q=repo%3Aabc%2Fweb+is%3Aopen")
+	assert.Equal(t, float64(1), res.(map[string]any)["total_count"])
+}
+
+func TestSearchRepos(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"total_count": float64(2)}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"q": "language:go"})
+	_, err := searchRepos(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/search/repositories", p)
+	assert.Contains(t, q, "q=language%3Ago")
+}
+
+func TestSearchCode(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"total_count": float64(3)}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"q": "addClass in:file repo:abc/web"})
+	_, err := searchCode(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/search/code", p)
+	assert.Contains(t, q, "q=addClass")
+}
+
+func TestListCollaborators(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, []map[string]any{{"login": "yoga"}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello"})
+	res, err := listCollaborators(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/collaborators", p)
+	assert.Len(t, res.([]any), 1)
+}
+
+func TestCreateRepoUser(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 201, map[string]any{"full_name": "yoga/web"}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"name": "web", "private": "true", "auto_init": "true"})
+	res, err := createRepo(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/user/repos", p)
+	assert.Equal(t, "web", captured["name"])
+	assert.Equal(t, true, captured["private"])
+	assert.Equal(t, true, captured["auto_init"])
+	assert.Equal(t, "yoga/web", res.(map[string]any)["full_name"])
+}
+
+func TestCreateRepoOrg(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 201, map[string]any{"full_name": "my-org/web"}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"name": "web", "org": "my-org"})
+	_, err := createRepo(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/orgs/my-org/repos", p)
+}
+
+func TestUpdateRepo(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 200, map[string]any{"full_name": "octocat/hello"}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "description": "Updated", "private": "true"})
+	_, err := updateRepo(c)
+	require.NoError(t, err)
+	assert.Equal(t, "PATCH", m)
+	assert.Equal(t, "/repos/octocat/hello", p)
+	assert.Equal(t, "Updated", captured["description"])
+	assert.Equal(t, true, captured["private"])
+	_, hasArchived := captured["archived"]
+	assert.False(t, hasArchived, "archived must not be sent when input is empty")
+}
+
+func TestListWorkflows(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"total_count": float64(1), "workflows": []any{map[string]any{"id": float64(1)}}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello"})
+	res, err := listWorkflows(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/actions/workflows", p)
+	assert.Equal(t, float64(1), res.(map[string]any)["total_count"])
+}
+
+func TestListWorkflowRuns(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, map[string]any{"total_count": float64(2), "workflow_runs": []any{}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello"})
+	res, err := listWorkflowRuns(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/actions/runs", p)
+	assert.Equal(t, float64(2), res.(map[string]any)["total_count"])
+}
+
+func TestDispatchWorkflow(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 204, nil, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "workflow_id": "ci.yml", "ref": "main", "inputs": `{"env":"prod"}`})
+	res, err := dispatchWorkflow(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/actions/workflows/ci.yml/dispatches", p)
+	assert.Equal(t, "main", captured["ref"])
+	assert.Equal(t, map[string]any{"env": "prod"}, captured["inputs"])
+	assert.Equal(t, true, res.(map[string]any)["ok"])
+}
+
+func TestListHooks(t *testing.T) {
+	var m, p, q string
+	srv := captureSrv(t, 200, []map[string]any{{"id": float64(1), "name": "web"}}, &m, &p, &q, nil)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello"})
+	res, err := listHooks(c)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", m)
+	assert.Equal(t, "/repos/octocat/hello/hooks", p)
+	assert.Len(t, res.([]any), 1)
+}
+
+func TestCreateHook(t *testing.T) {
+	var m, p, q string
+	captured := map[string]any{}
+	srv := captureSrv(t, 201, map[string]any{"id": float64(5), "active": true}, &m, &p, &q, &captured)
+	c := newCtx(map[string]string{"base_url": srv.URL, "token": "x"},
+		map[string]string{"owner": "octocat", "repo": "hello", "url": "https://example.com/hook", "events": "push,pull_request"})
+	_, err := createHook(c)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", m)
+	assert.Equal(t, "/repos/octocat/hello/hooks", p)
+	assert.Equal(t, "web", captured["name"])
+	assert.Equal(t, true, captured["active"])
+	assert.ElementsMatch(t, []any{"push", "pull_request"}, captured["events"])
+	config := captured["config"].(map[string]any)
+	assert.Equal(t, "https://example.com/hook", config["url"])
+	assert.Equal(t, "json", config["content_type"])
 }
