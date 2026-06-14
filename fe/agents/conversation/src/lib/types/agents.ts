@@ -132,3 +132,20 @@ export type FileContent = {
   tooBig?: boolean;
   mtime?: number;
 };
+
+export type AgentEvent = {
+  session_id?: string;
+  agent_name?: string;
+  type: string;
+  data?: string;
+  tool_name?: string;
+  tool_input?: string;
+  tool_use_id?: string;
+  is_error?: boolean;
+  pid?: number;
+  lifecycle?: string;
+  at?: number;
+  end_at?: number;
+};
+
+export type SSEStatus = "connecting" | "connected" | "error";
