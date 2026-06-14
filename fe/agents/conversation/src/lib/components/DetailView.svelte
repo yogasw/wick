@@ -15,6 +15,7 @@
   import { push } from "../router.js";
 
   import { getConversation, getSessionMeta, deleteSession } from "../api/sessions.js";
+  import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { answerAsk } from "../api/asks.js";
   import { sendApprovalDecision } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
@@ -28,6 +29,7 @@
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
   import Composer from "./Composer.svelte";
+  import ComposerToolbar from "./ComposerToolbar.svelte";
   import ContextPanel from "./ContextPanel.svelte";
   import FileViewerModal from "./FileViewerModal.svelte";
   import ProcessPanel from "./ProcessPanel.svelte";
@@ -40,6 +42,7 @@
     ConversationTurn, LiveTurn, TypingState,
     ContextFileEntry, AskAnswer, ApprovalDecision,
     WsInstance, WsBase, ProcessInfo, FileContent,
+    ProviderOption, ProjectOption,
   } from "../types/agents.js";
 
   type Props = {
@@ -94,6 +97,12 @@
   let wsBases = $state<WsBase[]>([]);
   let wsOpenCards = $state<Record<string, boolean>>({});
 
+  /* ── provider / project options ──────────────────────────────── */
+  let providerOptions = $state<ProviderOption[]>([]);
+  let projectOptions = $state<ProjectOption[]>([]);
+  let activeProvider = $state<string | null>(null);
+  let activeProjectId = $state<string | null>(null);
+
   /* ── SCM dock ─────────────────────────────────────────────────── */
   const scmAssetUrl =
     document.getElementById("app")?.dataset.scmAsset ??
@@ -124,6 +133,48 @@
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { wsInstances = res.instances; wsBases = res.bases; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  function loadProviderOptions() {
+    run(getProviderOptions(base).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { providerOptions = res; })
+      .catch(() => { providerOptions = []; });
+  }
+
+  function loadProjectOptions() {
+    run(getProjectOptions(base).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { projectOptions = res; })
+      .catch(() => { projectOptions = []; });
+  }
+
+  async function handleProviderChange(provider: string) {
+    try {
+      const res = await run(
+        switchProvider(base, sessionId, provider).pipe(Effect.provide(WickClientLayer)),
+      );
+      if (res.redirect) {
+        if (res.redirect.startsWith("/sessions/")) {
+          push(res.redirect);
+        } else {
+          window.location.href = res.redirect;
+        }
+      } else {
+        activeProvider = provider;
+      }
+    } catch (e: unknown) {
+      toastError(`Provider: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function handleProjectChange(projectId: string | null) {
+    try {
+      await run(
+        moveProject(base, sessionId, projectId).pipe(Effect.provide(WickClientLayer)),
+      );
+      activeProjectId = projectId;
+    } catch (e: unknown) {
+      toastError(`Project: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   /* ── auto-scroll thread to bottom ─────────────────────────────── */
@@ -271,6 +322,8 @@
       .then((res) => {
         title = res.label || res.id;
         agentLabel = res.active_agent || "";
+        activeProvider = res.active_agent || null;
+        activeProjectId = res.project_id || null;
       })
       .catch(() => { title = sessionId; });
 
@@ -278,6 +331,8 @@
     loadFiles();
     loadProcesses();
     loadWorkspace();
+    loadProviderOptions();
+    loadProjectOptions();
   });
 
   onDestroy(() => {
@@ -355,7 +410,15 @@
 
     <!-- Zone 4: composer docked at bottom -->
     <div class="relative shrink-0 px-4 md:px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
-      <div class="max-w-4xl mx-auto">
+      <div class="max-w-4xl mx-auto flex flex-col gap-1.5">
+        <ComposerToolbar
+          providers={providerOptions}
+          projects={projectOptions}
+          activeProvider={activeProvider}
+          activeProjectId={activeProjectId}
+          onProviderChange={handleProviderChange}
+          onProjectChange={handleProjectChange}
+        />
         <Composer
           onSend={handleSend}
           placeholder="Message the agent…"

@@ -182,3 +182,15 @@ export type WsBase = {
   base_key: string;
   label?: string;
 };
+
+export type ProviderOption = {
+  type: string;
+  name: string;
+  version: string;
+};
+
+export type ProjectOption = {
+  id: string;
+  name: string;
+  path: string;
+};
