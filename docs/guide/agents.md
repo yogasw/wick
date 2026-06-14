@@ -37,7 +37,7 @@ After boot, head to `/tools/agents`.
 | Page | What you do |
 |---|---|
 | **Overview** | Pool stats (active / max / queue), running list, recent sessions. |
-| **Sessions** | List, open, delete sessions. Detail tabs: Conversation, Commands (gate audit), Raw events. Composer at the bottom posts a new message. |
+| **Sessions** | List, open, delete sessions. Detail tabs: Conversation, Commands (gate audit), Approvals, Raw. Composer at the bottom posts a new message. |
 | **Projects** | Create / delete projects. New = empty managed folder unless pointed at a custom path. |
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
