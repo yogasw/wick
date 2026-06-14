@@ -208,6 +208,9 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)
 
+	// JSON API — overview SPA endpoint.
+	r.GET("/api/overview", apiOverview)
+
 	// JSON API — conversation SPA endpoints.
 	r.GET("/api/sessions", apiSessionList)
 	r.GET("/api/sessions/{id}/conversation", apiSessionConversation)
@@ -808,56 +811,10 @@ func overviewPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	// Active = sessions whose subprocess is still alive in the pool
-	// (any lifecycle except killed). Cap at 5; rest live in /sessions.
-	active := globalPool.ActiveSnapshot()
-	const activeCap = 5
-	lc := make(map[string]view.SessionLifecycleVM, len(active))
-	activeIDs := make([]string, 0, len(active))
-	for _, e := range active {
-		entry := view.SessionLifecycleVM{
-			Lifecycle: e.Lifecycle,
-			PID:       e.PID,
-		}
-		if !e.LastActive.IsZero() {
-			entry.LastActiveMs = e.LastActive.UnixMilli()
-		}
-		lc[e.SessionID] = entry
-		if len(activeIDs) < activeCap {
-			activeIDs = append(activeIDs, e.SessionID)
-		}
-	}
-	queue := globalPool.QueueSnapshot()
-	now := time.Now()
-	projects := globalMgr.Registry().Projects()
-	queued := make([]view.QueuedEntryVM, len(queue))
-	for i, q := range queue {
-		projName := ""
-		if s, ok := globalMgr.Registry().Session(q.SessionID); ok && s.Meta.ProjectID != "" {
-			if p, ok := projects[s.Meta.ProjectID]; ok {
-				projName = p.Meta.Name
-			}
-		}
-		queued[i] = view.QueuedEntryVM{
-			SessionID: q.SessionID,
-			AgentName: q.AgentName,
-			WaitingMs: now.Sub(q.Enqueued).Milliseconds(),
-			Label:     loadFirstUserMessage(globalLayout, q.SessionID, 60),
-			Project:   projName,
-		}
-	}
-	c.HTML(view.Overview(view.OverviewVM{
-		Layout:        sidebarVM(c, "overview", ""),
-		Base:          c.Base(),
-		Active:        globalPool.Active(),
-		QueueLen:      globalPool.QueueLen(),
-		PoolMax:       globalPool.MaxConcurrent(),
-		SessionIDs:    activeIDs,
-		Sessions:      globalMgr.Registry().Sessions(),
-		Projects:      globalMgr.Registry().Projects(),
-		Lifecycle:     lc,
-		IdleTimeoutMs: globalPool.IdleTimeout().Milliseconds(),
-		Queued:        queued,
+	c.HTML(view.OverviewSPA(view.OverviewSPAVM{
+		Layout:   sidebarVM(c, "overview", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("overview"),
 	}))
 }
 
