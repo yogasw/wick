@@ -23,19 +23,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/preset"
+	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
-	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/session"
-	agentstore "github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/skills"
+	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/processctl"
+	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -180,6 +180,8 @@ func Register(r tool.Router) {
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
 	r.GET("/overview", overviewPage)
+
+	r.GET("/conversation", conversationSPAPage)
 
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
@@ -2158,4 +2160,23 @@ func streamSnapshot(c *tool.Ctx) {
 		out = []Event{}
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// conversationSPAPage serves the conversation SPA thin-shell. The SPA reads
+// data-base from its #app mount div and prefixes all API calls with that
+// value (e.g. ${base}/api/sessions). c.Base() returns the tool mount path
+// (e.g. /tools/agents), which makes ${base}/api/sessions resolve to the
+// /api/sessions route registered in this same package — no path rewriting
+// needed. This route is additive and does NOT modify the existing /sessions
+// or /sessions/{id} handlers.
+func conversationSPAPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	c.HTML(view.Conversation(view.ConversationVM{
+		Layout:   sidebarVM(c, "sessions", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("conversation"),
+		ScmAsset: spaAssetURL("scm"),
+	}))
 }
