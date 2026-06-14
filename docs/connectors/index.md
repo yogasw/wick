@@ -17,7 +17,7 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 | Connector | Key | Purpose | Default tier |
 |---|---|---|---|
 | [HTTP / REST](./httprest) | `httprest` | Generic JSON REST client — GET / POST / PUT / PATCH / DELETE any path. Useful when you want an LLM to call an API you haven't wrapped in a typed connector yet. | builtin |
-| [GitHub](./github) | `github` | List repos / issues / PRs, read file contents, create issues, post comments. | builtin |
+| [GitHub](./github) | `github` | Full PR-review & release loop: repos, issues, PR diff/merge/create, edit files, releases, tags, forks, stars + health check. | builtin |
 | [Bitbucket](./bitbucket) | `bitbucket` | Search repos, read commits / diffs, list and create pull requests, post PR comments (top-level or inline). | builtin |
 | [Slack](./slack) | `slack` | Read channels, threads, users; send / edit / delete messages; manage reactions. OAuth credentials supported on the row. | builtin |
 | [Google Workspace](./googleworkspace) | `google_workspace` | Manage Drive files, read/write Sheets, edit Docs, and manage Slides — all under one Google OAuth account. 20 ops across four Google APIs. | builtin |

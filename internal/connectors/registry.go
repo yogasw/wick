@@ -118,9 +118,10 @@ func notify(m connector.Module) {
 // only exist mid-boot.
 func RegisterBuiltins() {
 	registerOnce(connector.Module{
-		Meta:       withConnectorTag(github.Meta(), tags.Development),
-		Configs:    entity.StructToConfigs(github.Configs{}),
-		Operations: github.Operations(),
+		Meta:        withConnectorTag(github.Meta(), tags.Development),
+		Configs:     entity.StructToConfigs(github.Configs{}),
+		Operations:  github.Operations(),
+		HealthCheck: github.HealthCheck,
 	})
 	registerOnce(connector.Module{
 		Meta:       withConnectorTag(httprest.Meta(), tags.API),
