@@ -1,29 +1,37 @@
-// Tiny hash router — runes-friendly. Avoids the svelte-spa-router dep
-// (which still uses afterUpdate and is therefore incompatible with
-// Svelte 5 runes mode as of the version we pinned). Public API mirrors
-// the bits we actually use: a `route` store + `push(path)`.
+import { readable, writable } from "svelte/store";
 
-import { readable } from "svelte/store";
-
-function readHash(): string {
-  const h = window.location.hash;
-  if (!h || h === "#") return "/";
-  return h.startsWith("#") ? h.slice(1) : h;
+function getBase(): string {
+  return document.getElementById("app")?.dataset.base ?? "";
 }
 
-export const route = readable<string>(readHash(), (set) => {
-  const onHash = () => set(readHash());
-  window.addEventListener("hashchange", onHash);
-  return () => window.removeEventListener("hashchange", onHash);
+export function routeFromPath(pathname: string, base: string): string {
+  const prefix = base + "/skills";
+  if (pathname === prefix || pathname === prefix + "/") return "/";
+  if (pathname.startsWith(prefix + "/")) {
+    return "/skills/" + pathname.slice(prefix.length + 1);
+  }
+  return "/";
+}
+
+const _route = writable<string>(routeFromPath(window.location.pathname, getBase()));
+
+window.addEventListener("popstate", () => {
+  _route.set(routeFromPath(window.location.pathname, getBase()));
 });
+
+export const route = readable<string>(
+  routeFromPath(window.location.pathname, getBase()),
+  (set) => _route.subscribe(set),
+);
 
 export function push(path: string): void {
   if (!path.startsWith("/")) path = "/" + path;
-  window.location.hash = path;
+  const base = getBase();
+  const fullUrl = path === "/" ? `${base}/skills` : `${base}${path}`;
+  history.pushState({}, "", fullUrl);
+  _route.set(routeFromPath(window.location.pathname, base));
 }
 
-// match("/edit/:id", "/edit/abc") → { id: "abc" }
-//        ("/edit/:id", "/")        → null
 export function match(
   pattern: string,
   path: string,
