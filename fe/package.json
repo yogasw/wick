@@ -18,7 +18,8 @@
     "dev:conversation": "npm --workspace=@wick-fe/agents-conversation run dev",
     "dev:skills": "npm --workspace=@wick-fe/agents-skills run dev",
     "dev:new-session": "npm --workspace=@wick-fe/agents-new-session run dev",
-    "dev:overview": "npm --workspace=@wick-fe/agents-overview run dev"
+    "dev:overview": "npm --workspace=@wick-fe/agents-overview run dev",
+    "dev:presets": "npm --workspace=@wick-fe/agents-presets run dev"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

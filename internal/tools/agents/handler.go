@@ -222,6 +222,10 @@ func Register(r tool.Router) {
 	r.GET("/api/skills/{folder}/files/{file}", apiSkillFolderFileDetail)
 	r.GET("/api/skills/{provider}/{path...}", apiSkillProviderPath)
 
+	// JSON API — presets SPA endpoints.
+	r.GET("/api/presets", apiPresetList)
+	r.GET("/api/presets/{name}", apiPresetDetail)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 
@@ -1668,10 +1672,10 @@ func presetsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	c.HTML(view.PresetsPage(view.PresetsVM{
-		Layout: sidebarVM(c, "presets", ""),
-		Base:   c.Base(),
-		Names:  globalMgr.Registry().PresetNames(),
+	c.HTML(view.PresetsSPA(view.PresetsSPAVM{
+		Layout:   sidebarVM(c, "presets", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("presets"),
 	}))
 }
 
@@ -1679,17 +1683,10 @@ func presetDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	name := c.PathValue("name")
-	p, err := preset.Load(globalLayout, name)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-	c.HTML(view.PresetEditor(view.PresetDetailVM{
-		Layout: sidebarVM(c, "presets", ""),
-		Base:   c.Base(),
-		Name:   p.Name,
-		Body:   p.Body,
+	c.HTML(view.PresetsSPA(view.PresetsSPAVM{
+		Layout:   sidebarVM(c, "presets", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("presets"),
 	}))
 }
 
