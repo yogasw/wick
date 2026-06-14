@@ -78,3 +78,29 @@ export type ConversationTurn = {
   events: TurnEvent[];
   attachments: Attachment[];
 };
+
+export type ApprovalRequest = {
+  id: string;
+  agent_name: string;
+  tool: string;
+  work_dir: string;
+  cmd: string;
+  match_key: string;
+};
+
+export type ApprovedItem = {
+  match_key: string;
+  scope: "session" | "always";
+};
+
+export type ApprovalDecision =
+  | "approve_once"
+  | "approve_session"
+  | "approve_always"
+  | "block";
+
+export type ApprovalsResponse = {
+  pending: ApprovalRequest[];
+  session_approved: ApprovedItem[];
+  always_approved: ApprovedItem[];
+};
