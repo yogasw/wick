@@ -13,6 +13,7 @@ package github
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -300,6 +301,226 @@ type ListTagsInput struct {
 
 // GetMeInput fetches the authenticated user. Takes no arguments.
 type GetMeInput struct{}
+
+// ── COMMENT inputs ───────────────────────────────────────────────────
+
+// UpdateCommentInput edits an existing issue/PR comment.
+type UpdateCommentInput struct {
+	Owner     string `wick:"required;desc=Repository owner."`
+	Repo      string `wick:"required;desc=Repository name."`
+	CommentID int    `wick:"required;desc=Comment ID (numeric, from list_issue_comments)."`
+	Body      string `wick:"textarea;required;desc=New comment body (Markdown supported)."`
+}
+
+// DeleteCommentInput removes an issue/PR comment.
+type DeleteCommentInput struct {
+	Owner     string `wick:"required;desc=Repository owner."`
+	Repo      string `wick:"required;desc=Repository name."`
+	CommentID int    `wick:"required;desc=Comment ID to delete."`
+}
+
+// ── PR REVIEW inputs ─────────────────────────────────────────────────
+
+// CreateReviewInput submits a formal review on a pull request.
+type CreateReviewInput struct {
+	Owner    string `wick:"required;desc=Repository owner."`
+	Repo     string `wick:"required;desc=Repository name."`
+	Number   int    `wick:"required;desc=PR number."`
+	Event    string `wick:"desc=APPROVE | REQUEST_CHANGES | COMMENT. Default COMMENT."`
+	Body     string `wick:"textarea;desc=Review body (Markdown). Required by GitHub when event is REQUEST_CHANGES or COMMENT."`
+	CommitID string `wick:"desc=SHA the review applies to. Default: the PR's latest commit."`
+}
+
+// ListReviewsInput lists the reviews on a pull request.
+type ListReviewsInput struct {
+	Owner   string `wick:"required;desc=Repository owner."`
+	Repo    string `wick:"required;desc=Repository name."`
+	Number  int    `wick:"required;desc=PR number."`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// CreateReviewCommentInput posts an inline diff comment on a pull request.
+type CreateReviewCommentInput struct {
+	Owner    string `wick:"required;desc=Repository owner."`
+	Repo     string `wick:"required;desc=Repository name."`
+	Number   int    `wick:"required;desc=PR number."`
+	Body     string `wick:"textarea;required;desc=Comment body (Markdown supported)."`
+	CommitID string `wick:"required;desc=SHA of the commit to comment on (usually the PR head)."`
+	Path     string `wick:"required;desc=File path the comment applies to."`
+	Line     int    `wick:"required;desc=Line number in the file's diff to attach the comment to."`
+	Side     string `wick:"desc=LEFT | RIGHT (which side of the diff). Default RIGHT."`
+}
+
+// ListReviewCommentsInput lists inline review comments on a pull request.
+type ListReviewCommentsInput struct {
+	Owner   string `wick:"required;desc=Repository owner."`
+	Repo    string `wick:"required;desc=Repository name."`
+	Number  int    `wick:"required;desc=PR number."`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// RequestReviewersInput requests reviewers on a pull request.
+type RequestReviewersInput struct {
+	Owner         string `wick:"required;desc=Repository owner."`
+	Repo          string `wick:"required;desc=Repository name."`
+	Number        int    `wick:"required;desc=PR number."`
+	Reviewers     string `wick:"desc=Comma-separated GitHub logins to request review from."`
+	TeamReviewers string `wick:"desc=Comma-separated team slugs to request review from."`
+}
+
+// ── BRANCH / REF inputs ──────────────────────────────────────────────
+
+// CreateBranchInput creates a new branch from another branch or SHA.
+type CreateBranchInput struct {
+	Owner      string `wick:"required;desc=Repository owner."`
+	Repo       string `wick:"required;desc=Repository name."`
+	Branch     string `wick:"required;desc=Name of the new branch."`
+	FromBranch string `wick:"desc=Branch to branch off. Default: the repo's default branch."`
+	Sha        string `wick:"desc=Commit SHA to point the new branch at. Overrides from_branch when set."`
+}
+
+// DeleteRefInput deletes a branch ref.
+type DeleteRefInput struct {
+	Owner  string `wick:"required;desc=Repository owner."`
+	Repo   string `wick:"required;desc=Repository name."`
+	Branch string `wick:"required;desc=Branch name to delete."`
+}
+
+// ── LABEL / ASSIGNEE inputs ──────────────────────────────────────────
+
+// AddLabelsInput adds labels to an issue or PR.
+type AddLabelsInput struct {
+	Owner  string `wick:"required;desc=Repository owner."`
+	Repo   string `wick:"required;desc=Repository name."`
+	Number int    `wick:"required;desc=Issue or PR number."`
+	Labels string `wick:"required;desc=Comma-separated label names to add (additive)."`
+}
+
+// RemoveLabelInput removes a single label from an issue or PR.
+type RemoveLabelInput struct {
+	Owner  string `wick:"required;desc=Repository owner."`
+	Repo   string `wick:"required;desc=Repository name."`
+	Number int    `wick:"required;desc=Issue or PR number."`
+	Name   string `wick:"required;desc=Label name to remove."`
+}
+
+// AddAssigneesInput assigns users to an issue or PR.
+type AddAssigneesInput struct {
+	Owner     string `wick:"required;desc=Repository owner."`
+	Repo      string `wick:"required;desc=Repository name."`
+	Number    int    `wick:"required;desc=Issue or PR number."`
+	Assignees string `wick:"required;desc=Comma-separated GitHub logins to assign."`
+}
+
+// ── COMMIT / COMPARE inputs ──────────────────────────────────────────
+
+// GetCommitInput fetches a single commit.
+type GetCommitInput struct {
+	Owner string `wick:"required;desc=Repository owner."`
+	Repo  string `wick:"required;desc=Repository name."`
+	Sha   string `wick:"required;desc=Commit SHA (or branch/tag name)."`
+}
+
+// CompareCommitsInput compares two commits/branches.
+type CompareCommitsInput struct {
+	Owner string `wick:"required;desc=Repository owner."`
+	Repo  string `wick:"required;desc=Repository name."`
+	Base  string `wick:"required;desc=Base ref (branch, tag, or SHA)."`
+	Head  string `wick:"required;desc=Head ref (branch, tag, or SHA) to compare against base."`
+}
+
+// ── SEARCH inputs (not repo-scoped) ──────────────────────────────────
+
+// SearchIssuesInput searches issues and pull requests.
+type SearchIssuesInput struct {
+	Q       string `wick:"required;desc=GitHub search query. Example: repo:abc/web is:open is:issue label:bug"`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// SearchReposInput searches repositories.
+type SearchReposInput struct {
+	Q       string `wick:"required;desc=GitHub search query. Example: language:go stars:>100"`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// SearchCodeInput searches code.
+type SearchCodeInput struct {
+	Q       string `wick:"required;desc=GitHub code search query. Example: addClass in:file language:js repo:abc/web"`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// ── COLLABORATOR / REPO-MGMT inputs ──────────────────────────────────
+
+// ListCollaboratorsInput lists repository collaborators.
+type ListCollaboratorsInput struct {
+	Owner   string `wick:"required;desc=Repository owner."`
+	Repo    string `wick:"required;desc=Repository name."`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// CreateRepoInput creates a repository for the user or an org.
+type CreateRepoInput struct {
+	Name        string `wick:"required;desc=Repository name."`
+	Description string `wick:"desc=Short repo description."`
+	Private     bool   `wick:"desc=Create as private. Default: false (public)."`
+	AutoInit    bool   `wick:"desc=Initialise with an empty README. Default: false."`
+	Org         string `wick:"desc=Organisation to create the repo under. Default: the authenticated user."`
+}
+
+// UpdateRepoInput edits repository settings.
+type UpdateRepoInput struct {
+	Owner         string `wick:"required;desc=Repository owner."`
+	Repo          string `wick:"required;desc=Repository name."`
+	Name          string `wick:"desc=New repo name. Omit to leave unchanged."`
+	Description   string `wick:"desc=New description. Omit to leave unchanged."`
+	Private       bool   `wick:"desc=Set visibility private/public. Sent only when the input is present."`
+	DefaultBranch string `wick:"desc=New default branch. Omit to leave unchanged."`
+	Archived      bool   `wick:"desc=Archive/unarchive. Sent only when the input is present."`
+}
+
+// ── ACTIONS inputs ───────────────────────────────────────────────────
+
+// ListWorkflowsInput lists GitHub Actions workflows.
+type ListWorkflowsInput struct {
+	Owner   string `wick:"required;desc=Repository owner."`
+	Repo    string `wick:"required;desc=Repository name."`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// ListWorkflowRunsInput lists GitHub Actions workflow runs.
+type ListWorkflowRunsInput struct {
+	Owner   string `wick:"required;desc=Repository owner."`
+	Repo    string `wick:"required;desc=Repository name."`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// DispatchWorkflowInput triggers a workflow_dispatch event.
+type DispatchWorkflowInput struct {
+	Owner      string `wick:"required;desc=Repository owner."`
+	Repo       string `wick:"required;desc=Repository name."`
+	WorkflowID string `wick:"required;desc=Numeric workflow ID or filename (e.g. ci.yml)."`
+	Ref        string `wick:"required;desc=Git ref (branch or tag) to run the workflow on."`
+	Inputs     string `wick:"textarea;desc=Optional JSON object of workflow inputs. Example: {\"env\":\"prod\"}"`
+}
+
+// ── WEBHOOK inputs ───────────────────────────────────────────────────
+
+// ListHooksInput lists repository webhooks.
+type ListHooksInput struct {
+	Owner   string `wick:"required;desc=Repository owner."`
+	Repo    string `wick:"required;desc=Repository name."`
+	PerPage int    `wick:"desc=Results per page, max 100. Default: 30."`
+}
+
+// CreateHookInput creates a repository webhook.
+type CreateHookInput struct {
+	Owner       string `wick:"required;desc=Repository owner."`
+	Repo        string `wick:"required;desc=Repository name."`
+	URL         string `wick:"required;desc=Payload URL the hook POSTs to."`
+	Events      string `wick:"desc=Comma-separated events to subscribe to. Default: push."`
+	Secret      string `wick:"secret;desc=Optional secret used to sign hook payloads."`
+	ContentType string `wick:"desc=json | form. Default: json."`
+}
 
 // Meta returns the static metadata block for this connector.
 func Meta() connector.Meta {
@@ -941,6 +1162,503 @@ func Operations() []connector.Operation {
 				InputSample: `{}`,
 			},
 		),
+
+		// ── COMMENTS ─────────────────────────────────────────────────
+		connector.OpDestructive(
+			"update_comment",
+			"Update Comment",
+			"Edit an existing issue or PR comment by its ID.",
+			UpdateCommentInput{},
+			updateComment,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"id":       "Comment ID.",
+					"body":     "Updated comment body.",
+					"html_url": "Web URL of the comment.",
+				},
+				Quirks: []string{
+					"comment_id is the numeric comment ID (from list_issue_comments), NOT the issue number.",
+					"Works for issue and PR conversation comments (shared endpoint).",
+				},
+				PairWith:    []string{"connector:github.list_issue_comments", "connector:github.delete_comment"},
+				InputSample: `{"owner":"abc","repo":"web","comment_id":123,"body":"edited"}`,
+			},
+		),
+		connector.OpDestructive(
+			"delete_comment",
+			"Delete Comment",
+			"Delete an issue or PR comment by its ID.",
+			DeleteCommentInput{},
+			deleteComment,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ok": "true when GitHub returned 204 No Content.",
+				},
+				Quirks: []string{
+					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+					"comment_id is the numeric comment ID, not the issue number.",
+				},
+				PairWith:    []string{"connector:github.list_issue_comments"},
+				InputSample: `{"owner":"abc","repo":"web","comment_id":123}`,
+			},
+		),
+
+		// ── PULL REQUEST REVIEWS ─────────────────────────────────────
+		connector.OpDestructive(
+			"create_review",
+			"Create PR Review",
+			"Submit a formal review (approve, request changes, or comment) on a pull request.",
+			CreateReviewInput{},
+			createReview,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"id":    "Review ID.",
+					"state": "APPROVED | CHANGES_REQUESTED | COMMENTED.",
+				},
+				Quirks: []string{
+					"event defaults to COMMENT; use APPROVE or REQUEST_CHANGES for a verdict.",
+					"GitHub 422s on a COMMENT/REQUEST_CHANGES review with an empty body.",
+					"commit_id pins the review to a specific SHA; omit to use the PR head.",
+				},
+				PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_reviews", "connector:github.create_review_comment"},
+				InputSample: `{"owner":"abc","repo":"web","number":7,"event":"APPROVE","body":"LGTM"}`,
+			},
+		),
+		connector.Op(
+			"list_reviews",
+			"List PR Reviews",
+			"List the reviews submitted on a pull request.",
+			ListReviewsInput{},
+			listReviews,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"reviews": "Array of {id, user.login, state, body, submitted_at}.",
+				},
+				Quirks: []string{
+					"state is APPROVED | CHANGES_REQUESTED | COMMENTED | PENDING | DISMISSED.",
+					"Pagination: PerPage max 100; first page only.",
+				},
+				PairWith:    []string{"connector:github.create_review", "connector:github.list_review_comments"},
+				InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
+			},
+		),
+		connector.OpDestructive(
+			"create_review_comment",
+			"Create PR Review Comment",
+			"Post an inline comment on a specific line of a pull request's diff.",
+			CreateReviewCommentInput{},
+			createReviewComment,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"id":       "Review comment ID.",
+					"path":     "File path the comment is attached to.",
+					"html_url": "Web URL of the inline comment.",
+				},
+				Quirks: []string{
+					"This is an INLINE diff comment (different from add_comment, which posts to the conversation).",
+					"commit_id, path, and line are required and must match a line present in the diff.",
+					"side selects LEFT (old) or RIGHT (new) of the diff; default RIGHT.",
+				},
+				PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_review_comments", "connector:github.create_review"},
+				InputSample: `{"owner":"abc","repo":"web","number":7,"body":"nit: rename","commit_id":"abc123","path":"main.go","line":10,"side":"RIGHT"}`,
+			},
+		),
+		connector.Op(
+			"list_review_comments",
+			"List PR Review Comments",
+			"List the inline diff comments on a pull request.",
+			ListReviewCommentsInput{},
+			listReviewComments,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"comments": "Array of {id, user.login, body, path, line, commit_id, html_url}.",
+				},
+				Quirks: []string{
+					"These are INLINE diff comments, not the conversation comments from list_issue_comments.",
+					"Pagination: PerPage max 100; first page only.",
+				},
+				PairWith:    []string{"connector:github.create_review_comment"},
+				InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
+			},
+		),
+		connector.OpDestructive(
+			"request_reviewers",
+			"Request PR Reviewers",
+			"Request one or more users or teams to review a pull request.",
+			RequestReviewersInput{},
+			requestReviewers,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"requested_reviewers": "Array of users now requested.",
+					"requested_teams":     "Array of teams now requested.",
+				},
+				Quirks: []string{
+					"reviewers and team_reviewers are comma-separated; supply at least one.",
+					"reviewers are GitHub logins; team_reviewers are team slugs (org repos only).",
+					"GitHub 422s if you request a reviewer who is the PR author.",
+				},
+				PairWith:    []string{"connector:github.create_review", "connector:github.get_pr"},
+				InputSample: `{"owner":"abc","repo":"web","number":7,"reviewers":"yoga,riska"}`,
+			},
+		),
+
+		// ── BRANCHES / REFS ──────────────────────────────────────────
+		connector.OpDestructive(
+			"create_branch",
+			"Create Branch",
+			"Create a new branch from another branch's head (or an explicit SHA).",
+			CreateBranchInput{},
+			createBranch,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ref":        "Full ref of the new branch (refs/heads/<branch>).",
+					"object.sha": "SHA the new branch points at.",
+				},
+				Quirks: []string{
+					"Pass sha to branch off a specific commit; otherwise from_branch's head is used.",
+					"from_branch defaults to the repo's default branch (resolved via GET /repos/{o}/{r}).",
+					"GitHub 422s if the branch already exists.",
+				},
+				PairWith:    []string{"connector:github.create_or_update_file", "connector:github.create_pr", "connector:github.delete_ref"},
+				InputSample: `{"owner":"abc","repo":"web","branch":"feature/x","from_branch":"main"}`,
+			},
+		),
+		connector.OpDestructive(
+			"delete_ref",
+			"Delete Branch",
+			"Delete a branch ref from a repository.",
+			DeleteRefInput{},
+			deleteRef,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ok": "true when GitHub returned 204 No Content.",
+				},
+				Quirks: []string{
+					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+					"Deletes refs/heads/{branch}; cannot delete a protected branch.",
+				},
+				PairWith:    []string{"connector:github.create_branch", "connector:github.list_branches"},
+				InputSample: `{"owner":"abc","repo":"web","branch":"feature/x"}`,
+			},
+		),
+
+		// ── LABELS / ASSIGNEES ───────────────────────────────────────
+		connector.OpDestructive(
+			"add_labels",
+			"Add Labels",
+			"Add labels to an issue or PR (additive — does not replace existing labels).",
+			AddLabelsInput{},
+			addLabels,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"labels": "Array of all labels on the issue after adding.",
+				},
+				Quirks: []string{
+					"Additive — unlike update_issue's labels which replaces the whole set.",
+					"labels is comma-separated; unknown labels are created/ignored by GitHub.",
+				},
+				PairWith:    []string{"connector:github.remove_label", "connector:github.update_issue"},
+				InputSample: `{"owner":"abc","repo":"web","number":42,"labels":"bug,priority:high"}`,
+			},
+		),
+		connector.OpDestructive(
+			"remove_label",
+			"Remove Label",
+			"Remove a single label from an issue or PR.",
+			RemoveLabelInput{},
+			removeLabel,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"labels": "Array of remaining labels on the issue.",
+				},
+				Quirks: []string{
+					"Removes exactly one label by name; GitHub 404s if the label isn't applied.",
+					"name is the label text (e.g. \"bug\"), URL-escaped by the connector.",
+				},
+				PairWith:    []string{"connector:github.add_labels"},
+				InputSample: `{"owner":"abc","repo":"web","number":42,"name":"bug"}`,
+			},
+		),
+		connector.OpDestructive(
+			"add_assignees",
+			"Add Assignees",
+			"Assign one or more users to an issue or PR.",
+			AddAssigneesInput{},
+			addAssignees,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"assignees": "Array of users now assigned to the issue.",
+				},
+				Quirks: []string{
+					"assignees is comma-separated GitHub logins; only users with repo access can be assigned.",
+					"Additive — leaves existing assignees in place.",
+				},
+				PairWith:    []string{"connector:github.update_issue", "connector:github.add_labels"},
+				InputSample: `{"owner":"abc","repo":"web","number":42,"assignees":"yoga,riska"}`,
+			},
+		),
+
+		// ── COMMITS / COMPARE ────────────────────────────────────────
+		connector.Op(
+			"get_commit",
+			"Get Commit",
+			"Fetch a single commit with its message, author, and changed files.",
+			GetCommitInput{},
+			getCommit,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"sha":            "Commit SHA.",
+					"commit.message": "Commit message.",
+					"files":          "Array of changed files with patch/additions/deletions.",
+				},
+				Quirks: []string{
+					"sha may be a full/short SHA or a branch/tag name.",
+				},
+				PairWith:    []string{"connector:github.list_commits", "connector:github.compare_commits"},
+				InputSample: `{"owner":"abc","repo":"web","sha":"main"}`,
+			},
+		),
+		connector.Op(
+			"compare_commits",
+			"Compare Commits",
+			"Compare two commits or branches (base...head). Returns the diff stats and commits between them.",
+			CompareCommitsInput{},
+			compareCommits,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"status":   "ahead | behind | identical | diverged.",
+					"ahead_by": "How many commits head is ahead of base.",
+					"commits":  "Array of commits between base and head.",
+					"files":    "Array of changed files.",
+				},
+				Quirks: []string{
+					"Compares base...head (three-dot, merge-base diff), matching GitHub's compare view.",
+					"base/head can be branches, tags, or SHAs; cross-fork uses owner:branch.",
+				},
+				PairWith:    []string{"connector:github.get_commit", "connector:github.list_commits"},
+				InputSample: `{"owner":"abc","repo":"web","base":"main","head":"feature/x"}`,
+			},
+		),
+
+		// ── SEARCH ───────────────────────────────────────────────────
+		connector.Op(
+			"search_issues",
+			"Search Issues",
+			"Search issues and pull requests across GitHub using the search query syntax.",
+			SearchIssuesInput{},
+			searchIssues,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"total_count": "Total matches (may exceed the returned page).",
+					"items":       "Array of matching issues/PRs.",
+				},
+				Quirks: []string{
+					"q uses GitHub search syntax (qualifiers like repo:, is:open, label:, author:).",
+					"Both issues and PRs are returned; add is:issue or is:pr to filter.",
+					"Search is rate-limited separately and returns the first page only here.",
+				},
+				PairWith:    []string{"connector:github.get_issue", "connector:github.get_pr"},
+				InputSample: `{"q":"repo:abc/web is:open is:issue label:bug","per_page":30}`,
+			},
+		),
+		connector.Op(
+			"search_repos",
+			"Search Repositories",
+			"Search repositories across GitHub using the search query syntax.",
+			SearchReposInput{},
+			searchRepos,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"total_count": "Total matches.",
+					"items":       "Array of matching repositories.",
+				},
+				Quirks: []string{
+					"q uses GitHub search syntax (language:, stars:>, topic:, org:).",
+					"First page only; sort/order qualifiers go in q.",
+				},
+				PairWith:    []string{"connector:github.get_repo"},
+				InputSample: `{"q":"language:go stars:>100","per_page":30}`,
+			},
+		),
+		connector.Op(
+			"search_code",
+			"Search Code",
+			"Search code across GitHub using the code search query syntax.",
+			SearchCodeInput{},
+			searchCode,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"total_count": "Total matches.",
+					"items":       "Array of matching files (name, path, repository).",
+				},
+				Quirks: []string{
+					"Code search needs a qualifier scoping the search (e.g. repo:, org:, user:).",
+					"q uses code search syntax (in:file, language:, filename:); first page only.",
+				},
+				PairWith:    []string{"connector:github.get_file"},
+				InputSample: `{"q":"addClass in:file language:js repo:abc/web","per_page":30}`,
+			},
+		),
+
+		// ── COLLABORATORS / REPO MANAGEMENT ──────────────────────────
+		connector.Op(
+			"list_collaborators",
+			"List Collaborators",
+			"List the collaborators on a repository.",
+			ListCollaboratorsInput{},
+			listCollaborators,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"collaborators": "Array of users (login, permissions, html_url).",
+				},
+				Quirks: []string{
+					"Requires push access to the repo to see the full collaborator list.",
+					"Pagination: PerPage max 100; first page only.",
+				},
+				PairWith:    []string{"connector:github.add_assignees", "connector:github.request_reviewers"},
+				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
+			},
+		),
+		connector.OpDestructive(
+			"create_repo",
+			"Create Repository",
+			"Create a new repository for the authenticated user, or under an organisation.",
+			CreateRepoInput{},
+			createRepo,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"full_name": "owner/name of the new repo.",
+					"html_url":  "Web URL of the new repo.",
+				},
+				Quirks: []string{
+					"Set org to create under an organisation (POST /orgs/{org}/repos); otherwise it's created for the token's user.",
+					"auto_init=true seeds an empty README so the repo has a default branch.",
+					"PAT scope: repo (or fine-grained Administration: write).",
+				},
+				PairWith:    []string{"connector:github.update_repo", "connector:github.create_or_update_file"},
+				InputSample: `{"name":"web","description":"My app","private":true,"auto_init":true}`,
+			},
+		),
+		connector.OpDestructive(
+			"update_repo",
+			"Update Repository",
+			"Edit repository settings (name, description, visibility, default branch, archived). Only provided fields change.",
+			UpdateRepoInput{},
+			updateRepo,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"full_name": "owner/name (reflects rename).",
+					"private":   "Resulting visibility.",
+					"archived":  "Resulting archive state.",
+				},
+				Quirks: []string{
+					"Only fields you supply are sent; private/archived are sent only when their input key is non-empty.",
+					"archived=true archives the repo (read-only); set false to unarchive.",
+					"PAT scope: repo (or fine-grained Administration: write).",
+				},
+				PairWith:    []string{"connector:github.get_repo"},
+				InputSample: `{"owner":"abc","repo":"web","description":"Updated","default_branch":"main"}`,
+			},
+		),
+
+		// ── ACTIONS ──────────────────────────────────────────────────
+		connector.Op(
+			"list_workflows",
+			"List Workflows",
+			"List the GitHub Actions workflows defined in a repository.",
+			ListWorkflowsInput{},
+			listWorkflows,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"total_count": "Number of workflows.",
+					"workflows":   "Array of {id, name, path, state}.",
+				},
+				Quirks: []string{
+					"id and path (filename) can both be used as workflow_id in dispatch_workflow.",
+				},
+				PairWith:    []string{"connector:github.dispatch_workflow", "connector:github.list_workflow_runs"},
+				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
+			},
+		),
+		connector.Op(
+			"list_workflow_runs",
+			"List Workflow Runs",
+			"List recent GitHub Actions workflow runs in a repository.",
+			ListWorkflowRunsInput{},
+			listWorkflowRuns,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"total_count":   "Number of runs.",
+					"workflow_runs": "Array of {id, name, status, conclusion, head_branch, html_url}.",
+				},
+				Quirks: []string{
+					"status is queued | in_progress | completed; conclusion holds the result when completed.",
+					"Pagination: PerPage max 100; first page only.",
+				},
+				PairWith:    []string{"connector:github.list_workflows", "connector:github.dispatch_workflow"},
+				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
+			},
+		),
+		connector.OpDestructive(
+			"dispatch_workflow",
+			"Dispatch Workflow",
+			"Trigger a workflow_dispatch event to run a GitHub Actions workflow on a ref.",
+			DispatchWorkflowInput{},
+			dispatchWorkflow,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"ok": "true when GitHub returned 204 No Content.",
+				},
+				Quirks: []string{
+					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+					"workflow_id can be the numeric ID or the filename (e.g. ci.yml).",
+					"The workflow must declare an on: workflow_dispatch trigger or GitHub 404s.",
+					"inputs is an optional JSON object string; invalid JSON is ignored.",
+				},
+				PairWith:    []string{"connector:github.list_workflows", "connector:github.list_workflow_runs"},
+				InputSample: `{"owner":"abc","repo":"web","workflow_id":"ci.yml","ref":"main","inputs":"{\"env\":\"prod\"}"}`,
+			},
+		),
+
+		// ── WEBHOOKS ─────────────────────────────────────────────────
+		connector.Op(
+			"list_hooks",
+			"List Webhooks",
+			"List the webhooks configured on a repository.",
+			ListHooksInput{},
+			listHooks,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"hooks": "Array of {id, name, active, events, config.url}.",
+				},
+				Quirks: []string{
+					"Requires admin access to the repo.",
+				},
+				PairWith:    []string{"connector:github.create_hook"},
+				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
+			},
+		),
+		connector.OpDestructive(
+			"create_hook",
+			"Create Webhook",
+			"Create a repository webhook that POSTs events to a payload URL.",
+			CreateHookInput{},
+			createHook,
+			wickdocs.Docs{
+				OutputShape: map[string]string{
+					"id":     "Webhook ID.",
+					"config": "The stored config (url, content_type).",
+					"active": "Whether the hook is active.",
+				},
+				Quirks: []string{
+					"events defaults to [\"push\"]; pass a comma-separated list to subscribe to more.",
+					"content_type is json (default) or form; secret signs the payloads (X-Hub-Signature-256).",
+					"Requires admin access to the repo.",
+				},
+				PairWith:    []string{"connector:github.list_hooks"},
+				InputSample: `{"owner":"abc","repo":"web","url":"https://example.com/hook","events":"push,pull_request"}`,
+			},
+		),
 	}
 }
 
@@ -1528,6 +2246,482 @@ func listTags(c *connector.Ctx) (any, error) {
 
 func getMe(c *connector.Ctx) (any, error) {
 	return doRequest(c, "GET", buildURL(c, "/user"), nil)
+}
+
+// ── COMMENT handlers ─────────────────────────────────────────────────
+
+func updateComment(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	commentID := c.InputInt("comment_id")
+	if commentID == 0 {
+		return nil, fmt.Errorf("comment_id is required")
+	}
+	body := strings.TrimSpace(c.Input("body"))
+	if body == "" {
+		return nil, fmt.Errorf("body is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID))
+	return doRequest(c, "PATCH", u, map[string]any{"body": body})
+}
+
+func deleteComment(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	commentID := c.InputInt("comment_id")
+	if commentID == 0 {
+		return nil, fmt.Errorf("comment_id is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID))
+	if _, err := doRequest(c, "DELETE", u, nil); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+// ── PULL REQUEST REVIEW handlers ─────────────────────────────────────
+
+func createReview(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	body := map[string]any{"event": firstNonEmpty(c.Input("event"), "COMMENT")}
+	if text := strings.TrimSpace(c.Input("body")); text != "" {
+		body["body"] = text
+	}
+	if commit := strings.TrimSpace(c.Input("commit_id")); commit != "" {
+		body["commit_id"] = commit
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number))
+	return doRequest(c, "POST", u, body)
+}
+
+func listReviews(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number)) +
+		fmt.Sprintf("?per_page=%d", perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+func createReviewComment(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	body := strings.TrimSpace(c.Input("body"))
+	if body == "" {
+		return nil, fmt.Errorf("body is required")
+	}
+	commit := strings.TrimSpace(c.Input("commit_id"))
+	if commit == "" {
+		return nil, fmt.Errorf("commit_id is required")
+	}
+	path := strings.TrimSpace(c.Input("path"))
+	if path == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	line := c.InputInt("line")
+	if line == 0 {
+		return nil, fmt.Errorf("line is required")
+	}
+	payload := map[string]any{
+		"body":      body,
+		"commit_id": commit,
+		"path":      path,
+		"line":      line,
+		"side":      firstNonEmpty(c.Input("side"), "RIGHT"),
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/pulls/%d/comments", owner, repo, number))
+	return doRequest(c, "POST", u, payload)
+}
+
+func listReviewComments(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/pulls/%d/comments", owner, repo, number)) +
+		fmt.Sprintf("?per_page=%d", perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+func requestReviewers(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	body := map[string]any{}
+	if reviewers := parseCSV(c.Input("reviewers")); len(reviewers) > 0 {
+		body["reviewers"] = reviewers
+	}
+	if teams := parseCSV(c.Input("team_reviewers")); len(teams) > 0 {
+		body["team_reviewers"] = teams
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, number))
+	return doRequest(c, "POST", u, body)
+}
+
+// ── BRANCH / REF handlers ────────────────────────────────────────────
+
+func createBranch(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	branch := strings.TrimSpace(c.Input("branch"))
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
+
+	sha := strings.TrimSpace(c.Input("sha"))
+	if sha == "" {
+		fromBranch := strings.TrimSpace(c.Input("from_branch"))
+		if fromBranch == "" {
+			// Resolve the repo's default branch.
+			repoInfo, repoErr := doRequest(c, "GET", buildURL(c, fmt.Sprintf("/repos/%s/%s", owner, repo)), nil)
+			if repoErr != nil {
+				return nil, repoErr
+			}
+			if m, ok := repoInfo.(map[string]any); ok {
+				if db, ok := m["default_branch"].(string); ok {
+					fromBranch = db
+				}
+			}
+			if fromBranch == "" {
+				return nil, fmt.Errorf("could not resolve default branch")
+			}
+		}
+		refURL := buildURL(c, fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, fromBranch))
+		ref, refErr := doRequest(c, "GET", refURL, nil)
+		if refErr != nil {
+			return nil, refErr
+		}
+		if m, ok := ref.(map[string]any); ok {
+			if obj, ok := m["object"].(map[string]any); ok {
+				if s, ok := obj["sha"].(string); ok {
+					sha = s
+				}
+			}
+		}
+		if sha == "" {
+			return nil, fmt.Errorf("could not resolve head sha for from_branch %q", fromBranch)
+		}
+	}
+
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/git/refs", owner, repo))
+	return doRequest(c, "POST", u, map[string]any{
+		"ref": "refs/heads/" + branch,
+		"sha": sha,
+	})
+}
+
+func deleteRef(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	branch := strings.TrimSpace(c.Input("branch"))
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, branch))
+	if _, err := doRequest(c, "DELETE", u, nil); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+// ── LABEL / ASSIGNEE handlers ────────────────────────────────────────
+
+func addLabels(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	labels := parseCSV(c.Input("labels"))
+	if len(labels) == 0 {
+		return nil, fmt.Errorf("labels is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, number))
+	return doRequest(c, "POST", u, map[string]any{"labels": labels})
+}
+
+func removeLabel(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	name := strings.TrimSpace(c.Input("name"))
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s", owner, repo, number, url.PathEscape(name)))
+	return doRequest(c, "DELETE", u, nil)
+}
+
+func addAssignees(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	number := c.InputInt("number")
+	if number == 0 {
+		return nil, fmt.Errorf("number is required")
+	}
+	assignees := parseCSV(c.Input("assignees"))
+	if len(assignees) == 0 {
+		return nil, fmt.Errorf("assignees is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", owner, repo, number))
+	return doRequest(c, "POST", u, map[string]any{"assignees": assignees})
+}
+
+// ── COMMIT / COMPARE handlers ────────────────────────────────────────
+
+func getCommit(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	sha := strings.TrimSpace(c.Input("sha"))
+	if sha == "" {
+		return nil, fmt.Errorf("sha is required")
+	}
+	return doRequest(c, "GET", buildURL(c, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, sha)), nil)
+}
+
+func compareCommits(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSpace(c.Input("base"))
+	if base == "" {
+		return nil, fmt.Errorf("base is required")
+	}
+	head := strings.TrimSpace(c.Input("head"))
+	if head == "" {
+		return nil, fmt.Errorf("head is required")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repo, base, head))
+	return doRequest(c, "GET", u, nil)
+}
+
+// ── SEARCH handlers ──────────────────────────────────────────────────
+
+func searchIssues(c *connector.Ctx) (any, error) {
+	return doSearch(c, "/search/issues")
+}
+
+func searchRepos(c *connector.Ctx) (any, error) {
+	return doSearch(c, "/search/repositories")
+}
+
+func searchCode(c *connector.Ctx) (any, error) {
+	return doSearch(c, "/search/code")
+}
+
+func doSearch(c *connector.Ctx, path string) (any, error) {
+	q := strings.TrimSpace(c.Input("q"))
+	if q == "" {
+		return nil, fmt.Errorf("q is required")
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, path) + fmt.Sprintf("?q=%s&per_page=%d", url.QueryEscape(q), perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+// ── COLLABORATOR / REPO-MGMT handlers ────────────────────────────────
+
+func listCollaborators(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/collaborators", owner, repo)) +
+		fmt.Sprintf("?per_page=%d", perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+func createRepo(c *connector.Ctx) (any, error) {
+	name := strings.TrimSpace(c.Input("name"))
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	body := map[string]any{"name": name}
+	if desc := strings.TrimSpace(c.Input("description")); desc != "" {
+		body["description"] = desc
+	}
+	if c.InputBool("private") {
+		body["private"] = true
+	}
+	if c.InputBool("auto_init") {
+		body["auto_init"] = true
+	}
+
+	path := "/user/repos"
+	if org := strings.TrimSpace(c.Input("org")); org != "" {
+		path = fmt.Sprintf("/orgs/%s/repos", org)
+	}
+	return doRequest(c, "POST", buildURL(c, path), body)
+}
+
+func updateRepo(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{}
+	if name := strings.TrimSpace(c.Input("name")); name != "" {
+		body["name"] = name
+	}
+	if desc := strings.TrimSpace(c.Input("description")); desc != "" {
+		body["description"] = desc
+	}
+	if strings.TrimSpace(c.Input("private")) != "" {
+		body["private"] = c.InputBool("private")
+	}
+	if db := strings.TrimSpace(c.Input("default_branch")); db != "" {
+		body["default_branch"] = db
+	}
+	if strings.TrimSpace(c.Input("archived")) != "" {
+		body["archived"] = c.InputBool("archived")
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s", owner, repo))
+	return doRequest(c, "PATCH", u, body)
+}
+
+// ── ACTIONS handlers ─────────────────────────────────────────────────
+
+func listWorkflows(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/actions/workflows", owner, repo)) +
+		fmt.Sprintf("?per_page=%d", perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+func listWorkflowRuns(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/actions/runs", owner, repo)) +
+		fmt.Sprintf("?per_page=%d", perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+func dispatchWorkflow(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	workflowID := strings.TrimSpace(c.Input("workflow_id"))
+	if workflowID == "" {
+		return nil, fmt.Errorf("workflow_id is required")
+	}
+	ref := strings.TrimSpace(c.Input("ref"))
+	if ref == "" {
+		return nil, fmt.Errorf("ref is required")
+	}
+	body := map[string]any{"ref": ref}
+	if raw := strings.TrimSpace(c.Input("inputs")); raw != "" {
+		var inputs map[string]any
+		if err := json.Unmarshal([]byte(raw), &inputs); err == nil && len(inputs) > 0 {
+			body["inputs"] = inputs
+		}
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches", owner, repo, workflowID))
+	if _, err := doRequest(c, "POST", u, body); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+// ── WEBHOOK handlers ─────────────────────────────────────────────────
+
+func listHooks(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	perPage := firstNonZero(c.InputInt("per_page"), 30)
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/hooks", owner, repo)) +
+		fmt.Sprintf("?per_page=%d", perPage)
+	return doRequest(c, "GET", u, nil)
+}
+
+func createHook(c *connector.Ctx) (any, error) {
+	owner, repo, err := requireOwnerRepo(c)
+	if err != nil {
+		return nil, err
+	}
+	hookURL := strings.TrimSpace(c.Input("url"))
+	if hookURL == "" {
+		return nil, fmt.Errorf("url is required")
+	}
+	events := parseCSV(c.Input("events"))
+	if len(events) == 0 {
+		events = []string{"push"}
+	}
+	config := map[string]any{
+		"url":          hookURL,
+		"content_type": firstNonEmpty(c.Input("content_type"), "json"),
+	}
+	if secret := strings.TrimSpace(c.Input("secret")); secret != "" {
+		config["secret"] = secret
+	}
+	body := map[string]any{
+		"name":   "web",
+		"active": true,
+		"events": events,
+		"config": config,
+	}
+	u := buildURL(c, fmt.Sprintf("/repos/%s/%s/hooks", owner, repo))
+	return doRequest(c, "POST", u, body)
 }
 
 // HealthCheck verifies the configured token by calling GET /user. It

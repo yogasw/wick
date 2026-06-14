@@ -6,7 +6,7 @@ outline: deep
 
 `github` wraps the GitHub REST API v3. One instance = one GitHub account or organisation (Personal Access Token, optional Enterprise base URL).
 
-Operations cover the full PR-review and release loop — reading repos / issues / PRs, diffing and merging PRs, creating PRs, editing files, cutting releases, plus forks, stars, and tags. Anything wick does NOT cover yet is one [`httprest`](./httprest) call away.
+Operations cover the full PR-review and release loop — reading repos / issues / PRs, diffing and merging PRs, creating PRs, editing files, cutting releases, plus forks, stars, tags, formal/inline reviews, branches, labels, assignees, search, collaborators, repo management, Actions, and webhooks. Anything wick does NOT cover yet is one [`httprest`](./httprest) call away.
 
 | | |
 |---|---|
@@ -41,6 +41,9 @@ The connector reports a single `auth` check that calls `GET /user`. A green chec
 | `list_commits` | `owner`, `repo`, `sha`, `path`, `author`, `per_page` | Commit history. Optional filters: start `sha`, `path`, `author`. |
 | `list_forks` | `owner`, `repo`, `per_page` | Who forked the repo. |
 | `list_stargazers` | `owner`, `repo`, `per_page` | Who starred the repo. |
+| `list_collaborators` | `owner`, `repo`, `per_page` | Collaborators (needs push access to see all). |
+| `get_commit` | `owner`, `repo`, `sha` | One commit with message, author, and changed files. |
+| `compare_commits` | `owner`, `repo`, `base`, `head` | Diff `base...head` — status, ahead/behind counts, commits, files. |
 
 ### Repositories — write *(destructive)*
 
@@ -49,6 +52,10 @@ The connector reports a single `auth` check that calls `GET /user`. A green chec
 | `create_fork` | `owner`, `repo`, `organization`, `name` | Fork into the token's account (or `organization`). |
 | `star_repo` | `owner`, `repo` | Star the repo as the authenticated user. |
 | `unstar_repo` | `owner`, `repo` | Remove the star. |
+| `create_repo` | `name`, `description`, `private`, `auto_init`, `org` | Create a repo for the user, or under `org`. Not repo-scoped. |
+| `update_repo` | `owner`, `repo`, `name`, `description`, `private`, `default_branch`, `archived` | Edit repo settings. Only provided fields change; `private`/`archived` sent only when set. |
+| `create_branch` | `owner`, `repo`, `branch`, `from_branch`, `sha` | New branch off `from_branch`'s head (or `sha`). `from_branch` defaults to the repo default. |
+| `delete_ref` | `owner`, `repo`, `branch` | Delete `refs/heads/{branch}`. |
 
 ### Issues — read
 
@@ -65,6 +72,11 @@ The connector reports a single `auth` check that calls `GET /user`. A green chec
 | `create_issue` | `owner`, `repo`, `title`, `body`, `labels` | Create an issue. `labels` is comma-separated. |
 | `update_issue` | `owner`, `repo`, `number`, `title`, `body`, `state`, `labels` | Edit / close / reopen. Only provided fields change; `labels` replaces the set. |
 | `add_comment` | `owner`, `repo`, `number`, `body` | Comment on an issue **or** PR (PRs are issues for comments). |
+| `update_comment` | `owner`, `repo`, `comment_id`, `body` | Edit a comment by its numeric ID (from `list_issue_comments`). |
+| `delete_comment` | `owner`, `repo`, `comment_id` | Delete a comment by ID. |
+| `add_labels` | `owner`, `repo`, `number`, `labels` | Add labels (**additive** — unlike `update_issue`). `labels` comma-separated. |
+| `remove_label` | `owner`, `repo`, `number`, `name` | Remove one label by name. |
+| `add_assignees` | `owner`, `repo`, `number`, `assignees` | Assign users (comma-separated logins). |
 
 ### Pull requests — read
 
@@ -82,6 +94,41 @@ The connector reports a single `auth` check that calls `GET /user`. A green chec
 | `create_pr` | `owner`, `repo`, `title`, `head`, `base`, `body`, `draft` | Open a PR. `head` may be `owner:branch` for cross-fork. |
 | `update_pr` | `owner`, `repo`, `number`, `title`, `body`, `state`, `base` | Edit / close / retarget. Only provided fields change. |
 | `merge_pr` | `owner`, `repo`, `number`, `merge_method`, `commit_title`, `commit_message` | Merge. `merge_method` = `merge` (default) / `squash` / `rebase`. |
+
+### Pull request reviews
+
+| Op | Destructive | Input | What it does |
+|---|---|---|---|
+| `list_reviews` | no | `owner`, `repo`, `number`, `per_page` | Formal reviews on a PR (state = APPROVED / CHANGES_REQUESTED / COMMENTED). |
+| `list_review_comments` | no | `owner`, `repo`, `number`, `per_page` | **Inline** diff comments (distinct from `list_issue_comments`). |
+| `create_review` | yes | `owner`, `repo`, `number`, `event`, `body`, `commit_id` | Submit a review. `event` = APPROVE / REQUEST_CHANGES / COMMENT (default COMMENT). |
+| `create_review_comment` | yes | `owner`, `repo`, `number`, `body`, `commit_id`, `path`, `line`, `side` | Inline comment on a diff line. `side` = LEFT / RIGHT (default RIGHT). |
+| `request_reviewers` | yes | `owner`, `repo`, `number`, `reviewers`, `team_reviewers` | Request user logins and/or team slugs (comma-separated). |
+
+### Search
+
+Not repo-scoped — `q` uses [GitHub search syntax](https://docs.github.com/en/search-github/searching-on-github). First page only.
+
+| Op | Input | What it does |
+|---|---|---|
+| `search_issues` | `q`, `per_page` | Search issues and PRs (`is:issue` / `is:pr` to filter). |
+| `search_repos` | `q`, `per_page` | Search repositories. |
+| `search_code` | `q`, `per_page` | Search code (needs a scoping qualifier like `repo:` / `org:`). |
+
+### Actions
+
+| Op | Destructive | Input | What it does |
+|---|---|---|---|
+| `list_workflows` | no | `owner`, `repo`, `per_page` | Workflows defined in the repo. |
+| `list_workflow_runs` | no | `owner`, `repo`, `per_page` | Recent workflow runs (status / conclusion). |
+| `dispatch_workflow` | yes | `owner`, `repo`, `workflow_id`, `ref`, `inputs` | Trigger a `workflow_dispatch`. `workflow_id` = numeric ID or filename (`ci.yml`); `inputs` is an optional JSON object. |
+
+### Webhooks
+
+| Op | Destructive | Input | What it does |
+|---|---|---|---|
+| `list_hooks` | no | `owner`, `repo`, `per_page` | Repo webhooks (needs admin access). |
+| `create_hook` | yes | `owner`, `repo`, `url`, `events`, `secret`, `content_type` | Create a `web` hook. `events` defaults to `push`; `content_type` = `json` (default) / `form`. |
 
 ### Files
 
@@ -171,6 +218,10 @@ See [Workflows ▶ Anatomy](/workflow/#anatomy) for the surrounding shape.
 - `get_latest_release` skips drafts and pre-releases; use `list_releases` to see those.
 - `delete_release` removes the release entry but leaves the underlying git tag in place.
 - Don't prefix labels with `#`; GitHub stores them without it, and unknown labels are silently ignored.
+- `add_labels` / `add_assignees` are **additive**; `update_issue`'s `labels` field **replaces** the whole set.
+- `create_review` / `create_review_comment` post into the PR's *review* timeline (inline on a diff line); `add_comment` posts to the *conversation* timeline.
+- `create_branch` resolves the head SHA for you (default branch when `from_branch` is empty), then creates `refs/heads/{branch}`; pass `sha` to skip the lookup.
+- `dispatch_workflow` needs the workflow to declare `on: workflow_dispatch`; it returns `{"ok": true}` (204) and `inputs` must be a JSON object — invalid JSON is dropped.
 
 ## See also
 
