@@ -185,3 +185,42 @@ describe("DetailView — SCM source rail panel", () => {
     expect(contextBtn).toBeDefined();
   });
 });
+
+describe("DetailView — placeholder views full-height (#10)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  test("commands placeholder view renders in a full-height flex container", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const tabBtn = screen.getByRole("button", { name: /tab menu/i });
+    await fireEvent.click(tabBtn);
+    const commandsBtn = screen.getByRole("button", { name: /^commands$/i });
+    await fireEvent.click(commandsBtn);
+
+    const wrapper = container.querySelector("[data-placeholder-view]");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("flex-1");
+    expect(wrapper?.className).toContain("flex");
+    expect(wrapper?.className).toContain("items-center");
+    expect(wrapper?.className).toContain("justify-center");
+  });
+
+  test("raw placeholder view renders in a full-height flex container", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const tabBtn = screen.getByRole("button", { name: /tab menu/i });
+    await fireEvent.click(tabBtn);
+    const rawBtn = screen.getByRole("button", { name: /^raw$/i });
+    await fireEvent.click(rawBtn);
+
+    const wrapper = container.querySelector("[data-placeholder-view]");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("flex-1");
+    expect(wrapper?.className).toContain("flex");
+    expect(wrapper?.className).toContain("items-center");
+    expect(wrapper?.className).toContain("justify-center");
+  });
+});

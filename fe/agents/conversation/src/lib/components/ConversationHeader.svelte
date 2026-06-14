@@ -129,7 +129,7 @@
       {#if tabMenuOpen}
         <div
           data-tab-dropdown
-          class="absolute top-full left-0 mt-1 z-20 min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
+          class="absolute top-full left-0 mt-1 z-40 min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
         >
           {#each TAB_ORDER as tab}
             <button

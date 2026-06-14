@@ -436,7 +436,7 @@
 <div class="flex h-full min-w-0 overflow-hidden">
 
   <!-- Centre column: header + thread + ask + composer -->
-  <div class="relative flex flex-col flex-1 min-w-0 overflow-hidden" data-session-id={sessionId}>
+  <div class="relative flex flex-col flex-1 min-w-0" data-session-id={sessionId}>
 
     <!-- Zone 1: header bar -->
     <ConversationHeader
@@ -555,11 +555,11 @@
         </div>
       </div>
     {:else if activeView === "commands"}
-      <div class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
+      <div data-placeholder-view class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
         <p class="text-sm text-black-600 dark:text-black-700">Commands view — coming soon to the new UI</p>
       </div>
     {:else if activeView === "raw"}
-      <div class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
+      <div data-placeholder-view class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
         <p class="text-sm text-black-600 dark:text-black-700">Raw trace — coming soon</p>
       </div>
     {/if}

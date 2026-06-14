@@ -23,3 +23,6 @@ export const moveProject = (base: string, sessionId: string, projectId: string |
     `${base}/sessions/${encodeURIComponent(sessionId)}/project`,
     { project_id: projectId },
   );
+
+export const pinProject = (base: string, projectId: string) =>
+  apiPostE<{ status: string }>(`${base}/projects/${encodeURIComponent(projectId)}/pin`, {});

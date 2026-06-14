@@ -2,10 +2,14 @@ import { Effect } from "effect";
 import { apiGetE, apiDeleteE } from "@wick-fe/common-api";
 import type { SessionListItem, SessionMeta, ConversationTurn } from "../types/agents.js";
 
-export const listSessions = (base: string) =>
-  apiGetE<{ sessions: SessionListItem[] }>(`${base}/api/sessions`).pipe(
+export const listSessions = (base: string, projectId?: string) => {
+  const url = projectId
+    ? `${base}/api/sessions?project=${encodeURIComponent(projectId)}`
+    : `${base}/api/sessions`;
+  return apiGetE<{ sessions: SessionListItem[] }>(url).pipe(
     Effect.map((r) => ({ sessions: r.sessions ?? [] })),
   );
+};
 
 export const getConversation = (base: string, id: string) =>
   apiGetE<{ turns: ConversationTurn[] }>(`${base}/api/sessions/${id}/conversation`).pipe(

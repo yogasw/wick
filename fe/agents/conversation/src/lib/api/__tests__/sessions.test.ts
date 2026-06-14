@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { Effect, Layer } from "effect";
-import { HttpClient, HttpClientResponse } from "@effect/platform";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform";
 import { listSessions, getConversation, getSessionMeta } from "../sessions.js";
 import type { SessionListItem, ConversationTurn, SessionMeta } from "../../types/agents.js";
 
@@ -155,5 +155,59 @@ describe("getSessionMeta", () => {
     expect(result.id).toBe("sess-1");
     expect(result.title_custom).toBe(false);
     expect(result.active_agent).toBe("claude");
+  });
+});
+
+describe("listSessions — project scoping", () => {
+  test("requests /api/sessions?project=proj1 when projectId is provided", async () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ sessions: [] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      listSessions("/tools/agents", "proj1").pipe(Effect.provide(captureLayer)),
+    );
+
+    const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
+    expect(r.url).toContain("project=proj1");
+  });
+
+  test("requests /api/sessions without project param when projectId is omitted", async () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ sessions: [] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      listSessions("/tools/agents").pipe(Effect.provide(captureLayer)),
+    );
+
+    const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
+    expect(r.url).not.toContain("project=");
   });
 });
