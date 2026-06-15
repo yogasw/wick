@@ -22,32 +22,89 @@
   };
   let { base, type, name, onBack }: Props = $props();
 
+  type KVRow = { key: string; value: string };
+
   let data = $state<ProviderDetailResponse | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let saving = $state(false);
   let confirmDelete = $state(false);
+  let togglingDisabled = $state(false);
   let busy = $state<Record<string, boolean>>({});
 
-  /* fieldValues mirrors config field inputs; secrets start empty so unchanged secrets aren't sent */
   let fieldValues = $state<Record<string, string>>({});
-  /* track which secret fields the user actually touched */
   let secretTouched = $state<Record<string, boolean>>({});
+  /* editorRows holds parsed rows for each kvlist field, keyed by field Key */
+  let editorRows = $state<Record<string, KVRow[]>>({});
 
   function setBusy(key: string, val: boolean) {
     busy = { ...busy, [key]: val };
   }
 
+  function kvCols(f: ConfigFieldDTO): string[] {
+    if (f.Options === "") {
+      return ["value"];
+    }
+    return f.Options.split("|");
+  }
+
+  function isKvlist(f: ConfigFieldDTO): boolean {
+    return f.Type === "kvlist";
+  }
+
+  function isKeyValueEditor(f: ConfigFieldDTO): boolean {
+    return isKvlist(f) && kvCols(f).length >= 2;
+  }
+
+  function isValueListEditor(f: ConfigFieldDTO): boolean {
+    return isKvlist(f) && kvCols(f).length < 2;
+  }
+
+  function isSimpleField(f: ConfigFieldDTO): boolean {
+    return !isKvlist(f);
+  }
+
+  function parseRows(f: ConfigFieldDTO): KVRow[] {
+    if (f.Value === "") {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(f.Value) as Record<string, string>[];
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.map((r) => ({ key: r.key ?? "", value: r.value ?? "" }));
+    } catch {
+      return [];
+    }
+  }
+
+  function serializeRows(f: ConfigFieldDTO, rows: KVRow[]): string {
+    const kv = isKeyValueEditor(f);
+    const cleaned = rows.filter((r) => (kv ? r.key.trim() !== "" || r.value.trim() !== "" : r.value.trim() !== ""));
+    const out = cleaned.map((r) => (kv ? { key: r.key, value: r.value } : { value: r.value }));
+    return JSON.stringify(out);
+  }
+
+  let simpleFields = $derived(data ? data.ConfigFields.filter(isSimpleField) : []);
+  let valueListFields = $derived(data ? data.ConfigFields.filter(isValueListEditor) : []);
+  let keyValueFields = $derived(data ? data.ConfigFields.filter(isKeyValueEditor) : []);
+
   async function load(silent = false) {
     if (!silent) { loading = true; error = null; }
     try {
       data = await apiGetProviderDetail(base, type, name);
-      /* init field values: secrets get empty string so they're blank by default */
       const vals: Record<string, string> = {};
+      const rows: Record<string, KVRow[]> = {};
       for (const f of data.ConfigFields) {
-        vals[f.Key] = f.IsSecret ? "" : f.Value;
+        if (isKvlist(f)) {
+          rows[f.Key] = parseRows(f);
+        } else {
+          vals[f.Key] = f.IsSecret ? "" : f.Value;
+        }
       }
       fieldValues = vals;
+      editorRows = rows;
       secretTouched = {};
     } catch (e) {
       if (!silent) error = e instanceof Error ? e.message : "Failed to load provider detail";
@@ -62,10 +119,11 @@
 
   function buildSavePayload(): Record<string, string> {
     const payload: Record<string, string> = {};
-    if (!data) return payload;
-    for (const f of data.ConfigFields) {
+    if (!data) {
+      return payload;
+    }
+    for (const f of simpleFields) {
       if (f.IsSecret) {
-        /* only include secret if the user typed something new */
         if (secretTouched[f.Key] && fieldValues[f.Key] !== "") {
           payload[f.Key] = fieldValues[f.Key];
         }
@@ -89,21 +147,46 @@
     }
   }
 
-  async function doSaveKey(f: ConfigFieldDTO) {
-    if (f.IsSecret && (!secretTouched[f.Key] || fieldValues[f.Key] === "")) {
-      toastError("Type a new value to save a secret field");
-      return;
-    }
-    const key = `save-${f.Key}`;
+  function addRow(f: ConfigFieldDTO) {
+    const current = editorRows[f.Key] ?? [];
+    editorRows = { ...editorRows, [f.Key]: [...current, { key: "", value: "" }] };
+  }
+
+  function removeRow(f: ConfigFieldDTO, idx: number) {
+    const current = editorRows[f.Key] ?? [];
+    const next = current.filter((_, i) => i !== idx);
+    editorRows = { ...editorRows, [f.Key]: next };
+    void saveEditor(f);
+  }
+
+  async function saveEditor(f: ConfigFieldDTO) {
+    const key = `editor-${f.Key}`;
     setBusy(key, true);
     try {
-      await apiSaveConfigKey(base, type, name, f.Key, fieldValues[f.Key] ?? "");
+      const serialized = serializeRows(f, editorRows[f.Key] ?? []);
+      await apiSaveConfigKey(base, type, name, f.Key, serialized);
       toastOk(`Saved ${f.Key}`);
       await load(true);
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setBusy(key, false);
+    }
+  }
+
+  async function toggleDisabled() {
+    if (!data) {
+      return;
+    }
+    togglingDisabled = true;
+    try {
+      await apiSaveConfigKey(base, type, name, "disabled", data.Instance.Disabled ? "false" : "true");
+      toastOk(data.Instance.Disabled ? "Provider enabled" : "Provider disabled");
+      await load(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Toggle failed");
+    } finally {
+      togglingDisabled = false;
     }
   }
 
@@ -207,17 +290,35 @@
         {#if data.ActiveCount > 0}
           <span class="rounded bg-blue-100 dark:bg-blue-900 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300">{data.ActiveCount} active</span>
         {/if}
-        {#if data.Instance.Disabled}
-          <span class="rounded bg-amber-100 dark:bg-amber-900 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">disabled</span>
-        {/if}
       {/if}
     </div>
     {#if data}
-      <button
-        onclick={() => { confirmDelete = true; }}
-        disabled={busy["delete"]}
-        class="rounded-lg border border-red-300 dark:border-red-700 px-3 py-1.5 text-xs font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
-      >Delete</button>
+      <div class="flex items-center gap-2">
+        {#if data.Instance.Disabled}
+          <button
+            onclick={toggleDisabled}
+            disabled={togglingDisabled}
+            class="flex items-center gap-2 rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 disabled:opacity-50"
+          >
+            <span class="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+            Disabled — click to enable
+          </button>
+        {:else}
+          <button
+            onclick={toggleDisabled}
+            disabled={togglingDisabled}
+            class="flex items-center gap-2 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
+          >
+            <span class="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+            Enabled — click to disable
+          </button>
+        {/if}
+        <button
+          onclick={() => { confirmDelete = true; }}
+          disabled={busy["delete"]}
+          class="rounded-lg border border-red-300 dark:border-red-700 px-3 py-1.5 text-xs font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+        >Delete</button>
+      </div>
     {/if}
   </div>
 
@@ -244,60 +345,64 @@
       {/if}
     </div>
 
-    <!-- Config fields -->
-    {#if data.ConfigFields.length > 0}
+    <!-- Configuration (simple fields, 2-column grid) -->
+    {#if simpleFields.length > 0}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Configuration</h2>
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Configuration</h3>
         </div>
-        <div class="divide-y divide-white-300 dark:divide-navy-600">
-          {#each data.ConfigFields as f (f.Key)}
-            <div class="px-5 py-4 flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-4">
-              <div class="sm:w-40 shrink-0">
-                <div class="flex items-center gap-1">
-                  <span class="text-xs font-medium text-black-900 dark:text-white-100 font-mono">{f.Key}</span>
-                  {#if f.Required}
-                    <span class="text-red-500 text-xs" title="required">*</span>
+        <div class="p-5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+            {#each simpleFields as f (f.Key)}
+              <div>
+                <div class="flex items-center gap-2 mb-1.5">
+                  <span class="font-mono text-xs font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
+                  {#if f.Required && f.Value === ""}
+                    <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-300">missing</span>
+                  {:else if f.Required}
+                    <span class="text-[10px] font-semibold text-red-500" title="required">*</span>
+                  {/if}
+                  {#if f.IsSecret && f.Value !== ""}
+                    <span class="rounded-full bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-[10px] font-semibold text-green-700 dark:text-green-300">stored</span>
                   {/if}
                 </div>
-                {#if f.Description}
-                  <p class="text-xs text-black-600 dark:text-black-700 mt-0.5">{f.Description}</p>
-                {/if}
-              </div>
-              <div class="flex-1 flex items-center gap-2">
-                {#if f.Type === "select" && f.Options}
+                {#if (f.Type === "dropdown" || f.Type === "select") && f.Options}
                   <select
                     bind:value={fieldValues[f.Key]}
-                    class="flex-1 rounded-lg border border-white-400 dark:border-navy-500 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors cursor-pointer"
                   >
-                    {#each f.Options.split(",").map((o) => o.trim()).filter(Boolean) as opt (opt)}
+                    {#each f.Options.split(f.Type === "dropdown" ? "|" : ",").map((o) => o.trim()).filter(Boolean) as opt (opt)}
                       <option value={opt}>{opt}</option>
                     {/each}
                   </select>
                 {:else if f.IsSecret}
                   <input
                     type="password"
-                    placeholder="••••••••"
+                    placeholder={f.Value !== "" ? "Type new value to replace" : "Enter secret"}
                     autocomplete="new-password"
                     bind:value={fieldValues[f.Key]}
                     oninput={() => onSecretInput(f.Key)}
-                    class="flex-1 rounded-lg border border-white-400 dark:border-navy-500 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+                  />
+                {:else if f.Type === "number"}
+                  <input
+                    type="number"
+                    bind:value={fieldValues[f.Key]}
+                    class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
                 {:else}
                   <input
                     type="text"
                     bind:value={fieldValues[f.Key]}
-                    class="flex-1 rounded-lg border border-white-400 dark:border-navy-500 bg-white-200 dark:bg-navy-800 px-3 py-1.5 text-xs text-black-900 dark:text-white-100 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
                 {/if}
-                <button
-                  onclick={() => doSaveKey(f)}
-                  disabled={busy[`save-${f.Key}`]}
-                  class="shrink-0 rounded-lg border border-white-400 dark:border-navy-500 px-3 py-1.5 text-xs font-medium text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
-                >Save</button>
+                {#if f.Description}
+                  <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed whitespace-pre-line">{f.Description}</p>
+                {/if}
               </div>
-            </div>
-          {/each}
+            {/each}
+          </div>
         </div>
         <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
           <button
@@ -308,6 +413,123 @@
         </div>
       </div>
     {/if}
+
+    <!-- Value-list editors (single-column kvlist, e.g. extra_args) -->
+    {#each valueListFields as f (f.Key)}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
+          </div>
+          {#if f.Description}
+            <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
+          {/if}
+        </div>
+        <div class="p-5">
+          <div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
+            <div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+              <div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Value</div>
+              <div class="w-10 shrink-0"></div>
+            </div>
+            {#if (editorRows[f.Key] ?? []).length === 0}
+              <div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600">No rows yet — click <strong>+ Add Row</strong> to start</div>
+            {:else}
+              {#each editorRows[f.Key] as row, idx (idx)}
+                <div class="flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+                  <div class="flex-1 min-w-0 px-3 py-2">
+                    <input
+                      type="text"
+                      bind:value={row.value}
+                      onblur={() => saveEditor(f)}
+                      placeholder="value"
+                      class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
+                    />
+                  </div>
+                  <div class="w-10 shrink-0 flex items-center justify-center">
+                    <button
+                      type="button"
+                      onclick={() => removeRow(f, idx)}
+                      aria-label="Remove row"
+                      class="text-black-700 dark:text-black-600 hover:text-red-500 text-base leading-none transition-colors"
+                    >✕</button>
+                  </div>
+                </div>
+              {/each}
+            {/if}
+          </div>
+          <button
+            type="button"
+            onclick={() => addRow(f)}
+            class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
+          >+ Add Row</button>
+        </div>
+      </div>
+    {/each}
+
+    <!-- Key-value editors (multi-column kvlist, e.g. env) -->
+    {#each keyValueFields as f (f.Key)}
+      {@const cols = kvCols(f)}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
+            <span class="text-[11px] text-black-700 dark:text-black-600 font-normal">{cols.join(" · ")}</span>
+          </div>
+          {#if f.Description}
+            <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
+          {/if}
+        </div>
+        <div class="p-5">
+          <div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
+            <div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+              {#each cols as col (col)}
+                <div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize">{col}</div>
+              {/each}
+              <div class="w-10 shrink-0"></div>
+            </div>
+            {#if (editorRows[f.Key] ?? []).length === 0}
+              <div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600">No rows yet — click <strong>+ Add Row</strong> to start</div>
+            {:else}
+              {#each editorRows[f.Key] as row, idx (idx)}
+                <div class="flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+                  <div class="flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600">
+                    <input
+                      type="text"
+                      bind:value={row.key}
+                      onblur={() => saveEditor(f)}
+                      placeholder="key"
+                      class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
+                    />
+                  </div>
+                  <div class="flex-1 min-w-0 px-3 py-2">
+                    <input
+                      type="text"
+                      bind:value={row.value}
+                      onblur={() => saveEditor(f)}
+                      placeholder="value"
+                      class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
+                    />
+                  </div>
+                  <div class="w-10 shrink-0 flex items-center justify-center">
+                    <button
+                      type="button"
+                      onclick={() => removeRow(f, idx)}
+                      aria-label="Remove row"
+                      class="text-black-700 dark:text-black-600 hover:text-red-500 text-base leading-none transition-colors"
+                    >✕</button>
+                  </div>
+                </div>
+              {/each}
+            {/if}
+          </div>
+          <button
+            type="button"
+            onclick={() => addRow(f)}
+            class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
+          >+ Add Row</button>
+        </div>
+      </div>
+    {/each}
 
     <!-- Hooks -->
     {#if hookEvents.length > 0}
@@ -327,7 +549,6 @@
                 {/if}
               </div>
               <div class="flex flex-wrap items-center gap-2 flex-1">
-                <!-- status badges -->
                 {#if cap.Verified}
                   <span class="rounded bg-green-100 dark:bg-green-900 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">verified</span>
                 {:else if cap.Supported}
