@@ -115,6 +115,7 @@
     "";
   let scmChangeCount = $state(0);
   let scmHostEl: HTMLElement | undefined = $state(undefined);
+  let scmHostMobileEl: HTMLElement | undefined = $state(undefined);
   let scmMounted = false;
 
   /* ── header tab view ──────────────────────────────────────────── */
@@ -225,18 +226,16 @@
   });
 
   /* ── SCM island mount when source tab opens ───────────────────── */
-  $effect(() => {
-    if (railTab !== "source" || !scmHostEl || !sessionId) return;
-
-    const w = window as unknown as {
-      WickSCM?: {
-        mount: (h: HTMLElement, o: { sessionID: string; mode: "sidebar" }) => void;
-        unmount: (h: HTMLElement) => void;
-      };
+  type WickSCMApi = {
+    WickSCM?: {
+      mount: (h: HTMLElement, o: { sessionID: string; mode: "sidebar"; onClose?: () => void }) => void;
+      unmount: (h: HTMLElement) => void;
     };
+  };
 
-    /* Capture host at mount time so teardown can still unmount after bind:this clears */
-    const capturedHost = scmHostEl;
+  function mountScmHost(host: HTMLElement) {
+    const w = window as unknown as WickSCMApi;
+    const capturedHost = host;
     const capturedSessionId = sessionId;
     let active = true;
 
@@ -256,7 +255,11 @@
           });
         }
         if (active) {
-          w.WickSCM?.mount(capturedHost, { sessionID: capturedSessionId, mode: "sidebar" });
+          w.WickSCM?.mount(capturedHost, {
+            sessionID: capturedSessionId,
+            mode: "sidebar",
+            onClose: () => { railTab = null; },
+          });
           scmMounted = true;
         }
       } catch (_) { /* bundle load failure — island stays blank */ }
@@ -269,6 +272,16 @@
       w.WickSCM?.unmount(capturedHost);
       scmMounted = false;
     };
+  }
+
+  $effect(() => {
+    if (railTab !== "source" || !scmHostEl || !sessionId) return;
+    return mountScmHost(scmHostEl);
+  });
+
+  $effect(() => {
+    if (railTab !== "source" || !scmHostMobileEl || !sessionId) return;
+    return mountScmHost(scmHostMobileEl);
   });
 
   /* ── file viewer ──────────────────────────────────────────────── */
@@ -699,7 +712,7 @@
         </div>
         <div class="flex-1 overflow-hidden flex flex-col">
           {#if railTab === "source"}
-            <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host-mobile></div>
+            <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host-mobile bind:this={scmHostMobileEl}></div>
           {:else if railTab === "context"}
             <ContextPanel
               cwd={cwdVal}
