@@ -1,4 +1,141 @@
-import type { ProvidersListResponse, ProviderDetailResponse, StorageResponse, StorageFileDTO } from "./types.js";
+import type {
+  ProvidersListResponse,
+  ProviderDetailResponse,
+  StorageResponse,
+  StorageFileDTO,
+  ProviderStatusDTO,
+  ProviderInstanceDTO,
+  ProviderCapDTO,
+  HookCapabilityDTO,
+  SpawnLogFileDTO,
+  MCPClientDTO,
+  MCPStatusDTO,
+  GateStatusDTO,
+  LiveProcessDTO,
+  ConfigFieldDTO,
+} from "./types.js";
+
+interface WireProviderInstance {
+  type: string;
+  name: string;
+  binary: string;
+  disabled: boolean;
+  max_concurrent: number;
+  send_mode: string;
+}
+
+interface WireProviderCap {
+  used: number;
+  max: number;
+  unlimited: boolean;
+}
+
+interface WireHookCapability {
+  supported: boolean;
+  verified: boolean;
+  probed_at?: string;
+  error?: string;
+  scope?: string;
+}
+
+interface WireProviderStatus {
+  instance: WireProviderInstance;
+  path: string;
+  path_found: boolean;
+  version: string;
+  version_err?: string;
+  probing: boolean;
+  hooks: Record<string, WireHookCapability> | null;
+  cap: WireProviderCap;
+  hook_enabled: Record<string, boolean> | null;
+}
+
+interface WireSpawnLogFile {
+  path: string;
+  provider_type: string;
+  provider_name: string;
+  session_id: string;
+  started_at: string;
+  pid?: number;
+  origin?: string;
+  first_user_message?: string;
+  binary?: string;
+  exit_reason?: string;
+}
+
+interface WireMCPClient {
+  id: string;
+  label: string;
+  detected: boolean;
+  installed: boolean;
+  blocklisted: boolean;
+  config_path: string;
+}
+
+interface WireMCPStatus {
+  app_name: string;
+  clients: WireMCPClient[] | null;
+}
+
+interface WireGateStatus {
+  enabled: boolean;
+  binary: string;
+  source: string;
+  reason?: string;
+  note: string;
+  permission_mode: string;
+  bypass_locked: boolean;
+}
+
+interface WireLiveProcess {
+  session_id: string;
+  agent_name: string;
+  pid: number;
+  lifecycle: string;
+  substate: string;
+}
+
+interface WireConfigField {
+  key: string;
+  value: string;
+  type: string;
+  options?: string;
+  is_secret: boolean;
+  description?: string;
+  required: boolean;
+}
+
+interface WireProvidersListResponse {
+  providers: WireProviderStatus[] | null;
+  gate: WireGateStatus | null;
+  spawns: WireSpawnLogFile[] | null;
+  mcp: WireMCPStatus | null;
+  auto_rescan: boolean;
+  pool_active: number;
+  pool_queue_len: number;
+  pool_max: number;
+  live_processes: WireLiveProcess[] | null;
+  supported_keys: string[] | null;
+}
+
+interface WireProviderDetailResponse {
+  instance: WireProviderInstance;
+  path: string;
+  path_found: boolean;
+  version: string;
+  version_err?: string;
+  probing: boolean;
+  hooks: Record<string, WireHookCapability> | null;
+  hook_enabled: Record<string, boolean> | null;
+  gate: WireGateStatus | null;
+  global_max: number;
+  active_count: number;
+  active_pids: WireLiveProcess[] | null;
+  config_fields: WireConfigField[] | null;
+  spawns: WireSpawnLogFile[] | null;
+  page: number;
+  has_next: boolean;
+}
 
 class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -56,35 +193,137 @@ async function del<T>(path: string): Promise<T> {
   return undefined as unknown as T;
 }
 
-export function normalizeProviders(r: ProvidersListResponse): ProvidersListResponse {
+function mapInstance(w: WireProviderInstance): ProviderInstanceDTO {
   return {
-    ...r,
-    Providers: (r.Providers ?? []).map((p) => ({
-      ...p,
-      Hooks: p.Hooks ?? {},
-      HookEnabled: p.HookEnabled ?? {},
-    })),
-    Spawns: r.Spawns ?? [],
-    LiveProcesses: r.LiveProcesses ?? [],
-    SupportedKeys: r.SupportedKeys ?? [],
-    MCPClients: {
-      AppName: r.MCPClients?.AppName ?? "",
-      Clients: r.MCPClients?.Clients ?? [],
-    },
-    Gate: r.Gate ?? {
-      Enabled: false,
-      Binary: "",
-      Source: "",
-      Reason: "",
-      Note: "",
-      PermissionMode: "",
-      BypassLocked: false,
-    },
+    Type: w.type ?? "",
+    Name: w.name ?? "",
+    Binary: w.binary ?? "",
+    Disabled: w.disabled ?? false,
+    MaxConcurrent: w.max_concurrent ?? 0,
+    SendMode: w.send_mode ?? "",
+  };
+}
+
+function mapCap(w: WireProviderCap | undefined): ProviderCapDTO {
+  return {
+    Used: w?.used ?? 0,
+    Max: w?.max ?? 0,
+    Unlimited: w?.unlimited ?? false,
+  };
+}
+
+function mapHooks(w: Record<string, WireHookCapability> | null | undefined): Record<string, HookCapabilityDTO> {
+  const out: Record<string, HookCapabilityDTO> = {};
+  for (const [k, v] of Object.entries(w ?? {})) {
+    out[k] = {
+      Supported: v.supported ?? false,
+      Verified: v.verified ?? false,
+      ProbedAt: v.probed_at ?? "",
+      Error: v.error ?? "",
+      Scope: v.scope ?? "",
+    };
+  }
+  return out;
+}
+
+function mapGate(w: WireGateStatus | null | undefined): GateStatusDTO {
+  return {
+    Enabled: w?.enabled ?? false,
+    Binary: w?.binary ?? "",
+    Source: w?.source ?? "",
+    Reason: w?.reason ?? "",
+    Note: w?.note ?? "",
+    PermissionMode: w?.permission_mode ?? "",
+    BypassLocked: w?.bypass_locked ?? false,
+  };
+}
+
+function mapSpawn(w: WireSpawnLogFile): SpawnLogFileDTO {
+  return {
+    Path: w.path ?? "",
+    ProviderType: w.provider_type ?? "",
+    ProviderName: w.provider_name ?? "",
+    SessionID: w.session_id ?? "",
+    StartedAt: w.started_at ?? "",
+    PID: w.pid ?? 0,
+    Origin: w.origin ?? "",
+    FirstUserMessage: w.first_user_message ?? "",
+    Binary: w.binary ?? "",
+    ExitReason: w.exit_reason ?? "",
+  };
+}
+
+function mapMCPClient(w: WireMCPClient): MCPClientDTO {
+  return {
+    ID: w.id ?? "",
+    Label: w.label ?? "",
+    Detected: w.detected ?? false,
+    Installed: w.installed ?? false,
+    Blocklisted: w.blocklisted ?? false,
+    ConfigPath: w.config_path ?? "",
+  };
+}
+
+function mapMCP(w: WireMCPStatus | null | undefined): MCPStatusDTO {
+  return {
+    AppName: w?.app_name ?? "",
+    Clients: (w?.clients ?? []).map(mapMCPClient),
+  };
+}
+
+function mapLiveProcess(w: WireLiveProcess): LiveProcessDTO {
+  return {
+    SessionID: w.session_id ?? "",
+    AgentName: w.agent_name ?? "",
+    PID: w.pid ?? 0,
+    Lifecycle: w.lifecycle ?? "",
+    Substate: w.substate ?? "",
+  };
+}
+
+function mapConfigField(w: WireConfigField): ConfigFieldDTO {
+  return {
+    Key: w.key ?? "",
+    Value: w.value ?? "",
+    Type: w.type ?? "",
+    Options: w.options ?? "",
+    IsSecret: w.is_secret ?? false,
+    Description: w.description ?? "",
+    Required: w.required ?? false,
+  };
+}
+
+function mapProviderStatus(w: WireProviderStatus): ProviderStatusDTO {
+  return {
+    Instance: mapInstance(w.instance),
+    Path: w.path ?? "",
+    PathFound: w.path_found ?? false,
+    Version: w.version ?? "",
+    VersionErr: w.version_err ?? "",
+    Probing: w.probing ?? false,
+    Hooks: mapHooks(w.hooks),
+    Cap: mapCap(w.cap),
+    HookEnabled: w.hook_enabled ?? {},
+  };
+}
+
+export function normalizeProviders(r: WireProvidersListResponse): ProvidersListResponse {
+  return {
+    Providers: (r.providers ?? []).map(mapProviderStatus),
+    Gate: mapGate(r.gate),
+    Spawns: (r.spawns ?? []).map(mapSpawn),
+    MCPClients: mapMCP(r.mcp),
+    AutoRescan: r.auto_rescan ?? false,
+    PoolActive: r.pool_active ?? 0,
+    PoolQueueLen: r.pool_queue_len ?? 0,
+    PoolMax: r.pool_max ?? 0,
+    LiveProcesses: (r.live_processes ?? []).map(mapLiveProcess),
+    SupportedKeys: r.supported_keys ?? [],
   };
 }
 
 export async function apiGetProviders(): Promise<ProvidersListResponse> {
-  const r = await get<ProvidersListResponse>(getBase() + "/api/providers");
+  const r = await get<WireProvidersListResponse>(getBase() + "/api/providers");
   return normalizeProviders(r);
 }
 
@@ -100,8 +339,23 @@ export async function apiGateToggle(): Promise<void> {
   return post<void>(getBase() + "/providers/gate/toggle");
 }
 
-export async function apiGateModes(modes: Record<string, boolean>): Promise<void> {
-  return post<void>(getBase() + "/providers/gate/modes", modes);
+export async function apiGateModes(fields: { permission_mode: string }): Promise<void> {
+  const form = new URLSearchParams();
+  form.set("permission_mode", fields.permission_mode);
+  const resp = await fetch(getBase() + "/providers/gate/modes", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+    redirect: "manual",
+  });
+  if (resp.type === "opaqueredirect" || resp.status === 303 || resp.status === 302) {
+    return;
+  }
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
 }
 
 export async function apiAutoRescanToggle(): Promise<void> {
@@ -120,32 +374,68 @@ export async function apiDeleteProvider(type: string, name: string): Promise<voi
   return del<void>(getBase() + `/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
+export async function apiCreateProvider(fields: {
+  type: string;
+  name: string;
+  binary?: string;
+  extra_args?: string;
+  env?: string;
+}): Promise<void> {
+  const form = new URLSearchParams();
+  form.set("type", fields.type);
+  form.set("name", fields.name);
+  if (fields.binary) {
+    form.set("binary", fields.binary);
+  }
+  if (fields.extra_args) {
+    form.set("extra_args", fields.extra_args);
+  }
+  if (fields.env) {
+    form.set("env", fields.env);
+  }
+  const resp = await fetch(getBase() + "/providers", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+    redirect: "manual",
+  });
+  if (resp.type === "opaqueredirect" || resp.status === 303 || resp.status === 302) {
+    return;
+  }
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
+}
+
 export async function apiProbeGate(type: string, name: string): Promise<void> {
   return post<void>(getBase() + `/providers/probe-gate/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
-export function normalizeProviderDetail(r: ProviderDetailResponse): ProviderDetailResponse {
+export function normalizeProviderDetail(r: WireProviderDetailResponse): ProviderDetailResponse {
   return {
-    ...r,
-    Hooks: r.Hooks ?? {},
-    HookEnabled: r.HookEnabled ?? {},
-    ActivePIDs: r.ActivePIDs ?? [],
-    ConfigFields: r.ConfigFields ?? [],
-    Spawns: r.Spawns ?? [],
-    Gate: r.Gate ?? {
-      Enabled: false,
-      Binary: "",
-      Source: "",
-      Reason: "",
-      Note: "",
-      PermissionMode: "",
-      BypassLocked: false,
-    },
+    Instance: mapInstance(r.instance),
+    Path: r.path ?? "",
+    PathFound: r.path_found ?? false,
+    Version: r.version ?? "",
+    VersionErr: r.version_err ?? "",
+    Probing: r.probing ?? false,
+    Hooks: mapHooks(r.hooks),
+    HookEnabled: r.hook_enabled ?? {},
+    Gate: mapGate(r.gate),
+    GlobalMax: r.global_max ?? 0,
+    ActiveCount: r.active_count ?? 0,
+    ActivePIDs: (r.active_pids ?? []).map(mapLiveProcess),
+    ConfigFields: (r.config_fields ?? []).map(mapConfigField),
+    Spawns: (r.spawns ?? []).map(mapSpawn),
+    Page: r.page ?? 0,
+    HasNext: r.has_next ?? false,
   };
 }
 
 export async function apiGetProviderDetail(base: string, type: string, name: string): Promise<ProviderDetailResponse> {
-  const r = await get<ProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+  const r = await get<WireProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
   return normalizeProviderDetail(r);
 }
 

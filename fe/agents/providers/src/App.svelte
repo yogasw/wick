@@ -20,23 +20,6 @@
 
 <div class="min-h-screen p-6">
   <ToastHost />
-  {#if !isStorage && !detailParams}
-    <div class="mb-5 flex items-center gap-2">
-      <button
-        onclick={() => push("/")}
-        class={[
-          "rounded-lg px-4 py-2 text-xs font-medium border transition-colors",
-          currentRoute === "/"
-            ? "bg-green-500 border-green-500 text-white-100"
-            : "border-white-400 dark:border-navy-600 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800",
-        ].join(" ")}
-      >Providers</button>
-      <button
-        onclick={() => push("/storage")}
-        class="rounded-lg px-4 py-2 text-xs font-medium border border-white-400 dark:border-navy-600 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-      >Storage</button>
-    </div>
-  {/if}
   {#if isStorage}
     <StorageView onBack={() => push("/")} />
   {:else if detailParams}

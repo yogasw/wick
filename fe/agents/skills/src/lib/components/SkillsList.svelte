@@ -126,14 +126,14 @@
         No skill files yet. Upload one above.
       </div>
     {:else if data.skills.length > 0}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <table class="w-full text-sm">
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-x-auto">
+        <table class="w-full min-w-[40rem] text-sm">
           <thead>
             <tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-              <th class="px-5 py-3 text-left">Name</th>
-              <th class="px-5 py-3 text-left">Present In</th>
-              <th class="px-5 py-3 text-left">Status</th>
-              <th class="px-5 py-3 text-right">Actions</th>
+              <th class="px-3 sm:px-5 py-3 text-left">Name</th>
+              <th class="px-3 sm:px-5 py-3 text-left">Present In</th>
+              <th class="px-3 sm:px-5 py-3 text-left">Status</th>
+              <th class="px-3 sm:px-5 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-white-300 dark:divide-navy-600">
@@ -142,7 +142,7 @@
                 class="cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
                 onclick={() => onNavigate(skill.name)}
               >
-                <td class="px-5 py-3">
+                <td class="px-3 sm:px-5 py-3">
                   <div class="flex items-center gap-2">
                     {#if skill.is_dir}
                       <svg class="w-4 h-4 text-amber-500 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
@@ -153,7 +153,7 @@
                     {/if}
                   </div>
                 </td>
-                <td class="px-5 py-3">
+                <td class="px-3 sm:px-5 py-3">
                   <div class="flex flex-wrap gap-1">
                     {#each skill.in_dirs as dir}
                       <span class="rounded-full bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400" title={dir}>{dirLabel(dir)}</span>
@@ -163,7 +163,7 @@
                     {/each}
                   </div>
                 </td>
-                <td class="px-5 py-3">
+                <td class="px-3 sm:px-5 py-3">
                   {#if skill.missing_dirs.length === 0}
                     <span class="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
                       <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
@@ -176,7 +176,7 @@
                     </span>
                   {/if}
                 </td>
-                <td class="px-5 py-3 text-right" onclick={(e) => e.stopPropagation()}>
+                <td class="px-3 sm:px-5 py-3 text-right" onclick={(e) => e.stopPropagation()}>
                   <button
                     class="text-xs text-red-600 dark:text-red-400 hover:underline"
                     onclick={() => { confirmDelete = skill; }}
@@ -192,7 +192,7 @@
 </div>
 
 {#if showUpload}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
     <div class="w-full max-w-lg rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl p-6">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Upload Skill File</h2>
