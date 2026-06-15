@@ -28,6 +28,7 @@
 
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
+  import JsonTree from "./JsonTree.svelte";
   import Composer from "./Composer.svelte";
   import ComposerToolbar from "./ComposerToolbar.svelte";
   import ContextPanel from "./ContextPanel.svelte";
@@ -69,7 +70,37 @@
   const unsubMeta = thread.meta.subscribe((v) => { threadMeta = v; });
 
   /* ── raw trace view ────────────────────────────────────────────── */
-  const rawJson = $derived(JSON.stringify(turns, null, 2));
+  let traceMap = $state<Record<string, unknown>>({});
+
+  const rawData = $derived(
+    turns.map((t) => {
+      if (t.has_trace !== true) return t;
+      const tr = traceMap[t.turn_id];
+      return { ...t, trace: tr === undefined ? "(loading…)" : tr };
+    }),
+  );
+  const rawJson = $derived(JSON.stringify(rawData, null, 2));
+
+  async function loadRawTraces() {
+    const pending = turns.filter((t) => t.has_trace === true && t.turn_id && traceMap[t.turn_id] === undefined);
+    if (pending.length === 0) return;
+    await Promise.all(
+      pending.map(async (t) => {
+        try {
+          const tr = await Effect.runPromise(getTurnTrace(base, sessionId, t.turn_id).pipe(Effect.provide(WickClientLayer)));
+          traceMap = { ...traceMap, [t.turn_id]: tr };
+        } catch {
+          traceMap = { ...traceMap, [t.turn_id]: { error: "failed to load trace" } };
+        }
+      }),
+    );
+  }
+
+  $effect(() => {
+    if (activeView !== "raw") return;
+    void turns.length;
+    void loadRawTraces();
+  });
 
   async function copyRaw() {
     try {
@@ -616,7 +647,9 @@
             <p class="text-sm text-black-600 dark:text-black-700">No trace yet.</p>
           </div>
         {:else}
-          <pre class="flex-1 min-h-0 overflow-auto px-4 py-3 text-xs font-mono leading-relaxed text-black-900 dark:text-white-100 whitespace-pre">{rawJson}</pre>
+          <div class="flex-1 min-h-0 overflow-auto px-3 py-3">
+            <JsonTree value={rawData} />
+          </div>
         {/if}
       </div>
     {/if}
