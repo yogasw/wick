@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Workflow agent node — extended thinking control**: A `thinking` dropdown (`on` | `off`, default `on`) and a conditional `max_thinking_tokens` number field are now available on the workflow **agent node**. `off` sets `MAX_THINKING_TOKENS=0` (extended thinking disabled); `on` with `max_thinking_tokens: 0` leaves the env unset (unlimited / provider default); `on` with `max_thinking_tokens ≥ 1024` caps the budget at that value. The setting is persisted to session meta before each pool send so a reused session always reflects the current node config. Claude only — Gemini and Codex ignore the fields. The regular agent chat flow is unchanged. See [Agent node — Extended thinking](/workflow/nodes/agent#extended-thinking).
 
 ---
 
