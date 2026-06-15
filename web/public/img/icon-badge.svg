@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="wick">
+	<!-- Monochrome notification badge: a white wrench silhouette on a
+	     transparent background. Android masks badges to a single colour by
+	     their alpha, so a flat white shape renders correctly instead of the
+	     full-colour icon collapsing into a white blob. -->
+	<defs>
+		<mask id="wr">
+			<rect width="512" height="512" fill="black"/>
+			<g fill="white">
+				<rect x="232" y="150" width="48" height="212" rx="18"/>
+				<circle cx="256" cy="150" r="64"/>
+				<circle cx="256" cy="362" r="64"/>
+			</g>
+			<g fill="black">
+				<rect x="234" y="70" width="44" height="92" rx="10"/>
+				<rect x="234" y="350" width="44" height="92" rx="10"/>
+			</g>
+		</mask>
+	</defs>
+	<g transform="rotate(-40 256 256)">
+		<rect width="512" height="512" fill="white" mask="url(#wr)"/>
+	</g>
+</svg>
