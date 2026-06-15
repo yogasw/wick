@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.7](https://github.com/yogasw/wick/compare/v0.18.6...v0.18.7) — Workflows & Agents
+
+_Released on 2026-06-15_
+
+### Added
+
+*   **Workflow parallel execution**: Workflows can now run multiple triggers concurrently. Enable `concurrency.enabled` per workflow and set a global cap via `workflow_max_parallel_global` in Agent Settings. Each workflow has its own FIFO queue; the global semaphore caps total simultaneous runs across all workflows. Serial mode remains the default (`concurrency.enabled: false`). See [Concurrency](/workflow/#concurrency).
+*   **Workflow agent node — extended thinking control**: A `thinking` dropdown (`on` | `off`, default `on`) and a conditional `max_thinking_tokens` number field are now available on the workflow **agent node**. `off` sets `MAX_THINKING_TOKENS=0` (extended thinking disabled); `on` with `max_thinking_tokens: 0` leaves the env unset (unlimited / provider default); `on` with `max_thinking_tokens ≥ 1024` caps the budget at that value. The setting is persisted to session meta before each pool send so a reused session always reflects the current node config. This feature is specific to Claude providers; Gemini and Codex ignore these fields. The regular agent chat flow is unchanged. See [Agent node — Extended thinking](/workflow/nodes/agent#extended-thinking).
+
+### Fixed
+
+*   **Workflow node argument bleeding**: Resolved a regression where rendered templates on workflow node arguments (e.g., `Args`, `Headers`, `Query`, `ShellEnv`, `Command`) would persist across multiple runs. This fix ensures that node fields are detached onto fresh copies before rendering for each run, preventing previous renders from affecting subsequent executions.
+
+---
+
+
 ## [v0.18.6](https://github.com/yogasw/wick/compare/v0.18.5...v0.18.6) — Agents
 
 _Released on 2026-06-15_

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,14 +19,16 @@ import (
 )
 
 type agentSchema struct {
-	Prompt        string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
-	Provider      string `wick:"key=provider;desc=Provider name"`
-	Skills        string `wick:"key=skills;desc=YAML list of skill names to expose"`
-	Tools         string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
-	MaxTurns      int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
-	Session       string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
-	TimeoutSec    int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
-	RequireStatus bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}; any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
+	Prompt            string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
+	Provider          string `wick:"key=provider;desc=Provider name"`
+	Skills            string `wick:"key=skills;desc=YAML list of skill names to expose"`
+	Tools             string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
+	MaxTurns          int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
+	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below); off disables it to cut latency (claude only)."`
+	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default); set >=1024 to cap. Claude only."`
+	Session           string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
+	TimeoutSec        int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
+	RequireStatus     bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}; any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
 }
 
 // AgentEvent is the minimal event shape the agent executor consumes
@@ -191,13 +194,14 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	}
 
 	req := provider.AgentRequest{
-		Prompt:    prompt,
-		Preset:    n.Preset,
-		Workspace: n.Workspace,
-		Skills:    n.Skills,
-		Tools:     n.Tools,
-		MaxTurns:  n.MaxTurns,
-		SessionID: sessionID,
+		Prompt:         prompt,
+		Preset:         n.Preset,
+		Workspace:      n.Workspace,
+		Skills:         n.Skills,
+		Tools:          n.Tools,
+		MaxTurns:       n.MaxTurns,
+		SessionID:      sessionID,
+		ThinkingTokens: resolveThinkingTokens(n.Thinking, n.MaxThinkingTokens),
 	}
 	res, err := prov.AgentCall(ctx, req)
 	if err != nil {
@@ -232,10 +236,8 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 		return workflow.NodeOutput{}, fmt.Errorf("ensure session: %w", err)
 	}
 
-	// Always persist the cap (including 0) so switching a reused session
-	// back to 0 clears a previously-persisted cap. 0 = unlimited.
-	if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
-		return workflow.NodeOutput{}, fmt.Errorf("set max turns: %w", err)
+	if err := e.persistAgentSessionConfig(sessionID, n); err != nil {
+		return workflow.NodeOutput{}, err
 	}
 
 	// n.Workspace carries the project id binding for this agent node
@@ -274,6 +276,42 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt,
 			}
 		}
 	}
+}
+
+// persistAgentSessionConfig writes the per-spawn knobs (max turns,
+// thinking) onto the session's "default" agent before the pool send so
+// the next spawn reads them from meta. Both are always persisted
+// (including the zero/clearing values) so a reused session reflects the
+// current node config rather than a prior run's. See resolveThinkingTokens
+// for the thinking value mapping.
+func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.Node) error {
+	if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
+		return fmt.Errorf("set max turns: %w", err)
+	}
+	if err := e.Pool.SetThinkingTokens(sessionID, "default", resolveThinkingTokens(n.Thinking, n.MaxThinkingTokens)); err != nil {
+		return fmt.Errorf("set thinking: %w", err)
+	}
+	return nil
+}
+
+// resolveThinkingTokens maps the agent node's thinking dropdown + the
+// max_thinking_tokens field to the MAX_THINKING_TOKENS env value the claude
+// spawner injects. "" = leave it unset (full / provider-default thinking):
+//
+//	thinking=off            → "0"   (extended thinking disabled)
+//	thinking=on, tokens<=0  → ""    (unlimited / provider default)
+//	thinking=on, tokens>0   → "<n>" (explicit token budget)
+//
+// Any non-"off" value (on / legacy default / missing) takes the on branch,
+// so existing nodes keep today's behaviour.
+func resolveThinkingTokens(thinking string, maxTokens int) string {
+	if strings.EqualFold(strings.TrimSpace(thinking), "off") {
+		return "0"
+	}
+	if maxTokens <= 0 {
+		return ""
+	}
+	return strconv.Itoa(maxTokens)
 }
 
 // resolveAgentSessionID picks the sessionID per the override order

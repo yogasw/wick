@@ -203,6 +203,10 @@ type FactoryOptions struct {
 	// MaxTurns caps agentic turns on the spawn (--max-turns). Pulled from
 	// the agent entry by the pool; 0 = no cap.
 	MaxTurns int
+	// ThinkingTokens is the resolved MAX_THINKING_TOKENS env value for the
+	// spawn (claude). Pulled from the agent entry by the pool; empty = unset
+	// (provider default, thinking on); "0" = disabled; "<n>" = budget.
+	ThinkingTokens string
 }
 
 // queueEntry is one request waiting for a slot.
@@ -571,12 +575,14 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 	resumeID := ""
 	maxTurns := 0
+	thinkingTokens := ""
 	pType := ""
 	pName := ""
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
 			resumeID = a.CLISessionID
 			maxTurns = a.MaxTurns
+			thinkingTokens = a.ThinkingTokens
 			// Provider field is stored as "type/name" (e.g. "claude/work").
 			// Fall back to bare type when no slash present.
 			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
@@ -596,19 +602,20 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 
 	br, err := p.cfg.Factory.Build(FactoryOptions{
-		SessionID:     sessionID,
-		AgentName:     agentName,
-		ProviderType:  pType,
-		ProviderName:  pName,
-		Workspace:     cwd,
-		ResumeID:      resumeID,
-		IdleTimeout:   p.cfg.IdleTimeout,
-		KillAfterIdle: p.cfg.KillAfterIdle,
-		PresetName:    sess.Meta.Preset,
-		Origin:        string(sess.Meta.Origin),
-		Title:         sess.Meta.Label,
-		TitleCustom:   sess.Meta.TitleCustom,
-		MaxTurns:      maxTurns,
+		SessionID:       sessionID,
+		AgentName:       agentName,
+		ProviderType:    pType,
+		ProviderName:    pName,
+		Workspace:       cwd,
+		ResumeID:        resumeID,
+		IdleTimeout:     p.cfg.IdleTimeout,
+		KillAfterIdle:   p.cfg.KillAfterIdle,
+		PresetName:      sess.Meta.Preset,
+		Origin:          string(sess.Meta.Origin),
+		Title:           sess.Meta.Label,
+		TitleCustom:     sess.Meta.TitleCustom,
+		MaxTurns:        maxTurns,
+		ThinkingTokens:  thinkingTokens,
 	})
 	if err != nil {
 		return err
@@ -911,6 +918,14 @@ func (p *Pool) bufferFor(sessionID string) (*Buffer, error) {
 // entry (creating it if missing) so the next spawn passes --max-turns.
 func (p *Pool) SetMaxTurns(sessionID, agentName string, maxTurns int) error {
 	return session.SetMaxTurns(p.cfg.Layout, sessionID, agentName, maxTurns)
+}
+
+// SetThinkingTokens persists the resolved MAX_THINKING_TOKENS env value on
+// the session's agent entry (creating it if missing) so the next spawn
+// applies it. Empty = unset (provider default); "0" = disabled; "<n>" =
+// token budget.
+func (p *Pool) SetThinkingTokens(sessionID, agentName, v string) error {
+	return session.SetThinkingTokens(p.cfg.Layout, sessionID, agentName, v)
 }
 
 // EnsureSession is the public wrapper for ensureSession. Workflow's

@@ -27,6 +27,11 @@ type AgentEntry struct {
 	// MaxTurns caps agentic turns on the next spawn (--max-turns).
 	// 0 = unlimited (provider default). Set per workflow agent node.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// ThinkingTokens is the resolved MAX_THINKING_TOKENS env value applied on
+	// the next spawn (claude). Empty = unset (provider default, thinking on);
+	// "0" = disabled; "<n>" = budget. Set per workflow agent node from its
+	// thinking + max_thinking_tokens inputs.
+	ThinkingTokens string `json:"thinking_tokens,omitempty"`
 }
 
 // SaveAgents atomically rewrites sessions/<id>/agents.json. nil
@@ -100,6 +105,30 @@ func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
 		Status:    "idle",
 		CreatedAt: time.Now().UTC(),
 		MaxTurns:  maxTurns,
+	})
+	return SaveAgents(layout, id, sess.Agents)
+}
+
+// SetThinkingTokens persists the resolved MAX_THINKING_TOKENS env value on
+// the agent entry, creating it if missing. Empty = unset (provider default,
+// thinking on); "0" = disabled; "<n>" = budget. Always persisted (including
+// "") so switching a reused session back to full thinking clears a prior value.
+func SetThinkingTokens(layout config.Layout, id, name, v string) error {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	for i := range sess.Agents {
+		if sess.Agents[i].Name == name {
+			sess.Agents[i].ThinkingTokens = v
+			return SaveAgents(layout, id, sess.Agents)
+		}
+	}
+	sess.Agents = append(sess.Agents, AgentEntry{
+		Name:           name,
+		Status:         "idle",
+		CreatedAt:      time.Now().UTC(),
+		ThinkingTokens: v,
 	})
 	return SaveAgents(layout, id, sess.Agents)
 }

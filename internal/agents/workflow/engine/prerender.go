@@ -19,6 +19,7 @@ import (
 //   - []string fields  → each element rendered
 //   - map[string]string → each value rendered (key used for arg_modes lookup: "env.<k>")
 //   - map[string]any   → top-level string values rendered; key used for arg_modes lookup
+//
 // PreRenderNode is the exported form used by callers (e.g. ExecNode)
 // that bypass the engine's runOne but still need arg_modes respected.
 func PreRenderNode(n workflow.Node, rctx workflow.RenderCtx) (workflow.Node, error) {
@@ -28,6 +29,16 @@ func PreRenderNode(n workflow.Node, rctx workflow.RenderCtx) (workflow.Node, err
 func preRenderNode(n workflow.Node, rctx workflow.RenderCtx) (workflow.Node, error) {
 	rv := reflect.ValueOf(&n).Elem()
 	rt := rv.Type()
+
+	// n is passed by value, but its map/slice fields (Args, ArgModes,
+	// Headers, Query, ShellEnv, Command, SQLArgs, ...) still alias the
+	// backing storage of the cached workflow definition that the trigger
+	// router reuses across runs. Rendering in place (SetMapIndex /
+	// Index().SetString below) would write the rendered literal back into
+	// that shared node, consuming the "{{...}}" markers so every later run
+	// reads the frozen value instead of re-rendering. Detach those fields
+	// onto fresh copies first so rendering only ever touches this run's node.
+	detachRefFields(rv)
 
 	renderStr := func(key, val string) (string, error) {
 		if n.ArgModes[key] == "fixed" || val == "" {
@@ -107,6 +118,38 @@ func preRenderNode(n workflow.Node, rctx workflow.RenderCtx) (workflow.Node, err
 	}
 
 	return n, nil
+}
+
+// detachRefFields replaces every map and slice field of the node (addressed
+// by rv) with a shallow copy, so that in-place rendering below never mutates
+// storage shared with the cached workflow definition. String fields are value
+// types and need no copy. Generic by design: any reference-typed field added
+// to Node later is protected automatically.
+func detachRefFields(rv reflect.Value) {
+	for i := 0; i < rv.NumField(); i++ {
+		fv := rv.Field(i)
+		if !fv.CanSet() {
+			continue
+		}
+		switch fv.Kind() {
+		case reflect.Map:
+			if fv.IsNil() {
+				continue
+			}
+			nm := reflect.MakeMapWithSize(fv.Type(), fv.Len())
+			for _, mk := range fv.MapKeys() {
+				nm.SetMapIndex(mk, fv.MapIndex(mk))
+			}
+			fv.Set(nm)
+		case reflect.Slice:
+			if fv.IsNil() {
+				continue
+			}
+			ns := reflect.MakeSlice(fv.Type(), fv.Len(), fv.Len())
+			reflect.Copy(ns, fv)
+			fv.Set(ns)
+		}
+	}
 }
 
 func jsonTagKey(sf reflect.StructField) string {

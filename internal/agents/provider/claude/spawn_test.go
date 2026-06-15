@@ -3,10 +3,63 @@ package claude
 import (
 	"context"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	provider "github.com/yogasw/wick/internal/agents/provider"
 )
+
+// TestClaudeSpawnThinkingTokensInjectsEnv asserts the claude spawn env
+// gains MAX_THINKING_TOKENS=<value> when ThinkingTokens is set: "0" is the
+// workflow agent node's thinking:off path; a positive value is a budget cap.
+func TestClaudeSpawnThinkingTokensInjectsEnv(t *testing.T) {
+	cases := []struct {
+		name   string
+		tokens string
+		want   string
+	}{
+		{name: "off disables thinking", tokens: "0", want: "MAX_THINKING_TOKENS=0"},
+		{name: "budget caps thinking", tokens: "2048", want: "MAX_THINKING_TOKENS=2048"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := spawnEnv(nil, provider.SpawnOptions{ThinkingTokens: tc.tokens})
+			if !slices.Contains(env, tc.want) {
+				t.Fatalf("expected %q in env, got %v", tc.want, env)
+			}
+		})
+	}
+}
+
+// TestClaudeSpawnThinkingOnByDefault is the chat-isolation regression
+// guard: a spawn with an empty ThinkingTokens (the chat / default path)
+// must NOT carry any MAX_THINKING_TOKENS env so chat behaviour stays
+// byte-identical.
+func TestClaudeSpawnThinkingOnByDefault(t *testing.T) {
+	env := spawnEnv(nil, provider.SpawnOptions{})
+	for _, e := range env {
+		if strings.HasPrefix(e, "MAX_THINKING_TOKENS=") {
+			t.Fatalf("chat/default spawn must NOT set MAX_THINKING_TOKENS, got %q", e)
+		}
+	}
+}
+
+// TestClaudeSpawnEnvPreservesExtraEnv ensures the thinking entry is
+// additive: existing ExtraEnv entries are preserved and not mutated.
+func TestClaudeSpawnEnvPreservesExtraEnv(t *testing.T) {
+	base := []string{"BASE=1"}
+	extra := []string{"FOO=bar"}
+	env := spawnEnv(base, provider.SpawnOptions{ExtraEnv: extra, ThinkingTokens: "0"})
+	for _, want := range []string{"BASE=1", "FOO=bar", "MAX_THINKING_TOKENS=0"} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("expected %q in env, got %v", want, env)
+		}
+	}
+	if len(extra) != 1 || extra[0] != "FOO=bar" {
+		t.Fatalf("ExtraEnv was mutated: %v", extra)
+	}
+}
 
 // TestSpawnerArgv verifies argv-construction for the claude spawner.
 // Uses a non-existent binary so Start errors fast; Argv() is populated

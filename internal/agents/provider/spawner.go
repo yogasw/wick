@@ -112,4 +112,13 @@ type SpawnOptions struct {
 	// MaxTurns caps agentic turns for this spawn (--max-turns on claude).
 	// 0 = no cap. Threaded from the agent node's max_turns.
 	MaxTurns int
+
+	// ThinkingTokens is the resolved MAX_THINKING_TOKENS env value for this
+	// spawn. Empty = leave it unset (full / provider-default thinking); "0"
+	// = thinking disabled; "<n>" = explicit token budget. The claude spawner
+	// injects MAX_THINKING_TOKENS=<value> only when non-empty; gemini/codex
+	// spawners ignore it (documented no-op for now). Empty by default so the
+	// regular agent chat flow is byte-identical — only the workflow agent
+	// node sets it (from its thinking + max_thinking_tokens inputs).
+	ThinkingTokens string
 }

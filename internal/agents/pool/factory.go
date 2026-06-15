@@ -351,20 +351,21 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			}
 			return event.NewClaudeParser()
 		},
-		Spawner:    spawner,
-		Store:      sto,
-		State:      st,
-		OnEvent:    onEvent,
-		OnExit:     onExit,
+		Spawner: spawner,
+		Store:   sto,
+		State:   st,
+		OnEvent: onEvent,
+		OnExit:  onExit,
 		OnSpawn: func(binary string, argv []string, pid int, firstMsg string) {
 			writeStartEvent(pid, binary, argv, firstMsg)
 		},
-		Instance:   &insCopy,
-		GateBinary: gateBin,
-		Preset:     presetContent,
-		MaxTurns:   opt.MaxTurns,
-		ExtraArgs:  resolvedIns.ExtraArgs,
-		ExtraEnv:   resolvedIns.Env,
+		Instance:        &insCopy,
+		GateBinary:      gateBin,
+		Preset:          presetContent,
+		MaxTurns:        opt.MaxTurns,
+		ThinkingTokens:  opt.ThinkingTokens,
+		ExtraArgs:       resolvedIns.ExtraArgs,
+		ExtraEnv:        resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the

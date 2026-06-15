@@ -173,6 +173,10 @@ type Options struct {
 	// MaxTurns caps agentic turns on each spawn (--max-turns). 0 = no cap.
 	// Forwarded verbatim into SpawnOptions.
 	MaxTurns int
+	// ThinkingTokens is the resolved MAX_THINKING_TOKENS env value applied on
+	// each spawn (claude). Empty = unset (provider default). Forwarded
+	// verbatim into SpawnOptions.
+	ThinkingTokens string
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -285,15 +289,16 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:  a.cfg.Workspace,
-		SessionDir: a.cfg.SessionDir,
-		ResumeID:   a.resumeID,
-		ExtraEnv:   a.cfg.ExtraEnv,
-		ExtraArgs:  a.cfg.ExtraArgs,
-		Instance:   a.cfg.Instance,
-		GateBinary: a.cfg.GateBinary,
-		Preset:     a.cfg.Preset,
-		MaxTurns:   a.cfg.MaxTurns,
+		Workspace:       a.cfg.Workspace,
+		SessionDir:      a.cfg.SessionDir,
+		ResumeID:        a.resumeID,
+		ExtraEnv:        a.cfg.ExtraEnv,
+		ExtraArgs:       a.cfg.ExtraArgs,
+		Instance:        a.cfg.Instance,
+		GateBinary:      a.cfg.GateBinary,
+		Preset:          a.cfg.Preset,
+		MaxTurns:        a.cfg.MaxTurns,
+		ThinkingTokens:  a.cfg.ThinkingTokens,
 	})
 	if err != nil {
 		cancel()
@@ -437,16 +442,17 @@ func (a *Agent) respawnWithMessage(text string) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:      a.cfg.Workspace,
-		SessionDir:     a.cfg.SessionDir,
-		ResumeID:       resumeID,
-		ExtraEnv:       a.cfg.ExtraEnv,
-		ExtraArgs:      a.cfg.ExtraArgs,
-		Instance:       a.cfg.Instance,
-		GateBinary:     a.cfg.GateBinary,
-		Preset:         a.cfg.Preset,
-		InitialMessage: text,
-		MaxTurns:       a.cfg.MaxTurns,
+		Workspace:       a.cfg.Workspace,
+		SessionDir:      a.cfg.SessionDir,
+		ResumeID:        resumeID,
+		ExtraEnv:        a.cfg.ExtraEnv,
+		ExtraArgs:       a.cfg.ExtraArgs,
+		Instance:        a.cfg.Instance,
+		GateBinary:      a.cfg.GateBinary,
+		Preset:          a.cfg.Preset,
+		InitialMessage:  text,
+		MaxTurns:        a.cfg.MaxTurns,
+		ThinkingTokens:  a.cfg.ThinkingTokens,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.

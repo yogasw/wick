@@ -93,6 +93,31 @@ Editing happens on a draft copy; **Publish** promotes the draft to the live vers
 
 The per-workflow worker goroutine that drains the trigger queue is pinned to the server lifetime, not the HTTP request. Publishing or toggling from the UI produces a worker that survives the response and begins processing runs immediately — no server restart required to see runs in history.
 
+## Concurrency
+
+By default every workflow runs **serially** — one run must complete before the next item is dequeued. This preserves FIFO order and is the safe default for most use cases.
+
+To allow a workflow to execute multiple triggers simultaneously, enable parallel runs in **Workflow Settings → Concurrency**:
+
+| Field | Default | Description |
+|---|---|---|
+| `concurrency.enabled` | `false` | Enable parallel runs for this workflow. |
+| `concurrency.max` | `0` (= 2) | Max simultaneous runs for this workflow. 0 uses the built-in default of 2. |
+
+Parallel execution also requires a **global cap** set in **Agent Settings → Workflow Max Parallel Global**. Setting it to `0` (the default) keeps all workflows serial regardless of per-workflow settings. Set it to `N > 0` to enable parallel mode — at most `N` runs execute simultaneously across all workflows combined.
+
+The two caps work as nested limits:
+
+```
+global cap = 5          → at most 5 runs across all workflows
+  workflow A cap = 2    → at most 2 of those 5 slots for workflow A
+  workflow B cap = 3    → at most 3 of those 5 slots for workflow B
+```
+
+Each workflow has its own FIFO queue (default depth 20). Runs that arrive while the cap is full wait in the queue rather than being dropped.
+
+**Run timeout**: each run is bounded by `max_duration_sec` (default 10 minutes). A stuck run is cancelled when the deadline expires; the run status is marked `failed`.
+
 ## Gate integration
 
 Workflow `shell` and `agent` nodes participate in the [Command Gate](/guide/command-gate) policy:
