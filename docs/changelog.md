@@ -10,6 +10,18 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.5](https://github.com/yogasw/wick/compare/v0.18.4...v0.18.5) — PWA Notifications
+
+_Released on 2026-06-15_
+
+### Improved
+*   Broadcast in-app lifecycle push notifications to all open tabs, ensuring exactly one OS notification is surfaced per push. Repeated pushes are collapsed into a single OS surface using a unique tag to prevent spam.
+*   De-duplicate in-app cards by push tag, replacing existing cards instead of stacking.
+*   Synchronize dismissals across tabs: Dismissing an in-app card in one tab now clears the same card in all other open tabs and closes the shared OS notification. Auto-dismiss and remote dismiss actions only clear the local card.
+
+---
+
+
 ## [v0.18.4](https://github.com/yogasw/wick/compare/v0.18.3...v0.18.4) — PWA Improvements
 
 _Released on 2026-06-15_
