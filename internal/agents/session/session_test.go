@@ -178,6 +178,30 @@ func TestSetMaxTurns(t *testing.T) {
 	}
 }
 
+func TestSetThinkingTokens(t *testing.T) {
+	layout := newLayout(t)
+	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S1", Origin: OriginUI})
+
+	// Upsert: creates the agent entry when none exists yet.
+	if err := SetThinkingTokens(layout, "S1", "main", "0"); err != nil {
+		t.Fatalf("set (create): %v", err)
+	}
+	s, _ := Load(layout, "S1")
+	if len(s.Agents) != 1 || s.Agents[0].ThinkingTokens != "0" {
+		t.Fatalf("after create want 1 agent ThinkingTokens=0, got %+v", s.Agents)
+	}
+
+	// Updates the existing entry in place (no duplicate row), and clearing
+	// back to "" (full thinking) overwrites the prior value.
+	if err := SetThinkingTokens(layout, "S1", "main", ""); err != nil {
+		t.Fatalf("set (update): %v", err)
+	}
+	s, _ = Load(layout, "S1")
+	if len(s.Agents) != 1 || s.Agents[0].ThinkingTokens != "" {
+		t.Fatalf("after update want 1 agent ThinkingTokens empty, got %+v", s.Agents)
+	}
+}
+
 func TestSetCLISessionID(t *testing.T) {
 	layout := newLayout(t)
 	_, _ = Create(context.Background(), layout, CreateOptions{ID: "S1", Origin: OriginUI})

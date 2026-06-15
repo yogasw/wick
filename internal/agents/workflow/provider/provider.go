@@ -54,6 +54,12 @@ type AgentRequest struct {
 	Tools     []string
 	MaxTurns  int
 	SessionID string
+	// ThinkingTokens is the resolved MAX_THINKING_TOKENS env value for this
+	// call. Set by the agent node from its thinking + max_thinking_tokens
+	// inputs ("" = unset, "0" = disabled, "<n>" = budget). The pooled claude
+	// provider honours it; the non-pool cliProvider (gemini/codex) ignores
+	// it (documented no-op for now).
+	ThinkingTokens string
 }
 
 // AgentResult is what the provider returns for an agent call.

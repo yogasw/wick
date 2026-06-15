@@ -18,21 +18,21 @@ import (
 type NodeType string
 
 const (
-	NodeClassify      NodeType = "classify"
-	NodeAgent         NodeType = "agent"
-	NodeChannel       NodeType = "channel"
-	NodeConnector     NodeType = "connector"
-	NodeShell         NodeType = "shell"
-	NodeSwitch        NodeType = "switch"
-	NodeGoScript      NodeType = "go_script"
-	NodePython        NodeType = "python"
-	NodeHTTP          NodeType = "http"
-	NodeDBQuery       NodeType = "db_query"
-	NodeTransform     NodeType = "transform"
-	NodeBranch        NodeType = "branch"
-	NodeParallel      NodeType = "parallel"
-	NodeMerge         NodeType = "merge"
-	NodeEnd           NodeType = "end"
+	NodeClassify        NodeType = "classify"
+	NodeAgent           NodeType = "agent"
+	NodeChannel         NodeType = "channel"
+	NodeConnector       NodeType = "connector"
+	NodeShell           NodeType = "shell"
+	NodeSwitch          NodeType = "switch"
+	NodeGoScript        NodeType = "go_script"
+	NodePython          NodeType = "python"
+	NodeHTTP            NodeType = "http"
+	NodeDBQuery         NodeType = "db_query"
+	NodeTransform       NodeType = "transform"
+	NodeBranch          NodeType = "branch"
+	NodeParallel        NodeType = "parallel"
+	NodeMerge           NodeType = "merge"
+	NodeEnd             NodeType = "end"
 	NodeDataTableGet    NodeType = "datatable_get"
 	NodeDataTableExists NodeType = "datatable_exists"
 	NodeDataTableQuery  NodeType = "datatable_query"
@@ -97,6 +97,7 @@ type Workflow struct {
 	MaxDurationSec int                `json:"max_duration_sec,omitempty"`
 	Triggers       []Trigger          `json:"triggers"`
 	Queue          QueuePolicy        `json:"queue,omitempty"`
+	Concurrency    ConcurrencyPolicy  `json:"concurrency,omitempty"`
 	Env            []EnvField         `json:"env,omitempty"`
 	DataTables     []DataTableBinding `json:"data_tables,omitempty"`
 	Graph          Graph              `json:"graph"`
@@ -110,6 +111,17 @@ type Workflow struct {
 type QueuePolicy struct {
 	MaxSize    int    `json:"max_size,omitempty"`
 	OnOverflow string `json:"on_overflow,omitempty"`
+}
+
+// ConcurrencyPolicy controls how many runs of this workflow may execute
+// simultaneously. When Enabled is false (default) runs are serialised —
+// the single worker drains the queue one item at a time, preserving
+// event order. When Enabled is true, up to Max goroutines may execute
+// runs concurrently. Max=0 means "use default" (2); set a positive value
+// to override. Both bounds are further capped by the global router cap.
+type ConcurrencyPolicy struct {
+	Enabled bool `json:"enabled"`
+	Max     int  `json:"max,omitempty"` // 0 = use default (2); >0 = explicit cap
 }
 
 // Overflow policy values.
@@ -182,11 +194,13 @@ type Node struct {
 	Examples            []ClassifyExample `json:"examples,omitempty"`
 
 	// agent
-	Workspace     string   `json:"workspace,omitempty"`
-	Skills        []string `json:"skills,omitempty"`
-	Tools         []string `json:"tools,omitempty"`
-	MaxTurns      int      `json:"max_turns,omitempty"`
-	RequireStatus bool     `json:"require_status,omitempty"`
+	Workspace         string   `json:"workspace,omitempty"`
+	Skills            []string `json:"skills,omitempty"`
+	Tools             []string `json:"tools,omitempty"`
+	MaxTurns          int      `json:"max_turns,omitempty"`
+	Thinking          string   `json:"thinking,omitempty"`
+	MaxThinkingTokens int      `json:"max_thinking_tokens,omitempty"`
+	RequireStatus     bool     `json:"require_status,omitempty"`
 
 	// channel (action) — Channel field name avoided clash with Event.Channel
 	ChannelName string            `json:"channel,omitempty"`
@@ -388,11 +402,11 @@ type Trigger struct {
 	ReplySource  *bool             `json:"reply_source,omitempty"`
 
 	// webhook
-	Path        string `json:"path,omitempty"`
-	Method      string `json:"method,omitempty"`
-	SecretRef   string `json:"secret_ref,omitempty"`
-	ParseBody   string `json:"parse_body,omitempty"`
-	BodyToVar   string `json:"body_to_var,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Method    string `json:"method,omitempty"`
+	SecretRef string `json:"secret_ref,omitempty"`
+	ParseBody string `json:"parse_body,omitempty"`
+	BodyToVar string `json:"body_to_var,omitempty"`
 	// RespondMode controls when and how the HTTP response is sent back to
 	// the webhook caller. Three values are supported:
 	//
@@ -436,7 +450,6 @@ type Trigger struct {
 	NodeTypes      []string `json:"node_types,omitempty"`
 }
 
-
 // Whitelist filters who can fire a trigger.
 type Whitelist struct {
 	Users  []string `json:"users,omitempty"`
@@ -454,12 +467,12 @@ type OnErrorBinding struct {
 
 // Event is the trigger payload passed to a run.
 type Event struct {
-	Type    string         `json:"type"`
-	Subtype string         `json:"subtype,omitempty"`
-	Channel string         `json:"channel,omitempty"`
-	At      time.Time      `json:"at"`
-	Payload map[string]any `json:"payload,omitempty"`
-	TriggerID string `json:"trigger_id,omitempty"`
+	Type      string         `json:"type"`
+	Subtype   string         `json:"subtype,omitempty"`
+	Channel   string         `json:"channel,omitempty"`
+	At        time.Time      `json:"at"`
+	Payload   map[string]any `json:"payload,omitempty"`
+	TriggerID string         `json:"trigger_id,omitempty"`
 }
 
 // RunStatus values.
