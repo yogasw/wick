@@ -291,25 +291,74 @@
     } catch (_) {}
   }
 
+  // --- Cross-tab in-app card registry -----------------------------------
+  // activeCards maps a push tag → the open card's dismiss() in THIS tab.
+  // Lets us de-dupe a repeated push within one tab (a fresh push for the
+  // same tag replaces the old card) and mirror a dismiss that happened in
+  // another tab. toastChannel is the cross-tab bus: when the user closes a
+  // card here we broadcast {type:'dismiss', id} so sibling tabs drop the
+  // same card, and we close the shared OS notification — so the user never
+  // has to dismiss the same notification in N places.
+  var activeCards = Object.create(null);
+  var toastChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('wick-toasts') : null;
+  if (toastChannel) {
+    toastChannel.addEventListener('message', function (event) {
+      var d = event.data || {};
+      if (d.type === 'dismiss' && d.id) dismissCardById(d.id);
+    });
+  }
+
+  // closeOSNotification clears any OS notification carrying this tag —
+  // called when the user dismisses a card so the OS surface disappears
+  // together with the in-app card. Best-effort.
+  function closeOSNotification(id) {
+    if (!('serviceWorker' in navigator) || !id) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      if (!reg.getNotifications) return;
+      return reg.getNotifications({ tag: id }).then(function (notes) {
+        notes.forEach(function (n) { try { n.close(); } catch (_) {} });
+      });
+    }).catch(function () {});
+  }
+
+  // dismissCardById closes the card surfaced for `id` in THIS tab without
+  // echoing the dismiss back out — used when another tab tells us it was
+  // dismissed there.
+  function dismissCardById(id) {
+    var entry = activeCards[id];
+    if (entry) entry.dismiss(false);
+  }
+
   // showLifecycleCard renders a rich, clickable in-app toast when the
-  // service worker relays a lifecycle push back to the page (wick was
-  // open, so we skipped the OS notification surface). Bigger than the
-  // small status toast — title + body preview + a footer hint —
-  // because the content here is the actual agent output the user
+  // service worker relays a lifecycle push back to the page. The SW now
+  // broadcasts every push to ALL open wick tabs, so this can fire in
+  // several tabs at once. Cards are keyed by the push `tag`: a repeat
+  // within a tab replaces rather than stacks, and a user dismiss is
+  // mirrored to every other tab (+ the OS notification) via toastChannel.
+  // Bigger than the small status toast — title + body preview + a footer
+  // hint — because the content here is the actual agent output the user
   // wants to read at a glance. Plays a short chime via playLifecycleChime
   // so the user notices even if the wick tab isn't focused.
   //
   // Click anywhere on the card navigates to the session URL. Auto-
   // dismisses after 8s (longer than a status toast since users may
   // need to skim the body) but the user can also click the × to
-  // dismiss early.
+  // dismiss early. Only a user dismiss (click / ×) propagates across
+  // tabs — the silent auto-dismiss and a remote dismiss just clear the
+  // local card.
   function showLifecycleCard(payload) {
+    var url = payload && payload.url ? String(payload.url) : '/';
+    var id = payload && payload.tag ? String(payload.tag) : ('wick:' + url);
+
+    // De-dupe within this tab: drop an existing card for the same push
+    // before rendering the fresh copy (locally, no propagation).
+    if (activeCards[id]) activeCards[id].dismiss(false);
+
     var stack = ensureToastStack();
     var card = document.createElement('div');
     card.className = 'pointer-events-auto w-80 max-w-[calc(100vw-2rem)] cursor-pointer rounded-xl border border-white-300 bg-white-100 text-black-900 shadow-lg transition-opacity duration-200 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100';
     var title = payload && payload.title ? String(payload.title) : 'Wick notification';
     var body = payload && payload.body ? String(payload.body) : '';
-    var url = payload && payload.url ? String(payload.url) : '/';
     card.innerHTML =
       '<div class="flex items-start gap-3 px-4 py-3">' +
         '<div class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-green-500/15 text-green-600 dark:text-green-400">' +
@@ -328,31 +377,41 @@
         '</button>' +
       '</div>';
     var dismissed = false;
-    function dismiss() {
+    // propagate=true → the user closed it here (click / ×), so mirror the
+    // dismiss to sibling tabs and clear the shared OS notification.
+    // propagate=false → auto-dismiss timeout or a dismiss relayed from
+    // another tab; just clear this card.
+    function dismiss(propagate) {
       if (dismissed) return;
       dismissed = true;
+      if (activeCards[id] && activeCards[id].card === card) delete activeCards[id];
       card.style.opacity = '0';
       window.setTimeout(function () { card.remove(); }, 220);
+      if (propagate) {
+        if (toastChannel) { try { toastChannel.postMessage({ type: 'dismiss', id: id }); } catch (_) {} }
+        closeOSNotification(id);
+      }
     }
+    activeCards[id] = { dismiss: dismiss, card: card };
     card.addEventListener('click', function (e) {
       if (e.target.closest('[data-lifecycle-card-dismiss]')) {
         e.stopPropagation();
-        dismiss();
+        dismiss(true);
         return;
       }
-      dismiss();
+      dismiss(true);
       // Same-origin navigation keeps the SPA / tab state intact.
       window.location.assign(url);
     });
     stack.appendChild(card);
     playLifecycleChime();
-    window.setTimeout(dismiss, 8000);
+    window.setTimeout(function () { dismiss(false); }, 8000);
   }
 
-  // Service worker → page bridge for lifecycle pushes. When wick is
-  // open anywhere, sw.js routes the push via postMessage instead of
-  // (or alongside, silently) a real OS notification so the page can
-  // render a click-to-navigate in-app card. See sw.js push handler.
+  // Service worker → page bridge for lifecycle pushes. The SW relays
+  // every push via postMessage (alongside a real OS notification) so the
+  // page can render a click-to-navigate in-app card. See sw.js push
+  // handler.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', function (event) {
       var data = event.data || {};
