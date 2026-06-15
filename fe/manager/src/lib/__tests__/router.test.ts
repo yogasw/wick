@@ -40,4 +40,15 @@ describe("match", () => {
   it("decodes encoded param values", () => {
     expect(match("/connectors/:key", "/connectors/my%2Fconn")).toEqual({ key: "my/conn" });
   });
+
+  it("extracts key + id from the detail route", () => {
+    expect(match("/connectors/:key/:id", "/connectors/slack/abc-123")).toEqual({
+      key: "slack",
+      id: "abc-123",
+    });
+  });
+
+  it("does not match the detail pattern against the list route", () => {
+    expect(match("/connectors/:key/:id", "/connectors/slack")).toBeNull();
+  });
 });

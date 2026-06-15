@@ -1,6 +1,7 @@
 <script lang="ts">
   import { TextInput } from "@wick-fe/common-ui";
   import { listConnectors } from "$lib/api.js";
+  import { push } from "$lib/router.js";
   import type { ConnectorDef } from "$lib/types.js";
 
   let connectors = $state<ConnectorDef[]>([]);
@@ -37,6 +38,18 @@
     } finally {
       loading = false;
     }
+  }
+
+  const appBase = document.getElementById("app")?.dataset.base ?? "";
+
+  function cardHref(key: string): string {
+    return `${appBase}/connectors/${encodeURIComponent(key)}`;
+  }
+
+  function openConnector(e: MouseEvent, key: string) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    push(`/connectors/${encodeURIComponent(key)}`);
   }
 
   function chipClass(active: boolean): string {
@@ -97,8 +110,9 @@
       >
         {#each filtered as conn (conn.key)}
           <a
-            href={`/manager/connectors/${encodeURIComponent(conn.key)}`}
+            href={cardHref(conn.key)}
             data-conn-card
+            onclick={(e) => openConnector(e, conn.key)}
             class="flex items-start gap-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-4 shadow-sm transition-colors hover:border-green-500 hover:shadow-md"
           >
             <span class="text-2xl leading-none flex-shrink-0" aria-hidden="true">{conn.icon || "🔌"}</span>
