@@ -169,8 +169,6 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
-	r.Static("/static/", StaticFS)
-
 	// Svelte SPA shell + assets for the workflow editor.
 	registerSPA(r)
 	registerSPAWorkflows(r)

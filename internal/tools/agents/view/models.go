@@ -2,12 +2,10 @@ package view
 
 import (
 	"strconv"
-	"time"
 
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
-	"github.com/yogasw/wick/internal/entity"
 )
 
 // AgentsLayoutVM carries sidebar data for the full-screen Claude-style shell.
@@ -91,74 +89,6 @@ func (vm AgentsLayoutVM) ScopedFolder() string {
 	return ""
 }
 
-// OverviewVM holds data for the Overview page. SessionIDs is the
-// active-only subset (spawning/working/idle) — Killed sessions live
-// in /sessions, not on the Overview. Queued is the per-session FIFO
-// snapshot — operators can kill a queue entry that's been waiting
-// too long.
-type OverviewVM struct {
-	Layout        AgentsLayoutVM
-	Base          string
-	Active        int
-	QueueLen      int
-	PoolMax       int
-	SessionIDs    []string
-	Sessions      map[string]session.Session
-	Projects      map[string]project.Project
-	Lifecycle     map[string]SessionLifecycleVM
-	IdleTimeoutMs int64
-	Queued        []QueuedEntryVM
-}
-
-// QueuedEntryVM is one row in the queue panel. WaitingMs drives a
-// "waiting Ns" label so operators see how stale the entry is.
-type QueuedEntryVM struct {
-	SessionID string
-	AgentName string
-	WaitingMs int64
-	// Label (first user message) + Project name make the queue list
-	// readable + searchable on the Overview page.
-	Label   string
-	Project string
-}
-
-// SessionsListVM holds data for the Sessions list page. Lifecycle is
-// keyed by session ID so each row can render the live badge — empty
-// means no live entry in the pool (badge falls back to "killed" /
-// no-agent).
-type SessionsListVM struct {
-	Layout        AgentsLayoutVM
-	Base          string
-	IDs           []string
-	Sessions      map[string]session.Session
-	Labels        map[string]string // id → first user message preview
-	Projects      map[string]project.Project
-	ProjectList   []string
-	PresetList    []string
-	Providers     []ProviderChoiceVM
-	Lifecycle     map[string]SessionLifecycleVM
-	IdleTimeoutMs int64
-	Page          int
-	HasNext       bool
-	// ScopedProjectID, when set, marks the project the sidebar/list is
-	// currently scoped to (drives the breadcrumb + header chip).
-	ScopedProjectID string
-	// Composer is rendered at the top of the scoped project landing
-	// (Claude-style compose box). Only used when ScopedProjectID != "".
-	Composer ComposerVM
-}
-
-// ProjectName resolves a project id to its display name (list VM helper).
-func (vm SessionsListVM) ProjectName(id string) string {
-	if id == "" {
-		return ""
-	}
-	if p, ok := vm.Projects[id]; ok {
-		return p.Meta.Name
-	}
-	return id
-}
-
 // ProviderChoiceVM is one healthy provider row — what the New Session
 // picker offers. Disabled / unprobed / version-failed providers
 // never reach the UI.
@@ -175,109 +105,6 @@ type SessionLifecycleVM struct {
 	Lifecycle    string
 	PID          int
 	LastActiveMs int64
-}
-
-// SessionsTableVM feeds the reusable sessions list table component.
-// The full /sessions page sets ShowPaging=true; the Overview "Active
-// Sessions" panel sets ShowPaging=false and uses a tighter EmptyText.
-type SessionsTableVM struct {
-	Base          string
-	IDs           []string
-	Sessions      map[string]session.Session
-	Projects      map[string]project.Project
-	Lifecycle     map[string]SessionLifecycleVM
-	IdleTimeoutMs int64
-	EmptyText     string
-	ShowPaging    bool
-	Page          int
-	HasNext       bool
-}
-
-// ProjectName resolves a project id to its display name (table VM helper).
-func (vm SessionsTableVM) ProjectName(id string) string {
-	if id == "" {
-		return ""
-	}
-	if p, ok := vm.Projects[id]; ok {
-		return p.Meta.Name
-	}
-	return id
-}
-
-// TurnEventVM is one tool/thinking event within an assistant turn.
-type TurnEventVM struct {
-	Type      string // "tool_use" | "tool_result" | "thinking"
-	ToolName  string
-	ToolInput string
-	ToolUseID string
-	IsError   bool
-	Text      string
-}
-
-// TurnVM is one conversation turn for the UI.
-type TurnVM struct {
-	TurnID      string // stable ID — used to lazy-fetch trace via GET /turns/:id
-	Role        string // "user" | "assistant" | "system"
-	Agent       string
-	Provider    string // "type/name" — snapshot from the turn that produced it
-	Text        string
-	Truncated   bool
-	Interrupted bool // true → killed before Done (distinct from text-cap truncation)
-	HasTrace    bool // true → trace file exists, UI shows "expand trace" button
-	Time        time.Time
-	Events      []TurnEventVM // legacy: populated only from old turns that inlined events
-	Attachments []AttachmentVM
-}
-
-// AttachmentVM is one user-uploaded file rendered under the user
-// bubble. URL is the GET path served by sessionUploadServe; IsImage
-// gates inline thumbnail rendering vs the generic file chip.
-type AttachmentVM struct {
-	Name    string
-	URL     string
-	MIME    string
-	Size    int64
-	IsImage bool
-}
-
-// SessionDetailVM holds data for the Session detail page.
-//
-// Lifecycle / PID / LastActiveMs / IdleTimeoutMs feed the realtime
-// status badge: the server emits the snapshot at render time and JS
-// updates it from SSE events thereafter.
-type SessionDetailVM struct {
-	Layout         AgentsLayoutVM
-	Base           string
-	Session        session.Session
-	Tab            string // "conversation" | "commands" | "raw"
-	Turns          []TurnVM
-	CmdLines       []string
-	Lifecycle      string
-	PID            int
-	LastActiveMs   int64
-	IdleTimeoutMs  int64
-	Gate           GateStatusVM
-	Providers      []ProviderChoiceVM
-	ActiveProvider string
-	// Projects feeds the "Move to project" picker on the detail page;
-	// ActiveProjectID is the session's current binding.
-	Projects        map[string]project.Project
-	ProjectList     []string
-	ActiveProjectID string
-	// SCMAssetURL is the hashed SCM Svelte bundle URL, injected lazily
-	// into the Source Control modal. Empty when the bundle isn't built.
-	SCMAssetURL string
-}
-
-// ProjectName resolves a project id to its display name (detail VM helper).
-func (vm SessionDetailVM) ProjectName(id string) string {
-	if id == "" {
-		return ""
-	}
-	if p, ok := vm.Projects[id]; ok {
-		return p.Meta.Name
-	}
-	return id
 }
 
 // Compose-form dropdown styling. When the page is scoped to a project,
@@ -388,64 +215,6 @@ func pinTitle(pinned bool) string {
 	return "Pin as your default project (opens here automatically)"
 }
 
-// PinnedSessionVM is one pinned-session row on the project settings page.
-type PinnedSessionVM struct {
-	ID    string
-	Label string
-}
-
-// ProjectSettingsVM drives the full project settings page (mockup ④) —
-// a real navigable page, not a modal. IsNew=true renders the create
-// form (empty, no delete / pinned / meta-preview).
-type ProjectSettingsVM struct {
-	Layout          AgentsLayoutVM
-	Base            string
-	IsNew           bool
-	ID              string
-	Name            string
-	Icon            string
-	Description     string
-	CustomPath      string
-	Managed         bool // CustomPath == ""
-	IsDefault       bool // built-in default project (cannot delete)
-	DefaultPreset   string
-	DefaultProvider string
-	SystemAddon     string
-	ChatCount       int
-	CreatedAt       string
-	PresetList      []string
-	Pinned          []PinnedSessionVM
-	MetaJSON        string
-	Action          string // form POST target
-}
-
-// BackHref is where the settings ← link / Cancel returns to: the
-// project's own landing for an existing project, else All chats.
-func (vm ProjectSettingsVM) BackHref() string {
-	if !vm.IsNew && vm.ID != "" {
-		return vm.Base + "/sessions?project=" + vm.ID
-	}
-	return vm.Base + "/sessions"
-}
-
-// PresetsVM holds data for the Presets list page.
-type PresetsVM struct {
-	Layout AgentsLayoutVM
-	Base   string
-	Names  []string
-}
-
-// PresetDetailVM holds data for the Preset editor page.
-type PresetDetailVM struct {
-	Layout AgentsLayoutVM
-	Base   string
-	Name   string
-	Body   string
-}
-
-// ProvidersVM holds data for the Providers page — runtime instance
-// statuses, recent spawn log files, and live pool capacity. Spawns
-// is the current page slice; Page/HasNext drive the pager.
 // ProviderCapVM is the used / effective-max slot count for one provider
 // instance, shown on its card as "<Used> / <Max>" — or "<Used> / ∞" when
 // Unlimited (no finite cap at provider or global scope).
@@ -455,39 +224,6 @@ type ProviderCapVM struct {
 	Unlimited bool
 }
 
-type ProvidersVM struct {
-	Layout        AgentsLayoutVM
-	Base          string
-	Statuses      []provider.Status
-	PoolActive    int
-	PoolQueueLen  int
-	PoolMax       int
-	LiveProcesses []LiveProcessVM
-	ProviderCaps  map[string]ProviderCapVM // key = "type/name"
-	SupportedKeys []string
-	Gate          GateStatusVM
-	AutoRescan    bool
-	MCP           MCPStatusVM
-}
-
-// ProviderDetailVM is the view model for the per-provider detail page.
-type ProviderDetailVM struct {
-	Layout      AgentsLayoutVM
-	Base        string
-	Status      provider.Status
-	GlobalMax   int
-	ActiveCount int
-	ActivePIDs  []LiveProcessVM
-	Rows        []entity.Config
-	ActionBase  string
-	Spawns      []provider.SpawnLogFile
-	Page        int
-	HasNext     bool
-	Gate        GateStatusVM
-	Flash       string
-	Error       string
-}
-
 // LiveProcessVM is one row in the Active Processes panel on the Providers page.
 type LiveProcessVM struct {
 	SessionID string
@@ -495,13 +231,6 @@ type LiveProcessVM struct {
 	PID       int
 	Lifecycle string // "spawning" | "working" | "idle" | "killed"
 	Substate  string
-}
-
-// SkillSyncVM holds the current state of skill directories for the sync card on Providers page.
-type SkillSyncVM struct {
-	Dirs       []string
-	Files      []SkillFileVM
-	LastResult string
 }
 
 // SkillFileVM is one row in skills tables.
@@ -540,29 +269,6 @@ type SkillFolderVM struct {
 	Entries    []SkillFileVM
 	InDirs     []string
 	Missing    []string
-}
-
-// SkillProviderFolderVM is the folder explorer scoped to one provider dir.
-type SkillProviderFolderVM struct {
-	Layout       AgentsLayoutVM
-	Base         string
-	Provider     string // dir label e.g. "claude"
-	FolderName   string
-	Entries      []SkillFileVM
-	AllProviders []string // all known dir labels for tab switching
-}
-
-// SkillProviderFileVM is the file viewer scoped to one provider dir.
-type SkillProviderFileVM struct {
-	Layout       AgentsLayoutVM
-	Base         string
-	Provider     string
-	FolderName   string
-	Filename     string
-	Content      string
-	SourcePath   string
-	AllProviders []string        // for tab switching
-	HasFile      map[string]bool // provider label → file exists
 }
 
 // MCPClientStatusVM is one row in the MCP Wick card — one per detected
