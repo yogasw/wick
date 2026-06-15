@@ -1,14 +1,30 @@
 package manager
 
 import (
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
+// withTestSPAFS swaps the package SPA filesystem for a synthetic bundle so
+// the handler tests exercise the serve logic without depending on a real
+// `npm run build` artifact — that bundle is gitignored and absent in CI
+// (only dist/.gitkeep is committed), so reading the real embed would 404.
+// Restored on cleanup.
+func withTestSPAFS(t *testing.T) {
+	t.Helper()
+	prev := spaFS
+	spaFS = fstest.MapFS{
+		"dist/manager/index.html":           {Data: []byte(`<!doctype html><html><body><div id="app" data-base=""></div></body></html>`)},
+		"dist/manager/assets/index-test.js": {Data: []byte("console.log(1);")},
+	}
+	t.Cleanup(func() { spaFS = prev })
+}
+
 func TestSPAHandlerServesShell(t *testing.T) {
+	withTestSPAFS(t)
 	h := &Handler{}
 
 	req := httptest.NewRequest(http.MethodGet, spaMount+"/", nil)
@@ -46,6 +62,7 @@ func TestSPAHandlerInjectsDataBase(t *testing.T) {
 }
 
 func TestSPAHandlerClientRouteFallsBackToShell(t *testing.T) {
+	withTestSPAFS(t)
 	h := &Handler{}
 
 	req := httptest.NewRequest(http.MethodGet, spaMount+"/connectors/slack", nil)
@@ -61,13 +78,9 @@ func TestSPAHandlerClientRouteFallsBackToShell(t *testing.T) {
 }
 
 func TestSPAHandlerServesAssetWithImmutableCache(t *testing.T) {
-	asset := firstBuiltJSAsset(t)
-	if asset == "" {
-		t.Skip("no built JS asset to probe (run npm build first)")
-	}
-
+	withTestSPAFS(t)
 	h := &Handler{}
-	req := httptest.NewRequest(http.MethodGet, spaMount+"/assets/"+asset, nil)
+	req := httptest.NewRequest(http.MethodGet, spaMount+"/assets/index-test.js", nil)
 	rec := httptest.NewRecorder()
 	h.spaHandler(rec, req)
 
@@ -80,20 +93,4 @@ func TestSPAHandlerServesAssetWithImmutableCache(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/javascript") {
 		t.Errorf("Content-Type = %q, want application/javascript…", ct)
 	}
-}
-
-// firstBuiltJSAsset returns the name of the first built JS asset under
-// dist/manager/assets, or "" when the bundle has not been built.
-func firstBuiltJSAsset(t *testing.T) string {
-	t.Helper()
-	entries, err := fs.ReadDir(spaFS, "dist/manager/assets")
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".js") {
-			return e.Name()
-		}
-	}
-	return ""
 }
