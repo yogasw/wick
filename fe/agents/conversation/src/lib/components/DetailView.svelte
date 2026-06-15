@@ -3,7 +3,7 @@
   import { get } from "svelte/store";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { toastError } from "@wick-fe/common-stores";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
 
   import { createThreadStore } from "../stores/thread.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
@@ -67,6 +67,18 @@
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   const unsubMeta = thread.meta.subscribe((v) => { threadMeta = v; });
+
+  /* ── raw trace view ────────────────────────────────────────────── */
+  const rawJson = $derived(JSON.stringify(turns, null, 2));
+
+  async function copyRaw() {
+    try {
+      await navigator.clipboard.writeText(rawJson);
+      toastOk("Raw trace copied");
+    } catch {
+      toastError("Copy failed", "Clipboard unavailable in this browser.");
+    }
+  }
 
   /* ── session title + meta ──────────────────────────────────────── */
   let title = $state("");
@@ -589,8 +601,23 @@
         <p class="text-sm text-black-600 dark:text-black-700">Commands view — coming soon to the new UI</p>
       </div>
     {:else if activeView === "raw"}
-      <div data-placeholder-view class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
-        <p class="text-sm text-black-600 dark:text-black-700">Raw trace — coming soon</p>
+      <div class="flex-1 min-h-0 flex flex-col bg-white-200 dark:bg-navy-800">
+        <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-white-300 dark:border-navy-600 shrink-0">
+          <span class="text-xs font-medium text-black-700 dark:text-black-600">Raw trace · {turns.length} turn{turns.length === 1 ? "" : "s"}</span>
+          <button
+            type="button"
+            onclick={copyRaw}
+            disabled={turns.length === 0}
+            class="rounded-lg border border-white-400 dark:border-navy-600 px-2.5 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors disabled:opacity-50 disabled:cursor-default"
+          >Copy</button>
+        </div>
+        {#if turns.length === 0}
+          <div class="flex-1 flex items-center justify-center">
+            <p class="text-sm text-black-600 dark:text-black-700">No trace yet.</p>
+          </div>
+        {:else}
+          <pre class="flex-1 min-h-0 overflow-auto px-4 py-3 text-xs font-mono leading-relaxed text-black-900 dark:text-white-100 whitespace-pre">{rawJson}</pre>
+        {/if}
       </div>
     {/if}
   </div>
