@@ -4,6 +4,10 @@ import type {
   ConnectorList,
   ConnectorDetail,
   HealthCheckResult,
+  TestMeta,
+  TestRunResult,
+  HistoryResult,
+  HistoryFilter,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager surface,
@@ -67,4 +71,40 @@ export async function deleteConnectorRow(key: string, id: string): Promise<void>
 
 export async function runHealthCheck(key: string, id: string): Promise<HealthCheckResult> {
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
+}
+
+export async function getTestMeta(key: string, id: string): Promise<TestMeta> {
+  const r = await apiGet<TestMeta>(`${rowBase(key, id)}/test-meta`);
+  return { ...r, ops: r.ops ?? [], accounts: r.accounts ?? [] };
+}
+
+export async function runConnectorTest(
+  key: string,
+  id: string,
+  operation: string,
+  input: Record<string, string>,
+  accountId: string,
+): Promise<TestRunResult> {
+  return apiPost<TestRunResult>(`${rowBase(key, id)}/test`, {
+    operation,
+    input,
+    account_id: accountId,
+  });
+}
+
+export async function getConnectorHistory(
+  key: string,
+  id: string,
+  filter: HistoryFilter,
+): Promise<HistoryResult> {
+  const params = new URLSearchParams();
+  if (filter.op) params.set("op", filter.op);
+  if (filter.source) params.set("source", filter.source);
+  if (filter.status) params.set("status", filter.status);
+  if (filter.user) params.set("user", filter.user);
+  if (filter.page > 1) params.set("page", String(filter.page));
+  const qs = params.toString();
+  const path = qs ? `${rowBase(key, id)}/history?${qs}` : `${rowBase(key, id)}/history`;
+  const r = await apiGet<HistoryResult>(path);
+  return { ...r, runs: r.runs ?? [], ops: r.ops ?? [], users: r.users ?? [] };
 }
