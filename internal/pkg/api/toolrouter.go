@@ -175,10 +175,11 @@ func (t *toolRouter) validate() error {
 
 // mount wires every collected route and static mount onto mux.
 //
-// Tool root routes (path == "/tools/{key}") are registered twice so
-// "/tools/{key}" and "/tools/{key}/" both hit the same handler. Without
-// this, ServeMux treats them as distinct patterns: the bare form is
-// exact-match and the trailing-slash form is subtree-match.
+// Tool root routes (path == "/tools/{key}") are registered twice — for
+// every method — so "/tools/{key}" and "/tools/{key}/" both hit the same
+// handler. Without this, ServeMux treats them as distinct patterns (bare
+// = exact-match, trailing-slash = subtree-match), so a POST/DELETE to the
+// trailing-slash root would 405 against a GET-only {$} pattern.
 func (t *toolRouter) mount(mux *http.ServeMux) {
 	for _, r := range t.routes {
 		r := r
@@ -190,8 +191,8 @@ func (t *toolRouter) mount(mux *http.ServeMux) {
 			r.h(tool.NewCtx(w, req, r.render, r.meta, cfg, notFound))
 		})
 		mux.Handle(r.method+" "+r.path, handler)
-		if r.method == "GET" && r.path == "/tools/"+r.meta.Key {
-			mux.Handle("GET "+r.path+"/{$}", handler)
+		if r.path == "/tools/"+r.meta.Key {
+			mux.Handle(r.method+" "+r.path+"/{$}", handler)
 		}
 	}
 	for _, s := range t.statics {
