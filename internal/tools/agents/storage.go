@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -248,12 +247,4 @@ func buildSrcsByInstance() map[string][]providersync.SrcInfo {
 		}
 	}
 	return m
-}
-
-// instanceSyncBase resolves the filesystem base for restore.
-func instanceSyncBase(ins provider.Instance) string {
-	if ins.Storage == nil {
-		return ""
-	}
-	return filepath.Dir(ins.Storage.SyncPath)
 }

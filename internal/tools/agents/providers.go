@@ -1035,31 +1035,6 @@ func liveProcessesVM() []view.LiveProcessVM {
 	return out
 }
 
-// providerChoices probes every configured provider and returns only
-// the healthy ones (binary on PATH + --version succeeded + not
-// disabled). Used by every "pick a provider" form so users can't
-// pick a provider that won't spawn.
-func providerChoices(ctx context.Context) []view.ProviderChoiceVM {
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	statuses, err := provider.ProbeAllCached(probeCtx)
-	if err != nil {
-		return nil
-	}
-	out := make([]view.ProviderChoiceVM, 0, len(statuses))
-	for _, st := range statuses {
-		if st.Instance.Disabled || !st.PathFound || st.VersionErr != "" {
-			continue
-		}
-		out = append(out, view.ProviderChoiceVM{
-			Type:    string(st.Instance.Type),
-			Name:    st.Instance.Name,
-			Version: st.Version,
-		})
-	}
-	return out
-}
-
 // providerChoicesCached reads provider status from the persistent cache
 // (no subprocess probe). Used by pages that only need the provider list
 // for a form dropdown — accuracy of version/path is not critical there.
