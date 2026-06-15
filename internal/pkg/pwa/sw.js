@@ -47,22 +47,14 @@ self.addEventListener('fetch', (event) => {
 });
 
 // sameOriginClients returns every window of this origin the service worker
-// can see (focused or not, visible or not). The push handler narrows this
-// down to decide whether to surface an OS notification.
+// can see (focused or not, visible or not). The push handler relays the
+// in-app lifecycle card to all of them.
 async function sameOriginClients() {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   return all.filter((c) => {
     try { return new URL(c.url).origin === self.location.origin; }
     catch (_) { return false; }
   });
-}
-
-// urlPath returns the pathname of a URL (absolute, or relative to this
-// origin), or '' when it can't be parsed. Used to compare the page a push
-// points at against the pages the user currently has open.
-function urlPath(u) {
-  try { return new URL(u, self.location.origin).pathname; }
-  catch (_) { return ''; }
 }
 
 self.addEventListener('push', (event) => {
@@ -81,56 +73,29 @@ self.addEventListener('push', (event) => {
   event.waitUntil((async () => {
     const clients = await sameOriginClients();
 
-    // Suppress the OS notification ONLY when the user is actively looking
-    // at the very page this push is about — i.e. a *visible* wick window
-    // already on the target path. In that one case the page shows its own
-    // in-app toast, so an OS notification would just duplicate what's
-    // already on screen.
-    //
-    // Every other case surfaces a real OS notification: wick focused on a
-    // different page/menu, wick only in a background tab, or wick fully
-    // closed. So looking away from (or closing) the relevant tab still
-    // notifies; only staying on that exact page stays silent.
-    const targetPath = urlPath(targetURL);
-    const onTarget = clients.filter(
-      (c) => c.visibilityState === 'visible' && urlPath(c.url) === targetPath
-    );
-
-    if (onTarget.length > 0) {
-      for (const c of onTarget) {
-        try {
-          c.postMessage({
-            type: 'wick:lifecycle_push',
-            title: title,
-            body: body,
-            url: targetURL,
-          });
-        } catch (_) {}
-      }
-      // userVisibleOnly: true (subscription constraint) requires us to call
-      // showNotification for every push. Satisfy the spec by showing one
-      // silently then closing it immediately — the user only ever sees the
-      // in-app toast.
-      await self.registration.showNotification(title, {
-        body: body,
-        icon: '/public/img/icon-192.png',
-        badge: '/public/img/icon-badge.png',
-        data: { url: targetURL },
-        silent: true,
-        requireInteraction: false,
-        tag: tag,
-        renotify: false,
-      });
+    // Relay the push to EVERY open wick tab so each renders its own in-app
+    // card — regardless of which page the tab is on or whether it's
+    // visible. The page side keys cards by `tag`, so a repeat collapses
+    // instead of stacking, and a user dismiss in one tab is mirrored to
+    // the others (BroadcastChannel) — no need to close it N times.
+    for (const c of clients) {
       try {
-        const notes = await self.registration.getNotifications({ tag: tag });
-        notes.forEach((n) => { try { n.close(); } catch (_) {} });
+        c.postMessage({
+          type: 'wick:lifecycle_push',
+          tag: tag,
+          title: title,
+          body: body,
+          url: targetURL,
+        });
       } catch (_) {}
-      return;
     }
 
-    // User isn't looking at the target page — surface a real OS
-    // notification. Click navigates via notificationclick (focuses an
-    // existing window + jumps to the session URL, or opens a new one).
+    // Always surface exactly one OS notification too. `tag` collapses
+    // repeated pushes to the same target into a single OS surface
+    // (renotify re-alerts) so it can never stack into spam; the page
+    // closes it via getNotifications(tag) when the card is dismissed.
+    // Click navigates via notificationclick (focuses an existing window
+    // + jumps to the session URL, or opens a new one).
     return self.registration.showNotification(title, {
       body: body,
       icon: '/public/img/icon-192.png',
