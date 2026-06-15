@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -48,6 +49,58 @@ func TestFactoryAttachGate_WritesClaudeSettings(t *testing.T) {
 	// file lives at SharedSpecPath and is owned by the daemon.
 	if _, err := os.Stat(filepath.Join(gateDir, "spec.json")); err == nil {
 		t.Errorf("factory wrote spec.json — should be daemon-only post Stage 9")
+	}
+}
+
+// captureSpawner records the SpawnOptions it receives so tests can
+// assert that instance config (ExtraArgs, Env) reaches the spawner.
+type captureSpawner struct {
+	got provider.SpawnOptions
+}
+
+func (s *captureSpawner) Spawn(_ context.Context, opt provider.SpawnOptions) (provider.Process, error) {
+	s.got = opt
+	return nil, errors.New("captureSpawner: no real process")
+}
+
+// TestFactoryInstanceConfig_ExtraArgsAndEnv verifies that
+// Instance.ExtraArgs and Instance.Env are forwarded into the agent's
+// Options so they reach SpawnOptions on every spawn.
+//
+// This test acts as a contract check: any new provider added to
+// factory.go must not drop these fields, otherwise it will fail here.
+func TestFactoryInstanceConfig_ExtraArgsAndEnv(t *testing.T) {
+	tmp := t.TempDir()
+	cap := &captureSpawner{}
+	f := &ClaudeFactory{
+		Layout:  config.NewLayout(tmp),
+		Spawner: cap,
+	}
+
+	// Inject an instance directly via the factory's InstanceOverride so
+	// this test does not depend on the userconfig file.
+	f.InstanceOverride = &provider.Instance{
+		ExtraArgs: []string{"--debug", "--verbose-extra"},
+		Env:       []string{"MY_TOKEN=secret", "DISABLE_AUTOUPDATER=1"},
+	}
+
+	result, err := f.Build(FactoryOptions{SessionID: "S3", AgentName: "main"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Start the agent so it calls Spawn — verifies SpawnOptions are set.
+	ctx := context.Background()
+	_ = result.Agent.Start(ctx)
+
+	wantArgs := []string{"--debug", "--verbose-extra"}
+	if !reflect.DeepEqual(cap.got.ExtraArgs, wantArgs) {
+		t.Errorf("SpawnOptions.ExtraArgs\n  got:  %v\n  want: %v", cap.got.ExtraArgs, wantArgs)
+	}
+
+	wantEnv := []string{"MY_TOKEN=secret", "DISABLE_AUTOUPDATER=1"}
+	if !reflect.DeepEqual(cap.got.ExtraEnv, wantEnv) {
+		t.Errorf("SpawnOptions.ExtraEnv\n  got:  %v\n  want: %v", cap.got.ExtraEnv, wantEnv)
 	}
 }
 

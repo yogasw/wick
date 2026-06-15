@@ -151,6 +151,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)
+	args = append(args, opt.ExtraArgs...)
 	args = append(args, maxTurnsArgs(opt.MaxTurns)...)
 	if opt.Preset != "" {
 		args = append(args, "--append-system-prompt", opt.Preset)
