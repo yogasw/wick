@@ -28,12 +28,12 @@ var StaticFS embed.FS
 // runtime configs for jobs and tools, and the admin surface for
 // connector rows.
 type Handler struct {
-	svc              *Service
-	configs          *configs.Service
-	connectors       *connectors.Service
-	tags             *tags.Service
-	users            *login.Service
-	tools            []tool.Tool
+	svc        *Service
+	configs    *configs.Service
+	connectors *connectors.Service
+	tags       *tags.Service
+	users      *login.Service
+	tools      []tool.Tool
 	// custom is the custom-connector service (nil until SetCustomConnectors
 	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
 	custom *customconn.Service
@@ -103,10 +103,23 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	mux.Handle("POST /manager/jobs/{key}/configs/{configKey}/regenerate", adminOnly(h.regenerateJobConfig))
 	mux.Handle("GET /manager/jobs/{key}/runs/{runID}", authJob(h.getRun))
 
+	// Jobs — JSON read/mutate twins for the manager SPA (coexist with the
+	// templ form routes above). Run/poll mirror the form routes' JSON
+	// behaviour on the /manager/api surface so the SPA stays consistent.
+	mux.Handle("GET /manager/api/jobs/{key}", authJob(h.apiJobDetail))
+	mux.Handle("POST /manager/api/jobs/{key}/run", authJob(h.apiRunJob))
+	mux.Handle("GET /manager/api/jobs/{key}/runs/{runID}", authJob(h.apiJobRun))
+	mux.Handle("POST /manager/api/jobs/{key}/settings", adminOnly(h.apiUpdateJobSettings))
+	mux.Handle("POST /manager/api/jobs/{key}/configs/{configKey}", adminOnly(h.apiSetJobConfig))
+
 	// Tools
 	mux.Handle("GET /manager/tools/{key}", auth(h.toolDetailPage))
 	mux.Handle("POST /manager/tools/{key}/configs/{configKey}", adminOnly(h.setToolConfig))
 	mux.Handle("POST /manager/tools/{key}/configs/{configKey}/regenerate", adminOnly(h.regenerateToolConfig))
+
+	// Tools — JSON read/mutate twins for the manager SPA.
+	mux.Handle("GET /manager/api/tools/{key}", auth(h.apiToolDetail))
+	mux.Handle("POST /manager/api/tools/{key}/configs/{configKey}", adminOnly(h.apiSetToolConfig))
 
 	// Connectors — list + per-row detail with test panel and action menu.
 	h.connectorRoutes(mux, authMidd)
@@ -121,6 +134,9 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	mux.Handle("GET /manager/runs", adminOnly(h.auditLogPage))
 	mux.Handle("GET /api/runs", adminOnly(h.apiRuns))
 	mux.Handle("GET /api/runs/summary", adminOnly(h.apiRunsSummary))
+	// Audit log — resolved JSON twin for the manager SPA (connector + user
+	// names + summary in one call; coexists with the raw /api/runs above).
+	mux.Handle("GET /manager/api/runs", adminOnly(h.apiAuditRuns))
 }
 
 // requiredMissingKeys returns the keys whose Required flag is set but
