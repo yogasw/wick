@@ -684,6 +684,10 @@ func NewServer() *Server {
 	if mode := configsSvc.GetOwned("agents", "workflow_guard_mode"); mode != "" {
 		wfMgr.WithGuardConfig(wfguard.Config{Mode: mode})
 	}
+	// Global concurrent-run cap across all workflows. 0 = unlimited.
+	if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_max_parallel_global")); err == nil && n >= 0 {
+		wfMgr.Router.SetGlobalConcurrency(n)
+	}
 	// connectorsSvc is constructed further down (line ~517) — the
 	// creds adapter is wired after that block so RowCreds can resolve
 	// rows from the live connectors service. Search for

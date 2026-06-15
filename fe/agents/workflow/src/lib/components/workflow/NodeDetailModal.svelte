@@ -871,6 +871,29 @@
                   />
                 </label>
                 <label class="flex flex-col gap-1">
+                  <span class="text-xs font-medium">Thinking</span>
+                  <select
+                    class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                    value={node.thinking ?? "on"}
+                    onchange={(e) => patch("thinking", (e.target as HTMLSelectElement).value)}
+                  >
+                    <option value="on">on — extended thinking (claude)</option>
+                    <option value="off">off — disable to cut latency</option>
+                  </select>
+                </label>
+                {#if (node.thinking ?? "on") !== "off"}
+                  <label class="flex flex-col gap-1">
+                    <span class="text-xs font-medium">Max thinking tokens</span>
+                    <input
+                      type="number"
+                      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"
+                      placeholder="0 = unlimited (provider default)"
+                      value={node.max_thinking_tokens ?? 0}
+                      oninput={(e) => patch("max_thinking_tokens", Number((e.target as HTMLInputElement).value) || 0)}
+                    />
+                  </label>
+                {/if}
+                <label class="flex flex-col gap-1">
                   <span class="text-xs font-medium">Session override</span>
                   <select
                     class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5"

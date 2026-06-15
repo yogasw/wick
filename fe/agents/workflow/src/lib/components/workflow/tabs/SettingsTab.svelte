@@ -1,5 +1,6 @@
 <script lang="ts">
   import { workflowAPI, type EnvField } from "$lib/api/workflow";
+  import type { Workflow } from "$lib/types/workflow";
   import { Select } from "@wick-fe/common-ui";
 
   type Props = { workflowID: string };
@@ -21,6 +22,15 @@
   let schema = $state<EnvField[]>([]);
   let schemaValues = $state<Record<string, string>>({});
 
+  // Concurrency settings — loaded from workflow draft/published definition.
+  let workflowDef = $state<Workflow | null>(null);
+  let concEnabled = $state(false);
+  let concMax = $state(0);
+  let concSaving = $state(false);
+  let concSaved = $state(false);
+  let concError = $state("");
+  let concSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
   const inputClass = "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors";
 
   $effect(() => { if (workflowID) void load(); });
@@ -28,14 +38,19 @@
   async function load() {
     loading = true; error = "";
     try {
-      const res = await workflowAPI.envGet(workflowID);
-      schema = res.schema ?? [];
-      const all = res.values ?? {};
+      const [envRes, wfRes] = await Promise.all([
+        workflowAPI.envGet(workflowID),
+        workflowAPI.get(workflowID),
+      ]);
+
+      // Env vars
+      schema = envRes.schema ?? [];
+      const all = envRes.values ?? {};
       const schemaKeys = new Set(schema.map((f) => f.name));
       const sv: Record<string, string> = {};
       for (const f of schema) sv[f.name] = all[f.name] ?? f.default ?? "";
       schemaValues = sv;
-      const secretSet = new Set(res.secret_keys ?? []);
+      const secretSet = new Set(envRes.secret_keys ?? []);
       const free: KVRow[] = [];
       for (const [k, v] of Object.entries(all)) {
         if (schemaKeys.has(k)) continue;
@@ -43,10 +58,43 @@
         free.push({ key: k, value: isSecret ? "" : v, secret: isSecret, stored: isSecret });
       }
       rows = free;
+
+      // Concurrency — prefer draft over published
+      workflowDef = wfRes.draft ?? wfRes.workflow;
+      const conc = workflowDef?.concurrency;
+      concEnabled = conc?.enabled ?? false;
+      concMax = conc?.max ?? 0;
     } catch (e: any) {
       error = e?.message ?? "Failed to load";
     } finally {
       loading = false;
+    }
+  }
+
+  function scheduleConcSave() {
+    concSaved = false;
+    if (concSaveTimer) clearTimeout(concSaveTimer);
+    concSaveTimer = setTimeout(() => void saveConcurrency(), 800);
+  }
+
+  async function saveConcurrency() {
+    if (!workflowDef) return;
+    concSaving = true; concError = "";
+    try {
+      const updated: Workflow = {
+        ...workflowDef,
+        concurrency: concEnabled
+          ? { enabled: true, max: concMax }
+          : { enabled: false },
+      };
+      await workflowAPI.saveDraft(workflowID, updated);
+      workflowDef = updated;
+      concSaved = true;
+      setTimeout(() => (concSaved = false), 2000);
+    } catch (e: any) {
+      concError = e?.message ?? "Save failed";
+    } finally {
+      concSaving = false;
     }
   }
 
@@ -127,6 +175,68 @@
       {#if error}
         <div class="px-4 py-3 rounded-lg bg-neg-100 dark:bg-neg-900/20 text-neg-600 dark:text-neg-400 text-xs">{error}</div>
       {/if}
+
+      <!-- Concurrency -->
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Concurrency</h3>
+          <span class="text-[11px] font-medium transition-colors"
+            class:text-green-500={concSaved}
+            class:text-black-700={concSaving}
+            class:dark:text-black-600={!concSaved}
+          >{#if concSaving}Saving…{:else if concSaved}✓ Saved{:else}&nbsp;{/if}</span>
+        </div>
+        <div class="p-5 flex flex-col gap-4">
+          {#if concError}
+            <div class="px-4 py-3 rounded-lg bg-neg-100 dark:bg-neg-900/20 text-neg-600 dark:text-neg-400 text-xs">{concError}</div>
+          {/if}
+
+          <!-- Enable parallel runs toggle -->
+          <div class="flex items-start gap-4">
+            <label class="inline-flex items-center gap-3 cursor-pointer select-none mt-0.5">
+              <input type="checkbox" class="sr-only cfg-toggle-input"
+                checked={concEnabled}
+                onchange={(e) => {
+                  concEnabled = (e.target as HTMLInputElement).checked;
+                  scheduleConcSave();
+                }}
+              />
+              <span class="toggle-track {concEnabled ? 'is-on' : ''}">
+                <span class="toggle-knob"></span>
+              </span>
+            </label>
+            <div>
+              <p class="text-sm font-medium text-black-900 dark:text-white-100">Enable parallel runs</p>
+              <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed">
+                Allow multiple triggers to execute this workflow concurrently.
+                Requires the global parallel cap to be enabled in Agent Settings.
+              </p>
+            </div>
+          </div>
+
+          <!-- Max parallel cap — only shown when enabled -->
+          {#if concEnabled}
+            <div class="flex flex-col gap-1.5 pl-11">
+              <label for="conc-max" class="text-xs font-semibold text-black-900 dark:text-white-100">Max parallel runs</label>
+              <input
+                id="conc-max"
+                type="number"
+                min="0"
+                class={inputClass + " max-w-[120px]"}
+                placeholder="0 = default (2)"
+                value={concMax}
+                oninput={(e) => {
+                  concMax = parseInt((e.target as HTMLInputElement).value, 10) || 0;
+                  scheduleConcSave();
+                }}
+              />
+              <p class="text-[11px] text-black-700 dark:text-black-600">
+                0 = use default cap of 2. Capped by the global limit in Agent Settings.
+              </p>
+            </div>
+          {/if}
+        </div>
+      </div>
 
       <!-- Schema fields (from env: block) -->
       {#if schema.length > 0}

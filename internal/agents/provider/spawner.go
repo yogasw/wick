@@ -79,7 +79,12 @@ type SpawnOptions struct {
 	SessionDir string
 	// ExtraEnv lets the gate (phase 3) inject hook config paths
 	// without coupling the agent package to gate internals.
+	// Instance.Env is merged in by the factory before every spawn.
 	ExtraEnv []string
+	// ExtraArgs is appended after each spawner's own ExtraArgs field.
+	// Populated by the factory from Instance.ExtraArgs so UI-configured
+	// extra flags are forwarded on every spawn without restarting wick.
+	ExtraArgs []string
 
 	// Instance is the resolved per-instance config the factory looked
 	// up before this spawn. Spawners read Instance.Hooks to decide
@@ -107,4 +112,13 @@ type SpawnOptions struct {
 	// MaxTurns caps agentic turns for this spawn (--max-turns on claude).
 	// 0 = no cap. Threaded from the agent node's max_turns.
 	MaxTurns int
+
+	// ThinkingTokens is the resolved MAX_THINKING_TOKENS env value for this
+	// spawn. Empty = leave it unset (full / provider-default thinking); "0"
+	// = thinking disabled; "<n>" = explicit token budget. The claude spawner
+	// injects MAX_THINKING_TOKENS=<value> only when non-empty; gemini/codex
+	// spawners ignore it (documented no-op for now). Empty by default so the
+	// regular agent chat flow is byte-identical — only the workflow agent
+	// node sets it (from its thinking + max_thinking_tokens inputs).
+	ThinkingTokens string
 }

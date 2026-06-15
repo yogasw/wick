@@ -151,6 +151,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 	args = append(args, s.ExtraArgs...)
+	args = append(args, opt.ExtraArgs...)
 	args = append(args, maxTurnsArgs(opt.MaxTurns)...)
 	if opt.Preset != "" {
 		args = append(args, "--append-system-prompt", opt.Preset)
@@ -161,7 +162,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
-	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
+	cmd.Env = spawnEnv(os.Environ(), opt)
 	hideConsole(cmd)
 
 	stdin, err := cmd.StdinPipe()
@@ -214,6 +215,21 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		Str("bin", bin).
 		Msg("agents.spawn: started")
 	return &process{cmd: cmd, stdin: stdin, stdout: stdout, stderrB: stderrB}, nil
+}
+
+// spawnEnv assembles the subprocess environment from base (typically
+// os.Environ()) plus opt.ExtraEnv, appending MAX_THINKING_TOKENS=<value>
+// when opt.ThinkingTokens is non-empty so claude caps (value "<n>") or
+// disables (value "0") extended thinking. The thinking entry is purely
+// additive: a spawn with an empty ThinkingTokens (the chat / default path)
+// gets no MAX_THINKING_TOKENS env at all, so chat behaviour is unchanged.
+// ExtraEnv is copied, never mutated.
+func spawnEnv(base []string, opt provider.SpawnOptions) []string {
+	env := append(append([]string{}, base...), opt.ExtraEnv...)
+	if opt.ThinkingTokens != "" {
+		env = append(env, "MAX_THINKING_TOKENS="+opt.ThinkingTokens)
+	}
+	return env
 }
 
 // applyHookConfig installs or removes the per-workspace hook config

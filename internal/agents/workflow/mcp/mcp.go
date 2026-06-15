@@ -381,9 +381,17 @@ func (m *Ops) SetTriggers(id string, triggers []workflow.Trigger) (workflow.Work
 	return m.Canvas.SetTriggers(id, triggers)
 }
 
-// Toggle wraps Canvas.Toggle.
+// Toggle enables/disables a workflow and hot-reloads the router so the
+// dispatcher goroutine and cron/schedule state reflect the change immediately.
 func (m *Ops) Toggle(id string, enabled bool) (workflow.Workflow, error) {
-	return m.Canvas.Toggle(id, enabled)
+	w, err := m.Canvas.Toggle(id, enabled)
+	if err != nil {
+		return w, err
+	}
+	if m.Reload != nil {
+		_ = m.Reload(id)
+	}
+	return w, nil
 }
 
 // ── Tier 3: action ───────────────────────────────────────────────────

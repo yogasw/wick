@@ -22,6 +22,46 @@ All notable changes to Wick are documented here.
 
 ---
 
+## [v0.18.7](https://github.com/yogasw/wick/compare/v0.18.6...v0.18.7) — Workflows & Agents
+
+_Released on 2026-06-15_
+
+### Added
+
+*   **Workflow parallel execution**: Workflows can now run multiple triggers concurrently. Enable `concurrency.enabled` per workflow and set a global cap via `workflow_max_parallel_global` in Agent Settings. Each workflow has its own FIFO queue; the global semaphore caps total simultaneous runs across all workflows. Serial mode remains the default (`concurrency.enabled: false`). See [Concurrency](/workflow/#concurrency).
+*   **Workflow agent node — extended thinking control**: A `thinking` dropdown (`on` | `off`, default `on`) and a conditional `max_thinking_tokens` number field are now available on the workflow **agent node**. `off` sets `MAX_THINKING_TOKENS=0` (extended thinking disabled); `on` with `max_thinking_tokens: 0` leaves the env unset (unlimited / provider default); `on` with `max_thinking_tokens ≥ 1024` caps the budget at that value. The setting is persisted to session meta before each pool send so a reused session always reflects the current node config. This feature is specific to Claude providers; Gemini and Codex ignore these fields. The regular agent chat flow is unchanged. See [Agent node — Extended thinking](/workflow/nodes/agent#extended-thinking).
+
+### Fixed
+
+*   **Workflow node argument bleeding**: Resolved a regression where rendered templates on workflow node arguments (e.g., `Args`, `Headers`, `Query`, `ShellEnv`, `Command`) would persist across multiple runs. This fix ensures that node fields are detached onto fresh copies before rendering for each run, preventing previous renders from affecting subsequent executions.
+
+---
+
+
+## [v0.18.6](https://github.com/yogasw/wick/compare/v0.18.5...v0.18.6) — Agents
+
+_Released on 2026-06-15_
+
+### Fixed
+
+*   **Agent Spawner Configuration**: Addressed an issue where `ExtraArgs` and `Env` settings configured in the providers UI were not being forwarded from the `Instance` to the agent subprocess during spawning, resulting in agents running without their intended custom configurations.
+
+### Added
+
+*   **Instance-Level Argument Flow**: `ExtraArgs` can now be passed via `SpawnOptions`, mirroring the existing `ExtraEnv` functionality to ensure instance-level arguments are correctly delivered.
+*   **Test Injection Utility**: A new `InstanceOverride` in `ClaudeFactory` facilitates test injection without requiring modifications to user configuration files.
+*   **Enhanced Testing for Claude**: Dedicated `spawn_test.go` added for the Claude provider to specifically validate `spawner` and `opt ExtraArgs` handling.
+*   **Configuration Contract Test**: A new test, `TestFactoryInstanceConfig_ExtraArgsAndEnv`, was implemented to establish a contract, ensuring all future providers correctly process and forward `ExtraArgs` and `Env` configurations.
+
+### Improved
+
+*   **Universal Spawner Compatibility**: All agent spawners (Claude, Codex, Gemini) now correctly append `opt.ExtraArgs` after their inherent `s.ExtraArgs`, preserving compatibility with existing static test fixtures.
+*   **Consistent Configuration Forwarding**: `ExtraArgs` are now consistently forwarded through `agent.Options` and both `Spawn` call-sites (`Start` and `respawnWithMessage`).
+*   **Extended Provider Test Coverage**: Existing Codex and Gemini spawn tests have been expanded to include `opt.ExtraArgs` cases, ensuring uniform behavior across different providers.
+
+---
+
+
 ## [v0.18.5](https://github.com/yogasw/wick/compare/v0.18.4...v0.18.5) — PWA Notifications
 
 _Released on 2026-06-15_

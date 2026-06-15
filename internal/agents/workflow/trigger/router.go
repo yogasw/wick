@@ -47,11 +47,11 @@ type webhookEntry struct {
 	secretRef  string
 }
 
-// workerHandle tracks one worker goroutine. cancel stops it; alive is
-// flipped to false when runWorker returns, so Dispatch can tell whether a
-// queue still has a LIVE consumer — the map entry alone is not proof the
-// goroutine is running (a worker born from a cancelled ctx dies but its
-// handle lingers until Unregister).
+// workerHandle tracks one dispatcher goroutine per workflow. The dispatcher
+// dequeues WorkItems and either runs them inline (serial mode) or spawns a
+// bounded pool goroutine (parallel mode). cancel stops the dispatcher; alive
+// is flipped to false when runWorker returns so Dispatch can detect a dead
+// consumer without holding the lock.
 type workerHandle struct {
 	cancel context.CancelFunc
 	alive  atomic.Bool
@@ -83,8 +83,14 @@ type Router struct {
 	// secret lookup per incoming webhook request. Built/torn-down
 	// alongside the main index in reindexLocked/removeFromIndexLocked.
 	webhookIndex map[string]webhookEntry
-	wg           sync.WaitGroup
-	clock        func() time.Time
+	// globalSem is a counting semaphore that caps total concurrent runs
+	// across ALL workflows. nil = parallel disabled (all workflows run
+	// serially regardless of per-workflow Concurrency setting). Non-nil =
+	// parallel enabled; capacity is the global max concurrent runs.
+	// Set via SetGlobalConcurrency.
+	globalSem chan struct{}
+	wg        sync.WaitGroup
+	clock     func() time.Time
 }
 
 // triggerRef pins one trigger inside a registered workflow. TriggerIdx
@@ -110,6 +116,35 @@ func (r *Router) SetBaseCtx(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.baseCtx = ctx
+}
+
+// SetGlobalConcurrency enables parallel workflow execution and sets the
+// maximum total concurrent runs across ALL workflows.
+//
+//   - max <= 0  → parallel disabled; every workflow runs serially regardless
+//     of its per-workflow Concurrency setting (the default).
+//   - max > 0   → parallel enabled; at most max runs execute simultaneously
+//     across all workflows combined. Per-workflow Concurrency.Max is still
+//     honoured as an inner cap (≤ global max).
+//
+// Safe to call at any time; the new policy applies to runs dispatched after
+// the call. In-flight runs already holding a slot are unaffected.
+func (r *Router) SetGlobalConcurrency(max int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if max <= 0 {
+		r.globalSem = nil // disabled — all serial
+		return
+	}
+	r.globalSem = make(chan struct{}, max)
+}
+
+// GlobalParallelEnabled reports whether parallel execution is currently
+// enabled (i.e. SetGlobalConcurrency was called with max > 0).
+func (r *Router) GlobalParallelEnabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.globalSem != nil
 }
 
 // NewRouter wires a Router to an Engine + Service.
@@ -781,29 +816,53 @@ func dedupKey(evt workflow.Event) string {
 	return ""
 }
 
+// runWorker is the dispatcher goroutine for one workflow. It dequeues
+// WorkItems and either executes them inline (serial) or spawns a bounded
+// goroutine pool (parallel). Two conditions must BOTH be true for parallel
+// execution:
+//
+//  1. Global parallel is enabled (globalSem != nil — set via SetGlobalConcurrency).
+//  2. This workflow has Concurrency.Enabled = true.
+//
+// If either is false, the run executes inline (serial, FIFO order preserved).
+// The global semaphore caps total concurrent runs across all workflows; the
+// per-workflow semaphore (Concurrency.Max, default 2) caps runs for this
+// specific workflow.
 func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 	defer r.wg.Done()
-	// Mark dead on exit so Dispatch reports the queue as workerless
-	// (truthful signal — the map handle alone outlives the goroutine).
 	defer h.alive.Store(false)
+
 	r.mu.RLock()
 	q := r.queues[id]
 	r.mu.RUnlock()
 	if q == nil {
 		return
 	}
+
+	// perSem is the per-workflow slot semaphore. Allocated once at worker
+	// start from the registered definition. Only used when global parallel
+	// is also enabled — checked per-item in the loop below.
+	var perSem chan struct{}
+	r.mu.RLock()
+	def, hasDef := r.defs[id]
+	r.mu.RUnlock()
+	if hasDef && def.Concurrency.Enabled {
+		m := def.Concurrency.Max
+		if m == 0 {
+			m = 2 // default: 2 parallel runs per workflow when max not set
+		}
+		perSem = make(chan struct{}, m)
+	}
+
 	for {
 		item, ok := q.Dequeue(ctx)
 		if !ok {
-			// Dequeue returns false on ctx cancel or queue close. Either
-			// way this worker stops serving runs for `id` — log it so a
-			// silently-dead worker (enqueues pile up, never execute) is
-			// visible. ctx.Err() distinguishes shutdown from Unregister.
 			log.Info().Str("component", "wf").Str("wf_id", id).
 				Bool("ctx_cancelled", ctx.Err() != nil).
 				Msg("router: worker stopped")
 			return
 		}
+
 		var w workflow.Workflow
 		if item.Workflow != nil {
 			w = *item.Workflow
@@ -816,13 +875,71 @@ func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 			}
 			w = reg
 		}
-		st, err := r.engine.Run(ctx, w, item.Event)
-		if item.Done != nil {
-			item.Done <- RunResult{State: st, Err: err}
+
+		// Read global sem once per item — it may change between items if
+		// SetGlobalConcurrency is called at runtime.
+		r.mu.RLock()
+		gSem := r.globalSem
+		r.mu.RUnlock()
+
+		// Serial if: global parallel disabled OR this workflow opted out.
+		if gSem == nil || !w.Concurrency.Enabled {
+			st, err := r.engine.Run(ctx, w, item.Event)
+			if item.Done != nil {
+				item.Done <- RunResult{State: st, Err: err}
+			}
+			if err != nil {
+				_ = r.fireErrorWorkflow(ctx, w, st, err)
+			}
+			continue
 		}
-		if err != nil {
-			_ = r.fireErrorWorkflow(ctx, w, st, err)
-		}
+
+		// Parallel mode: acquire slots then hand off to a goroutine.
+		// Slot acquisition blocks so runs queue up instead of being
+		// dropped — the WorkItem queue already provides back-pressure.
+
+		// Snapshot captures for the goroutine closure — avoids data
+		// races on loop variables.
+		runW := w
+		runItem := item
+
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+
+			// Acquire global slot first (outer bound). gSem is non-nil
+			// here — checked before the goroutine was spawned.
+			select {
+			case gSem <- struct{}{}:
+				defer func() { <-gSem }()
+			case <-ctx.Done():
+				if runItem.Done != nil {
+					runItem.Done <- RunResult{Err: ctx.Err()}
+				}
+				return
+			}
+
+			// Acquire per-workflow slot (inner bound).
+			if perSem != nil {
+				select {
+				case perSem <- struct{}{}:
+					defer func() { <-perSem }()
+				case <-ctx.Done():
+					if runItem.Done != nil {
+						runItem.Done <- RunResult{Err: ctx.Err()}
+					}
+					return
+				}
+			}
+
+			st, err := r.engine.Run(ctx, runW, runItem.Event)
+			if runItem.Done != nil {
+				runItem.Done <- RunResult{State: st, Err: err}
+			}
+			if err != nil {
+				_ = r.fireErrorWorkflow(ctx, runW, st, err)
+			}
+		}()
 	}
 }
 
