@@ -154,8 +154,11 @@ type Options struct {
 	Preset string
 	// ExtraEnv merges into the subprocess env on every spawn. Used by
 	// per-channel transports (Slack, HTTP) that need to inject auth
-	// tokens or routing keys.
+	// tokens or routing keys. Instance.Env is merged in by the factory.
 	ExtraEnv []string
+	// ExtraArgs is appended after the spawner's own ExtraArgs on every
+	// spawn. Populated by the factory from Instance.ExtraArgs.
+	ExtraArgs []string
 	// SessionDir is the per-session storage dir, forwarded into every
 	// SpawnOptions so providers write session-scoped files (codex's
 	// soul.md) there instead of the shared project workspace.
@@ -286,6 +289,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		SessionDir: a.cfg.SessionDir,
 		ResumeID:   a.resumeID,
 		ExtraEnv:   a.cfg.ExtraEnv,
+		ExtraArgs:  a.cfg.ExtraArgs,
 		Instance:   a.cfg.Instance,
 		GateBinary: a.cfg.GateBinary,
 		Preset:     a.cfg.Preset,
@@ -437,6 +441,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 		SessionDir:     a.cfg.SessionDir,
 		ResumeID:       resumeID,
 		ExtraEnv:       a.cfg.ExtraEnv,
+		ExtraArgs:      a.cfg.ExtraArgs,
 		Instance:       a.cfg.Instance,
 		GateBinary:     a.cfg.GateBinary,
 		Preset:         a.cfg.Preset,
