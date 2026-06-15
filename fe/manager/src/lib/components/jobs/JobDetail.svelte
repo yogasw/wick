@@ -13,6 +13,7 @@
   import type { JobDetail } from "$lib/types.js";
   import ConfigsForm from "../fields/ConfigsForm.svelte";
   import { renderMarkdownSafe } from "./markdown.js";
+  import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { jobKey: string };
   let { jobKey }: Props = $props();
@@ -43,19 +44,24 @@
     }
   }
 
-  async function load(): Promise<void> {
-    loading = true;
-    error = "";
+  async function load(silent = false): Promise<void> {
+    if (!silent) loading = true;
     try {
       data = await getJob(jobKey);
       schedule = data.schedule;
       maxRuns = data.max_runs;
       maxTimeoutMin = data.max_timeout_min;
       enabled = data.enabled;
+      error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) {
+        toastError("Refresh failed", msg);
+      } else {
+        error = msg;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
 
@@ -105,6 +111,7 @@
       runStatus = r.status;
       runOutput = r.result ? renderMarkdownSafe(r.result) : "";
       running = false;
+      load(true);
     } catch {
       /* transient fetch error — keep polling until the deadline-less loop
          either succeeds or the user navigates away (unmount clears it) */
@@ -117,7 +124,14 @@
     error: "bg-neg-100 text-neg-400",
   };
 
-  $effect(() => { load(); });
+  $effect(() => {
+    if (data) setBreadcrumbNames({ job: data.name });
+  });
+
+  $effect(() => {
+    load();
+    return clearBreadcrumbNames;
+  });
   onDestroy(clearPoll);
 </script>
 

@@ -6,9 +6,11 @@
      (replaceState, no SPA navigation) so links stay shareable, then trigger
      a re-fetch. Reuses common-ui Select/Button + the JSON history endpoint. */
   import { Button, Select } from "@wick-fe/common-ui";
+  import { toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
   import { getConnectorHistory } from "$lib/api.js";
   import type { HistoryResult, HistoryFilter, HistoryRun } from "$lib/types.js";
+  import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string; connectorId: string };
   let { connectorKey, connectorId }: Props = $props();
@@ -78,7 +80,7 @@
     filter = { ...filter, ...patch, page: patch.page ?? 1 };
     syncFilterToUrl(filter);
     expanded = {};
-    load();
+    load(true);
   }
 
   function clearFilters(): void {
@@ -89,22 +91,27 @@
     filter = { ...filter, page };
     syncFilterToUrl(filter);
     expanded = {};
-    load();
+    load(true);
   }
 
   function toggle(id: string): void {
     expanded = { ...expanded, [id]: !expanded[id] };
   }
 
-  async function load(): Promise<void> {
-    loading = true;
-    error = "";
+  async function load(silent = false): Promise<void> {
+    if (!silent) loading = true;
     try {
       data = await getConnectorHistory(connectorKey, connectorId, filter);
+      error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) {
+        toastError("Refresh failed", msg);
+      } else {
+        error = msg;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
 
@@ -138,7 +145,14 @@
     running: "bg-prog-100 text-prog-400",
   };
 
-  $effect(() => { load(); });
+  $effect(() => {
+    if (data) setBreadcrumbNames({ connector: data.name, row: data.label });
+  });
+
+  $effect(() => {
+    load();
+    return clearBreadcrumbNames;
+  });
 </script>
 
 <div class="space-y-6">

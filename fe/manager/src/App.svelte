@@ -14,10 +14,17 @@
   import JobDetail from "$lib/components/jobs/JobDetail.svelte";
   import ToolDetail from "$lib/components/tools/ToolDetail.svelte";
   import AuditLog from "$lib/components/audit/AuditLog.svelte";
+  import { breadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   let currentRoute = $state(get(route));
   $effect(() => {
     const unsub = route.subscribe((r) => { currentRoute = r; });
+    return unsub;
+  });
+
+  let names = $state(get(breadcrumbNames));
+  $effect(() => {
+    const unsub = breadcrumbNames.subscribe((n) => { names = n; });
     return unsub;
   });
 
@@ -35,13 +42,6 @@
   let detailParams = $derived(match("/connectors/:key/:id", currentRoute));
   let listParams = $derived(match("/connectors/:key", currentRoute));
 
-  let section = $derived.by(() => {
-    if (auditRoute) return "audit";
-    if (jobParams) return "jobs";
-    if (toolParams) return "tools";
-    return "connectors";
-  });
-
   let rowCrumb = $derived(testParams ?? historyParams ?? detailParams);
   let customCrumb = $derived.by(() => {
     if (pasteRoute) return "From paste";
@@ -52,40 +52,65 @@
     if (editParams) return "Edit definition";
     return "";
   });
+
+  /* Display names come from the page's loaded data (published into the
+     breadcrumb store). Fall back to the raw URL key until the fetch lands so
+     the trail is never blank. */
+  let connectorName = $derived(names.connector ?? listParams?.key ?? rowCrumb?.key ?? "");
+  let rowName = $derived(names.row ?? rowCrumb?.id ?? "");
+  let jobName = $derived(names.job ?? jobParams?.key ?? "");
+  let toolName = $derived(names.tool ?? toolParams?.key ?? "");
 </script>
 
-<AppShell {section}>
+<AppShell>
+  {#snippet sep()}
+    <span aria-hidden="true">/</span>
+  {/snippet}
+  {#snippet homeLink()}
+    <button type="button" class="whitespace-nowrap hover:text-green-600" onclick={() => push("/")}>Home</button>
+  {/snippet}
+  {#snippet current(label: string)}
+    <span class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 sm:max-w-[18rem]">{label}</span>
+  {/snippet}
   {#snippet breadcrumb()}
     {#if auditRoute}
-      <span class="text-black-900 dark:text-white-100">Audit Log</span>
+      {@render homeLink()}
+      {@render sep()}
+      {@render current("Audit Log")}
     {:else if jobParams}
-      <span class="text-black-700 dark:text-black-600">Jobs</span>
-      <span aria-hidden="true"> / </span>
-      <span class="text-black-900 dark:text-white-100">{jobParams.key}</span>
+      <span>Jobs</span>
+      {@render sep()}
+      <button type="button" class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/jobs/${encodeURIComponent(jobParams.key)}`)}>{jobName}</button>
     {:else if toolParams}
-      <span class="text-black-700 dark:text-black-600">Tools</span>
-      <span aria-hidden="true"> / </span>
-      <span class="text-black-900 dark:text-white-100">{toolParams.key}</span>
-    {:else}
+      <span>Tools</span>
+      {@render sep()}
+      <button type="button" class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/tools/${encodeURIComponent(toolParams.key)}`)}>{toolName}</button>
+    {:else if customCrumb}
+      {@render homeLink()}
+      {@render sep()}
       <button type="button" class="hover:text-green-600" onclick={() => push("/")}>Connectors</button>
-      {#if customCrumb}
-        <span aria-hidden="true"> / </span>
-        <span class="text-black-900 dark:text-white-100">{customCrumb}</span>
-      {:else if listParams}
-        <span aria-hidden="true"> / </span>
-        <span class="text-black-900 dark:text-white-100">{listParams.key}</span>
-      {:else if rowCrumb}
-        <span aria-hidden="true"> / </span>
-        <button type="button" class="hover:text-green-600" onclick={() => push(`/connectors/${encodeURIComponent(rowCrumb.key)}`)}>{rowCrumb.key}</button>
-        <span aria-hidden="true"> / </span>
-        {#if testParams || historyParams}
-          <button type="button" class="hover:text-green-600" onclick={() => push(`/connectors/${encodeURIComponent(rowCrumb.key)}/${encodeURIComponent(rowCrumb.id)}`)}>{rowCrumb.id}</button>
-          <span aria-hidden="true"> / </span>
-          <span class="text-black-900 dark:text-white-100">{testParams ? "Test" : "History"}</span>
-        {:else}
-          <span class="text-black-900 dark:text-white-100">{rowCrumb.id}</span>
-        {/if}
+      {@render sep()}
+      {@render current(customCrumb)}
+    {:else if listParams}
+      {@render homeLink()}
+      {@render sep()}
+      {@render current(connectorName)}
+    {:else if rowCrumb}
+      {@render homeLink()}
+      {@render sep()}
+      <button type="button" class="inline-block max-w-[55vw] truncate align-bottom hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/connectors/${encodeURIComponent(rowCrumb.key)}`)}>{connectorName}</button>
+      {@render sep()}
+      {#if testParams || historyParams}
+        <button type="button" class="inline-block max-w-[55vw] truncate align-bottom hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/connectors/${encodeURIComponent(rowCrumb.key)}/${encodeURIComponent(rowCrumb.id)}`)}>{rowName}</button>
+        {@render sep()}
+        {@render current(testParams ? "Test" : "History")}
+      {:else}
+        {@render current(rowName)}
       {/if}
+    {:else}
+      {@render homeLink()}
+      {@render sep()}
+      {@render current("Connectors")}
     {/if}
   {/snippet}
   {#key currentRoute}

@@ -6,6 +6,7 @@
      1. Reuses common-ui Select/Button + the resolved /manager/api/runs JSON
      (connector + user names + summary in one call). */
   import { Button, Select } from "@wick-fe/common-ui";
+  import { toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
   import { getAuditRuns } from "$lib/api.js";
   import type { AuditResult, AuditFilter, AuditRun } from "$lib/types.js";
@@ -65,7 +66,7 @@
   function setFilter(patch: Partial<AuditFilter>): void {
     filter = { ...filter, ...patch, page: patch.page ?? 1 };
     syncFilterToUrl(filter);
-    load();
+    load(true);
   }
 
   function clearFilters(): void {
@@ -75,18 +76,23 @@
   function gotoPage(page: number): void {
     filter = { ...filter, page };
     syncFilterToUrl(filter);
-    load();
+    load(true);
   }
 
-  async function load(): Promise<void> {
-    loading = true;
-    error = "";
+  async function load(silent = false): Promise<void> {
+    if (!silent) loading = true;
     try {
       data = await getAuditRuns(filter);
+      error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) {
+        toastError("Refresh failed", msg);
+      } else {
+        error = msg;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
 

@@ -1,0 +1,61 @@
+package view
+
+import (
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/pkg/ui"
+)
+
+// ManagerSPAVM feeds the thin-shell that hosts the manager Svelte SPA
+// inside the standard host chrome. Base is the client-side route prefix
+// written to the #app div's data-base; AssetURL is the hashed Vite bundle
+// path resolved at render via spaAssetURL(). User drives the header user
+// menu (nil = no menu).
+type ManagerSPAVM struct {
+	Base     string
+	AssetURL string
+	User     *entity.User
+}
+
+// ManagerSPA renders the manager SPA shell inside the host ui.Layout
+// chrome: the "● <AppName> / Manager" header with the host theme toggle
+// and user menu, then the SPA mount point. The theme + app name are read
+// from ctx by ui.Layout, so the SPA inherits the same theme as every
+// other page with no manual injection. The SPA reads data-base from the
+// #app div and uses it as the prefix for client-side routing.
+templ ManagerSPA(vm ManagerSPAVM) {
+	@ui.Layout("Manager") {
+		<nav class="sticky top-0 z-50 flex h-16 items-center border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+			<div class="mx-auto flex w-full max-w-container items-center justify-between px-6">
+				<div class="flex items-center gap-4">
+					<a href="/" class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100">
+						<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
+						{ ui.AppNameFromContext(ctx) }
+					</a>
+					<span class="text-black-600 dark:text-black-700">/</span>
+					<span class="text-sm font-medium text-black-800 dark:text-black-600">Manager</span>
+				</div>
+				<div class="flex items-center gap-3">
+					if vm.User != nil {
+						@ui.ThemePicker(ui.ThemeByID(ui.EffectiveTheme(vm.User.Metadata.Theme)), ui.EffectiveLightTheme(vm.User.Metadata.LightTheme), ui.EffectiveDarkTheme(vm.User.Metadata.DarkTheme))
+					} else {
+						{{ g := ui.GuestThemeFromContext(ctx) }}
+						@ui.ThemePicker(ui.ThemeByID(g.Current), g.Light, g.Dark)
+					}
+					@ui.UserMenu(vm.User)
+				</div>
+			</div>
+		</nav>
+		<main class="mx-auto w-full max-w-container px-6 py-6">
+			if vm.AssetURL == "" {
+				<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+					Manager bundle not built yet. Run
+					<code class="font-mono">npm --workspace=@wick-fe/manager run build</code>
+					in <code class="font-mono">fe/</code> and refresh.
+				</div>
+			} else {
+				<div id="app" data-base={ vm.Base }></div>
+				<script type="module" src={ vm.AssetURL }></script>
+			}
+		</main>
+	}
+}

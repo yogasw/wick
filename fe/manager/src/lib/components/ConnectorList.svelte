@@ -10,9 +10,11 @@
     getConnector,
     createConnectorRow,
     toggleConnectorDisabled,
+    duplicateConnectorRow,
     deleteConnectorRow,
   } from "$lib/api.js";
   import type { ConnectorList, ConnectorRow } from "$lib/types.js";
+  import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string };
   let { connectorKey }: Props = $props();
@@ -23,15 +25,20 @@
   let busy = $state(false);
   let confirmRow = $state<ConnectorRow | null>(null);
 
-  async function load() {
-    loading = true;
-    error = "";
+  async function load(silent = false) {
+    if (!silent) loading = true;
     try {
       data = await getConnector(connectorKey);
+      error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) {
+        toastError("Refresh failed", msg);
+      } else {
+        error = msg;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
 
@@ -52,9 +59,22 @@
     try {
       const disabled = await toggleConnectorDisabled(connectorKey, row.id);
       toastOk(disabled ? "Row disabled" : "Row enabled");
-      await load();
+      await load(true);
     } catch (e) {
       toastError("Action failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function duplicateRow(row: ConnectorRow) {
+    if (busy) return;
+    busy = true;
+    try {
+      const id = await duplicateConnectorRow(connectorKey, row.id);
+      push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(id)}`);
+    } catch (e) {
+      toastError("Duplicate failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      busy = false;
     }
   }
 
@@ -65,7 +85,7 @@
     try {
       await deleteConnectorRow(connectorKey, row.id);
       toastOk("Row deleted");
-      await load();
+      await load(true);
     } catch (e) {
       toastError("Delete failed", e instanceof Error ? e.message : String(e));
     }
@@ -83,7 +103,14 @@
 
   let rows = $derived(data?.rows ?? []);
 
-  $effect(() => { load(); });
+  $effect(() => {
+    if (data) setBreadcrumbNames({ connector: data.name });
+  });
+
+  $effect(() => {
+    load();
+    return clearBreadcrumbNames;
+  });
 </script>
 
 {#if loading}
@@ -141,6 +168,7 @@
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
                   <Button variant="ghost" size="sm" onclick={() => toggleDisabled(row)}>{row.disabled ? "Enable" : "Disable"}</Button>
                   {#if !data.fixed}
+                    <Button variant="ghost" size="sm" disabled={busy} onclick={() => duplicateRow(row)}>Duplicate</Button>
                     <Button variant="ghost" size="sm" onclick={() => (confirmRow = row)}>Delete</Button>
                   {/if}
                 </div>

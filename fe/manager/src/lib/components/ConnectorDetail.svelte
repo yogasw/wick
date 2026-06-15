@@ -1,25 +1,24 @@
 <script lang="ts">
   /* Per-row admin surface: label rename, credentials/configs form, a
-     health-check probe, the operations table, and disable/delete actions.
-     Mirrors the legacy connector_detail.templ page. Config auto-save is owned
-     by ConfigsForm; everything else POSTs through the JSON api client. */
-  import { Button, TextInput, NumberInput, ConfirmDialog } from "@wick-fe/common-ui";
+     health-check probe, the operations table, rate limit, access policy,
+     and accounts. Mirrors the legacy connector_detail.templ page (disable/
+     duplicate/delete live on the connector list's per-row menu, not here).
+     Config auto-save is owned by ConfigsForm; the rest POSTs through the
+     JSON api client. */
+  import { Button, TextInput, NumberInput } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { push } from "$lib/router.js";
   import {
     getConnectorRow,
     setConnectorLabel,
-    toggleConnectorDisabled,
-    deleteConnectorRow,
     runHealthCheck,
     setConnectorRateLimit,
-    duplicateConnectorRow,
   } from "$lib/api.js";
   import type { ConnectorDetail } from "$lib/types.js";
   import ConfigsForm from "./fields/ConfigsForm.svelte";
   import OperationsTable from "./OperationsTable.svelte";
   import AccountsSection from "./AccountsSection.svelte";
   import AccessPolicySection from "./AccessPolicySection.svelte";
+  import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string; connectorId: string };
   let { connectorKey, connectorId }: Props = $props();
@@ -30,23 +29,30 @@
   let labelDraft = $state("");
   let rateDraft = $state(0);
   let rateBusy = $state(false);
-  let dupBusy = $state(false);
   let healthBusy = $state(false);
   let healthBanner = $state<{ ok: boolean; msg: string } | null>(null);
-  let confirmDelete = $state(false);
 
-  async function load() {
-    loading = true;
-    error = "";
+  async function load(silent = false) {
+    if (!silent) loading = true;
     try {
       data = await getConnectorRow(connectorKey, connectorId);
       labelDraft = data.label;
       rateDraft = data.rate_limit_rpm;
+      error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) {
+        toastError("Refresh failed", msg);
+      } else {
+        error = msg;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
+  }
+
+  function refresh() {
+    load(true);
   }
 
   async function saveLabel() {
@@ -57,17 +63,6 @@
       toastOk("Label saved");
     } catch (e) {
       toastError("Save failed", e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function toggleDisabled() {
-    if (!data) return;
-    try {
-      const disabled = await toggleConnectorDisabled(connectorKey, connectorId);
-      data = { ...data, disabled };
-      toastOk(disabled ? "Row disabled" : "Row enabled");
-    } catch (e) {
-      toastError("Action failed", e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -87,7 +82,7 @@
         if (cleared.length) parts.push(`Cleared: ${cleared.join(", ")}.`);
         if (!parts.length) parts.push("No changes — every operation has the permissions it needs.");
         healthBanner = { ok: true, msg: parts.join(" ") };
-        await load();
+        await load(true);
       }
     } catch (e) {
       healthBanner = { ok: false, msg: e instanceof Error ? e.message : String(e) };
@@ -111,32 +106,14 @@
     }
   }
 
-  async function duplicate() {
-    if (dupBusy) return;
-    dupBusy = true;
-    try {
-      const newId = await duplicateConnectorRow(connectorKey, connectorId);
-      toastOk("Row duplicated");
-      push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(newId)}`);
-    } catch (e) {
-      toastError("Duplicate failed", e instanceof Error ? e.message : String(e));
-    } finally {
-      dupBusy = false;
-    }
-  }
+  $effect(() => {
+    if (data) setBreadcrumbNames({ connector: data.name, row: data.label });
+  });
 
-  async function doDelete() {
-    confirmDelete = false;
-    try {
-      await deleteConnectorRow(connectorKey, connectorId);
-      toastOk("Row deleted");
-      push(`/connectors/${encodeURIComponent(connectorKey)}`);
-    } catch (e) {
-      toastError("Delete failed", e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  $effect(() => { load(); });
+  $effect(() => {
+    load();
+    return clearBreadcrumbNames;
+  });
 </script>
 
 {#if loading}
@@ -159,10 +136,6 @@
           </div>
           <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
         </div>
-      </div>
-      <div class="flex flex-shrink-0 items-center gap-2">
-        <Button variant="secondary" size="md" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/test`)}>Test runner</Button>
-        <Button variant="secondary" size="md" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/history`)}>History</Button>
       </div>
     </div>
 
@@ -197,7 +170,7 @@
     </section>
 
     {#if data.is_admin}
-      <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={load} />
+      <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={refresh} />
     {/if}
 
     {#if data.oauth}
@@ -208,7 +181,7 @@
         oauth={data.oauth}
         enableSso={data.enable_sso}
         multiAccount={data.multi_account}
-        onchanged={load}
+        onchanged={refresh}
       />
     {/if}
 
@@ -232,29 +205,6 @@
       connectorKey={connectorKey}
       connectorId={connectorId}
       canConfigure={data.can_configure}
-      isAdmin={data.is_admin}
-      onchanged={load}
     />
-
-    <section>
-      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Danger zone</h2>
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        <Button variant="secondary" onclick={toggleDisabled}>{data.disabled ? "Enable row" : "Disable row"}</Button>
-        <Button variant="secondary" disabled={dupBusy} onclick={duplicate}>Duplicate row</Button>
-        {#if data.can_configure}
-          <Button variant="danger" onclick={() => (confirmDelete = true)}>Delete row</Button>
-        {/if}
-      </div>
-    </section>
   </div>
-
-  <ConfirmDialog
-    open={confirmDelete}
-    title="Delete this connector row?"
-    body="Run history is kept for audit. This cannot be undone."
-    confirmLabel="Delete"
-    destructive
-    onConfirm={doDelete}
-    onCancel={() => (confirmDelete = false)}
-  />
 {/if}

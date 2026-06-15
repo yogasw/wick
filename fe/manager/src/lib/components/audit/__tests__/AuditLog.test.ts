@@ -3,10 +3,12 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import AuditLog from "../AuditLog.svelte";
 import * as api from "$lib/api.js";
 import * as router from "$lib/router.js";
+import * as stores from "@wick-fe/common-stores";
 import type { AuditResult } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
 vi.mock("$lib/router.js", () => ({ push: vi.fn() }));
+vi.mock("@wick-fe/common-stores", () => ({ toastError: vi.fn() }));
 
 function makeResult(over: Partial<AuditResult> = {}): AuditResult {
   return {
@@ -88,5 +90,27 @@ describe("AuditLog", () => {
     vi.mocked(api.getAuditRuns).mockResolvedValue(makeResult({ runs: [], total: 0, summary: { total: 0, succeeded: 0, errored: 0, avg_latency_ms: 0 } }));
     render(AuditLog);
     expect(await screen.findByText("No runs match the current filter.")).toBeTruthy();
+  });
+
+  it("does not flash the Loading screen on a filter-change refresh", async () => {
+    render(AuditLog);
+    await screen.findByText("Prod Slack");
+    const sourceSelect = screen.getAllByRole("combobox")[0];
+    await fireEvent.change(sourceSelect, { target: { value: "mcp" } });
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(screen.getByText("Prod Slack")).toBeTruthy();
+    await waitFor(() => expect(api.getAuditRuns).toHaveBeenLastCalledWith(expect.objectContaining({ source: "mcp" })));
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+
+  it("toasts on a silent-refresh failure instead of showing the error screen", async () => {
+    vi.mocked(api.getAuditRuns).mockResolvedValueOnce(makeResult()).mockRejectedValueOnce(new Error("refresh boom"));
+    render(AuditLog);
+    await screen.findByText("Prod Slack");
+    const sourceSelect = screen.getAllByRole("combobox")[0];
+    await fireEvent.change(sourceSelect, { target: { value: "error" } });
+    await waitFor(() => expect(stores.toastError).toHaveBeenCalledWith("Refresh failed", "refresh boom"));
+    expect(screen.queryByText("refresh boom")).toBeNull();
+    expect(screen.getByText("Prod Slack")).toBeTruthy();
   });
 });

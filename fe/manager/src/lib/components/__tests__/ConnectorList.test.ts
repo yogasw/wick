@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import ConnectorList from "../ConnectorList.svelte";
 import * as api from "$lib/api.js";
 import * as router from "$lib/router.js";
+import * as stores from "@wick-fe/common-stores";
 import type { ConnectorList as ConnectorListType } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
 vi.mock("$lib/router.js", () => ({ push: vi.fn() }));
+vi.mock("@wick-fe/common-stores", () => ({ toastOk: vi.fn(), toastError: vi.fn() }));
 
 function makeData(over: Partial<ConnectorListType> = {}): ConnectorListType {
   return {
@@ -62,6 +64,16 @@ describe("ConnectorList", () => {
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/new-id");
   });
 
+  it("duplicates a row and navigates to the copy", async () => {
+    vi.mocked(api.duplicateConnectorRow).mockResolvedValue("row-copy");
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getAllByRole("button", { name: "Duplicate" })[0]);
+    await Promise.resolve();
+    expect(api.duplicateConnectorRow).toHaveBeenCalledWith("slack", "row-a");
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-copy");
+  });
+
   it("hides + New row for fixed connectors", async () => {
     vi.mocked(api.getConnector).mockResolvedValue(makeData({ fixed: true }));
     render(ConnectorList, { connectorKey: "slack" });
@@ -73,5 +85,27 @@ describe("ConnectorList", () => {
     vi.mocked(api.getConnector).mockRejectedValueOnce(new Error("nope"));
     render(ConnectorList, { connectorKey: "slack" });
     expect(await screen.findByText("nope")).toBeTruthy();
+  });
+
+  it("refreshes silently after disable — no Loading flash, rows stay mounted", async () => {
+    vi.mocked(api.toggleConnectorDisabled).mockResolvedValue(true);
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getAllByRole("button", { name: "Disable" })[0]);
+    await waitFor(() => expect(api.toggleConnectorDisabled).toHaveBeenCalledWith("slack", "row-a"));
+    await waitFor(() => expect(api.getConnector).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(screen.getByText("Prod")).toBeTruthy();
+  });
+
+  it("toasts on a silent-refresh failure instead of replacing the page", async () => {
+    vi.mocked(api.toggleConnectorDisabled).mockResolvedValue(false);
+    vi.mocked(api.getConnector).mockResolvedValueOnce(makeData()).mockRejectedValueOnce(new Error("refresh boom"));
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getAllByRole("button", { name: "Disable" })[0]);
+    await waitFor(() => expect(stores.toastError).toHaveBeenCalledWith("Refresh failed", "refresh boom"));
+    expect(screen.queryByText("refresh boom")).toBeNull();
+    expect(screen.getByText("Prod")).toBeTruthy();
   });
 });

@@ -4,98 +4,61 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/manager/view"
 )
 
-// spaMount is the URL prefix the manager SPA is served under. It lives
-// alongside the legacy server-rendered templ pages at /modules/manager/
-// (static) and /manager/* (handlers) so both run side by side during the
-// migration. The Vite build bakes this as the asset `base`, so script and
-// chunk URLs in index.html resolve back to this handler.
-const spaMount = "/modules/manager/app"
-
-// spaBase is the value injected into the #app div's data-base attribute.
-// The SPA router reads it as the client-side route prefix; the API client
-// uses server-absolute /manager paths and ignores it.
-const spaBase = spaMount
-
-// dataBaseRe matches the data-base attribute on the SPA mount div so the
-// handler can normalize it to the live mount path regardless of what the
-// build baked in.
-var dataBaseRe = regexp.MustCompile(`data-base="[^"]*"`)
-
-// htmlClassRe matches the class attribute on the root <html> element of
-// the served SPA shell so the handler can inject the user's resolved
-// theme classes — the SPA is served outside ui.Layout, which would
-// otherwise set them, so without this it always renders light.
-var htmlClassRe = regexp.MustCompile(`(<html[^>]*\sclass=")[^"]*(")`)
-
-// headOpenRe matches the opening <head> tag so the handler can inject the
-// system-preference theme script when the user has no stored theme,
-// mirroring the no-preference branch of ui.Layout.
-var headOpenRe = regexp.MustCompile(`(?i)<head>`)
-
-// applyTheme rewrites the SPA shell's <html class> with the theme
-// resolved from ctx so the standalone SPA reflects the same theme as the
-// server-rendered pages. When no theme is stored it leaves the class
-// empty and injects the device color-scheme script into <head> before
-// first paint, exactly as ui.Layout does.
-func applyTheme(idx []byte, themeClass string) []byte {
-	idx = htmlClassRe.ReplaceAll(idx, []byte(`${1}`+themeClass+`${2}`))
-	if themeClass == "" {
-		script := []byte("<head><script>" + ui.SystemThemeScript + "</script>")
-		idx = headOpenRe.ReplaceAll(idx, script)
-	}
-	return idx
+// registerSPAAssets wires the manager SPA's Vite asset handler. The bundle
+// is served from the all:dist embed at spaAssetBase (the value baked as the
+// Vite `base`), so the hashed script + chunk URLs in dist/manager/index.html
+// resolve back here. Behind the same auth as the page routes. The "/" suffix
+// makes it a subtree match for /manager/_app/assets/*.
+func (h *Handler) registerSPAAssets(mux *http.ServeMux, authMidd *login.Middleware) {
+	mux.Handle("GET "+spaAssetBase, authMidd.RequireAuth(http.HandlerFunc(h.spaAssetHandler)))
 }
 
-// registerSPA wires the manager SPA shell + asset handler. Mounted behind
-// the same auth as the templ pages. The "/" suffix on the pattern makes
-// it a subtree match so client-side routes (e.g. /modules/manager/app/foo)
-// all resolve to the SPA shell.
-func (h *Handler) registerSPA(mux *http.ServeMux, authMidd *login.Middleware) {
-	mux.Handle("GET "+spaMount+"/", authMidd.RequireAuth(http.HandlerFunc(h.spaHandler)))
-}
-
-// spaHandler serves /modules/manager/app/assets/* from the embed with an
-// immutable cache, and every other subpath with index.html (data-base
-// normalized) so the Svelte router resolves the client-side route.
-func (h *Handler) spaHandler(w http.ResponseWriter, r *http.Request) {
+// spaAssetHandler serves the hashed Vite bundle files from the embed under
+// spaAssetBase with an immutable cache. Only assets/* live here — page
+// routes render the thin-shell via serveSPAShell instead.
+func (h *Handler) spaAssetHandler(w http.ResponseWriter, r *http.Request) {
 	sub, err := fs.Sub(spaFS, "dist/manager")
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-
-	rest := strings.TrimPrefix(r.URL.Path, spaMount+"/")
-
-	if strings.HasPrefix(rest, "assets/") {
-		assetPath := strings.TrimPrefix(rest, "assets/")
-		data, err := fs.ReadFile(sub, "assets/"+assetPath)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", contentTypeFor(assetPath))
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		_, _ = w.Write(data)
+	rest := strings.TrimPrefix(r.URL.Path, spaAssetBase)
+	if !strings.HasPrefix(rest, "assets/") {
+		http.NotFound(w, r)
 		return
 	}
-
-	idx, err := fs.ReadFile(sub, "index.html")
+	assetPath := strings.TrimPrefix(rest, "assets/")
+	data, err := fs.ReadFile(sub, "assets/"+assetPath)
 	if err != nil {
-		http.Error(w, "manager SPA not built yet — run `npm --workspace=@wick-fe/manager run build` in fe/", http.StatusNotFound)
+		http.NotFound(w, r)
 		return
 	}
-	idx = dataBaseRe.ReplaceAll(idx, []byte(`data-base="`+spaBase+`"`))
-	idx = applyTheme(idx, ui.HTMLThemeClass(r.Context()))
+	w.Header().Set("Content-Type", contentTypeFor(assetPath))
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	_, _ = w.Write(data)
+}
+
+// serveSPAShell renders the manager SPA thin-shell inside the host
+// ui.Layout chrome. Every manager *page* GET route (/manager,
+// /manager/connectors/..., /manager/jobs/{key}, etc.) resolves here; the
+// SPA's client router then resolves the rest of the path. The theme + app
+// name flow from the request context (set by the auth middleware) into
+// ui.Layout, so the SPA inherits the host theme with no manual injection.
+func (h *Handler) serveSPAShell(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(idx)
+	vm := view.ManagerSPAVM{
+		Base:     spaBase,
+		AssetURL: spaAssetURL(),
+		User:     login.GetUser(r.Context()),
+	}
+	_ = view.ManagerSPA(vm).Render(r.Context(), w)
 }
 
 // contentTypeFor maps an asset extension to its MIME type for the

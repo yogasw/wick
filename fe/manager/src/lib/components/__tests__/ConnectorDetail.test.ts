@@ -81,17 +81,6 @@ describe("ConnectorDetail", () => {
     expect(screen.queryByRole("button", { name: "Check Permissions" })).toBeNull();
   });
 
-  it("deletes the row and navigates back to the list", async () => {
-    vi.mocked(api.deleteConnectorRow).mockResolvedValue(undefined);
-    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
-    await screen.findByText("row-a");
-    await fireEvent.click(screen.getByRole("button", { name: "Delete row" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await Promise.resolve();
-    expect(api.deleteConnectorRow).toHaveBeenCalledWith("slack", "row-a");
-    expect(router.push).toHaveBeenCalledWith("/connectors/slack");
-  });
-
   it("renders read-only fields when can_configure is false", async () => {
     vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ can_configure: false }));
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
@@ -112,16 +101,6 @@ describe("ConnectorDetail", () => {
     expect(api.setConnectorRateLimit).toHaveBeenCalledWith("slack", "row-a", 60);
   });
 
-  it("duplicates the row and navigates to the copy", async () => {
-    vi.mocked(api.duplicateConnectorRow).mockResolvedValue("row-copy");
-    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
-    await screen.findByText("row-a");
-    await fireEvent.click(screen.getByRole("button", { name: "Duplicate row" }));
-    await Promise.resolve();
-    expect(api.duplicateConnectorRow).toHaveBeenCalledWith("slack", "row-a");
-    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-copy");
-  });
-
   it("toggles an operation enabled state via the toggle endpoint", async () => {
     vi.mocked(api.toggleConnectorOperation).mockResolvedValue(false);
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
@@ -138,13 +117,32 @@ describe("ConnectorDetail", () => {
     expect(screen.queryByLabelText("Enable Send")).toBeNull();
   });
 
-  it("renders admin-only toggles and access policy only for admins", async () => {
+  it("renders the access policy section only for admins", async () => {
     vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ is_admin: true }));
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
-    expect(screen.getByLabelText("Admin-only Send")).toBeTruthy();
     expect(screen.getByText("Access policy")).toBeTruthy();
     expect(screen.getByLabelText("Allow others to configure")).toBeTruthy();
+  });
+
+  it("deep-links to the test runner per operation with ?op=", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    await fireEvent.click(screen.getAllByRole("button", { name: "Test" })[0]);
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/test?op=send");
+  });
+
+  it("deep-links to the history page per operation with ?op=", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    await fireEvent.click(screen.getAllByRole("button", { name: "History" })[0]);
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/history?op=send");
+  });
+
+  it("does not render row-level test runner / history entry points", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.queryByRole("button", { name: "Test runner" })).toBeNull();
   });
 
   it("renders the accounts section + connect button for OAuth connectors", async () => {

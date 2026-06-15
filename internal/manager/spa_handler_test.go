@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 
@@ -14,24 +15,35 @@ import (
 // the handler tests exercise the serve logic without depending on a real
 // `npm run build` artifact — that bundle is gitignored and absent in CI
 // (only dist/.gitkeep is committed), so reading the real embed would 404.
-// Restored on cleanup.
+// Restored on cleanup. The asset resolver caches its result once per
+// process, so the synthetic index.html must declare the bundle src the
+// asset test expects.
 func withTestSPAFS(t *testing.T) {
 	t.Helper()
 	prev := spaFS
 	spaFS = fstest.MapFS{
-		"dist/manager/index.html":           {Data: []byte(`<!doctype html><html lang="en" class=""><head></head><body><div id="app" data-base=""></div></body></html>`)},
+		"dist/manager/index.html": {Data: []byte(
+			`<!doctype html><html lang="en"><head>` +
+				`<script type="module" crossorigin src="/manager/_app/assets/index-test.js"></script>` +
+				`</head><body><div id="app" data-base=""></div></body></html>`)},
 		"dist/manager/assets/index-test.js": {Data: []byte("console.log(1);")},
 	}
-	t.Cleanup(func() { spaFS = prev })
+	t.Cleanup(func() {
+		spaFS = prev
+		assetURLOnce = sync.Once{}
+		assetURL = ""
+	})
+	assetURLOnce = sync.Once{}
+	assetURL = ""
 }
 
-func TestSPAHandlerServesShell(t *testing.T) {
+func TestServeSPAShellRendersHostChrome(t *testing.T) {
 	withTestSPAFS(t)
 	h := &Handler{}
 
-	req := httptest.NewRequest(http.MethodGet, spaMount+"/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/manager", nil)
 	rec := httptest.NewRecorder()
-	h.spaHandler(rec, req)
+	h.serveSPAShell(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -40,124 +52,65 @@ func TestSPAHandlerServesShell(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/html…", ct)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `data-base="`+spaBase+`"`) {
-		t.Errorf("served shell missing injected data-base=%q; body=%s", spaBase, body)
+	checks := []string{
+		`data-base="` + spaBase + `"`,        // SPA route prefix injected
+		`<title>Manager`,                     // host ui.Layout title
+		`/manager/_app/assets/index-test.js`, // hashed bundle from asset base
+		`<script type="module"`,              // module script tag present
 	}
-}
-
-func TestSPAHandlerInjectsDataBase(t *testing.T) {
-	cases := []string{
-		`<div id="app" data-base=""></div>`,
-		`<div id="app" data-base="/wrong/base"></div>`,
-		`<div id="app" data-base="/modules/manager/app"></div>`,
-	}
-	want := `data-base="` + spaBase + `"`
-	for _, in := range cases {
-		got := dataBaseRe.ReplaceAllString(in, want)
-		if !strings.Contains(got, want) {
-			t.Errorf("ReplaceAll(%q) = %q, want it to contain %q", in, got, want)
-		}
-		if strings.Contains(got, `data-base="/wrong/base"`) {
-			t.Errorf("ReplaceAll left a stale base in %q", got)
+	for _, want := range checks {
+		if !strings.Contains(body, want) {
+			t.Errorf("served shell missing %q; body=%s", want, body)
 		}
 	}
 }
 
-func TestApplyTheme(t *testing.T) {
-	const shell = `<!doctype html><html lang="en" class=""><head></head><body></body></html>`
-	cases := []struct {
-		name       string
-		themeClass string
-		wantClass  string
-		wantScript bool
-	}{
-		{
-			name:       "dark theme injects class, no system script",
-			themeClass: "theme-dark dark",
-			wantClass:  `class="theme-dark dark"`,
-			wantScript: false,
-		},
-		{
-			name:       "light theme injects class, no system script",
-			themeClass: "theme-github-light",
-			wantClass:  `class="theme-github-light"`,
-			wantScript: false,
-		},
-		{
-			name:       "no preference leaves class empty and injects system script",
-			themeClass: "",
-			wantClass:  `class=""`,
-			wantScript: true,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := string(applyTheme([]byte(shell), tc.themeClass))
-			if !strings.Contains(got, tc.wantClass) {
-				t.Errorf("applyTheme(%q) = %q, want it to contain %q", tc.themeClass, got, tc.wantClass)
-			}
-			hasScript := strings.Contains(got, ui.SystemThemeScript)
-			if hasScript != tc.wantScript {
-				t.Errorf("applyTheme(%q) system script present = %v, want %v; got %q", tc.themeClass, hasScript, tc.wantScript, got)
-			}
-		})
-	}
-}
-
-func TestSPAHandlerInjectsThemeFromContext(t *testing.T) {
+func TestServeSPAShellInheritsThemeFromContext(t *testing.T) {
 	withTestSPAFS(t)
 	h := &Handler{}
 
-	req := httptest.NewRequest(http.MethodGet, spaMount+"/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/manager", nil)
 	req = req.WithContext(ui.WithTheme(req.Context(), "dark"))
 	rec := httptest.NewRecorder()
-	h.spaHandler(rec, req)
+	h.serveSPAShell(rec, req)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, `class="theme-dark dark"`) {
-		t.Errorf("served shell missing dark theme class; body=%s", body)
-	}
-	if strings.Contains(body, ui.SystemThemeScript) {
-		t.Errorf("served shell injected system-preference script despite a stored theme; body=%s", body)
+		t.Errorf("served shell missing dark theme class from host Layout; body=%s", body)
 	}
 }
 
-func TestSPAHandlerInjectsSystemScriptWhenNoTheme(t *testing.T) {
-	withTestSPAFS(t)
+func TestServeSPAShellFallbackWhenBundleMissing(t *testing.T) {
+	prev := spaFS
+	spaFS = fstest.MapFS{} // no dist/manager → empty asset URL
+	assetURLOnce = sync.Once{}
+	assetURL = ""
+	t.Cleanup(func() {
+		spaFS = prev
+		assetURLOnce = sync.Once{}
+		assetURL = ""
+	})
 	h := &Handler{}
 
-	req := httptest.NewRequest(http.MethodGet, spaMount+"/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/manager", nil)
 	rec := httptest.NewRecorder()
-	h.spaHandler(rec, req)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, ui.SystemThemeScript) {
-		t.Errorf("served shell missing system-preference script for empty theme; body=%s", body)
-	}
-}
-
-func TestSPAHandlerClientRouteFallsBackToShell(t *testing.T) {
-	withTestSPAFS(t)
-	h := &Handler{}
-
-	req := httptest.NewRequest(http.MethodGet, spaMount+"/connectors/slack", nil)
-	rec := httptest.NewRecorder()
-	h.spaHandler(rec, req)
+	h.serveSPAShell(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (shell fallback); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
-		t.Fatalf("Content-Type = %q, want text/html…", ct)
+	if !strings.Contains(rec.Body.String(), "bundle not built yet") {
+		t.Errorf("expected not-built fallback message; body=%s", rec.Body.String())
 	}
 }
 
-func TestSPAHandlerServesAssetWithImmutableCache(t *testing.T) {
+func TestSPAAssetHandlerServesWithImmutableCache(t *testing.T) {
 	withTestSPAFS(t)
 	h := &Handler{}
-	req := httptest.NewRequest(http.MethodGet, spaMount+"/assets/index-test.js", nil)
+
+	req := httptest.NewRequest(http.MethodGet, spaAssetBase+"assets/index-test.js", nil)
 	rec := httptest.NewRecorder()
-	h.spaHandler(rec, req)
+	h.spaAssetHandler(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -167,5 +120,25 @@ func TestSPAHandlerServesAssetWithImmutableCache(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/javascript") {
 		t.Errorf("Content-Type = %q, want application/javascript…", ct)
+	}
+}
+
+func TestSPAAssetHandlerRejectsNonAssetPath(t *testing.T) {
+	withTestSPAFS(t)
+	h := &Handler{}
+
+	req := httptest.NewRequest(http.MethodGet, spaAssetBase+"index.html", nil)
+	rec := httptest.NewRecorder()
+	h.spaAssetHandler(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for non-asset path; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSPAAssetURLReadsHashedBundle(t *testing.T) {
+	withTestSPAFS(t)
+	if got := spaAssetURL(); got != "/manager/_app/assets/index-test.js" {
+		t.Errorf("spaAssetURL() = %q, want /manager/_app/assets/index-test.js", got)
 	}
 }

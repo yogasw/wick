@@ -10,7 +10,7 @@ const WATCH = process.argv.includes("--watch") || process.argv.includes("-w");
 
 export default defineConfig({
   plugins: [svelte()],
-  base: "/modules/manager/app/",
+  base: "/manager/_app/",
   build: {
     outDir: OUT_DIR,
     emptyOutDir: !WATCH,
@@ -25,19 +25,23 @@ export default defineConfig({
   server: {
     port: 5191,
     proxy: {
-      "/manager": {
+      /* Proxy the JSON + mutation API to the running wick server. The SPA
+         page routes (/manager, /manager/connectors, …) and the Vite asset
+         base (/manager/_app/) are served by Vite in dev, so only the API
+         and OAuth surfaces forward upstream. */
+      "/manager/api": process.env.WICK_PROXY ?? "http://localhost:9425",
+      "/manager/connectors/custom": {
         target: process.env.WICK_PROXY ?? "http://localhost:9425",
         changeOrigin: true,
-      },
-      "/modules/manager": {
-        target: process.env.WICK_PROXY ?? "http://localhost:9425",
-        changeOrigin: true,
+        /* POST/mutation + OAuth callbacks forward; the builder *page* GETs
+           stay client-side so Vite serves the SPA shell. */
         bypass: (req) => {
-          if (req.url?.startsWith("/modules/manager/app/")) {
+          if (req.method === "GET" && !req.url?.includes("/oauth/")) {
             return req.url;
           }
         },
       },
+      "/api/runs": process.env.WICK_PROXY ?? "http://localhost:9425",
       "/public": process.env.WICK_PROXY ?? "http://localhost:9425",
     },
   },
