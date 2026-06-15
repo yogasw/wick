@@ -12,6 +12,11 @@ import type {
   CustomDraftResult,
   Draft,
   SaveDraftResult,
+  McpServerForm,
+  McpServerFormResult,
+  McpTestResult,
+  McpOAuthStartResult,
+  McpOAuthStatusResult,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager surface,
@@ -131,6 +136,40 @@ export async function setCustomDefDisabled(defID: string, disabled: boolean): Pr
   const verb = disabled ? "disable" : "enable";
   const r = await apiPost<{ disabled: boolean }>(`${customBase}/${encodeURIComponent(defID)}/${verb}`);
   return r.disabled;
+}
+
+/* MCP server form. The test/save/oauth endpoints live on the legacy
+   /manager/connectors/custom/mcp-servers/* surface (already JSON, reused
+   verbatim); only the edit-mode prefill has a /manager/api/ twin. */
+const mcpBase = "/manager/connectors/custom/mcp-servers";
+
+export async function getMcpServerForm(id: string): Promise<McpServerFormResult> {
+  const r = await apiGet<McpServerFormResult>(
+    `/manager/api/connectors/custom/mcp-servers/edit?id=${encodeURIComponent(id)}`,
+  );
+  return { ...r, tools: r.tools ?? [] };
+}
+
+export async function testMcpServer(form: McpServerForm): Promise<McpTestResult> {
+  return apiPost<McpTestResult>(`${mcpBase}/test`, form);
+}
+
+export async function saveMcpServer(
+  form: McpServerForm,
+  testedOk: boolean,
+  id: string,
+): Promise<{ redirect?: string }> {
+  return apiPost<{ redirect?: string }>(`${mcpBase}/save`, { form, tested_ok: testedOk, id });
+}
+
+export async function startMcpOAuth(form: McpServerForm): Promise<McpOAuthStartResult> {
+  return apiPost<McpOAuthStartResult>(`${mcpBase}/oauth/start`, { form });
+}
+
+export async function getMcpOAuthStatus(loginId: string): Promise<McpOAuthStatusResult> {
+  return apiGet<McpOAuthStatusResult>(
+    `${mcpBase}/oauth/status?login_id=${encodeURIComponent(loginId)}`,
+  );
 }
 
 export async function getConnectorHistory(

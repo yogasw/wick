@@ -10,6 +10,7 @@
   import CustomPaste from "$lib/components/custom/CustomPaste.svelte";
   import CustomManual from "$lib/components/custom/CustomManual.svelte";
   import CustomReview from "$lib/components/custom/CustomReview.svelte";
+  import McpServerForm from "$lib/components/custom/McpServerForm.svelte";
 
   let currentRoute = $state(get(route));
   $effect(() => {
@@ -20,6 +21,8 @@
   let pasteRoute = $derived(currentRoute === "/custom/paste");
   let manualRoute = $derived(currentRoute === "/custom/manual");
   let reviewRoute = $derived(currentRoute === "/custom/review");
+  let mcpNewRoute = $derived(currentRoute === "/custom/mcp");
+  let mcpEditParams = $derived(match("/custom/mcp/:serverID/edit", currentRoute));
   let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let testParams = $derived(match("/connectors/:key/:id/test", currentRoute));
   let historyParams = $derived(match("/connectors/:key/:id/history", currentRoute));
@@ -31,6 +34,8 @@
     if (pasteRoute) return "From paste";
     if (manualRoute) return "Manual builder";
     if (reviewRoute) return "Review";
+    if (mcpNewRoute) return "Register MCP server";
+    if (mcpEditParams) return "Edit MCP server";
     if (editParams) return "Edit definition";
     return "";
   });
@@ -65,6 +70,10 @@
       <CustomManual />
     {:else if reviewRoute}
       <CustomReview />
+    {:else if mcpNewRoute}
+      <McpServerForm />
+    {:else if mcpEditParams}
+      <McpServerForm serverId={mcpEditParams.serverID} />
     {:else if editParams}
       <CustomReview defID={editParams.defID} />
     {:else if testParams}
