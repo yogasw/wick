@@ -10,6 +10,20 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.4](https://github.com/yogasw/wick/compare/v0.18.3...v0.18.4) — PWA Improvements
+
+_Released on 2026-06-15_
+
+### Fixed
+*   **PWA Push Notifications**: The PWA push notification handler no longer suppresses OS notifications when any same-origin window is open. Notifications are now surfaced unless a visible PWA window is already on the push's target path, ensuring users receive notifications even with background or different-page tabs open.
+*   **PWA Fetch Handler**: Resolved an issue where the PWA fetch handler could throw 'Failed to convert value to Response' by intercepting cross-origin requests and resolving `respondWith()` with `undefined`. The handler now explicitly skips cross-origin requests and always returns a valid Response.
+
+### Improved
+*   **PWA Notification Badge**: Added a dedicated monochrome white-silhouette notification badge (`icon-badge.png`) for Android devices. This prevents the full-color icon from being collapsed into a white blob when masked by Android's badge rendering.
+
+---
+
+
 ## [v0.18.3](https://github.com/yogasw/wick/compare/v0.18.2...v0.18.3) — Workflows & Connectors
 
 _Released on 2026-06-14_

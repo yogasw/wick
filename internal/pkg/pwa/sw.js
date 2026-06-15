@@ -1,11 +1,12 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v1';
+const CACHE = 'wick-static-v2';
 const ASSETS = [
   '/public/img/icon-192.png',
   '/public/img/icon-512.png',
   '/public/img/icon-maskable-512.png',
+  '/public/img/icon-badge.png',
   '/public/manifest.json',
 ];
 
@@ -25,24 +26,43 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Network-first. Only the precached static assets fall back to cache when
-// offline; everything else (HTML, API) just fails like a normal fetch.
+// Network-first for same-origin GETs; the precached static assets fall back
+// to cache when offline. Cross-origin requests (Cloudflare beacon, analytics,
+// CDNs…) are NOT intercepted — letting them go straight to the network avoids
+// needless proxying and the "Failed to convert value to 'Response'" crash that
+// happened when such a fetch failed and respondWith() got an undefined cache
+// miss.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-  event.respondWith(fetch(req).catch(() => caches.match(req)));
+  let sameOrigin = false;
+  try { sameOrigin = new URL(req.url).origin === self.location.origin; }
+  catch (_) { sameOrigin = false; }
+  if (!sameOrigin) return;
+  event.respondWith(
+    fetch(req).catch(() =>
+      caches.match(req).then((cached) => cached || Response.error())
+    )
+  );
 });
 
-// sameOriginClients returns every window of this origin the service
-// worker can see. Used to decide whether to route the push to an
-// in-app toast (wick is open somewhere) or surface an OS notification
-// (wick is fully in the background — the user has no other channel).
+// sameOriginClients returns every window of this origin the service worker
+// can see (focused or not, visible or not). The push handler narrows this
+// down to decide whether to surface an OS notification.
 async function sameOriginClients() {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   return all.filter((c) => {
     try { return new URL(c.url).origin === self.location.origin; }
     catch (_) { return false; }
   });
+}
+
+// urlPath returns the pathname of a URL (absolute, or relative to this
+// origin), or '' when it can't be parsed. Used to compare the page a push
+// points at against the pages the user currently has open.
+function urlPath(u) {
+  try { return new URL(u, self.location.origin).pathname; }
+  catch (_) { return ''; }
 }
 
 self.addEventListener('push', (event) => {
@@ -56,24 +76,28 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'Wick notification';
   const body = data.body || '';
   const targetURL = data.url || '/';
+  const tag = 'wick:' + targetURL;
 
   event.waitUntil((async () => {
     const clients = await sameOriginClients();
-    const hasClient = clients.length > 0;
 
-    // When wick is open anywhere (focused or not), route via
-    // postMessage so the page renders its own in-app toast — the
-    // user shouldn't see a duplicate Chrome / OS notification
-    // alongside our custom card.
+    // Suppress the OS notification ONLY when the user is actively looking
+    // at the very page this push is about — i.e. a *visible* wick window
+    // already on the target path. In that one case the page shows its own
+    // in-app toast, so an OS notification would just duplicate what's
+    // already on screen.
     //
-    // userVisibleOnly: true (subscription constraint) requires us to
-    // call showNotification for every push. We satisfy the spec by
-    // calling it silently, then immediately closing it via
-    // getNotifications + .close(). Browser policies tolerate
-    // momentary visible notifications; users only see the in-app
-    // toast.
-    if (hasClient) {
-      for (const c of clients) {
+    // Every other case surfaces a real OS notification: wick focused on a
+    // different page/menu, wick only in a background tab, or wick fully
+    // closed. So looking away from (or closing) the relevant tab still
+    // notifies; only staying on that exact page stays silent.
+    const targetPath = urlPath(targetURL);
+    const onTarget = clients.filter(
+      (c) => c.visibilityState === 'visible' && urlPath(c.url) === targetPath
+    );
+
+    if (onTarget.length > 0) {
+      for (const c of onTarget) {
         try {
           c.postMessage({
             type: 'wick:lifecycle_push',
@@ -83,11 +107,14 @@ self.addEventListener('push', (event) => {
           });
         } catch (_) {}
       }
-      const tag = 'wick:' + targetURL;
+      // userVisibleOnly: true (subscription constraint) requires us to call
+      // showNotification for every push. Satisfy the spec by showing one
+      // silently then closing it immediately — the user only ever sees the
+      // in-app toast.
       await self.registration.showNotification(title, {
         body: body,
         icon: '/public/img/icon-192.png',
-        badge: '/public/img/icon-192.png',
+        badge: '/public/img/icon-badge.png',
         data: { url: targetURL },
         silent: true,
         requireInteraction: false,
@@ -101,16 +128,16 @@ self.addEventListener('push', (event) => {
       return;
     }
 
-    // No wick client at all — fall back to the real OS notification.
-    // Click navigates via notificationclick (opens wick + jumps to
-    // the session URL).
+    // User isn't looking at the target page — surface a real OS
+    // notification. Click navigates via notificationclick (focuses an
+    // existing window + jumps to the session URL, or opens a new one).
     return self.registration.showNotification(title, {
       body: body,
       icon: '/public/img/icon-192.png',
-      badge: '/public/img/icon-192.png',
+      badge: '/public/img/icon-badge.png',
       data: { url: targetURL },
       requireInteraction: false,
-      tag: 'wick:' + targetURL,
+      tag: tag,
       renotify: true,
     });
   })());
