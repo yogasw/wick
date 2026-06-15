@@ -28,13 +28,22 @@ import type {
 /* Connector definitions live at the server-absolute /manager surface,
    distinct from the SPA mount base (/modules/manager/app). */
 export async function listConnectors(): Promise<ConnectorDef[]> {
-  const r = await apiGet<ConnectorDef[] | null>("/manager/api/connectors");
+  const r = await apiGet<Partial<ConnectorDef>[] | null>("/manager/api/connectors");
   return (r ?? []).map((c) => ({
-    key: c.key,
-    name: c.name,
+    key: c.key ?? "",
+    name: c.name ?? "",
+    description: c.description ?? "",
     category: c.category ?? "",
+    category_desc: c.category_desc ?? "",
     icon: c.icon ?? "",
+    op_count: c.op_count ?? 0,
+    active_count: c.active_count ?? 0,
+    needs_setup_count: c.needs_setup_count ?? 0,
+    disabled_count: c.disabled_count ?? 0,
+    system: c.system ?? false,
     custom: c.custom ?? false,
+    custom_source: c.custom_source ?? "",
+    needs_reload: c.needs_reload ?? false,
     disabled: c.disabled ?? false,
   }));
 }

@@ -1,10 +1,19 @@
 export interface ConnectorDef {
   key: string;
   name: string;
+  description: string;
   category: string;
+  category_desc: string;
   icon: string;
-  custom?: boolean;
-  disabled?: boolean;
+  op_count: number;
+  active_count: number;
+  needs_setup_count: number;
+  disabled_count: number;
+  system: boolean;
+  custom: boolean;
+  custom_source: string;
+  needs_reload: boolean;
+  disabled: boolean;
 }
 
 export interface ConnectorRow {

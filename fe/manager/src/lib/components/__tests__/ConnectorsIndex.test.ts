@@ -13,9 +13,57 @@ vi.mock("$lib/router.js", async () => {
 
 function makeData(): ConnectorDef[] {
   return [
-    { key: "slack", name: "Slack", category: "Communication", icon: "💬", custom: false, disabled: false },
-    { key: "github", name: "GitHub", category: "Development", icon: "🐙", custom: false, disabled: false },
-    { key: "my-curl", name: "My cURL", category: "Development", icon: "🔧", custom: true, disabled: true },
+    {
+      key: "slack",
+      name: "Slack",
+      description: "Send messages and manage channels",
+      category: "Communication",
+      category_desc: "Chat + messaging platforms",
+      icon: "💬",
+      op_count: 5,
+      active_count: 2,
+      needs_setup_count: 0,
+      disabled_count: 0,
+      system: false,
+      custom: false,
+      custom_source: "",
+      needs_reload: false,
+      disabled: false,
+    },
+    {
+      key: "github",
+      name: "GitHub",
+      description: "Repos, issues, and pull requests",
+      category: "Development",
+      category_desc: "Dev tooling + source control",
+      icon: "🐙",
+      op_count: 8,
+      active_count: 1,
+      needs_setup_count: 0,
+      disabled_count: 0,
+      system: false,
+      custom: false,
+      custom_source: "",
+      needs_reload: false,
+      disabled: false,
+    },
+    {
+      key: "my-curl",
+      name: "My cURL",
+      description: "Imported from a cURL command",
+      category: "Development",
+      category_desc: "Dev tooling + source control",
+      icon: "🔧",
+      op_count: 3,
+      active_count: 0,
+      needs_setup_count: 0,
+      disabled_count: 1,
+      system: false,
+      custom: true,
+      custom_source: "cURL",
+      needs_reload: false,
+      disabled: true,
+    },
   ];
 }
 
@@ -85,5 +133,38 @@ describe("ConnectorsIndex", () => {
     await fireEvent.click(screen.getByRole("button", { name: "＋ New connector" }));
     await fireEvent.click(await screen.findByText("Blank / manual"));
     expect(router.push).toHaveBeenCalledWith("/custom/manual");
+  });
+
+  it("groups connectors into category sections with subtitles", async () => {
+    const { container } = render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    const sections = container.querySelectorAll("[data-group]");
+    expect(sections.length).toBe(2);
+    const names = Array.from(sections).map((s) => s.getAttribute("data-group-name"));
+    expect(names).toContain("Communication");
+    expect(names).toContain("Development");
+    expect(screen.getByText("Chat + messaging platforms")).toBeTruthy();
+    expect(screen.getByText("Dev tooling + source control")).toBeTruthy();
+  });
+
+  it("renders each connector description and op-count stats", async () => {
+    render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    expect(screen.getByText("Send messages and manage channels")).toBeTruthy();
+    expect(screen.getByText("5 operation(s) · 2 active")).toBeTruthy();
+    expect(screen.getByText("8 operation(s) · 1 active")).toBeTruthy();
+  });
+
+  it("renders the Custom badge with its source for custom connectors", async () => {
+    render(ConnectorsIndex);
+    await screen.findByText("My cURL");
+    expect(screen.getByText("Custom · cURL")).toBeTruthy();
+    expect(screen.getByText(/1 disabled/)).toBeTruthy();
+  });
+
+  it("renders the page subtitle", async () => {
+    render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    expect(screen.getByText(/LLM-callable connectors that wrap external APIs/)).toBeTruthy();
   });
 });
