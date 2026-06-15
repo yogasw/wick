@@ -99,6 +99,8 @@ export type Node = {
   skills?: string[];
   tools?: string[];
   max_turns?: number;
+  thinking?: string;
+  max_thinking_tokens?: number;
 
   // channel + connector
   channel?: string;
