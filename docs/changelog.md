@@ -10,14 +10,55 @@ All notable changes to Wick are documented here.
 *   **Providers list: Active Processes panel** — when any agent is running, a table above the provider cards shows every live spawn (session ID, agent name, PID, lifecycle/substate). Hidden when the pool is empty.
 *   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
 
+---
+
+## [v0.18.5](https://github.com/yogasw/wick/compare/v0.18.4...v0.18.5) — PWA Notifications
+
+_Released on 2026-06-15_
+
+### Improved
+*   Broadcast in-app lifecycle push notifications to all open tabs, ensuring exactly one OS notification is surfaced per push. Repeated pushes are collapsed into a single OS surface using a unique tag to prevent spam.
+*   De-duplicate in-app cards by push tag, replacing existing cards instead of stacking.
+*   Synchronize dismissals across tabs: Dismissing an in-app card in one tab now clears the same card in all other open tabs and closes the shared OS notification. Auto-dismiss and remote dismiss actions only clear the local card.
+
+---
+
+
+## [v0.18.4](https://github.com/yogasw/wick/compare/v0.18.3...v0.18.4) — PWA Improvements
+
+_Released on 2026-06-15_
+
 ### Fixed
-*   **Workflow runs from a freshly-published workflow now execute immediately** — previously a workflow created or published from the UI would accept its trigger (webhook returned `202`, dispatch reported a match) but the run never executed and never appeared in run history until the server was restarted. The per-workflow worker was being spawned bound to the HTTP request context, so it died the instant the response was sent; the queue lingered with no live consumer and runs piled up undrained. Workers are now pinned to the server lifetime, so a publish, toggle, or hot-reload from any HTTP handler produces a worker that survives the request. Publishing a new workflow (or re-publishing one) never interrupts another workflow's in-flight run.
+*   **PWA Push Notifications**: The PWA push notification handler no longer suppresses OS notifications when any same-origin window is open. Notifications are now surfaced unless a visible PWA window is already on the push's target path, ensuring users receive notifications even with background or different-page tabs open.
+*   **PWA Fetch Handler**: Resolved an issue where the PWA fetch handler could throw 'Failed to convert value to Response' by intercepting cross-origin requests and resolving `respondWith()` with `undefined`. The handler now explicitly skips cross-origin requests and always returns a valid Response.
+
+### Improved
+*   **PWA Notification Badge**: Added a dedicated monochrome white-silhouette notification badge (`icon-badge.png`) for Android devices. This prevents the full-color icon from being collapsed into a white blob when masked by Android's badge rendering.
+
+---
+
+
+## [v0.18.3](https://github.com/yogasw/wick/compare/v0.18.2...v0.18.3) — Workflows & Connectors
+
+_Released on 2026-06-14_
+
+### Fixed
+*   **Workflow runs from a freshly-published workflow now execute immediately** — previously, workflows created or published from the UI would accept their trigger (webhook returned `202`, dispatch reported a match) but the run never executed and never appeared in run history until the server was restarted. The per-workflow worker was being spawned bound to the HTTP request context, so it died the instant the response was sent; the queue lingered with no live consumer and runs piled up undrained. Workers are now pinned to the server lifetime, so a publish, toggle, or hot-reload from any HTTP handler produces a worker that survives the request. Publishing a new workflow (or re-publishing one) never interrupts another workflow's in-flight run.
 *   **Connector nodes that require an authenticated identity now work from workflow runs** — operations gated on the logged-in user (e.g. `notifications.send_to_push_id`) returned `not authenticated` when fired from a headless workflow run, even though they worked when tested manually through the UI. Connector nodes now run as the workflow's owner.
 
 ### Changed
-*   **Workflow dispatch is no longer silent** — the router now logs when a run is enqueued, when a matched trigger has no queue or no live worker (the run would otherwise vanish without a trace), and when a worker is spawned or stops. Makes a run that fails to execute debuggable from the logs instead of leaving no evidence.
+*   **Workflow dispatch is no longer silent** — the router now logs when a run is enqueued, when a matched trigger has no queue or no live worker (the run would otherwise vanish without a trace), and when a worker is spawned or stops. This makes a run that fails to execute debuggable from the logs instead of leaving no evidence.
+
+### Improved
+*   **CI performance and reliability**:
+    *   **Shared caches**: A new `ci-cache-warm.yml` workflow warms shared caches (Go build, module, and templ binary) on `push:master`, making them available for all PRs.
+    *   **Faster PR tests**: PR tests now efficiently restore Go build caches and utilize a two-tier strategy: a fast full suite without `-race`, followed by `-race` only on packages changed in the PR to minimize runtime.
+    *   **Conditional job execution**: Go and frontend jobs are now gated by `dorny/paths-filter`, running only when their respective files change.
+    *   **New frontend build job**: A dedicated job with caching for Node.js and Vite builds (gated on `fe/**` changes) has been added.
+    *   **Nightly race detection**: A new `nightly-race.yml` workflow runs the full `-race` suite daily, ensuring race conditions are caught in packages not frequently touched by PRs.
 
 ---
+
 
 ## [v0.18.2](https://github.com/yogasw/wick/compare/v0.18.1...v0.18.2) — GitHub Connector
 
