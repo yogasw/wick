@@ -17,6 +17,12 @@ import type {
   McpTestResult,
   McpOAuthStartResult,
   McpOAuthStatusResult,
+  JobDetail,
+  JobSettings,
+  JobRunResult,
+  ToolDetail,
+  AuditResult,
+  AuditFilter,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager surface,
@@ -170,6 +176,56 @@ export async function getMcpOAuthStatus(loginId: string): Promise<McpOAuthStatus
   return apiGet<McpOAuthStatusResult>(
     `${mcpBase}/oauth/status?login_id=${encodeURIComponent(loginId)}`,
   );
+}
+
+/* Jobs + tools live at the server-absolute /manager/api surface, like the
+   connector endpoints — the SPA mount base is ignored by the api client. */
+function jobBase(key: string): string {
+  return `/manager/api/jobs/${encodeURIComponent(key)}`;
+}
+
+export async function getJob(key: string): Promise<JobDetail> {
+  const r = await apiGet<JobDetail>(jobBase(key));
+  return { ...r, fields: r.fields ?? [] };
+}
+
+export async function updateJobSettings(key: string, settings: JobSettings): Promise<void> {
+  await apiPost(`${jobBase(key)}/settings`, settings);
+}
+
+export async function setJobConfig(key: string, configKey: string, value: string): Promise<void> {
+  await apiPost(`${jobBase(key)}/configs/${encodeURIComponent(configKey)}`, { value });
+}
+
+export async function runJob(key: string): Promise<string> {
+  const r = await apiPost<{ run_id: string }>(`${jobBase(key)}/run`);
+  return r.run_id;
+}
+
+export async function getJobRun(key: string, runID: string): Promise<JobRunResult> {
+  return apiGet<JobRunResult>(`${jobBase(key)}/runs/${encodeURIComponent(runID)}`);
+}
+
+export async function getTool(key: string): Promise<ToolDetail> {
+  const r = await apiGet<ToolDetail>(`/manager/api/tools/${encodeURIComponent(key)}`);
+  return { ...r, fields: r.fields ?? [] };
+}
+
+export async function setToolConfig(key: string, configKey: string, value: string): Promise<void> {
+  await apiPost(`/manager/api/tools/${encodeURIComponent(key)}/configs/${encodeURIComponent(configKey)}`, { value });
+}
+
+export async function getAuditRuns(filter: AuditFilter): Promise<AuditResult> {
+  const params = new URLSearchParams();
+  if (filter.source) params.set("source", filter.source);
+  if (filter.status) params.set("status", filter.status);
+  if (filter.from) params.set("from", filter.from);
+  if (filter.to) params.set("to", filter.to);
+  if (filter.page > 1) params.set("page", String(filter.page));
+  const qs = params.toString();
+  const path = qs ? `/manager/api/runs?${qs}` : "/manager/api/runs";
+  const r = await apiGet<AuditResult>(path);
+  return { ...r, runs: r.runs ?? [] };
 }
 
 export async function getConnectorHistory(

@@ -24,6 +24,7 @@
   import McpAuthPanel from "./McpAuthPanel.svelte";
   import McpHeadersEditor from "./McpHeadersEditor.svelte";
   import McpToolExcludeList from "./McpToolExcludeList.svelte";
+  import IconPicker from "../icon/IconPicker.svelte";
   import type { McpServerForm, McpTool } from "$lib/types.js";
 
   type Props = { serverId?: string };
@@ -227,15 +228,10 @@
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <div class="grid grid-cols-12 gap-4">
           <div class="col-span-3 sm:col-span-2">
-            <label class="block text-xs font-medium text-black-800 dark:text-black-600" for="cc-srv-icon">Icon</label>
-            <input
-              id="cc-srv-icon"
-              type="text"
-              class="mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-center text-lg outline-none focus:border-green-500"
-              placeholder="🔌"
-              value={form.icon}
-              oninput={(e) => { form.icon = (e.target as HTMLInputElement).value; invalidateTest(); }}
-            />
+            <span class="block text-xs font-medium text-black-800 dark:text-black-600">Icon</span>
+            <div class="mt-1">
+              <IconPicker value={form.icon} onChange={(v) => { form.icon = v; invalidateTest(); }} ariaLabel="Icon" />
+            </div>
           </div>
           <div class="col-span-9 sm:col-span-4">
             <span class="block text-xs font-medium text-black-800 dark:text-black-600">Label</span>

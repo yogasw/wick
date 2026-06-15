@@ -293,3 +293,86 @@ export interface McpOAuthStartResult {
 export interface McpOAuthStatusResult {
   status: string;
 }
+
+export interface JobDetail {
+  key: string;
+  name: string;
+  description: string;
+  icon: string;
+  schedule: string;
+  enabled: boolean;
+  max_runs: number;
+  max_timeout_min: number;
+  total_runs: number;
+  last_status: string;
+  can_configure: boolean;
+  fields: ConfigField[] | null;
+}
+
+export interface JobSettings {
+  schedule: string;
+  enabled: boolean;
+  max_runs: number;
+  max_timeout_min: number;
+}
+
+export interface JobRunResult {
+  id: string;
+  job_id: string;
+  status: string;
+  result: string;
+  triggered_by: string;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface ToolDetail {
+  key: string;
+  name: string;
+  description: string;
+  icon: string;
+  can_configure: boolean;
+  fields: ConfigField[] | null;
+}
+
+export interface AuditRun {
+  id: string;
+  connector_id: string;
+  connector_key: string;
+  connector_name: string;
+  operation_key: string;
+  source: string;
+  status: string;
+  user_id: string;
+  user_name: string;
+  latency_ms: number;
+  started_at: string;
+}
+
+export interface AuditSummary {
+  total: number;
+  succeeded: number;
+  errored: number;
+  avg_latency_ms: number;
+}
+
+export interface AuditResult {
+  runs: AuditRun[] | null;
+  source: string;
+  status: string;
+  from: string;
+  to: string;
+  page: number;
+  total_pages: number;
+  total: number;
+  page_size: number;
+  summary: AuditSummary;
+}
+
+export interface AuditFilter {
+  source: string;
+  status: string;
+  from: string;
+  to: string;
+  page: number;
+}

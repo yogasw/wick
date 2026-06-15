@@ -17,12 +17,19 @@
 
   type SaveState = "" | "saving" | "saved" | "error";
   type Props = {
-    connectorKey: string;
-    connectorId: string;
+    connectorKey?: string;
+    connectorId?: string;
     fields: ConfigField[];
     canConfigure: boolean;
+    save?: (key: string, value: string) => Promise<void>;
   };
-  let { connectorKey, connectorId, fields, canConfigure }: Props = $props();
+  let { connectorKey = "", connectorId = "", fields, canConfigure, save }: Props = $props();
+
+  /* Default persist hits the per-key connector config endpoint; job/tool
+     detail pages inject their own save targeting /manager/api/{jobs,tools}. */
+  function persistFn(key: string, value: string): Promise<void> {
+    return save ? save(key, value) : setConnectorConfig(connectorKey, connectorId, key, value);
+  }
 
   const DEBOUNCE_MS = 800;
   const IMMEDIATE = new Set(["dropdown", "checkbox", "bool", "boolean", "color", "date", "datetime"]);
@@ -62,7 +69,7 @@
   async function persist(key: string, value: string) {
     saveStatus = { ...saveStatus, [key]: "saving" };
     try {
-      await setConnectorConfig(connectorKey, connectorId, key, value);
+      await persistFn(key, value);
       saveStatus = { ...saveStatus, [key]: "saved" };
       if (value.trim() !== "") savedHasValue = { ...savedHasValue, [key]: true };
       setTimeout(() => {
