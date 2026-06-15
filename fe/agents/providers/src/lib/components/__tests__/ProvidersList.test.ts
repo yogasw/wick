@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ProvidersList from "../ProvidersList.svelte";
 import * as api from "$lib/api.js";
+import type { ProvidersListResponse } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
 vi.mock("@wick-fe/common-stores", () => ({
@@ -10,7 +11,7 @@ vi.mock("@wick-fe/common-stores", () => ({
   toasts: { subscribe: vi.fn(() => vi.fn()) },
 }));
 
-function makeData() {
+function makeData(): ProvidersListResponse {
   return {
     Providers: [
       {
@@ -64,6 +65,9 @@ beforeEach(() => {
   vi.mocked(api.apiMCPInstall).mockResolvedValue(undefined);
   vi.mocked(api.apiMCPUninstall).mockResolvedValue(undefined);
   vi.mocked(api.apiCreateProvider).mockResolvedValue(undefined);
+  vi.mocked(api.apiHookEnable).mockResolvedValue(undefined);
+  vi.mocked(api.apiHookDisable).mockResolvedValue(undefined);
+  vi.mocked(api.apiHookCheck).mockResolvedValue(undefined);
 });
 
 describe("ProvidersList", () => {
@@ -145,5 +149,86 @@ describe("ProvidersList", () => {
     await screen.findByText("openai/gpt4");
     fireEvent.click(screen.getByText("+ Add Custom"));
     expect(await screen.findByText("New Provider Instance")).toBeTruthy();
+  });
+});
+
+describe("ProvidersList - hook capability section", () => {
+  it("shows Enable button when gate on and intent off, calls apiHookEnable", async () => {
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "/wick" } });
+    await screen.findByText("openai/gpt4");
+    const enableBtns = screen.getAllByText("Enable");
+    fireEvent.click(enableBtns[0]);
+    expect(api.apiHookEnable).toHaveBeenCalledWith("/wick", "claude", "claude", "PreToolUse");
+  });
+
+  it("shows Disable and Test when intent on, calls apiHookDisable and apiHookCheck", async () => {
+    const d = makeData();
+    d.Providers[0].HookEnabled = { PreToolUse: true };
+    d.Providers[0].Hooks = { PreToolUse: { Supported: true, Verified: true, ProbedAt: "2024-01-01", Error: "", Scope: "global" } };
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "/wick" } });
+    await screen.findByText("openai/gpt4");
+    fireEvent.click(screen.getByText("Disable"));
+    expect(api.apiHookDisable).toHaveBeenCalledWith("/wick", "claude", "claude", "PreToolUse");
+    fireEvent.click(screen.getByText("Test"));
+    expect(api.apiHookCheck).toHaveBeenCalledWith("/wick", "claude", "claude", "PreToolUse");
+  });
+
+  it("hides hook action buttons when gate is locked (bypass)", async () => {
+    const d = makeData();
+    d.Gate = { ...d.Gate, Enabled: true, BypassLocked: true };
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    await screen.findByText("openai/gpt4");
+    expect(screen.queryByText("Enable")).toBeNull();
+    expect(screen.getAllByText("locked (bypass)").length).toBeGreaterThan(0);
+  });
+});
+
+describe("ProvidersList - active processes panel", () => {
+  it("renders the panel when LiveProcesses is non-empty", async () => {
+    const d = makeData();
+    d.LiveProcesses = [{ SessionID: "abcdef123456", AgentName: "claude", PID: 77, Lifecycle: "working", Substate: "active" }];
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    await screen.findByText("Active Processes");
+    expect(screen.getByText("abcdef12")).toBeTruthy();
+    expect(screen.getByText("77")).toBeTruthy();
+  });
+
+  it("hides the panel when LiveProcesses is empty", async () => {
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    await screen.findByText("openai/gpt4");
+    expect(screen.queryByText("Active Processes")).toBeNull();
+  });
+});
+
+describe("ProvidersList - recent spawns", () => {
+  it("renders spawn rows linking to the server-rendered detail page", async () => {
+    const d = makeData();
+    d.Spawns = [{
+      Path: "/var/spawns/spawn-xyz.log",
+      ProviderType: "claude",
+      ProviderName: "claude",
+      SessionID: "sess-12345678",
+      StartedAt: "2024-01-01 00:00:00",
+      PID: 5,
+      Origin: "web",
+      FirstUserMessage: "hello",
+      Binary: "claude",
+      ExitReason: "",
+    }];
+    vi.mocked(api.apiGetProviders).mockResolvedValue(d);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "/wick" } });
+    await screen.findByText("Recent Spawns");
+    const link = screen.getByText("2024-01-01 00:00:00").closest("a");
+    expect(link?.getAttribute("href")).toBe("/wick/providers/spawns/spawn-xyz.log");
+    expect(screen.getByText("running")).toBeTruthy();
+  });
+
+  it("shows empty state when no spawns", async () => {
+    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    await screen.findByText("openai/gpt4");
+    expect(screen.getByText("No spawns recorded yet.")).toBeTruthy();
   });
 });

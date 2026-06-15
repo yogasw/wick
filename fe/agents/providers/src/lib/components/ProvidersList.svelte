@@ -12,8 +12,13 @@
     apiMCPUninstall,
     apiDeleteProvider,
     apiCreateProvider,
+    apiHookEnable,
+    apiHookDisable,
+    apiHookCheck,
   } from "$lib/api.js";
-  import type { ProvidersListResponse, ProviderStatusDTO } from "$lib/types.js";
+  import type { ProvidersListResponse, ProviderStatusDTO, SpawnLogFileDTO } from "$lib/types.js";
+
+  const HOOK_EVENT = "PreToolUse";
 
   type Props = {
     onNavigate: (type: string, name: string) => void;
@@ -167,6 +172,57 @@
     }
   }
 
+  async function doHookEnable(p: ProviderStatusDTO): Promise<void> {
+    const key = `hook-${p.Instance.Type}-${p.Instance.Name}`;
+    setBusy(key, true);
+    try {
+      await apiHookEnable(base, p.Instance.Type, p.Instance.Name, HOOK_EVENT);
+      toastOk(`Hook enabled for ${p.Instance.Name}`);
+      await load(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Enable failed");
+    } finally {
+      setBusy(key, false);
+    }
+  }
+
+  async function doHookDisable(p: ProviderStatusDTO): Promise<void> {
+    const key = `hook-${p.Instance.Type}-${p.Instance.Name}`;
+    setBusy(key, true);
+    try {
+      await apiHookDisable(base, p.Instance.Type, p.Instance.Name, HOOK_EVENT);
+      toastOk(`Hook disabled for ${p.Instance.Name}`);
+      await load(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Disable failed");
+    } finally {
+      setBusy(key, false);
+    }
+  }
+
+  async function doHookCheck(p: ProviderStatusDTO): Promise<void> {
+    const key = `hook-${p.Instance.Type}-${p.Instance.Name}`;
+    setBusy(key, true);
+    try {
+      await apiHookCheck(base, p.Instance.Type, p.Instance.Name, HOOK_EVENT);
+      toastOk(`Probe triggered for ${p.Instance.Name}`);
+      await load(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Test failed");
+    } finally {
+      setBusy(key, false);
+    }
+  }
+
+  function spawnFile(s: SpawnLogFileDTO): string {
+    const idx = Math.max(s.Path.lastIndexOf("/"), s.Path.lastIndexOf("\\"));
+    return idx >= 0 ? s.Path.slice(idx + 1) : s.Path;
+  }
+
+  function shortID(id: string): string {
+    return id.slice(0, 8);
+  }
+
   function openAdd(): void {
     formType = data?.SupportedKeys[0] ?? "";
     formName = "";
@@ -296,6 +352,37 @@
       </div>
     </div>
 
+    {#if data.LiveProcesses.length > 0}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 flex items-center justify-between border-b border-white-300 dark:border-navy-600">
+          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Active Processes</h2>
+          <span class="rounded bg-blue-100 dark:bg-blue-900 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300">{data.LiveProcesses.length} / {data.PoolMax}</span>
+        </div>
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
+              <th class="px-5 py-2 text-left font-medium">Session</th>
+              <th class="px-5 py-2 text-left font-medium">Agent</th>
+              <th class="px-5 py-2 text-left font-medium">PID</th>
+              <th class="px-5 py-2 text-left font-medium">State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.LiveProcesses as proc (proc.SessionID)}
+              <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800">
+                <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{shortID(proc.SessionID)}</td>
+                <td class="px-5 py-2 text-black-900 dark:text-white-100">{proc.AgentName}</td>
+                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{proc.PID > 0 ? proc.PID : "—"}</td>
+                <td class="px-5 py-2">
+                  <span class="rounded px-2 py-0.5 text-xs font-medium bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600">{proc.Lifecycle || "—"}{proc.Substate ? ` · ${proc.Substate}` : ""}</span>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+
     {#if data.Providers.length === 0}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-6 py-12 text-center text-sm text-black-700 dark:text-black-600">
         No providers detected. Run Rescan all to discover installed AI providers.
@@ -305,6 +392,9 @@
         {#each data.Providers as p (`${p.Instance.Type}/${p.Instance.Name}`)}
           {@const rescanKey = `rescan-${p.Instance.Type}-${p.Instance.Name}`}
           {@const delKey = `del-${p.Instance.Type}-${p.Instance.Name}`}
+          {@const hookKey = `hook-${p.Instance.Type}-${p.Instance.Name}`}
+          {@const hc = p.Hooks[HOOK_EVENT]}
+          {@const intent = p.HookEnabled[HOOK_EVENT] === true}
           <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-3">
             <div class="flex items-start justify-between gap-3">
               <div>
@@ -352,19 +442,63 @@
                 </div>
               {/if}
             </dl>
-            <div class="pt-3 border-t border-white-300 dark:border-navy-600">
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-xs font-semibold text-black-900 dark:text-white-100">Command Gate</span>
-                {#if data.Gate.BypassLocked}
-                  <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked (bypass)</span>
-                {:else if !data.Gate.Enabled}
-                  <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked</span>
-                {:else if p.HookEnabled["PreToolUse"]}
-                  <span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100">enabled ✓</span>
-                {:else}
-                  <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">disabled</span>
+            <div class="pt-3 border-t border-white-300 dark:border-navy-600 space-y-2">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-xs font-semibold text-black-900 dark:text-white-100">Command Gate</span>
+                  {#if data.Gate.BypassLocked}
+                    <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked (bypass)</span>
+                  {:else if !data.Gate.Enabled}
+                    <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked</span>
+                  {:else if p.Probing}
+                    <span class="rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white-100 animate-pulse">testing…</span>
+                  {:else if intent && hc?.Verified}
+                    <span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100">enabled ✓</span>
+                  {:else if intent && !hc?.Verified}
+                    <span class="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white-100">enabled (unverified)</span>
+                  {:else if hc?.Verified}
+                    <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">ready</span>
+                  {:else}
+                    <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">disabled</span>
+                  {/if}
+                  {#if hc?.Scope}
+                    <span class="text-xs text-black-700 dark:text-black-600">scope: {hc.Scope}</span>
+                  {/if}
+                </div>
+                {#if data.Gate.Enabled && !data.Gate.BypassLocked}
+                  <div class="flex items-center gap-1 shrink-0">
+                    {#if p.Probing}
+                      <button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-700 dark:text-black-600 opacity-60 cursor-not-allowed">Testing…</button>
+                    {:else if intent}
+                      <button
+                        type="button"
+                        onclick={() => doHookCheck(p)}
+                        disabled={busy[hookKey]}
+                        class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50"
+                      >Test</button>
+                      <button
+                        type="button"
+                        onclick={() => doHookDisable(p)}
+                        disabled={busy[hookKey]}
+                        class="rounded-lg border border-red-400 dark:border-red-700 px-2 py-1 text-xs text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+                      >Disable</button>
+                    {:else}
+                      <button
+                        type="button"
+                        onclick={() => doHookEnable(p)}
+                        disabled={busy[hookKey]}
+                        class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600 disabled:opacity-50"
+                      >Enable</button>
+                    {/if}
+                  </div>
                 {/if}
               </div>
+              {#if hc?.Error}
+                <p class="font-mono text-xs text-red-600 dark:text-red-400 break-all">{hc.Error}</p>
+              {/if}
+              {#if hc?.ProbedAt}
+                <p class="font-mono text-xs text-black-700 dark:text-black-600">last probed: {hc.ProbedAt}</p>
+              {/if}
             </div>
             {#if !isBuiltin(p)}
               <div class="pt-2 border-t border-white-300 dark:border-navy-600">
@@ -521,6 +655,53 @@
             </div>
           {/each}
         </div>
+      {/if}
+    </div>
+
+    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+      <div class="px-5 py-3 flex items-center gap-2 border-b border-white-300 dark:border-navy-600">
+        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
+        {#if data.Spawns.length > 0}
+          <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{data.Spawns.length}</span>
+        {/if}
+      </div>
+      {#if data.Spawns.length === 0}
+        <div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
+      {:else}
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
+              <th class="px-5 py-2.5 text-left">Started</th>
+              <th class="px-5 py-2.5 text-left">Provider</th>
+              <th class="px-5 py-2.5 text-left">Session</th>
+              <th class="px-5 py-2.5 text-left">PID</th>
+              <th class="px-5 py-2.5 text-left">Status</th>
+              <th class="px-5 py-2.5 text-left">First Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.Spawns as s (s.Path)}
+              <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800">
+                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">
+                  <a href={`${base}/providers/spawns/${encodeURIComponent(spawnFile(s))}`} class="hover:underline">{s.StartedAt}</a>
+                </td>
+                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.ProviderType}/{s.ProviderName}</td>
+                <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{shortID(s.SessionID)}</td>
+                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.PID > 0 ? s.PID : "—"}</td>
+                <td class="px-5 py-2">
+                  {#if !s.ExitReason}
+                    <span class="rounded bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-xs text-green-700 dark:text-green-300">running</span>
+                  {:else if s.ExitReason === "unclean"}
+                    <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-300">unclean exit</span>
+                  {:else}
+                    <span class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-xs text-black-700 dark:text-black-600">{s.ExitReason}</span>
+                  {/if}
+                </td>
+                <td class="px-5 py-2 text-black-700 dark:text-black-600 max-w-xs truncate">{s.FirstUserMessage}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       {/if}
     </div>
   {/if}
