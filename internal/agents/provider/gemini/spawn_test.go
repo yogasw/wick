@@ -45,6 +45,28 @@ func TestSpawnerArgv(t *testing.T) {
 				"-p", "--resume", "g-123",
 			},
 		},
+		{
+			name:    "opt.ExtraArgs (instance config) forwarded",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				ExtraArgs: []string{"--model", "gemini-2.5-pro"},
+			},
+			wantArgs: []string{
+				"-p", "--model", "gemini-2.5-pro",
+			},
+		},
+		{
+			name:    "spawner ExtraArgs + opt.ExtraArgs both forwarded",
+			spawner: Spawner{ExtraArgs: []string{"--debug"}},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				ExtraArgs: []string{"--model", "gemini-2.5-pro"},
+			},
+			wantArgs: []string{
+				"-p", "--debug", "--model", "gemini-2.5-pro",
+			},
+		},
 	}
 
 	for _, tc := range cases {

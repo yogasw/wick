@@ -135,6 +135,37 @@ func TestSpawnerArgv(t *testing.T) {
 				"--ask-for-approval", "never",
 			},
 		},
+		{
+			name:    "opt.ExtraArgs (instance config) forwarded",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				ExtraArgs: []string{"--model", "o4-mini"},
+			},
+			wantArgs: []string{
+				"exec",
+				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
+				"--model", "o4-mini",
+			},
+		},
+		{
+			name:    "spawner ExtraArgs + opt.ExtraArgs both forwarded",
+			spawner: Spawner{ExtraArgs: []string{"--model", "o3"}},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				ExtraArgs: []string{"--timeout", "60"},
+			},
+			wantArgs: []string{
+				"exec",
+				"--json",
+				"--skip-git-repo-check",
+				"--sandbox", "danger-full-access",
+				"--model", "o3",
+				"--timeout", "60",
+			},
+		},
 	}
 
 	for _, tc := range cases {

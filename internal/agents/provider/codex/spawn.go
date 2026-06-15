@@ -133,6 +133,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--ask-for-approval", s.AskForApproval)
 	}
 	args = append(args, s.ExtraArgs...)
+	args = append(args, opt.ExtraArgs...)
 	if soulPath != "" {
 		// model_instructions_file points codex at our preset file as the
 		// model instructions. The earlier `instructions_files` key was

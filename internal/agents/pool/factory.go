@@ -87,6 +87,11 @@ type ClaudeFactory struct {
 	// MCPToken is the per-boot internal MCP secret forwarded to the
 	// claude spawner so agents reach the live MCP server over loopback.
 	MCPToken string
+
+	// InstanceOverride pins a specific Instance for every Build call,
+	// bypassing the provider.Find registry lookup. Tests use this to
+	// inject ExtraArgs / Env without touching userconfig files.
+	InstanceOverride *provider.Instance
 }
 
 // GateConfig describes the gate plumbing: where the wick-gate binary
@@ -208,6 +213,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// Per-instance config: spawner reads Instance.Hooks every spawn so
 	// UI toggles take effect on the next message without server restart.
 	resolvedIns, _ := provider.Find(pType, pName)
+	if f.InstanceOverride != nil {
+		resolvedIns = *f.InstanceOverride
+	}
 
 	// GateBinary path resolved once per Build. Still consulted by the
 	// legacy whitelist refresh below and threaded into every spawn so
@@ -355,6 +363,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		GateBinary: gateBin,
 		Preset:     presetContent,
 		MaxTurns:   opt.MaxTurns,
+		ExtraArgs:  resolvedIns.ExtraArgs,
+		ExtraEnv:   resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the
