@@ -10,6 +10,7 @@
   import { TextInput, Select } from "@wick-fe/common-ui";
   import FieldRow from "./FieldRow.svelte";
   import OpCard from "./OpCard.svelte";
+  import IconPicker from "../icon/IconPicker.svelte";
   import { newField, newOp, serialize } from "./draft.js";
   import type { Draft } from "$lib/types.js";
 
@@ -78,7 +79,9 @@
         <div class="grid grid-cols-12 gap-4">
           <div class="col-span-12 sm:col-span-3">
             <span class="block text-xs font-medium text-black-800 dark:text-black-600">Icon</span>
-            <TextInput value={draft.icon} onChange={(v) => set("icon", v)} placeholder="🔌" ariaLabel="Icon" class="mt-1" />
+            <div class="mt-1">
+              <IconPicker value={draft.icon} onChange={(v) => set("icon", v)} ariaLabel="Icon" />
+            </div>
           </div>
           <div class="col-span-12 sm:col-span-9">
             <span class="block text-xs font-medium text-black-800 dark:text-black-600">Key (slug, unique)</span>
