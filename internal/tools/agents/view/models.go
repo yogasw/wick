@@ -156,54 +156,6 @@ type ProjectChoiceVM struct {
 	SystemAddon     string
 }
 
-// NewSessionComposeVM feeds the ChatGPT-style compose page that
-// gathers provider/preset/project + first message before any
-// session is persisted. The session is created server-side only when
-// the form posts back with a non-empty message.
-type NewSessionComposeVM struct {
-	Layout          AgentsLayoutVM
-	Base            string
-	Providers       []ProviderChoiceVM
-	Presets         []string
-	Projects        []ProjectChoiceVM
-	DefaultProvider string
-	DefaultPreset   string
-	// ScopedProjectID locks the picker to the active project when the
-	// compose page is opened from a scoped sidebar (green "inherited" UI).
-	ScopedProjectID string
-	// DefaultProjectID is the operator's configured default project
-	// (Settings → default_project_id). When the page is NOT explicitly
-	// scoped, the picker pre-selects this so new sessions land in the
-	// preferred project by default. No green styling — it's a soft default.
-	DefaultProjectID string
-	Message          string // round-tripped on validation error
-	Error            string
-}
-
-// SelectedProjectID is the project the picker should pre-select: the
-// explicit scope wins, else the operator's configured default.
-func (vm NewSessionComposeVM) SelectedProjectID() string {
-	if vm.ScopedProjectID != "" {
-		return vm.ScopedProjectID
-	}
-	return vm.DefaultProjectID
-}
-
-// ScopedProject returns the active project choice + ok when the compose
-// page is scoped. Drives the "New session in 📁 X" heading and the
-// green "inherited" dropdown styling (mockup state ②).
-func (vm NewSessionComposeVM) ScopedProject() (ProjectChoiceVM, bool) {
-	if vm.ScopedProjectID == "" {
-		return ProjectChoiceVM{}, false
-	}
-	for _, p := range vm.Projects {
-		if p.ID == vm.ScopedProjectID {
-			return p, true
-		}
-	}
-	return ProjectChoiceVM{}, false
-}
-
 // fmtCount renders an int as a string for templ text nodes.
 func fmtCount(n int) string { return strconv.Itoa(n) }
 
@@ -231,44 +183,6 @@ type LiveProcessVM struct {
 	PID       int
 	Lifecycle string // "spawning" | "working" | "idle" | "killed"
 	Substate  string
-}
-
-// SkillFileVM is one row in skills tables.
-type SkillFileVM struct {
-	Name    string
-	IsDir   bool
-	InDirs  []string
-	Missing []string
-}
-
-// SkillsPageVM is the view model for the dedicated Skills page.
-type SkillsPageVM struct {
-	Layout AgentsLayoutVM
-	Base   string
-	Dirs   []string
-	Files  []SkillFileVM
-	Flash  string
-	Error  string
-}
-
-// SkillDetailVM is the view model for a single skill file viewer.
-type SkillDetailVM struct {
-	Layout     AgentsLayoutVM
-	Base       string
-	Filename   string
-	Content    string
-	SourcePath string
-	InDirs     []string
-}
-
-// SkillFolderVM is the view model for the folder explorer page.
-type SkillFolderVM struct {
-	Layout     AgentsLayoutVM
-	Base       string
-	FolderName string
-	Entries    []SkillFileVM
-	InDirs     []string
-	Missing    []string
 }
 
 // MCPClientStatusVM is one row in the MCP Wick card — one per detected

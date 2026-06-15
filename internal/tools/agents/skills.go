@@ -51,19 +51,11 @@ func skillsSync(c *tool.Ctx) {
 		c.Error(http.StatusForbidden, "admins only")
 		return
 	}
-	res, err := skillsync.Sync()
-	flash := ""
-	errMsg := ""
-	if err != nil {
-		errMsg = err.Error()
-	} else {
-		flash = fmt.Sprintf("Synced %d file(s), %d already up to date (hidden dirs skipped).", res.Copied, res.Skipped)
-		if len(res.Errors) > 0 {
-			flash += fmt.Sprintf(" %d error(s): %s", len(res.Errors), strings.Join(res.Errors, "; "))
-		}
+	if _, err := skillsync.Sync(); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
 	}
-	files, dirs, _ := skillsync.Status()
-	c.HTML(view.SkillsPage(buildSkillsPageVM(c, dirs, files, flash, errMsg)))
+	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
 func skillsUpload(c *tool.Ctx) {
@@ -95,29 +87,25 @@ func skillsUpload(c *tool.Ctx) {
 	}
 
 	folderName, res, err := skillsync.UploadProcessed(filename, data)
-	flash := ""
-	errMsg := ""
 	if err != nil {
-		errMsg = err.Error()
-	} else if res.Copied == 0 {
-		errMsg = fmt.Sprintf("nothing imported from %q — check the archive structure", filename)
-		if len(res.Errors) > 0 {
-			errMsg += fmt.Sprintf(" (%s)", strings.Join(res.Errors, "; "))
-		}
-	} else {
-		flash = fmt.Sprintf("Uploaded %q as skill %q to %d dir(s).", filename, folderName, res.Copied)
-		if len(res.Errors) > 0 {
-			flash += fmt.Sprintf(" %d error(s): %s", len(res.Errors), strings.Join(res.Errors, "; "))
-		}
-		if globalTagsSvc != nil && folderName != "" {
-			_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), folderName, actorID(c))
-		}
-		if globalSkillStore != nil && folderName != "" {
-			_ = globalSkillStore.Register(c.Context(), folderName, actorID(c), "")
-		}
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
 	}
-	files, dirs, _ := skillsync.Status()
-	c.HTML(view.SkillsPage(buildSkillsPageVM(c, dirs, files, flash, errMsg)))
+	if res.Copied == 0 {
+		msg := fmt.Sprintf("nothing imported from %q — check the archive structure", filename)
+		if len(res.Errors) > 0 {
+			msg += fmt.Sprintf(" (%s)", strings.Join(res.Errors, "; "))
+		}
+		c.Error(http.StatusBadRequest, msg)
+		return
+	}
+	if globalTagsSvc != nil && folderName != "" {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), folderName, actorID(c))
+	}
+	if globalSkillStore != nil && folderName != "" {
+		_ = globalSkillStore.Register(c.Context(), folderName, actorID(c), "")
+	}
+	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
 func skillDetail(c *tool.Ctx) {
@@ -181,49 +169,6 @@ func skillEntrySync(c *tool.Ctx) {
 		return nil
 	})
 	c.Redirect(c.Base()+"/skills/"+name, http.StatusSeeOther)
-}
-
-func skillDetailByPath(c *tool.Ctx, name string) {
-	entries, presentIn, _ := skillsync.ListDir(name)
-	if len(presentIn) > 0 {
-		// It's a folder — render folder explorer
-		_, allDirs, _ := skillsync.Status()
-		missing := dirsNotIn(allDirs, presentIn)
-		vm := view.SkillFolderVM{
-			Layout:     sidebarVM(c, "skills", ""),
-			Base:       c.Base(),
-			FolderName: name,
-			InDirs:     presentIn,
-			Missing:    missing,
-		}
-		for _, e := range entries {
-			vm.Entries = append(vm.Entries, view.SkillFileVM{
-				Name:    e.Name,
-				IsDir:   e.IsDir,
-				InDirs:  e.Sources,
-				Missing: e.Missing,
-			})
-		}
-		c.HTML(view.SkillFolderPage(vm))
-		return
-	}
-
-	// File viewer
-	data, srcPath, err := skillsync.ReadFile(name)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-	_, dirs, _ := skillsync.Status()
-	inDirs := dirsContaining(dirs, name)
-	c.HTML(view.SkillDetailPage(view.SkillDetailVM{
-		Layout:     sidebarVM(c, "skills", ""),
-		Base:       c.Base(),
-		Filename:   name,
-		Content:    string(data),
-		SourcePath: srcPath,
-		InDirs:     inDirs,
-	}))
 }
 
 func skillDelete(c *tool.Ctx) {
@@ -403,25 +348,6 @@ func skillProviderSync(c *tool.Ctx) {
 	})
 
 	c.Redirect(c.Base()+"/skills/"+provider+"/"+filepath.ToSlash(cleanPath), http.StatusSeeOther)
-}
-
-func buildSkillsPageVM(c *tool.Ctx, dirs []string, files []skillsync.SkillFile, flash, errMsg string) view.SkillsPageVM {
-	vm := view.SkillsPageVM{
-		Layout: sidebarVM(c, "skills", ""),
-		Base:   c.Base(),
-		Dirs:   dirs,
-		Flash:  flash,
-		Error:  errMsg,
-	}
-	for _, f := range files {
-		vm.Files = append(vm.Files, view.SkillFileVM{
-			Name:    f.Name,
-			IsDir:   f.IsDir,
-			InDirs:  f.Sources,
-			Missing: f.Missing,
-		})
-	}
-	return vm
 }
 
 func dirsContaining(dirs []string, filename string) []string {
