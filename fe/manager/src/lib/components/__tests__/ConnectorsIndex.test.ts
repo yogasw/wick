@@ -2,9 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ConnectorsIndex from "../ConnectorsIndex.svelte";
 import * as api from "$lib/api.js";
+import * as router from "$lib/router.js";
 import type { ConnectorDef } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
+vi.mock("$lib/router.js", async () => {
+  const actual = await vi.importActual<typeof import("$lib/router.js")>("$lib/router.js");
+  return { ...actual, push: vi.fn() };
+});
 
 function makeData(): ConnectorDef[] {
   return [
@@ -62,5 +67,23 @@ describe("ConnectorsIndex", () => {
     vi.mocked(api.listConnectors).mockRejectedValueOnce(new Error("boom"));
     render(ConnectorsIndex);
     expect(await screen.findByText("boom")).toBeTruthy();
+  });
+
+  it("opens the New connector menu and navigates to the paste flow", async () => {
+    vi.mocked(router.push).mockClear();
+    render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    await fireEvent.click(screen.getByRole("button", { name: "＋ New connector" }));
+    await fireEvent.click(await screen.findByText("From paste"));
+    expect(router.push).toHaveBeenCalledWith("/custom/paste");
+  });
+
+  it("navigates to the manual flow from the New connector menu", async () => {
+    vi.mocked(router.push).mockClear();
+    render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    await fireEvent.click(screen.getByRole("button", { name: "＋ New connector" }));
+    await fireEvent.click(await screen.findByText("Blank / manual"));
+    expect(router.push).toHaveBeenCalledWith("/custom/manual");
   });
 });

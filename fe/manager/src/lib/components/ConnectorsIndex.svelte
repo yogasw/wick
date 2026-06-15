@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { TextInput } from "@wick-fe/common-ui";
+  import { Button, TextInput } from "@wick-fe/common-ui";
   import { listConnectors } from "$lib/api.js";
   import { push } from "$lib/router.js";
   import type { ConnectorDef } from "$lib/types.js";
@@ -10,6 +10,18 @@
 
   let query = $state("");
   let activeCategory = $state("all");
+  let newMenuOpen = $state(false);
+
+  function go(path: string) {
+    newMenuOpen = false;
+    push(path);
+  }
+
+  /* MCP server registration stays on the legacy templ form for now. */
+  function openMCPServer() {
+    newMenuOpen = false;
+    window.location.href = "/manager/connectors/custom/mcp-servers";
+  }
 
   let categories = $derived(
     Array.from(new Set(connectors.map((c) => c.category).filter(Boolean))).sort(),
@@ -64,6 +76,34 @@
 <div class="space-y-6">
   <div class="flex items-center justify-between gap-4">
     <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Connectors</h1>
+    <div class="relative">
+      <Button size="lg" onclick={() => (newMenuOpen = !newMenuOpen)}>＋ New connector</Button>
+      {#if newMenuOpen}
+        <div class="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-2 shadow-lg">
+          <button type="button" class="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800" onclick={() => go("/custom/paste")}>
+            <span class="text-lg" aria-hidden="true">📋</span>
+            <span class="min-w-0">
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">From paste</span>
+              <span class="block text-xs text-black-700 dark:text-black-600">Paste a cURL (or anything, via AI) — wick extracts the fields</span>
+            </span>
+          </button>
+          <button type="button" class="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800" onclick={openMCPServer}>
+            <span class="text-lg" aria-hidden="true">🔌</span>
+            <span class="min-w-0">
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">From MCP server</span>
+              <span class="block text-xs text-black-700 dark:text-black-600">HTTP MCP — pick tools to import</span>
+            </span>
+          </button>
+          <button type="button" class="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800" onclick={() => go("/custom/manual")}>
+            <span class="text-lg" aria-hidden="true">✎</span>
+            <span class="min-w-0">
+              <span class="block text-sm font-medium text-black-900 dark:text-white-100">Blank / manual</span>
+              <span class="block text-xs text-black-700 dark:text-black-600">Build Meta + Configs + Operations by hand</span>
+            </span>
+          </button>
+        </div>
+      {/if}
+    </div>
   </div>
 
   {#if loading}

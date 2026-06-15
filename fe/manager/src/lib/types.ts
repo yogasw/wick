@@ -160,3 +160,69 @@ export interface HistoryFilter {
   user: string;
   page: number;
 }
+
+export interface DraftField {
+  key: string;
+  widget: string;
+  options: string;
+  secret: boolean;
+  required: boolean;
+  default: string;
+  desc: string;
+}
+
+export interface DraftOpRequest {
+  method: string;
+  url_template: string;
+  headers: Record<string, string>;
+  body_template: string;
+  content_type: string;
+}
+
+export interface DraftMCPSource {
+  server_id: string;
+  tool_name: string;
+}
+
+export interface DraftOp {
+  key: string;
+  name: string;
+  description: string;
+  destructive: boolean;
+  inputs: DraftField[];
+  request?: DraftOpRequest;
+  mcp_source?: DraftMCPSource;
+}
+
+export interface Draft {
+  key: string;
+  name: string;
+  description: string;
+  icon: string;
+  source: string;
+  category: string;
+  single: boolean;
+  allow_session_config: boolean;
+  health_op: string;
+  health_expect: string;
+  configs: DraftField[];
+  ops: DraftOp[];
+}
+
+export interface CustomMeta {
+  ai_providers: string[];
+  categories: string[];
+}
+
+export interface CustomDraftResult {
+  def_id: string;
+  disabled: boolean;
+  mcp: boolean;
+  draft: Draft | null;
+}
+
+export interface SaveDraftResult {
+  redirect?: string;
+  ok?: boolean;
+  reload_error?: string;
+}

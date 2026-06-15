@@ -7,6 +7,9 @@
   import ConnectorDetail from "$lib/components/ConnectorDetail.svelte";
   import ConnectorTest from "$lib/components/ConnectorTest.svelte";
   import ConnectorHistory from "$lib/components/ConnectorHistory.svelte";
+  import CustomPaste from "$lib/components/custom/CustomPaste.svelte";
+  import CustomManual from "$lib/components/custom/CustomManual.svelte";
+  import CustomReview from "$lib/components/custom/CustomReview.svelte";
 
   let currentRoute = $state(get(route));
   $effect(() => {
@@ -14,18 +17,32 @@
     return unsub;
   });
 
+  let pasteRoute = $derived(currentRoute === "/custom/paste");
+  let manualRoute = $derived(currentRoute === "/custom/manual");
+  let reviewRoute = $derived(currentRoute === "/custom/review");
+  let editParams = $derived(match("/custom/:defID/edit", currentRoute));
   let testParams = $derived(match("/connectors/:key/:id/test", currentRoute));
   let historyParams = $derived(match("/connectors/:key/:id/history", currentRoute));
   let detailParams = $derived(match("/connectors/:key/:id", currentRoute));
   let listParams = $derived(match("/connectors/:key", currentRoute));
 
   let rowCrumb = $derived(testParams ?? historyParams ?? detailParams);
+  let customCrumb = $derived.by(() => {
+    if (pasteRoute) return "From paste";
+    if (manualRoute) return "Manual builder";
+    if (reviewRoute) return "Review";
+    if (editParams) return "Edit definition";
+    return "";
+  });
 </script>
 
 <AppShell>
   {#snippet breadcrumb()}
     <button type="button" class="hover:text-green-600" onclick={() => push("/")}>Connectors</button>
-    {#if listParams}
+    {#if customCrumb}
+      <span aria-hidden="true"> / </span>
+      <span class="text-black-900 dark:text-white-100">{customCrumb}</span>
+    {:else if listParams}
       <span aria-hidden="true"> / </span>
       <span class="text-black-900 dark:text-white-100">{listParams.key}</span>
     {:else if rowCrumb}
@@ -42,7 +59,15 @@
     {/if}
   {/snippet}
   {#key currentRoute}
-    {#if testParams}
+    {#if pasteRoute}
+      <CustomPaste />
+    {:else if manualRoute}
+      <CustomManual />
+    {:else if reviewRoute}
+      <CustomReview />
+    {:else if editParams}
+      <CustomReview defID={editParams.defID} />
+    {:else if testParams}
       <ConnectorTest connectorKey={testParams.key} connectorId={testParams.id} />
     {:else if historyParams}
       <ConnectorHistory connectorKey={historyParams.key} connectorId={historyParams.id} />
