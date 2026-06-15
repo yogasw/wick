@@ -62,12 +62,12 @@
     {#if (data.entries ?? []).length === 0}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-6 py-12 text-center text-sm text-black-700 dark:text-black-600">Folder is empty.</div>
     {:else}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <table class="w-full text-sm">
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-x-auto">
+        <table class="w-full min-w-[28rem] text-sm">
           <thead>
             <tr class="border-b border-white-300 dark:border-navy-600 text-xs font-medium text-black-700 dark:text-black-600 uppercase tracking-wide">
-              <th class="px-5 py-3 text-left">Name</th>
-              <th class="px-5 py-3 text-left">Present In</th>
+              <th class="px-3 sm:px-5 py-3 text-left">Name</th>
+              <th class="px-3 sm:px-5 py-3 text-left">Present In</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-white-300 dark:divide-navy-600">
@@ -80,7 +80,7 @@
                 onclick={() => onOpenChild(childPath)}
                 onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenChild(childPath); } }}
               >
-                <td class="px-5 py-3">
+                <td class="px-3 sm:px-5 py-3">
                   <div class="flex items-center gap-2">
                     {#if entry.is_dir}
                       <svg class="w-4 h-4 text-amber-500 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
@@ -91,7 +91,7 @@
                     {/if}
                   </div>
                 </td>
-                <td class="px-5 py-3">
+                <td class="px-3 sm:px-5 py-3">
                   <div class="flex flex-wrap gap-1">
                     {#each entry.in_dirs as dir}
                       <span class="rounded-full bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400" title={dir}>{dirLabel(dir)}</span>
@@ -110,7 +110,7 @@
   {:else if data}
     <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden flex flex-col" style="min-height: calc(100vh - 160px)">
       <div class="px-4 py-2 border-b border-white-300 dark:border-navy-600 text-xs text-black-600 dark:text-black-500 shrink-0">{data.source_path}</div>
-      <div class="px-5 py-4 space-y-1 overflow-x-auto flex-1">
+      <div class="px-3 sm:px-5 py-4 space-y-1 overflow-x-auto flex-1">
         {@html renderMarkdown(data.content ?? "")}
       </div>
     </div>

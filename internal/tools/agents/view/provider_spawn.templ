@@ -1,0 +1,111 @@
+package view
+
+import (
+	"fmt"
+	"strings"
+)
+
+// ProviderSpawnDetail renders the event timeline of one spawn log file.
+templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
+	@AgentsLayout(vm.Layout) {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<div>
+					<h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Spawn Log</h1>
+					<p class="text-xs text-black-700 dark:text-black-600 mt-0.5 font-mono">{ vm.File.ProviderType }/{ vm.File.ProviderName } · session { shortID(vm.File.SessionID) } · { vm.File.StartedAt.Local().Format("2006-01-02 15:04:05") }</p>
+				</div>
+				<a href={ templ.SafeURL(vm.Base + "/providers") } class="text-xs text-green-600 dark:text-green-400 hover:underline">← Back</a>
+			</div>
+			if vm.SessionDeleted {
+				<div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 flex items-start gap-2">
+					<span class="text-amber-600 dark:text-amber-400 text-sm">⚠</span>
+					<p class="text-xs text-amber-800 dark:text-amber-300">This session has been <strong>deleted</strong>. This is a historical spawn log — its session and the <code class="font-mono">cwd</code> path below may no longer exist.</p>
+				</div>
+			}
+			if vm.File.Binary != "" || len(vm.File.Argv) > 0 {
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-4 space-y-2">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Reproduce</h2>
+					<p class="text-xs text-black-700 dark:text-black-600">Copy this exact command to reproduce the spawn outside wick.</p>
+					<pre class="font-mono text-xs bg-white-200 dark:bg-navy-800 rounded-md p-3 text-black-900 dark:text-white-100 whitespace-pre-wrap break-all select-all">{ shellCommand(vm.File.Binary, vm.File.Argv) }</pre>
+				</div>
+			}
+			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+				if len(vm.Events) == 0 {
+					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No events.</div>
+				} else {
+					<ul class="divide-y divide-white-300 dark:divide-navy-600">
+						for _, ev := range vm.Events {
+							<li class="px-5 py-3">
+								<div class="flex items-center gap-3">
+									<span class="font-mono text-xs text-black-700 dark:text-black-600">{ ev.At.Local().Format("15:04:05.000") }</span>
+									<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-900 dark:text-white-100">{ ev.Type }</span>
+									if ev.ExitReason != "" {
+										<span class="text-xs text-black-800 dark:text-black-600">{ ev.ExitReason }</span>
+									}
+									if ev.DurationMs > 0 {
+										<span class="text-xs text-black-700 dark:text-black-600">{ fmt.Sprintf("%dms", ev.DurationMs) }</span>
+									}
+								</div>
+								if ev.Error != "" {
+									<p class="mt-1 font-mono text-xs text-red-600 dark:text-red-400 break-all">{ ev.Error }</p>
+								}
+								if ev.Workspace != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">cwd: { ev.Workspace }</p>
+								}
+								if ev.ResumeID != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">resume: { ev.ResumeID }</p>
+								}
+								if ev.PID != 0 {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600">pid: { fmt.Sprintf("%d", ev.PID) }</p>
+								}
+								if ev.Binary != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">bin: { ev.Binary }</p>
+								}
+								if len(ev.Args) > 0 {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">args: { strings.Join(ev.Args, " ") }</p>
+								}
+								if ev.FirstUserMessage != "" {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">msg: { ev.FirstUserMessage }</p>
+								}
+							</li>
+						}
+					</ul>
+				}
+			</div>
+		</div>
+	}
+}
+
+// shellCommand renders binary + argv as a copy-pasteable shell line.
+func shellCommand(binary string, argv []string) string {
+	parts := make([]string, 0, len(argv)+1)
+	parts = append(parts, shellQuote(binary))
+	for _, a := range argv {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := true
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.' || r == '/' || r == ':' || r == ',' || r == '=' || r == '@' || r == '+' || r == '%':
+		default:
+			safe = false
+		}
+		if !safe {
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

@@ -169,8 +169,6 @@ func AskUsers() *askuser.Manager { return globalAskUsers }
 
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
-	r.Static("/static/", StaticFS)
-
 	// Svelte SPA shell + assets for the workflow editor.
 	registerSPA(r)
 	registerSPAWorkflows(r)
@@ -514,37 +512,6 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 // projectChoices builds the picker rows for the compose form / move menu
 // from the registry projects, ordered by display name. Non-admin users only
 // see their own personal project.
-func projectChoices(c *tool.Ctx) []view.ProjectChoiceVM {
-	ids := globalMgr.Registry().ProjectIDs()
-	projects := globalMgr.Registry().Projects()
-	u := login.GetUser(c.Context())
-	out := make([]view.ProjectChoiceVM, 0, len(ids))
-	for _, id := range ids {
-		p, ok := projects[id]
-		if !ok {
-			continue
-		}
-		if u != nil && !u.IsAdmin() {
-			if globalTagsSvc != nil {
-				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, id)
-				if !owns {
-					continue
-				}
-			} else if p.Meta.OwnerUserID != "" && p.Meta.OwnerUserID != u.ID {
-				continue
-			}
-		}
-		out = append(out, view.ProjectChoiceVM{
-			ID:              id,
-			Name:            p.Meta.Name,
-			Icon:            p.Meta.Icon,
-			DefaultPreset:   p.Meta.Defaults.Preset,
-			DefaultProvider: p.Meta.Defaults.Provider,
-		})
-	}
-	return out
-}
-
 // createSessionQuick creates a session with defaults (no form) and redirects.
 func createSessionQuick(c *tool.Ctx) {
 	if notReady(c) {
@@ -756,66 +723,25 @@ func startNewSession(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
 
-// renderCompose is the shared body of newSessionCompose / startNewSession's
-// validation branches. message and errMsg are round-tripped so a failed
-// submit keeps the user's text and surfaces the reason inline.
-func renderCompose(c *tool.Ctx, message, errMsg string) {
-	providers := providerChoicesCached(c.Context())
-	defaultProv := ""
-	if len(providers) > 0 {
-		defaultProv = providers[0].Type
-	}
+// renderCompose re-renders the new-session SPA shell after a failed
+// startNewSession submit. The SPA owns compose state client-side, so
+// message/errMsg are accepted for call-site compatibility only.
+func renderCompose(c *tool.Ctx, _, _ string) {
 	scoped := c.Query("project")
 	if scoped != "" {
 		if _, ok := globalMgr.Registry().Project(scoped); !ok {
 			scoped = ""
 		}
 	}
-	// No explicit ?project= → land on the user's pinned project (their
-	// personal default). Opening the agents tool drops straight into it.
-	// The compose picker still lets them pick "— no project —" per-session.
 	if scoped == "" {
 		scoped = pinnedProjectID(c)
 	}
-	// Scope the sidebar too so the compose page keeps the breadcrumb +
-	// filtered Recent when opened from a scoped project (mockup ②).
 	layout := sidebarVMScoped(c, "new", "", scoped)
 	layout.FullBleed = true
-	// When not explicitly scoped, fall back to the operator's configured
-	// default project (Settings → default_project_id) as a soft default.
-	configuredDefault := ""
-	if globalConfigs != nil {
-		configuredDefault = globalConfigs.GetOwned("agents", "default_project_id")
-	}
-	// effective = the project whose defaults prefill provider/preset.
-	effective := scoped
-	if effective == "" {
-		effective = configuredDefault
-	}
-	defaultPreset := ""
-	if effective != "" {
-		if p, ok := globalMgr.Registry().Project(effective); ok {
-			if p.Meta.Defaults.Provider != "" {
-				defaultProv = p.Meta.Defaults.Provider
-			}
-			defaultPreset = p.Meta.Defaults.Preset
-		} else if effective == configuredDefault {
-			// Stale configured default (project deleted) — ignore.
-			configuredDefault = ""
-		}
-	}
-	c.HTML(view.NewSessionCompose(view.NewSessionComposeVM{
-		Layout:           layout,
-		Base:             c.Base(),
-		Providers:        providers,
-		Presets:          globalMgr.Registry().PresetNames(),
-		Projects:         projectChoices(c),
-		DefaultProvider:  defaultProv,
-		DefaultPreset:    defaultPreset,
-		ScopedProjectID:  scoped,
-		DefaultProjectID: configuredDefault,
-		Message:          message,
-		Error:            errMsg,
+	c.HTML(view.NewSessionSPA(view.NewSessionSPAVM{
+		Layout:   layout,
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("new-session"),
 	}))
 }
 
@@ -1661,11 +1587,6 @@ func presetDetail(c *tool.Ctx) {
 		Base:     c.Base(),
 		AssetURL: spaAssetURL("presets"),
 	}))
-}
-
-type presetReq struct {
-	Name string `json:"name"`
-	Body string `json:"body"`
 }
 
 func createPreset(c *tool.Ctx) {
