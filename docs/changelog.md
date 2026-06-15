@@ -11,6 +11,9 @@ All notable changes to Wick are documented here.
 *   **Providers list: Active Processes panel** — when any agent is running, a table above the provider cards shows every live spawn (session ID, agent name, PID, lifecycle/substate). Hidden when the pool is empty.
 *   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
 
+### Changed
+*   **Manager UI rebuilt as a Svelte SPA** — the connector manager at `/manager/*` is now served as a Svelte single-page application rendered inside the host chrome (shared header, theme, user menu), replacing the previous server-rendered templ pages. URLs, features, and the full `/manager/api/*` surface are unchanged.
+
 ### Fixed
 *   **Connector operation toggle no longer silently no-ops on first disable** — `SetOperation` in the connector repo was using `db.Save()` which resolves to an `UPDATE` when the primary key is set, leaving a missing row untouched (and `Enabled=false` was dropped as a zero-value on struct insert). Rewritten as a GORM `OnConflict` upsert with a map payload so the `enabled` column is always written verbatim. Affects both the legacy admin UI and the new manager SPA.
 *   **Starting a new agents session no longer fails with 405** — tool root routes now accept POST/DELETE on the trailing-slash form (`/tools/{key}/`), not just GET. The new-session and conversation SPA POSTs to `${base}/` to create a session, which previously matched a GET-only pattern and returned 405 on Send.
