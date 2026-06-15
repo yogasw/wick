@@ -10,6 +10,32 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.5](https://github.com/yogasw/wick/compare/v0.18.4...v0.18.5) — PWA Notifications
+
+_Released on 2026-06-15_
+
+### Improved
+*   Broadcast in-app lifecycle push notifications to all open tabs, ensuring exactly one OS notification is surfaced per push. Repeated pushes are collapsed into a single OS surface using a unique tag to prevent spam.
+*   De-duplicate in-app cards by push tag, replacing existing cards instead of stacking.
+*   Synchronize dismissals across tabs: Dismissing an in-app card in one tab now clears the same card in all other open tabs and closes the shared OS notification. Auto-dismiss and remote dismiss actions only clear the local card.
+
+---
+
+
+## [v0.18.4](https://github.com/yogasw/wick/compare/v0.18.3...v0.18.4) — PWA Improvements
+
+_Released on 2026-06-15_
+
+### Fixed
+*   **PWA Push Notifications**: The PWA push notification handler no longer suppresses OS notifications when any same-origin window is open. Notifications are now surfaced unless a visible PWA window is already on the push's target path, ensuring users receive notifications even with background or different-page tabs open.
+*   **PWA Fetch Handler**: Resolved an issue where the PWA fetch handler could throw 'Failed to convert value to Response' by intercepting cross-origin requests and resolving `respondWith()` with `undefined`. The handler now explicitly skips cross-origin requests and always returns a valid Response.
+
+### Improved
+*   **PWA Notification Badge**: Added a dedicated monochrome white-silhouette notification badge (`icon-badge.png`) for Android devices. This prevents the full-color icon from being collapsed into a white blob when masked by Android's badge rendering.
+
+---
+
+
 ## [v0.18.3](https://github.com/yogasw/wick/compare/v0.18.2...v0.18.3) — Workflows & Connectors
 
 _Released on 2026-06-14_
