@@ -32,6 +32,20 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 
 	mux.Handle("GET /manager/connectors", auth(h.connectorsIndexPage))
 	mux.Handle("GET /manager/api/connectors", auth(h.apiConnectors))
+
+	// JSON read/write surface for the manager SPA (Phase 2). Mirrors the
+	// templ /manager/connectors/* routes below but speaks JSON, reusing the
+	// same services + permission gates. The templ routes stay intact for
+	// coexistence during the migration.
+	mux.Handle("GET /manager/api/connectors/{key}", auth(h.apiConnectorRows))
+	mux.Handle("GET /manager/api/connectors/{key}/{id}", auth(h.apiConnectorDetail))
+	mux.Handle("POST /manager/api/connectors/{key}/new", auth(h.apiCreateConnectorRow))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/label", auth(h.apiSetConnectorLabel))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
+
 	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
 	mux.Handle("GET /manager/connectors/{key}/{id}", auth(h.connectorDetailPage))
