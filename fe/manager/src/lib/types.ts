@@ -58,6 +58,20 @@ export interface ConnectorOp {
   enabled: boolean;
   system_disabled: boolean;
   system_disabled_reason: string;
+  admin_only: boolean;
+}
+
+export interface ConnectorAccount {
+  id: string;
+  display_name: string;
+  wick_user_id: string;
+  disabled_ops: string[] | null;
+  can_manage: boolean;
+}
+
+export interface ConnectorOAuthMeta {
+  display_name: string;
+  start_url: string;
 }
 
 export interface ConnectorDetail {
@@ -70,8 +84,17 @@ export interface ConnectorDetail {
   rate_limit_rpm: number;
   has_health_check: boolean;
   can_configure: boolean;
+  is_admin: boolean;
   fields: ConfigField[] | null;
   operations: ConnectorOp[] | null;
+  accounts: ConnectorAccount[] | null;
+  oauth: ConnectorOAuthMeta | null;
+  enable_sso: boolean;
+  multi_account: boolean;
+  allow_others_connect_sso: boolean;
+  allow_others_configure: boolean;
+  session_config_capable: boolean;
+  session_config_allowed: boolean;
 }
 
 export interface HealthCheckResult {

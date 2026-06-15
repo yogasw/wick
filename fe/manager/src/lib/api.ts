@@ -63,7 +63,12 @@ export async function getConnector(key: string): Promise<ConnectorList> {
 
 export async function getConnectorRow(key: string, id: string): Promise<ConnectorDetail> {
   const r = await apiGet<ConnectorDetail>(rowBase(key, id));
-  return { ...r, fields: r.fields ?? [], operations: r.operations ?? [] };
+  return {
+    ...r,
+    fields: r.fields ?? [],
+    operations: r.operations ?? [],
+    accounts: r.accounts ?? [],
+  };
 }
 
 export async function createConnectorRow(key: string): Promise<string> {
@@ -95,6 +100,100 @@ export async function deleteConnectorRow(key: string, id: string): Promise<void>
 
 export async function runHealthCheck(key: string, id: string): Promise<HealthCheckResult> {
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
+}
+
+/* Per-row admin controls (Phase 7a). Each POSTs JSON to a /manager/api
+   twin of the legacy templ form-post route, reusing the same services +
+   permission gates server-side. */
+
+export async function setConnectorRateLimit(key: string, id: string, rpm: number): Promise<number> {
+  const r = await apiPost<{ rate_limit_rpm: number }>(`${rowBase(key, id)}/rate-limit`, { rpm });
+  return r.rate_limit_rpm;
+}
+
+export async function duplicateConnectorRow(key: string, id: string): Promise<string> {
+  const r = await apiPost<{ id: string }>(`${rowBase(key, id)}/duplicate`);
+  return r.id;
+}
+
+export interface AccessPolicy {
+  allow_others_configure: boolean;
+  allow_others_connect_sso: boolean;
+  enable_sso: boolean;
+  multi_account: boolean;
+}
+
+export async function setConnectorAccessPolicy(
+  key: string,
+  id: string,
+  policy: AccessPolicy,
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/access-policy`, policy);
+}
+
+export async function setConnectorSessionConfig(
+  key: string,
+  id: string,
+  allow: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ allow_session_config: boolean }>(`${rowBase(key, id)}/session-config`, {
+    allow_session_config: allow,
+  });
+  return r.allow_session_config;
+}
+
+export async function toggleConnectorOperation(
+  key: string,
+  id: string,
+  opKey: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ enabled: boolean }>(
+    `${rowBase(key, id)}/operations/${encodeURIComponent(opKey)}`,
+    { enabled },
+  );
+  return r.enabled;
+}
+
+export async function bulkToggleOperations(
+  key: string,
+  id: string,
+  enabled: boolean,
+  ops: string[] = [],
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/operations/bulk`, { enabled, ops });
+}
+
+export async function toggleOperationAdminOnly(
+  key: string,
+  id: string,
+  opKey: string,
+  adminOnly: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ admin_only: boolean }>(
+    `${rowBase(key, id)}/operations/${encodeURIComponent(opKey)}/admin-only`,
+    { admin_only: adminOnly },
+  );
+  return r.admin_only;
+}
+
+export async function disconnectConnectorAccount(
+  key: string,
+  id: string,
+  accountId: string,
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/accounts/${encodeURIComponent(accountId)}/disconnect`);
+}
+
+export async function setAccountDisabledOps(
+  key: string,
+  id: string,
+  accountId: string,
+  disabledOps: string[],
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/accounts/${encodeURIComponent(accountId)}/ops`, {
+    disabled_ops: disabledOps,
+  });
 }
 
 export async function getTestMeta(key: string, id: string): Promise<TestMeta> {
