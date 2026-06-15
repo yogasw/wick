@@ -226,3 +226,70 @@ export interface SaveDraftResult {
   ok?: boolean;
   reload_error?: string;
 }
+
+export interface McpHeaderRow {
+  key: string;
+  value: string;
+  secret?: boolean;
+}
+
+export interface McpSSOExtra {
+  audience?: string;
+  ttl_seconds?: number;
+}
+
+export interface McpOAuthExtra {
+  client_id?: string;
+  client_secret?: string;
+  scopes?: string;
+}
+
+export interface McpServerForm {
+  label: string;
+  icon: string;
+  description: string;
+  url: string;
+  auth_scheme: string;
+  auth_secret: string;
+  auth_headers: McpHeaderRow[];
+  headers: McpHeaderRow[];
+  sso: McpSSOExtra;
+  oauth: McpOAuthExtra;
+  excluded: string[];
+  oauth_login_id: string;
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+}
+
+export interface McpTestResult {
+  ok: boolean;
+  tools?: McpTool[];
+  latency_ms?: number;
+  error?: string;
+  needs_login?: boolean;
+  server_name?: string;
+}
+
+export interface McpServerInfo {
+  def_id: string;
+  disabled: boolean;
+}
+
+export interface McpServerFormResult {
+  id: string;
+  form: McpServerForm;
+  tools: McpTool[];
+  info: McpServerInfo | null;
+}
+
+export interface McpOAuthStartResult {
+  auth_url: string;
+  login_id: string;
+}
+
+export interface McpOAuthStatusResult {
+  status: string;
+}

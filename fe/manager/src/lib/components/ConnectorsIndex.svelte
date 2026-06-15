@@ -17,12 +17,6 @@
     push(path);
   }
 
-  /* MCP server registration stays on the legacy templ form for now. */
-  function openMCPServer() {
-    newMenuOpen = false;
-    window.location.href = "/manager/connectors/custom/mcp-servers";
-  }
-
   let categories = $derived(
     Array.from(new Set(connectors.map((c) => c.category).filter(Boolean))).sort(),
   );
@@ -87,7 +81,7 @@
               <span class="block text-xs text-black-700 dark:text-black-600">Paste a cURL (or anything, via AI) — wick extracts the fields</span>
             </span>
           </button>
-          <button type="button" class="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800" onclick={openMCPServer}>
+          <button type="button" class="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800" onclick={() => go("/custom/mcp")}>
             <span class="text-lg" aria-hidden="true">🔌</span>
             <span class="min-w-0">
               <span class="block text-sm font-medium text-black-900 dark:text-white-100">From MCP server</span>

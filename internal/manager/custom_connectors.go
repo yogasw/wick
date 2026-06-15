@@ -42,6 +42,9 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	// Mirrors the templ flows below but speaks JSON; the templ routes stay
 	// for coexistence during the migration.
 	h.customConnectorAPIRoutes(mux, authMidd)
+	// JSON read for the SPA MCP server form (edit-mode prefill). The
+	// test/save/oauth endpoints below already speak JSON and are reused.
+	h.customMCPServerAPIRoutes(mux, authMidd)
 
 	// Definition builder flows.
 	mux.Handle("GET /manager/connectors/custom/new/paste", authOnly(h.customPastePage))

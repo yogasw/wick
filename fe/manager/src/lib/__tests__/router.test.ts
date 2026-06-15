@@ -83,4 +83,24 @@ describe("match", () => {
     expect(match("/custom/:defID/edit", "/custom/manual")).toBeNull();
     expect(match("/custom/:defID/edit", "/custom/review")).toBeNull();
   });
+
+  it("extracts serverID from the MCP edit route", () => {
+    expect(match("/custom/mcp/:serverID/edit", "/custom/mcp/srv-123/edit")).toEqual({
+      serverID: "srv-123",
+    });
+  });
+
+  it("does not match the MCP edit route against the new MCP route", () => {
+    expect(match("/custom/mcp/:serverID/edit", "/custom/mcp")).toBeNull();
+  });
+
+  it("does not match the def edit route against the MCP new route", () => {
+    /* /custom/mcp is 2 segments; /custom/:defID/edit is 3 — no overlap. */
+    expect(match("/custom/:defID/edit", "/custom/mcp")).toBeNull();
+  });
+
+  it("does not match the def edit route against the MCP edit route", () => {
+    /* /custom/mcp/:serverID/edit is 4 segments; /custom/:defID/edit is 3. */
+    expect(match("/custom/:defID/edit", "/custom/mcp/srv-123/edit")).toBeNull();
+  });
 });
