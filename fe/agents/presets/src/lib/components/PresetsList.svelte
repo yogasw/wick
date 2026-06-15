@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Button, TextInput, TextArea } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { listPresets, createPreset, deletePreset } from "$lib/api.js";
   import type { PresetItem } from "$lib/types.js";
@@ -84,37 +84,28 @@
       <form onsubmit={handleCreate} class="space-y-4">
         <div>
           <label for="create-name" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
-          <input
+          <TextInput
             id="create-name"
-            type="text"
-            bind:value={createName}
             required
+            value={createName}
+            onChange={(v) => (createName = v)}
             placeholder="e.g. reviewer"
-            class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
           />
         </div>
         <div>
           <label for="create-body" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">System prompt</label>
-          <textarea
+          <TextArea
             id="create-body"
-            bind:value={createBody}
             rows={8}
             maxlength={10000}
+            value={createBody}
+            onChange={(v) => (createBody = v)}
             placeholder="You are a code reviewer. Focus on clarity, performance, and correctness…"
-            class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none resize-y"
-          ></textarea>
+          />
         </div>
         <div class="flex justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onclick={() => { showCreate = false; }}
-            class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-          >Cancel</button>
-          <button
-            type="submit"
-            disabled={creating}
-            class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors disabled:opacity-50"
-          >{creating ? "Creating…" : "Create"}</button>
+          <Button variant="secondary" size="lg" onclick={() => { showCreate = false; }}>Cancel</Button>
+          <Button type="submit" size="lg" disabled={creating}>{creating ? "Creating…" : "Create"}</Button>
         </div>
       </form>
     </div>
@@ -124,10 +115,7 @@
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Presets</h1>
-    <button
-      onclick={() => { showCreate = true; }}
-      class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
-    >+ New Preset</button>
+    <Button size="lg" onclick={() => { showCreate = true; }}>+ New Preset</Button>
   </div>
 
   {#if loading}
