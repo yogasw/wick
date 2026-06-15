@@ -31,6 +31,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	}
 
 	mux.Handle("GET /manager/connectors", auth(h.connectorsIndexPage))
+	mux.Handle("GET /manager/api/connectors", auth(h.apiConnectors))
 	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
 	mux.Handle("GET /manager/connectors/{key}/{id}", auth(h.connectorDetailPage))

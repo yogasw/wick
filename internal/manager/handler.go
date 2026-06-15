@@ -89,6 +89,10 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// Static assets
 	mux.Handle("GET /modules/manager/", ui.StaticHandler("/modules/manager/", StaticFS))
 
+	// Manager SPA — new Svelte module served at /modules/manager/app/,
+	// alongside the legacy templ pages above (incremental coexistence).
+	h.registerSPA(mux, authMidd)
+
 	// Jobs — view/run gated by per-job access; admin mutations gate by RequireAdmin only
 	// (admins must be able to manage disabled jobs, so settings routes skip RequireJobAccess).
 	mux.Handle("GET /manager/jobs/{key}", authJob(h.jobDetailPage))
