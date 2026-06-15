@@ -30,12 +30,7 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-// providersPage renders the Providers overview: one card per
-// configured runtime instance (claude/codex/gemini × user-named
-// profiles), live detect/version status, and the most recent spawn
-// log files. The page is static (no SSE) so the user reloads to
-// refresh — that matches the page reload model decided in the
-// agents-design doc.
+// providersPage renders the providers SPA thin-shell.
 func providersPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -43,40 +38,10 @@ func providersPage(c *tool.Ctx) {
 	if !requireAdmin(c) {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
-	defer cancel()
-	statuses, err := provider.LoadCached(ctx)
-	if err != nil {
-		log.Ctx(c.Context()).Error().Msgf("providers probe: %s", err.Error())
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-	// Annotate in-flight probes so the UI can disable buttons while
-	// a background check is running. Cheap map lookup per row.
-	for i := range statuses {
-		statuses[i].Probing = capability.IsProbing(string(statuses[i].Instance.Type))
-	}
-
-	if globalSpawnLog != nil {
-		_ = globalSpawnLog.Prune(provider.MaxSpawnLogs)
-	}
-
-	mcpVM := buildMCPStatusVM()
-
-	c.HTML(view.ProvidersPage(view.ProvidersVM{
-		Layout:        sidebarVM(c, "providers", ""),
-		Base:          c.Base(),
-		Statuses:      statuses,
-		PoolActive:         globalPool.Active(),
-		PoolQueueLen:       globalPool.QueueLen(),
-		PoolMax:            poolMaxConcurrent(),
-		LiveProcesses:      liveProcessesVM(),
-		ProviderCaps:       providerCapacities(),
-		SupportedKeys:      supportedTypeKeys(),
-		Gate:          gateStatusVM(),
-		AutoRescan:    autoRescanEnabled(),
-		MCP:           mcpVM,
+	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
+		Layout:   sidebarVM(c, "providers", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("providers"),
 	}))
 }
 
@@ -265,7 +230,7 @@ func runBackgroundProbeAll() {
 	}
 }
 
-// providerDetailPage renders the per-provider detail + edit page.
+// providerDetailPage renders the providers SPA thin-shell (detail route handled client-side).
 func providerDetailPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -273,71 +238,10 @@ func providerDetailPage(c *tool.Ctx) {
 	if !requireAdmin(c) {
 		return
 	}
-	t := provider.Type(c.PathValue("type"))
-	name := c.PathValue("name")
-	ins, err := provider.Find(t, name)
-	if err != nil {
-		c.Error(http.StatusNotFound, "provider not found")
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
-	defer cancel()
-	st := provider.Probe(ctx, ins)
-
-	// active processes for this provider (match by exe basename)
-	var activePIDs []view.LiveProcessVM
-	if globalPool != nil {
-		for _, e := range globalPool.ActiveSnapshot() {
-			activePIDs = append(activePIDs, view.LiveProcessVM{
-				SessionID: e.SessionID,
-				AgentName: e.AgentName,
-				PID:       e.PID,
-				Lifecycle: e.Lifecycle,
-				Substate:  e.Substate,
-			})
-		}
-	}
-
-	const perPage = 20
-	page := 1
-	if v := c.Query("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			page = n
-		}
-	}
-	var pageSpawns []provider.SpawnLogFile
-	hasNext := false
-	if globalSpawnLog != nil {
-		raw, _ := globalSpawnLog.List(string(t), name, "")
-		all := normalizeSpawnStatus(raw)
-		start := (page - 1) * perPage
-		if start > len(all) {
-			start = len(all)
-		}
-		end := start + perPage
-		if end > len(all) {
-			end = len(all)
-		}
-		pageSpawns = all[start:end]
-		hasNext = end < len(all)
-	}
-
-	actionBase := c.Base() + "/providers/detail/" + string(t) + "/" + name
-	c.HTML(view.ProviderDetailPage(view.ProviderDetailVM{
-		Layout:      sidebarVM(c, "providers", ""),
-		Base:        c.Base(),
-		Status:      st,
-		GlobalMax:   poolMaxConcurrent(),
-		ActiveCount: len(activePIDs),
-		ActivePIDs:  activePIDs,
-		Rows:        provider.SeedInstanceConfig(st.Instance),
-		ActionBase:  actionBase,
-		Spawns:      pageSpawns,
-		Page:        page,
-		HasNext:     hasNext,
-		Gate:        gateStatusVM(),
-		Flash:       c.Query("flash"),
-		Error:       c.Query("error"),
+	c.HTML(view.ProvidersSPA(view.ProvidersSPAVM{
+		Layout:   sidebarVM(c, "providers", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("providers"),
 	}))
 }
 
@@ -1126,31 +1030,6 @@ func liveProcessesVM() []view.LiveProcessVM {
 			PID:       e.PID,
 			Lifecycle: e.Lifecycle,
 			Substate:  e.Substate,
-		})
-	}
-	return out
-}
-
-// providerChoices probes every configured provider and returns only
-// the healthy ones (binary on PATH + --version succeeded + not
-// disabled). Used by every "pick a provider" form so users can't
-// pick a provider that won't spawn.
-func providerChoices(ctx context.Context) []view.ProviderChoiceVM {
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	statuses, err := provider.ProbeAllCached(probeCtx)
-	if err != nil {
-		return nil
-	}
-	out := make([]view.ProviderChoiceVM, 0, len(statuses))
-	for _, st := range statuses {
-		if st.Instance.Disabled || !st.PathFound || st.VersionErr != "" {
-			continue
-		}
-		out = append(out, view.ProviderChoiceVM{
-			Type:    string(st.Instance.Type),
-			Name:    st.Instance.Name,
-			Version: st.Version,
 		})
 	}
 	return out

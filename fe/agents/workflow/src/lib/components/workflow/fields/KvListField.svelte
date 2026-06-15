@@ -1,13 +1,16 @@
 <script lang="ts">
   // Key-value list editor used by http headers/query, shell env, channel
-  // and connector args — same surface as the legacy editor's kvlist
-  // rows in node module ArgForms. Each value supports the Fixed ⇄
-  // Expression mode pill so callers can template individual entries.
+  // and connector args. Each value supports the Fixed ⇄ Expression mode
+  // pill via ArgField. This is a thin wrapper over the shared common-ui
+  // KvList: KvList owns the row container + remove + list iteration; this
+  // wrapper keeps the map storage, the per-key mode reconciliation, and the
+  // add-staging row (a map can't hold an empty-key row, so adds stage here).
   //
   // Storage shape: { [key: string]: string }. The parent provides the
   // current map + the matching mode map (Record<string, "fixed" |
   // "expression">) so this component stays stateless across renders.
 
+  import { KvList } from "@wick-fe/common-ui";
   import ArgField from "./ArgField.svelte";
 
   type Mode = "fixed" | "expression";
@@ -36,35 +39,58 @@
   let newKey = $state("");
   let newValue = $state("");
 
+  const rows = $derived(
+    Object.entries(entries ?? {}).map(([key, value]) => ({ key, value })),
+  );
+
+  const keyInputClass =
+    "rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1";
+
   function setValue(k: string, v: string) {
     const next = { ...(entries ?? {}) };
     next[k] = v;
     onChange(next);
   }
 
-  function renameKey(oldKey: string, newKey: string) {
-    if (!newKey || newKey === oldKey) return;
+  function renameKey(oldKey: string, nextKey: string) {
+    if (!nextKey || nextKey === oldKey) return;
     const next: Record<string, string> = {};
     for (const [k, v] of Object.entries(entries ?? {})) {
-      next[k === oldKey ? newKey : k] = v;
+      next[k === oldKey ? nextKey : k] = v;
     }
     onChange(next);
     if (modes && onModeChange) {
       const m: Record<string, string> = {};
       for (const [k, v] of Object.entries(modes)) {
-        m[k === oldKey ? newKey : k] = v;
+        m[k === oldKey ? nextKey : k] = v;
       }
       onModeChange(m);
     }
   }
 
-  function remove(k: string) {
-    const next = { ...(entries ?? {}) };
-    delete next[k];
-    onChange(next);
+  function setMode(k: string, m: Mode) {
+    if (!onModeChange) return;
+    const next = { ...(modes ?? {}) };
+    next[k] = m;
+    onModeChange(next);
+  }
+
+  // KvList fires onChange only on row removal here (key/value edits go through
+  // the wrapper's own handlers via the row snippet). Rebuild the map + modes
+  // from the surviving rows.
+  function handleRows(next: Record<string, string>[]) {
+    const map: Record<string, string> = {};
+    for (const r of next) {
+      map[r.key] = r.value;
+    }
+    onChange(map);
     if (modes && onModeChange) {
-      const m = { ...modes };
-      delete m[k];
+      const m: Record<string, string> = {};
+      for (const r of next) {
+        if (modes[r.key] !== undefined) {
+          m[r.key] = modes[r.key];
+        }
+      }
       onModeChange(m);
     }
   }
@@ -76,56 +102,51 @@
     newKey = "";
     newValue = "";
   }
-
-  function setMode(k: string, m: Mode) {
-    if (!onModeChange) return;
-    const next = { ...(modes ?? {}) };
-    next[k] = m;
-    onModeChange(next);
-  }
 </script>
 
 <div class="space-y-2">
-  <div class="flex items-center justify-between">
-    <span class="text-xs font-medium">{label}</span>
-  </div>
-  {#if helper}
-    <span class="text-[11px] text-black-700 dark:text-black-600">{helper}</span>
-  {/if}
-  {#each Object.entries(entries ?? {}) as [k, v] (k)}
-    <div class="rounded border border-slate-200 dark:border-navy-600 p-2 space-y-1">
+  <KvList
+    {label}
+    {helper}
+    columns={["key", "value"]}
+    rows={rows}
+    showAdd={false}
+    onChange={handleRows}
+  >
+    {#snippet row({ row: entry, remove })}
       <div class="flex items-center gap-2">
         <input
-          class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
-          value={k}
-          onchange={(e) => renameKey(k, (e.target as HTMLInputElement).value)}
+          class={keyInputClass}
+          placeholder={keyPlaceholder}
+          value={entry.key}
+          onchange={(e) => renameKey(entry.key, (e.target as HTMLInputElement).value)}
         />
         <button
           type="button"
           class="text-rose-500 text-xs px-2"
-          onclick={() => remove(k)}
+          onclick={remove}
           title="Remove entry"
         >✕</button>
       </div>
       <ArgField
         label="value"
-        value={v}
-        mode={(modes?.[k] as Mode | undefined) ?? "fixed"}
+        value={entry.value}
+        mode={(modes?.[entry.key] as Mode | undefined) ?? "fixed"}
         placeholder={valuePlaceholder}
-        onValueChange={(nv) => setValue(k, nv)}
-        onModeChange={onModeChange ? (nm) => setMode(k, nm) : undefined}
+        onValueChange={(nv) => setValue(entry.key, nv)}
+        onModeChange={onModeChange ? (nm) => setMode(entry.key, nm) : undefined}
       />
-    </div>
-  {/each}
+    {/snippet}
+  </KvList>
   <div class="flex items-center gap-2 pt-1">
     <input
-      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+      class={keyInputClass}
       placeholder={keyPlaceholder}
       bind:value={newKey}
       onkeydown={(e) => e.key === "Enter" && add()}
     />
     <input
-      class="rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2 py-1 font-mono text-[12px] flex-1"
+      class={keyInputClass}
       placeholder={valuePlaceholder}
       bind:value={newValue}
       onkeydown={(e) => e.key === "Enter" && add()}

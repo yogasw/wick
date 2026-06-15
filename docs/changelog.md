@@ -6,7 +6,19 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Conversation — Raw trace tab** — the **Raw** tab on a session detail page now renders an interactive, collapsible JSON tree of the session's turns. Turns that have a server-side trace (`has_trace`) automatically fetch their full per-turn tool and thinking events on demand when the tab opens, merging them into the tree as a `trace` field. Each node can be expanded or collapsed individually; values are type-colored (string / number / boolean / null). A **Copy** button copies the full JSON to the clipboard.
+*   **Providers list: Active Processes panel** — when any agent is running, a table above the provider cards shows every live spawn (session ID, agent name, PID, lifecycle/substate). Hidden when the pool is empty.
+*   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
+
+### Changed
+*   **Manager UI rebuilt as a Svelte SPA** — the connector manager at `/manager/*` is now served as a Svelte single-page application rendered inside the host chrome (shared header, theme, user menu), replacing the previous server-rendered templ pages. URLs, features, and the full `/manager/api/*` surface are unchanged.
+
+### Fixed
+*   **Connector operation toggle no longer silently no-ops on first disable** — `SetOperation` in the connector repo was using `db.Save()` which resolves to an `UPDATE` when the primary key is set, leaving a missing row untouched (and `Enabled=false` was dropped as a zero-value on struct insert). Rewritten as a GORM `OnConflict` upsert with a map payload so the `enabled` column is always written verbatim. Affects both the legacy admin UI and the new manager SPA.
+*   **Starting a new agents session no longer fails with 405** — tool root routes now accept POST/DELETE on the trailing-slash form (`/tools/{key}/`), not just GET. The new-session and conversation SPA POSTs to `${base}/` to create a session, which previously matched a GET-only pattern and returned 405 on Send.
+*   **Provider Detail — config saves and enable/disable toggle now work** — the API call was sending a JSON body but the Go handler reads `c.Form("value")` (form-encoded). Every provider config save and the enabled/disabled header toggle silently no-op'd; the request now sends `application/x-www-form-urlencoded`.
+*   **Provider Detail — UI parity restored after SPA migration** — the detail page now shows the Enabled/Disabled header toggle, a 2-column grid for simple config fields with a single Save All action, a row editor for `extra_args`, and a key-value editor for `env` (previously flattened to plain text inputs by the SPA migration).
 
 ---
 
@@ -143,6 +155,7 @@ _Released on 2026-06-14_
 
 ### Added
 
+*   **Conversation UI rebuilt as a Svelte 5 SPA** — the session list and conversation thread (`/tools/agents/sessions` and `/tools/agents/sessions/{id}`) are now served by a self-contained Svelte 5 single-page application. Visible changes: an **Approvals** tab joins Conversation / Commands / Raw in the session header; agent turns with tool events show a **Show trace** toggle for lazy-loading the thinking + event stream without cluttering the thread; the conversation header shows an idle-countdown badge ("kill in Ns") during the idle-timeout window; the Projects landing page scoped to managed and custom projects is now integrated into the SPA; the composer reuses the full action row (provider/project selectors, bell, attachment). The server now exposes three JSON endpoints that back the SPA: `GET /api/sessions`, `GET /api/sessions/{id}/conversation`, `GET /api/sessions/{id}/meta`, and `GET /providers/options`.
 *   **Workflow editor — replay-to-editor imports full run state** — the **Copy to editor** button now pins the run's trigger event payload alongside per-node status overlays and output pre-population. Every node inspector's INPUT dropdown gains an entry for the pinned event so `{{.Event.Payload.*}}` expressions resolve to the real run's data during an Execute step (n8n-style "retry with pinned input"). A **Unpin** action on the trigger OUTPUT pane clears the pinned payload. See [Canvas editor — Run timeline](./workflow/canvas#run-timeline).
 *   **Workflow editor — per-expression preview table** — template fields that contain multiple `{{...}}` segments now show a breakdown table in the inspector preview: one row per expression with its rendered value or error, isolating a failing ref without blanking the combined output. Autocomplete now suggests `.Event.Payload.*`, `.Node.<label>.*`, `.Env.*`, and `.Trigger.*` paths from the live context, and a manual refresh button re-renders when upstream outputs change.
 *   **Workflow editor — node rename cascades `{{.Node.<label>.…}}` refs** — renaming a node label in the inspector rewrites every reference to that label across all other nodes in the workflow automatically. A toast confirms how many references were updated.

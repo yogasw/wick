@@ -55,7 +55,7 @@ type paletteCategory struct {
 }
 
 type paletteResponse struct {
-	Categories []paletteCategory       `json:"categories"`
+	Categories []paletteCategory        `json:"categories"`
 	Drills     map[string][]paletteItem `json:"drills"`
 }
 

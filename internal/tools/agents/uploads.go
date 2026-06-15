@@ -163,18 +163,6 @@ func sanitizeFilenamePart(s string) string {
 	return b.String()
 }
 
-// imageMIMEAllowed is the subset of inline-safe types that the UI
-// renders as <img> thumbnails in the user bubble. SVG is intentionally
-// excluded — it can carry <script>; if image previews matter for SVG,
-// rasterize server-side first.
-var imageMIMEAllowed = map[string]bool{
-	"image/png":  true,
-	"image/jpeg": true,
-	"image/gif":  true,
-	"image/webp": true,
-	"image/avif": true,
-}
-
 // inlineSafeMIME is the full whitelist of types served inline (image
 // thumbnails + plain-text previews opened in a new tab). Anything not
 // in this map is forced to download via Content-Disposition: attachment
@@ -274,29 +262,29 @@ func sanitizeHeaderFilename(s string) string {
 // doesn't know (or maps to something less useful). All values must be
 // keys in inlineSafeMIME for the file to render inline.
 var extMIMEOverrides = map[string]string{
-	".md":         "text/markdown",
-	".markdown":   "text/markdown",
-	".log":        "text/x-log",
-	".yaml":       "application/yaml",
-	".yml":        "application/yaml",
-	".toml":       "text/x-toml",
-	".go":         "text/x-go",
-	".py":         "text/x-python",
-	".sh":         "text/x-shellscript",
-	".bash":       "text/x-shellscript",
-	".js":         "text/javascript",
-	".mjs":        "text/javascript",
-	".cjs":        "text/javascript",
-	".ts":         "text/plain",
-	".tsx":        "text/plain",
-	".jsx":        "text/plain",
-	".env":        "text/plain",
-	".ini":        "text/plain",
-	".conf":       "text/plain",
-	".cfg":        "text/plain",
-	".csv":        "text/csv",
-	".jsonl":      "application/json",
-	".ndjson":     "application/json",
+	".md":       "text/markdown",
+	".markdown": "text/markdown",
+	".log":      "text/x-log",
+	".yaml":     "application/yaml",
+	".yml":      "application/yaml",
+	".toml":     "text/x-toml",
+	".go":       "text/x-go",
+	".py":       "text/x-python",
+	".sh":       "text/x-shellscript",
+	".bash":     "text/x-shellscript",
+	".js":       "text/javascript",
+	".mjs":      "text/javascript",
+	".cjs":      "text/javascript",
+	".ts":       "text/plain",
+	".tsx":      "text/plain",
+	".jsx":      "text/plain",
+	".env":      "text/plain",
+	".ini":      "text/plain",
+	".conf":     "text/plain",
+	".cfg":      "text/plain",
+	".csv":      "text/csv",
+	".jsonl":    "application/json",
+	".ndjson":   "application/json",
 }
 
 // normalizeExtMIME returns the canonical lower-case MIME for a file

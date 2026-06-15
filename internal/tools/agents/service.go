@@ -2,12 +2,9 @@ package agents
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	"github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -66,80 +63,4 @@ func loadConversation(layout agentconfig.Layout, sessionID string) ([]store.Conv
 		return nil, err
 	}
 	return turns, nil
-}
-
-// loadCommands reads raw lines from the SHARED commands.jsonl filtered
-// by the session's project cwd. Stage 9 moved the audit log out of
-// per-session files and into a single app-wide jsonl; we filter on
-// the read side so the UI session-detail Commands tab still shows
-// only what's relevant to that session.
-//
-// Filter: an entry matches a session when its WorkDir equals the
-// session's resolved project path or sits under it (prefix match
-// with separator boundary). Entries with empty WorkDir (failure
-// modes from gate-side timeouts where cwd was never recorded) are
-// dropped from per-session views.
-func loadCommands(layout agentconfig.Layout, sessionID string) ([]string, error) {
-	projectID := lookupSessionProject(layout, sessionID)
-	wsPath := ""
-	if projectID != "" && project.Exists(layout, projectID) {
-		if p, err := project.ResolvePath(layout, projectID); err == nil {
-			if abs, err := filepath.Abs(p); err == nil {
-				wsPath = filepath.Clean(abs)
-			} else {
-				wsPath = filepath.Clean(p)
-			}
-		}
-	}
-	app := gate.AppName()
-	if app == "" {
-		app = "wick"
-	}
-	var lines []string
-	err := storage.ReadJSONL(gate.SharedCommandsPath(app), func(line []byte) bool {
-		if wsPath == "" {
-			lines = append(lines, string(line))
-			return true
-		}
-		var e gate.Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return true
-		}
-		if e.SessionID != "" {
-			if e.SessionID == sessionID {
-				lines = append(lines, string(line))
-			}
-			return true
-		}
-		if e.WorkDir == "" {
-			return true
-		}
-		ew := e.WorkDir
-		if abs, err := filepath.Abs(ew); err == nil {
-			ew = filepath.Clean(abs)
-		} else {
-			ew = filepath.Clean(ew)
-		}
-		if ew == wsPath || strings.HasPrefix(ew, wsPath+string(filepath.Separator)) {
-			lines = append(lines, string(line))
-		}
-		return true
-	})
-	if err != nil {
-		return nil, err
-	}
-	return lines, nil
-}
-
-// lookupSessionProject returns the project id from a session's
-// meta.json, or empty if the session has none / can't be loaded.
-func lookupSessionProject(_ agentconfig.Layout, sessionID string) string {
-	if globalMgr == nil {
-		return ""
-	}
-	s, ok := globalMgr.Registry().Sessions()[sessionID]
-	if !ok {
-		return ""
-	}
-	return s.Meta.ProjectID
 }
