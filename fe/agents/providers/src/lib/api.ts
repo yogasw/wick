@@ -458,11 +458,22 @@ export async function apiSaveProviderDetail(base: string, type: string, name: st
   }
 }
 
-export async function apiSaveConfigKey(base: string, type: string, name: string, key: string, value: string): Promise<unknown> {
-  return post<unknown>(
+export async function apiSaveConfigKey(base: string, type: string, name: string, key: string, value: string): Promise<void> {
+  const form = new URLSearchParams({ value });
+  const resp = await fetch(
     `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/${encodeURIComponent(key)}`,
-    { value },
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: form.toString(),
+      redirect: "follow",
+    },
   );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
 }
 
 export async function apiHookCheck(base: string, type: string, name: string, event: string): Promise<unknown> {
