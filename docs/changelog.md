@@ -7,6 +7,7 @@ All notable changes to Wick are documented here.
 ## [Unreleased]
 
 ### Added
+*   **Conversation — Raw trace tab** — the **Raw** tab on a session detail page now renders an interactive, collapsible JSON tree of the session's turns. Turns that have a server-side trace (`has_trace`) automatically fetch their full per-turn tool and thinking events on demand when the tab opens, merging them into the tree as a `trace` field. Each node can be expanded or collapsed individually; values are type-colored (string / number / boolean / null). A **Copy** button copies the full JSON to the clipboard.
 *   **Providers list: Active Processes panel** — when any agent is running, a table above the provider cards shows every live spawn (session ID, agent name, PID, lifecycle/substate). Hidden when the pool is empty.
 *   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
 

@@ -3,7 +3,7 @@
   import { get } from "svelte/store";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { toastError } from "@wick-fe/common-stores";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
 
   import { createThreadStore } from "../stores/thread.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
@@ -28,6 +28,7 @@
 
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
+  import JsonTree from "./JsonTree.svelte";
   import Composer from "./Composer.svelte";
   import ComposerToolbar from "./ComposerToolbar.svelte";
   import ContextPanel from "./ContextPanel.svelte";
@@ -67,6 +68,48 @@
   const unsubTyping = thread.typing.subscribe((v) => { typing = v; });
   const unsubLifecycle = thread.lifecycle.subscribe((v) => { agentLifecycle = v; });
   const unsubMeta = thread.meta.subscribe((v) => { threadMeta = v; });
+
+  /* ── raw trace view ────────────────────────────────────────────── */
+  let traceMap = $state<Record<string, unknown>>({});
+
+  const rawData = $derived(
+    turns.map((t) => {
+      if (t.has_trace !== true) return t;
+      const tr = traceMap[t.turn_id];
+      return { ...t, trace: tr === undefined ? "(loading…)" : tr };
+    }),
+  );
+  const rawJson = $derived(JSON.stringify(rawData, null, 2));
+
+  async function loadRawTraces() {
+    const pending = turns.filter((t) => t.has_trace === true && t.turn_id && traceMap[t.turn_id] === undefined);
+    if (pending.length === 0) return;
+    await Promise.all(
+      pending.map(async (t) => {
+        try {
+          const tr = await Effect.runPromise(getTurnTrace(base, sessionId, t.turn_id).pipe(Effect.provide(WickClientLayer)));
+          traceMap = { ...traceMap, [t.turn_id]: tr };
+        } catch {
+          traceMap = { ...traceMap, [t.turn_id]: { error: "failed to load trace" } };
+        }
+      }),
+    );
+  }
+
+  $effect(() => {
+    if (activeView !== "raw") return;
+    void turns.length;
+    void loadRawTraces();
+  });
+
+  async function copyRaw() {
+    try {
+      await navigator.clipboard.writeText(rawJson);
+      toastOk("Raw trace copied");
+    } catch {
+      toastError("Copy failed", "Clipboard unavailable in this browser.");
+    }
+  }
 
   /* ── session title + meta ──────────────────────────────────────── */
   let title = $state("");
@@ -589,8 +632,25 @@
         <p class="text-sm text-black-600 dark:text-black-700">Commands view — coming soon to the new UI</p>
       </div>
     {:else if activeView === "raw"}
-      <div data-placeholder-view class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
-        <p class="text-sm text-black-600 dark:text-black-700">Raw trace — coming soon</p>
+      <div class="flex-1 min-h-0 flex flex-col bg-white-200 dark:bg-navy-800">
+        <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-white-300 dark:border-navy-600 shrink-0">
+          <span class="text-xs font-medium text-black-700 dark:text-black-600">Raw trace · {turns.length} turn{turns.length === 1 ? "" : "s"}</span>
+          <button
+            type="button"
+            onclick={copyRaw}
+            disabled={turns.length === 0}
+            class="rounded-lg border border-white-400 dark:border-navy-600 px-2.5 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors disabled:opacity-50 disabled:cursor-default"
+          >Copy</button>
+        </div>
+        {#if turns.length === 0}
+          <div class="flex-1 flex items-center justify-center">
+            <p class="text-sm text-black-600 dark:text-black-700">No trace yet.</p>
+          </div>
+        {:else}
+          <div class="flex-1 min-h-0 overflow-auto px-3 py-3">
+            <JsonTree value={rawData} />
+          </div>
+        {/if}
       </div>
     {/if}
   </div>

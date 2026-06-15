@@ -322,7 +322,7 @@ describe("DetailView — placeholder views full-height (#10)", () => {
     expect(wrapper?.className).toContain("justify-center");
   });
 
-  test("raw placeholder view renders in a full-height flex container", async () => {
+  test("raw view renders the raw-trace panel (not a placeholder)", async () => {
     const { container } = render(DetailView, { props: DEFAULT_PROPS });
 
     const tabBtn = screen.getByRole("button", { name: /tab menu/i });
@@ -330,11 +330,8 @@ describe("DetailView — placeholder views full-height (#10)", () => {
     const rawBtn = screen.getByRole("button", { name: /^raw$/i });
     await fireEvent.click(rawBtn);
 
-    const wrapper = container.querySelector("[data-placeholder-view]");
-    expect(wrapper).not.toBeNull();
-    expect(wrapper?.className).toContain("flex-1");
-    expect(wrapper?.className).toContain("flex");
-    expect(wrapper?.className).toContain("items-center");
-    expect(wrapper?.className).toContain("justify-center");
+    expect(screen.getByText(/Raw trace/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: /^copy$/i })).not.toBeNull();
+    expect(container.querySelector("[data-placeholder-view]")).toBeNull();
   });
 });
