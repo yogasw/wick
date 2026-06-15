@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
 // withTestSPAFS swaps the package SPA filesystem for a synthetic bundle so
@@ -17,7 +19,7 @@ func withTestSPAFS(t *testing.T) {
 	t.Helper()
 	prev := spaFS
 	spaFS = fstest.MapFS{
-		"dist/manager/index.html":           {Data: []byte(`<!doctype html><html><body><div id="app" data-base=""></div></body></html>`)},
+		"dist/manager/index.html":           {Data: []byte(`<!doctype html><html lang="en" class=""><head></head><body><div id="app" data-base=""></div></body></html>`)},
 		"dist/manager/assets/index-test.js": {Data: []byte("console.log(1);")},
 	}
 	t.Cleanup(func() { spaFS = prev })
@@ -58,6 +60,79 @@ func TestSPAHandlerInjectsDataBase(t *testing.T) {
 		if strings.Contains(got, `data-base="/wrong/base"`) {
 			t.Errorf("ReplaceAll left a stale base in %q", got)
 		}
+	}
+}
+
+func TestApplyTheme(t *testing.T) {
+	const shell = `<!doctype html><html lang="en" class=""><head></head><body></body></html>`
+	cases := []struct {
+		name       string
+		themeClass string
+		wantClass  string
+		wantScript bool
+	}{
+		{
+			name:       "dark theme injects class, no system script",
+			themeClass: "theme-dark dark",
+			wantClass:  `class="theme-dark dark"`,
+			wantScript: false,
+		},
+		{
+			name:       "light theme injects class, no system script",
+			themeClass: "theme-github-light",
+			wantClass:  `class="theme-github-light"`,
+			wantScript: false,
+		},
+		{
+			name:       "no preference leaves class empty and injects system script",
+			themeClass: "",
+			wantClass:  `class=""`,
+			wantScript: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(applyTheme([]byte(shell), tc.themeClass))
+			if !strings.Contains(got, tc.wantClass) {
+				t.Errorf("applyTheme(%q) = %q, want it to contain %q", tc.themeClass, got, tc.wantClass)
+			}
+			hasScript := strings.Contains(got, ui.SystemThemeScript)
+			if hasScript != tc.wantScript {
+				t.Errorf("applyTheme(%q) system script present = %v, want %v; got %q", tc.themeClass, hasScript, tc.wantScript, got)
+			}
+		})
+	}
+}
+
+func TestSPAHandlerInjectsThemeFromContext(t *testing.T) {
+	withTestSPAFS(t)
+	h := &Handler{}
+
+	req := httptest.NewRequest(http.MethodGet, spaMount+"/", nil)
+	req = req.WithContext(ui.WithTheme(req.Context(), "dark"))
+	rec := httptest.NewRecorder()
+	h.spaHandler(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="theme-dark dark"`) {
+		t.Errorf("served shell missing dark theme class; body=%s", body)
+	}
+	if strings.Contains(body, ui.SystemThemeScript) {
+		t.Errorf("served shell injected system-preference script despite a stored theme; body=%s", body)
+	}
+}
+
+func TestSPAHandlerInjectsSystemScriptWhenNoTheme(t *testing.T) {
+	withTestSPAFS(t)
+	h := &Handler{}
+
+	req := httptest.NewRequest(http.MethodGet, spaMount+"/", nil)
+	rec := httptest.NewRecorder()
+	h.spaHandler(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, ui.SystemThemeScript) {
+		t.Errorf("served shell missing system-preference script for empty theme; body=%s", body)
 	}
 }
 
