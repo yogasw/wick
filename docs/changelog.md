@@ -12,6 +12,7 @@ All notable changes to Wick are documented here.
 *   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
 
 ### Fixed
+*   **Starting a new agents session no longer fails with 405** — tool root routes now accept POST/DELETE on the trailing-slash form (`/tools/{key}/`), not just GET. The new-session and conversation SPA POSTs to `${base}/` to create a session, which previously matched a GET-only pattern and returned 405 on Send.
 *   **Provider Detail — config saves and enable/disable toggle now work** — the API call was sending a JSON body but the Go handler reads `c.Form("value")` (form-encoded). Every provider config save and the enabled/disabled header toggle silently no-op'd; the request now sends `application/x-www-form-urlencoded`.
 *   **Provider Detail — UI parity restored after SPA migration** — the detail page now shows the Enabled/Disabled header toggle, a 2-column grid for simple config fields with a single Save All action, a row editor for `extra_args`, and a key-value editor for `env` (previously flattened to plain text inputs by the SPA migration).
 
