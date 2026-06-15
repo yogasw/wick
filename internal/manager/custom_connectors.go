@@ -38,6 +38,11 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 		return authMidd.RequireAuth(next)
 	}
 
+	// JSON surface for the manager SPA builder (paste / manual / review).
+	// Mirrors the templ flows below but speaks JSON; the templ routes stay
+	// for coexistence during the migration.
+	h.customConnectorAPIRoutes(mux, authMidd)
+
 	// Definition builder flows.
 	mux.Handle("GET /manager/connectors/custom/new/paste", authOnly(h.customPastePage))
 	mux.Handle("POST /manager/connectors/custom/parse", authOnly(h.customParse))
