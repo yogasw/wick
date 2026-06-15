@@ -4,9 +4,14 @@
      any health-check system-disable warning). Toggling is deferred to a later
      phase — this mirrors the legacy table's display, not its mutations. */
   import type { ConnectorOp } from "$lib/types.js";
+  import { push } from "$lib/router.js";
 
-  type Props = { operations: ConnectorOp[] };
-  let { operations }: Props = $props();
+  type Props = { operations: ConnectorOp[]; connectorKey: string; connectorId: string };
+  let { operations, connectorKey, connectorId }: Props = $props();
+
+  function testOp(opKey: string): void {
+    push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/test?op=${encodeURIComponent(opKey)}`);
+  }
 </script>
 
 <section class="mt-8">
@@ -26,6 +31,7 @@
               <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>
               <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Description</th>
               <th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Enabled</th>
+              <th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Run</th>
             </tr>
           </thead>
           <tbody>
@@ -54,6 +60,9 @@
                       <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">disabled</span>
                     {/if}
                   </div>
+                </td>
+                <td class="px-4 py-3 text-right">
+                  <button type="button" class="rounded-md border border-white-400 dark:border-navy-600 px-2.5 py-1 text-[11px] font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600" onclick={() => testOp(op.key)}>Test</button>
                 </td>
               </tr>
             {/each}

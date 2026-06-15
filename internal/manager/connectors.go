@@ -45,6 +45,13 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
+	// Phase 3 — test runner + run history JSON for the SPA. test-meta
+	// exposes each op's input schema (previously templ-only); test runs
+	// the op (alias of the legacy /test JSON handler); history serves the
+	// filtered + paginated audit log.
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/test-meta", auth(h.apiConnectorTestMeta))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/test", auth(h.apiTestConnectorOperation))
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/history", auth(h.apiConnectorHistory))
 
 	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))

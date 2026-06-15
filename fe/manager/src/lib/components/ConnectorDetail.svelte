@@ -108,18 +108,24 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-8">
-    <div class="flex items-center gap-3">
-      <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg" aria-hidden="true">{data.icon || "🔌"}</span>
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.label}</h1>
-          {#if data.disabled}
-            <span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
-          {:else}
-            <span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
-          {/if}
+    <div class="flex items-start justify-between gap-3">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg" aria-hidden="true">{data.icon || "🔌"}</span>
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.label}</h1>
+            {#if data.disabled}
+              <span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
+            {:else}
+              <span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
+            {/if}
+          </div>
+          <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
         </div>
-        <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
+      </div>
+      <div class="flex flex-shrink-0 items-center gap-2">
+        <Button variant="secondary" size="md" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/test`)}>Test runner</Button>
+        <Button variant="secondary" size="md" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/history`)}>History</Button>
       </div>
     </div>
 
@@ -153,7 +159,7 @@
       />
     </section>
 
-    <OperationsTable operations={data.operations ?? []} />
+    <OperationsTable operations={data.operations ?? []} connectorKey={connectorKey} connectorId={connectorId} />
 
     <section>
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Danger zone</h2>

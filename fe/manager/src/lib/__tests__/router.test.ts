@@ -51,4 +51,26 @@ describe("match", () => {
   it("does not match the detail pattern against the list route", () => {
     expect(match("/connectors/:key/:id", "/connectors/slack")).toBeNull();
   });
+
+  it("extracts key + id from the test route", () => {
+    expect(match("/connectors/:key/:id/test", "/connectors/slack/abc-123/test")).toEqual({
+      key: "slack",
+      id: "abc-123",
+    });
+  });
+
+  it("extracts key + id from the history route", () => {
+    expect(match("/connectors/:key/:id/history", "/connectors/slack/abc-123/history")).toEqual({
+      key: "slack",
+      id: "abc-123",
+    });
+  });
+
+  it("does not match the test route against the bare detail route", () => {
+    expect(match("/connectors/:key/:id/test", "/connectors/slack/abc-123")).toBeNull();
+  });
+
+  it("does not match the detail route against the test route", () => {
+    expect(match("/connectors/:key/:id", "/connectors/slack/abc-123/test")).toBeNull();
+  });
 });
