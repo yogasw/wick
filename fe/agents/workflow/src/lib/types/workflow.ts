@@ -241,6 +241,11 @@ export type QueuePolicy = {
   on_overflow?: "drop_oldest" | "drop_new" | "reject";
 };
 
+export type ConcurrencyPolicy = {
+  enabled: boolean;
+  max?: number; // 0 or omitted = default (2); >0 = explicit cap
+};
+
 export type Graph = {
   entry: string;
   nodes: Node[];
@@ -269,6 +274,7 @@ export type Workflow = {
   max_duration_sec?: number;
   triggers: Trigger[];
   queue?: QueuePolicy;
+  concurrency?: ConcurrencyPolicy;
   env?: EnvField[];
   data_tables?: DataTableBinding[];
   graph: Graph;

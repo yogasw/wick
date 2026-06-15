@@ -97,6 +97,7 @@ type Workflow struct {
 	MaxDurationSec int                `json:"max_duration_sec,omitempty"`
 	Triggers       []Trigger          `json:"triggers"`
 	Queue          QueuePolicy        `json:"queue,omitempty"`
+	Concurrency    ConcurrencyPolicy  `json:"concurrency,omitempty"`
 	Env            []EnvField         `json:"env,omitempty"`
 	DataTables     []DataTableBinding `json:"data_tables,omitempty"`
 	Graph          Graph              `json:"graph"`
@@ -110,6 +111,17 @@ type Workflow struct {
 type QueuePolicy struct {
 	MaxSize    int    `json:"max_size,omitempty"`
 	OnOverflow string `json:"on_overflow,omitempty"`
+}
+
+// ConcurrencyPolicy controls how many runs of this workflow may execute
+// simultaneously. When Enabled is false (default) runs are serialised —
+// the single worker drains the queue one item at a time, preserving
+// event order. When Enabled is true, up to Max goroutines may execute
+// runs concurrently. Max=0 means "use default" (2); set a positive value
+// to override. Both bounds are further capped by the global router cap.
+type ConcurrencyPolicy struct {
+	Enabled bool `json:"enabled"`
+	Max     int  `json:"max,omitempty"` // 0 = use default (2); >0 = explicit cap
 }
 
 // Overflow policy values.

@@ -14,8 +14,9 @@ type GeneralConfig struct {
 	AutoRescan            bool   `wick:"bool;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
 	PreemptIdle           bool   `wick:"bool;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
 	SystemPrompt          string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
-	WorkflowGuardMode     string `wick:"dropdown=off|warn|block;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
-	WorkflowLokiURL       string `wick:"url;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
+	WorkflowGuardMode        string `wick:"dropdown=off|warn|block;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
+	WorkflowMaxParallelGlobal int   `wick:"number;desc=Global parallel cap. 0 = parallel disabled, all workflows serial (default). N > 0 = parallel enabled; at most N runs execute simultaneously across all workflows. Per-workflow concurrency.max is honoured as an inner cap."`
+	WorkflowLokiURL          string `wick:"url;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
 	WorkflowLokiLabels    string `wick:"text;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
 	MCPUninstalledClients string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
 	TraceEventInlineKB    int    `wick:"number;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
