@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, KvList } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetProviderDetail,
@@ -147,16 +147,11 @@
     }
   }
 
-  function addRow(f: ConfigFieldDTO) {
-    const current = editorRows[f.Key] ?? [];
-    editorRows = { ...editorRows, [f.Key]: [...current, { key: "", value: "" }] };
-  }
-
-  function removeRow(f: ConfigFieldDTO, idx: number) {
-    const current = editorRows[f.Key] ?? [];
-    const next = current.filter((_, i) => i !== idx);
-    editorRows = { ...editorRows, [f.Key]: next };
-    void saveEditor(f);
+  function setRows(f: ConfigFieldDTO, rows: Record<string, string>[]) {
+    editorRows = {
+      ...editorRows,
+      [f.Key]: rows.map((r) => ({ key: r.key ?? "", value: r.value ?? "" })),
+    };
   }
 
   async function saveEditor(f: ConfigFieldDTO) {
@@ -426,42 +421,15 @@
           {/if}
         </div>
         <div class="p-5">
-          <div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
-            <div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-              <div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Value</div>
-              <div class="w-10 shrink-0"></div>
-            </div>
-            {#if (editorRows[f.Key] ?? []).length === 0}
-              <div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600">No rows yet — click <strong>+ Add Row</strong> to start</div>
-            {:else}
-              {#each editorRows[f.Key] as row, idx (idx)}
-                <div class="flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-                  <div class="flex-1 min-w-0 px-3 py-2">
-                    <input
-                      type="text"
-                      bind:value={row.value}
-                      onblur={() => saveEditor(f)}
-                      placeholder="value"
-                      class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
-                    />
-                  </div>
-                  <div class="w-10 shrink-0 flex items-center justify-center">
-                    <button
-                      type="button"
-                      onclick={() => removeRow(f, idx)}
-                      aria-label="Remove row"
-                      class="text-black-700 dark:text-black-600 hover:text-red-500 text-base leading-none transition-colors"
-                    >✕</button>
-                  </div>
-                </div>
-              {/each}
-            {/if}
-          </div>
-          <button
-            type="button"
-            onclick={() => addRow(f)}
-            class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
-          >+ Add Row</button>
+          <KvList
+            columns={kvCols(f)}
+            rows={editorRows[f.Key] ?? []}
+            onChange={(rows: Record<string, string>[]) => setRows(f, rows)}
+            onCommit={() => saveEditor(f)}
+            placeholders={{ value: "value" }}
+            addLabel="+ Add Row"
+            emptyText="No rows yet — click + Add Row to start"
+          />
         </div>
       </div>
     {/each}
@@ -480,53 +448,15 @@
           {/if}
         </div>
         <div class="p-5">
-          <div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
-            <div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-              {#each cols as col (col)}
-                <div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize">{col}</div>
-              {/each}
-              <div class="w-10 shrink-0"></div>
-            </div>
-            {#if (editorRows[f.Key] ?? []).length === 0}
-              <div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600">No rows yet — click <strong>+ Add Row</strong> to start</div>
-            {:else}
-              {#each editorRows[f.Key] as row, idx (idx)}
-                <div class="flex border-b border-white-300 dark:border-navy-600 last:border-b-0 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-                  <div class="flex-1 min-w-0 px-3 py-2 border-r border-white-300 dark:border-navy-600">
-                    <input
-                      type="text"
-                      bind:value={row.key}
-                      onblur={() => saveEditor(f)}
-                      placeholder="key"
-                      class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
-                    />
-                  </div>
-                  <div class="flex-1 min-w-0 px-3 py-2">
-                    <input
-                      type="text"
-                      bind:value={row.value}
-                      onblur={() => saveEditor(f)}
-                      placeholder="value"
-                      class="w-full bg-transparent border-none outline-none text-xs font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600"
-                    />
-                  </div>
-                  <div class="w-10 shrink-0 flex items-center justify-center">
-                    <button
-                      type="button"
-                      onclick={() => removeRow(f, idx)}
-                      aria-label="Remove row"
-                      class="text-black-700 dark:text-black-600 hover:text-red-500 text-base leading-none transition-colors"
-                    >✕</button>
-                  </div>
-                </div>
-              {/each}
-            {/if}
-          </div>
-          <button
-            type="button"
-            onclick={() => addRow(f)}
-            class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
-          >+ Add Row</button>
+          <KvList
+            columns={cols}
+            rows={editorRows[f.Key] ?? []}
+            onChange={(rows: Record<string, string>[]) => setRows(f, rows)}
+            onCommit={() => saveEditor(f)}
+            placeholders={{ key: "key", value: "value" }}
+            addLabel="+ Add Row"
+            emptyText="No rows yet — click + Add Row to start"
+          />
         </div>
       </div>
     {/each}
