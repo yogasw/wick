@@ -2,9 +2,11 @@
   /* Per-tool config editor, ported from tool_detail.templ. No schedule, no
      runs — just the reusable ConfigsForm scoped to the tool key, with a
      tool-scoped save injected (POSTs /manager/api/tools/{key}/configs/…). */
+  import { toastError } from "@wick-fe/common-stores";
   import { getTool, setToolConfig } from "$lib/api.js";
   import type { ToolDetail } from "$lib/types.js";
   import ConfigsForm from "../fields/ConfigsForm.svelte";
+  import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { toolKey: string };
   let { toolKey }: Props = $props();
@@ -13,15 +15,20 @@
   let loading = $state(true);
   let error = $state("");
 
-  async function load(): Promise<void> {
-    loading = true;
-    error = "";
+  async function load(silent = false): Promise<void> {
+    if (!silent) loading = true;
     try {
       data = await getTool(toolKey);
+      error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) {
+        toastError("Refresh failed", msg);
+      } else {
+        error = msg;
+      }
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
 
@@ -29,7 +36,14 @@
     await setToolConfig(toolKey, key, value);
   }
 
-  $effect(() => { load(); });
+  $effect(() => {
+    if (data) setBreadcrumbNames({ tool: data.name });
+  });
+
+  $effect(() => {
+    load();
+    return clearBreadcrumbNames;
+  });
 </script>
 
 {#if loading}

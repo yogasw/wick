@@ -25,8 +25,8 @@ import type {
   AuditFilter,
 } from "./types.js";
 
-/* Connector definitions live at the server-absolute /manager surface,
-   distinct from the SPA mount base (/modules/manager/app). */
+/* Connector definitions live at the server-absolute /manager/api surface
+   (the SPA itself is mounted at /manager). */
 export async function listConnectors(): Promise<ConnectorDef[]> {
   const r = await apiGet<Partial<ConnectorDef>[] | null>("/manager/api/connectors");
   return (r ?? []).map((c) => ({
@@ -162,19 +162,6 @@ export async function bulkToggleOperations(
   ops: string[] = [],
 ): Promise<void> {
   await apiPost(`${rowBase(key, id)}/operations/bulk`, { enabled, ops });
-}
-
-export async function toggleOperationAdminOnly(
-  key: string,
-  id: string,
-  opKey: string,
-  adminOnly: boolean,
-): Promise<boolean> {
-  const r = await apiPost<{ admin_only: boolean }>(
-    `${rowBase(key, id)}/operations/${encodeURIComponent(opKey)}/admin-only`,
-    { admin_only: adminOnly },
-  );
-  return r.admin_only;
 }
 
 export async function disconnectConnectorAccount(

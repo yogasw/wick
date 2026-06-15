@@ -11,6 +11,7 @@
   import { push } from "$lib/router.js";
   import { getTestMeta, runConnectorTest } from "$lib/api.js";
   import type { TestMeta, TestOp, TestInputField, TestRunResult } from "$lib/types.js";
+  import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string; connectorId: string };
   let { connectorKey, connectorId }: Props = $props();
@@ -112,7 +113,14 @@
     return JSON.stringify(res.response ?? null, null, 2);
   }
 
-  $effect(() => { load(); });
+  $effect(() => {
+    if (meta) setBreadcrumbNames({ connector: meta.name, row: meta.label });
+  });
+
+  $effect(() => {
+    load();
+    return clearBreadcrumbNames;
+  });
 
   const statusClasses: Record<string, string> = {
     running: "bg-prog-100 text-prog-400",

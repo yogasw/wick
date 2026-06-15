@@ -46,13 +46,15 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	// test/save/oauth endpoints below already speak JSON and are reused.
 	h.customMCPServerAPIRoutes(mux, authMidd)
 
-	// Definition builder flows.
-	mux.Handle("GET /manager/connectors/custom/new/paste", authOnly(h.customPastePage))
+	// Definition builder flows. The builder pages render the SPA shell; the
+	// SPA reads the JSON twins (apiCustomMeta / apiCustomDraft). Every
+	// POST/mutation route stays live.
+	mux.Handle("GET /manager/connectors/custom/new/paste", authOnly(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/custom/parse", authOnly(h.customParse))
-	mux.Handle("GET /manager/connectors/custom/new/manual", authOnly(h.customManualPage))
-	mux.Handle("GET /manager/connectors/custom/new/review", authOnly(h.customReviewPage))
+	mux.Handle("GET /manager/connectors/custom/new/manual", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/new/review", authOnly(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/custom/save", authOnly(h.customSaveNew))
-	mux.Handle("GET /manager/connectors/custom/{defID}/edit", authOnly(h.customEditPage))
+	mux.Handle("GET /manager/connectors/custom/{defID}/edit", authOnly(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/custom/{defID}/save", authOnly(h.customSaveExisting))
 	mux.Handle("POST /manager/connectors/custom/{defID}/reload", authOnly(h.customReload))
 	mux.Handle("POST /manager/connectors/custom/{defID}/disable", authOnly(h.customSetDisabled(true)))
@@ -62,10 +64,12 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	// MCP servers — /mcp-servers is the register form; saving creates the
 	// connector directly (one server = one connector, every listed tool
 	// exposed minus the exclude list). No list page, no import picker.
-	// Deleting the connector definition cascades to the server row.
-	mux.Handle("GET /manager/connectors/custom/mcp-servers", authOnly(h.customMCPServerNewPage))
-	mux.Handle("GET /manager/connectors/custom/mcp-servers/new", authOnly(h.customMCPServerNewPage))
-	mux.Handle("GET /manager/connectors/custom/mcp-servers/edit", authOnly(h.customMCPServerEditPage))
+	// Deleting the connector definition cascades to the server row. The
+	// register/edit form GET pages render the SPA shell (which reads the
+	// JSON edit twin); test/save/oauth below already speak JSON and are reused.
+	mux.Handle("GET /manager/connectors/custom/mcp-servers", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/mcp-servers/new", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/mcp-servers/edit", authOnly(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/test", authOnly(h.customMCPServerTest))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/save", authOnly(h.customMCPServerSave))
 
@@ -163,15 +167,13 @@ func customSSOClaims(r *http.Request) *customconn.SSOClaims {
 	}
 }
 
-// ── Definition builder pages ─────────────────────────────────────────
-
-func (h *Handler) customPastePage(w http.ResponseWriter, r *http.Request) {
-	if h.customNotReady(w, r, false) {
-		return
-	}
-	user := login.GetUser(r.Context())
-	view.CustomPastePage(h.custom.AIProviderNames(), user).Render(r.Context(), w)
-}
+// ── Definition builder ───────────────────────────────────────────────
+//
+// The templ builder pages (paste / manual / review / edit) and the MCP
+// register/edit form pages were removed in the SPA cutover. Their GET
+// routes 302 to the SPA, which reads apiCustomMeta / apiCustomDraft and
+// the MCP edit twin. The parse / save / reload / disable / delete and the
+// MCP test / save / oauth mutation handlers below stay live.
 
 func (h *Handler) customParse(w http.ResponseWriter, r *http.Request) {
 	if h.customNotReady(w, r, true) {
@@ -194,22 +196,6 @@ func (h *Handler) customParse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
-}
-
-func (h *Handler) customManualPage(w http.ResponseWriter, r *http.Request) {
-	if h.customNotReady(w, r, false) {
-		return
-	}
-	user := login.GetUser(r.Context())
-	view.CustomManualPage(customconn.CategoryNames(), user).Render(r.Context(), w)
-}
-
-func (h *Handler) customReviewPage(w http.ResponseWriter, r *http.Request) {
-	if h.customNotReady(w, r, false) {
-		return
-	}
-	user := login.GetUser(r.Context())
-	view.CustomReviewPage("new", "", nil, customconn.CategoryNames(), nil, user).Render(r.Context(), w)
 }
 
 func (h *Handler) customSaveNew(w http.ResponseWriter, r *http.Request) {
@@ -264,30 +250,6 @@ func customDraftFromDef(def *entity.CustomConnector) (*customconn.Draft, error) 
 		Configs:            fields,
 		Ops:                ops,
 	}, nil
-}
-
-func (h *Handler) customEditPage(w http.ResponseWriter, r *http.Request) {
-	if h.customNotReady(w, r, false) {
-		return
-	}
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	def := h.requireDefMutable(w, r, r.PathValue("defID"))
-	if def == nil {
-		return
-	}
-	// MCP defs have no editable ops — their settings (label, auth,
-	// excluded tools) live on the server form.
-	if serverID := customconn.ServerIDForDef(def); serverID != "" {
-		http.Redirect(w, r, "/manager/connectors/custom/mcp-servers/edit?id="+serverID, http.StatusFound)
-		return
-	}
-	draft, err := customDraftFromDef(def)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	view.CustomReviewPage("edit", def.ID, draft, customconn.CategoryNames(), h.customDefInfo(ctx, def.Key, user), user).Render(ctx, w)
 }
 
 func (h *Handler) customSaveExisting(w http.ResponseWriter, r *http.Request) {
@@ -378,57 +340,11 @@ func (h *Handler) customDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── MCP servers ──────────────────────────────────────────────────────
-
-func (h *Handler) customMCPServerNewPage(w http.ResponseWriter, r *http.Request) {
-	if h.customNotReady(w, r, false) {
-		return
-	}
-	user := login.GetUser(r.Context())
-	view.CustomMCPServerFormPage("", nil, nil, nil, user).Render(r.Context(), w)
-}
-
-func (h *Handler) customMCPServerEditPage(w http.ResponseWriter, r *http.Request) {
-	if h.customNotReady(w, r, false) {
-		return
-	}
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	id := r.URL.Query().Get("id")
-	srv, err := h.custom.Store().GetServer(ctx, id)
-	if err != nil {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	form, err := serverFormFromRow(srv)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Live tools/list so the exclude list shows the server's current
-	// surface without forcing a manual test first. Best-effort — a down
-	// server still renders the form (tools section stays empty until a
-	// successful test).
-	var tools []view.MCPToolRow
-	if res, perr := h.custom.ProbeStored(ctx, srv.ID, customSSOClaims(r)); perr == nil && res.OK {
-		for _, t := range res.Tools {
-			tools = append(tools, view.MCPToolRow{Name: t.Name, Description: t.Description})
-		}
-	}
-	// Definition-level danger zone (disable/delete) renders on the edit
-	// form — resolve the def this server backs.
-	var info *view.CustomDefInfo
-	if def := h.custom.DefForServer(ctx, srv.ID); def != nil {
-		// Editing a server mutates its definition — level-1 rule.
-		if !customconn.CanMutate(def, user) {
-			ui.RenderNotFound(w, r, user, http.StatusNotFound)
-			return
-		}
-		info = h.customDefInfo(ctx, def.Key, user)
-		form.Icon = def.Icon
-		form.Description = def.Description
-	}
-	view.CustomMCPServerFormPage(srv.ID, form, tools, info, user).Render(ctx, w)
-}
+//
+// The templ MCP register/edit form pages were removed in the SPA cutover;
+// their GET routes 302 to the SPA, which reads the JSON edit twin
+// (apiMCPServerForm in custom_mcp_api.go). The test/save/oauth/connect
+// mutation handlers below stay live.
 
 // serverFormFromRow maps a stored server row back into the form
 // payload. Secret values stay as their wick_enc_ tokens — the form

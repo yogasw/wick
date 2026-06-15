@@ -3,19 +3,27 @@ import { routeFromPath, match } from "../router.js";
 
 describe("routeFromPath", () => {
   it("returns / for exact base match", () => {
-    expect(routeFromPath("/modules/manager/app", "/modules/manager/app")).toBe("/");
+    expect(routeFromPath("/manager", "/manager")).toBe("/");
   });
 
   it("returns / for base with trailing slash", () => {
-    expect(routeFromPath("/modules/manager/app/", "/modules/manager/app")).toBe("/");
+    expect(routeFromPath("/manager/", "/manager")).toBe("/");
   });
 
   it("returns sub-path for nested route", () => {
-    expect(routeFromPath("/modules/manager/app/connectors/slack", "/modules/manager/app")).toBe("/connectors/slack");
+    expect(routeFromPath("/manager/connectors/slack", "/manager")).toBe("/connectors/slack");
+  });
+
+  it("returns sub-path for the audit route", () => {
+    expect(routeFromPath("/manager/audit", "/manager")).toBe("/audit");
+  });
+
+  it("returns sub-path for a custom builder route", () => {
+    expect(routeFromPath("/manager/custom/paste", "/manager")).toBe("/custom/paste");
   });
 
   it("returns / for path outside the base", () => {
-    expect(routeFromPath("/modules/manager/", "/modules/manager/app")).toBe("/");
+    expect(routeFromPath("/managers/other", "/manager")).toBe("/");
   });
 
   it("handles empty base", () => {
