@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
 // spaMount is the URL prefix the manager SPA is served under. It lives
@@ -26,6 +27,31 @@ const spaBase = spaMount
 // handler can normalize it to the live mount path regardless of what the
 // build baked in.
 var dataBaseRe = regexp.MustCompile(`data-base="[^"]*"`)
+
+// htmlClassRe matches the class attribute on the root <html> element of
+// the served SPA shell so the handler can inject the user's resolved
+// theme classes — the SPA is served outside ui.Layout, which would
+// otherwise set them, so without this it always renders light.
+var htmlClassRe = regexp.MustCompile(`(<html[^>]*\sclass=")[^"]*(")`)
+
+// headOpenRe matches the opening <head> tag so the handler can inject the
+// system-preference theme script when the user has no stored theme,
+// mirroring the no-preference branch of ui.Layout.
+var headOpenRe = regexp.MustCompile(`(?i)<head>`)
+
+// applyTheme rewrites the SPA shell's <html class> with the theme
+// resolved from ctx so the standalone SPA reflects the same theme as the
+// server-rendered pages. When no theme is stored it leaves the class
+// empty and injects the device color-scheme script into <head> before
+// first paint, exactly as ui.Layout does.
+func applyTheme(idx []byte, themeClass string) []byte {
+	idx = htmlClassRe.ReplaceAll(idx, []byte(`${1}`+themeClass+`${2}`))
+	if themeClass == "" {
+		script := []byte("<head><script>" + ui.SystemThemeScript + "</script>")
+		idx = headOpenRe.ReplaceAll(idx, script)
+	}
+	return idx
+}
 
 // registerSPA wires the manager SPA shell + asset handler. Mounted behind
 // the same auth as the templ pages. The "/" suffix on the pattern makes
@@ -66,6 +92,7 @@ func (h *Handler) spaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idx = dataBaseRe.ReplaceAll(idx, []byte(`data-base="`+spaBase+`"`))
+	idx = applyTheme(idx, ui.HTMLThemeClass(r.Context()))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(idx)

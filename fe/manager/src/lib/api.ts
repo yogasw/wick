@@ -28,13 +28,22 @@ import type {
 /* Connector definitions live at the server-absolute /manager surface,
    distinct from the SPA mount base (/modules/manager/app). */
 export async function listConnectors(): Promise<ConnectorDef[]> {
-  const r = await apiGet<ConnectorDef[] | null>("/manager/api/connectors");
+  const r = await apiGet<Partial<ConnectorDef>[] | null>("/manager/api/connectors");
   return (r ?? []).map((c) => ({
-    key: c.key,
-    name: c.name,
+    key: c.key ?? "",
+    name: c.name ?? "",
+    description: c.description ?? "",
     category: c.category ?? "",
+    category_desc: c.category_desc ?? "",
     icon: c.icon ?? "",
+    op_count: c.op_count ?? 0,
+    active_count: c.active_count ?? 0,
+    needs_setup_count: c.needs_setup_count ?? 0,
+    disabled_count: c.disabled_count ?? 0,
+    system: c.system ?? false,
     custom: c.custom ?? false,
+    custom_source: c.custom_source ?? "",
+    needs_reload: c.needs_reload ?? false,
     disabled: c.disabled ?? false,
   }));
 }
@@ -54,7 +63,12 @@ export async function getConnector(key: string): Promise<ConnectorList> {
 
 export async function getConnectorRow(key: string, id: string): Promise<ConnectorDetail> {
   const r = await apiGet<ConnectorDetail>(rowBase(key, id));
-  return { ...r, fields: r.fields ?? [], operations: r.operations ?? [] };
+  return {
+    ...r,
+    fields: r.fields ?? [],
+    operations: r.operations ?? [],
+    accounts: r.accounts ?? [],
+  };
 }
 
 export async function createConnectorRow(key: string): Promise<string> {
@@ -86,6 +100,100 @@ export async function deleteConnectorRow(key: string, id: string): Promise<void>
 
 export async function runHealthCheck(key: string, id: string): Promise<HealthCheckResult> {
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
+}
+
+/* Per-row admin controls (Phase 7a). Each POSTs JSON to a /manager/api
+   twin of the legacy templ form-post route, reusing the same services +
+   permission gates server-side. */
+
+export async function setConnectorRateLimit(key: string, id: string, rpm: number): Promise<number> {
+  const r = await apiPost<{ rate_limit_rpm: number }>(`${rowBase(key, id)}/rate-limit`, { rpm });
+  return r.rate_limit_rpm;
+}
+
+export async function duplicateConnectorRow(key: string, id: string): Promise<string> {
+  const r = await apiPost<{ id: string }>(`${rowBase(key, id)}/duplicate`);
+  return r.id;
+}
+
+export interface AccessPolicy {
+  allow_others_configure: boolean;
+  allow_others_connect_sso: boolean;
+  enable_sso: boolean;
+  multi_account: boolean;
+}
+
+export async function setConnectorAccessPolicy(
+  key: string,
+  id: string,
+  policy: AccessPolicy,
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/access-policy`, policy);
+}
+
+export async function setConnectorSessionConfig(
+  key: string,
+  id: string,
+  allow: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ allow_session_config: boolean }>(`${rowBase(key, id)}/session-config`, {
+    allow_session_config: allow,
+  });
+  return r.allow_session_config;
+}
+
+export async function toggleConnectorOperation(
+  key: string,
+  id: string,
+  opKey: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ enabled: boolean }>(
+    `${rowBase(key, id)}/operations/${encodeURIComponent(opKey)}`,
+    { enabled },
+  );
+  return r.enabled;
+}
+
+export async function bulkToggleOperations(
+  key: string,
+  id: string,
+  enabled: boolean,
+  ops: string[] = [],
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/operations/bulk`, { enabled, ops });
+}
+
+export async function toggleOperationAdminOnly(
+  key: string,
+  id: string,
+  opKey: string,
+  adminOnly: boolean,
+): Promise<boolean> {
+  const r = await apiPost<{ admin_only: boolean }>(
+    `${rowBase(key, id)}/operations/${encodeURIComponent(opKey)}/admin-only`,
+    { admin_only: adminOnly },
+  );
+  return r.admin_only;
+}
+
+export async function disconnectConnectorAccount(
+  key: string,
+  id: string,
+  accountId: string,
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/accounts/${encodeURIComponent(accountId)}/disconnect`);
+}
+
+export async function setAccountDisabledOps(
+  key: string,
+  id: string,
+  accountId: string,
+  disabledOps: string[],
+): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/accounts/${encodeURIComponent(accountId)}/ops`, {
+    disabled_ops: disabledOps,
+  });
 }
 
 export async function getTestMeta(key: string, id: string): Promise<TestMeta> {

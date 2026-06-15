@@ -161,4 +161,56 @@ func TestAPIConnectorsShape(t *testing.T) {
 	if d.Custom {
 		t.Errorf("custom should be false for a code-defined connector")
 	}
+	// apiTestModule defines a single "noop" operation, so the enriched
+	// op_count must reflect it. Instance state counts default to zero when
+	// no rows are seeded.
+	if d.OpCount != 1 {
+		t.Errorf("op_count = %d, want 1", d.OpCount)
+	}
+	if d.ActiveCount != 0 || d.NeedsSetupCount != 0 || d.DisabledCount != 0 {
+		t.Errorf("instance counts non-zero without seeded rows: %+v", d)
+	}
+}
+
+func TestAPIConnectorsEnriched(t *testing.T) {
+	mods := []connector.Module{
+		{
+			Meta: connector.Meta{
+				Key:         "stripe",
+				Name:        "Stripe",
+				Description: "Payments API",
+				Icon:        "💳",
+				DefaultTags: []tool.DefaultTag{tags.Connector, tags.Development},
+			},
+			Operations: []connector.Operation{
+				{Key: "charge", Name: "Charge", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+				{Key: "refund", Name: "Refund", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+			},
+		},
+	}
+	h := &Handler{connectors: newConnectorsSvcForAPI(t, mods)}
+	admin := &entity.User{ID: "u-admin", Role: entity.RoleAdmin}
+
+	req := httptest.NewRequest(http.MethodGet, "/manager/api/connectors", nil)
+	req = req.WithContext(login.WithUser(req.Context(), admin, nil))
+	rec := httptest.NewRecorder()
+	h.apiConnectors(rec, req)
+
+	var got []connectorDef
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(got), got)
+	}
+	d := got[0]
+	if d.Description != "Payments API" {
+		t.Errorf("description = %q, want %q", d.Description, "Payments API")
+	}
+	if d.OpCount != 2 {
+		t.Errorf("op_count = %d, want 2", d.OpCount)
+	}
+	if d.CategoryDesc != tags.Development.Description {
+		t.Errorf("category_desc = %q, want %q", d.CategoryDesc, tags.Development.Description)
+	}
 }

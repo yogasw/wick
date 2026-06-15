@@ -27,16 +27,32 @@
       : "text-black-700 dark:text-black-600 hover:text-green-600";
   }
 
+  /* Theme persists server-side via POST /theme (HttpOnly _st_theme cookie),
+     identical to the rest of the app — the SPA cannot read or write the
+     cookie from JS. The toggle posts the base dark/light theme id and a
+     redirect back to the current URL; the server re-renders the shell with
+     the resolved <html class> on return. The class is flipped optimistically
+     so the switch is visible during the round-trip. */
   let dark = $state(document.documentElement.classList.contains("dark"));
 
   function toggleDark() {
-    dark = !dark;
-    document.documentElement.classList.toggle("dark", dark);
-    try {
-      localStorage.setItem("wick-theme", dark ? "dark" : "light");
-    } catch {
-      /* storage unavailable (private mode / disabled cookies) */
-    }
+    const next = !dark;
+    dark = next;
+    document.documentElement.classList.toggle("dark", next);
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/theme";
+    const theme = document.createElement("input");
+    theme.type = "hidden";
+    theme.name = "theme";
+    theme.value = next ? "dark" : "light";
+    const redirect = document.createElement("input");
+    redirect.type = "hidden";
+    redirect.name = "redirect";
+    redirect.value = window.location.pathname + window.location.search;
+    form.append(theme, redirect);
+    document.body.appendChild(form);
+    form.submit();
   }
 </script>
 

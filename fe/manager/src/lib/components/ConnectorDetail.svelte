@@ -3,7 +3,7 @@
      health-check probe, the operations table, and disable/delete actions.
      Mirrors the legacy connector_detail.templ page. Config auto-save is owned
      by ConfigsForm; everything else POSTs through the JSON api client. */
-  import { Button, TextInput, ConfirmDialog } from "@wick-fe/common-ui";
+  import { Button, TextInput, NumberInput, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
   import {
@@ -12,10 +12,14 @@
     toggleConnectorDisabled,
     deleteConnectorRow,
     runHealthCheck,
+    setConnectorRateLimit,
+    duplicateConnectorRow,
   } from "$lib/api.js";
   import type { ConnectorDetail } from "$lib/types.js";
   import ConfigsForm from "./fields/ConfigsForm.svelte";
   import OperationsTable from "./OperationsTable.svelte";
+  import AccountsSection from "./AccountsSection.svelte";
+  import AccessPolicySection from "./AccessPolicySection.svelte";
 
   type Props = { connectorKey: string; connectorId: string };
   let { connectorKey, connectorId }: Props = $props();
@@ -24,6 +28,9 @@
   let loading = $state(true);
   let error = $state("");
   let labelDraft = $state("");
+  let rateDraft = $state(0);
+  let rateBusy = $state(false);
+  let dupBusy = $state(false);
   let healthBusy = $state(false);
   let healthBanner = $state<{ ok: boolean; msg: string } | null>(null);
   let confirmDelete = $state(false);
@@ -34,6 +41,7 @@
     try {
       data = await getConnectorRow(connectorKey, connectorId);
       labelDraft = data.label;
+      rateDraft = data.rate_limit_rpm;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -85,6 +93,35 @@
       healthBanner = { ok: false, msg: e instanceof Error ? e.message : String(e) };
     } finally {
       healthBusy = false;
+    }
+  }
+
+  async function saveRateLimit() {
+    if (!data || rateBusy) return;
+    rateBusy = true;
+    try {
+      const saved = await setConnectorRateLimit(connectorKey, connectorId, rateDraft);
+      rateDraft = saved;
+      data = { ...data, rate_limit_rpm: saved };
+      toastOk("Rate limit saved");
+    } catch (e) {
+      toastError("Save failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      rateBusy = false;
+    }
+  }
+
+  async function duplicate() {
+    if (dupBusy) return;
+    dupBusy = true;
+    try {
+      const newId = await duplicateConnectorRow(connectorKey, connectorId);
+      toastOk("Row duplicated");
+      push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(newId)}`);
+    } catch (e) {
+      toastError("Duplicate failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      dupBusy = false;
     }
   }
 
@@ -159,12 +196,51 @@
       />
     </section>
 
-    <OperationsTable operations={data.operations ?? []} connectorKey={connectorKey} connectorId={connectorId} />
+    {#if data.is_admin}
+      <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={load} />
+    {/if}
+
+    {#if data.oauth}
+      <AccountsSection
+        connectorKey={connectorKey}
+        connectorId={connectorId}
+        accounts={data.accounts ?? []}
+        oauth={data.oauth}
+        enableSso={data.enable_sso}
+        multiAccount={data.multi_account}
+        onchanged={load}
+      />
+    {/if}
+
+    <section>
+      <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Rate limit</h2>
+      <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+        Maximum MCP and test-panel calls per minute for this connector instance. Set to 0 to disable limiting.
+      </p>
+      <div class="mt-3 flex items-center gap-2">
+        <div class="w-32">
+          <NumberInput value={rateDraft} min={0} disabled={!data.can_configure} onChange={(v) => (rateDraft = v)} ariaLabel="Rate limit per minute" />
+        </div>
+        <span class="text-sm text-black-800 dark:text-black-600">requests / min</span>
+        <Button disabled={!data.can_configure || rateBusy} onclick={saveRateLimit}>Save</Button>
+        <span class="text-xs text-black-700 dark:text-black-600">{data.rate_limit_rpm > 0 ? `Currently limited to ${data.rate_limit_rpm} rpm` : "Currently unlimited"}</span>
+      </div>
+    </section>
+
+    <OperationsTable
+      operations={data.operations ?? []}
+      connectorKey={connectorKey}
+      connectorId={connectorId}
+      canConfigure={data.can_configure}
+      isAdmin={data.is_admin}
+      onchanged={load}
+    />
 
     <section>
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Danger zone</h2>
       <div class="mt-3 flex flex-wrap items-center gap-2">
         <Button variant="secondary" onclick={toggleDisabled}>{data.disabled ? "Enable row" : "Disable row"}</Button>
+        <Button variant="secondary" disabled={dupBusy} onclick={duplicate}>Duplicate row</Button>
         {#if data.can_configure}
           <Button variant="danger" onclick={() => (confirmDelete = true)}>Delete row</Button>
         {/if}

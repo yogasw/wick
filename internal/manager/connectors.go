@@ -53,6 +53,20 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/test", auth(h.apiTestConnectorOperation))
 	mux.Handle("GET /manager/api/connectors/{key}/{id}/history", auth(h.apiConnectorHistory))
 
+	// Phase 7a — JSON twins of the per-row admin controls (rate limit,
+	// duplicate, access policy, session config, operation toggles, and
+	// account management). Same services + permission gates as the templ
+	// routes below; SPA-driven, no page reload.
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/rate-limit", auth(h.apiSetConnectorRateLimit))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/duplicate", auth(h.apiDuplicateConnector))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/access-policy", auth(h.apiSetConnectorAccessPolicy))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/session-config", auth(h.apiSetConnectorSessionConfig))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/bulk", auth(h.apiBulkToggleOperations))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}", auth(h.apiToggleConnectorOperation))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.apiToggleOperationAdminOnly))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.apiDisconnectAccount))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.apiSetAccountDisabledOps))
+
 	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
 	mux.Handle("GET /manager/connectors/{key}/{id}", auth(h.connectorDetailPage))
