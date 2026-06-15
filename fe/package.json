@@ -5,7 +5,8 @@
   "type": "module",
   "workspaces": [
     "agents/*",
-    "common/*"
+    "common/*",
+    "manager"
   ],
   "scripts": {
     "build": "npm --workspaces --if-present run build",
@@ -22,7 +23,8 @@
     "dev:presets": "npm --workspace=@wick-fe/agents-presets run dev",
     "dev:project-settings": "npm --workspace=@wick-fe/agents-project-settings run dev",
     "dev:providers": "npm --workspace=@wick-fe/agents-providers run dev",
-    "dev:shell": "npm --workspace=@wick-fe/agents-shell run dev"
+    "dev:shell": "npm --workspace=@wick-fe/agents-shell run dev",
+    "dev:manager": "npm --workspace=@wick-fe/manager run dev"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
